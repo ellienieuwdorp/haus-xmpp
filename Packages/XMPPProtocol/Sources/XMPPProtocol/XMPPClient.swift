@@ -45,6 +45,9 @@ public enum XMPPEvent: Sendable, Equatable {
     case encryptedMessage(XMPPEncryptedMessage)
     case omemoDevices(owner: String, profile: XMPPOMEMOProfile, devices: [UInt32])
     case encryptionFailure(from: String, id: String?)
+    /// Consume previous events durably before acknowledging this token.
+    case streamManagementBarrier(XMPPInboundToken)
+    case streamAcknowledged
 }
 
 public enum XMPPClientError: Error, Sendable {
@@ -52,7 +55,8 @@ public enum XMPPClientError: Error, Sendable {
     case authenticationFailed, bindingFailed, unexpectedProtocol, connectionClosed, timedOut, eventConsumerTooSlow
 }
 
-/// Direct-TLS protocol laboratory with OMEMO wire transport and PEP. No STARTTLS, SM or MAM yet.
+/// Direct-TLS transport with OMEMO PEP, durable stream management and bounded archive recovery.
+/// DNS SRV, STARTTLS and modern SASL mechanisms are still separate work.
 /// PLAIN is permitted only inside validated TLS. Never use this API as an encryption fallback.
 public actor XMPPClient {
     public nonisolated let events: AsyncStream<XMPPEvent>
@@ -75,9 +79,15 @@ public actor XMPPClient {
         let timeout: Task<Void, Never>
     }
     private var iqRequests: [String: IQRequest] = [:]
+    private var archiveQuery: ArchiveQuery?
+    private var streamManagement: StreamManagement?
+    private var resumeSnapshot: XMPPStreamManagementSnapshot?
+    private var smOffered = false
+    private var csiOffered = false
+    private let writeGate = XMPPAsyncGate()
     private var handshake: CheckedContinuation<Void, Error>?
     private let queue = DispatchQueue(label: "xmpp.transport")
-    private enum Phase { case idle, features, authentication, authenticatedFeatures, binding, online }
+    private enum Phase { case idle, features, authentication, authenticatedFeatures, binding, enablingSM, resumingSM, online }
 
     /// A DER CA certificate is exclusively for the explicit local lab. System trust is the default.
     public init(labCertificateAuthority: Data? = nil) {
@@ -88,15 +98,17 @@ public actor XMPPClient {
     }
 
     public func connect(host: String, port: UInt16 = 5223, domain: String, username: String, password: String) async throws {
-        guard connection == nil else { throw XMPPClientError.alreadyConnected }
+        guard connection == nil, phase == .idle else { throw XMPPClientError.alreadyConnected }
         guard !host.isEmpty, !domain.isEmpty, !username.isEmpty, !password.isEmpty,
               !username.contains("\0"), !password.contains("\0"), !domain.contains(where: { $0.isWhitespace }),
               let endpointPort = NWEndpoint.Port(rawValue: port) else { throw XMPPClientError.invalidConfiguration }
         self.domain = domain; self.username = username; self.password = password
-        framer = XMLStreamFramer()
-        phase = .features
-        generation = UUID()
+        phase = .features; generation = UUID()
         let token = generation
+        do { resumeSnapshot = try await streamManagement?.restore(accountID: username + "@" + domain) }
+        catch { if generation == token { phase = .idle; self.password = "" }; throw error }
+        guard generation == token else { throw XMPPClientError.connectionClosed }
+        framer = XMLStreamFramer()
         let tls = NWProtocolTLS.Options()
         sec_protocol_options_set_tls_server_name(tls.securityProtocolOptions, domain)
         sec_protocol_options_set_min_tls_protocol_version(tls.securityProtocolOptions, .TLSv12)
@@ -141,6 +153,15 @@ public actor XMPPClient {
 
     public func disconnect() {
         finish(nil)
+    }
+
+    /// External lifecycle boundary: cancel the connection and join its current reader before
+    /// releasing a shared database lease. Never call this from the reader/event parser itself.
+    /// Application event consumers and senders must also be cancelled and joined by their owner.
+    public func disconnectAndWait() async {
+        let previousReader = reader
+        finish(nil)
+        await previousReader?.value
     }
 
     /// Completion means only that the local socket accepted the write, not server or peer delivery.
@@ -251,29 +272,81 @@ public actor XMPPClient {
         case .authenticatedFeatures:
             guard node.name == "features", node.namespace == "http://etherx.jabber.org/streams",
                   node.child("bind", namespace: "urn:ietf:params:xml:ns:xmpp-bind") != nil else { throw XMPPClientError.bindingFailed }
-            phase = .binding
-            bindID = UUID().uuidString
-            try emit(.state(.binding))
-            try await write("<iq type='set' id='\(bindID)'><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'><resource>ios-lab-\(UUID().uuidString.prefix(8))</resource></bind></iq>")
+            smOffered = node.child("sm", namespace: "urn:xmpp:sm:3") != nil
+            csiOffered = node.child("csi", namespace: PushNotifications.clientStateNamespace) != nil
+            if smOffered, let snapshot = resumeSnapshot, let id = snapshot.streamID {
+                phase = .resumingSM
+                try await write("<resume xmlns='urn:xmpp:sm:3' previd='\(xmlEscaped(id))' h='\(UInt32(truncatingIfNeeded: snapshot.inboundHandled))'/>")
+            } else { try await startBinding() }
         case .binding:
             guard node.name == "iq", node.namespace == "jabber:client", node.attributes["id"] == bindID,
                   node.attributes["type"] == "result",
                   let jid = node.child("bind", namespace: "urn:ietf:params:xml:ns:xmpp-bind")?.child("jid", namespace: "urn:ietf:params:xml:ns:xmpp-bind")?.text, !jid.isEmpty else { throw XMPPClientError.bindingFailed }
-            try await write("<presence/>")
-            guard generation == token else { throw XMPPClientError.connectionClosed }
             boundJID = jid
-            phase = .online
-            deadline?.cancel(); deadline = nil
-            try emit(.state(.online(jid: jid)))
-            handshake?.resume(); handshake = nil
+            if smOffered, streamManagement != nil {
+                phase = .enablingSM
+                try await write("<enable xmlns='urn:xmpp:sm:3' resume='true' max='300'/>")
+            } else { try await becomeOnline(token: token) }
+        case .enablingSM:
+            guard node.namespace == "urn:xmpp:sm:3", node.name == "enabled" else { throw XMPPClientError.unexpectedProtocol }
+            let resumable = ["true", "1"].contains(node.attributes["resume"] ?? "false")
+            let id = node.attributes["id"]
+            guard !resumable || id.map(validArchiveID) == true else { throw XMPPClientError.unexpectedProtocol }
+            let maxSeconds = node.attributes["max"].flatMap(UInt32.init) ?? 300
+            try await streamManagement?.enable(accountID: username + "@" + domain, fullJID: boundJID,
+                                               streamID: resumable ? id : nil, expiresAt: Date().addingTimeInterval(Double(min(maxSeconds, 300))),
+                                               resumeTimeoutSeconds: min(maxSeconds, 300))
+            try await becomeOnline(token: token)
+        case .resumingSM:
+            guard node.namespace == "urn:xmpp:sm:3" else { throw XMPPClientError.unexpectedProtocol }
+            if node.name == "failed" {
+                // A failed resume never triggers blind retransmission; MAM reconciles uncertain sends.
+                resumeSnapshot = nil
+                try await startBinding()
+            } else {
+                guard node.name == "resumed", let snapshot = resumeSnapshot,
+                      node.attributes["previd"] == snapshot.streamID,
+                      let h = Self.smCount(node.attributes["h"]), let streamManagement else { throw XMPPClientError.unexpectedProtocol }
+                boundJID = snapshot.fullJID
+                let replay = try await streamManagement.acknowledge(h, resumed: true)
+                try emit(.streamAcknowledged)
+                guard try await streamManagement.permitsReplay() else { throw XMPPStreamManagementError.invalidState }
+                for entry in replay { try await rawWrite(entry.xml, expectedGeneration: token) }
+                try await becomeOnline(token: token, presence: false)
+            }
         case .online:
-            if routeIQ(node) { return }
+            if node.namespace == "urn:xmpp:sm:3" {
+                guard let streamManagement else { throw XMPPClientError.unexpectedProtocol }
+                if node.name == "r" {
+                    let h = await streamManagement.handledCount()
+                    try await write("<a xmlns='urn:xmpp:sm:3' h='\(h)'/>")
+                } else if node.name == "a", let h = Self.smCount(node.attributes["h"]) {
+                    _ = try await streamManagement.acknowledge(h)
+                    try emit(.streamAcknowledged)
+                } else { throw XMPPClientError.unexpectedProtocol }
+                return
+            }
+            let inbound = ["message", "iq", "presence"].contains(node.name) && node.namespace == "jabber:client" ? try await streamManagement?.receive() : nil
+            if ArchiveQuery.containsWrapper(node) {
+                if var query = archiveQuery, node.child("result", namespace: ArchiveQuery.namespace)?.attributes["queryid"] == query.queryID {
+                    try query.receive(node)
+                    if let inbound { query.handledTokens.append(inbound) }
+                    archiveQuery = query
+                } else if let inbound { try await streamManagement?.handled(inbound) }
+                return
+            }
+            if routeIQ(node) {
+                if let inbound { try await streamManagement?.handled(inbound) }
+                return
+            }
             if node.name == "message", node.namespace == "jabber:client" {
                 if Carbons.containsWrapper(node) {
                     // Malformed or foreign wrappers are discarded as a whole; their outer body
                     // must not become a plaintext fallback or their inner sender become trusted.
                     guard let ownBare = OMEMOWire.bareJID(boundJID),
-                          let (forwarded, provenance) = try? Carbons.unwrap(node, accountBareJID: ownBare, accountFullJID: boundJID) else { return }
+                          let (forwarded, provenance) = try? Carbons.unwrap(node, accountBareJID: ownBare, accountFullJID: boundJID) else {
+                        if let inbound { try await streamManagement?.handled(inbound) }; return
+                    }
                     try emitMessage(forwarded, provenance: provenance)
                 } else { try emitMessage(node, provenance: .direct) }
             } else if node.name == "iq", node.namespace == "jabber:client",
@@ -291,8 +364,67 @@ public actor XMPPClient {
                     try await write("<iq type='error' id='\(xmlEscaped(id))'\(to)><error type='cancel'><service-unavailable xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></iq>")
                 }
             }
+            if let inbound {
+                if node.name == "message" { try emit(.streamManagementBarrier(inbound)) }
+                else { try await streamManagement?.handled(inbound) }
+            }
         case .idle: throw XMPPClientError.unexpectedProtocol
         }
+    }
+
+    public func configureStreamManagement(persistence: any XMPPStreamManagementPersistence) throws {
+        guard connection == nil, phase == .idle else { throw XMPPClientError.alreadyConnected }
+        streamManagement = StreamManagement(persistence)
+    }
+
+    public func acknowledgeInbound(_ token: XMPPInboundToken) async throws {
+        try await streamManagement?.handled(token)
+    }
+
+    public func requestAcknowledgement() async throws {
+        guard phase == .online, streamManagement != nil, smOffered else { throw XMPPClientError.notConnected }
+        try await write("<r xmlns='urn:xmpp:sm:3'/>")
+    }
+
+    /// Caller must persist every result and its archive position before acknowledging handledTokens.
+    /// Only one bounded own-account query can be active; no arbitrary archive sender is trusted.
+    public func fetchArchivePage(after: String? = nil, limit: Int = 100) async throws -> XMPPArchivePage {
+        guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
+        guard archiveQuery == nil, (1...200).contains(limit), after.map(validArchiveID) ?? true else { throw XMPPClientError.invalidConfiguration }
+        let queryID = UUID().uuidString
+        archiveQuery = ArchiveQuery(queryID: queryID, accountBareJID: ownBare, accountFullJID: boundJID, limit: limit)
+        defer { archiveQuery = nil }
+        let afterXML = after.map { "<after>\(xmlEscaped($0))</after>" } ?? ""
+        let payload = "<query xmlns='urn:xmpp:mam:2' queryid='\(queryID)'><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE' type='hidden'><value>urn:xmpp:mam:2</value></field></x><set xmlns='http://jabber.org/protocol/rsm'><max>\(limit)</max>\(afterXML)</set></query>"
+        do {
+            let response = try await requestIQ(type: "set", to: ownBare, payload: payload)
+            guard let query = archiveQuery else { throw XMPPClientError.connectionClosed }
+            return try query.finish(response)
+        } catch {
+            // A discarded partial page must not leave a permanent inbound acknowledgement gap.
+            // Its unchanged durable cursor will refetch the page after reconnecting.
+            if !(archiveQuery?.handledTokens.isEmpty ?? true) { finish("Archive synchronization interrupted", error: error) }
+            throw error
+        }
+    }
+
+    private static func smCount(_ value: String?) -> UInt32? {
+        guard let value, !value.isEmpty, value.utf8.allSatisfy({ (48...57).contains($0) }) else { return nil }
+        return UInt32(value)
+    }
+
+    private func startBinding() async throws {
+        phase = .binding; bindID = UUID().uuidString
+        try emit(.state(.binding))
+        try await write("<iq type='set' id='\(bindID)'><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'><resource>ios-lab-\(UUID().uuidString.prefix(8))</resource></bind></iq>")
+    }
+
+    private func becomeOnline(token: UUID, presence: Bool = true) async throws {
+        if presence { try await write("<presence/>") }
+        guard generation == token else { throw XMPPClientError.connectionClosed }
+        phase = .online; deadline?.cancel(); deadline = nil
+        try emit(.state(.online(jid: boundJID)))
+        handshake?.resume(); handshake = nil
     }
 
     private func emitMessage(_ node: XMLNode, provenance: XMPPMessageProvenance) throws {
@@ -315,6 +447,41 @@ public actor XMPPClient {
         guard phase == .online else { throw XMPPClientError.notConnected }
         try await write(Self.encryptedMessageXML(to: to, envelope: envelope, id: id))
         return id
+    }
+
+    public var supportsClientStateIndication: Bool { phase == .online && csiOffered }
+
+    /// CSI is a hint, independent of presence. It is not a guarantee of suspended traffic or push.
+    /// New and resumed streams default to active; the caller must indicate its current lifecycle state.
+    public func setClientActive(_ active: Bool) async throws {
+        guard phase == .online else { throw XMPPClientError.notConnected }
+        guard csiOffered else { throw XMPPNotificationError.clientStateUnavailable }
+        try await write(PushNotifications.clientStateXML(active: active))
+    }
+
+    public func supportsPushNotifications() async throws -> Bool {
+        guard let ownBare = OMEMOWire.bareJID(boundJID), phase == .online else { throw XMPPClientError.notConnected }
+        return try await discoveryFeatures(for: ownBare).contains(PushNotifications.namespace)
+    }
+
+    /// Confirms registration only after the authenticated account server returns an IQ result.
+    /// Provisioning the gateway/APNs registration is a separate application operation.
+    public func enablePush(_ configuration: XMPPPushConfiguration) async throws {
+        guard let ownBare = OMEMOWire.bareJID(boundJID), phase == .online else { throw XMPPClientError.notConnected }
+        let token = generation
+        guard try await supportsPushNotifications() else { throw XMPPNotificationError.pushUnavailable }
+        guard generation == token else { throw XMPPClientError.connectionClosed }
+        _ = try await requestIQ(type: "set", to: ownBare, payload: PushNotifications.enableXML(configuration))
+    }
+
+    /// Node is mandatory here so disabling this installation cannot revoke another device's node.
+    public func disablePush(serviceJID: String, node: String) async throws {
+        let payload = try PushNotifications.disableXML(serviceJID: serviceJID, node: node)
+        guard let ownBare = OMEMOWire.bareJID(boundJID), phase == .online else { throw XMPPClientError.notConnected }
+        let token = generation
+        guard try await supportsPushNotifications() else { throw XMPPNotificationError.pushUnavailable }
+        guard generation == token else { throw XMPPClientError.connectionClosed }
+        _ = try await requestIQ(type: "set", to: ownBare, payload: payload)
     }
 
     public func discoveryFeatures(for jid: String? = nil) async throws -> Set<String> {
@@ -456,13 +623,30 @@ public actor XMPPClient {
         boundJID = ""
         handshake?.resume(throwing: error); handshake = nil
         connection?.cancel(); connection = nil
-        reader?.cancel(); reader = nil
+        // Keep the task handle until the next connection so a later lifecycle join still
+        // sees work cancelled by an earlier error/disconnect (including an archive abort).
+        reader?.cancel()
         deadline?.cancel(); deadline = nil
-        password = ""; phase = .idle
+        password = ""; phase = .idle; csiOffered = false
         if case .dropped = continuation.yield(.state(.disconnected(reason))) { continuation.finish() }
     }
     private func write(_ xml: String) async throws {
+        let token = generation
+        await writeGate.enter()
+        do {
+            guard token == generation else { throw XMPPClientError.connectionClosed }
+            if xml.hasPrefix("<message") || xml.hasPrefix("<iq") || xml.hasPrefix("<presence") {
+                try await streamManagement?.record(xml)
+            }
+            guard generation == token else { throw XMPPClientError.connectionClosed }
+            try await rawWrite(xml, expectedGeneration: token)
+            await writeGate.leave()
+        } catch { await writeGate.leave(); throw error }
+    }
+
+    private func rawWrite(_ xml: String, expectedGeneration: UUID) async throws {
         try Task.checkCancellation()
+        guard generation == expectedGeneration else { throw XMPPClientError.connectionClosed }
         guard let connection else { throw XMPPClientError.notConnected }
         let token = generation
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -488,7 +672,10 @@ public actor XMPPClient {
             connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready: result.finish(nil)
-                case .failed(let error), .waiting(let error): result.finish(error)
+                case .failed(let error): result.finish(error)
+                // Waiting is recoverable (for example the first local-network permission
+                // prompt). Keep the attempt alive until ready, cancellation or our deadline.
+                case .waiting: break
                 case .cancelled: result.finish(XMPPClientError.connectionClosed)
                 default: break
                 }

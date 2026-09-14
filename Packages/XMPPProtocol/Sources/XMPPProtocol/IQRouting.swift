@@ -36,6 +36,22 @@ extension XMPPClient {
         try OMEMOWire.messageXML(to: to, envelope: envelope, id: id)
     }
 
+    /// Decode saved outgoing ciphertext for fingerprint-scoped replay authorization.
+    /// Only the already authenticated account may fill the absent outgoing sender attribute.
+    public nonisolated static func decodeOutgoingEncryptedMessageXML(_ xml: String, from account: String) throws -> XMPPEncryptedMessage {
+        guard OMEMOWire.bareJID(account) == account else { throw XMPPClientError.invalidConfiguration }
+        var parser = XMLStreamFramer()
+        let frames = try parser.feed(Data(("<stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client'>" + xml + "</stream:stream>").utf8))
+        let elements = frames.compactMap { frame -> XMLNode? in if case .element(let node) = frame { node } else { nil } }
+        guard elements.count == 1, let original = elements.first,
+              original.name == "message", original.namespace == "jabber:client",
+              original.attributes["from"] == nil || original.attributes["from"] == account,
+              !Carbons.containsWrapper(original), !ArchiveQuery.containsWrapper(original) else { throw XMPPIQError.malformedResponse }
+        var attributes = original.attributes; attributes["from"] = account
+        let node = XMLNode(name: original.name, namespace: original.namespace, attributes: attributes, text: original.text, children: original.children)
+        return try OMEMOWire.parseMessage(node)
+    }
+
     /// Standalone parser for a complete stanza. Includes the same size, depth and namespace limits as the transport.
     public nonisolated static func decodeEncryptedMessageXML(_ xml: String) throws -> XMPPEncryptedMessage {
         var parser = XMLStreamFramer()

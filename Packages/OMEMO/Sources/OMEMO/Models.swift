@@ -33,9 +33,11 @@ public struct EncryptionOverview: Sendable {
 
 public enum OMEMOError: Error, Equatable, Sendable, LocalizedError {
     case unavailable, noDevices, trustRequired, identityChanged, notForThisDevice
-    case invalidContent, stateUnavailable, unsupportedProfile, concurrentChange, recipientSetChanged
+    case invalidContent, stateUnavailable, unsupportedProfile, concurrentChange, recipientSetChanged, cannotRetireCurrentDevice, unsupportedEncryptedReactions
     public var errorDescription: String? {
         switch self {
+        case .unsupportedEncryptedReactions: "Private reactions require OMEMO 2 and an authenticated message reference. Nothing was sent unencrypted."
+        case .cannotRetireCurrentDevice: "This device cannot be removed while it is in use."
         case .unavailable: "Encryption is not ready. Connect to finish setting it up."
         case .noDevices: "No compatible encryption devices were found. Your message is waiting safely on this device."
         case .trustRequired: "Review the encryption devices before sending or opening messages."
@@ -57,8 +59,9 @@ struct AccountEncryptionState: Codable {
     var profiles: [String: XMPPOMEMOProfile] = [:]
     var bundles: [String: XMPPOMEMOBundle] = [:]
     var incompatiblePeers: [String: Bool] = [:]
+    var pendingBundlePublications: Set<String> = []
     init(engines: [String: Data]) { self.engines = engines }
-    enum CodingKeys: String, CodingKey { case format, engines, devices, profiles, bundles, incompatiblePeers }
+    enum CodingKeys: String, CodingKey { case format, engines, devices, profiles, bundles, incompatiblePeers, pendingBundlePublications }
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         format = try values.decode(Int.self, forKey: .format)
@@ -67,6 +70,7 @@ struct AccountEncryptionState: Codable {
         profiles = try values.decodeIfPresent([String: XMPPOMEMOProfile].self, forKey: .profiles) ?? [:]
         bundles = try values.decodeIfPresent([String: XMPPOMEMOBundle].self, forKey: .bundles) ?? [:]
         incompatiblePeers = try values.decodeIfPresent([String: Bool].self, forKey: .incompatiblePeers) ?? [:]
+        pendingBundlePublications = try values.decodeIfPresent(Set<String>.self, forKey: .pendingBundlePublications) ?? []
     }
 }
 

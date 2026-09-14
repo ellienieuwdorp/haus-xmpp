@@ -34,6 +34,21 @@ public final class OMEMOEngine {
       try output { om_fingerprint(profile.version, p[0], identityKey.count, $0) }
     }
   }
+  /// Verifies a signed public bundle (or a modern signed device label) without advancing
+  /// a ratchet or granting trust. The profile determines the upstream identity encoding.
+  public static func verifySignature(_ signature: Data, for data: Data,
+                                    identityKey: Data, profile: CryptoProfile) throws -> Bool {
+    guard signature.count == 64, data.count <= 1_048_576,
+          identityKey.count == (profile == .legacy ? 33 : 32) else {
+      throw OMEMOCryptoError.invalidInput
+    }
+    return try withDataPointers([identityKey, data, signature]) { p in
+      let result = om_verify(profile.version, p[0], identityKey.count,
+                             p[1], data.count, p[2], signature.count)
+      try checked(result)
+      return result == 1
+    }
+  }
   public static func randomDeviceID() throws -> UInt32 {
     var value: UInt32 = 0
     repeat {
@@ -140,7 +155,8 @@ public final class OMEMOEngine {
       signedPreKeySignature: publicKey(kind: 2, id: signedPreKeyID), preKeys: prekeys)
   }
   /// Rotate weekly; retain previous private signed prekeys for 30 days after retirement
-  /// so sessions initiated from recently cached bundles remain decryptable.
+  /// so sessions initiated from recently cached bundles remain decryptable. Returns true
+  /// whenever the snapshot changed, including expired-key deletion without a new rotation.
   @discardableResult
   public func rotateSignedPreKeyIfNeeded(now: Date = Date()) throws -> Bool {
     guard now.timeIntervalSince1970.isFinite, now.timeIntervalSince1970 >= 0,
@@ -155,12 +171,14 @@ public final class OMEMOEngine {
       signedPreKeyID = next
       signedPreKeyCreatedAt = now
     }
+    var changed = due
     for (id, retiredAt) in retiredSignedPreKeys
     where now.timeIntervalSince(retiredAt) >= 30 * 24 * 60 * 60 {
       om_delete_signed_key(engine, id)
       retiredSignedPreKeys.removeValue(forKey: id)
+      changed = true
     }
-    return due
+    return changed
   }
   public func replenishPreKeys(targetCount: UInt32 = 100) throws {
     guard targetCount > 0, targetCount <= 1000 else { throw OMEMOCryptoError.invalidInput }

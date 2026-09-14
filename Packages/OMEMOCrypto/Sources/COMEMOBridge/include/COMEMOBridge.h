@@ -41,6 +41,9 @@ void om_delete_signed_key(om_engine *, uint32_t id);
 int om_fingerprint(int version, const uint8_t *identity, size_t length,
                    om_bytes *out);
 int om_sign(om_engine *, const uint8_t *, size_t, om_bytes *);
+int om_verify(int version, const uint8_t *identity, size_t identity_len,
+              const uint8_t *message, size_t message_len,
+              const uint8_t *signature, size_t signature_len);
 int om_aes_cbc(int encrypt, const uint8_t *key, size_t key_len,
                const uint8_t *iv, const uint8_t *input, size_t input_len,
                om_bytes *out);

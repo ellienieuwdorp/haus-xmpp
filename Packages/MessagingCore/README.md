@@ -1,7 +1,7 @@
 # MessagingCore
 
-Small application-owned sending policy over MessageStore. No external dependencies beyond our local package and system SQLite. `OutboxSender` serializes one in-process drain, claims durable queued rows before transport, and preserves uncertain sends for explicit retry.
+Application-owned coordination across MessageStore, XMPPProtocol and OMEMO. `OutboxSender` serializes prepared send claims. `StreamPersistence` binds one immutable account to revisioned stream state, atomic server acceptance and encryption replay authorization. `ArchiveSynchronizer` orders ciphertext/message commits before archive checkpoints and inbound acknowledgements; abandoned pages disconnect safely.
 
-Cancellation after claim but before calling the transport returns the claim to queued. Once transport was invoked, success or failure becomes unconfirmed: neither proves recipient delivery. On write error the drain stops. The app disconnects that session and restarts pending work only after another connection. Attempt tokens fence stale storage updates. One store and sender owner per database is required; this is not yet an app/notification-extension coordination protocol.
+Acquire the store transport lease before running send/recovery operations. Cancellation before transport returns a claim to queue; a completed or uncertain socket write is unconfirmed unless an authenticated server acknowledgement has already advanced it. Stale callbacks cannot regress server acceptance. Exact-ciphertext retry policy remains separate from recipient delivery.
 
-`swift test --package-path Packages/MessagingCore` covers persist-before-wire ordering, explicit retries preserving the same ID, no automatic replay, socket failures and cancellation on both sides of claim.
+`swift test --package-path Packages/MessagingCore` covers sender ordering, cancellation, account/revision fences, corrupt snapshots and refusal to resume plaintext or unknown encrypted operations. Protocol and OMEMO packages add live server and cryptographic interoperability checks.

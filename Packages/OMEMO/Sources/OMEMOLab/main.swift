@@ -75,6 +75,8 @@ import XMPPProtocol
             try writePrivate(key, to: keyURL)
         }
         let store = try MessageStore(url: databaseURL)
+        try await store.acquireTransportOwnership()
+        try await store.recoverInterruptedSubmissions(accountID: credentials.jid)
         let service = OMEMOService(store: store, protection: try StateProtection(key: key))
         let client = XMPPClient(labCertificateAuthority: try Data(contentsOf: URL(fileURLWithPath: caPath)))
         let deadline = Task {
@@ -155,7 +157,7 @@ import XMPPProtocol
                 if String(incoming.from.prefix { $0 != "/" }) == peer { throw Failure.plaintextReceived }
             case .encryptionFailure: throw Failure.mismatch
             case .state(.disconnected): throw Failure.timeout
-            case .state, .omemoDevices: break
+            case .state, .omemoDevices, .streamAcknowledged, .streamManagementBarrier: break
             }
         }
         throw Failure.timeout

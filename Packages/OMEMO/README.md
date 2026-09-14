@@ -38,3 +38,17 @@ swift test --package-path Packages/OMEMO
 See `Scripts/Interop/README.md` for independent upstream Python ratchet/payload checks and live local-peer testing. `omemo-lab` is a separate test executable, excluded from the iOS app product. It requires explicit fixture-trust authorization and generated localhost accounts; its automatic test trust policy is never used by the application.
 
 The [milestone report](../../docs/development/omemo-milestone.md) records verified capabilities and remaining release work. This is a development direct-messaging milestone, not a claim of full production OMEMO support across groups, archives, devices and notifications.
+
+## Recovery and private reactions
+
+The service now exposes explicit fingerprint-scoped session repair, other-own-device retirement, own PEP advertisement repair, and durable pending bundle publication. Approved inbound sender keys can decrypt without PEP availability; an absent device's still-approved key can authenticate delayed traffic. A previously replaced fingerprint's discarded ratchet is not automatically reconstructed, and a rejected key is never approved by a repair operation.
+
+Session repair creates a fresh upstream session while retaining its old session state, then atomically saves a header-only control with the ratchet. It preserves local identity and queued/prepared messages. Retirement rereads current device lists, validates the selected physical fingerprint in each advertised profile, removes only that device and confirms the update. It cannot erase keys from a remote installation or prevent that installation from re-registering.
+
+Bundle discovery verifies signed prekeys before recording the public identity. The crypto adapter also exposes signature verification for future signed device labels. Labels are currently omitted and ignored, so an unauthenticated label never appears as trusted device metadata.
+
+Modern private reactions now have a dedicated durable outbox and projection, with authenticated inner message references and no plaintext fallback. See [reaction protocol evidence and limits](REACTIONS.md). The package exposes exact-envelope SM replay policy and authenticated own-archive reconciliation for messages and reactions; transport wrappers must establish archive provenance before calling the reconciliation API.
+
+Retained first-contact ciphertext is discoverable through `pendingConversations`, which returns only validated conversation addresses and counts. It never exposes unverified message content. A timestamp supplied to `receive` must come from a validated archive/delivery context. When that context corrects an earlier live arrival time, the service compares the exact envelope and conversation (including equivalent direct-to-archive provenance and restoration of an omitted local recipient) and atomically replaces the pending context before decryption or another trust decision. The correction survives a restart and cannot resurrect consumed ciphertext.
+
+Tests use awaited XCTest teardown and explicitly close every SQLite connection before removing fixture files. Unlinking an active SQLite database or shared-memory file violates SQLite's lifetime contract; removing a directory in a synchronous `defer` while service actors still retain stores is prohibited.

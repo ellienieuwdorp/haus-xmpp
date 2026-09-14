@@ -121,4 +121,53 @@ final class EncryptedContentTests: XCTestCase {
         XCTAssertEqual(result.reply?.body, quote)
     }
 
+    func testModernReactionSetsRoundTripPrivatelyAndClearWithoutBody() throws {
+        for values in [["❤️", "👍🏽", "👩🏽‍💻"], []] {
+            let data = try EncryptedContent.encodeReaction(targetWireID: "target&<id>", reactions: values,
+                                                           sender: sender, recipient: recipient, originID: "update-id", modern: true)
+            let result = try EncryptedContent.decode(data, sender: sender, recipient: recipient, modern: true)
+            XCTAssertEqual(result.body, "")
+            XCTAssertEqual(result.originID, "update-id")
+            XCTAssertEqual(result.reaction?.targetWireID, "target&<id>")
+            XCTAssertEqual(result.reaction?.reactions, Array(Set(values)).sorted())
+            XCTAssertNil(result.timestamp)
+        }
+        XCTAssertThrowsError(try EncryptedContent.encodeReaction(targetWireID: "target", reactions: ["👍"],
+                                                                  sender: sender, recipient: recipient, originID: "update", modern: false)) {
+            XCTAssertEqual($0 as? OMEMOError, .unsupportedEncryptedReactions)
+        }
+    }
+
+    func testReactionParserIgnoresDuplicateEmojiButRejectsAmbiguousContainers() throws {
+        let result = try decode(envelope("<reactions xmlns='urn:xmpp:reactions:0' id='target'><reaction>👍</reaction><reaction>👍</reaction><reaction>ordinary text</reaction><reaction>❤️</reaction></reactions>"))
+        XCTAssertEqual(result.reaction?.reactions, ["❤️", "👍"].sorted())
+        assertRejected(envelope("<reactions xmlns='urn:xmpp:reactions:0' id='target'/><reactions xmlns='urn:xmpp:reactions:0' id='other'/>"))
+        assertRejected(envelope("<reactions xmlns='urn:xmpp:reactions:0'/>"))
+        assertRejected(envelope("<reactions xmlns='urn:xmpp:reactions:0' id=''><reaction>👍</reaction></reactions>"))
+        assertRejected(envelope("<reactions xmlns='urn:xmpp:reactions:0' id='target'><reaction><nested>👍</nested></reaction></reactions>"))
+        assertRejected(envelope("<reactions xmlns='urn:evil' id='target'><reaction>👍</reaction></reactions>"))
+        for invalid in [["1"], ["plain"], ["👍👍"], [String(repeating: "👍", count: 17)]] {
+            XCTAssertThrowsError(try EncryptedContent.encodeReaction(targetWireID: "target", reactions: invalid,
+                                                                      sender: sender, recipient: recipient, originID: "id", modern: true))
+        }
+    }
+
+    func testAuthenticatedOriginCannotBeOverriddenByNestedOrDuplicateIDs() throws {
+        let xml = envelope("<body xmlns='jabber:client'>Bound message</body><origin-id xmlns='urn:xmpp:sid:0' id='real'/><container xmlns='urn:evil'><origin-id xmlns='urn:xmpp:sid:0' id='fake'/></container>")
+        XCTAssertEqual(try decode(xml).originID, "real")
+        assertRejected(envelope("<body xmlns='jabber:client'>Body</body><origin-id xmlns='urn:xmpp:sid:0' id='first'/><origin-id xmlns='urn:xmpp:sid:0' id='second'/>"))
+        XCTAssertNil(try decode(envelope("<body xmlns='jabber:client'>Body</body><origin-id xmlns='urn:evil' id='fake'/>" )).originID)
+    }
+
+    func testAuthenticatedTimeMustMatchArchiveOrLiveContext() throws {
+        let content = "<reactions xmlns='urn:xmpp:reactions:0' id='target'><reaction>👍</reaction></reactions>"
+        let xml = envelope(content, affixes: "<from jid='alice@localhost'/><to jid='bob@localhost'/><time stamp='2023-11-14T22:13:20Z'/>")
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let valid = try EncryptedContent.decode(Data(xml.utf8), sender: sender, recipient: recipient, modern: true, sendingTime: stamp)
+        XCTAssertEqual(valid.timestamp, stamp)
+        XCTAssertThrowsError(try EncryptedContent.decode(Data(xml.utf8), sender: sender, recipient: recipient, modern: true, sendingTime: stamp.addingTimeInterval(301)))
+        assertRejected(envelope(content, affixes: "<time stamp='not-a-time'/>"))
+        assertRejected(envelope(content, affixes: "<time stamp='2023-11-14T22:13:20Z'/><time stamp='2023-11-14T22:13:20Z'/>"))
+    }
+
 }

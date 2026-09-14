@@ -12,6 +12,7 @@ private func encryptedStoreURL() throws -> URL {
     let url = try encryptedStoreURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
     try await store.upsertChat(accountID: "a", chatID: "b", title: "B")
     try await store.enqueueOutgoing(StoredMessage(id: "m", accountID: "a", chatID: "b", senderID: "a", body: "private", isOutgoing: true, encryptionProfile: "pending"))
     try await store.saveEncryptionState(accountID: "a", expectedRevision: nil, data: Data([1]))
@@ -38,6 +39,7 @@ private func encryptedStoreURL() throws -> URL {
     let url = try encryptedStoreURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
     try await store.saveEncryptionState(accountID: "a", expectedRevision: nil, data: Data([1]))
     try await store.retainEncryptedIncoming(accountID: "a", sender: "b", digest: "hash", wire: Data([99]))
     let invalid = StoredMessage(id: "", accountID: "a", chatID: "b", senderID: "b", body: "secret", encryptionProfile: "modern")
@@ -76,6 +78,7 @@ private func encryptedStoreURL() throws -> URL {
     let url = try encryptedStoreURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
     try await store.upsertChat(accountID: "a", chatID: "b", title: "B")
     for id in ["waiting-for-trust", "prepared", "new-during-drain"] {
         try await store.enqueueOutgoing(StoredMessage(id: id, accountID: "a", chatID: "b", senderID: "a", body: "private", isOutgoing: true, encryptionProfile: "pending"))

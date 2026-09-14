@@ -9,6 +9,8 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public let body: String
     public let reply: MessageReply?
     public var encryptionProfile: String?
+    public let wireID: String?
+    public let wireIDAuthenticated: Bool
     public let sentAt: Date
     public let isOutgoing: Bool
     public var isStarred: Bool
@@ -16,7 +18,7 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
 
     public init(id: String, accountID: String, chatID: String, senderID: String, body: String,
                 sentAt: Date = Date(), isOutgoing: Bool = false, isStarred: Bool = false,
-                transportState: OutgoingTransportState? = nil, reply: MessageReply? = nil, encryptionProfile: String? = nil) {
+                transportState: OutgoingTransportState? = nil, reply: MessageReply? = nil, encryptionProfile: String? = nil, wireID: String? = nil, wireIDAuthenticated: Bool = false) {
         self.id = id
         self.accountID = accountID
         self.chatID = chatID
@@ -24,6 +26,7 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
         self.body = body
         self.reply = reply
         self.encryptionProfile = encryptionProfile
+        self.wireID = wireID; self.wireIDAuthenticated = wireIDAuthenticated
         self.sentAt = sentAt
         self.isOutgoing = isOutgoing
         self.isStarred = isStarred
@@ -45,11 +48,14 @@ public enum MessageStoreError: Error, Equatable, Sendable {
     case unsupportedSchema(Int)
     case invalidValue
     case invalidTransition
+    case transportOwnershipRequired
+    case transportOwnedElsewhere
+    case closed
 }
 
-/// Local transport progress only. None of these states proves receipt by a server or peer.
+/// Local progress and authenticated stream acknowledgement. None proves peer delivery.
 public enum OutgoingTransportState: String, Equatable, Sendable {
-    case queued, submitting, unconfirmed, failed
+    case queued, submitting, unconfirmed, failed, serverAccepted
 }
 
 /// A claim token fences late callbacks after recovery and manual retry.
@@ -90,4 +96,55 @@ public struct EncryptionControl: Sendable {
     public let recipient: String
     public let wire: Data
     public init(id: String, recipient: String, wire: Data) { self.id = id; self.recipient = recipient; self.wire = wire }
+}
+
+/// Opaque protocol-owned SM snapshot. Revision CAS and transport ownership fence stale saves.
+public struct StreamManagementState: Sendable, Equatable {
+    public let revision: Int
+    public let data: Data
+}
+
+public struct ArchiveCheckpoint: Sendable, Equatable {
+    public let revision: Int
+    public let cursor: String
+}
+
+
+/// A durable complete reaction set, separate from visible chat messages.
+public struct StoredReactionUpdate: Sendable, Equatable {
+    public let id: String
+    public let accountID: String
+    public let chatID: String
+    public let targetMessageID: String
+    public let targetWireID: String
+    public let actorID: String
+    public let reactions: [String]
+    public let createdAt: Date
+    public var transportState: OutgoingTransportState?
+    public init(id: String, accountID: String, chatID: String, targetMessageID: String, targetWireID: String, actorID: String,
+                reactions: [String], createdAt: Date = Date(), transportState: OutgoingTransportState? = nil) {
+        self.id = id; self.accountID = accountID; self.chatID = chatID; self.targetMessageID = targetMessageID
+        self.targetWireID = targetWireID; self.actorID = actorID; self.reactions = reactions.sorted()
+        self.createdAt = Date(timeIntervalSince1970: (createdAt.timeIntervalSince1970 * 1_000).rounded() / 1_000)
+        self.transportState = transportState
+    }
+}
+
+/// Actor and update time must come from authenticated encrypted content/provenance.
+public struct AuthenticatedReaction: Sendable, Equatable {
+    public let id: String
+    public let chatID: String
+    public let actorID: String
+    public let targetWireID: String
+    public let reactions: [String]
+    public let updatedAt: Date
+    public init(id: String, chatID: String, actorID: String, targetWireID: String, reactions: [String], updatedAt: Date) {
+        self.id = id; self.chatID = chatID; self.actorID = actorID; self.targetWireID = targetWireID; self.reactions = reactions.sorted()
+        self.updatedAt = Date(timeIntervalSince1970: (updatedAt.timeIntervalSince1970 * 1_000).rounded() / 1_000)
+    }
+}
+
+public struct ReactionSubmission: Sendable, Equatable {
+    public let update: StoredReactionUpdate
+    public let attemptID: String
 }

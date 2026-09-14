@@ -218,3 +218,42 @@ func rotationPreservesDelayedPreKeyMessagesButExpiresOldSecrets(profile: CryptoP
   #expect(try reopened.identityKey == modern.identityKey)
   #expect(try reopened.bundle() == modern.bundle())
 }
+
+@Test(arguments: CryptoProfile.allCases)
+func publicSignatureValidationDoesNotRequireASession(profile: CryptoProfile) throws {
+  let engine = try OMEMOEngine(profile: profile, deviceID: 17, preKeyCount: 2)
+  let bundle = try engine.bundle()
+  #expect(try OMEMOEngine.verifySignature(bundle.signedPreKeySignature, for: bundle.signedPreKey,
+                                         identityKey: bundle.identityKey, profile: profile))
+  var invalid = bundle.signedPreKeySignature
+  invalid[0] ^= 1
+  #expect(try !OMEMOEngine.verifySignature(invalid, for: bundle.signedPreKey,
+                                          identityKey: bundle.identityKey, profile: profile))
+  let label = Data("iPhone 🗝️".utf8)
+  let signed = try engine.sign(label)
+  #expect(try OMEMOEngine.verifySignature(signed, for: label, identityKey: engine.identityKey, profile: profile))
+  #expect(try !OMEMOEngine.verifySignature(signed, for: Data("Changed label".utf8), identityKey: engine.identityKey, profile: profile))
+}
+
+@Test(arguments: CryptoProfile.allCases)
+func expiredSignedKeyDeletionSignalsADurableChangeWithoutRotating(profile: CryptoProfile) throws {
+  let day: TimeInterval = 24 * 60 * 60
+  let start = Date(timeIntervalSince1970: 1_700_000_000)
+  let bob = try OMEMOEngine(profile: profile, deviceID: 222, preKeyCount: 2, now: start)
+  let alice = try OMEMOEngine(profile: profile, deviceID: 111, preKeyCount: 2, now: start)
+  let a = DeviceAddress(jid: "alice@example.org", deviceID: 111)
+  let b = DeviceAddress(jid: "bob@example.org", deviceID: 222)
+  try bob.trustIdentity(alice.identityKey, for: a)
+  try alice.trustIdentity(bob.identityKey, for: b)
+  try alice.establishSession(with: b, bundle: bob.bundle(), preKeyID: 1)
+  let delayed = try alice.encrypt(Data("old signed prekey".utf8), to: b)
+  for week in 1...5 {
+    #expect(try bob.rotateSignedPreKeyIfNeeded(now: start.addingTimeInterval(Double(week) * 7 * day)))
+  }
+  let keyID = try bob.bundle().signedPreKeyID
+  // The first key expires 30 days after its retirement at day 7; no rotation is due at day 37.
+  #expect(try bob.rotateSignedPreKeyIfNeeded(now: start.addingTimeInterval(37 * day)))
+  #expect(try bob.bundle().signedPreKeyID == keyID)
+  let reopened = try OMEMOEngine(snapshot: bob.snapshot())
+  #expect(throws: (any Error).self) { try reopened.decrypt(delayed, from: a) }
+}

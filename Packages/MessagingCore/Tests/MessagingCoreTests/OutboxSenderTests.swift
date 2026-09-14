@@ -13,6 +13,7 @@ struct OutboxSenderTests {
     private func fixture() async throws -> (MessageStore, URL) {
         let url = FileManager.default.temporaryDirectory.appending(path: "sender-\(UUID()).sqlite")
         let store = try MessageStore(url: url)
+        try await store.acquireTransportOwnership()
         try await store.upsertChat(accountID: "alice", chatID: "bob", title: "Bob")
         try await store.enqueueOutgoing(StoredMessage(id: "wire-1", accountID: "alice", chatID: "bob",
                                                       senderID: "alice", body: "Hello", isOutgoing: true))

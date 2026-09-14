@@ -18,6 +18,7 @@ private func replyMessage(_ reply: MessageReply?) -> StoredMessage {
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let quote = MessageReply(messageID: "original-local", senderID: "peer", body: "Quoted ☕️\nsecond line", wireID: "original-wire")
     var store: MessageStore? = try MessageStore(url: url)
+    try await store!.acquireTransportOwnership()
     try await store!.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
     try await store!.enqueueOutgoing(replyMessage(quote))
     #expect(try await !store!.enqueueOutgoing(replyMessage(quote)))
@@ -25,6 +26,8 @@ private func replyMessage(_ reply: MessageReply?) -> StoredMessage {
     #expect(first.message.reply == quote)
     store = nil
     let reopened = try MessageStore(url: url)
+    try await reopened.acquireTransportOwnership()
+    try await reopened.recoverInterruptedSubmissions(accountID: "a")
     #expect(try await reopened.messages(accountID: "a", chatID: "peer").first?.reply == quote)
     #expect(try await reopened.search(accountID: "a", query: "answer").first?.reply == quote)
     #expect(try await reopened.chats(accountID: "a").first?.lastMessage?.reply == quote)
@@ -39,6 +42,7 @@ private func replyMessage(_ reply: MessageReply?) -> StoredMessage {
     let url = try replyFixture()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
     try await store.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
     for quote in [MessageReply(messageID: "", senderID: "peer", body: "quote"),
                   MessageReply(messageID: "original", senderID: "peer", body: String(repeating: "x", count: 16_385)),
@@ -72,6 +76,7 @@ private func replyMessage(_ reply: MessageReply?) -> StoredMessage {
     #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
     sqlite3_close(db)
     let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
     let chat = try #require(await store.chats(accountID: "a").first)
     #expect(chat.isPinned && chat.lastMessage?.isStarred == true)
     #expect(chat.lastMessage?.reply == nil)

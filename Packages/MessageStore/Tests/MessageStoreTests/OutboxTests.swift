@@ -17,6 +17,7 @@ private func outgoing(_ id: String, account: String = "a", time: Double = 100, b
     let url = try fixture()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
     await #expect(throws: MessageStoreError.self) { try await store.enqueueOutgoing(outgoing("first")) }
     for account in ["a", "b"] { try await store.upsertChat(accountID: account, chatID: "peer", title: "Peer") }
     #expect(try await store.enqueueOutgoing(outgoing("first", time: 200)))
@@ -41,11 +42,14 @@ private func outgoing(_ id: String, account: String = "a", time: Double = 100, b
     let url = try fixture()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     var store: MessageStore? = try MessageStore(url: url)
+    try await store!.acquireTransportOwnership()
     try await store!.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
     for id in ["crashed", "queued"] { try await store!.enqueueOutgoing(outgoing(id)) }
     let interrupted = try #require(await store!.claimNextOutgoing(accountID: "a"))
     store = nil
     let reopened = try MessageStore(url: url)
+    try await reopened.acquireTransportOwnership()
+    try await reopened.recoverInterruptedSubmissions(accountID: "a")
     #expect(try await reopened.messages(accountID: "a", chatID: "peer").first { $0.id == "crashed" }?.transportState == .unconfirmed)
     #expect(try await reopened.claimNextOutgoing(accountID: "a")?.message.id == "queued")
     #expect(try await reopened.claimNextOutgoing(accountID: "a") == nil)
@@ -64,6 +68,7 @@ private func outgoing(_ id: String, account: String = "a", time: Double = 100, b
     let url = try fixture()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
     for account in ["a", "b"] {
         try await store.upsertChat(accountID: account, chatID: "peer", title: "Peer")
         try await store.enqueueOutgoing(outgoing("1", account: account))
@@ -91,6 +96,7 @@ private func outgoing(_ id: String, account: String = "a", time: Double = 100, b
     let url = try fixture()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
     try await store.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
     try await store.enqueueOutgoing(outgoing("1"))
     let task = Task {
@@ -116,6 +122,7 @@ private func outgoing(_ id: String, account: String = "a", time: Double = 100, b
     #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
     sqlite3_close(db)
     let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
     let chat = try #require(await store.chats(accountID: "a").first)
     #expect(chat.isPinned && chat.lastMessage?.isStarred == true)
     #expect(chat.lastMessage?.body == "hello")
@@ -130,6 +137,7 @@ private func outgoing(_ id: String, account: String = "a", time: Double = 100, b
     let url = try fixture()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
     try await store.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
     for body in ["", String(repeating: "x", count: 65_537)] {
         await #expect(throws: MessageStoreError.invalidValue) { try await store.enqueueOutgoing(outgoing("invalid", body: body)) }

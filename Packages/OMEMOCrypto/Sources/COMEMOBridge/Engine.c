@@ -638,3 +638,24 @@ int om_generate_shared_identity(om_engine *engine, om_engine *source,
     return result;
   return om_replenish(engine, 1, count);
 }
+
+// Signature verification delegates to the pinned upstream implementation. It does not
+// touch a session or a trust record, so discovery can reject malformed signed bundles.
+int om_verify(int version, const uint8_t *identity, size_t identity_len,
+              const uint8_t *message, size_t message_len,
+              const uint8_t *signature, size_t signature_len) {
+  signal_context *context = NULL;
+  ec_public_key *key = NULL;
+  int r = signal_context_create(&context, NULL);
+  if (r < 0)
+    goto done;
+  r = version == 4 ? curve_decode_point_ed(&key, identity, identity_len, context)
+                   : curve_decode_point(&key, identity, identity_len, context);
+  if (r >= 0)
+    r = curve_verify_signature(key, message, message_len, signature, signature_len);
+done:
+  SIGNAL_UNREF(key);
+  if (context)
+    signal_context_destroy(context);
+  return r;
+}

@@ -13,31 +13,42 @@ import XMPPProtocol
         }
         let ca = try env["XMPP_LAB_CA_DER"].map { try Data(contentsOf: URL(fileURLWithPath: $0)) }
         let client = XMPPClient(labCertificateAuthority: ca)
-        let timeout = Task { try await Task.sleep(for: .seconds(30)); await client.disconnect() }
+        let recovery = LabRecoveryPersistence()
+        if env["XMPP_LAB_RECOVERY_SMOKE"] == "1" || env["XMPP_LAB_PUSH_SMOKE"] == "1" { try await client.configureStreamManagement(persistence: recovery) }
+        let timeout = Task { try await Task.sleep(for: .seconds(30)); await client.disconnectAndWait() }
         try await client.connect(host: env["XMPP_LAB_HOST"] ?? domain, port: UInt16(env["XMPP_LAB_PORT"] ?? "5223") ?? 5223, domain: domain, username: user, password: password)
+        if env["XMPP_LAB_PUSH_SMOKE"] == "1" {
+            try await verifyPush(client: client, persistence: recovery)
+            timeout.cancel(); await client.disconnectAndWait(); return
+        }
+        if env["XMPP_LAB_RECOVERY_SMOKE"] == "1" {
+            try await verifyRecovery(client: client, persistence: recovery, env: env)
+            timeout.cancel(); await client.disconnectAndWait(); return
+        }
         if env["XMPP_LAB_CARBONS_SMOKE"] == "1" {
             try await verifyCarbons(client: client, env: env, ca: ca)
             timeout.cancel()
-            await client.disconnect()
+            await client.disconnectAndWait()
             return
         }
         if env["XMPP_LAB_OMEMO_WIRE_SMOKE"] == "1" {
             try await verifyOMEMOWire(client: client, ownJID: user + "@" + domain)
             timeout.cancel()
-            await client.disconnect()
+            await client.disconnectAndWait()
             return
         }
         if env["XMPP_LAB_REPLY_SMOKE"] == "1" {
             guard let to = env["XMPP_LAB_TO"], let sourceID = env["XMPP_LAB_ID"] else { throw XMPPClientError.invalidConfiguration }
             try await verifyReply(client: client, to: to, sourceID: sourceID)
             timeout.cancel()
-            await client.disconnect()
+            await client.disconnectAndWait()
             return
         }
         var receivedCount = 0
         let cycles = max(1, Int(env["XMPP_LAB_CYCLES"] ?? "1") ?? 1)
         for await event in client.events {
             switch event {
+            case .streamManagementBarrier(let token): try await client.acknowledgeInbound(token)
             case .state(.online):
                 print("ONLINE")
                 if let to = env["XMPP_LAB_TO"] {
@@ -52,17 +63,65 @@ import XMPPProtocol
                     timeout.cancel()
                     return
                 }
-            case .encryptedMessage, .omemoDevices, .encryptionFailure: break
+            case .encryptedMessage, .omemoDevices, .encryptionFailure, .streamAcknowledged: break
             case .state: break
             case .message(let message):
                 if let expected = env["XMPP_LAB_EXPECT_BODY"], message.body != expected { throw XMPPClientError.unexpectedProtocol }
                 if let expectedID = env["XMPP_LAB_ID"], message.id != expectedID || message.originID != expectedID { throw XMPPClientError.unexpectedProtocol }
                 receivedCount += 1
                 print("RECEIVED \(message.id) bytes=\(message.body.utf8.count)")
-                await client.disconnect()
+                await client.disconnectAndWait()
             }
         }
     }
+    private static func verifyPush(client: XMPPClient, persistence: LabRecoveryPersistence) async throws {
+        guard try await client.supportsPushNotifications(), await client.supportsClientStateIndication else { throw XMPPClientError.unexpectedProtocol }
+        let before = await persistence.snapshot?.outboundSent
+        try await client.setClientActive(false)
+        try await client.setClientActive(true)
+        guard await persistence.snapshot?.outboundSent == before else { throw XMPPClientError.unexpectedProtocol }
+        // Deliberately no APNs gateway or device token: this verifies account-server configuration only.
+        let config = try XMPPPushConfiguration(serviceJID: "fixture-push.localhost", node: UUID().uuidString, publishOptions: ["secret": UUID().uuidString])
+        try await client.enablePush(config)
+        try await client.disablePush(serviceJID: config.serviceJID, node: config.node)
+        print("PUSH_REGISTRATION_AND_CSI_VERIFIED")
+    }
+
+    private static func verifyRecovery(client: XMPPClient, persistence: LabRecoveryPersistence, env: [String: String]) async throws {
+        let domain = env["XMPP_LAB_DOMAIN"]!, user = env["XMPP_LAB_USERNAME"]!
+        let ids = (0..<3).map { _ in UUID().uuidString }
+        for id in ids { try await client.sendMessage(to: user + "@" + domain, body: "Recovery fixture", id: id) }
+        try await client.requestAcknowledgement()
+        var received = Set<String>()
+        for await event in client.events {
+            switch event {
+            case .message(let message): received.insert(message.id)
+            case .streamManagementBarrier(let token): try await client.acknowledgeInbound(token)
+            case .state(.disconnected): throw XMPPClientError.connectionClosed
+            default: break
+            }
+            if received.isSuperset(of: ids), await persistence.acknowledged.isSuperset(of: ids),
+               await persistence.snapshot?.inboundHandled ?? 0 >= 3 { break }
+        }
+        let oldJID = await persistence.snapshot?.fullJID
+        await client.disconnectAndWait()
+        try await client.connect(host: env["XMPP_LAB_HOST"] ?? domain, domain: domain, username: user, password: env["XMPP_LAB_PASSWORD"]!)
+        guard await persistence.snapshot?.fullJID == oldJID else { throw XMPPClientError.unexpectedProtocol }
+        print("SM_DURABLE_ACK_AND_RESUME_VERIFIED")
+        var cursor: String?, found = Set<String>(), pages = 0
+        while true {
+            let page = try await client.fetchArchivePage(after: cursor, limit: 2)
+            pages += 1
+            for item in page.messages { if let id = item.message?.id { found.insert(id) } }
+            for token in page.handledTokens { try await client.acknowledgeInbound(token) }
+            if page.complete { break }
+            guard page.lastID != cursor, pages < 100 else { throw XMPPClientError.unexpectedProtocol }
+            cursor = page.lastID
+        }
+        guard found.isSuperset(of: ids), pages >= 2 else { throw XMPPClientError.unexpectedProtocol }
+        print("MAM_PAGED_CATCHUP_VERIFIED")
+    }
+
     /// Verifies delivered fallback body, not incoming structured-reply reconciliation.
     static func verifyReply(client: XMPPClient, to: String, sourceID: String) async throws {
         let source = "Original 👩🏽‍💻 & <text>\nSecond line"
@@ -73,6 +132,7 @@ import XMPPProtocol
         var awaitingReply = false
         for await event in client.events {
             switch event {
+            case .streamManagementBarrier(let token): try await client.acknowledgeInbound(token)
             case .message(let message):
                 guard message.id == (awaitingReply ? replyID : sourceID),
                       message.originID == message.id,
@@ -86,7 +146,7 @@ import XMPPProtocol
                 _ = try await client.sendMessage(to: to, body: answer, id: replyID,
                                                  reply: XMPPReply(id: sourceID, to: message.from, body: source))
             case .state(.disconnected): throw XMPPClientError.connectionClosed
-            case .encryptedMessage, .omemoDevices, .encryptionFailure: break
+            case .encryptedMessage, .omemoDevices, .encryptionFailure, .streamAcknowledged: break
             case .state: break
             }
         }
@@ -163,9 +223,20 @@ import XMPPProtocol
                 break
             }
         }
-        await sibling.disconnect()
-        await peer.disconnect()
+        await sibling.disconnectAndWait()
+        await peer.disconnectAndWait()
         print("OMEMO_CARBONS_BOTH_DIRECTIONS_VERIFIED")
     }
 
+}
+
+/// Disposable generated-fixture persistence; app uses transactional SQLite and process ownership.
+private actor LabRecoveryPersistence: XMPPStreamManagementPersistence {
+    var snapshot: XMPPStreamManagementSnapshot?
+    var acknowledged: Set<String> = []
+    func load() -> XMPPStreamManagementSnapshot? { snapshot }
+    func save(_ value: XMPPStreamManagementSnapshot, expectedRevision: Int?, acknowledgedMessageIDs: [String]) throws {
+        guard snapshot?.revision == expectedRevision else { throw XMPPStreamManagementError.invalidState }
+        snapshot = value; acknowledged.formUnion(acknowledgedMessageIDs)
+    }
 }
