@@ -1,6 +1,6 @@
 # XMPP iOS
 
-Research and planning for an iPhone-first XMPP messenger with reliable notifications, full OMEMO interoperability, excellent local search, rich media, and a modern native interface.
+Research and planning for an iPhone-first XMPP messenger with reliable notifications, full OMEMO interoperability, core message reactions, excellent local search, rich media, and a modern native interface.
 
 Start with the [preliminary research index](docs/preliminary/README.md) and [executive summary](docs/preliminary/00-executive-summary.md).
 
