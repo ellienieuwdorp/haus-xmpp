@@ -25,6 +25,19 @@ public struct XMPPMessage: Sendable, Equatable {
     }
 }
 
+/// A caller-resolved direct-chat reply target plus a bounded plaintext fallback snapshot.
+/// IDs must come from the original wire message, never a generated local database ID.
+/// A nil ID emits only the quoted body, without structured reply/fallback metadata.
+public struct XMPPReply: Sendable, Equatable {
+    public let id: String?
+    public let to: String
+    public let body: String
+
+    public init(id: String? = nil, to: String, body: String) {
+        self.id = id; self.to = to; self.body = body
+    }
+}
+
 public enum XMPPEvent: Sendable, Equatable {
     case state(XMPPConnectionState)
     case message(XMPPMessage)
@@ -121,23 +134,44 @@ public actor XMPPClient {
 
     /// Completion means only that the local socket accepted the write, not server or peer delivery.
     /// Retrying an uncertain write must preserve the same caller-supplied ID.
-    @discardableResult public func sendMessage(to: String, body: String, id: String = UUID().uuidString) async throws -> String {
+    @discardableResult public func sendMessage(to: String, body: String, id: String = UUID().uuidString, reply: XMPPReply? = nil) async throws -> String {
         guard phase == .online else { throw XMPPClientError.notConnected }
-        try await write(Self.messageXML(to: to, body: body, id: id))
+        try await write(Self.messageXML(to: to, body: body, id: id, reply: reply))
         return id
     }
 
     /// Pure preflight for durable enqueueing; does not require a connected session.
-    public static func validateMessage(to: String, body: String, id: String) throws {
+    public static func validateMessage(to: String, body: String, id: String, reply: XMPPReply? = nil) throws {
         guard !to.isEmpty, to.utf8.count <= 3_071, !to.contains(where: { $0.isWhitespace }),
               !body.isEmpty, body.utf8.count <= 65_536,
               validMessageID(id), validXMLText(to), validXMLText(body) else { throw XMPPClientError.invalidConfiguration }
+        if let reply {
+            guard reply.id.map(validMessageID) ?? true, !reply.to.isEmpty, reply.to.utf8.count <= 3_071,
+                  !reply.to.contains(where: { $0.isWhitespace }), validXMLText(reply.to),
+                  !reply.body.isEmpty, reply.body.utf8.count <= 16_384, validXMLText(reply.body),
+                  replyFallback(reply.body).utf8.count + body.utf8.count <= 65_536 else { throw XMPPClientError.invalidConfiguration }
+        }
     }
 
-    static func messageXML(to: String, body: String, id: String) throws -> String {
-        try validateMessage(to: to, body: body, id: id)
+    static func messageXML(to: String, body: String, id: String, reply: XMPPReply? = nil) throws -> String {
+        try validateMessage(to: to, body: body, id: id, reply: reply)
         let escapedID = xmlEscaped(id)
-        return "<message to='\(xmlEscaped(to))' type='chat' id='\(escapedID)'><body>\(xmlEscaped(body))</body><origin-id xmlns='urn:xmpp:sid:0' id='\(escapedID)'/></message>"
+        var wireBody = body
+        var extensionXML = ""
+        if let reply {
+            let fallback = replyFallback(reply.body)
+            wireBody = fallback + body
+            if let replyID = reply.id {
+                extensionXML = "<reply xmlns='urn:xmpp:reply:0' to='\(xmlEscaped(reply.to))' id='\(xmlEscaped(replyID))'/><fallback xmlns='urn:xmpp:fallback:0' for='urn:xmpp:reply:0'><body start='0' end='\(fallback.unicodeScalars.count)'/></fallback>"
+            }
+        }
+        return "<message to='\(xmlEscaped(to))' type='chat' id='\(escapedID)'><body>\(xmlEscaped(wireBody))</body><origin-id xmlns='urn:xmpp:sid:0' id='\(escapedID)'/>\(extensionXML)</message>"
+    }
+
+    private static func replyFallback(_ body: String) -> String {
+        // XML normalizes literal CR/CRLF to LF; normalize before counting fallback offsets.
+        let normalized = body.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        return normalized.components(separatedBy: "\n").map { "> " + $0 }.joined(separator: "\n") + "\n"
     }
 
     private static func validMessageID(_ id: String) -> Bool {

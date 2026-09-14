@@ -15,6 +15,13 @@ import XMPPProtocol
         let client = XMPPClient(labCertificateAuthority: ca)
         let timeout = Task { try await Task.sleep(for: .seconds(30)); await client.disconnect() }
         try await client.connect(host: env["XMPP_LAB_HOST"] ?? domain, port: UInt16(env["XMPP_LAB_PORT"] ?? "5223") ?? 5223, domain: domain, username: user, password: password)
+        if env["XMPP_LAB_REPLY_SMOKE"] == "1" {
+            guard let to = env["XMPP_LAB_TO"], let sourceID = env["XMPP_LAB_ID"] else { throw XMPPClientError.invalidConfiguration }
+            try await verifyReply(client: client, to: to, sourceID: sourceID)
+            timeout.cancel()
+            await client.disconnect()
+            return
+        }
         var receivedCount = 0
         let cycles = max(1, Int(env["XMPP_LAB_CYCLES"] ?? "1") ?? 1)
         for await event in client.events {
@@ -43,4 +50,33 @@ import XMPPProtocol
             }
         }
     }
+    /// Verifies delivered fallback body, not incoming structured-reply reconciliation.
+    static func verifyReply(client: XMPPClient, to: String, sourceID: String) async throws {
+        let source = "Original 👩🏽‍💻 & <text>\nSecond line"
+        let answer = "Reply e\u{301} & <answer>"
+        let replyID = sourceID + "-reply"
+        let expectedReplyBody = "> Original 👩🏽‍💻 & <text>\n> Second line\n" + answer
+        _ = try await client.sendMessage(to: to, body: source, id: sourceID)
+        var awaitingReply = false
+        for await event in client.events {
+            switch event {
+            case .message(let message):
+                guard message.id == (awaitingReply ? replyID : sourceID),
+                      message.originID == message.id,
+                      message.body == (awaitingReply ? expectedReplyBody : source) else { throw XMPPClientError.unexpectedProtocol }
+                if awaitingReply {
+                    print("REPLY_BODY_VERIFIED")
+                    return
+                }
+                print("REPLY_SOURCE_VERIFIED")
+                awaitingReply = true
+                _ = try await client.sendMessage(to: to, body: answer, id: replyID,
+                                                 reply: XMPPReply(id: sourceID, to: message.from, body: source))
+            case .state(.disconnected): throw XMPPClientError.connectionClosed
+            case .state: break
+            }
+        }
+        throw XMPPClientError.connectionClosed
+    }
+
 }

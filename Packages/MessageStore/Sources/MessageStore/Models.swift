@@ -7,6 +7,7 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public let chatID: String
     public let senderID: String
     public let body: String
+    public let reply: MessageReply?
     public let sentAt: Date
     public let isOutgoing: Bool
     public var isStarred: Bool
@@ -14,12 +15,13 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
 
     public init(id: String, accountID: String, chatID: String, senderID: String, body: String,
                 sentAt: Date = Date(), isOutgoing: Bool = false, isStarred: Bool = false,
-                transportState: OutgoingTransportState? = nil) {
+                transportState: OutgoingTransportState? = nil, reply: MessageReply? = nil) {
         self.id = id
         self.accountID = accountID
         self.chatID = chatID
         self.senderID = senderID
         self.body = body
+        self.reply = reply
         self.sentAt = sentAt
         self.isOutgoing = isOutgoing
         self.isStarred = isStarred
@@ -52,4 +54,19 @@ public enum OutgoingTransportState: String, Equatable, Sendable {
 public struct OutboxSubmission: Equatable, Sendable {
     public let message: StoredMessage
     public let attemptID: String
+}
+
+/// Local snapshot of a selected message. This is not a validated incoming protocol reference.
+public struct MessageReply: Codable, Sendable, Equatable {
+    public let messageID: String
+    public let wireID: String?
+    public let senderID: String
+    public let body: String
+
+    public init(messageID: String, senderID: String, body: String, wireID: String? = nil) {
+        self.messageID = messageID
+        self.wireID = wireID
+        self.senderID = senderID
+        self.body = body
+    }
 }

@@ -12,7 +12,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA journal_mode = WAL")
         try connection.execute("PRAGMA synchronous = FULL")
         let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-        guard version <= 2 else { throw MessageStoreError.unsupportedSchema(version) }
+        guard version <= 3 else { throw MessageStoreError.unsupportedSchema(version) }
         try connection.transaction {
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
@@ -43,7 +43,10 @@ public actor MessageStore {
             try connection.execute("CREATE INDEX IF NOT EXISTS outbox_queue ON outbox(account_id,state,sequence)")
             // The previous process might have written to the socket before termination. Never auto-replay.
             try connection.execute("UPDATE outbox SET state='unconfirmed', attempt_id=NULL WHERE state='submitting'")
-            try connection.execute("PRAGMA user_version = 2")
+            if version < 3 {
+                try connection.execute("ALTER TABLE messages ADD COLUMN reply_json TEXT")
+            }
+            try connection.execute("PRAGMA user_version = 3")
         }
     }
 
@@ -63,6 +66,13 @@ public actor MessageStore {
     private func insertMessageInTransaction(_ message: StoredMessage) throws -> Bool {
         guard !message.id.isEmpty, !message.accountID.isEmpty, !message.chatID.isEmpty,
               message.sentAt.timeIntervalSince1970.isFinite else { throw MessageStoreError.invalidValue }
+        let replyJSON: Value
+        if let reply = message.reply {
+            try Self.validateReply(reply)
+            replyJSON = .text(String(decoding: try JSONEncoder().encode(reply), as: UTF8.self))
+        } else {
+            replyJSON = .null
+        }
         if let existing = try connection.query("SELECT \(Self.columns) FROM messages WHERE account_id=? AND id=?",
                                                [.text(message.accountID), .text(message.id)]).first.map(Self.decode) {
             var comparison = message
@@ -72,11 +82,11 @@ public actor MessageStore {
             return false
         }
         try connection.execute("""
-            INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing,starred)
-            VALUES(?,?,?,?,?,?,?,?)
+            INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing,starred,reply_json)
+            VALUES(?,?,?,?,?,?,?,?,?)
             """, [.text(message.accountID), .text(message.id), .text(message.chatID), .text(message.senderID),
                   .text(message.body), .real(message.sentAt.timeIntervalSince1970),
-                  .integer(message.isOutgoing ? 1 : 0), .integer(message.isStarred ? 1 : 0)])
+                  .integer(message.isOutgoing ? 1 : 0), .integer(message.isStarred ? 1 : 0), replyJSON])
         return true
     }
 
@@ -221,14 +231,29 @@ public actor MessageStore {
 
     private static let columns = """
         account_id,id,chat_id,sender_id,body,sent_at,outgoing,starred,
-        (SELECT state FROM outbox WHERE outbox.account_id=messages.account_id AND outbox.message_id=messages.id)
+        (SELECT state FROM outbox WHERE outbox.account_id=messages.account_id AND outbox.message_id=messages.id),reply_json
         """
-    private static func decode(_ row: [Value]) -> StoredMessage {
-        StoredMessage(id: row[1].string, accountID: row[0].string, chatID: row[2].string,
+    private static func validateReply(_ reply: MessageReply) throws {
+        guard !reply.messageID.isEmpty, reply.messageID.utf8.count <= 1_024,
+              !reply.senderID.isEmpty, reply.senderID.utf8.count <= 3_071,
+              reply.body.utf8.count <= 16_384,
+              reply.wireID.map({ !$0.isEmpty && $0.utf8.count <= 1_024 }) ?? true else { throw MessageStoreError.invalidValue }
+    }
+
+    private static func decode(_ row: [Value]) throws -> StoredMessage {
+        let reply: MessageReply?
+        if case .null = row[9] {
+            reply = nil
+        } else {
+            let decoded = try JSONDecoder().decode(MessageReply.self, from: Data(row[9].string.utf8))
+            try validateReply(decoded)
+            reply = decoded
+        }
+        return StoredMessage(id: row[1].string, accountID: row[0].string, chatID: row[2].string,
                       senderID: row[3].string, body: row[4].string,
                       sentAt: Date(timeIntervalSince1970: row[5].double),
                       isOutgoing: row[6].integer != 0, isStarred: row[7].integer != 0,
-                      transportState: OutgoingTransportState(rawValue: row[8].string))
+                      transportState: OutgoingTransportState(rawValue: row[8].string), reply: reply)
     }
 }
 
