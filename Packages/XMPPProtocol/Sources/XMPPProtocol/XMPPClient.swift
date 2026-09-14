@@ -558,7 +558,7 @@ public actor XMPPClient {
         return (owner, profile, devices)
     }
 
-    private func requestIQ(type: String, to: String?, payload: String) async throws -> XMLNode {
+    func requestIQ(type: String, to: String?, payload: String) async throws -> XMLNode {
         guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
         guard iqRequests.count < 64 else { throw XMPPIQError.requestLimit }
         if let to {
