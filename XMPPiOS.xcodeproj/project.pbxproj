@@ -1,0 +1,485 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		17A325600E79D8A8156382ED /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B83163D7B25E749804F80AF /* ConversationView.swift */; };
+		473142DDB095B7B4EAD782BD /* XMPPiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D999DD559C833CD87788CAD5 /* XMPPiOSApp.swift */; };
+		5F166C0A1D90C747BD73588F /* ConversationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */; };
+		728CFF70CFB117DBE2C87F11 /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = FDC9596D2F9805667807CD8E /* XMPPProtocol */; };
+		73C11D0503BE6524DD670DBD /* OrganizationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */; };
+		7E6C4263F5BA1BCBF4FC6C9C /* ConversationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24B51206177B769B64F7212B /* ConversationUITests.swift */; };
+		817111520A55373B387F2F40 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = AFC1C801720A06EEB5CC2DFD /* MessageStore */; };
+		E23C003181D2864649BEB0CA /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0311640D33AB3155A53A53A3 /* RootView.swift */; };
+		EF7387F958D30472732FFADE /* LabConnectionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 672F8EB6B8BC64098369E462 /* LabConnectionUITests.swift */; };
+		FC4281063E554402B9A2C568 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2820963E2FB064DD0BAD839F /* AppModel.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		12ED3E33185DDA22AC3FE54A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 39E63228423EE6A092F5C3A8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 457D0AFAB9A4904EA1A67DFE;
+			remoteInfo = XMPPiOS;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0025A6ABF07DBBF6BF577B0C /* XMPPProtocol */ = {isa = PBXFileReference; lastKnownFileType = folder; name = XMPPProtocol; path = Packages/XMPPProtocol; sourceTree = SOURCE_ROOT; };
+		0311640D33AB3155A53A53A3 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		1EC37336D093CD8D185451AA /* XMPPiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = XMPPiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		24B51206177B769B64F7212B /* ConversationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationUITests.swift; sourceTree = "<group>"; };
+		2820963E2FB064DD0BAD839F /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		672F8EB6B8BC64098369E462 /* LabConnectionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabConnectionUITests.swift; sourceTree = "<group>"; };
+		827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrganizationUITests.swift; sourceTree = "<group>"; };
+		832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTimeline.swift; sourceTree = "<group>"; };
+		9B83163D7B25E749804F80AF /* ConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationView.swift; sourceTree = "<group>"; };
+		AC9D418986C30C4F6A0D3E79 /* MessageStore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MessageStore; path = Packages/MessageStore; sourceTree = SOURCE_ROOT; };
+		D999DD559C833CD87788CAD5 /* XMPPiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XMPPiOSApp.swift; sourceTree = "<group>"; };
+		F011167791FD6608B0B26510 /* XMPPiOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = XMPPiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		E96DDAF0D4007001F7C78138 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				728CFF70CFB117DBE2C87F11 /* XMPPProtocol in Frameworks */,
+				817111520A55373B387F2F40 /* MessageStore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1F3D912F711973CA6C4304DF = {
+			isa = PBXGroup;
+			children = (
+				8B7B528868C72631BB457B60 /* App */,
+				763D5AE0C98E6D4747186770 /* AppTests */,
+				68555B8F5CB74992594BA79F /* Packages */,
+				B8BF035EA1B8692F5F294439 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		68555B8F5CB74992594BA79F /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				AC9D418986C30C4F6A0D3E79 /* MessageStore */,
+				0025A6ABF07DBBF6BF577B0C /* XMPPProtocol */,
+			);
+			path = Packages;
+			sourceTree = "<group>";
+		};
+		763D5AE0C98E6D4747186770 /* AppTests */ = {
+			isa = PBXGroup;
+			children = (
+				24B51206177B769B64F7212B /* ConversationUITests.swift */,
+				672F8EB6B8BC64098369E462 /* LabConnectionUITests.swift */,
+				827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */,
+			);
+			path = AppTests;
+			sourceTree = "<group>";
+		};
+		8B7B528868C72631BB457B60 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				2820963E2FB064DD0BAD839F /* AppModel.swift */,
+				832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */,
+				9B83163D7B25E749804F80AF /* ConversationView.swift */,
+				0311640D33AB3155A53A53A3 /* RootView.swift */,
+				D999DD559C833CD87788CAD5 /* XMPPiOSApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		B8BF035EA1B8692F5F294439 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1EC37336D093CD8D185451AA /* XMPPiOS.app */,
+				F011167791FD6608B0B26510 /* XMPPiOSUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		133E80DA0478A8C0CD361FC7 /* XMPPiOSUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F495AF25DF105A9559B96D11 /* Build configuration list for PBXNativeTarget "XMPPiOSUITests" */;
+			buildPhases = (
+				C4401CFCBA693C9460D926E6 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C3EDC64EEB1666E2FEC9379E /* PBXTargetDependency */,
+			);
+			name = XMPPiOSUITests;
+			packageProductDependencies = (
+			);
+			productName = XMPPiOSUITests;
+			productReference = F011167791FD6608B0B26510 /* XMPPiOSUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		457D0AFAB9A4904EA1A67DFE /* XMPPiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 96BAFA47AF53079A1523DCFC /* Build configuration list for PBXNativeTarget "XMPPiOS" */;
+			buildPhases = (
+				6E482958E2CFAE476CBB0297 /* Sources */,
+				E96DDAF0D4007001F7C78138 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = XMPPiOS;
+			packageProductDependencies = (
+				FDC9596D2F9805667807CD8E /* XMPPProtocol */,
+				AFC1C801720A06EEB5CC2DFD /* MessageStore */,
+			);
+			productName = XMPPiOS;
+			productReference = 1EC37336D093CD8D185451AA /* XMPPiOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		39E63228423EE6A092F5C3A8 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					133E80DA0478A8C0CD361FC7 = {
+						ProvisioningStyle = Automatic;
+						TestTargetID = 457D0AFAB9A4904EA1A67DFE;
+					};
+					457D0AFAB9A4904EA1A67DFE = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = A552351F7B72244053D00C78 /* Build configuration list for PBXProject "XMPPiOS" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 1F3D912F711973CA6C4304DF;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				26A1CC1B31A664C05A14E4C5 /* XCLocalSwiftPackageReference "Packages/MessageStore" */,
+				B128AEA93413334A31D3EC8F /* XCLocalSwiftPackageReference "Packages/XMPPProtocol" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = B8BF035EA1B8692F5F294439 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				457D0AFAB9A4904EA1A67DFE /* XMPPiOS */,
+				133E80DA0478A8C0CD361FC7 /* XMPPiOSUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		6E482958E2CFAE476CBB0297 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FC4281063E554402B9A2C568 /* AppModel.swift in Sources */,
+				5F166C0A1D90C747BD73588F /* ConversationTimeline.swift in Sources */,
+				17A325600E79D8A8156382ED /* ConversationView.swift in Sources */,
+				E23C003181D2864649BEB0CA /* RootView.swift in Sources */,
+				473142DDB095B7B4EAD782BD /* XMPPiOSApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C4401CFCBA693C9460D926E6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7E6C4263F5BA1BCBF4FC6C9C /* ConversationUITests.swift in Sources */,
+				EF7387F958D30472732FFADE /* LabConnectionUITests.swift in Sources */,
+				73C11D0503BE6524DD670DBD /* OrganizationUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C3EDC64EEB1666E2FEC9379E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 457D0AFAB9A4904EA1A67DFE /* XMPPiOS */;
+			targetProxy = 12ED3E33185DDA22AC3FE54A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		02276C2047CD366ADEFE58AC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		0419187EC23F099FA292046F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "XMPP Lab";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to your local XMPP development server.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.xmpplab.ios;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		049100273777D8A153930792 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.xmpplab.XMPPiOSUITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = XMPPiOS;
+			};
+			name = Release;
+		};
+		217B5C15A38CDB9933872274 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.xmpplab.XMPPiOSUITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = XMPPiOS;
+			};
+			name = Debug;
+		};
+		78E7E1C75AA4DE3DA0A9EB80 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "XMPP Lab";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to your local XMPP development server.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.xmpplab.ios;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A052F8E5EA7D2804950192DA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		96BAFA47AF53079A1523DCFC /* Build configuration list for PBXNativeTarget "XMPPiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0419187EC23F099FA292046F /* Debug */,
+				78E7E1C75AA4DE3DA0A9EB80 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A552351F7B72244053D00C78 /* Build configuration list for PBXProject "XMPPiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				02276C2047CD366ADEFE58AC /* Debug */,
+				A052F8E5EA7D2804950192DA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F495AF25DF105A9559B96D11 /* Build configuration list for PBXNativeTarget "XMPPiOSUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				217B5C15A38CDB9933872274 /* Debug */,
+				049100273777D8A153930792 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		26A1CC1B31A664C05A14E4C5 /* XCLocalSwiftPackageReference "Packages/MessageStore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/MessageStore;
+		};
+		B128AEA93413334A31D3EC8F /* XCLocalSwiftPackageReference "Packages/XMPPProtocol" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/XMPPProtocol;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AFC1C801720A06EEB5CC2DFD /* MessageStore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MessageStore;
+		};
+		FDC9596D2F9805667807CD8E /* XMPPProtocol */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = XMPPProtocol;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 39E63228423EE6A092F5C3A8 /* Project object */;
+}

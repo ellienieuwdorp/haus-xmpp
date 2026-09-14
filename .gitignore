@@ -46,3 +46,12 @@ Secrets.xcconfig
 *.db-shm
 *.db-wal
 *.log
+
+# Local simulator/test artifacts and generated tool state
+*.xcresult/
+*.xctestproducts/
+.xcodebuildmcp/
+
+# Private development certificate keys
+*.key
+*.pem
