@@ -1,7 +1,7 @@
 import XCTest
 
 final class LabConnectionUITests: XCTestCase {
-    @MainActor func testLiveTLSLoginAndSelfMessage() throws {
+    @MainActor func testLiveTLSLoginDoesNotSendWithoutApprovedDevices() throws {
         continueAfterFailure = false
         let env = ProcessInfo.processInfo.environment
         guard let user = env["XMPP_LAB_USERNAME"], let password = env["XMPP_LAB_PASSWORD"] else {
@@ -38,9 +38,9 @@ final class LabConnectionUITests: XCTestCase {
         app.buttons["Settings"].tap()
         let received = app.staticTexts["labReceivedCount"]
         XCTAssertTrue(received.waitForExistence(timeout: 5))
-        let arrived = NSPredicate(format: "label == %@", "Received lab messages: 1")
-        expectation(for: arrived, evaluatedWith: received)
-        waitForExpectations(timeout: 10)
+        let unexpectedPlaintext = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label != %@", "Received lab messages: 0"), object: received)
+        unexpectedPlaintext.isInverted = true
+        wait(for: [unexpectedPlaintext], timeout: 3)
         app.buttons["Disconnect"].tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Offline")).firstMatch.waitForExistence(timeout: 5))
     }

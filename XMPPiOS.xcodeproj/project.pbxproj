@@ -10,12 +10,15 @@
 		14259EDA76E8B6B4C53D4E92 /* CircularGlassButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60CDCE362B275821D181D99A /* CircularGlassButtonStyle.swift */; };
 		17A325600E79D8A8156382ED /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B83163D7B25E749804F80AF /* ConversationView.swift */; };
 		1EEF6DDECCEA1FBA9B0A2FAF /* OutboxUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAC07EFB739E1EFD8DF0DCA3 /* OutboxUITests.swift */; };
+		369DEFDBC3B4D3938F3C1527 /* EncryptionDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 272E25DD29F38AD395BDE164 /* EncryptionDetailsView.swift */; };
 		40D62336483129A255BB1524 /* UITestStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42CFC68CD43A67165491DDB9 /* UITestStorage.swift */; };
 		473142DDB095B7B4EAD782BD /* XMPPiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D999DD559C833CD87788CAD5 /* XMPPiOSApp.swift */; };
 		4C24D0B2E96BA3297A3628B7 /* MessagingCore in Frameworks */ = {isa = PBXBuildFile; productRef = 0912355BF91BD872B68D1F0D /* MessagingCore */; };
 		5F166C0A1D90C747BD73588F /* ConversationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */; };
+		68E84935703E72818760EDD8 /* EncryptionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9CB3F0019D6F6D8C373107D /* EncryptionUITests.swift */; };
 		728CFF70CFB117DBE2C87F11 /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = FDC9596D2F9805667807CD8E /* XMPPProtocol */; };
 		73C11D0503BE6524DD670DBD /* OrganizationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */; };
+		7C73B051197157DA0813B292 /* EncryptionKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70C2AE56A0B7CD182E1DCD21 /* EncryptionKeychain.swift */; };
 		7E6C4263F5BA1BCBF4FC6C9C /* ConversationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24B51206177B769B64F7212B /* ConversationUITests.swift */; };
 		817111520A55373B387F2F40 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = AFC1C801720A06EEB5CC2DFD /* MessageStore */; };
 		E23C003181D2864649BEB0CA /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0311640D33AB3155A53A53A3 /* RootView.swift */; };
@@ -23,6 +26,7 @@
 		EF7387F958D30472732FFADE /* LabConnectionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 672F8EB6B8BC64098369E462 /* LabConnectionUITests.swift */; };
 		EFB84D5EC3319705EABE26D4 /* ConversationSearchBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B424C6F4AC85C78B1A51212 /* ConversationSearchBar.swift */; };
 		F5D4164ADFE260D260C59223 /* PolishUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A510E4E14CCDC43B6EEA364F /* PolishUITests.swift */; };
+		F9CA03662A6393D39C2A36AB /* OMEMO in Frameworks */ = {isa = PBXBuildFile; productRef = FB7F8F2D39F1B31F4CE92570 /* OMEMO */; };
 		FC4281063E554402B9A2C568 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2820963E2FB064DD0BAD839F /* AppModel.swift */; };
 /* End PBXBuildFile section */
 
@@ -39,18 +43,22 @@
 /* Begin PBXFileReference section */
 		0025A6ABF07DBBF6BF577B0C /* XMPPProtocol */ = {isa = PBXFileReference; lastKnownFileType = folder; name = XMPPProtocol; path = Packages/XMPPProtocol; sourceTree = SOURCE_ROOT; };
 		0311640D33AB3155A53A53A3 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		09336CE7482840B04C804E1D /* OMEMO */ = {isa = PBXFileReference; lastKnownFileType = folder; name = OMEMO; path = Packages/OMEMO; sourceTree = SOURCE_ROOT; };
 		1EC37336D093CD8D185451AA /* XMPPiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = XMPPiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		24B51206177B769B64F7212B /* ConversationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationUITests.swift; sourceTree = "<group>"; };
+		272E25DD29F38AD395BDE164 /* EncryptionDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionDetailsView.swift; sourceTree = "<group>"; };
 		2820963E2FB064DD0BAD839F /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		42CFC68CD43A67165491DDB9 /* UITestStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestStorage.swift; sourceTree = "<group>"; };
 		60CDCE362B275821D181D99A /* CircularGlassButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircularGlassButtonStyle.swift; sourceTree = "<group>"; };
 		672F8EB6B8BC64098369E462 /* LabConnectionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabConnectionUITests.swift; sourceTree = "<group>"; };
+		70C2AE56A0B7CD182E1DCD21 /* EncryptionKeychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionKeychain.swift; sourceTree = "<group>"; };
 		71C9EF89EE0813A74E05D3D4 /* MessagingCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MessagingCore; path = Packages/MessagingCore; sourceTree = SOURCE_ROOT; };
 		827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrganizationUITests.swift; sourceTree = "<group>"; };
 		832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTimeline.swift; sourceTree = "<group>"; };
 		8B424C6F4AC85C78B1A51212 /* ConversationSearchBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSearchBar.swift; sourceTree = "<group>"; };
 		9B83163D7B25E749804F80AF /* ConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationView.swift; sourceTree = "<group>"; };
 		A510E4E14CCDC43B6EEA364F /* PolishUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PolishUITests.swift; sourceTree = "<group>"; };
+		A9CB3F0019D6F6D8C373107D /* EncryptionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionUITests.swift; sourceTree = "<group>"; };
 		AC9D418986C30C4F6A0D3E79 /* MessageStore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MessageStore; path = Packages/MessageStore; sourceTree = SOURCE_ROOT; };
 		CC7CDB26BA137152F2503309 /* ReplyUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyUITests.swift; sourceTree = "<group>"; };
 		D999DD559C833CD87788CAD5 /* XMPPiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XMPPiOSApp.swift; sourceTree = "<group>"; };
@@ -66,6 +74,7 @@
 				728CFF70CFB117DBE2C87F11 /* XMPPProtocol in Frameworks */,
 				817111520A55373B387F2F40 /* MessageStore in Frameworks */,
 				4C24D0B2E96BA3297A3628B7 /* MessagingCore in Frameworks */,
+				F9CA03662A6393D39C2A36AB /* OMEMO in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -87,6 +96,7 @@
 			children = (
 				AC9D418986C30C4F6A0D3E79 /* MessageStore */,
 				71C9EF89EE0813A74E05D3D4 /* MessagingCore */,
+				09336CE7482840B04C804E1D /* OMEMO */,
 				0025A6ABF07DBBF6BF577B0C /* XMPPProtocol */,
 			);
 			path = Packages;
@@ -96,6 +106,7 @@
 			isa = PBXGroup;
 			children = (
 				24B51206177B769B64F7212B /* ConversationUITests.swift */,
+				A9CB3F0019D6F6D8C373107D /* EncryptionUITests.swift */,
 				672F8EB6B8BC64098369E462 /* LabConnectionUITests.swift */,
 				827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */,
 				EAC07EFB739E1EFD8DF0DCA3 /* OutboxUITests.swift */,
@@ -114,6 +125,8 @@
 				8B424C6F4AC85C78B1A51212 /* ConversationSearchBar.swift */,
 				832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */,
 				9B83163D7B25E749804F80AF /* ConversationView.swift */,
+				272E25DD29F38AD395BDE164 /* EncryptionDetailsView.swift */,
+				70C2AE56A0B7CD182E1DCD21 /* EncryptionKeychain.swift */,
 				0311640D33AB3155A53A53A3 /* RootView.swift */,
 				D999DD559C833CD87788CAD5 /* XMPPiOSApp.swift */,
 			);
@@ -166,6 +179,7 @@
 				FDC9596D2F9805667807CD8E /* XMPPProtocol */,
 				AFC1C801720A06EEB5CC2DFD /* MessageStore */,
 				0912355BF91BD872B68D1F0D /* MessagingCore */,
+				FB7F8F2D39F1B31F4CE92570 /* OMEMO */,
 			);
 			productName = XMPPiOS;
 			productReference = 1EC37336D093CD8D185451AA /* XMPPiOS.app */;
@@ -201,6 +215,7 @@
 			packageReferences = (
 				26A1CC1B31A664C05A14E4C5 /* XCLocalSwiftPackageReference "Packages/MessageStore" */,
 				15E9A30E45E5BC5EA02B3B52 /* XCLocalSwiftPackageReference "Packages/MessagingCore" */,
+				3455CECA5FF894B2974921A4 /* XCLocalSwiftPackageReference "Packages/OMEMO" */,
 				B128AEA93413334A31D3EC8F /* XCLocalSwiftPackageReference "Packages/XMPPProtocol" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -224,6 +239,8 @@
 				EFB84D5EC3319705EABE26D4 /* ConversationSearchBar.swift in Sources */,
 				5F166C0A1D90C747BD73588F /* ConversationTimeline.swift in Sources */,
 				17A325600E79D8A8156382ED /* ConversationView.swift in Sources */,
+				369DEFDBC3B4D3938F3C1527 /* EncryptionDetailsView.swift in Sources */,
+				7C73B051197157DA0813B292 /* EncryptionKeychain.swift in Sources */,
 				E23C003181D2864649BEB0CA /* RootView.swift in Sources */,
 				473142DDB095B7B4EAD782BD /* XMPPiOSApp.swift in Sources */,
 			);
@@ -234,6 +251,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				7E6C4263F5BA1BCBF4FC6C9C /* ConversationUITests.swift in Sources */,
+				68E84935703E72818760EDD8 /* EncryptionUITests.swift in Sources */,
 				EF7387F958D30472732FFADE /* LabConnectionUITests.swift in Sources */,
 				73C11D0503BE6524DD670DBD /* OrganizationUITests.swift in Sources */,
 				1EEF6DDECCEA1FBA9B0A2FAF /* OutboxUITests.swift in Sources */,
@@ -498,6 +516,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/MessageStore;
 		};
+		3455CECA5FF894B2974921A4 /* XCLocalSwiftPackageReference "Packages/OMEMO" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/OMEMO;
+		};
 		B128AEA93413334A31D3EC8F /* XCLocalSwiftPackageReference "Packages/XMPPProtocol" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/XMPPProtocol;
@@ -512,6 +534,10 @@
 		AFC1C801720A06EEB5CC2DFD /* MessageStore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = MessageStore;
+		};
+		FB7F8F2D39F1B31F4CE92570 /* OMEMO */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = OMEMO;
 		};
 		FDC9596D2F9805667807CD8E /* XMPPProtocol */ = {
 			isa = XCSwiftPackageProductDependency;

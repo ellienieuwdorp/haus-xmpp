@@ -6,6 +6,7 @@ struct ConversationView: View {
     @State private var draft = ""
     @State private var query = ""
     @State private var showingSearch = false
+    @State private var showingEncryption = false
     @State private var starredOnly = false
     @State private var retryMessageID: String?
     @State private var replyingTo: ChatMessage?
@@ -39,9 +40,16 @@ struct ConversationView: View {
                         .padding(.horizontal, 16).padding(.bottom, 8)
                 }
             } else {
-                Label(model.isDemo ? "Sample conversation" : "Lab messages · no end-to-end encryption", systemImage: "flask")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity).padding(.vertical, 8)
+                if model.isDemo {
+                    Label("Sample conversation", systemImage: "flask").font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity).padding(.vertical, 8)
+                } else {
+                    Button { showingEncryption = true } label: {
+                        Label(model.encryptionStatus, systemImage: model.encryptionNeedsReview ? "exclamationmark.shield" : "lock")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            .frame(maxWidth: .infinity).frame(minHeight: 44)
+                    }.buttonStyle(.plain).accessibilityIdentifier("encryptionDetails")
+                }
             }
             if starredOnly {
                 HStack {
@@ -53,7 +61,8 @@ struct ConversationView: View {
             ConversationTimeline(messages: messages.map {
                 TimelineMessage(id: $0.id, body: $0.body, isOutgoing: $0.isOutgoing, isStarred: $0.isStarred,
                                 sentAt: $0.sentAt, status: $0.transportState.flatMap { TimelineMessage.Status(rawValue: $0.rawValue) },
-                                reply: $0.reply.map { TimelineReply(author: authorName($0.senderID), body: $0.body) })
+                                reply: $0.reply.map { TimelineReply(author: authorName($0.senderID), body: $0.body) },
+                                securityNotice: !model.isDemo && $0.encryptionProfile == nil ? "Not encrypted" : nil)
             }, onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
                 replyingTo = message
@@ -77,6 +86,7 @@ struct ConversationView: View {
                 Menu {
                     Button("Search messages", systemImage: "magnifyingglass") { composing = false; showingSearch = true }
                     Button("Starred messages", systemImage: "star") { starredOnly = true }
+                    if !model.isDemo { Button("Encryption", systemImage: "lock.shield") { showingEncryption = true } }
                 } label: { Image(systemName: "ellipsis") }
                 .accessibilityLabel("Conversation options")
             }
@@ -140,6 +150,7 @@ struct ConversationView: View {
         } message: { _ in
             Text("The recipient may already have it. Sending again could create a duplicate.")
         }
+        .sheet(isPresented: $showingEncryption) { EncryptionDetailsView(model: model, chatID: chatID) }
         .task(id: chatID) { await model.openChat(chatID) }
         .onDisappear { model.closeChat(chatID) }
     }

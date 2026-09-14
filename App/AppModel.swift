@@ -3,6 +3,7 @@ import Observation
 import MessageStore
 import XMPPProtocol
 import MessagingCore
+import OMEMO
 
 struct ChatSummary: Identifiable {
     let id: String
@@ -24,6 +25,11 @@ final class AppModel {
     private(set) var isSending = false
     private(set) var receivedCount = 0
     var error: String?
+    private(set) var encryptionReady = false
+    private(set) var encryptionStatus = "Preparing encryption…"
+    private(set) var encryptionOverview: EncryptionOverview?
+    private(set) var encryptionNeedsReview = false
+    @ObservationIgnored private var encryption: OMEMOService?
     var isDemo: Bool { accountID == "preview.local" }
 
     @ObservationIgnored private var store: MessageStore?
@@ -63,7 +69,12 @@ final class AppModel {
             values.isExcludedFromBackup = true
             try excluded.setResourceValues(values)
             store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
-            if let store { outboxSender = OutboxSender(store: store) }
+            if let store {
+                outboxSender = OutboxSender(store: store)
+                let allowCreation = try await !store.hasAnyEncryptionState()
+                let wrappingKey = try EncryptionKeychain.load(storageID: testSessionID ?? "primary", allowCreation: allowCreation)
+                encryption = OMEMOService(store: store, protection: try StateProtection(key: wrappingKey))
+            }
             accountID = preferences.string(forKey: "lastAccount") ?? ""
             if ProcessInfo.processInfo.arguments.contains("-demo") { await loadDemo() }
             else { await refresh() }
@@ -160,10 +171,15 @@ final class AppModel {
         isConnected = false
         isConnecting = false
         connectionStatus = "Offline"
+        encryptionReady = false
+        encryptionOverview = nil
+        encryptionNeedsReview = false
+        encryptionStatus = "Connect to prepare encryption"
         return previous
     }
 
     private func handle(_ event: XMPPEvent, token: UUID) async {
+        let account = accountID
         switch event {
         case .state(let state):
             switch state {
@@ -172,25 +188,58 @@ final class AppModel {
             case .binding: connectionStatus = "Opening session…"
             case .online:
                 connectionStatus = "Connected to lab"; isConnected = true; isConnecting = false
-                startOutbox()
+                if let encryption, let client {
+                    do {
+                        let features = try await client.discoveryFeatures()
+                        if features.contains("urn:xmpp:carbons:2") { try await client.setCarbonsEnabled() }
+                        try await encryption.initialize(account: account, transport: client)
+                        guard generation == token else { return }
+                        encryptionReady = true
+                        encryptionStatus = "End-to-end encryption"
+                        try? await encryption.retryPendingIncoming(account: account, transport: client)
+                        guard generation == token else { return }
+                        await flushEncryptionControls(account: account, client: client)
+                        await refresh()
+                        guard generation == token else { return }
+                        startOutbox()
+                        if let openChatID { await loadEncryptionDetails(for: openChatID) }
+                    } catch {
+                        guard generation == token else { return }
+                        encryptionStatus = "Encryption setup needs attention"
+                        self.error = "Could not prepare encryption. Your queued messages have not been sent."
+                    }
+                }
             case .disconnected(let reason):
                 drainTask?.cancel()
                 connectionStatus = "Offline"; isConnected = false; isConnecting = false
                 if reason != nil { error = "The lab connection ended. Delivery of any in-flight message is unconfirmed." }
             }
-        case .message(let incoming):
+        case .encryptedMessage(let incoming):
             receivedCount += 1
-            let sender = String(incoming.from.split(separator: "/", maxSplits: 1).first ?? "")
-            // Self echoes are useful to the transport smoke but aren't a second conversation entry.
-            guard sender != accountID, !sender.isEmpty, let store else { return }
-            let account = accountID
+            guard let encryption, let client else { return }
             do {
-                try await store.upsertChat(accountID: account, chatID: sender, title: sender)
-                try await store.insertMessage(StoredMessage(id: UUID().uuidString, accountID: account, chatID: sender,
-                                                           senderID: sender, body: incoming.body))
+                _ = try await encryption.receive(account: account, message: incoming, transport: client)
+                guard generation == token else { return }
+                await flushEncryptionControls(account: account, client: client)
                 guard generation == token else { return }
                 await refresh()
-            } catch { self.error = "An incoming lab message could not be saved." }
+            } catch {
+                guard generation == token else { return }
+                encryptionNeedsReview = true
+                encryptionStatus = (error as? OMEMOError)?.errorDescription ?? "An encrypted message needs attention"
+                if let openChatID { await loadEncryptionDetails(for: openChatID, refreshFromServer: false) }
+            }
+        case .omemoDevices(let owner, _, _):
+            if let openChatID, owner == openChatID || owner == accountID {
+                await loadEncryptionDetails(for: openChatID)
+            }
+        case .encryptionFailure:
+            encryptionStatus = "An encrypted message could not be opened"
+        case .message:
+            // Encrypted conversations do not render unauthenticated plaintext injected by a peer
+            // or server as though it had passed OMEMO authentication.
+            encryptionStatus = "An unencrypted message was blocked"
+
         }
     }
 
@@ -224,7 +273,7 @@ final class AppModel {
         if let source, source.accountID != account || source.chatID != chatID { return false }
         let reply = source.map { MessageReply(messageID: $0.id, senderID: $0.senderID, body: $0.body, wireID: $0.isOutgoing && $0.transportState != nil ? $0.id : nil) }
         let message = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chatID,
-                                    senderID: account, body: body, isOutgoing: true, reply: reply)
+                                    senderID: account, body: body, isOutgoing: true, reply: reply, encryptionProfile: sample ? nil : "pending")
         do {
             try XMPPClient.validateMessage(to: chatID, body: body, id: message.id, reply: Self.wireReply(message.reply))
         } catch {
@@ -258,21 +307,31 @@ final class AppModel {
 
     private func startOutbox() {
         outboxRequested = true
-        guard drainTask == nil, isConnected, !isDemo,
-              let client, let outboxSender else { return }
+        guard drainTask == nil, isConnected, encryptionReady, !isDemo,
+              let client, let outboxSender, let encryption else { return }
         outboxRequested = false
         let account = accountID
         let token = generation
         drainTask = Task { [weak self] in
             do {
-                try await outboxSender.drain(accountID: account, send: { message in
-                    _ = try await client.sendMessage(to: message.chatID, body: message.body, id: message.id, reply: Self.wireReply(message.reply))
+                let preparation = try await encryption.prepareAvailableMessages(account: account, transport: client)
+                if let self, self.generation == token, let issue = preparation.blockedChats[self.openChatID ?? ""] {
+                    self.encryptionStatus = issue
+                    self.encryptionNeedsReview = true
+                }
+                try await outboxSender.drain(accountID: account, messageIDs: preparation.messageIDs, send: { message in
+                    let envelope: XMPPOMEMOEnvelope
+                    do { envelope = try await encryption.outgoingEnvelope(account: account, messageID: message.id) }
+                    catch { throw OutboxSendFailure.notAttempted }
+                    _ = try await client.sendEncryptedMessage(to: message.chatID, envelope: envelope, id: message.id)
                 }, didChange: { [weak self] in
                     await self?.refresh()
                 })
             } catch {
                 if let self, self.generation == token {
-                    await self.disconnect()
+                    self.encryptionNeedsReview = true
+                    self.encryptionStatus = (error as? OMEMOError)?.errorDescription ?? "Encryption could not be prepared. Messages remain saved."
+                    if let chat = self.openChatID { await self.loadEncryptionDetails(for: chat, refreshFromServer: false) }
                 }
             }
             guard let self else { return }
@@ -282,7 +341,60 @@ final class AppModel {
         }
     }
 
-    func openChat(_ chatID: String) async { openChatID = chatID; messages = []; await refresh() }
+    func openChat(_ chatID: String) async {
+        openChatID = chatID; messages = []; encryptionOverview = nil
+        await refresh()
+        if !isDemo { await loadEncryptionDetails(for: chatID) }
+    }
+
+    func loadEncryptionDetails(for chatID: String, refreshFromServer: Bool = true, profile: XMPPOMEMOProfile? = nil) async {
+        guard let encryption, !isDemo else { return }
+        let account = accountID
+        let token = generation
+        do {
+            let overview: EncryptionOverview
+            if refreshFromServer, encryptionReady, isConnected, let client {
+                overview = try await encryption.refreshDevices(account: account, peer: chatID, profile: profile, transport: client)
+            } else { overview = try await encryption.overview(account: account, peer: chatID) }
+            guard accountID == account, generation == token, openChatID == chatID else { return }
+            encryptionOverview = overview
+            encryptionNeedsReview = overview.needsTrust
+            if overview.hasIncompatibleDevices { encryptionStatus = "Devices use incompatible encryption versions" }
+            else if overview.needsTrust { encryptionStatus = "Review encryption devices" }
+            else if !overview.devices.contains(where: { $0.jid == chatID && $0.active && $0.trust.permitsEncryption }) {
+                encryptionStatus = "No compatible encryption devices"
+            } else { encryptionStatus = "New messages are end-to-end encrypted" }
+        } catch {
+            guard accountID == account, generation == token else { return }
+            encryptionStatus = (error as? OMEMOError)?.errorDescription ?? "Could not fetch encryption devices"
+        }
+    }
+
+    func setDeviceTrust(_ device: EncryptionDevice, trust: DeviceTrust, chatID: String) async {
+        guard let encryption else { return }
+        let account = accountID
+        let token = generation
+        do {
+            try await encryption.setTrust(account: account, deviceID: device.id, trust: trust)
+            guard generation == token else { return }
+            await loadEncryptionDetails(for: chatID, refreshFromServer: false)
+            guard generation == token else { return }
+            if let client, isConnected {
+                try? await encryption.retryPendingIncoming(account: account, transport: client)
+                guard generation == token else { return }
+                await flushEncryptionControls(account: account, client: client)
+                await refresh()
+                startOutbox()
+            }
+        } catch { if generation == token { self.error = "This device changed. Refresh its fingerprint before reviewing it again." } }
+    }
+    private func flushEncryptionControls(account: String, client: XMPPClient) async {
+        guard accountID == account, self.client === client else { return }
+        try? await encryption?.flushKeyTransports(account: account) { to, id, envelope in
+            _ = try await client.sendEncryptedMessage(to: to, envelope: envelope, id: id)
+        }
+    }
+
     func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = [] } }
 
     func toggleStar(_ id: String) async {

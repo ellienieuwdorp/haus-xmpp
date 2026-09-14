@@ -31,7 +31,7 @@ struct RootView: View {
                         Section("Development preview") {
                             Text("Received lab messages: \(model.receivedCount)")
                                 .accessibilityIdentifier("labReceivedCount")
-                            Text("This first build supports local test messages. End-to-end encryption is not implemented yet.")
+                            Text("This development build supports encrypted direct messages between local test accounts. Notifications and archive recovery are still in development.")
                                 .foregroundStyle(.secondary)
                             Button("Explore sample conversations") { Task { await model.loadDemo() } }
                         }
@@ -82,7 +82,7 @@ struct ChatListView: View {
             } else {
                 List {
                     Section {
-                        Label(model.isDemo ? "Sample conversations · stored on this device" : "Local lab · not end-to-end encrypted", systemImage: "flask")
+                        Label(model.isDemo ? "Sample conversations · stored on this device" : "Local development lab", systemImage: "flask")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     ForEach(visibleChats) { chat in
@@ -192,11 +192,11 @@ struct ConnectionView: View {
         NavigationStack {
             Form {
                 Section {
-                    Text("Connect a disposable account on the local development server. Messages use TLS but are not end-to-end encrypted.")
+                    Text("Connect a disposable account on the local development server. New messages require end-to-end encryption and approved recipient devices.")
                     TextField("Username (without @localhost)", text: $username)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("labUsername")
                     SecureField("Password", text: $password).accessibilityIdentifier("labPassword")
-                    Toggle("Use unencrypted lab messages", isOn: $consent)
+                    Toggle("Use a disposable lab account", isOn: $consent)
                         .accessibilityIdentifier("labConsent")
                 } footer: {
                     Text("localhost:5223 · Direct TLS. The lab certificate must be trusted in this simulator. Passwords stay in memory for this session.")

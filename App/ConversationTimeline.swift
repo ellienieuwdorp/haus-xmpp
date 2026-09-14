@@ -14,6 +14,7 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     var sentAt: Date? = nil
     var status: Status? = nil
     var reply: TimelineReply? = nil
+    var securityNotice: String? = nil
 
     enum Status: String, Sendable, Equatable {
         case queued, submitting, unconfirmed, failed
@@ -514,6 +515,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         if message.isStarred { descriptions.append("starred") }
         if let date = message.sentAt { descriptions.append(date.formatted(date: .abbreviated, time: .shortened)) }
         if message.isOutgoing, let state = message.status { descriptions.append(state.accessibilityDescription) }
+        if let notice = message.securityNotice { descriptions.append(notice) }
         textView.accessibilityLabel = descriptions.joined(separator: ", ")
         textView.accessibilityCustomActions = [UIAccessibilityCustomAction(name: message.isStarred ? "Unstar message" : "Star message") { _ in
             toggleStar()
@@ -532,8 +534,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
             textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: "Retry message") { _ in retry(); return true })
         }
         star.alpha = message.isStarred ? 1 : 0
-        time.text = message.sentAt?.formatted(date: .omitted, time: .shortened)
-        time.isHidden = message.sentAt == nil
+        time.text = [message.securityNotice, message.sentAt?.formatted(date: .omitted, time: .shortened)].compactMap { $0 }.joined(separator: " · ")
+        time.isHidden = message.sentAt == nil && message.securityNotice == nil
         status.isHidden = !message.isOutgoing || message.status == nil
         status.tintColor = message.status == .failed ? .systemRed : .secondaryLabel
         switch message.status {

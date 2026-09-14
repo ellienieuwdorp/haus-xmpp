@@ -2,9 +2,9 @@
 
 A new native iOS XMPP client, currently an early **local development prototype**. `XMPP Lab` is a temporary build name, not a chosen product name.
 
-The app builds and runs in the iOS simulator. It has a SwiftUI shell, UIKit conversation timeline, selectable messages, local stars/pins, swipe-to-reply with persisted quotes, native search controls and SQLite persistence. A new Swift protocol package can connect through validated direct TLS, authenticate, bind and exchange lab messages. Outgoing messages are now durably queued before transport, with explicit uncertain-send handling. No protocol library fork or external package dependency is adopted.
+The app builds and runs in the iOS simulator. It has a SwiftUI shell, UIKit conversation timeline, selectable messages, local stars/pins, swipe-to-reply with persisted quotes, native search controls and SQLite persistence. Our own Swift protocol stack connects through validated direct TLS and now exchanges legacy and modern OMEMO encrypted direct messages. Device trust and encryption live in an isolated business package; exact ciphertext and ratchet changes commit together before transport. Focused, pinned crypto dependencies are reused without maintaining a protocol/client fork.
 
-**This is not ready for personal conversations.** OMEMO, archive/stream synchronization, reactions, media and production notifications are still to be implemented. The app explicitly limits network sends to the local lab. Sample conversations are local fixtures, clearly separated from lab accounts.
+**This is not ready for personal conversations.** Encrypted direct messaging works in the local lab. Archive/stream synchronization, reactions, group workflows, media transfer and production notifications remain in development. The app explicitly limits network sends to the local lab. Sample conversations are local fixtures, clearly separated from lab accounts.
 
 ## Build and run
 
@@ -16,12 +16,14 @@ Open `XMPPiOS.xcodeproj`, select the `XMPPiOS` scheme and an iOS 26+ simulator, 
 swift test --package-path Packages/MessageStore
 swift test --package-path Packages/XMPPProtocol
 swift test --package-path Packages/MessagingCore
+swift test --package-path Packages/OMEMOCrypto
+swift test --package-path Packages/OMEMO
 ```
 
-Run the `XMPPiOS` test action in Xcode for simulator UI checks. The optional live lab UI test skips unless provided disposable credentials. See [current development status and checks](docs/development/replies-and-list-refinement.md).
+Run the `XMPPiOS` test action in Xcode for simulator UI checks. The optional live lab UI test skips unless provided disposable credentials. See [current development status and checks](docs/development/omemo-milestone.md).
 
 ## Direction
 
-Reliable notifications, full OMEMO interoperability, core reactions, excellent search, media organization and a simple modern interface remain the product goals. We own the protocol stack, reuse focused components as appropriate, and avoid paid dependencies by default. No project license has been selected; the remote is private.
+Reliable notifications, full OMEMO interoperability, core reactions, excellent search, media organization and a simple modern interface remain the product goals. We own the protocol stack, reuse focused components as appropriate, and avoid paid dependencies by default. No project license has been selected; the remote is private. The selected GPL crypto dependency has an App Store additional permission; app distribution terms remain to be resolved. See its package README for exact provenance and terms.
 
 Read the [accepted decisions](docs/preliminary/16-accepted-direction-and-local-development.md), [research index](docs/preliminary/README.md).
