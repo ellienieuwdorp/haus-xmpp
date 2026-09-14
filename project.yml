@@ -13,6 +13,8 @@ packages:
     path: Packages/XMPPProtocol
   MessageStore:
     path: Packages/MessageStore
+  MessagingCore:
+    path: Packages/MessagingCore
 targets:
   XMPPiOS:
     type: application
@@ -21,6 +23,7 @@ targets:
     dependencies:
       - package: XMPPProtocol
       - package: MessageStore
+      - package: MessagingCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.xmpplab.ios

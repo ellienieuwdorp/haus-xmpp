@@ -7,8 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		14259EDA76E8B6B4C53D4E92 /* CircularGlassButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60CDCE362B275821D181D99A /* CircularGlassButtonStyle.swift */; };
 		17A325600E79D8A8156382ED /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B83163D7B25E749804F80AF /* ConversationView.swift */; };
+		1EEF6DDECCEA1FBA9B0A2FAF /* OutboxUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAC07EFB739E1EFD8DF0DCA3 /* OutboxUITests.swift */; };
 		473142DDB095B7B4EAD782BD /* XMPPiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D999DD559C833CD87788CAD5 /* XMPPiOSApp.swift */; };
+		4C24D0B2E96BA3297A3628B7 /* MessagingCore in Frameworks */ = {isa = PBXBuildFile; productRef = 0912355BF91BD872B68D1F0D /* MessagingCore */; };
 		5F166C0A1D90C747BD73588F /* ConversationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */; };
 		728CFF70CFB117DBE2C87F11 /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = FDC9596D2F9805667807CD8E /* XMPPProtocol */; };
 		73C11D0503BE6524DD670DBD /* OrganizationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */; };
@@ -16,6 +19,7 @@
 		817111520A55373B387F2F40 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = AFC1C801720A06EEB5CC2DFD /* MessageStore */; };
 		E23C003181D2864649BEB0CA /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0311640D33AB3155A53A53A3 /* RootView.swift */; };
 		EF7387F958D30472732FFADE /* LabConnectionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 672F8EB6B8BC64098369E462 /* LabConnectionUITests.swift */; };
+		F5D4164ADFE260D260C59223 /* PolishUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A510E4E14CCDC43B6EEA364F /* PolishUITests.swift */; };
 		FC4281063E554402B9A2C568 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2820963E2FB064DD0BAD839F /* AppModel.swift */; };
 /* End PBXBuildFile section */
 
@@ -35,12 +39,16 @@
 		1EC37336D093CD8D185451AA /* XMPPiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = XMPPiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		24B51206177B769B64F7212B /* ConversationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationUITests.swift; sourceTree = "<group>"; };
 		2820963E2FB064DD0BAD839F /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		60CDCE362B275821D181D99A /* CircularGlassButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircularGlassButtonStyle.swift; sourceTree = "<group>"; };
 		672F8EB6B8BC64098369E462 /* LabConnectionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabConnectionUITests.swift; sourceTree = "<group>"; };
+		71C9EF89EE0813A74E05D3D4 /* MessagingCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MessagingCore; path = Packages/MessagingCore; sourceTree = SOURCE_ROOT; };
 		827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrganizationUITests.swift; sourceTree = "<group>"; };
 		832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTimeline.swift; sourceTree = "<group>"; };
 		9B83163D7B25E749804F80AF /* ConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationView.swift; sourceTree = "<group>"; };
+		A510E4E14CCDC43B6EEA364F /* PolishUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PolishUITests.swift; sourceTree = "<group>"; };
 		AC9D418986C30C4F6A0D3E79 /* MessageStore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MessageStore; path = Packages/MessageStore; sourceTree = SOURCE_ROOT; };
 		D999DD559C833CD87788CAD5 /* XMPPiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XMPPiOSApp.swift; sourceTree = "<group>"; };
+		EAC07EFB739E1EFD8DF0DCA3 /* OutboxUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutboxUITests.swift; sourceTree = "<group>"; };
 		F011167791FD6608B0B26510 /* XMPPiOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = XMPPiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -51,6 +59,7 @@
 			files = (
 				728CFF70CFB117DBE2C87F11 /* XMPPProtocol in Frameworks */,
 				817111520A55373B387F2F40 /* MessageStore in Frameworks */,
+				4C24D0B2E96BA3297A3628B7 /* MessagingCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,6 +80,7 @@
 			isa = PBXGroup;
 			children = (
 				AC9D418986C30C4F6A0D3E79 /* MessageStore */,
+				71C9EF89EE0813A74E05D3D4 /* MessagingCore */,
 				0025A6ABF07DBBF6BF577B0C /* XMPPProtocol */,
 			);
 			path = Packages;
@@ -82,6 +92,8 @@
 				24B51206177B769B64F7212B /* ConversationUITests.swift */,
 				672F8EB6B8BC64098369E462 /* LabConnectionUITests.swift */,
 				827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */,
+				EAC07EFB739E1EFD8DF0DCA3 /* OutboxUITests.swift */,
+				A510E4E14CCDC43B6EEA364F /* PolishUITests.swift */,
 			);
 			path = AppTests;
 			sourceTree = "<group>";
@@ -90,6 +102,7 @@
 			isa = PBXGroup;
 			children = (
 				2820963E2FB064DD0BAD839F /* AppModel.swift */,
+				60CDCE362B275821D181D99A /* CircularGlassButtonStyle.swift */,
 				832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */,
 				9B83163D7B25E749804F80AF /* ConversationView.swift */,
 				0311640D33AB3155A53A53A3 /* RootView.swift */,
@@ -143,6 +156,7 @@
 			packageProductDependencies = (
 				FDC9596D2F9805667807CD8E /* XMPPProtocol */,
 				AFC1C801720A06EEB5CC2DFD /* MessageStore */,
+				0912355BF91BD872B68D1F0D /* MessagingCore */,
 			);
 			productName = XMPPiOS;
 			productReference = 1EC37336D093CD8D185451AA /* XMPPiOS.app */;
@@ -177,6 +191,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				26A1CC1B31A664C05A14E4C5 /* XCLocalSwiftPackageReference "Packages/MessageStore" */,
+				15E9A30E45E5BC5EA02B3B52 /* XCLocalSwiftPackageReference "Packages/MessagingCore" */,
 				B128AEA93413334A31D3EC8F /* XCLocalSwiftPackageReference "Packages/XMPPProtocol" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -196,6 +211,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				FC4281063E554402B9A2C568 /* AppModel.swift in Sources */,
+				14259EDA76E8B6B4C53D4E92 /* CircularGlassButtonStyle.swift in Sources */,
 				5F166C0A1D90C747BD73588F /* ConversationTimeline.swift in Sources */,
 				17A325600E79D8A8156382ED /* ConversationView.swift in Sources */,
 				E23C003181D2864649BEB0CA /* RootView.swift in Sources */,
@@ -210,6 +226,8 @@
 				7E6C4263F5BA1BCBF4FC6C9C /* ConversationUITests.swift in Sources */,
 				EF7387F958D30472732FFADE /* LabConnectionUITests.swift in Sources */,
 				73C11D0503BE6524DD670DBD /* OrganizationUITests.swift in Sources */,
+				1EEF6DDECCEA1FBA9B0A2FAF /* OutboxUITests.swift in Sources */,
+				F5D4164ADFE260D260C59223 /* PolishUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -460,6 +478,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		15E9A30E45E5BC5EA02B3B52 /* XCLocalSwiftPackageReference "Packages/MessagingCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/MessagingCore;
+		};
 		26A1CC1B31A664C05A14E4C5 /* XCLocalSwiftPackageReference "Packages/MessageStore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/MessageStore;
@@ -471,6 +493,10 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		0912355BF91BD872B68D1F0D /* MessagingCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MessagingCore;
+		};
 		AFC1C801720A06EEB5CC2DFD /* MessageStore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = MessageStore;

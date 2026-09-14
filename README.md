@@ -2,9 +2,9 @@
 
 A new native iOS XMPP client, currently at its first **local development prototype**. `XMPP Lab` is a temporary build name, not a chosen product name.
 
-The app builds and runs in the iOS simulator. It has a SwiftUI shell, UIKit conversation timeline, selectable messages, local stars/pins and SQLite persistence. A new Swift protocol package can connect through validated direct TLS, authenticate, bind and exchange lab messages. No protocol library fork or external package dependency is adopted.
+The app builds and runs in the iOS simulator. It has a SwiftUI shell, UIKit conversation timeline, selectable messages, local stars/pins and SQLite persistence. A new Swift protocol package can connect through validated direct TLS, authenticate, bind and exchange lab messages. Outgoing messages are now durably queued before transport, with explicit uncertain-send handling. No protocol library fork or external package dependency is adopted.
 
-**This is not ready for personal conversations.** OMEMO, reliable synchronization/outbox, reactions, media and production notifications are still to be implemented. The app explicitly limits network sends to the local lab. Sample conversations are local fixtures, clearly separated from lab accounts.
+**This is not ready for personal conversations.** OMEMO, archive/stream synchronization, reactions, media and production notifications are still to be implemented. The app explicitly limits network sends to the local lab. Sample conversations are local fixtures, clearly separated from lab accounts.
 
 ## Build and run
 
@@ -15,9 +15,10 @@ Open `XMPPiOS.xcodeproj`, select the `XMPPiOS` scheme and an iOS 26+ simulator, 
 ```sh
 swift test --package-path Packages/MessageStore
 swift test --package-path Packages/XMPPProtocol
+swift test --package-path Packages/MessagingCore
 ```
 
-Run the `XMPPiOS` test action in Xcode for simulator UI checks. The optional live lab UI test skips unless provided disposable credentials. See [development status and checks](docs/development/first-milestone.md).
+Run the `XMPPiOS` test action in Xcode for simulator UI checks. The optional live lab UI test skips unless provided disposable credentials. See [current development status and checks](docs/development/durable-sending-and-ui.md).
 
 ## Direction
 

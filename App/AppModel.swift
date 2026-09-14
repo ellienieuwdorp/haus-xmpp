@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import MessageStore
 import XMPPProtocol
+import MessagingCore
 
 struct ChatSummary: Identifiable {
     let id: String
@@ -26,6 +27,9 @@ final class AppModel {
     var isDemo: Bool { accountID == "preview.local" }
 
     @ObservationIgnored private var store: MessageStore?
+    @ObservationIgnored private var outboxSender: OutboxSender?
+    @ObservationIgnored private var outboxRequested = false
+    @ObservationIgnored private var drainTask: Task<Void, Never>?
     @ObservationIgnored private var client: XMPPClient?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var openChatID: String?
@@ -45,6 +49,7 @@ final class AppModel {
             values.isExcludedFromBackup = true
             try excluded.setResourceValues(values)
             store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
+            if let store { outboxSender = OutboxSender(store: store) }
             accountID = UserDefaults.standard.string(forKey: "lastAccount") ?? ""
             if ProcessInfo.processInfo.arguments.contains("-demo") { await loadDemo() }
             else { await refresh() }
@@ -133,6 +138,7 @@ final class AppModel {
 
     private func resetSession() -> XMPPClient? {
         generation = UUID()
+        drainTask?.cancel()
         eventTask?.cancel()
         eventTask = nil
         let previous = client
@@ -150,8 +156,11 @@ final class AppModel {
             case .connecting: connectionStatus = "Connecting…"
             case .authenticating: connectionStatus = "Signing in…"
             case .binding: connectionStatus = "Opening session…"
-            case .online: connectionStatus = "Connected to lab"; isConnected = true; isConnecting = false
+            case .online:
+                connectionStatus = "Connected to lab"; isConnected = true; isConnecting = false
+                startOutbox()
             case .disconnected(let reason):
+                drainTask?.cancel()
                 connectionStatus = "Offline"; isConnected = false; isConnecting = false
                 if reason != nil { error = "The lab connection ended. Delivery of any in-flight message is unconfirmed." }
             }
@@ -190,23 +199,66 @@ final class AppModel {
     }
 
     func send(_ body: String, to chatID: String) async -> Bool {
-        guard !isSending, let store, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard !isSending, let store, !accountID.isEmpty,
+              !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               body.utf8.count <= 16_384 else { return false }
         isSending = true
         defer { isSending = false }
         let account = accountID
+        let sample = isDemo
+        guard sample || chatID.hasSuffix("@localhost") else { return false }
+        let message = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chatID,
+                                    senderID: account, body: body, isOutgoing: true)
         do {
-            if !isDemo {
-                guard isConnected, let client, chatID.hasSuffix("@localhost") else { return false }
-                _ = try await client.sendMessage(to: chatID, body: body)
-            }
-            try await store.insertMessage(StoredMessage(id: UUID().uuidString, accountID: account, chatID: chatID,
-                                                       senderID: account, body: body, isOutgoing: true))
-            await refresh()
-            return true
+            try XMPPClient.validateMessage(to: chatID, body: body, id: message.id)
         } catch {
-            self.error = "The lab send did not complete. Delivery is unconfirmed; check the recipient before retrying."
+            self.error = "This message contains characters that cannot be sent. Your text is still in the composer."
             return false
+        }
+        do {
+            if sample { try await store.insertMessage(message) }
+            else { try await store.enqueueOutgoing(message) }
+            await refresh()
+            startOutbox()
+            return true // Accepted durably, not delivered.
+        } catch {
+            if accountID == account { self.error = "Could not save the message. Your text is still in the composer." }
+            return false
+        }
+    }
+
+    func retryMessage(_ id: String) async {
+        guard let store else { return }
+        do {
+            try await store.retryOutgoing(accountID: accountID, messageID: id)
+            await refresh()
+            startOutbox()
+        } catch { self.error = "This message could not be queued again." }
+    }
+
+    private func startOutbox() {
+        outboxRequested = true
+        guard drainTask == nil, isConnected, !isDemo,
+              let client, let outboxSender else { return }
+        outboxRequested = false
+        let account = accountID
+        let token = generation
+        drainTask = Task { [weak self] in
+            do {
+                try await outboxSender.drain(accountID: account, send: { message in
+                    _ = try await client.sendMessage(to: message.chatID, body: message.body, id: message.id)
+                }, didChange: { [weak self] in
+                    await self?.refresh()
+                })
+            } catch {
+                if let self, self.generation == token {
+                    await self.disconnect()
+                }
+            }
+            guard let self else { return }
+            self.drainTask = nil
+            // A different account/session may have become ready while this attempt settled.
+            if self.outboxRequested || self.generation != token { self.startOutbox() }
         }
     }
 

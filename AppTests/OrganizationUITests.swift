@@ -35,9 +35,9 @@ final class OrganizationUITests: XCTestCase {
         app.buttons["sendMessage"].tap()
         let message = app.textViews.containing(NSPredicate(format: "value == %@", marker)).firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 5))
-        message.press(forDuration: 1)
+        message.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1)
         let star = app.buttons["Star message"]
-        XCTAssertTrue(star.waitForExistence(timeout: 5), "Starring must remain reachable while text is selectable")
+        XCTAssertTrue(star.waitForExistence(timeout: 5), "Long-pressing message text must open bubble actions")
         star.tap()
         app.buttons["Conversation options"].tap()
         app.buttons["Starred messages"].tap()

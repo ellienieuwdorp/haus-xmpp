@@ -119,8 +119,15 @@ struct ChatListView: View {
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Spacer()
-                Button("New conversation", systemImage: "square.and.pencil") { showingNewChat = true }
-                    .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).controlSize(.large)
+                Button { showingNewChat = true } label: {
+                    Image(systemName: "square.and.pencil")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 22, height: 22)
+                }
+                    .buttonStyle(CircularGlassButtonStyle(diameter: 48))
+                    .accessibilityLabel("New conversation")
+                    .accessibilityIdentifier("newConversation")
                     .disabled(model.accountID.isEmpty)
             }.padding(.horizontal, 16).padding(.vertical, 8)
         }
