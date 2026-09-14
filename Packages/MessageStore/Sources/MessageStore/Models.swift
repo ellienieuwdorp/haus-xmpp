@@ -10,9 +10,11 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public let sentAt: Date
     public let isOutgoing: Bool
     public var isStarred: Bool
+    public var transportState: OutgoingTransportState?
 
     public init(id: String, accountID: String, chatID: String, senderID: String, body: String,
-                sentAt: Date = Date(), isOutgoing: Bool = false, isStarred: Bool = false) {
+                sentAt: Date = Date(), isOutgoing: Bool = false, isStarred: Bool = false,
+                transportState: OutgoingTransportState? = nil) {
         self.id = id
         self.accountID = accountID
         self.chatID = chatID
@@ -21,6 +23,7 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
         self.sentAt = sentAt
         self.isOutgoing = isOutgoing
         self.isStarred = isStarred
+        self.transportState = transportState
     }
 }
 
@@ -37,4 +40,16 @@ public enum MessageStoreError: Error, Equatable, Sendable {
     case conflictingIdentity
     case unsupportedSchema(Int)
     case invalidValue
+    case invalidTransition
+}
+
+/// Local transport progress only. None of these states proves receipt by a server or peer.
+public enum OutgoingTransportState: String, Equatable, Sendable {
+    case queued, submitting, unconfirmed, failed
+}
+
+/// A claim token fences late callbacks after recovery and manual retry.
+public struct OutboxSubmission: Equatable, Sendable {
+    public let message: StoredMessage
+    public let attemptID: String
 }

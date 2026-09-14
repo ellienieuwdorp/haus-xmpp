@@ -15,6 +15,14 @@ public struct XMPPMessage: Sendable, Equatable {
     public let from: String
     public let to: String?
     public let body: String
+    /// Untrusted sender-provided identifier, scoped by the application to its provenance.
+    public let originID: String?
+    public let type: String?
+
+    public init(id: String, from: String, to: String?, body: String, originID: String? = nil, type: String? = nil) {
+        self.id = id; self.from = from; self.to = to; self.body = body
+        self.originID = originID; self.type = type
+    }
 }
 
 public enum XMPPEvent: Sendable, Equatable {
@@ -111,13 +119,51 @@ public actor XMPPClient {
         finish(nil)
     }
 
-    @discardableResult public func sendMessage(to: String, body: String) async throws -> String {
+    /// Completion means only that the local socket accepted the write, not server or peer delivery.
+    /// Retrying an uncertain write must preserve the same caller-supplied ID.
+    @discardableResult public func sendMessage(to: String, body: String, id: String = UUID().uuidString) async throws -> String {
         guard phase == .online else { throw XMPPClientError.notConnected }
-        guard !to.isEmpty, !to.contains(where: { $0.isWhitespace }), !body.isEmpty,
-              body.utf8.count <= 65_536, !body.unicodeScalars.contains(where: { $0.value < 32 && ![9, 10, 13].contains($0.value) }) else { throw XMPPClientError.invalidConfiguration }
-        let id = UUID().uuidString
-        try await write("<message to='\(xmlEscaped(to))' type='chat' id='\(id)'><body>\(xmlEscaped(body))</body></message>")
+        try await write(Self.messageXML(to: to, body: body, id: id))
         return id
+    }
+
+    /// Pure preflight for durable enqueueing; does not require a connected session.
+    public static func validateMessage(to: String, body: String, id: String) throws {
+        guard !to.isEmpty, to.utf8.count <= 3_071, !to.contains(where: { $0.isWhitespace }),
+              !body.isEmpty, body.utf8.count <= 65_536,
+              validMessageID(id), validXMLText(to), validXMLText(body) else { throw XMPPClientError.invalidConfiguration }
+    }
+
+    static func messageXML(to: String, body: String, id: String) throws -> String {
+        try validateMessage(to: to, body: body, id: id)
+        let escapedID = xmlEscaped(id)
+        return "<message to='\(xmlEscaped(to))' type='chat' id='\(escapedID)'><body>\(xmlEscaped(body))</body><origin-id xmlns='urn:xmpp:sid:0' id='\(escapedID)'/></message>"
+    }
+
+    private static func validMessageID(_ id: String) -> Bool {
+        // Keep attribute normalization from changing a caller's durable identifier.
+        !id.isEmpty && id.utf8.count <= 1_024 && !id.contains(where: { $0.isWhitespace }) && validXMLText(id)
+    }
+
+    private static func validXMLText(_ value: String) -> Bool {
+        value.unicodeScalars.allSatisfy {
+            $0.value == 9 || $0.value == 10 || $0.value == 13 ||
+            (0x20...0xD7FF).contains($0.value) || (0xE000...0xFFFD).contains($0.value) ||
+            (0x10000...0x10FFFF).contains($0.value)
+        }
+    }
+
+    static func parsedMessage(_ node: XMLNode) -> XMPPMessage? {
+        guard node.name == "message", node.namespace == "jabber:client",
+              node.attributes["type"] == nil || node.attributes["type"] == "chat" || node.attributes["type"] == "normal",
+              let from = node.attributes["from"], !from.isEmpty,
+              let body = node.child("body", namespace: "jabber:client")?.text, !body.isEmpty else { return nil }
+        let origins = node.children.filter { $0.name == "origin-id" && $0.namespace == "urn:xmpp:sid:0" }
+        // Multiple origin IDs are ambiguous; never pick one based on XML order.
+        let candidate = origins.count == 1 ? origins[0].attributes["id"] : nil
+        let originID = candidate.flatMap { validMessageID($0) ? $0 : nil }
+        return XMPPMessage(id: node.attributes["id"] ?? UUID().uuidString, from: from,
+                           to: node.attributes["to"], body: body, originID: originID, type: node.attributes["type"])
     }
 
     private func readLoop(_ conn: NWConnection, token: UUID) async {
@@ -174,11 +220,8 @@ public actor XMPPClient {
             try emit(.state(.online(jid: jid)))
             handshake?.resume(); handshake = nil
         case .online:
-            if node.name == "message", node.namespace == "jabber:client",
-               node.attributes["type"] == nil || node.attributes["type"] == "chat" || node.attributes["type"] == "normal",
-               let from = node.attributes["from"], !from.isEmpty,
-               let body = node.child("body", namespace: "jabber:client")?.text, !body.isEmpty {
-                try emit(.message(XMPPMessage(id: node.attributes["id"] ?? UUID().uuidString, from: from, to: node.attributes["to"], body: body)))
+            if let message = Self.parsedMessage(node) {
+                try emit(.message(message))
             } else if node.name == "iq", node.namespace == "jabber:client",
                       ["get", "set"].contains(node.attributes["type"] ?? ""), let id = node.attributes["id"] {
                 let to = node.attributes["from"].map { " to='\(xmlEscaped($0))'" } ?? ""
@@ -213,12 +256,17 @@ public actor XMPPClient {
         if case .dropped = continuation.yield(.state(.disconnected(reason))) { continuation.finish() }
     }
     private func write(_ xml: String) async throws {
+        try Task.checkCancellation()
         guard let connection else { throw XMPPClientError.notConnected }
+        let token = generation
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: Data(xml.utf8), completion: .contentProcessed { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             })
         }
+        // A cancelled/replaced connection must not report a successful send to the outbox.
+        guard generation == token else { throw XMPPClientError.connectionClosed }
+        try Task.checkCancellation()
     }
     private static func receive(_ connection: NWConnection) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in

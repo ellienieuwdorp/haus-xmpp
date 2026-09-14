@@ -12,7 +12,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA journal_mode = WAL")
         try connection.execute("PRAGMA synchronous = FULL")
         let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-        guard version <= 1 else { throw MessageStoreError.unsupportedSchema(version) }
+        guard version <= 2 else { throw MessageStoreError.unsupportedSchema(version) }
         try connection.transaction {
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
@@ -30,7 +30,20 @@ public actor MessageStore {
                 )
                 """)
             try connection.execute("CREATE INDEX IF NOT EXISTS timeline ON messages(account_id, chat_id, sent_at, id)")
-            try connection.execute("PRAGMA user_version = 1")
+            try connection.execute("""
+                CREATE TABLE IF NOT EXISTS outbox (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id TEXT NOT NULL, message_id TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('queued','submitting','unconfirmed','failed')),
+                    attempt_id TEXT,
+                    UNIQUE(account_id, message_id),
+                    FOREIGN KEY(account_id, message_id) REFERENCES messages(account_id, id)
+                )
+                """)
+            try connection.execute("CREATE INDEX IF NOT EXISTS outbox_queue ON outbox(account_id,state,sequence)")
+            // The previous process might have written to the socket before termination. Never auto-replay.
+            try connection.execute("UPDATE outbox SET state='unconfirmed', attempt_id=NULL WHERE state='submitting'")
+            try connection.execute("PRAGMA user_version = 2")
         }
     }
 
@@ -44,22 +57,116 @@ public actor MessageStore {
 
     /// Repeated delivery preserves local starring. A conflicting payload is an error.
     @discardableResult public func insertMessage(_ message: StoredMessage) throws -> Bool {
-        guard !message.id.isEmpty, message.sentAt.timeIntervalSince1970.isFinite else { throw MessageStoreError.invalidValue }
+        try connection.transaction { try insertMessageInTransaction(message) }
+    }
+
+    private func insertMessageInTransaction(_ message: StoredMessage) throws -> Bool {
+        guard !message.id.isEmpty, !message.accountID.isEmpty, !message.chatID.isEmpty,
+              message.sentAt.timeIntervalSince1970.isFinite else { throw MessageStoreError.invalidValue }
+        if let existing = try connection.query("SELECT \(Self.columns) FROM messages WHERE account_id=? AND id=?",
+                                               [.text(message.accountID), .text(message.id)]).first.map(Self.decode) {
+            var comparison = message
+            comparison.isStarred = existing.isStarred
+            comparison.transportState = existing.transportState
+            guard existing == comparison else { throw MessageStoreError.conflictingIdentity }
+            return false
+        }
+        try connection.execute("""
+            INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing,starred)
+            VALUES(?,?,?,?,?,?,?,?)
+            """, [.text(message.accountID), .text(message.id), .text(message.chatID), .text(message.senderID),
+                  .text(message.body), .real(message.sentAt.timeIntervalSince1970),
+                  .integer(message.isOutgoing ? 1 : 0), .integer(message.isStarred ? 1 : 0)])
+        return true
+    }
+
+    /// Atomically saves the message and queued work before any socket operation.
+    /// The supplied message ID must also be the stable outgoing stanza/origin ID.
+    /// Repeating an enqueue never resets an existing transport attempt.
+    @discardableResult public func enqueueOutgoing(_ message: StoredMessage) throws -> Bool {
+        guard message.isOutgoing, !message.body.isEmpty, message.body.utf8.count <= 65_536 else { throw MessageStoreError.invalidValue }
         return try connection.transaction {
-            if let existing = try connection.query("SELECT \(Self.columns) FROM messages WHERE account_id=? AND id=?",
-                                                   [.text(message.accountID), .text(message.id)]).first.map(Self.decode) {
-                var comparison = message
-                comparison.isStarred = existing.isStarred
-                guard existing == comparison else { throw MessageStoreError.conflictingIdentity }
-                return false
+            let inserted = try insertMessageInTransaction(message)
+            let existing = try connection.query("SELECT state FROM outbox WHERE account_id=? AND message_id=?",
+                                                [.text(message.accountID), .text(message.id)])
+            if !inserted && existing.isEmpty {
+                // An older message may already have been sent. Enqueue must not silently replay it.
+                throw MessageStoreError.invalidTransition
             }
+            if inserted {
+                try connection.execute("INSERT INTO outbox(account_id,message_id,state) VALUES(?,?,'queued')",
+                                       [.text(message.accountID), .text(message.id)])
+            }
+            return inserted
+        }
+    }
+
+    /// FIFO by durable enqueue order, independent of message timestamps.
+    public func claimNextOutgoing(accountID: String) throws -> OutboxSubmission? {
+        try Task.checkCancellation()
+        return try connection.transaction {
+            guard let row = try connection.query("""
+                SELECT message_id FROM outbox WHERE account_id=? AND state='queued' ORDER BY sequence LIMIT 1
+                """, [.text(accountID)]).first else { return nil }
+            let attemptID = UUID().uuidString
+            try connection.execute("UPDATE outbox SET state='submitting',attempt_id=? WHERE account_id=? AND message_id=? AND state='queued'",
+                                   [.text(attemptID), .text(accountID), .text(row[0].string)])
+            let message = try connection.query("SELECT \(Self.columns) FROM messages WHERE account_id=? AND id=?",
+                                               [.text(accountID), .text(row[0].string)]).first.map(Self.decode)!
+            return OutboxSubmission(message: message, attemptID: attemptID)
+        }
+    }
+
+    /// Safe only when the caller knows no wire-send operation was invoked for this attempt.
+    @discardableResult public func releaseUnsentSubmission(_ submission: OutboxSubmission) throws -> Bool {
+        try connection.transaction {
             try connection.execute("""
-                INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing,starred)
-                VALUES(?,?,?,?,?,?,?,?)
-                """, [.text(message.accountID), .text(message.id), .text(message.chatID), .text(message.senderID),
-                      .text(message.body), .real(message.sentAt.timeIntervalSince1970),
-                      .integer(message.isOutgoing ? 1 : 0), .integer(message.isStarred ? 1 : 0)])
-            return true
+                UPDATE outbox SET state='queued',attempt_id=NULL
+                WHERE account_id=? AND message_id=? AND state='submitting' AND attempt_id=?
+                """, [.text(submission.message.accountID), .text(submission.message.id), .text(submission.attemptID)])
+            return try connection.query("SELECT changes()").first?[0].integer == 1
+        }
+    }
+
+    /// Call for BOTH successful socket writes and errors/cancellation after claiming.
+    /// Socket completion is not a delivery acknowledgement. Late callbacks are harmless no-ops.
+    @discardableResult public func finishOutgoingSubmission(_ submission: OutboxSubmission) throws -> Bool {
+        try connection.transaction {
+            try connection.execute("""
+                UPDATE outbox SET state='unconfirmed',attempt_id=NULL
+                WHERE account_id=? AND message_id=? AND state='submitting' AND attempt_id=?
+                """, [.text(submission.message.accountID), .text(submission.message.id), .text(submission.attemptID)])
+            return try connection.query("SELECT changes()").first?[0].integer == 1
+        }
+    }
+
+    /// Only use after stopping/joining that account's sender. A new store performs the same recovery.
+    public func recoverInterruptedSubmissions(accountID: String) throws {
+        try connection.execute("UPDATE outbox SET state='unconfirmed',attempt_id=NULL WHERE account_id=? AND state='submitting'",
+                               [.text(accountID)])
+    }
+
+    /// Caller must explicitly warn that retry can duplicate a message already accepted remotely.
+    public func retryOutgoing(accountID: String, messageID: String) throws {
+        try connection.transaction {
+            try connection.execute("""
+                UPDATE outbox SET state='queued',attempt_id=NULL WHERE account_id=? AND message_id=?
+                AND state IN ('unconfirmed','failed')
+                """, [.text(accountID), .text(messageID)])
+            guard try connection.query("SELECT changes()").first?[0].integer == 1 else {
+                throw MessageStoreError.invalidTransition
+            }
+        }
+    }
+
+    /// Marks only work rejected locally BEFORE claiming (for example unsupported addressing).
+    public func failQueuedOutgoing(accountID: String, messageID: String) throws {
+        try connection.transaction {
+            try connection.execute("UPDATE outbox SET state='failed' WHERE account_id=? AND message_id=? AND state='queued'",
+                                   [.text(accountID), .text(messageID)])
+            guard try connection.query("SELECT changes()").first?[0].integer == 1 else {
+                throw MessageStoreError.invalidTransition
+            }
         }
     }
 
@@ -112,12 +219,16 @@ public actor MessageStore {
                                [.integer(pinned ? 1 : 0), .text(accountID), .text(chatID)])
     }
 
-    private static let columns = "account_id,id,chat_id,sender_id,body,sent_at,outgoing,starred"
+    private static let columns = """
+        account_id,id,chat_id,sender_id,body,sent_at,outgoing,starred,
+        (SELECT state FROM outbox WHERE outbox.account_id=messages.account_id AND outbox.message_id=messages.id)
+        """
     private static func decode(_ row: [Value]) -> StoredMessage {
         StoredMessage(id: row[1].string, accountID: row[0].string, chatID: row[2].string,
                       senderID: row[3].string, body: row[4].string,
                       sentAt: Date(timeIntervalSince1970: row[5].double),
-                      isOutgoing: row[6].integer != 0, isStarred: row[7].integer != 0)
+                      isOutgoing: row[6].integer != 0, isStarred: row[7].integer != 0,
+                      transportState: OutgoingTransportState(rawValue: row[8].string))
     }
 }
 

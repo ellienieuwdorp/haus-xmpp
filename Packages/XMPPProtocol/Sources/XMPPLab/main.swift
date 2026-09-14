@@ -15,21 +15,29 @@ import XMPPProtocol
         let client = XMPPClient(labCertificateAuthority: ca)
         let timeout = Task { try await Task.sleep(for: .seconds(30)); await client.disconnect() }
         try await client.connect(host: env["XMPP_LAB_HOST"] ?? domain, port: UInt16(env["XMPP_LAB_PORT"] ?? "5223") ?? 5223, domain: domain, username: user, password: password)
+        var receivedCount = 0
+        let cycles = max(1, Int(env["XMPP_LAB_CYCLES"] ?? "1") ?? 1)
         for await event in client.events {
             switch event {
             case .state(.online):
                 print("ONLINE")
                 if let to = env["XMPP_LAB_TO"] {
-                    let id = try await client.sendMessage(to: to, body: env["XMPP_LAB_BODY"] ?? "Local protocol smoke test")
+                    let id = try await client.sendMessage(to: to, body: env["XMPP_LAB_BODY"] ?? "Local protocol smoke test", id: env["XMPP_LAB_ID"] ?? UUID().uuidString)
                     print("SENT \(id)")
                 }
             case .state(.disconnected(let reason)):
                 print("DISCONNECTED \(reason ?? "requested")")
-                timeout.cancel()
-                return
+                if receivedCount > 0 && receivedCount < cycles {
+                    try await client.connect(host: env["XMPP_LAB_HOST"] ?? domain, port: UInt16(env["XMPP_LAB_PORT"] ?? "5223") ?? 5223, domain: domain, username: user, password: password)
+                } else {
+                    timeout.cancel()
+                    return
+                }
             case .state: break
             case .message(let message):
                 if let expected = env["XMPP_LAB_EXPECT_BODY"], message.body != expected { throw XMPPClientError.unexpectedProtocol }
+                if let expectedID = env["XMPP_LAB_ID"], message.id != expectedID || message.originID != expectedID { throw XMPPClientError.unexpectedProtocol }
+                receivedCount += 1
                 print("RECEIVED \(message.id) bytes=\(message.body.utf8.count)")
                 await client.disconnect()
             }
