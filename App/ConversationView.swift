@@ -24,6 +24,28 @@ struct ConversationView: View {
         sender == model.accountID ? "you" : (model.chats.first(where: { $0.id == chatID })?.title ?? sender)
     }
 
+    private func timelineMessage(_ message: ChatMessage) -> TimelineMessage {
+        var counts: [String: Int] = [:]
+        var selected: Set<String> = []
+        for update in model.messageReactions[message.id] ?? [] {
+            for emoji in update.reactions {
+                counts[emoji, default: 0] += 1
+                if update.actorID == model.accountID { selected.insert(emoji) }
+            }
+        }
+        let emoji = counts.keys.sorted {
+            let left = TimelineReaction.choices.firstIndex(of: $0) ?? Int.max
+            let right = TimelineReaction.choices.firstIndex(of: $1) ?? Int.max
+            return left == right ? $0 < $1 : left < right
+        }
+        return TimelineMessage(id: message.id, body: message.body, isOutgoing: message.isOutgoing, isStarred: message.isStarred,
+                               sentAt: message.sentAt, status: message.transportState.flatMap { TimelineMessage.Status(rawValue: $0.rawValue) },
+                               reply: message.reply.map { TimelineReply(author: authorName($0.senderID), body: $0.body) },
+                               securityNotice: !model.isDemo && message.encryptionProfile == nil ? "Not encrypted" : nil,
+                               reactions: emoji.map { TimelineReaction(emoji: $0, count: counts[$0]!, isSelected: selected.contains($0)) },
+                               canReact: model.canReact(to: message))
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if showingSearch {
@@ -58,17 +80,14 @@ struct ConversationView: View {
                     Button("Show all") { starredOnly = false }
                 }.padding(.horizontal).padding(.bottom, 8)
             }
-            ConversationTimeline(messages: messages.map {
-                TimelineMessage(id: $0.id, body: $0.body, isOutgoing: $0.isOutgoing, isStarred: $0.isStarred,
-                                sentAt: $0.sentAt, status: $0.transportState.flatMap { TimelineMessage.Status(rawValue: $0.rawValue) },
-                                reply: $0.reply.map { TimelineReply(author: authorName($0.senderID), body: $0.body) },
-                                securityNotice: !model.isDemo && $0.encryptionProfile == nil ? "Not encrypted" : nil)
-            }, onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
+            ConversationTimeline(messages: messages.map(timelineMessage), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
                 replyingTo = message
                 showingSearch = false
                 query = ""
                 composing = true
+            }, onReaction: { id, emoji in
+                Task { await model.toggleReaction(emoji, messageID: id) }
             })
             .overlay {
                 if messages.isEmpty {

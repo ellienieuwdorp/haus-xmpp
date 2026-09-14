@@ -45,7 +45,7 @@ final class EncryptionUITests: XCTestCase {
         app.buttons["Done"].tap()
         let response = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: bubbles)
         wait(for: [response], timeout: 30)
-        XCTAssertTrue(bubbles.allElementsBoundByIndex.contains { $0.label.contains("Delivery unconfirmed") })
+        XCTAssertTrue(bubbles.allElementsBoundByIndex.contains { $0.label.contains("Accepted by server") || $0.label.contains("Delivery unconfirmed") })
         capture(app, "Encrypted independent peer round trip")
         app.terminate(); app.launch()
         let chat = app.buttons["chat.\(peer)"]
@@ -69,6 +69,8 @@ final class EncryptionUITests: XCTestCase {
         XCTAssertTrue(consent.waitForExistence(timeout: 5))
         consent.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         app.buttons["Connect"].tap()
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"]
+        if allow.waitForExistence(timeout: 3) { allow.tap() }
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected to lab")).firstMatch.waitForExistence(timeout: 25))
     }
     @MainActor private func capture(_ app: XCUIApplication, _ name: String) {

@@ -6,6 +6,28 @@ struct TimelineReply: Sendable, Equatable {
     let body: String
 }
 
+struct TimelineReaction: Sendable, Equatable {
+    let emoji: String
+    let count: Int
+    let isSelected: Bool
+
+    static let choices = ["❤️", "👍", "😂", "😮", "😢", "🙏"]
+    static func name(for emoji: String) -> String {
+        switch emoji {
+        case "❤️": "heart"
+        case "👍": "thumbs up"
+        case "😂": "tears of joy"
+        case "😮": "surprised"
+        case "😢": "sad"
+        case "🙏": "folded hands"
+        default: emoji
+        }
+    }
+    var accessibilityDescription: String {
+        "\(count) \(Self.name(for: emoji)) \(count == 1 ? "reaction" : "reactions")" + (isSelected ? ", including you" : "")
+    }
+}
+
 struct TimelineMessage: Identifiable, Sendable, Equatable {
     let id: String
     let body: String
@@ -15,9 +37,11 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     var status: Status? = nil
     var reply: TimelineReply? = nil
     var securityNotice: String? = nil
+    var reactions: [TimelineReaction] = []
+    var canReact: Bool = false
 
     enum Status: String, Sendable, Equatable {
-        case queued, submitting, unconfirmed, failed
+        case queued, submitting, unconfirmed, failed, serverAccepted
 
         var accessibilityDescription: String {
             switch self {
@@ -25,6 +49,7 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
             case .submitting: "Sending"
             case .unconfirmed: "Delivery unconfirmed"
             case .failed: "Not sent"
+            case .serverAccepted: "Accepted by server"
             }
         }
 
@@ -38,13 +63,14 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     var onToggleStar: (String) -> Void
     var onRetryMessage: (String) -> Void = { _ in }
     var onReply: (String) -> Void = { _ in }
+    var onReaction: (String, String) -> Void = { _, _ in }
 
     func makeUIViewController(context: Context) -> ConversationTimelineController {
         ConversationTimelineController()
     }
 
     func updateUIViewController(_ controller: ConversationTimelineController, context: Context) {
-        controller.update(messages: messages, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply)
+        controller.update(messages: messages, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction)
     }
 }
 
@@ -62,6 +88,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var onToggleStar: (String) -> Void = { _ in }
     private var onRetryMessage: (String) -> Void = { _ in }
     private var onReply: (String) -> Void = { _ in }
+    private var onReaction: (String, String) -> Void = { _, _ in }
     private var previousSize: CGSize = .zero
     private var revision = 0
     private var followsBottom = true
@@ -88,16 +115,17 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] collection, indexPath, id in
             guard let self, let message = messagesByID[id],
                   let cell = collection.dequeueReusableCell(withReuseIdentifier: "message", for: indexPath) as? MessageBubbleCell else { return nil }
-            cell.configure(message: message, toggleStar: { [weak self] in self?.onToggleStar(id) }, retry: { [weak self] in self?.onRetryMessage(id) }, reply: { [weak self] in self?.onReply(id) })
+            cell.configure(message: message, toggleStar: { [weak self] in self?.onToggleStar(id) }, retry: { [weak self] in self?.onRetryMessage(id) }, reply: { [weak self] in self?.onReply(id) }, reaction: { [weak self] emoji in self?.onReaction(id, emoji) })
             return cell
         }
     }
 
-    func update(messages incoming: [TimelineMessage], onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }) {
+    func update(messages incoming: [TimelineMessage], onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in }) {
         loadViewIfNeeded()
         self.onToggleStar = onToggleStar
         self.onRetryMessage = onRetryMessage
         self.onReply = onReply
+        self.onReaction = onReaction
         // The durable store supplies unique IDs. Avoid a diffable crash if a caller repeats an ID.
         var seen = Set<String>()
         let uniqueMessages = incoming.filter { seen.insert($0.id).inserted }
@@ -200,6 +228,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
     private var toggleStar: () -> Void = {}
     private var retry: () -> Void = {}
     private var replyAction: () -> Void = {}
+    private var reactionAction: (String) -> Void = { _ in }
     private var swipeReplyAction: (() -> Void)?
     private var crossedReplyThreshold = false
     private let replyFeedback = UIImpactFeedbackGenerator(style: .light)
@@ -215,6 +244,10 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
     private let textView = MessageTextView()
     private var messageID: String?
     private let footer = UIStackView()
+    private let reactionSummary = UILabel()
+    private var reactionTop: NSLayoutConstraint!
+    private var reactionHeight: NSLayoutConstraint!
+    private var footerTop: NSLayoutConstraint!
     private let time = UILabel()
     private let status = UIImageView()
     private let star = UIImageView(image: UIImage(systemName: "star.fill"))
@@ -242,6 +275,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
             replyIndicator.heightAnchor.constraint(equalToConstant: 24)
         ])
         bubble.addInteraction(UIContextMenuInteraction(delegate: self))
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (cell: MessageBubbleCell, _: UITraitCollection) in
+            cell.configureReactionSummary(cell.message?.reactions ?? [])
+        }
         let replyPan = UIPanGestureRecognizer(target: self, action: #selector(handleReplyPan(_:)))
         replyPan.maximumNumberOfTouches = 1
         replyPan.delegate = self
@@ -297,6 +333,18 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         // Preview fetching is a separate, explicit feature, never a text rendering side effect.
         textView.dataDetectorTypes = []
         bubble.addSubview(textView)
+        reactionSummary.translatesAutoresizingMaskIntoConstraints = false
+        reactionSummary.font = .preferredFont(forTextStyle: .caption1)
+        reactionSummary.adjustsFontForContentSizeCategory = true
+        reactionSummary.numberOfLines = 0
+        reactionSummary.lineBreakMode = .byWordWrapping
+        reactionSummary.isUserInteractionEnabled = false
+        // Message accessibility already includes the full summary and adequately sized actions.
+        reactionSummary.isAccessibilityElement = false
+        bubble.addSubview(reactionSummary)
+        reactionTop = reactionSummary.topAnchor.constraint(equalTo: textView.bottomAnchor)
+        reactionHeight = reactionSummary.heightAnchor.constraint(equalToConstant: 0)
+        footerTop = footer.topAnchor.constraint(equalTo: reactionSummary.bottomAnchor)
         footer.translatesAutoresizingMaskIntoConstraints = false
         footer.axis = .horizontal
         footer.alignment = .center
@@ -332,7 +380,10 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
             bubble.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -16),
             textView.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
             textView.trailingAnchor.constraint(equalTo: bubble.trailingAnchor),
-            footer.topAnchor.constraint(equalTo: textView.bottomAnchor),
+            reactionTop,
+            reactionSummary.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 12),
+            reactionSummary.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -12),
+            footerTop,
             footer.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -12),
             footer.leadingAnchor.constraint(greaterThanOrEqualTo: bubble.leadingAnchor, constant: 12),
             footer.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -8)
@@ -368,6 +419,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         let starAction = toggleStar
         let retryAction = retry
         let reply = replyAction
+        let react = reactionAction
         return UIContextMenuConfiguration(identifier: message.id as NSString, previewProvider: nil) { [weak self] _ in
             guard self != nil else { return nil }
             var actions: [UIMenuElement] = [
@@ -380,6 +432,13 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
                 },
                 UIAction(title: message.isStarred ? "Unstar message" : "Star message", image: UIImage(systemName: message.isStarred ? "star.slash" : "star")) { _ in starAction() }
             ]
+            if message.canReact {
+                let selected = Set(message.reactions.filter(\.isSelected).map(\.emoji))
+                let reactions = TimelineReaction.choices.map { emoji in
+                    UIAction(title: emoji, state: selected.contains(emoji) ? .on : .off) { _ in react(emoji) }
+                }
+                actions.insert(UIMenu(title: "React", image: UIImage(systemName: "face.smiling"), children: reactions), at: 1)
+            }
             if message.isOutgoing, message.status?.canRetry == true {
                 actions.append(UIAction(title: "Retry message", image: UIImage(systemName: "arrow.clockwise")) { _ in retryAction() })
             }
@@ -463,6 +522,23 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         }
     }
 
+    private func configureReactionSummary(_ reactions: [TimelineReaction]) {
+        reactionSummary.isHidden = reactions.isEmpty
+        reactionHeight.isActive = reactions.isEmpty
+        reactionTop.constant = reactions.isEmpty ? 0 : 3
+        footerTop.constant = reactions.isEmpty ? 0 : 5
+        let text = NSMutableAttributedString(string: "")
+        for (index, reaction) in reactions.enumerated() {
+            if index > 0 { text.append(NSAttributedString(string: "  ")) }
+            // Nonbreaking space keeps each emoji/count together, while groups wrap naturally.
+            text.append(NSAttributedString(string: "\(reaction.emoji)\u{00a0}\(reaction.count)", attributes: [
+                .font: UIFont.preferredFont(forTextStyle: .caption1),
+                .foregroundColor: reaction.isSelected ? UIColor.systemIndigo : UIColor.secondaryLabel
+            ]))
+        }
+        reactionSummary.attributedText = text
+    }
+
     var isSelectingText: Bool { textView.isSelectable }
 
     func beginTextSelection() {
@@ -487,11 +563,12 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         selectAfterDismissal = false
     }
 
-    func configure(message: TimelineMessage, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void) {
+    func configure(message: TimelineMessage, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void) {
         self.message = message
         self.toggleStar = toggleStar
         self.retry = retry
         self.replyAction = reply
+        self.reactionAction = reaction
         if messageID != message.id {
             resetReplySwipe(animated: false)
             _ = textView.resignFirstResponder()
@@ -516,6 +593,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         if let date = message.sentAt { descriptions.append(date.formatted(date: .abbreviated, time: .shortened)) }
         if message.isOutgoing, let state = message.status { descriptions.append(state.accessibilityDescription) }
         if let notice = message.securityNotice { descriptions.append(notice) }
+        if !message.reactions.isEmpty { descriptions.append(message.reactions.map(\.accessibilityDescription).joined(separator: ", ")) }
+        configureReactionSummary(message.reactions)
         textView.accessibilityLabel = descriptions.joined(separator: ", ")
         textView.accessibilityCustomActions = [UIAccessibilityCustomAction(name: message.isStarred ? "Unstar message" : "Star message") { _ in
             toggleStar()
@@ -530,6 +609,13 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
             UIPasteboard.general.string = message.body
             return true
         })
+        if message.canReact {
+            let selected = Set(message.reactions.filter(\.isSelected).map(\.emoji))
+            for emoji in TimelineReaction.choices {
+                let actionName = "\(selected.contains(emoji) ? "Remove" : "Add") \(TimelineReaction.name(for: emoji)) reaction"
+                textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: actionName) { _ in reaction(emoji); return true })
+            }
+        }
         if canRetry {
             textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: "Retry message") { _ in retry(); return true })
         }
@@ -543,6 +629,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         case .submitting: status.image = UIImage(systemName: "arrow.up.circle")
         case .unconfirmed: status.image = UIImage(systemName: "questionmark.circle")
         case .failed: status.image = UIImage(systemName: "exclamationmark.circle")
+        case .serverAccepted: status.image = UIImage(systemName: "checkmark")
         case nil: status.image = nil
         }
     }

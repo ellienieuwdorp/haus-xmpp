@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import Observation
 import MessageStore
 import XMPPProtocol
@@ -18,6 +19,7 @@ typealias ChatMessage = StoredMessage
 final class AppModel {
     private(set) var chats: [ChatSummary] = []
     private(set) var messages: [ChatMessage] = []
+    private(set) var messageReactions: [String: [AuthenticatedReaction]] = [:]
     private(set) var accountID = ""
     private(set) var connectionStatus = "Offline"
     private(set) var isConnecting = false
@@ -25,6 +27,14 @@ final class AppModel {
     private(set) var isSending = false
     private(set) var receivedCount = 0
     var error: String?
+    private(set) var notificationStatus = "Not enabled"
+    @ObservationIgnored private var sessionAccount: NotificationAccount?
+    @ObservationIgnored private var lifecycleTask: Task<Void, Never>?
+    @ObservationIgnored private var foreground = true
+    @ObservationIgnored private var quiescing = false
+    @ObservationIgnored private var activeEncryptionOperations = 0
+    @ObservationIgnored private var acquiringOwnership = false
+    @ObservationIgnored private var hasTransportOwnership = false
     private(set) var encryptionReady = false
     private(set) var encryptionStatus = "Preparing encryption…"
     private(set) var encryptionOverview: EncryptionOverview?
@@ -41,6 +51,7 @@ final class AppModel {
     @ObservationIgnored private var openChatID: String?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var prepared = false
+    @ObservationIgnored private var inboundMayAcknowledge = true
     @ObservationIgnored private let testSessionID: String? = {
         #if DEBUG
         guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"],
@@ -59,15 +70,7 @@ final class AppModel {
         guard !prepared else { return }
         prepared = true
         do {
-            var directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-                .appending(path: "Messaging", directoryHint: .isDirectory)
-            if let testSessionID { directory.append(path: "UITests/" + testSessionID) }
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
-                                                   attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
-            var excluded = directory
-            var values = URLResourceValues()
-            values.isExcludedFromBackup = true
-            try excluded.setResourceValues(values)
+            let directory = try await SharedStorage.directory(testSessionID: testSessionID, migrate: true)
             store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
             if let store {
                 outboxSender = OutboxSender(store: store)
@@ -77,16 +80,23 @@ final class AppModel {
             }
             accountID = preferences.string(forKey: "lastAccount") ?? ""
             if ProcessInfo.processInfo.arguments.contains("-demo") { await loadDemo() }
-            else { await refresh() }
+            else {
+                if let store, try await NotificationDiagnostics.exportIfRequested(store: store, directory: directory) { return }
+                await refresh()
+                if testSessionID == nil, let saved = try NotificationAccount.load() {
+                    sessionAccount = saved
+                    notificationStatus = "Configured for staging"
+                    _ = await connect(username: saved.username, password: saved.password, savedEndpoint: saved)
+                }
+            }
         } catch { self.error = "Could not open local message storage." }
     }
 
     func loadDemo() async {
-        let previous = resetSession()
+        await disconnect()
         let token = generation
         let account = "preview.local"
         selectAccount(account)
-        await previous?.disconnect()
         guard generation == token, let store else { return }
         do {
             let samples: [(String, String, [String])] = [
@@ -110,20 +120,33 @@ final class AppModel {
         } catch { if generation == token { self.error = "Could not load sample conversations." } }
     }
 
-    func connect(username: String, password: String) async -> Bool {
-        guard !isConnecting, username.range(of: #"^[a-z0-9][a-z0-9._-]{0,63}$"#, options: .regularExpression) != nil else {
+    func connect(username: String, password: String, savedEndpoint: NotificationAccount? = nil) async -> Bool {
+        guard foreground, !quiescing, !isConnecting, username.range(of: #"^[a-z0-9][a-z0-9._-]{0,63}$"#, options: .regularExpression) != nil else {
             error = "Use a simple local lab username, without @localhost."
             return false
         }
+        let requestedDomain = savedEndpoint?.domain ?? DevelopmentEndpoint.domain
+        if let sessionAccount, sessionAccount.accountID != username + "@" + requestedDomain {
+            await disconnect()
+            guard foreground, !quiescing else { return false }
+        }
+        let priorEvents = eventTask
         let previous = resetSession()
         let token = generation
         isConnecting = true
         connectionStatus = "Connecting…"
-        let connection = XMPPClient()
+        let connection = XMPPClient(labCertificateAuthority: DevelopmentEndpoint.certificateAuthority)
         client = connection
         // Assign account before consuming events; scoped refresh rejects stale results.
-        selectAccount(username + "@localhost")
-        await previous?.disconnect()
+        let endpoint = savedEndpoint ?? Self.retainingPushSubscription(previous: sessionAccount, replacement: NotificationAccount(accountID: username + "@" + DevelopmentEndpoint.domain,
+            host: DevelopmentEndpoint.host, port: 5223, domain: DevelopmentEndpoint.domain,
+            username: username, password: password, push: nil))
+        let account = endpoint.accountID
+        sessionAccount = endpoint
+        selectAccount(account)
+        await previous?.disconnectAndWait()
+        await priorEvents?.value
+        await drainTask?.value
         guard generation == token else { return false }
         await refresh()
         guard generation == token else { return false }
@@ -134,29 +157,177 @@ final class AppModel {
             }
         }
         do {
-            try await connection.connect(host: "localhost", port: 5223, domain: "localhost", username: username, password: password)
+            guard let store, let encryption else { throw MessageStoreError.invalidValue }
+            try await acquireForegroundOwnership(store, token: token)
+            try await store.recoverInterruptedSubmissions(accountID: account)
             guard generation == token else { return false }
+            try await connection.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
+            guard generation == token else { return false }
+            try await connection.connect(host: endpoint.host, port: endpoint.port, domain: endpoint.domain, username: username, password: password)
+            guard generation == token, accountID == endpoint.accountID,
+                  sessionAccount?.accountID == endpoint.accountID else { await connection.disconnect(); return false }
+            if endpoint.push != nil {
+                // Authentication has succeeded. Only now may a manually entered password
+                // replace the extension's previously working protected credentials.
+                do { try endpoint.save() }
+                catch {
+                    notificationStatus = "Needs attention"
+                    self.error = "Connected, but background credentials could not be saved. Enable notifications again before leaving the app."
+                }
+            }
             isConnecting = false
             return true
         } catch {
-            guard generation == token else { return false }
+            guard generation == token else { await connection.disconnect(); return false }
             isConnecting = false
             isConnected = false
             connectionStatus = "Connection failed"
-            self.error = "Could not connect. Check the lab is running, the account password and the simulator's trusted lab certificate."
+            self.error = "Could not connect. Check the server and account password."
             return false
         }
     }
 
     func disconnect() async {
+        quiescing = true
+        generation = UUID() // Invalidate pending permission/registration before removing credentials.
+        let token = generation
+        let push = sessionAccount?.push
+        let connection = client
+        try? NotificationAccount.remove()
+        sessionAccount = nil
+        notificationStatus = "Not enabled"
+        if let push, let connection, isConnected {
+            activeEncryptionOperations += 1
+            defer { activeEncryptionOperations -= 1 }
+            do { try await connection.disablePush(serviceJID: push.serviceJID, node: push.node) }
+            catch {
+                if generation == token { self.error = "Could not disable the server push subscription. Background access has been removed from this phone." }
+            }
+        }
+        guard generation == token else { return }
+        await quiesceTransport()
+    }
+
+    /// Re-entering credentials does not revoke an existing server subscription. Keep its
+    /// identity available for background handoff and explicit logout, but never cross accounts.
+    static func retainingPushSubscription(previous: NotificationAccount?, replacement: NotificationAccount) -> NotificationAccount {
+        guard replacement.push == nil, let previous, let push = previous.push,
+              previous.accountID == replacement.accountID, previous.domain == replacement.domain,
+              previous.username == replacement.username else { return replacement }
+        return NotificationAccount(accountID: replacement.accountID, host: replacement.host, port: replacement.port,
+            domain: replacement.domain, username: replacement.username, password: replacement.password, push: push)
+    }
+
+    /// Serialize scene transitions; never release the lease with a suspended writer alive.
+    func setForeground(_ active: Bool) {
+        foreground = active
+        if !active { quiescing = true }
+        let previous = lifecycleTask
+        lifecycleTask = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            if active {
+                guard self.foreground else { return }
+                if let saved = self.sessionAccount, !self.isConnected, !self.isConnecting {
+                    _ = await self.connect(username: saved.username, password: saved.password, savedEndpoint: saved)
+                }
+                if let client = self.client { try? await client.setClientActive(true) }
+                await self.refresh()
+            } else {
+                let task = UIApplication.shared.beginBackgroundTask(withName: "Finish encrypted synchronization")
+                await self.quiesceTransport()
+                if task != .invalid { UIApplication.shared.endBackgroundTask(task) }
+            }
+        }
+    }
+
+    private func quiesceTransport() async {
+        quiescing = true
+        defer { quiescing = false }
+        let events = eventTask
+        let drain = drainTask
         let previous = resetSession()
-        await previous?.disconnect()
+        await previous?.disconnectAndWait()
+        await events?.value
+        await drain?.value
+        // Includes already-started UI trust/repair/discovery work and an acquisition that
+        // was suspended in the store actor when the scene changed.
+        while activeEncryptionOperations > 0 || acquiringOwnership {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        hasTransportOwnership = false
+        try? await store?.releaseTransportOwnership()
+    }
+
+    private func acquireForegroundOwnership(_ store: MessageStore, token: UUID) async throws {
+        acquiringOwnership = true
+        defer { acquiringOwnership = false }
+        for attempt in 0..<120 {
+            guard foreground, !quiescing, generation == token else { throw CancellationError() }
+            do {
+                try await store.acquireTransportOwnership()
+                guard foreground, !quiescing, generation == token else { throw CancellationError() }
+                hasTransportOwnership = true
+                return
+            }
+            catch MessageStoreError.transportOwnedElsewhere {
+                guard attempt < 119 else { throw MessageStoreError.transportOwnedElsewhere }
+                try await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
+    func enableNotifications() async {
+        guard hasTransportOwnership, foreground, !quiescing else { return }
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
+        guard let client, isConnected, encryptionReady, let session = sessionAccount,
+              testSessionID == nil, session.domain == "staging.example.net" else {
+            error = "Notification testing requires a connected staging account."
+            return
+        }
+        let token = generation
+        do {
+            let deviceToken = try await PushRegistration.request()
+            guard generation == token else { return }
+            #if DEBUG
+            let environment = ProcessInfo.processInfo.environment
+            guard let node = environment["XMPP_PUSH_NODE"], let secret = environment["XMPP_PUSH_SECRET"] else {
+                throw XMPPNotificationError.invalidConfiguration
+            }
+            let push = try XMPPPushConfiguration(serviceJID: "push.staging.example.net", node: node, publishOptions: ["secret": secret])
+            let saved = NotificationAccount(accountID: session.accountID, host: session.host, port: session.port,
+                domain: session.domain, username: session.username, password: session.password, push: push)
+            // Save before enabling: an immediately arriving push can safely find its account.
+            try saved.save()
+            try await client.enablePush(push)
+            guard generation == token else { return }
+            sessionAccount = saved
+            notificationStatus = "Enabled for staging"
+            if ProcessInfo.processInfo.arguments.contains("-push-diagnostics") {
+                let directory = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+                let data = try JSONEncoder().encode(["node": node, "device_token": deviceToken.map { String(format: "%02x", $0) }.joined()])
+                try data.write(to: directory.appending(path: "push-registration.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                var privateFile = directory.appending(path: "push-registration.json")
+                var values = URLResourceValues(); values.isExcludedFromBackup = true
+                try privateFile.setResourceValues(values)
+            }
+            #else
+            _ = deviceToken
+            throw XMPPNotificationError.invalidConfiguration
+            #endif
+        } catch {
+            guard generation == token else { return }
+            notificationStatus = "Needs attention"
+            self.error = "Notifications could not be enabled. Check notification permission and staging gateway configuration."
+        }
     }
 
     private func selectAccount(_ account: String) {
         accountID = account
         chats = []
         messages = []
+        messageReactions = [:]
         openChatID = nil
         preferences.set(account, forKey: "lastAccount")
     }
@@ -175,6 +346,7 @@ final class AppModel {
         encryptionOverview = nil
         encryptionNeedsReview = false
         encryptionStatus = "Connect to prepare encryption"
+        inboundMayAcknowledge = true
         return previous
     }
 
@@ -193,8 +365,13 @@ final class AppModel {
                         let features = try await client.discoveryFeatures()
                         if features.contains("urn:xmpp:carbons:2") { try await client.setCarbonsEnabled() }
                         try await encryption.initialize(account: account, transport: client)
+                        if features.contains("urn:xmpp:mam:2"), let store {
+                            connectionStatus = "Catching up…"
+                            try await ArchiveSynchronizer(store: store).synchronize(account: account, client: client, encryption: encryption)
+                        }
                         guard generation == token else { return }
                         encryptionReady = true
+                        connectionStatus = "Connected to lab"
                         encryptionStatus = "End-to-end encryption"
                         try? await encryption.retryPendingIncoming(account: account, transport: client)
                         guard generation == token else { return }
@@ -225,16 +402,42 @@ final class AppModel {
                 await refresh()
             } catch {
                 guard generation == token else { return }
+                let mayAcknowledge = (try? await encryption.hasDurableIncomingDisposition(account: account, message: incoming)) ?? false
+                guard generation == token else { return }
+                inboundMayAcknowledge = mayAcknowledge
                 encryptionNeedsReview = true
                 encryptionStatus = (error as? OMEMOError)?.errorDescription ?? "An encrypted message needs attention"
+                await refresh()
+                guard generation == token else { return }
                 if let openChatID { await loadEncryptionDetails(for: openChatID, refreshFromServer: false) }
             }
-        case .omemoDevices(let owner, _, _):
+        case .omemoDevices(let owner, let profile, _):
+            if owner == account, let encryption, let client {
+                try? await encryption.maintainLocalAdvertisement(account: account, profile: profile, transport: client)
+            }
             if let openChatID, owner == openChatID || owner == accountID {
                 await loadEncryptionDetails(for: openChatID)
             }
         case .encryptionFailure:
             encryptionStatus = "An encrypted message could not be opened"
+        case .streamAcknowledged:
+            await refresh()
+        case .streamManagementBarrier(let barrier):
+            guard let client else { return }
+            if inboundMayAcknowledge {
+                do { try await client.acknowledgeInbound(barrier) }
+                catch {
+                    await client.disconnect()
+                    guard generation == token else { return }
+                    self.error = "Could not save synchronization progress. Reconnect to recover safely."
+                }
+            } else {
+                await client.disconnect()
+                guard generation == token else { return }
+                self.error = "An incoming message could not be saved. Reconnect after checking local storage."
+            }
+            guard generation == token else { return }
+            inboundMayAcknowledge = true
         case .message:
             // Encrypted conversations do not render unauthenticated plaintext injected by a peer
             // or server as though it had passed OMEMO authentication.
@@ -250,7 +453,7 @@ final class AppModel {
             error = "Enter a contact address such as bob@localhost."
             return false
         }
-        guard isDemo || recipient.hasSuffix("@localhost") else {
+        guard isDemo || recipient.hasSuffix("@" + (sessionAccount?.domain ?? DevelopmentEndpoint.domain)) else {
             error = "This development build only sends to local lab accounts."
             return false
         }
@@ -269,7 +472,7 @@ final class AppModel {
         defer { isSending = false }
         let account = accountID
         let sample = isDemo
-        guard sample || chatID.hasSuffix("@localhost") else { return false }
+        guard sample || chatID.hasSuffix("@" + (sessionAccount?.domain ?? DevelopmentEndpoint.domain)) else { return false }
         if let source, source.accountID != account || source.chatID != chatID { return false }
         let reply = source.map { MessageReply(messageID: $0.id, senderID: $0.senderID, body: $0.body, wireID: $0.isOutgoing && $0.transportState != nil ? $0.id : nil) }
         let message = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chatID,
@@ -305,9 +508,32 @@ final class AppModel {
         reply.map { XMPPReply(id: $0.wireID, to: $0.senderID, body: $0.body) }
     }
 
+    func canReact(to message: StoredMessage) -> Bool {
+        message.accountID == accountID && message.chatID == openChatID && message.encryptionProfile == "modern"
+            && message.wireIDAuthenticated && message.wireID != nil && encryptionOverview?.profile == .modern
+    }
+
+    func toggleReaction(_ emoji: String, messageID: String) async {
+        guard hasTransportOwnership, foreground, !quiescing else { return }
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
+        guard let encryption, let message = messages.first(where: { $0.id == messageID }), canReact(to: message) else { return }
+        let account = accountID, token = generation
+        let mine = messageReactions[messageID]?.first(where: { $0.actorID == account })?.reactions ?? []
+        do {
+            _ = try await encryption.queueReactions(account: account, chatID: message.chatID, messageID: messageID,
+                                                     reactions: mine.contains(emoji) ? [] : [emoji])
+            guard generation == token else { return }
+            await refresh()
+            startOutbox()
+        } catch {
+            if generation == token { self.error = (error as? OMEMOError)?.errorDescription ?? "Could not save your reaction." }
+        }
+    }
+
     private func startOutbox() {
         outboxRequested = true
-        guard drainTask == nil, isConnected, encryptionReady, !isDemo,
+        guard hasTransportOwnership, foreground, !quiescing, drainTask == nil, isConnected, encryptionReady, !isDemo,
               let client, let outboxSender, let encryption else { return }
         outboxRequested = false
         let account = accountID
@@ -324,9 +550,20 @@ final class AppModel {
                     do { envelope = try await encryption.outgoingEnvelope(account: account, messageID: message.id) }
                     catch { throw OutboxSendFailure.notAttempted }
                     _ = try await client.sendEncryptedMessage(to: message.chatID, envelope: envelope, id: message.id)
+                    try? await client.requestAcknowledgement()
                 }, didChange: { [weak self] in
                     await self?.refresh()
                 })
+                let reactions = try await encryption.prepareAvailableReactions(account: account, transport: client)
+                if let self, self.generation == token, let issue = reactions.blockedChats[self.openChatID ?? ""] {
+                    self.encryptionStatus = issue
+                    self.encryptionNeedsReview = true
+                }
+                try await encryption.flushPreparedReactions(account: account, preparedIDs: reactions.messageIDs) { to, id, envelope in
+                    _ = try await client.sendEncryptedMessage(to: to, envelope: envelope, id: id)
+                    try? await client.requestAcknowledgement()
+                }
+                await self?.refresh()
             } catch {
                 if let self, self.generation == token {
                     self.encryptionNeedsReview = true
@@ -342,18 +579,21 @@ final class AppModel {
     }
 
     func openChat(_ chatID: String) async {
-        openChatID = chatID; messages = []; encryptionOverview = nil
+        openChatID = chatID; messages = []; messageReactions = [:]; encryptionOverview = nil
         await refresh()
         if !isDemo { await loadEncryptionDetails(for: chatID) }
     }
 
     func loadEncryptionDetails(for chatID: String, refreshFromServer: Bool = true, profile: XMPPOMEMOProfile? = nil) async {
+        guard foreground, !quiescing else { return }
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
         guard let encryption, !isDemo else { return }
         let account = accountID
         let token = generation
         do {
             let overview: EncryptionOverview
-            if refreshFromServer, encryptionReady, isConnected, let client {
+            if refreshFromServer, hasTransportOwnership, encryptionReady, isConnected, let client {
                 overview = try await encryption.refreshDevices(account: account, peer: chatID, profile: profile, transport: client)
             } else { overview = try await encryption.overview(account: account, peer: chatID) }
             guard accountID == account, generation == token, openChatID == chatID else { return }
@@ -365,12 +605,15 @@ final class AppModel {
                 encryptionStatus = "No compatible encryption devices"
             } else { encryptionStatus = "New messages are end-to-end encrypted" }
         } catch {
-            guard accountID == account, generation == token else { return }
+            guard accountID == account, generation == token, openChatID == chatID else { return }
             encryptionStatus = (error as? OMEMOError)?.errorDescription ?? "Could not fetch encryption devices"
         }
     }
 
     func setDeviceTrust(_ device: EncryptionDevice, trust: DeviceTrust, chatID: String) async {
+        guard hasTransportOwnership, foreground, !quiescing else { return }
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
         guard let encryption else { return }
         let account = accountID
         let token = generation
@@ -388,14 +631,48 @@ final class AppModel {
             }
         } catch { if generation == token { self.error = "This device changed. Refresh its fingerprint before reviewing it again." } }
     }
-    private func flushEncryptionControls(account: String, client: XMPPClient) async {
-        guard accountID == account, self.client === client else { return }
-        try? await encryption?.flushKeyTransports(account: account) { to, id, envelope in
-            _ = try await client.sendEncryptedMessage(to: to, envelope: envelope, id: id)
+
+    func repairDeviceSession(_ device: EncryptionDevice, chatID: String) async {
+        guard hasTransportOwnership, foreground, !quiescing else { return }
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
+        guard let encryption, let client, isConnected else { return }
+        let account = accountID, token = generation
+        do {
+            try await encryption.repairSession(account: account, deviceID: device.id, transport: client)
+            guard generation == token else { return }
+            await flushEncryptionControls(account: account, client: client)
+            await loadEncryptionDetails(for: chatID, refreshFromServer: false)
+            startOutbox()
+        } catch {
+            if generation == token { self.error = (error as? OMEMOError)?.errorDescription ?? "Could not repair this session. Your identity and saved messages are unchanged." }
         }
     }
 
-    func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = [] } }
+    func retireDevice(_ device: EncryptionDevice, chatID: String) async {
+        guard hasTransportOwnership, foreground, !quiescing else { return }
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
+        guard let encryption, let client, isConnected else { return }
+        let account = accountID, token = generation
+        do {
+            try await encryption.retireOwnDevice(account: account, deviceID: device.id, transport: client)
+            guard generation == token else { return }
+            await loadEncryptionDetails(for: chatID)
+        } catch {
+            if generation == token { self.error = (error as? OMEMOError)?.errorDescription ?? "Could not remove this device. Refresh its fingerprint and try again." }
+        }
+    }
+    private func flushEncryptionControls(account: String, client: XMPPClient) async {
+        guard accountID == account, self.client === client else { return }
+        try? await encryption?.flushBundlePublications(account: account, transport: client)
+        try? await encryption?.flushKeyTransports(account: account) { to, id, envelope in
+            _ = try await client.sendEncryptedMessage(to: to, envelope: envelope, id: id)
+            try? await client.requestAcknowledgement()
+        }
+    }
+
+    func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = []; messageReactions = [:] } }
 
     func toggleStar(_ id: String) async {
         guard let message = messages.first(where: { $0.id == id }), let store else { return }
@@ -419,13 +696,31 @@ final class AppModel {
         let selected = openChatID
         do {
             let storedChats = try await store.chats(accountID: account)
+            let pending = try await encryption?.pendingConversations(account: account) ?? [:]
+            let existingChatIDs = Set(storedChats.map(\.id))
+            for peer in pending.keys where !existingChatIDs.contains(peer) {
+                // A retained first-contact message needs a discoverable review entry and
+                // a durable conversation for pinning or queuing a reply before approval.
+                try await store.upsertChat(accountID: account, chatID: peer, title: peer)
+            }
             let storedMessages: [StoredMessage]
             if let selected {
                 storedMessages = try await store.messages(accountID: account, chatID: selected, limit: 1000)
             } else { storedMessages = [] }
+            let reactions: [String: [AuthenticatedReaction]]
+            if let selected {
+                reactions = try await store.reactionsForChat(accountID: account, chatID: selected, messageIDs: Set(storedMessages.map(\.id)))
+            } else { reactions = [:] }
             guard accountID == account, openChatID == selected else { return }
-            chats = storedChats.map { ChatSummary(id: $0.id, title: $0.title, preview: $0.lastMessage?.body ?? "", isPinned: $0.isPinned) }
+            let known = Set(storedChats.map(\.id))
+            let reviewPreview = "Encrypted message needs attention"
+            chats = storedChats.map { ChatSummary(id: $0.id, title: $0.title,
+                preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage?.body ?? ""), isPinned: $0.isPinned) }
+            chats += pending.keys.filter { !known.contains($0) }.sorted().map {
+                ChatSummary(id: $0, title: $0, preview: reviewPreview, isPinned: false)
+            }
             messages = storedMessages
+            messageReactions = reactions
         } catch { self.error = "Could not read local conversations." }
     }
 }

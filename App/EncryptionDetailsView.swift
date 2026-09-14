@@ -7,6 +7,8 @@ struct EncryptionDetailsView: View {
     let chatID: String
     @Environment(\.dismiss) private var dismiss
     @State private var selectedDevice: EncryptionDevice?
+    @State private var confirmingRetirement = false
+    @State private var confirmingRepair = false
 
     var body: some View {
         NavigationStack {
@@ -72,9 +74,37 @@ struct EncryptionDetailsView: View {
                             Button("Block this device", systemImage: "hand.raised", role: .destructive) { setTrust(.rejected, device: device) }
                         } footer: { Text("A blocked device will be excluded from new encrypted messages. Previous messages cannot be recalled.") }
                         .disabled(!device.active)
+                        if device.active && device.trust.permitsEncryption {
+                            Section {
+                                Button("Repair encryption session", systemImage: "arrow.trianglehead.2.clockwise.rotate.90") { confirmingRepair = true }
+                                    .disabled(!model.isConnected)
+                            } footer: {
+                                Text("Use this if messages from this device cannot be opened. Your fingerprint and saved messages stay the same.")
+                            }
+                        }
+                        if device.active && device.jid == model.accountID {
+                            Section {
+                                Button("Remove old device", systemImage: "iphone.slash", role: .destructive) { confirmingRetirement = true }
+                                    .disabled(!model.isConnected)
+                            } footer: {
+                                Text("Remove a device you no longer use. Sign out on that device first, or it may advertise itself again.")
+                            }
+                        }
                     }
                     .navigationTitle("Device fingerprint").navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { selectedDevice = nil }.labelStyle(.iconOnly) } }
+                    .confirmationDialog("Repair this encryption session?", isPresented: $confirmingRepair, titleVisibility: .visible) {
+                        Button("Repair session") {
+                            selectedDevice = nil
+                            Task { await model.repairDeviceSession(device, chatID: chatID) }
+                        }
+                    } message: { Text("This starts a fresh session with the approved fingerprint. It cannot recover messages whose original keys are no longer available.") }
+                    .confirmationDialog("Remove this old device?", isPresented: $confirmingRetirement, titleVisibility: .visible) {
+                        Button("Remove device", role: .destructive) {
+                            selectedDevice = nil
+                            Task { await model.retireDevice(device, chatID: chatID) }
+                        }
+                    } message: { Text("It will be removed from your account’s advertised encryption devices. Previous messages cannot be recalled.") }
                 }
             }
         }

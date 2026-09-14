@@ -28,10 +28,18 @@ struct RootView: View {
                                 Button("Disconnect") { Task { await model.disconnect() } }
                             }
                         }
+                        if model.accountID.hasSuffix("@staging.example.net") {
+                            Section("Notifications") {
+                                LabeledContent("Status", value: model.notificationStatus)
+                                Button("Enable notifications") { Task { await model.enableNotifications() } }
+                                    .disabled(!model.isConnected || !model.encryptionReady)
+                                    .accessibilityIdentifier("enableNotifications")
+                            }
+                        }
                         Section("Development preview") {
                             Text("Received lab messages: \(model.receivedCount)")
                                 .accessibilityIdentifier("labReceivedCount")
-                            Text("This development build supports encrypted direct messages between local test accounts. Notifications and archive recovery are still in development.")
+                            Text("This development build supports encrypted direct messages between local test accounts. Archive recovery is enabled. Push delivery is being validated on the staging server.")
                                 .foregroundStyle(.secondary)
                             Button("Explore sample conversations") { Task { await model.loadDemo() } }
                         }
@@ -193,13 +201,13 @@ struct ConnectionView: View {
             Form {
                 Section {
                     Text("Connect a disposable account on the local development server. New messages require end-to-end encryption and approved recipient devices.")
-                    TextField("Username (without @localhost)", text: $username)
+                    TextField("Username", text: $username)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("labUsername")
                     SecureField("Password", text: $password).accessibilityIdentifier("labPassword")
                     Toggle("Use a disposable lab account", isOn: $consent)
                         .accessibilityIdentifier("labConsent")
                 } footer: {
-                    Text("localhost:5223 · Direct TLS. The lab certificate must be trusted in this simulator. Passwords stay in memory for this session.")
+                    Text("\(DevelopmentEndpoint.host):5223 · Direct TLS. The lab certificate must be trusted by this connection. Enabling notifications stores this account in this device’s protected Keychain for background synchronization.")
                 }
                 Section {
                     Button(model.isConnecting ? "Connecting…" : "Connect") {
@@ -213,7 +221,7 @@ struct ConnectionView: View {
                     Text(model.connectionStatus).foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle("Local lab")
+            .navigationTitle(DevelopmentEndpoint.domain == "localhost" ? "Local lab" : "Staging lab")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }
     }

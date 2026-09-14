@@ -21,15 +21,17 @@ targets:
   XMPPiOS:
     type: application
     platform: iOS
-    sources: [App]
+    sources: [App, Shared]
     dependencies:
       - package: XMPPProtocol
       - package: MessageStore
       - package: MessagingCore
       - package: OMEMO
+      - target: XMPPNotificationService
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.xmpplab.ios
+        CODE_SIGN_ENTITLEMENTS: App/App.entitlements
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: XMPP Lab
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
@@ -39,6 +41,38 @@ targets:
         SUPPORTS_MACCATALYST: NO
         MARKETING_VERSION: '0.1.0'
         CURRENT_PROJECT_VERSION: '1'
+  XMPPNotificationService:
+    type: app-extension
+    platform: iOS
+    sources: [NotificationService, Shared]
+    dependencies:
+      - package: MessageStore
+      - package: MessagingCore
+      - package: OMEMO
+      - package: XMPPProtocol
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.xmpplab.ios.notifications
+        CODE_SIGN_ENTITLEMENTS: NotificationService/NotificationService.entitlements
+        INFOPLIST_FILE: NotificationService/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
+        MARKETING_VERSION: '0.1.0'
+        CURRENT_PROJECT_VERSION: '1'
+  XMPPiOSLifecycleTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [AppLifecycleTests]
+    dependencies:
+      - target: XMPPiOS
+      - package: MessageStore
+      - package: OMEMO
+      - package: XMPPProtocol
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/XMPPiOS.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/XMPPiOS
+        BUNDLE_LOADER: $(TEST_HOST)
   XMPPiOSUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -55,3 +89,11 @@ schemes:
         XMPPiOS: all
     test:
       targets: [XMPPiOSUITests]
+  XMPPiOSLifecycle:
+    build:
+      targets:
+        XMPPiOS: all
+    test:
+      targets: [XMPPiOSLifecycleTests]
+      environmentVariables:
+        XMPP_UI_TEST_STORE: 8EA94AB4-1CDF-4978-B3C3-BF9D6E879842
