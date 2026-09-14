@@ -1,6 +1,11 @@
 import SwiftUI
 import UIKit
 
+struct TimelineReply: Sendable, Equatable {
+    let author: String
+    let body: String
+}
+
 struct TimelineMessage: Identifiable, Sendable, Equatable {
     let id: String
     let body: String
@@ -8,6 +13,7 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     let isStarred: Bool
     var sentAt: Date? = nil
     var status: Status? = nil
+    var reply: TimelineReply? = nil
 
     enum Status: String, Sendable, Equatable {
         case queued, submitting, unconfirmed, failed
@@ -30,13 +36,14 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     let messages: [TimelineMessage]
     var onToggleStar: (String) -> Void
     var onRetryMessage: (String) -> Void = { _ in }
+    var onReply: (String) -> Void = { _ in }
 
     func makeUIViewController(context: Context) -> ConversationTimelineController {
         ConversationTimelineController()
     }
 
     func updateUIViewController(_ controller: ConversationTimelineController, context: Context) {
-        controller.update(messages: messages, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage)
+        controller.update(messages: messages, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply)
     }
 }
 
@@ -53,9 +60,12 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var messagesByID: [String: TimelineMessage] = [:]
     private var onToggleStar: (String) -> Void = { _ in }
     private var onRetryMessage: (String) -> Void = { _ in }
+    private var onReply: (String) -> Void = { _ in }
     private var previousSize: CGSize = .zero
     private var revision = 0
     private var followsBottom = true
+    private weak var contentPopGesture: UIGestureRecognizer?
+    private var contentPopWasEnabled = false
 
     override func loadView() {
         let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(64)))
@@ -66,7 +76,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         let section = NSCollectionLayoutSection(group: group)
         section.interGroupSpacing = 8
         section.contentInsets = .init(top: 12, leading: 0, bottom: 12, trailing: 0)
-        collectionView = UICollectionView(frame: .zero, collectionViewLayout: UICollectionViewCompositionalLayout(section: section))
+        collectionView = ConversationCollectionView(frame: .zero, collectionViewLayout: UICollectionViewCompositionalLayout(section: section))
         collectionView.backgroundColor = .systemBackground
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .interactive
@@ -77,15 +87,16 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] collection, indexPath, id in
             guard let self, let message = messagesByID[id],
                   let cell = collection.dequeueReusableCell(withReuseIdentifier: "message", for: indexPath) as? MessageBubbleCell else { return nil }
-            cell.configure(message: message, toggleStar: { [weak self] in self?.onToggleStar(id) }, retry: { [weak self] in self?.onRetryMessage(id) })
+            cell.configure(message: message, toggleStar: { [weak self] in self?.onToggleStar(id) }, retry: { [weak self] in self?.onRetryMessage(id) }, reply: { [weak self] in self?.onReply(id) })
             return cell
         }
     }
 
-    func update(messages incoming: [TimelineMessage], onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }) {
+    func update(messages incoming: [TimelineMessage], onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }) {
         loadViewIfNeeded()
         self.onToggleStar = onToggleStar
         self.onRetryMessage = onRetryMessage
+        self.onReply = onReply
         // The durable store supplies unique IDs. Avoid a diffable crash if a caller repeats an ID.
         var seen = Set<String>()
         let uniqueMessages = incoming.filter { seen.insert($0.id).inserted }
@@ -115,6 +126,32 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             }
             followsBottom = isNearBottom
         }
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        reserveContentSwipeForReply()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        reserveContentSwipeForReply()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if let contentPopGesture { contentPopGesture.isEnabled = contentPopWasEnabled }
+        contentPopGesture = nil
+    }
+
+    private func reserveContentSwipeForReply() {
+        guard contentPopGesture == nil else { return }
+        guard let gesture = navigationController?.interactiveContentPopGestureRecognizer else {
+            return
+        }
+        contentPopWasEnabled = gesture.isEnabled
+        contentPopGesture = gesture
+        gesture.isEnabled = false
     }
 
     override func viewDidLayoutSubviews() {
@@ -157,12 +194,23 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 }
 
 @MainActor
-private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate {
+private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate, UIGestureRecognizerDelegate {
     private var message: TimelineMessage?
     private var toggleStar: () -> Void = {}
     private var retry: () -> Void = {}
+    private var replyAction: () -> Void = {}
+    private var swipeReplyAction: (() -> Void)?
+    private var crossedReplyThreshold = false
+    private let replyFeedback = UIImpactFeedbackGenerator(style: .light)
+    private let quote = UIView()
+    private let quoteAuthor = UILabel()
+    private let quoteBody = UILabel()
+    private var plainTextTop: NSLayoutConstraint!
+    private var replyTextTop: NSLayoutConstraint!
     private var selectAfterDismissal = false
     private let bubble = UIView()
+    private let replyIndicator = UIImageView(image: UIImage(systemName: "arrowshape.turn.up.left.fill"))
+    private var replyIndicatorLeading: NSLayoutConstraint!
     private let textView = MessageTextView()
     private var messageID: String?
     private let footer = UIStackView()
@@ -178,8 +226,62 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         bubble.translatesAutoresizingMaskIntoConstraints = false
         bubble.layer.cornerRadius = 20
         bubble.layer.cornerCurve = .continuous
+        replyIndicator.translatesAutoresizingMaskIntoConstraints = false
+        replyIndicator.tintColor = .systemIndigo
+        replyIndicator.contentMode = .scaleAspectFit
+        replyIndicator.alpha = 0
+        replyIndicator.isAccessibilityElement = false
+        contentView.addSubview(replyIndicator)
         contentView.addSubview(bubble)
+        replyIndicatorLeading = replyIndicator.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 28)
+        NSLayoutConstraint.activate([
+            replyIndicatorLeading,
+            replyIndicator.centerYAnchor.constraint(equalTo: bubble.centerYAnchor),
+            replyIndicator.widthAnchor.constraint(equalToConstant: 24),
+            replyIndicator.heightAnchor.constraint(equalToConstant: 24)
+        ])
         bubble.addInteraction(UIContextMenuInteraction(delegate: self))
+        let replyPan = UIPanGestureRecognizer(target: self, action: #selector(handleReplyPan(_:)))
+        replyPan.maximumNumberOfTouches = 1
+        replyPan.delegate = self
+        bubble.addGestureRecognizer(replyPan)
+        quote.translatesAutoresizingMaskIntoConstraints = false
+        quote.isUserInteractionEnabled = false
+        quote.isAccessibilityElement = false
+        bubble.addSubview(quote)
+        let quoteBar = UIView()
+        quoteBar.translatesAutoresizingMaskIntoConstraints = false
+        quoteBar.backgroundColor = .systemIndigo
+        quoteBar.layer.cornerRadius = 1.5
+        quote.addSubview(quoteBar)
+        let quoteLabels = UIStackView(arrangedSubviews: [quoteAuthor, quoteBody])
+        quoteLabels.translatesAutoresizingMaskIntoConstraints = false
+        quoteLabels.axis = .vertical
+        quoteLabels.spacing = 2
+        quote.addSubview(quoteLabels)
+        quoteAuthor.font = .preferredFont(forTextStyle: .caption1)
+        quoteAuthor.textColor = .label
+        quoteAuthor.numberOfLines = 1
+        quoteBody.font = .preferredFont(forTextStyle: .subheadline)
+        quoteBody.textColor = .secondaryLabel
+        quoteBody.numberOfLines = 2
+        for label in [quoteAuthor, quoteBody] {
+            label.adjustsFontForContentSizeCategory = true
+            label.isAccessibilityElement = false
+        }
+        NSLayoutConstraint.activate([
+            quote.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 12),
+            quote.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -12),
+            quote.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 10),
+            quoteBar.leadingAnchor.constraint(equalTo: quote.leadingAnchor),
+            quoteBar.topAnchor.constraint(equalTo: quote.topAnchor),
+            quoteBar.bottomAnchor.constraint(equalTo: quote.bottomAnchor),
+            quoteBar.widthAnchor.constraint(equalToConstant: 3),
+            quoteLabels.leadingAnchor.constraint(equalTo: quoteBar.trailingAnchor, constant: 7),
+            quoteLabels.trailingAnchor.constraint(equalTo: quote.trailingAnchor),
+            quoteLabels.topAnchor.constraint(equalTo: quote.topAnchor),
+            quoteLabels.bottomAnchor.constraint(equalTo: quote.bottomAnchor)
+        ])
         textView.translatesAutoresizingMaskIntoConstraints = false
         textView.isEditable = false
         textView.isAccessibilityElement = true
@@ -218,13 +320,15 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         leading = bubble.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16)
         trailing = bubble.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16)
         bubbleWidth = bubble.widthAnchor.constraint(equalToConstant: 200)
+        plainTextTop = textView.topAnchor.constraint(equalTo: bubble.topAnchor)
+        replyTextTop = textView.topAnchor.constraint(equalTo: quote.bottomAnchor)
+        plainTextTop.isActive = true
         NSLayoutConstraint.activate([
             bubble.topAnchor.constraint(equalTo: contentView.topAnchor),
             bubble.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
             bubbleWidth,
             bubble.leadingAnchor.constraint(greaterThanOrEqualTo: contentView.leadingAnchor, constant: 16),
             bubble.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -16),
-            textView.topAnchor.constraint(equalTo: bubble.topAnchor),
             textView.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
             textView.trailingAnchor.constraint(equalTo: bubble.trailingAnchor),
             footer.topAnchor.constraint(equalTo: textView.bottomAnchor),
@@ -246,7 +350,14 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         )
         // Reserve the same star space for every message so starring never changes bubble width.
         let metadataWidth = footer.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize).width + 24
-        bubbleWidth.constant = min(maximumTextWidth + 24, max(metadataWidth, max(44, ceil(measured.width) + 25)))
+        var quoteWidth: CGFloat = 0
+        if let reply = message?.reply {
+            let limit = min(220, maximumTextWidth - 10)
+            let bodyWidth = (reply.body as NSString).boundingRect(with: CGSize(width: limit, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: quoteBody.font!], context: nil).width
+            let authorWidth = (reply.author as NSString).size(withAttributes: [.font: quoteAuthor.font!]).width
+            quoteWidth = min(limit, max(bodyWidth, authorWidth)) + 34
+        }
+        bubbleWidth.constant = min(maximumTextWidth + 24, max(quoteWidth, max(metadataWidth, max(44, ceil(measured.width) + 25))))
         return super.preferredLayoutAttributesFitting(layoutAttributes)
     }
 
@@ -255,9 +366,11 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
               UIBezierPath(roundedRect: bubble.bounds, cornerRadius: 20).contains(location) else { return nil }
         let starAction = toggleStar
         let retryAction = retry
+        let reply = replyAction
         return UIContextMenuConfiguration(identifier: message.id as NSString, previewProvider: nil) { [weak self] _ in
             guard self != nil else { return nil }
             var actions: [UIMenuElement] = [
+                UIAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { _ in reply() },
                 UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
                     UIPasteboard.general.string = message.body
                 },
@@ -299,6 +412,56 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         return UITargetedPreview(view: bubble, parameters: parameters)
     }
 
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+        let velocity = pan.velocity(in: contentView)
+        return !isSelectingText && messageID != nil && pan.location(in: window).x > 24
+            && UIBezierPath(roundedRect: bubble.bounds, cornerRadius: 20).contains(pan.location(in: bubble))
+            && velocity.x > 0 && velocity.x > abs(velocity.y) * 1.5
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRequireFailureOf otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        return otherGestureRecognizer is UIScreenEdgePanGestureRecognizer
+    }
+
+
+    @objc private func handleReplyPan(_ pan: UIPanGestureRecognizer) {
+        let distance = max(0, pan.translation(in: contentView).x)
+        switch pan.state {
+        case .began:
+            replyIndicatorLeading.constant = bubble.frame.minX + 12
+            swipeReplyAction = replyAction
+            crossedReplyThreshold = false
+            replyFeedback.prepare()
+        case .changed:
+            bubble.transform = CGAffineTransform(translationX: min(80, distance), y: 0)
+            replyIndicator.alpha = min(1, distance / 56)
+            if distance >= 56, !crossedReplyThreshold {
+                crossedReplyThreshold = true
+                replyFeedback.impactOccurred()
+            }
+        case .ended:
+            let reply = distance >= 56 ? swipeReplyAction : nil
+            resetReplySwipe(animated: true)
+            reply?()
+        case .cancelled, .failed:
+            resetReplySwipe(animated: true)
+        default: break
+        }
+    }
+
+    private func resetReplySwipe(animated: Bool) {
+        swipeReplyAction = nil
+        replyIndicator.alpha = 0
+        crossedReplyThreshold = false
+        if animated, !UIAccessibility.isReduceMotionEnabled {
+            UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0, options: [.beginFromCurrentState, .allowUserInteraction]) { self.bubble.transform = .identity }
+        } else {
+            bubble.layer.removeAllAnimations()
+            bubble.transform = .identity
+        }
+    }
+
     var isSelectingText: Bool { textView.isSelectable }
 
     func beginTextSelection() {
@@ -313,6 +476,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        resetReplySwipe(animated: false)
         _ = textView.resignFirstResponder()
         textView.isSelectable = false
         textView.isUserInteractionEnabled = false
@@ -322,16 +486,23 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         selectAfterDismissal = false
     }
 
-    func configure(message: TimelineMessage, toggleStar: @escaping () -> Void, retry: @escaping () -> Void) {
+    func configure(message: TimelineMessage, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void) {
         self.message = message
         self.toggleStar = toggleStar
         self.retry = retry
+        self.replyAction = reply
         if messageID != message.id {
+            resetReplySwipe(animated: false)
             _ = textView.resignFirstResponder()
             textView.isSelectable = false
             textView.isUserInteractionEnabled = false
             messageID = message.id
         }
+        quote.isHidden = message.reply == nil
+        quoteAuthor.text = message.reply?.author
+        quoteBody.text = message.reply?.body
+        NSLayoutConstraint.deactivate([plainTextTop, replyTextTop])
+        (message.reply == nil ? plainTextTop : replyTextTop)?.isActive = true
         let canRetry = message.isOutgoing && message.status?.canRetry == true
         leading.isActive = !message.isOutgoing
         trailing.isActive = message.isOutgoing
@@ -339,6 +510,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         textView.textColor = .label
         if textView.text != message.body { textView.text = message.body }
         var descriptions = ["\(message.isOutgoing ? "You" : "Contact"): \(message.body)"]
+        if let quote = message.reply { descriptions.append("Replying to \(quote.author): \(quote.body)") }
         if message.isStarred { descriptions.append("starred") }
         if let date = message.sentAt { descriptions.append(date.formatted(date: .abbreviated, time: .shortened)) }
         if message.isOutgoing, let state = message.status { descriptions.append(state.accessibilityDescription) }
@@ -347,6 +519,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
             toggleStar()
             return true
         }]
+        textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: "Reply") { _ in reply(); return true })
         textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: "Select text") { [weak self] _ in
             self?.beginTextSelection()
             return true
@@ -397,5 +570,17 @@ private final class MessageTextView: UITextView {
             isUserInteractionEnabled = false
         }
         return resigned
+    }
+}
+
+/// A horizontal message action must not start vertical scrolling or keyboard dismissal.
+@MainActor
+private final class ConversationCollectionView: UICollectionView {
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === panGestureRecognizer {
+            let velocity = panGestureRecognizer.velocity(in: self)
+            if abs(velocity.x) > abs(velocity.y) * 1.5 { return false }
+        }
+        return super.gestureRecognizerShouldBegin(gestureRecognizer)
     }
 }

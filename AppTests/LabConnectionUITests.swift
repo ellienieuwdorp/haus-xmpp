@@ -10,6 +10,7 @@ final class LabConnectionUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-lab-ui-test"]
         app.launchEnvironment = ["XMPP_LAB_USERNAME": user, "XMPP_LAB_PASSWORD": password]
+        app.isolateMessageStorage()
         app.launch()
         app.buttons["Settings"].tap()
         app.buttons["Connect to local lab"].tap()
@@ -25,9 +26,6 @@ final class LabConnectionUITests: XCTestCase {
         recipient.tap()
         recipient.typeText(user + "@localhost")
         app.buttons["Create conversation"].tap()
-        let chat = app.staticTexts[user + "@localhost"].firstMatch
-        XCTAssertTrue(chat.waitForExistence(timeout: 5))
-        chat.tap()
         let field = app.textFields["messageComposer"]
         let input = field.exists ? field : app.textViews["messageComposer"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))

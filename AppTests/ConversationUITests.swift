@@ -4,6 +4,7 @@ final class ConversationUITests: XCTestCase {
     @MainActor func testComposeSearchAndRelaunch() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]
+        app.isolateMessageStorage()
         app.launch()
         let alex = app.staticTexts["Alex"]
         XCTAssertTrue(alex.waitForExistence(timeout: 15))
@@ -24,7 +25,7 @@ final class ConversationUITests: XCTestCase {
         add(capture)
         app.buttons["Conversation options"].tap()
         app.buttons["Search messages"].tap()
-        let search = app.textFields["messageSearch"]
+        let search = app.searchFields["messageSearch"]
         XCTAssertTrue(search.waitForExistence(timeout: 3))
         search.tap()
         search.typeText(marker)

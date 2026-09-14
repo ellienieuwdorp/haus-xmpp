@@ -4,22 +4,33 @@ final class OrganizationUITests: XCTestCase {
     @MainActor func testPinStarFilterAndRelaunch() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]
+        app.isolateMessageStorage()
         app.launch()
         let alex = app.staticTexts["Alex"]
         XCTAssertTrue(alex.waitForExistence(timeout: 15))
-        alex.press(forDuration: 1)
-        // Preserve repeatability when a preceding run left the conversation pinned.
-        if app.buttons["Unpin chat"].waitForExistence(timeout: 2) {
-            app.buttons["Unpin chat"].tap()
-            alex.press(forDuration: 1)
+        let row = app.buttons["chat.alex@preview.local"]
+        row.press(forDuration: 1)
+        XCTAssertFalse(app.buttons["Pin"].exists, "Pin must not appear on long press")
+        if app.buttons["BackButton"].exists { app.buttons["BackButton"].tap() }
+        row.swipeLeft()
+        if app.buttons["Unpin"].waitForExistence(timeout: 1) {
+            app.buttons["Unpin"].tap()
+            row.swipeLeft()
         }
-        let pin = app.buttons["Pin chat"]
-        XCTAssertTrue(pin.waitForExistence(timeout: 3))
-        pin.tap()
-        alex.press(forDuration: 1)
-        XCTAssertTrue(app.buttons["Unpin chat"].waitForExistence(timeout: 3))
-        // Dismiss the context menu by tapping outside its preview and actions.
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
+        XCTAssertTrue(app.buttons["Pin"].waitForExistence(timeout: 3))
+        app.buttons["Pin"].tap()
+        XCTAssertEqual(row.value as? String, "Pinned")
+        let capture = XCTAttachment(screenshot: app.screenshot())
+        capture.name = "Centered pin and larger compose"
+        capture.lifetime = .keepAlways
+        add(capture)
+        row.swipeLeft()
+        XCTAssertTrue(app.buttons["Unpin"].waitForExistence(timeout: 3))
+        let swipe = XCTAttachment(screenshot: app.screenshot())
+        swipe.name = "Trailing pin action"
+        swipe.lifetime = .keepAlways
+        add(swipe)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
         alex.tap()
 
         let marker = "Favorite \(UUID().uuidString.prefix(8))"
@@ -49,9 +60,7 @@ final class OrganizationUITests: XCTestCase {
         app.terminate()
         app.launch()
         XCTAssertTrue(alex.waitForExistence(timeout: 10))
-        alex.press(forDuration: 1)
-        XCTAssertTrue(app.buttons["Unpin chat"].waitForExistence(timeout: 3), "Pin must survive process restart")
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
+        XCTAssertEqual(row.value as? String, "Pinned", "Pin must survive process restart")
         alex.tap()
         app.buttons["Conversation options"].tap()
         app.buttons["Starred messages"].tap()

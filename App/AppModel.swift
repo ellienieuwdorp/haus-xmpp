@@ -35,13 +35,27 @@ final class AppModel {
     @ObservationIgnored private var openChatID: String?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var prepared = false
+    @ObservationIgnored private let testSessionID: String? = {
+        #if DEBUG
+        guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"],
+              let id = UUID(uuidString: value) else { return nil }
+        return id.uuidString
+        #else
+        return nil
+        #endif
+    }()
+    @ObservationIgnored private lazy var preferences: UserDefaults = {
+        guard let testSessionID else { return .standard }
+        return UserDefaults(suiteName: "dev.xmpplab.uitest." + testSessionID) ?? .standard
+    }()
 
     func prepare() async {
         guard !prepared else { return }
         prepared = true
         do {
-            let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            var directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
                 .appending(path: "Messaging", directoryHint: .isDirectory)
+            if let testSessionID { directory.append(path: "UITests/" + testSessionID) }
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                    attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
             var excluded = directory
@@ -50,7 +64,7 @@ final class AppModel {
             try excluded.setResourceValues(values)
             store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
             if let store { outboxSender = OutboxSender(store: store) }
-            accountID = UserDefaults.standard.string(forKey: "lastAccount") ?? ""
+            accountID = preferences.string(forKey: "lastAccount") ?? ""
             if ProcessInfo.processInfo.arguments.contains("-demo") { await loadDemo() }
             else { await refresh() }
         } catch { self.error = "Could not open local message storage." }
@@ -133,7 +147,7 @@ final class AppModel {
         chats = []
         messages = []
         openChatID = nil
-        UserDefaults.standard.set(account, forKey: "lastAccount")
+        preferences.set(account, forKey: "lastAccount")
     }
 
     private func resetSession() -> XMPPClient? {
@@ -198,7 +212,7 @@ final class AppModel {
         } catch { self.error = "Could not create conversation."; return false }
     }
 
-    func send(_ body: String, to chatID: String) async -> Bool {
+    func send(_ body: String, to chatID: String, replyingTo source: ChatMessage? = nil) async -> Bool {
         guard !isSending, let store, !accountID.isEmpty,
               !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               body.utf8.count <= 16_384 else { return false }
@@ -207,12 +221,14 @@ final class AppModel {
         let account = accountID
         let sample = isDemo
         guard sample || chatID.hasSuffix("@localhost") else { return false }
+        if let source, source.accountID != account || source.chatID != chatID { return false }
+        let reply = source.map { MessageReply(messageID: $0.id, senderID: $0.senderID, body: $0.body, wireID: $0.isOutgoing && $0.transportState != nil ? $0.id : nil) }
         let message = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chatID,
-                                    senderID: account, body: body, isOutgoing: true)
+                                    senderID: account, body: body, isOutgoing: true, reply: reply)
         do {
-            try XMPPClient.validateMessage(to: chatID, body: body, id: message.id)
+            try XMPPClient.validateMessage(to: chatID, body: body, id: message.id, reply: Self.wireReply(message.reply))
         } catch {
-            self.error = "This message contains characters that cannot be sent. Your text is still in the composer."
+            self.error = "This message or quoted text is too long or contains unsupported characters. Your text is still in the composer."
             return false
         }
         do {
@@ -236,6 +252,10 @@ final class AppModel {
         } catch { self.error = "This message could not be queued again." }
     }
 
+    private nonisolated static func wireReply(_ reply: MessageReply?) -> XMPPReply? {
+        reply.map { XMPPReply(id: $0.wireID, to: $0.senderID, body: $0.body) }
+    }
+
     private func startOutbox() {
         outboxRequested = true
         guard drainTask == nil, isConnected, !isDemo,
@@ -246,7 +266,7 @@ final class AppModel {
         drainTask = Task { [weak self] in
             do {
                 try await outboxSender.drain(accountID: account, send: { message in
-                    _ = try await client.sendMessage(to: message.chatID, body: message.body, id: message.id)
+                    _ = try await client.sendMessage(to: message.chatID, body: message.body, id: message.id, reply: Self.wireReply(message.reply))
                 }, didChange: { [weak self] in
                     await self?.refresh()
                 })

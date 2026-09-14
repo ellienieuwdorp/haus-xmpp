@@ -10,6 +10,7 @@ final class OutboxUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-lab-ui-test"]
         app.launchEnvironment = ["XMPP_LAB_USERNAME": user, "XMPP_LAB_PASSWORD": password]
+        app.isolateMessageStorage()
         app.launch()
         func connect() {
             app.buttons["Settings"].tap()
@@ -27,7 +28,6 @@ final class OutboxUITests: XCTestCase {
         app.textFields["name@server"].tap()
         app.textFields["name@server"].typeText(user + "@localhost")
         app.buttons["Create conversation"].tap()
-        app.staticTexts[user + "@localhost"].firstMatch.tap()
         let input = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
         input.tap()
         let marker = "Queued \(UUID().uuidString.prefix(6))"

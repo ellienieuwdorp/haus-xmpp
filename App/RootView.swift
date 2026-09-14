@@ -3,13 +3,14 @@ import SwiftUI
 struct RootView: View {
     @Bindable var model: AppModel
     @State private var selectedTab = 0
+    @State private var chatPath: [String] = []
     @State private var showingConnection = false
 
     var body: some View {
         TabView(selection: $selectedTab) {
             Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: 0) {
-                NavigationStack {
-                    ChatListView(model: model)
+                NavigationStack(path: $chatPath) {
+                    ChatListView(model: model, path: $chatPath)
                         .toolbar {
                             ToolbarItem(placement: .topBarTrailing) {
                                 Button("Account", systemImage: "person.crop.circle") { showingConnection = true }
@@ -39,6 +40,7 @@ struct RootView: View {
                 }
             }
         }
+        .onChange(of: model.accountID) { _, _ in chatPath.removeAll() }
         .sheet(isPresented: $showingConnection) { ConnectionView(model: model) }
         .alert("Something needs attention", isPresented: Binding(
             get: { model.error != nil }, set: { if !$0 { model.error = nil } }
@@ -50,25 +52,32 @@ struct RootView: View {
 
 struct ChatListView: View {
     @Bindable var model: AppModel
+    @Binding var path: [String]
     @State private var search = ""
     @State private var recipient = ""
     @State private var showingNewChat = false
 
+    private var searchTerm: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
+
     private var visibleChats: [ChatSummary] {
-        guard !search.isEmpty else { return model.chats }
-        return model.chats.filter { $0.title.localizedCaseInsensitiveContains(search) || $0.id.localizedCaseInsensitiveContains(search) }
+        guard !searchTerm.isEmpty else { return model.chats }
+        return model.chats.filter { $0.title.localizedCaseInsensitiveContains(searchTerm) || $0.id.localizedCaseInsensitiveContains(searchTerm) }
     }
 
     var body: some View {
         Group {
             if model.chats.isEmpty {
                 ContentUnavailableView {
-                    Label("A little closer", systemImage: "bubble.left.and.bubble.right")
+                    Label("No conversations yet", systemImage: "bubble.left.and.bubble.right")
                 } description: {
-                    Text("Your conversations will live here. Connect to the local lab from Settings, or explore the interface with sample messages.")
+                    Text(model.accountID.isEmpty
+                         ? "Connect to the local lab in Settings, or explore sample conversations."
+                         : "Tap the compose button to start a conversation.")
                 } actions: {
-                    Button("Explore sample conversations") { Task { await model.loadDemo() } }
-                        .buttonStyle(.borderedProminent)
+                    if model.accountID.isEmpty {
+                        Button("Explore sample conversations") { Task { await model.loadDemo() } }
+                            .buttonStyle(.borderedProminent)
+                    }
                 }
             } else {
                 List {
@@ -77,42 +86,51 @@ struct ChatListView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     ForEach(visibleChats) { chat in
-                        NavigationLink(value: chat.id) {
+                        Button { path.append(chat.id) } label: {
                             HStack(spacing: 13) {
                                 Text(String(chat.title.prefix(1)).uppercased())
                                     .font(.title3.weight(.semibold))
                                     .foregroundStyle(.indigo)
                                     .frame(width: 48, height: 48)
                                     .background(.indigo.opacity(0.10), in: Circle())
+                                    .accessibilityHidden(true)
                                 VStack(alignment: .leading, spacing: 5) {
-                                    HStack {
-                                        Text(chat.title).font(.headline)
-                                        Spacer()
-                                        if chat.isPinned { Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary) }
-                                    }
+                                    Text(chat.title).font(.headline).foregroundStyle(.primary)
+                                        .lineLimit(1)
                                     Text(chat.preview.isEmpty ? "Start a conversation" : chat.preview)
                                         .font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                if chat.isPinned {
+                                    Image(systemName: "pin.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .accessibilityHidden(true)
+                                }
                             }
                             .padding(.vertical, 6)
+                            .contentShape(Rectangle())
                         }
-                        .swipeActions(edge: .leading) {
+                        .buttonStyle(.plain)
+                        .accessibilityValue(chat.isPinned ? "Pinned" : "")
+                        .accessibilityIdentifier("chat.\(chat.id)")
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button(chat.isPinned ? "Unpin" : "Pin", systemImage: chat.isPinned ? "pin.slash" : "pin") {
                                 Task { await model.togglePin(chat) }
                             }.tint(.indigo)
                         }
-                        .contextMenu {
-                            Button(chat.isPinned ? "Unpin chat" : "Pin chat", systemImage: "pin") {
-                                Task { await model.togglePin(chat) }
-                            }
-                        }
                     }
                 }
                 .listStyle(.plain)
+                .overlay {
+                    if visibleChats.isEmpty {
+                        ContentUnavailableView.search(text: searchTerm)
+                    }
+                }
             }
         }
         .navigationTitle("Chats")
-        .searchable(text: $search, prompt: "Find a conversation")
+        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search conversations")
         .navigationDestination(for: String.self) { chatID in
             ConversationView(model: model, chatID: chatID)
         }
@@ -120,12 +138,12 @@ struct ChatListView: View {
             HStack {
                 Spacer()
                 Button { showingNewChat = true } label: {
-                    Image(systemName: "square.and.pencil")
+                    Image(systemName: "pencil")
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 22, height: 22)
+                        .frame(width: 24, height: 24)
                 }
-                    .buttonStyle(CircularGlassButtonStyle(diameter: 48))
+                    .buttonStyle(CircularGlassButtonStyle(diameter: 56))
                     .accessibilityLabel("New conversation")
                     .accessibilityIdentifier("newConversation")
                     .disabled(model.accountID.isEmpty)
@@ -137,7 +155,12 @@ struct ChatListView: View {
                     TextField("name@server", text: $recipient).textInputAutocapitalization(.never).autocorrectionDisabled()
                     Button("Create conversation") {
                         Task {
-                            if await model.createChat(recipient) { showingNewChat = false; recipient = "" }
+                            let address = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if await model.createChat(address) {
+                                showingNewChat = false
+                                recipient = ""
+                                path.append(address)
+                            }
                         }
                     }.disabled(recipient.isEmpty)
                 }

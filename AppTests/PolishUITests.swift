@@ -5,6 +5,7 @@ final class PolishUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]
+        app.isolateMessageStorage()
         app.launch()
         let compose = app.buttons["newConversation"]
         XCTAssertTrue(compose.waitForExistence(timeout: 15))
@@ -69,6 +70,7 @@ final class PolishUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityM"]
+        app.isolateMessageStorage()
         app.launch()
         XCTAssertTrue(app.staticTexts["Notes to self"].waitForExistence(timeout: 15))
         app.staticTexts["Notes to self"].tap()
