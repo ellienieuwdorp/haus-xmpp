@@ -1,0 +1,2 @@
+# Preserve upstream bytes exactly; verify_vendor.py checks their pinned hashes.
+Packages/OMEMOCrypto/Sources/CLibOMEMO/** -whitespace linguist-vendored

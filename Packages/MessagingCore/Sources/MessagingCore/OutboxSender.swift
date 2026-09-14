@@ -12,6 +12,7 @@ public actor OutboxSender {
     /// Caller cancels on session replacement. Never automatically replays uncertain attempts.
     public func drain(
         accountID: String,
+        messageIDs: Set<String>? = nil,
         send: @Sendable (StoredMessage) async throws -> Void,
         didChange: @Sendable () async -> Void = {}
     ) async throws {
@@ -19,7 +20,7 @@ public actor OutboxSender {
         running = true
         defer { running = false }
         while !Task.isCancelled {
-            guard let attempt = try await store.claimNextOutgoing(accountID: accountID) else { return }
+            guard let attempt = try await store.claimNextOutgoing(accountID: accountID, messageIDs: messageIDs) else { return }
             await didChange()
             if Task.isCancelled {
                 try await store.releaseUnsentSubmission(attempt)
@@ -28,6 +29,11 @@ public actor OutboxSender {
             }
             do {
                 try await send(attempt.message)
+            } catch OutboxSendFailure.notAttempted {
+                // Only an explicit pre-transport rejection can safely return this claim to queue.
+                try await store.releaseUnsentSubmission(attempt)
+                await didChange()
+                throw OutboxSendFailure.notAttempted
             } catch {
                 // The write may have reached the peer even when the completion reports failure.
                 try await store.finishOutgoingSubmission(attempt)
@@ -39,3 +45,7 @@ public actor OutboxSender {
         }
     }
 }
+
+/// A caller may use this only if it has not invoked the transport at all (for example, a final
+/// device-trust check failed). Socket failures must never be translated into this error.
+public enum OutboxSendFailure: Error, Sendable { case notAttempted }

@@ -55,3 +55,7 @@ Secrets.xcconfig
 # Private development certificate keys
 *.key
 *.pem
+
+# Python interoperability harness caches
+__pycache__/
+*.pyc

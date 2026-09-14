@@ -18,10 +18,11 @@ public struct XMPPMessage: Sendable, Equatable {
     /// Untrusted sender-provided identifier, scoped by the application to its provenance.
     public let originID: String?
     public let type: String?
+    public let provenance: XMPPMessageProvenance
 
-    public init(id: String, from: String, to: String?, body: String, originID: String? = nil, type: String? = nil) {
+    public init(id: String, from: String, to: String?, body: String, originID: String? = nil, type: String? = nil, provenance: XMPPMessageProvenance = .direct) {
         self.id = id; self.from = from; self.to = to; self.body = body
-        self.originID = originID; self.type = type
+        self.originID = originID; self.type = type; self.provenance = provenance
     }
 }
 
@@ -41,6 +42,9 @@ public struct XMPPReply: Sendable, Equatable {
 public enum XMPPEvent: Sendable, Equatable {
     case state(XMPPConnectionState)
     case message(XMPPMessage)
+    case encryptedMessage(XMPPEncryptedMessage)
+    case omemoDevices(owner: String, profile: XMPPOMEMOProfile, devices: [UInt32])
+    case encryptionFailure(from: String, id: String?)
 }
 
 public enum XMPPClientError: Error, Sendable {
@@ -48,7 +52,7 @@ public enum XMPPClientError: Error, Sendable {
     case authenticationFailed, bindingFailed, unexpectedProtocol, connectionClosed, timedOut, eventConsumerTooSlow
 }
 
-/// Early direct-TLS protocol laboratory. Does not implement OMEMO, STARTTLS, SM or MAM.
+/// Direct-TLS protocol laboratory with OMEMO wire transport and PEP. No STARTTLS, SM or MAM yet.
 /// PLAIN is permitted only inside validated TLS. Never use this API as an encryption fallback.
 public actor XMPPClient {
     public nonisolated let events: AsyncStream<XMPPEvent>
@@ -64,6 +68,13 @@ public actor XMPPClient {
     private var username = ""
     private var password = ""
     private var bindID = ""
+    private var boundJID = ""
+    private struct IQRequest {
+        let scope: IQReplyScope
+        let continuation: CheckedContinuation<XMLNode, Error>
+        let timeout: Task<Void, Never>
+    }
+    private var iqRequests: [String: IQRequest] = [:]
     private var handshake: CheckedContinuation<Void, Error>?
     private let queue = DispatchQueue(label: "xmpp.transport")
     private enum Phase { case idle, features, authentication, authenticatedFeatures, binding, online }
@@ -187,9 +198,10 @@ public actor XMPPClient {
         }
     }
 
-    static func parsedMessage(_ node: XMLNode) -> XMPPMessage? {
+    static func parsedMessage(_ node: XMLNode, provenance: XMPPMessageProvenance = .direct) -> XMPPMessage? {
         guard node.name == "message", node.namespace == "jabber:client",
               node.attributes["type"] == nil || node.attributes["type"] == "chat" || node.attributes["type"] == "normal",
+              !OMEMOWire.hasEncryptedContent(node), !Carbons.containsWrapper(node),
               let from = node.attributes["from"], !from.isEmpty,
               let body = node.child("body", namespace: "jabber:client")?.text, !body.isEmpty else { return nil }
         let origins = node.children.filter { $0.name == "origin-id" && $0.namespace == "urn:xmpp:sid:0" }
@@ -197,7 +209,7 @@ public actor XMPPClient {
         let candidate = origins.count == 1 ? origins[0].attributes["id"] : nil
         let originID = candidate.flatMap { validMessageID($0) ? $0 : nil }
         return XMPPMessage(id: node.attributes["id"] ?? UUID().uuidString, from: from,
-                           to: node.attributes["to"], body: body, originID: originID, type: node.attributes["type"])
+                           to: node.attributes["to"], body: body, originID: originID, type: node.attributes["type"], provenance: provenance)
     }
 
     private func readLoop(_ conn: NWConnection, token: UUID) async {
@@ -249,18 +261,31 @@ public actor XMPPClient {
                   let jid = node.child("bind", namespace: "urn:ietf:params:xml:ns:xmpp-bind")?.child("jid", namespace: "urn:ietf:params:xml:ns:xmpp-bind")?.text, !jid.isEmpty else { throw XMPPClientError.bindingFailed }
             try await write("<presence/>")
             guard generation == token else { throw XMPPClientError.connectionClosed }
+            boundJID = jid
             phase = .online
             deadline?.cancel(); deadline = nil
             try emit(.state(.online(jid: jid)))
             handshake?.resume(); handshake = nil
         case .online:
-            if let message = Self.parsedMessage(node) {
-                try emit(.message(message))
+            if routeIQ(node) { return }
+            if node.name == "message", node.namespace == "jabber:client" {
+                if Carbons.containsWrapper(node) {
+                    // Malformed or foreign wrappers are discarded as a whole; their outer body
+                    // must not become a plaintext fallback or their inner sender become trusted.
+                    guard let ownBare = OMEMOWire.bareJID(boundJID),
+                          let (forwarded, provenance) = try? Carbons.unwrap(node, accountBareJID: ownBare, accountFullJID: boundJID) else { return }
+                    try emitMessage(forwarded, provenance: provenance)
+                } else { try emitMessage(node, provenance: .direct) }
             } else if node.name == "iq", node.namespace == "jabber:client",
                       ["get", "set"].contains(node.attributes["type"] ?? ""), let id = node.attributes["id"] {
                 let to = node.attributes["from"].map { " to='\(xmlEscaped($0))'" } ?? ""
                 // Respond to XEP-0199 pings; reject other unsupported requests explicitly.
-                if node.child("ping", namespace: "urn:xmpp:ping") != nil {
+                if node.attributes["type"] == "get", node.children.count == 1,
+                   node.child("query", namespace: "http://jabber.org/protocol/disco#info") != nil {
+                    let features = ["http://jabber.org/protocol/disco#info", "urn:xmpp:ping"] + XMPPOMEMOProfile.allCases.flatMap { [$0.namespace, $0.devicesNode + "+notify"] }
+                    let query = "<query xmlns='http://jabber.org/protocol/disco#info'><identity category='client' type='phone' name='XMPP Lab'/>" + features.map { "<feature var='\($0)'/>" }.joined() + "</query>"
+                    try await write("<iq type='result' id='\(xmlEscaped(id))'\(to)>\(query)</iq>")
+                } else if node.child("ping", namespace: "urn:xmpp:ping") != nil {
                     try await write("<iq type='result' id='\(xmlEscaped(id))'\(to)/>")
                 } else {
                     try await write("<iq type='error' id='\(xmlEscaped(id))'\(to)><error type='cancel'><service-unavailable xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></iq>")
@@ -268,6 +293,150 @@ public actor XMPPClient {
             }
         case .idle: throw XMPPClientError.unexpectedProtocol
         }
+    }
+
+    private func emitMessage(_ node: XMLNode, provenance: XMPPMessageProvenance) throws {
+        if OMEMOWire.hasEncryptedContent(node) {
+            do { try emit(.encryptedMessage(OMEMOWire.parseMessage(node, provenance: provenance))) }
+            catch { try emit(.encryptionFailure(from: node.attributes["from"] ?? "", id: node.attributes["id"])) }
+        } else if provenance == .direct, let update = Self.deviceUpdate(node) {
+            try emit(.omemoDevices(owner: update.owner, profile: update.profile, devices: update.devices))
+        } else if let message = Self.parsedMessage(node, provenance: provenance) {
+            try emit(.message(message))
+        }
+    }
+
+    /// Enable on each new session. Carbons synchronize live resources, not offline archives.
+    public func setCarbonsEnabled(_ enabled: Bool = true) async throws {
+        _ = try await requestIQ(type: "set", to: nil, payload: "<\(enabled ? "enable" : "disable") xmlns='urn:xmpp:carbons:2'/>")
+    }
+
+    @discardableResult public func sendEncryptedMessage(to: String, envelope: XMPPOMEMOEnvelope, id: String) async throws -> String {
+        guard phase == .online else { throw XMPPClientError.notConnected }
+        try await write(Self.encryptedMessageXML(to: to, envelope: envelope, id: id))
+        return id
+    }
+
+    public func discoveryFeatures(for jid: String? = nil) async throws -> Set<String> {
+        let response = try await requestIQ(type: "get", to: jid, payload: "<query xmlns='http://jabber.org/protocol/disco#info'/>")
+        let query = try OMEMOWire.singleton(response, "query", "http://jabber.org/protocol/disco#info")
+        let features = query.children.filter { $0.name == "feature" && $0.namespace == query.namespace }
+        guard features.count <= 1_024, features.allSatisfy({ $0.attributes["var"]?.isEmpty == false }) else { throw XMPPIQError.malformedResponse }
+        return Set(features.compactMap { $0.attributes["var"] })
+    }
+
+    public func fetchOMEMODevices(for jid: String, profile: XMPPOMEMOProfile) async throws -> [UInt32] {
+        guard OMEMOWire.bareJID(jid) == jid else { throw XMPPClientError.invalidConfiguration }
+        do {
+            let response = try await requestIQ(type: "get", to: jid, payload: "<pubsub xmlns='\(OMEMOWire.pubsub)'><items node='\(profile.devicesNode)' max_items='1'/></pubsub>")
+            let items = try Self.pubsubItems(response, node: profile.devicesNode)
+            guard items.children.count == 1 else { throw XMPPIQError.malformedResponse }
+            let item = try OMEMOWire.singleton(items, "item", OMEMOWire.pubsub)
+            guard item.attributes["id"] == "current", item.children.count == 1 else { throw XMPPIQError.malformedResponse }
+            return try OMEMOWire.parseDevices(item.children[0], profile: profile)
+        } catch XMPPIQError.stanza(condition: "item-not-found") { return [] }
+    }
+
+    public func fetchOMEMOBundle(for jid: String, deviceID: UInt32, profile: XMPPOMEMOProfile) async throws -> XMPPOMEMOBundle {
+        guard OMEMOWire.bareJID(jid) == jid, OMEMOWire.validID(deviceID) else { throw XMPPClientError.invalidConfiguration }
+        let node = profile.bundlesNode(deviceID: deviceID)
+        let selection = profile == .modern ? "<item id='\(deviceID)'/>" : ""
+        let response = try await requestIQ(type: "get", to: jid, payload: "<pubsub xmlns='\(OMEMOWire.pubsub)'><items node='\(node)' max_items='1'>\(selection)</items></pubsub>")
+        let items = try Self.pubsubItems(response, node: node)
+        guard items.children.count == 1 else { throw XMPPIQError.malformedResponse }
+        let item = try OMEMOWire.singleton(items, "item", OMEMOWire.pubsub)
+        guard item.children.count == 1, profile == .legacy || item.attributes["id"] == String(deviceID) else { throw XMPPIQError.malformedResponse }
+        return try OMEMOWire.parseBundle(item.children[0], deviceID: deviceID, profile: profile)
+    }
+
+    public func publishOMEMODevices(_ devices: [UInt32], profile: XMPPOMEMOProfile) async throws {
+        try await publishPEP(node: profile.devicesNode, itemID: "current", item: OMEMOWire.devicesXML(devices, profile: profile), multipleItems: false)
+    }
+
+    public func publishOMEMOBundle(_ bundle: XMPPOMEMOBundle) async throws {
+        try await publishPEP(node: bundle.profile.bundlesNode(deviceID: bundle.deviceID),
+                             itemID: bundle.profile == .modern ? String(bundle.deviceID) : "current",
+                             item: OMEMOWire.bundleXML(bundle), multipleItems: bundle.profile == .modern)
+    }
+
+    private func publishPEP(node: String, itemID: String, item: String, multipleItems: Bool) async throws {
+        let fields = "<field var='pubsub#access_model'><value>open</value></field>" + (multipleItems ? "<field var='pubsub#max_items'><value>max</value></field>" : "")
+        let options = "<publish-options><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE' type='hidden'><value>http://jabber.org/protocol/pubsub#publish-options</value></field>\(fields)</x></publish-options>"
+        let payload = "<pubsub xmlns='\(OMEMOWire.pubsub)'><publish node='\(node)'><item id='\(itemID)'>\(item)</item></publish>\(options)</pubsub>"
+        do { _ = try await requestIQ(type: "set", to: nil, payload: payload) }
+        catch XMPPIQError.stanza(condition: "conflict") {
+            // Existing PEP nodes may have default access/max-items settings incompatible with OMEMO.
+            let configure = "<pubsub xmlns='http://jabber.org/protocol/pubsub#owner'><configure node='\(node)'><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE' type='hidden'><value>http://jabber.org/protocol/pubsub#node_config</value></field>\(fields)</x></configure></pubsub>"
+            _ = try await requestIQ(type: "set", to: nil, payload: configure)
+            _ = try await requestIQ(type: "set", to: nil, payload: payload)
+        }
+    }
+
+    private static func pubsubItems(_ response: XMLNode, node: String) throws -> XMLNode {
+        let pubsub = try OMEMOWire.singleton(response, "pubsub", OMEMOWire.pubsub)
+        let items = try OMEMOWire.singleton(pubsub, "items", OMEMOWire.pubsub)
+        guard items.attributes["node"] == node else { throw XMPPIQError.malformedResponse }
+        return items
+    }
+
+    private static func deviceUpdate(_ message: XMLNode) -> (owner: String, profile: XMPPOMEMOProfile, devices: [UInt32])? {
+        guard message.name == "message", message.namespace == "jabber:client", let owner = message.attributes["from"],
+              OMEMOWire.bareJID(owner) == owner,
+              let event = try? OMEMOWire.singleton(message, "event", OMEMOWire.eventNamespace),
+              let items = try? OMEMOWire.singleton(event, "items", OMEMOWire.eventNamespace),
+              let profile = XMPPOMEMOProfile.allCases.first(where: { $0.devicesNode == items.attributes["node"] }),
+              items.children.count == 1, let item = try? OMEMOWire.singleton(items, "item", OMEMOWire.eventNamespace),
+              item.attributes["id"] == "current", item.children.count == 1,
+              let devices = try? OMEMOWire.parseDevices(item.children[0], profile: profile) else { return nil }
+        return (owner, profile, devices)
+    }
+
+    private func requestIQ(type: String, to: String?, payload: String) async throws -> XMLNode {
+        guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
+        guard iqRequests.count < 64 else { throw XMPPIQError.requestLimit }
+        if let to {
+            guard !to.isEmpty, to.utf8.count <= 3_071, !to.contains(where: { $0.isWhitespace }),
+                  Self.validXMLText(to) else { throw XMPPClientError.invalidConfiguration }
+        }
+        let id = UUID().uuidString
+        let token = generation
+        let scope = IQReplyScope(recipient: to, accountBareJID: ownBare, accountFullJID: boundJID, serverDomain: domain)
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                let timeout = Task { [weak self] in
+                    do { try await Task.sleep(for: .seconds(15)) } catch { return }
+                    await self?.failIQ(id, error: XMPPClientError.timedOut)
+                }
+                iqRequests[id] = IQRequest(scope: scope, continuation: continuation, timeout: timeout)
+                let destination = to.map { " to='\(xmlEscaped($0))'" } ?? ""
+                Task { [weak self] in
+                    guard let self else { return }
+                    do { try await self.writeIQIfPending("<iq type='\(type)' id='\(id)'\(destination)>\(payload)</iq>", id: id, token: token) }
+                    catch { await self.failIQ(id, error: error) }
+                }
+            }
+        } onCancel: { Task { await self.failIQ(id, error: CancellationError()) } }
+    }
+
+    private func writeIQIfPending(_ xml: String, id: String, token: UUID) async throws {
+        guard generation == token, iqRequests[id] != nil else { throw CancellationError() }
+        try await write(xml)
+    }
+
+    private func routeIQ(_ node: XMLNode) -> Bool {
+        guard let id = node.attributes["id"], let request = iqRequests[id], request.scope.accepts(node) else { return false }
+        iqRequests.removeValue(forKey: id)
+        request.timeout.cancel()
+        do { request.continuation.resume(returning: try IQReplyScope.result(node)) }
+        catch { request.continuation.resume(throwing: error) }
+        return true
+    }
+
+    private func failIQ(_ id: String, error: Error) {
+        guard let request = iqRequests.removeValue(forKey: id) else { return }
+        request.timeout.cancel()
+        request.continuation.resume(throwing: error)
     }
 
     private func streamOpening() -> String { "<stream:stream to='\(xmlEscaped(domain))' xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams' version='1.0'>" }
@@ -282,6 +451,9 @@ public actor XMPPClient {
     private func timeout(_ token: UUID) { if generation == token && phase != .online { finish("Connection timed out", error: XMPPClientError.timedOut) } }
     private func finish(_ reason: String?, error: Error = XMPPClientError.connectionClosed) {
         generation = UUID()
+        let pending = iqRequests; iqRequests.removeAll()
+        for request in pending.values { request.timeout.cancel(); request.continuation.resume(throwing: error) }
+        boundJID = ""
         handshake?.resume(throwing: error); handshake = nil
         connection?.cancel(); connection = nil
         reader?.cancel(); reader = nil

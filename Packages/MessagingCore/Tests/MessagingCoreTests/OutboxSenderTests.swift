@@ -38,6 +38,15 @@ struct OutboxSenderTests {
         #expect(await recorder.ids == ["wire-1", "wire-1"])
     }
 
+    @Test func finalTrustRejectionWithoutTransportKeepsQueued() async throws {
+        let (store, _) = try await fixture()
+        let sender = OutboxSender(store: store)
+        await #expect(throws: OutboxSendFailure.self) {
+            try await sender.drain(accountID: "alice", messageIDs: ["wire-1"]) { _ in throw OutboxSendFailure.notAttempted }
+        }
+        #expect(try await store.messages(accountID: "alice", chatID: "bob").first?.transportState == .queued)
+    }
+
     @Test func socketFailureRemainsUnconfirmed() async throws {
         let (store, _) = try await fixture()
         let sender = OutboxSender(store: store)

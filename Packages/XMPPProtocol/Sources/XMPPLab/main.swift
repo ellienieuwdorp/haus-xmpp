@@ -15,6 +15,18 @@ import XMPPProtocol
         let client = XMPPClient(labCertificateAuthority: ca)
         let timeout = Task { try await Task.sleep(for: .seconds(30)); await client.disconnect() }
         try await client.connect(host: env["XMPP_LAB_HOST"] ?? domain, port: UInt16(env["XMPP_LAB_PORT"] ?? "5223") ?? 5223, domain: domain, username: user, password: password)
+        if env["XMPP_LAB_CARBONS_SMOKE"] == "1" {
+            try await verifyCarbons(client: client, env: env, ca: ca)
+            timeout.cancel()
+            await client.disconnect()
+            return
+        }
+        if env["XMPP_LAB_OMEMO_WIRE_SMOKE"] == "1" {
+            try await verifyOMEMOWire(client: client, ownJID: user + "@" + domain)
+            timeout.cancel()
+            await client.disconnect()
+            return
+        }
         if env["XMPP_LAB_REPLY_SMOKE"] == "1" {
             guard let to = env["XMPP_LAB_TO"], let sourceID = env["XMPP_LAB_ID"] else { throw XMPPClientError.invalidConfiguration }
             try await verifyReply(client: client, to: to, sourceID: sourceID)
@@ -40,6 +52,7 @@ import XMPPProtocol
                     timeout.cancel()
                     return
                 }
+            case .encryptedMessage, .omemoDevices, .encryptionFailure: break
             case .state: break
             case .message(let message):
                 if let expected = env["XMPP_LAB_EXPECT_BODY"], message.body != expected { throw XMPPClientError.unexpectedProtocol }
@@ -73,10 +86,86 @@ import XMPPProtocol
                 _ = try await client.sendMessage(to: to, body: answer, id: replyID,
                                                  reply: XMPPReply(id: sourceID, to: message.from, body: source))
             case .state(.disconnected): throw XMPPClientError.connectionClosed
+            case .encryptedMessage, .omemoDevices, .encryptionFailure: break
             case .state: break
             }
         }
         throw XMPPClientError.connectionClosed
+    }
+
+    /// Uses intentionally synthetic key bytes: this verifies XML/PEP transport, not cryptography.
+    static func verifyOMEMOWire(client: XMPPClient, ownJID: String) async throws {
+        let features = try await client.discoveryFeatures()
+        guard features.contains("http://jabber.org/protocol/pubsub") else { throw XMPPClientError.unexpectedProtocol }
+        for profile in XMPPOMEMOProfile.allCases {
+            guard try await client.fetchOMEMODevices(for: ownJID, profile: profile).isEmpty else { throw XMPPClientError.unexpectedProtocol }
+            let key = profile == .legacy ? Data([5] + Array(repeating: UInt8(42), count: 32)) : Data(repeating: 42, count: 32)
+            let bundle = XMPPOMEMOBundle(profile: profile, deviceID: 123, identityKey: key, signedPreKeyID: 7,
+                                         signedPreKey: key, signedPreKeySignature: Data(repeating: 10, count: 64),
+                                         preKeys: Dictionary(uniqueKeysWithValues: (1...100).map { (UInt32($0), key) }))
+            try await client.publishOMEMOBundle(bundle)
+            try await client.publishOMEMODevices([123], profile: profile)
+            guard try await client.fetchOMEMODevices(for: ownJID, profile: profile) == [123],
+                  try await client.fetchOMEMOBundle(for: ownJID, deviceID: 123, profile: profile) == bundle else { throw XMPPClientError.unexpectedProtocol }
+            let envelope = XMPPOMEMOEnvelope(profile: profile, senderDeviceID: 91,
+                                            keys: [XMPPOMEMOKey(recipientJID: profile == .modern ? ownJID : nil,
+                                                                deviceID: 123, keyExchange: true, data: Data([1, 2, 3]))],
+                                            iv: profile == .legacy ? Data(repeating: 10, count: 12) : nil, payload: Data([4, 5, 6]))
+            let id = UUID().uuidString
+            try await client.sendEncryptedMessage(to: ownJID, envelope: envelope, id: id)
+            for await event in client.events {
+                if case .state(.disconnected) = event { throw XMPPClientError.connectionClosed }
+                if case .encryptionFailure = event { throw XMPPClientError.unexpectedProtocol }
+                if case .encryptedMessage(let message) = event {
+                    guard message.id == id, message.originID == id, message.envelope == envelope else { throw XMPPClientError.unexpectedProtocol }
+                    break
+                }
+            }
+            print("OMEMO_WIRE_\(profile.rawValue.uppercased())_VERIFIED")
+        }
+    }
+
+    static func verifyCarbons(client: XMPPClient, env: [String: String], ca: Data?) async throws {
+        guard let username = env["XMPP_LAB_USERNAME"], let password = env["XMPP_LAB_PASSWORD"],
+              let peerUser = env["XMPP_LAB_PEER_USERNAME"], let peerPassword = env["XMPP_LAB_PEER_PASSWORD"],
+              let domain = env["XMPP_LAB_DOMAIN"] else { throw XMPPClientError.invalidConfiguration }
+        let sibling = XMPPClient(labCertificateAuthority: ca)
+        let peer = XMPPClient(labCertificateAuthority: ca)
+        try await sibling.connect(host: env["XMPP_LAB_HOST"] ?? domain, domain: domain, username: username, password: password)
+        try await peer.connect(host: env["XMPP_LAB_HOST"] ?? domain, domain: domain, username: peerUser, password: peerPassword)
+        var siblingJID: String?
+        for await event in sibling.events {
+            if case .state(.online(let jid)) = event { siblingJID = jid; break }
+        }
+        guard let siblingJID else { throw XMPPClientError.connectionClosed }
+        try await client.setCarbonsEnabled()
+        try await sibling.setCarbonsEnabled()
+        func sample(_ recipient: String) -> XMPPOMEMOEnvelope {
+            XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: 91,
+                              keys: [XMPPOMEMOKey(recipientJID: recipient, deviceID: 123, keyExchange: true, data: Data([1, 2, 3]))],
+                              payload: Data([4, 5, 6]))
+        }
+        let outgoingID = UUID().uuidString
+        try await sibling.sendEncryptedMessage(to: peerUser + "@" + domain, envelope: sample(peerUser + "@" + domain), id: outgoingID)
+        for await event in client.events {
+            if case .state(.disconnected) = event { throw XMPPClientError.connectionClosed }
+            if case .encryptedMessage(let message) = event, message.id == outgoingID {
+                guard message.provenance == .sentCarbon, message.from == siblingJID else { throw XMPPClientError.unexpectedProtocol }
+                break
+            }
+        }
+        let incomingID = UUID().uuidString
+        try await peer.sendEncryptedMessage(to: siblingJID, envelope: sample(username + "@" + domain), id: incomingID)
+        for await event in client.events {
+            if case .state(.disconnected) = event { throw XMPPClientError.connectionClosed }
+            if case .encryptedMessage(let message) = event, message.id == incomingID {
+                guard message.provenance == .receivedCarbon, message.to == siblingJID else { throw XMPPClientError.unexpectedProtocol }
+                break
+            }
+        }
+        await sibling.disconnect()
+        await peer.disconnect()
+        print("OMEMO_CARBONS_BOTH_DIRECTIONS_VERIFIED")
     }
 
 }

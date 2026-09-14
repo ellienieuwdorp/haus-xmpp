@@ -8,6 +8,7 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public let senderID: String
     public let body: String
     public let reply: MessageReply?
+    public var encryptionProfile: String?
     public let sentAt: Date
     public let isOutgoing: Bool
     public var isStarred: Bool
@@ -15,13 +16,14 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
 
     public init(id: String, accountID: String, chatID: String, senderID: String, body: String,
                 sentAt: Date = Date(), isOutgoing: Bool = false, isStarred: Bool = false,
-                transportState: OutgoingTransportState? = nil, reply: MessageReply? = nil) {
+                transportState: OutgoingTransportState? = nil, reply: MessageReply? = nil, encryptionProfile: String? = nil) {
         self.id = id
         self.accountID = accountID
         self.chatID = chatID
         self.senderID = senderID
         self.body = body
         self.reply = reply
+        self.encryptionProfile = encryptionProfile
         self.sentAt = sentAt
         self.isOutgoing = isOutgoing
         self.isStarred = isStarred
@@ -69,4 +71,23 @@ public struct MessageReply: Codable, Sendable, Equatable {
         self.senderID = senderID
         self.body = body
     }
+}
+
+/// Opaque application encryption state, versioned for optimistic concurrency across owners.
+public struct EncryptionState: Sendable, Equatable {
+    public let revision: Int
+    public let data: Data
+}
+
+public struct PendingEncryptedMessage: Sendable {
+    public let sender: String
+    public let digest: String
+    public let wire: Data
+}
+
+public struct EncryptionControl: Sendable {
+    public let id: String
+    public let recipient: String
+    public let wire: Data
+    public init(id: String, recipient: String, wire: Data) { self.id = id; self.recipient = recipient; self.wire = wire }
 }

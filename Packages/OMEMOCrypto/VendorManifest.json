@@ -1,0 +1,861 @@
+{
+  "retrieved": "2026-09-14",
+  "dependencies": [
+    {
+      "name": "libomemo-c",
+      "repository": "https://github.com/dino/libomemo-c",
+      "revision": "1f0b37fee3ebefc46c32f882623481899a1ba568",
+      "version": "0.5.1",
+      "files": [
+        {
+          "path": "Sources/CLibOMEMO/upstream/CMakeLists.txt",
+          "upstreamPath": "src/CMakeLists.txt",
+          "sha256": "7fdd6b4741933dea442a04fbe2b45916a47ccdf19e768616d365826984b25ea6"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/LocalStorageProtocol.pb-c.c",
+          "upstreamPath": "src/LocalStorageProtocol.pb-c.c",
+          "sha256": "d595c019de836067aeeeefd62a69ed80cc84392a1924f60a4730ca1bead64746"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/LocalStorageProtocol.pb-c.h",
+          "upstreamPath": "src/LocalStorageProtocol.pb-c.h",
+          "sha256": "6921c2ed04ef44bb7b33da1fc7e249b7beb2a69e497e1cde8c07dd0e1b4f2c45"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/OMEMO.pb-c.c",
+          "upstreamPath": "src/OMEMO.pb-c.c",
+          "sha256": "a43340fe91d85e008f55abe0541ba687ccab14a8416791550f525d4827fefa21"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/OMEMO.pb-c.h",
+          "upstreamPath": "src/OMEMO.pb-c.h",
+          "sha256": "360262b5305c394840e6033a7994fc5ff3c3e57474328a0c405361c6c2ace905"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/WhisperTextProtocol.pb-c.c",
+          "upstreamPath": "src/WhisperTextProtocol.pb-c.c",
+          "sha256": "7e230be4af43f6fc928e05240c32b5d84637bc810af472a272e61678a6bf0b56"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/WhisperTextProtocol.pb-c.h",
+          "upstreamPath": "src/WhisperTextProtocol.pb-c.h",
+          "sha256": "c319121c9f8b95d670e0d4ff5c92aeb08d40f6751b4ee6afb9e9918bfac955bb"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve.c",
+          "upstreamPath": "src/curve.c",
+          "sha256": "226e9b3c036b74d4d181a88198d2b0f8b15e0819511d908e3a1d410d8268cd83"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve.h",
+          "upstreamPath": "src/curve.h",
+          "sha256": "2c9bcf3f41d68eaf77f7a86b9d4dc61496350c4870aac312b5eb86ee9f5a8734"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/CMakeLists.txt",
+          "upstreamPath": "src/curve25519/CMakeLists.txt",
+          "sha256": "0b12d2d09f577a2c65513473159bbb1b7c4b5fcb145ae6ef593328f8178fc2b3"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/curve25519-donna.c",
+          "upstreamPath": "src/curve25519/curve25519-donna.c",
+          "sha256": "6dd85201134fd73bec0952b4aaa6b488a58576cf7de76693dd875f0dd437b947"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/curve25519-donna.h",
+          "upstreamPath": "src/curve25519/curve25519-donna.h",
+          "sha256": "ca328e84b20dae9586cc8556ce2c9232cf1f775462968855c15d34539ba38667"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/compare.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/compare.c",
+          "sha256": "4de81fd960a66f057fc4dc181c44fa38e9ca753243ed904e8fede73c51ae0cac"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/compare.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/compare.h",
+          "sha256": "311bdb20911e92677d2b08c79c52d0047d246b747700abd93d54cd1933c1caa8"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/crypto_additions.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/crypto_additions.h",
+          "sha256": "38434ea2f6cfb056aa17c353fdc847822d48d0a12596133d78d8cad858abef89"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/crypto_hash_sha512.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/crypto_hash_sha512.h",
+          "sha256": "8248201f4a54528f445c7153b276af1bc6a4314ab93382bfaa28ea09f396caa3"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/curve_sigs.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/curve_sigs.c",
+          "sha256": "4617f332b8adec6944af231f05b57ea12530d845e4a800baf945c5da48cbc1f2"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/curve_sigs.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/curve_sigs.h",
+          "sha256": "bfff8328141cb33bfe0923df11835a29a4e32d4f2230fd48c935735064b318ba"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/ed_sigs.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/ed_sigs.c",
+          "sha256": "f784c3a1edbb57b067a2d3b546f40f28473e553b760bf0f3908f88e649692c93"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/ed_sigs.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/ed_sigs.h",
+          "sha256": "d3bc103e0c12b353f3678c21d612cf5fec8d5dd27a56e7a3fb5090ca3ab73525"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/elligator.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/elligator.c",
+          "sha256": "88d5347a400b243b17401b1ac60b5a1dd93c262909050855a8c252432ed5c490"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/fe_edy_to_montx.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/fe_edy_to_montx.c",
+          "sha256": "4394a6e4a78396bbfdee289745b311e7a10b7087c5861995e919f2a5ad6fa24a"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/fe_isequal.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/fe_isequal.c",
+          "sha256": "10f174359ecab89fb3f9141b6079f4719a10f078e1789e1085a9d1782be6e773"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/fe_isreduced.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/fe_isreduced.c",
+          "sha256": "e3d63565eb8c3df8aeff39290ff48ae1d085977a0d2c4b7ac166e7a832f25eb0"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/fe_mont_rhs.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/fe_mont_rhs.c",
+          "sha256": "932b464b03299a0efc292f6ef5870faf73d5e63ffa4e661c0b83e7bf96fcd37e"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/fe_montx_to_edy.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/fe_montx_to_edy.c",
+          "sha256": "5172226d935588d16c0ac31bb0bcebc3f48e277c0bbecbd12b0d4a52db358a6a"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/fe_sqrt.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/fe_sqrt.c",
+          "sha256": "b16fe57807155df7872ba31ade1a55c7a7dd5428f3797d6fb321d06803d3306e"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/ge_isneutral.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/ge_isneutral.c",
+          "sha256": "63f6b9703e5d66272277a305917da160dc6abcf34beb29db598283a70861f4ef"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/ge_montx_to_p3.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/ge_montx_to_p3.c",
+          "sha256": "ed8b3827e1c3a580055494639c4eb6df46edfad860add6b592f43d92e6fe2b0b"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/ge_neg.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/ge_neg.c",
+          "sha256": "bda9343ce307d624089476378a9705639ee7f6ae91e8f0e9e253f16c39b0306d"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/ge_p3_to_montx.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/ge_p3_to_montx.c",
+          "sha256": "d536f2c0e969f1d6ce2ba66749dc11ae9380ce2b2f3c788e94539a5c1ac3033b"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/ge_scalarmult.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/ge_scalarmult.c",
+          "sha256": "dc0a1e97bd15f97e06d2861d01171a5562f598c664d3e3d3894236d37a76f5ad"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/ge_scalarmult_cofactor.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/ge_scalarmult_cofactor.c",
+          "sha256": "3c8b4deca634d72da81917e8df9823d432ec32a5c459d5058e41354b360ed7f6"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/generalized/ge_p3_add.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/generalized/ge_p3_add.c",
+          "sha256": "25c9e49a663152214501c3e47a65cd1c3d9888a1f224759bbcde2a327ef05af1"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/generalized/gen_constants.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/generalized/gen_constants.h",
+          "sha256": "a404fe3cc4fede266cce9677868c75b6b575f5853cc2f64ec54be3c78758eb61"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/generalized/gen_crypto_additions.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/generalized/gen_crypto_additions.h",
+          "sha256": "82fdb6e1f6c69c5685ad6b201954ea2a6817714797a18210efbb61132c428fb0"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/generalized/gen_eddsa.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/generalized/gen_eddsa.c",
+          "sha256": "2c77efa61963b76a1bad9ff4c6d356c1e8dbfb9161a5effe0b8ba99a5f350a4c"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/generalized/gen_eddsa.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/generalized/gen_eddsa.h",
+          "sha256": "9bec76f4f7a1346b5b57036ef675a877051f1249fe232aaddc73f9d7ba4788bf"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/generalized/gen_labelset.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/generalized/gen_labelset.c",
+          "sha256": "7ca05c3b4bfc7365583396a9d017278fe0a96db20fbce3505ed39a235e4be9fe"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/generalized/gen_labelset.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/generalized/gen_labelset.h",
+          "sha256": "bd8fb8b84a9914dc3e585041bda505eb734224f2c3ba160004bb5cd344a3f908"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/generalized/gen_veddsa.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/generalized/gen_veddsa.c",
+          "sha256": "bc1dc38a59f8213d16d7dd7a3ab03e0a207c160adece2cb269734baa76a24c3a"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/generalized/gen_veddsa.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/generalized/gen_veddsa.h",
+          "sha256": "c26c2d3437729b46f89959288e30d500f543e30bba8b0e6835fe586fa48ad438"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/generalized/gen_x.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/generalized/gen_x.c",
+          "sha256": "6a1bece39186927f9520135e6b45fbaa2653ece618a2c94e991f92c4054c3947"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/generalized/gen_x.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/generalized/gen_x.h",
+          "sha256": "a01157e63a92555f76b0d7796a93b7fd4936e0b9ffdbd2f154fd5ca25274cc0b"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/generalized/point_isreduced.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/generalized/point_isreduced.c",
+          "sha256": "b1f1cb9554ac45c460cd58620fbb96c505ca6ed25a6b60b6fb53f919cd9671c5"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/generalized/sc_isreduced.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/generalized/sc_isreduced.c",
+          "sha256": "1e43275a34c17765ebcfab6f8fe373132f0f9679861d43506868abeaac6f3ce2"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/keygen.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/keygen.c",
+          "sha256": "694dacfe685233e75bf046ef15538fa7a7a8267d1520ea2ef7a7a77be6140d2e"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/keygen.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/keygen.h",
+          "sha256": "7d3b06e22466786f90789c47c15b699f4d655ee98d8c8819d65ac6f2bd6b1203"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/open_modified.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/open_modified.c",
+          "sha256": "f03be7fa15d2ce8ca33f69d4a456772cff18e3d8a76c1b4f4785856261f225fa"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/sc_clamp.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/sc_clamp.c",
+          "sha256": "99e2f2885f65c9b94ef24734668f9636b22407852289037d59d48f263287a129"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/sc_cmov.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/sc_cmov.c",
+          "sha256": "9c5f965e56644933d619d2c31d5b298d9847c0b2486c4ad0b392eb591ff91e62"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/sc_neg.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/sc_neg.c",
+          "sha256": "cae45b21fad66029233b25f2e440669f4ff500b38b7f657c82a924633ffa0cce"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/sign_modified.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/sign_modified.c",
+          "sha256": "b94f41e01e87352ce73ab7263c8dea823c899cb884827bbdc8e790275f60fe77"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/utility.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/utility.c",
+          "sha256": "b0496c829e94bf7372119ce2a4047779f9793b552251a8442efccba7e1f86d35"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/utility.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/utility.h",
+          "sha256": "b2289a8771dec9cf11a28ad48499cb81ef7bb2235c728d98729296f9d9509bd9"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/xeddsa.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/xeddsa.c",
+          "sha256": "3fc116f778cfbb68182609d5a27a3f9f93d3efcf6377939da551b665026d4508"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/xeddsa.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/xeddsa.h",
+          "sha256": "74fd5d41dc76311203083aef8e75e32469ca658845e3473013dd5e6909849f19"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/zeroize.c",
+          "upstreamPath": "src/curve25519/ed25519/additions/zeroize.c",
+          "sha256": "e73a3830953d709d12ab2e178bd0eb175ae6568d5fe0ac7cbb3212b7eabec10e"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/additions/zeroize.h",
+          "upstreamPath": "src/curve25519/ed25519/additions/zeroize.h",
+          "sha256": "e4c003e78a647730de4c69ec1ccf0913b2c4f5b4dcf656b00aab9d5da3e95736"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/base.h",
+          "upstreamPath": "src/curve25519/ed25519/base.h",
+          "sha256": "dac873e5965b34e29a14b56bc63f9434fbba16b3513daf53c7b0b2d07b614ac0"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/base2.h",
+          "upstreamPath": "src/curve25519/ed25519/base2.h",
+          "sha256": "1dbe1b61a3b7689d840eec4be7569261d719e67cf9ed5ad1b51c5e34583bec94"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/d.h",
+          "upstreamPath": "src/curve25519/ed25519/d.h",
+          "sha256": "4729f3315d4815f5f3cb47d3f176ad0e907471aa3a9afc8d80484d2da98723a2"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/d2.h",
+          "upstreamPath": "src/curve25519/ed25519/d2.h",
+          "sha256": "0248fcb39acf255d78e0d19d6d605275a1939a7f61001f58f376569ecc0c5256"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe.h",
+          "upstreamPath": "src/curve25519/ed25519/fe.h",
+          "sha256": "37c8cf172c190b37134e6c9f9bf61f12c790126ecedc2abd6ecddffa71a4fd92"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_0.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_0.c",
+          "sha256": "825fc6d85b392d15c9b26c26ad2ccfb664a1c09658d8e2d26c54e37ac6e8b509"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_1.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_1.c",
+          "sha256": "a7ab32148848f7c44bc78b1e6d53c7bd633f629694b3b2dc075cc06d5eb17054"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_add.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_add.c",
+          "sha256": "f838729610a80bb3a988fdfe1a8a9e9ab01648006492adf1ff35b544a38cf398"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_cmov.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_cmov.c",
+          "sha256": "dc5f5993f3268ee20a333407e2d4b7a26a38ce1f8be7ce20b11c7d8f05efe03d"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_copy.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_copy.c",
+          "sha256": "0f91f42eac64053f508537fff726561d2e21cd88f5f7fa304f34f419545a9121"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_frombytes.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_frombytes.c",
+          "sha256": "ae43a9b293d0950e4a87b5fdeaf59fbb9374aaa910f7aa295ee9e9521cec9a8a"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_invert.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_invert.c",
+          "sha256": "504b694c38ab523f9514164a6f19dfa2987e5561525e4ebb1964c33028b0a6fb"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_isnegative.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_isnegative.c",
+          "sha256": "c15116f89c80c6d393e6aa2e8ef6ad8b164e7b61f04bd208064f61e70f394697"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_isnonzero.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_isnonzero.c",
+          "sha256": "7e10e64997758f9e8aa234b626abfc8d1e7fc34e76a4bd47a988c6b977e7e2fc"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_mul.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_mul.c",
+          "sha256": "77a67c16eebaa095e171caca018ceee1646a737eb314cebe72f05fff8a7d6b14"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_neg.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_neg.c",
+          "sha256": "3ce85c334bbe9fa2e7e231d2319ec3d29cd03781c7b3108570635348652732c5"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_pow22523.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_pow22523.c",
+          "sha256": "c6fca170f96ae1decbf89b9a0eef5e3973e3332fb064d8a39da20535148fdbc7"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_sq.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_sq.c",
+          "sha256": "a35384fbebe43092b465a2abd12abbf2ae1b2f337a711688c5487c06ce0dc56e"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_sq2.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_sq2.c",
+          "sha256": "2abf4c6b3ed21ed8a805f2c0be1b9db4d88cdde9a0c710f24d070c5f2d01e076"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_sub.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_sub.c",
+          "sha256": "1a2afa4c5fc5fcec3dfd1344dbb41ba3b1c93acea47f74b413216b9c8f374c11"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/fe_tobytes.c",
+          "upstreamPath": "src/curve25519/ed25519/fe_tobytes.c",
+          "sha256": "678b10c1f49937ceccabddbaebe0982dea91a2620bdd81e29207178a959d97aa"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge.h",
+          "upstreamPath": "src/curve25519/ed25519/ge.h",
+          "sha256": "827267cd894408c3e10443a51c257ce5dfc93ad032eff178a101d12cc9d1ace7"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_add.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_add.c",
+          "sha256": "cc236e58ad907a18671f2b5782ff9f4d2383a9848bc589b9fda83b3ecc55c05a"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_add.h",
+          "upstreamPath": "src/curve25519/ed25519/ge_add.h",
+          "sha256": "ac78e776b39f2eb09cb6588bb86f34f3cf970f81d124136920bf8ba5c3e8b3b8"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_double_scalarmult.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_double_scalarmult.c",
+          "sha256": "225189d7203c85950c21a0a19120919bcc2cf91b50fa6c7453106321b362c463"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_frombytes.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_frombytes.c",
+          "sha256": "6e65ae1c056f1dc11da16b2bd4aabad151db3abcd5ab7fbfaca7e784c18496d1"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_madd.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_madd.c",
+          "sha256": "daf288d47d4d7356821912391ad2279a7ae5696a28bde7830b1660672ab5e6b4"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_madd.h",
+          "upstreamPath": "src/curve25519/ed25519/ge_madd.h",
+          "sha256": "a39615f652006291a3fb0299728243191937b98e0e91fc8bf8196f96075a8d60"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_msub.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_msub.c",
+          "sha256": "a7e060f539ad7a19428491fce2328ab2d5a6b5e1967a41e24bea8c80fe526a15"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_msub.h",
+          "upstreamPath": "src/curve25519/ed25519/ge_msub.h",
+          "sha256": "ee0e1ecc451b7b30ea9ba9c71035d371414ce26267ca94523b12877a01c84e82"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_p1p1_to_p2.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_p1p1_to_p2.c",
+          "sha256": "be6e9b143c304c652534eea0fa9c92031005db7c83b824e7cf95581c093f9983"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_p1p1_to_p3.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_p1p1_to_p3.c",
+          "sha256": "ce67bc193d4d9c81ff18532ab5c1e74ccf519e8349ed19ff112feb22df27a3d2"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_p2_0.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_p2_0.c",
+          "sha256": "1277df80612424d2eeb17e6700687b6fa24bfb5549f774c2112bc20fc39ebcfb"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_p2_dbl.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_p2_dbl.c",
+          "sha256": "3d6aba9a349542b8350c5bbc8f69252d463b14605ad65d35241e89812482e780"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_p2_dbl.h",
+          "upstreamPath": "src/curve25519/ed25519/ge_p2_dbl.h",
+          "sha256": "68aece7c0d6d99f8c6a91b4708d85336f060f9dfe171c1484097c4e380d1f884"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_p3_0.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_p3_0.c",
+          "sha256": "e11b72f763151ef2ce652a0bf7991673b01e6ce74f15e90fd4af28cde505a52b"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_p3_dbl.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_p3_dbl.c",
+          "sha256": "343ec8eddef9d91d130e3bbf443cdd64d226cd129530fede2126a837e31aab49"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_p3_to_cached.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_p3_to_cached.c",
+          "sha256": "7fb03b81ba8d513990c3ed90128fcb8bbff1012d8a4e7573fb50a0c0c6af0fcf"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_p3_to_p2.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_p3_to_p2.c",
+          "sha256": "1a29bfa686815c7c694d6cd2c660314f00e2bc53278478b7d8d51ede5133c34d"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_p3_tobytes.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_p3_tobytes.c",
+          "sha256": "232f48e92a096e1a9c5c18ce2bc80583d42236740501bff7d57eb9b9cc6310f4"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_precomp_0.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_precomp_0.c",
+          "sha256": "602db7879544d2084b3a6b21b33950b2b6974fabc36a8c867ad7207ac7a7b115"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_scalarmult_base.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_scalarmult_base.c",
+          "sha256": "08d424c208d9f52a0dce884720413dc37449bee2ea6997e0d1cc5061433ff445"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_sub.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_sub.c",
+          "sha256": "b1efea5ffb664ce1302099db84073cd959a4f9754f62ea73a1c58aac47e8f2df"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_sub.h",
+          "upstreamPath": "src/curve25519/ed25519/ge_sub.h",
+          "sha256": "ee9a421a8a9778518748c93c1e9e7a08032601bfea0b5a7ecf266d1fc1b6a95d"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/ge_tobytes.c",
+          "upstreamPath": "src/curve25519/ed25519/ge_tobytes.c",
+          "sha256": "6a54bfa8dbe907892fdb5b8f11581e3c6afaca1d9bf8f452ba9d6af3ea72ec6b"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/nacl_includes/crypto_int32.h",
+          "upstreamPath": "src/curve25519/ed25519/nacl_includes/crypto_int32.h",
+          "sha256": "238803073441714ec17cd8b5f499f697f3dced53951daec0746eb79be45693d7"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/nacl_includes/crypto_int64.h",
+          "upstreamPath": "src/curve25519/ed25519/nacl_includes/crypto_int64.h",
+          "sha256": "16f9d693eb714e216101a79ba82355e98d703a68631cfd9269d28468663b8363"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/nacl_includes/crypto_sign.h",
+          "upstreamPath": "src/curve25519/ed25519/nacl_includes/crypto_sign.h",
+          "sha256": "a1b682f9b510164d8e0fbf67675911a8057883581053254a612debaf332c6776"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/nacl_includes/crypto_sign_edwards25519sha512batch.h",
+          "upstreamPath": "src/curve25519/ed25519/nacl_includes/crypto_sign_edwards25519sha512batch.h",
+          "sha256": "5f03e9d8809df50a834d384162ee0049b8bc591e40512ef7e59b085044e5d5a2"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/nacl_includes/crypto_uint32.h",
+          "upstreamPath": "src/curve25519/ed25519/nacl_includes/crypto_uint32.h",
+          "sha256": "13f943899ccdbaf3b50fdab4658a1ca67d59abdb17c08a6be6ed31a30378556d"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/nacl_includes/crypto_uint64.h",
+          "upstreamPath": "src/curve25519/ed25519/nacl_includes/crypto_uint64.h",
+          "sha256": "5e420d20b6f23d1b4f9a174a9096ba5c811f71e8ce0355eec0d81a3310e8852f"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/nacl_includes/crypto_verify_32.h",
+          "upstreamPath": "src/curve25519/ed25519/nacl_includes/crypto_verify_32.h",
+          "sha256": "9d8ec6d012255bb7faa700aa8a72a91b98cb12b122a363320a5b2732ae823c1e"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/nacl_sha512/blocks.c",
+          "upstreamPath": "src/curve25519/ed25519/nacl_sha512/blocks.c",
+          "sha256": "b4763f0b2f9b65edbbd1e9d8041cbd5a1a27ef6fae7bb540f2de1710b2fa7c14"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/nacl_sha512/hash.c",
+          "upstreamPath": "src/curve25519/ed25519/nacl_sha512/hash.c",
+          "sha256": "48bdca264421720fac9f69184f2535f278eaa62e2ba532e1ecc219f4fec024d5"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/open.c",
+          "upstreamPath": "src/curve25519/ed25519/open.c",
+          "sha256": "9fd51699dde7bc7362c52fb98831b79b6355611fe21cfe132ff6ee4f3c9cecfc"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/pow22523.h",
+          "upstreamPath": "src/curve25519/ed25519/pow22523.h",
+          "sha256": "32a9c7273c98fe428c7e1349f940e346960e84219b2d3c3cd0ada753e305fd86"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/pow225521.h",
+          "upstreamPath": "src/curve25519/ed25519/pow225521.h",
+          "sha256": "7ab9170e5237fa676da2acd90cfe72a0357852114aeb937e210dc7dd6b9ff3df"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/sc.h",
+          "upstreamPath": "src/curve25519/ed25519/sc.h",
+          "sha256": "8ca4cb1ddc03571b62d668853f652b6116a8a93c439e32a529924bc0acc16c9d"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/sc_muladd.c",
+          "upstreamPath": "src/curve25519/ed25519/sc_muladd.c",
+          "sha256": "5970a794d5e3691abee3514fe7a51c100bafcd1ef6053109a252ed7a6635194a"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/sc_reduce.c",
+          "upstreamPath": "src/curve25519/ed25519/sc_reduce.c",
+          "sha256": "957ca57f09db9b46e6f25d530c2d913765893a7be36d34dfbcd3dc4524546299"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/sign.c",
+          "upstreamPath": "src/curve25519/ed25519/sign.c",
+          "sha256": "d71fce453b41ccd285fb4f9b8843e06e352b537be96519c595b438de9c840709"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/sqrtm1.h",
+          "upstreamPath": "src/curve25519/ed25519/sqrtm1.h",
+          "sha256": "eb5c2da31ae65159d3a2aa590dcac6594a384a731f918828c6e0d99fc1844b86"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/tests/internal_fast_tests.c",
+          "upstreamPath": "src/curve25519/ed25519/tests/internal_fast_tests.c",
+          "sha256": "d3d14b4df7db5427e5189bd3dcd386eb0ca04cac864590c35717877acc0c3f2f"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/tests/internal_fast_tests.h",
+          "upstreamPath": "src/curve25519/ed25519/tests/internal_fast_tests.h",
+          "sha256": "c4ac6e0508735e184f2fe8c5db36e9bc0eb2953e74fbcdd9679d264eaedf5c1a"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/tests/internal_slow_tests.c",
+          "upstreamPath": "src/curve25519/ed25519/tests/internal_slow_tests.c",
+          "sha256": "80e6a3abd2bec2944f87d91533d87db35261757bcf0b46c6dcd4625f583b95a3"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/ed25519/tests/internal_slow_tests.h",
+          "upstreamPath": "src/curve25519/ed25519/tests/internal_slow_tests.h",
+          "sha256": "6968bf13414eb4f9944d8282f0eb04a578f2fd1c3b4ed43bdba6348926290d88"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/curve25519/meson.build",
+          "upstreamPath": "src/curve25519/meson.build",
+          "sha256": "0b0ae91975aa4456f7015a50df2f1564f2edfb1874ba81c7cb64598a02b2e119"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/hkdf.c",
+          "upstreamPath": "src/hkdf.c",
+          "sha256": "b3658d41409adbdfe9b177fd33a6e2e57a3cfaa473cba46af8f9be595f8e5385"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/hkdf.h",
+          "upstreamPath": "src/hkdf.h",
+          "sha256": "dfdedc07c3bedc5d534263f1040dc955a4eb1edfd405bc289b4f15ee34aeb3fd"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/key_helper.c",
+          "upstreamPath": "src/key_helper.c",
+          "sha256": "eca1fdcbc855909049b3783e7528381991ad03c62f992bf6e543cf50d70cb120"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/key_helper.h",
+          "upstreamPath": "src/key_helper.h",
+          "sha256": "d1d43fca604d013320f848fad41b5ae6fad347eb91f290ef0ffa3a2b0b08b528"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/libomemo-c.def",
+          "upstreamPath": "src/libomemo-c.def",
+          "sha256": "8ae4e80378adda750949f3d0a86ce97a236dfa7ecf36ea9e48367e78ed29bf74"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/libomemo-c.pc.in",
+          "upstreamPath": "src/libomemo-c.pc.in",
+          "sha256": "0012a9f4f5e90bae6600949ae9d9e2a077db8f0c3477b88a631f145358449f1a"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/meson.build",
+          "upstreamPath": "src/meson.build",
+          "sha256": "04dc025da86d78be5ea66df952c02f3786958dd27a44e9e45259eeea8ae4b074"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/protocol.c",
+          "upstreamPath": "src/protocol.c",
+          "sha256": "a69ced7e2d6cfdb8f35fb643ab4af108ae2cc3c80f126e526283e2321e6dccb9"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/protocol.h",
+          "upstreamPath": "src/protocol.h",
+          "sha256": "0c0a29975a4a745c5d41eea85bb183ecdb39b048a3b6afef0bd3ddc53194e61f"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/ratchet.c",
+          "upstreamPath": "src/ratchet.c",
+          "sha256": "f1af833fdd99e7909ef5208561120583f0a3a3d9f0a33afe1608e4fedadc1fc1"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/ratchet.h",
+          "upstreamPath": "src/ratchet.h",
+          "sha256": "9cb223a345a42fafb7471cf94623ac904cd2e9b47712f62114097851da60037e"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/sender_key.c",
+          "upstreamPath": "src/sender_key.c",
+          "sha256": "84d296ff1cc78d932a5379cd755723dcb1953dea68a2d462ddfcf65961ce3e12"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/sender_key.h",
+          "upstreamPath": "src/sender_key.h",
+          "sha256": "04e9deec1b71d9fa2efb877ef7882073c1ee50e161c5407dc839f287958e263e"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/sender_key_record.c",
+          "upstreamPath": "src/sender_key_record.c",
+          "sha256": "fe5b97db92a4d3aff071a9912b672a7b8e027a146e55a6ebd0ca970691d8f7e9"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/sender_key_record.h",
+          "upstreamPath": "src/sender_key_record.h",
+          "sha256": "ca231b6666764fd64daf4fc9c09e901884bd1d5fec874ff4f16314a10cc685f1"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/sender_key_state.c",
+          "upstreamPath": "src/sender_key_state.c",
+          "sha256": "b99284990a0cb239ef61ad115112e257b83fbc95bd8a02d2380c9fe1329261da"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/sender_key_state.h",
+          "upstreamPath": "src/sender_key_state.h",
+          "sha256": "f8c401d2b96a0453d70a211b9a1c568b7b68d029219012b74fb418d19e09e177"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/session_builder.c",
+          "upstreamPath": "src/session_builder.c",
+          "sha256": "2e67cb935c24f6fa96572ebd5b4b07c0ec5f2592e8d1999eb02d32755cb26ee0"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/session_builder.h",
+          "upstreamPath": "src/session_builder.h",
+          "sha256": "027a1b445862757b67b77d9bd6173d41f54a7ee64ddc1d0654548a1836488c2c"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/session_builder_internal.h",
+          "upstreamPath": "src/session_builder_internal.h",
+          "sha256": "597c4a197cd7ee6bda8d09f7204ae9b635cd26a78001f9d792470f219ee4a3d4"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/session_cipher.c",
+          "upstreamPath": "src/session_cipher.c",
+          "sha256": "359a4adf3e75981fe3b7994dab58419455b7ac03564a7519160186e84bc2abfc"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/session_cipher.h",
+          "upstreamPath": "src/session_cipher.h",
+          "sha256": "67ac3a3fb644e254265dcb29f9e11b1000a29c588c9f9a4cbc420ba767a046b4"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/session_pre_key.c",
+          "upstreamPath": "src/session_pre_key.c",
+          "sha256": "e047643c59bb72cc4a30b3d4043d7318adcb8c9978c451ebed9530815624f666"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/session_pre_key.h",
+          "upstreamPath": "src/session_pre_key.h",
+          "sha256": "0074ee35f505d25c4cdee173713d7b2ed8ac04724900f746201250c5fd98a975"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/session_record.c",
+          "upstreamPath": "src/session_record.c",
+          "sha256": "657505c6fb820ecde0b6353e3a0369d55bcee92eccdaf903d411d981daa650e0"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/session_record.h",
+          "upstreamPath": "src/session_record.h",
+          "sha256": "b7925dfc7eee83fb1d6dae2992cab1036c107d055657c2ce5be880eabfa2dbd3"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/session_state.c",
+          "upstreamPath": "src/session_state.c",
+          "sha256": "89e3353211786a9ba7353078b2cc0edaf014b94981f64d2e9bc6e8b3595ed701"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/session_state.h",
+          "upstreamPath": "src/session_state.h",
+          "sha256": "95a2b50fcfb33dbc6116c013fbac507e10384b42daa562774b62a0c6d65c74d2"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/signal_protocol.c",
+          "upstreamPath": "src/signal_protocol.c",
+          "sha256": "aa6af71a698ff28796651eeb5ec6885ccc83da7d2531a365dd9549ab5859b2d5"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/signal_protocol.h",
+          "upstreamPath": "src/signal_protocol.h",
+          "sha256": "dda7bab42d54422f7045097b0e8d2a218f73cd002d06a0cd0b6d229c359a970d"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/signal_protocol_internal.h",
+          "upstreamPath": "src/signal_protocol_internal.h",
+          "sha256": "3a5867dbb8e0d82e66ccfce39454e85d3bc82e82157e3ea161a3bb97dd0ca208"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/signal_protocol_types.h",
+          "upstreamPath": "src/signal_protocol_types.h",
+          "sha256": "7f0faaf9ced8fdf58ed4f8e68c02c9afc55e7af19a35fef47297065b6be7b226"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/signal_utarray.h",
+          "upstreamPath": "src/signal_utarray.h",
+          "sha256": "8e288035ef49b0c52c34bed59b29be87a0f2bb037238965b350e893775c6e276"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/utarray.h",
+          "upstreamPath": "src/utarray.h",
+          "sha256": "a0a1986395e0bb25ade0aae41e4305c79bb0d79a7885e12d96f141a9016efd1e"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/uthash.h",
+          "upstreamPath": "src/uthash.h",
+          "sha256": "c5164216ad45c8dfaca6903fd0bab399e56d4b5f30ac41fa3c57b711282b104a"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/utlist.h",
+          "upstreamPath": "src/utlist.h",
+          "sha256": "4e124afa83b696e6e1b1396799dc932fa576070194824456ef9fdc1f1e05d3b0"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/vpool.c",
+          "upstreamPath": "src/vpool.c",
+          "sha256": "b1837e9dd420fa457a523c8e32dae5d02d68a9a454d655880ebc3e8aa1d9e663"
+        },
+        {
+          "path": "Sources/CLibOMEMO/upstream/vpool.h",
+          "upstreamPath": "src/vpool.h",
+          "sha256": "f2fe0e40425f60c6d69fa6f1ed5cb135125d1e68ae20b5f393877fa13c3c7911"
+        },
+        {
+          "path": "LICENSE.libomemo-c",
+          "upstreamPath": "LICENSE",
+          "sha256": "c61f12da7cdad526bdcbed47a4c0a603e60dbbfdaf8b66933cd088e9132c303f"
+        }
+      ]
+    },
+    {
+      "name": "protobuf-c",
+      "repository": "https://github.com/protobuf-c/protobuf-c",
+      "revision": "4719fdd7760624388c2c5b9d6759eb6a47490626",
+      "version": "1.5.2",
+      "files": [
+        {
+          "path": "Sources/CLibOMEMO/protobuf-c/protobuf-c.c",
+          "upstreamPath": "protobuf-c/protobuf-c.c",
+          "sha256": "e1b4481e4b2b1f139a3186a11601f1a6575bfd7e3468fe5a9b809d689f91096b"
+        },
+        {
+          "path": "Sources/CLibOMEMO/protobuf-c/protobuf-c.h",
+          "upstreamPath": "protobuf-c/protobuf-c.h",
+          "sha256": "e0e544af6430e16259a8c54ac7b4a0548eaa76d9fd66d8602f9619a5d3390aba"
+        },
+        {
+          "path": "LICENSE.protobuf-c",
+          "upstreamPath": "LICENSE",
+          "sha256": "2d1d028bd27f8c85bc970d720519d2069ca6213fcb26b9dea444a7c39d24bbb3"
+        }
+      ]
+    }
+  ]
+}
