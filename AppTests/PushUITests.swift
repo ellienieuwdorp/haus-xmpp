@@ -4,6 +4,32 @@ import XCTest
 /// primary App Group store because an NSE cannot see the isolated UI-test database. Credentials
 /// and the one-device push subscription must belong to generated disposable staging fixtures.
 final class PushUITests: XCTestCase {
+    @MainActor func testPrepareNotificationInspectionAndEnterBackground() throws {
+        continueAfterFailure = false
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires opted-in physical staging fixture")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["XMPP_PUSH_DEVICE_TEST"] == "1",
+              let expected = environment["XMPP_EXPECTED_MESSAGE"], expected.hasPrefix("Synthetic"), expected.utf8.count <= 100 else {
+            throw XCTSkip("Requires explicitly selected synthetic notification fixture")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["--inspect-notification", "-staging"]
+        app.launchEnvironment = ["XMPP_EXPECTED_MESSAGE": expected]
+        if let preference = environment["XMPP_NOTIFICATION_PREVIEWS"] {
+            XCTAssertTrue(["0", "1"].contains(preference))
+            app.launchEnvironment["XMPP_NOTIFICATION_PREVIEWS"] = preference
+        }
+        app.launch()
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 10))
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(app.staticTexts["Status, Inspection complete"].waitForExistence(timeout: 15))
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10) || app.state == .runningBackgroundSuspended)
+        #endif
+    }
+
     @MainActor func testRegisterStagingPushAndEnterBackground() throws {
         continueAfterFailure = false
         #if targetEnvironment(simulator)

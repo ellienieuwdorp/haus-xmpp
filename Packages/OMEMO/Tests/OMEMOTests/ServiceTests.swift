@@ -13,7 +13,7 @@ private func expectFalse(_ a: Bool, file: StaticString = #filePath, line: UInt =
 private func expectNil<T>(_ a: T?, file: StaticString = #filePath, line: UInt = #line) { XCTAssertNil(a, file: file, line: line) }
 private func expectNotNil<T>(_ a: T?, file: StaticString = #filePath, line: UInt = #line) { XCTAssertNotNil(a, file: file, line: line) }
 
-private actor PublicationServer {
+actor PublicationServer {
     var lists: [String: [UInt32]] = [:]
     var bundles: [String: XMPPOMEMOBundle] = [:]
     func devices(_ jid: String, _ profile: XMPPOMEMOProfile) -> [UInt32] { lists[jid + profile.rawValue] ?? [] }
@@ -24,7 +24,7 @@ private actor PublicationServer {
     func publish(_ jid: String, _ ids: [UInt32], _ profile: XMPPOMEMOProfile) { lists[jid + profile.rawValue] = ids }
     func publish(_ jid: String, _ bundle: XMPPOMEMOBundle) { bundles[jid + bundle.profile.rawValue + String(bundle.deviceID)] = bundle }
 }
-private struct TestTransport: OMEMOTransport {
+struct TestTransport: OMEMOTransport {
     let account: String
     let server: PublicationServer
     func fetchOMEMODevices(for jid: String, profile: XMPPOMEMOProfile) async throws -> [UInt32] { await server.devices(jid, profile) }
@@ -75,7 +75,7 @@ private struct RegisterDuringBundlePublication: OMEMOTransport {
 }
 
 @MainActor
-private final class ServiceFixture {
+final class ServiceFixture {
     let directory: URL
     let server = PublicationServer()
     let alice = "alice@localhost"

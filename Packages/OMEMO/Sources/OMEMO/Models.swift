@@ -60,8 +60,9 @@ struct AccountEncryptionState: Codable {
     var bundles: [String: XMPPOMEMOBundle] = [:]
     var incompatiblePeers: [String: Bool] = [:]
     var pendingBundlePublications: Set<String> = []
+    var groupRooms: [String: [String]] = [:]
     init(engines: [String: Data]) { self.engines = engines }
-    enum CodingKeys: String, CodingKey { case format, engines, devices, profiles, bundles, incompatiblePeers, pendingBundlePublications }
+    enum CodingKeys: String, CodingKey { case format, engines, devices, profiles, bundles, incompatiblePeers, pendingBundlePublications, groupRooms }
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         format = try values.decode(Int.self, forKey: .format)
@@ -71,6 +72,7 @@ struct AccountEncryptionState: Codable {
         bundles = try values.decodeIfPresent([String: XMPPOMEMOBundle].self, forKey: .bundles) ?? [:]
         incompatiblePeers = try values.decodeIfPresent([String: Bool].self, forKey: .incompatiblePeers) ?? [:]
         pendingBundlePublications = try values.decodeIfPresent(Set<String>.self, forKey: .pendingBundlePublications) ?? []
+        groupRooms = try values.decodeIfPresent([String: [String]].self, forKey: .groupRooms) ?? [:]
     }
 }
 

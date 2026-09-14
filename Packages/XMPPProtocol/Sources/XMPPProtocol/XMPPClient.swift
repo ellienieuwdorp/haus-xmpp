@@ -43,6 +43,8 @@ public enum XMPPEvent: Sendable, Equatable {
     case state(XMPPConnectionState)
     case message(XMPPMessage)
     case encryptedMessage(XMPPEncryptedMessage)
+    case encryptedGroupMessage(XMPPEncryptedGroupMessage)
+    case groupPresence(room: String)
     case omemoDevices(owner: String, profile: XMPPOMEMOProfile, devices: [UInt32])
     case encryptionFailure(from: String, id: String?)
     /// Consume previous events durably before acknowledging this token.
@@ -80,6 +82,7 @@ public actor XMPPClient {
     }
     private var iqRequests: [String: IQRequest] = [:]
     private var archiveQuery: ArchiveQuery?
+    var groupRooms: [String: GroupRoomState] = [:]
     private var streamManagement: StreamManagement?
     private var resumeSnapshot: XMPPStreamManagementSnapshot?
     private var smOffered = false
@@ -102,6 +105,7 @@ public actor XMPPClient {
         guard !host.isEmpty, !domain.isEmpty, !username.isEmpty, !password.isEmpty,
               !username.contains("\0"), !password.contains("\0"), !domain.contains(where: { $0.isWhitespace }),
               let endpointPort = NWEndpoint.Port(rawValue: port) else { throw XMPPClientError.invalidConfiguration }
+        groupRooms.removeAll()
         self.domain = domain; self.username = username; self.password = password
         phase = .features; generation = UUID()
         let token = generation
@@ -339,6 +343,13 @@ public actor XMPPClient {
                 if let inbound { try await streamManagement?.handled(inbound) }
                 return
             }
+            if node.name == "presence", node.namespace == "jabber:client",
+               let occupant = node.attributes["from"], let room = OMEMOWire.bareJID(occupant), var state = groupRooms[room] {
+                guard let account = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
+                GroupChatWire.applyPresence(node, room: room, account: account, state: &state)
+                groupRooms[room] = state
+                try emit(.groupPresence(room: room))
+            }
             if node.name == "message", node.namespace == "jabber:client" {
                 if Carbons.containsWrapper(node) {
                     // Malformed or foreign wrappers are discarded as a whole; their outer body
@@ -388,22 +399,32 @@ public actor XMPPClient {
 
     /// Caller must persist every result and its archive position before acknowledging handledTokens.
     /// Only one bounded own-account query can be active; no arbitrary archive sender is trusted.
-    public func fetchArchivePage(after: String? = nil, limit: Int = 100) async throws -> XMPPArchivePage {
+    public func fetchArchivePage(after: String? = nil, limit: Int = 100, room: String? = nil) async throws -> XMPPArchivePage {
         guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
         guard archiveQuery == nil, (1...200).contains(limit), after.map(validArchiveID) ?? true else { throw XMPPClientError.invalidConfiguration }
+        if let room { _ = try await refreshGroupRoom(room) }
+        guard phase == .online, OMEMOWire.bareJID(boundJID) == ownBare, archiveQuery == nil else { throw XMPPClientError.connectionClosed }
         let queryID = UUID().uuidString
         archiveQuery = ArchiveQuery(queryID: queryID, accountBareJID: ownBare, accountFullJID: boundJID, limit: limit)
+        archiveQuery?.room = room
+        archiveQuery?.knownRooms = Set(groupRooms.filter { !$0.value.members.isEmpty }.keys)
         defer { archiveQuery = nil }
         let afterXML = after.map { "<after>\(xmlEscaped($0))</after>" } ?? ""
         let payload = "<query xmlns='urn:xmpp:mam:2' queryid='\(queryID)'><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE' type='hidden'><value>urn:xmpp:mam:2</value></field></x><set xmlns='http://jabber.org/protocol/rsm'><max>\(limit)</max>\(afterXML)</set></query>"
         do {
-            let response = try await requestIQ(type: "set", to: ownBare, payload: payload)
+            let response = try await requestIQ(type: "set", to: room ?? ownBare, payload: payload)
             guard let query = archiveQuery else { throw XMPPClientError.connectionClosed }
             return try query.finish(response)
         } catch {
             // A discarded partial page must not leave a permanent inbound acknowledgement gap.
             // Its unchanged durable cursor will refetch the page after reconnecting.
-            if !(archiveQuery?.handledTokens.isEmpty ?? true) { finish("Archive synchronization interrupted", error: error) }
+            if !(archiveQuery?.handledTokens.isEmpty ?? true) {
+                finish("Archive synchronization interrupted", error: error)
+                if error is CancellationError { throw error }
+                // A room policy error after a partial page is no longer skippable:
+                // abandoning its unhandled tokens has terminated the transport.
+                throw XMPPClientError.connectionClosed
+            }
             throw error
         }
     }
@@ -427,7 +448,24 @@ public actor XMPPClient {
         handshake?.resume(); handshake = nil
     }
 
+    func groupAccount() throws -> String {
+        guard phase == .online, let account = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
+        return account
+    }
+    func groupWrite(_ xml: String, snapshot: XMPPGroupRoomSnapshot? = nil) async throws {
+        _ = try groupAccount()
+        try await write(xml, groupSnapshot: snapshot)
+    }
+
     private func emitMessage(_ node: XMLNode, provenance: XMPPMessageProvenance) throws {
+        if node.attributes["type"] == "groupchat" {
+            if provenance == .direct, let room = node.attributes["from"].flatMap(OMEMOWire.bareJID),
+               let state = groupRooms[room], let account = OMEMOWire.bareJID(boundJID), OMEMOWire.hasEncryptedContent(node) {
+                do { try emit(.encryptedGroupMessage(GroupChatWire.message(node, account: account, room: room, state: state))) }
+                catch { try emit(.encryptionFailure(from: room, id: node.attributes["id"])) }
+            }
+            return
+        }
         if OMEMOWire.hasEncryptedContent(node) {
             do { try emit(.encryptedMessage(OMEMOWire.parseMessage(node, provenance: provenance))) }
             catch { try emit(.encryptionFailure(from: node.attributes["from"] ?? "", id: node.attributes["id"])) }
@@ -618,6 +656,7 @@ public actor XMPPClient {
     private func timeout(_ token: UUID) { if generation == token && phase != .online { finish("Connection timed out", error: XMPPClientError.timedOut) } }
     private func finish(_ reason: String?, error: Error = XMPPClientError.connectionClosed) {
         generation = UUID()
+        groupRooms.removeAll()
         let pending = iqRequests; iqRequests.removeAll()
         for request in pending.values { request.timeout.cancel(); request.continuation.resume(throwing: error) }
         boundJID = ""
@@ -630,15 +669,17 @@ public actor XMPPClient {
         password = ""; phase = .idle; csiOffered = false
         if case .dropped = continuation.yield(.state(.disconnected(reason))) { continuation.finish() }
     }
-    private func write(_ xml: String) async throws {
+    private func write(_ xml: String, groupSnapshot: XMPPGroupRoomSnapshot? = nil) async throws {
         let token = generation
         await writeGate.enter()
         do {
             guard token == generation else { throw XMPPClientError.connectionClosed }
+            try validateGroupWrite(groupSnapshot)
             if xml.hasPrefix("<message") || xml.hasPrefix("<iq") || xml.hasPrefix("<presence") {
                 try await streamManagement?.record(xml)
             }
             guard generation == token else { throw XMPPClientError.connectionClosed }
+            try validateGroupWrite(groupSnapshot)
             try await rawWrite(xml, expectedGeneration: token)
             await writeGate.leave()
         } catch { await writeGate.leave(); throw error }

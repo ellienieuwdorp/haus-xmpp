@@ -4,7 +4,7 @@ import XMPPProtocol
 
 /// Contains secrets; intentionally has no printable description. The extension only reads a
 /// foreground-authenticated account. Push payloads cannot supply credentials or endpoints.
-struct NotificationAccount: Codable, Sendable {
+struct NotificationAccount: Codable, Sendable, Equatable {
     let accountID: String
     let host: String
     let port: UInt16
@@ -14,6 +14,7 @@ struct NotificationAccount: Codable, Sendable {
     let push: XMPPPushConfiguration?
 
     static func load() throws -> Self? {
+        guard try !NotificationAccessGate.isDisabled(at: NotificationAccessGate.location()) else { return nil }
         var query = keychainQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -37,11 +38,19 @@ struct NotificationAccount: Codable, Sendable {
             attributes.forEach { item[$0.key] = $0.value }
             guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw Failure.unavailable }
         } else if status != errSecSuccess { throw Failure.unavailable }
+        try NotificationAccessGate.enable(at: NotificationAccessGate.location())
     }
 
     static func remove() throws {
+        var disabled = false
+        do {
+            try NotificationAccessGate.disable(at: NotificationAccessGate.location())
+            disabled = true
+        } catch { /* Still attempt credential deletion if the separate tombstone cannot be saved. */ }
         let status = SecItemDelete(keychainQuery as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.unavailable }
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw Failure.credentialsRemain(backgroundDisabled: disabled)
+        }
     }
 
     private static var keychainQuery: [String: Any] {
@@ -50,5 +59,5 @@ struct NotificationAccount: Codable, Sendable {
          kSecAttrAccount as String: "primary",
          kSecAttrSynchronizable as String: false]
     }
-    enum Failure: Error { case unavailable }
+    enum Failure: Error { case unavailable, credentialsRemain(backgroundDisabled: Bool) }
 }

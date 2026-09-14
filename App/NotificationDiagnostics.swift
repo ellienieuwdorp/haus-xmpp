@@ -1,5 +1,6 @@
 import Foundation
 import MessageStore
+import UserNotifications
 
 /// Opt-in, synthetic staging inspection through the containing app's regular data container.
 /// The caller must return from prepare before starting any foreground network synchronization.
@@ -43,9 +44,33 @@ enum NotificationDiagnostics {
                   decoded.started > 0, decoded.completed >= decoded.started else { throw Failure.invalidMarker }
             marker = decoded
         }
+        let previewsBefore = try await store.notificationPreviewsEnabled(accountID: account.accountID)
+        if let requested = process.environment["XMPP_NOTIFICATION_PREVIEWS"] {
+            guard requested == "0" || requested == "1" else { throw Failure.invalidFixture }
+            try await store.acquireTransportOwnership()
+            do {
+                try await store.setNotificationPreviews(accountID: account.accountID, enabled: requested == "1")
+                try await store.releaseTransportOwnership()
+            } catch {
+                try? await store.releaseTransportOwnership()
+                throw error
+            }
+        }
+        let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
+        let fresh = delivered.filter { notification in
+            guard let started = marker?.started else { return false }
+            // UNNotification.date describes the original push arrival, before NSE work starts.
+            return notification.date.timeIntervalSince1970 >= started - 5
+        }
         let inspection = Inspection(expectedPresent: !matches.isEmpty, expectedCount: matches.count,
             inspectedMessageCount: messages.count, encryptionRevision: state?.revision,
-            started: marker?.started, completed: marker?.completed, sharedDirectory: directory.path)
+            started: marker?.started, completed: marker?.completed, sharedDirectory: directory.path,
+            previewsBefore: previewsBefore,
+            previewsAfter: try await store.notificationPreviewsEnabled(accountID: account.accountID),
+            deliveredExpectedCount: delivered.filter { $0.request.content.body == expected }.count,
+            deliveredSinceSyncCount: fresh.count,
+            deliveredSinceSyncExpectedCount: fresh.filter { $0.request.content.body == expected }.count,
+            deliveredSinceSyncGenericCount: fresh.filter { ["New message", "New encrypted activity"].contains($0.request.content.body) }.count)
         try JSONEncoder().encode(inspection).write(to: output,
             options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         var values = URLResourceValues()
@@ -70,6 +95,12 @@ enum NotificationDiagnostics {
         let started: Double?
         let completed: Double?
         let sharedDirectory: String
+        let previewsBefore: Bool
+        let previewsAfter: Bool
+        let deliveredExpectedCount: Int
+        let deliveredSinceSyncCount: Int
+        let deliveredSinceSyncExpectedCount: Int
+        let deliveredSinceSyncGenericCount: Int
     }
     #endif
 }

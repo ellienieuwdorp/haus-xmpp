@@ -64,7 +64,7 @@ import XMPPProtocol
                     return
                 }
             case .encryptedMessage, .omemoDevices, .encryptionFailure, .streamAcknowledged: break
-            case .state: break
+            case .state, .encryptedGroupMessage, .groupPresence: break
             case .message(let message):
                 if let expected = env["XMPP_LAB_EXPECT_BODY"], message.body != expected { throw XMPPClientError.unexpectedProtocol }
                 if let expectedID = env["XMPP_LAB_ID"], message.id != expectedID || message.originID != expectedID { throw XMPPClientError.unexpectedProtocol }
@@ -147,7 +147,7 @@ import XMPPProtocol
                                                  reply: XMPPReply(id: sourceID, to: message.from, body: source))
             case .state(.disconnected): throw XMPPClientError.connectionClosed
             case .encryptedMessage, .omemoDevices, .encryptionFailure, .streamAcknowledged: break
-            case .state: break
+            case .state, .encryptedGroupMessage, .groupPresence: break
             }
         }
         throw XMPPClientError.connectionClosed

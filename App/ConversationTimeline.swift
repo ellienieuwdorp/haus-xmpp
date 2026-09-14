@@ -39,6 +39,7 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     var securityNotice: String? = nil
     var reactions: [TimelineReaction] = []
     var canReact: Bool = false
+    var author: String? = nil
 
     enum Status: String, Sendable, Equatable {
         case queued, submitting, unconfirmed, failed, serverAccepted
@@ -232,6 +233,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
     private var swipeReplyAction: (() -> Void)?
     private var crossedReplyThreshold = false
     private let replyFeedback = UIImpactFeedbackGenerator(style: .light)
+    private let author = UILabel()
+    private var authorHeight: NSLayoutConstraint!
+    private var authorTop: NSLayoutConstraint!
     private let quote = UIView()
     private let quoteAuthor = UILabel()
     private let quoteBody = UILabel()
@@ -283,6 +287,19 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         replyPan.delegate = self
         bubble.addGestureRecognizer(replyPan)
         quote.translatesAutoresizingMaskIntoConstraints = false
+        author.translatesAutoresizingMaskIntoConstraints = false
+        author.font = .preferredFont(forTextStyle: .caption1)
+        author.textColor = .systemIndigo
+        author.adjustsFontForContentSizeCategory = true
+        author.numberOfLines = 1
+        author.lineBreakMode = .byTruncatingMiddle
+        author.isAccessibilityElement = false
+        bubble.addSubview(author)
+        authorHeight = author.heightAnchor.constraint(equalToConstant: 0)
+        authorTop = author.topAnchor.constraint(equalTo: bubble.topAnchor)
+        NSLayoutConstraint.activate([authorTop,
+            author.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 12),
+            author.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -12)])
         quote.isUserInteractionEnabled = false
         quote.isAccessibilityElement = false
         bubble.addSubview(quote)
@@ -309,7 +326,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         NSLayoutConstraint.activate([
             quote.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 12),
             quote.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -12),
-            quote.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 10),
+            quote.topAnchor.constraint(equalTo: author.bottomAnchor, constant: 10),
             quoteBar.leadingAnchor.constraint(equalTo: quote.leadingAnchor),
             quoteBar.topAnchor.constraint(equalTo: quote.topAnchor),
             quoteBar.bottomAnchor.constraint(equalTo: quote.bottomAnchor),
@@ -369,7 +386,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         leading = bubble.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16)
         trailing = bubble.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16)
         bubbleWidth = bubble.widthAnchor.constraint(equalToConstant: 200)
-        plainTextTop = textView.topAnchor.constraint(equalTo: bubble.topAnchor)
+        plainTextTop = textView.topAnchor.constraint(equalTo: author.bottomAnchor)
         replyTextTop = textView.topAnchor.constraint(equalTo: quote.bottomAnchor)
         plainTextTop.isActive = true
         NSLayoutConstraint.activate([
@@ -409,7 +426,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
             let authorWidth = (reply.author as NSString).size(withAttributes: [.font: quoteAuthor.font!]).width
             quoteWidth = min(limit, max(bodyWidth, authorWidth)) + 34
         }
-        bubbleWidth.constant = min(maximumTextWidth + 24, max(quoteWidth, max(metadataWidth, max(44, ceil(measured.width) + 25))))
+        let authorWidth = message?.author.map { ($0 as NSString).size(withAttributes: [.font: author.font!]).width + 24 } ?? 0
+        bubbleWidth.constant = min(maximumTextWidth + 24, max(authorWidth, max(quoteWidth, max(metadataWidth, max(44, ceil(measured.width) + 25)))))
         return super.preferredLayoutAttributesFitting(layoutAttributes)
     }
 
@@ -576,6 +594,10 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
             textView.isUserInteractionEnabled = false
             messageID = message.id
         }
+        author.text = message.author
+        author.isHidden = message.author == nil
+        authorHeight.isActive = message.author == nil
+        authorTop.constant = message.author == nil ? 0 : 9
         quote.isHidden = message.reply == nil
         quoteAuthor.text = message.reply?.author
         quoteBody.text = message.reply?.body
@@ -587,7 +609,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         bubble.backgroundColor = message.isOutgoing ? .systemGray5 : .secondarySystemBackground
         textView.textColor = .label
         if textView.text != message.body { textView.text = message.body }
-        var descriptions = ["\(message.isOutgoing ? "You" : "Contact"): \(message.body)"]
+        var descriptions = ["\(message.isOutgoing ? "You" : (message.author ?? "Contact")): \(message.body)"]
         if let quote = message.reply { descriptions.append("Replying to \(quote.author): \(quote.body)") }
         if message.isStarred { descriptions.append("starred") }
         if let date = message.sentAt { descriptions.append(date.formatted(date: .abbreviated, time: .shortened)) }

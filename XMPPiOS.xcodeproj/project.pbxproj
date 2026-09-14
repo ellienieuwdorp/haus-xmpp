@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		06EBBE691608536D4BCD2A50 /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 9D3BA1F6BA1BAE2CD370EA2E /* XMPPProtocol */; };
+		0ECC4EC93A1EAF5DC4ED45E5 /* PushTokenCallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C45B2B0F98D48433E926D3B5 /* PushTokenCallbackTests.swift */; };
+		1048A0DA5C55818F6E908F4C /* GroupDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29D0F7FE889C5ECA318C15DC /* GroupDetailsView.swift */; };
 		10D4A99046FBA70E9DA9374C /* PushUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458E132229BD40D81BDBBF78 /* PushUITests.swift */; };
 		14259EDA76E8B6B4C53D4E92 /* CircularGlassButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60CDCE362B275821D181D99A /* CircularGlassButtonStyle.swift */; };
 		17A325600E79D8A8156382ED /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B83163D7B25E749804F80AF /* ConversationView.swift */; };
@@ -16,25 +18,35 @@
 		2767972D202828F227DCCE8E /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 66D03BA1F4C19B5809A1DA26 /* XMPPProtocol */; };
 		2C2E8D4B3C2387440EC9F2DC /* XMPPNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 9056316202CE7B7657FF164B /* XMPPNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		369DEFDBC3B4D3938F3C1527 /* EncryptionDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 272E25DD29F38AD395BDE164 /* EncryptionDetailsView.swift */; };
+		3709C7E5332EEFFC9F51D2C4 /* GroupUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113A93C794A0D6437CCAE333 /* GroupUITests.swift */; };
+		3FBEB8AA01BC5062AF02BD11 /* NotificationAccessGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD5764F5CEC7644EC23110AC /* NotificationAccessGateTests.swift */; };
 		40D62336483129A255BB1524 /* UITestStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42CFC68CD43A67165491DDB9 /* UITestStorage.swift */; };
 		417913C78643B9C802D67F05 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C55CC82738BE53CA1CF1D4 /* NotificationService.swift */; };
 		473142DDB095B7B4EAD782BD /* XMPPiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D999DD559C833CD87788CAD5 /* XMPPiOSApp.swift */; };
+		499E7E1A9669B8DAC6983612 /* PushRegistrationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA3471BC57BCF7C038498282 /* PushRegistrationState.swift */; };
 		49B4941B82AD96B7E6A08528 /* MessagingCore in Frameworks */ = {isa = PBXBuildFile; productRef = 28955149AC7ADAF9741CE517 /* MessagingCore */; };
 		4C24D0B2E96BA3297A3628B7 /* MessagingCore in Frameworks */ = {isa = PBXBuildFile; productRef = 0912355BF91BD872B68D1F0D /* MessagingCore */; };
+		4D91772A57D7681DA852F974 /* NotificationNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F6DBBCFE3B68BEDB76D1A21 /* NotificationNavigation.swift */; };
+		525544352D1196E5205127DF /* GroupChatState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAF76316D7F572ECA650DC23 /* GroupChatState.swift */; };
+		5581B0609F6688C9C3868D17 /* GroupJoinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBD21AF11824F42FB3E0DE46 /* GroupJoinView.swift */; };
 		565E2244C18990588EFB56B6 /* ReactionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40EBA5FA15B66AEBE4033B4B /* ReactionUITests.swift */; };
+		57EE3016876A1EE8034033D3 /* PushRegistrationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA3471BC57BCF7C038498282 /* PushRegistrationState.swift */; };
 		5F166C0A1D90C747BD73588F /* ConversationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */; };
 		68E84935703E72818760EDD8 /* EncryptionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9CB3F0019D6F6D8C373107D /* EncryptionUITests.swift */; };
 		728CFF70CFB117DBE2C87F11 /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = FDC9596D2F9805667807CD8E /* XMPPProtocol */; };
 		73C11D0503BE6524DD670DBD /* OrganizationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */; };
 		75938C306D9B6543EB30A7AF /* PushRegistration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8B2544FBAE494AC3B25B49F /* PushRegistration.swift */; };
+		790E75EB8C82D4041832860D /* NotificationAccessGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D64D2C443130E517FB4227F /* NotificationAccessGate.swift */; };
 		791F4FE97D241AC6A44A0B4F /* NotificationAccountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4B4C1530960F6129C8EC8AD /* NotificationAccountTests.swift */; };
 		7E6C4263F5BA1BCBF4FC6C9C /* ConversationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24B51206177B769B64F7212B /* ConversationUITests.swift */; };
 		817111520A55373B387F2F40 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = AFC1C801720A06EEB5CC2DFD /* MessageStore */; };
 		821A596E851CCBD9728A4C87 /* SharedStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97F738E51D0098B3D95850BB /* SharedStorage.swift */; };
 		8A211ED028F5061BAE138553 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = F283B99C4452326F2C17009D /* MessageStore */; };
+		8D51C2128F80DDF36183FF66 /* NotificationNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F29F51D890D21FD55BB2D510 /* NotificationNavigationTests.swift */; };
 		8EAA0FEA4C802F4E5C6AE385 /* OMEMO in Frameworks */ = {isa = PBXBuildFile; productRef = BBB3036FB6B2351360EF2939 /* OMEMO */; };
 		8FB4D40A8733E90C432DF781 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = F001BEFD4DDC53B7961876FE /* README.md */; };
 		91E5E2C6F61406E3B3C48C8A /* SharedStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 131E8E6FF67B20A245542D39 /* SharedStorageTests.swift */; };
+		B37B871F7D7642ED3049C072 /* NotificationAccessGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D64D2C443130E517FB4227F /* NotificationAccessGate.swift */; };
 		B9295B0FF8C5639FCD26A317 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = 97379906848496F5DE6ECB98 /* MessageStore */; };
 		BA48F0DF4A1A5455A042F055 /* NotificationAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A7EFE21E5ABA53391725448 /* NotificationAccount.swift */; };
 		C4FDD086DC3AD8D8FF0C472C /* SharedStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97F738E51D0098B3D95850BB /* SharedStorage.swift */; };
@@ -96,12 +108,15 @@
 		0311640D33AB3155A53A53A3 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		06754889A5E9FA0A851916A1 /* NotificationDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationDiagnostics.swift; sourceTree = "<group>"; };
 		09336CE7482840B04C804E1D /* OMEMO */ = {isa = PBXFileReference; lastKnownFileType = folder; name = OMEMO; path = Packages/OMEMO; sourceTree = SOURCE_ROOT; };
+		0D64D2C443130E517FB4227F /* NotificationAccessGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationAccessGate.swift; sourceTree = "<group>"; };
+		113A93C794A0D6437CCAE333 /* GroupUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupUITests.swift; sourceTree = "<group>"; };
 		131E8E6FF67B20A245542D39 /* SharedStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedStorageTests.swift; sourceTree = "<group>"; };
 		1EC37336D093CD8D185451AA /* XMPPiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = XMPPiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		24B51206177B769B64F7212B /* ConversationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationUITests.swift; sourceTree = "<group>"; };
 		272E25DD29F38AD395BDE164 /* EncryptionDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionDetailsView.swift; sourceTree = "<group>"; };
 		2820963E2FB064DD0BAD839F /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		293B323A3D7EB1375E1F7124 /* XMPPiOSLifecycleTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = XMPPiOSLifecycleTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		29D0F7FE889C5ECA318C15DC /* GroupDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupDetailsView.swift; sourceTree = "<group>"; };
 		3343546173C8FA0AB546ECBF /* DevelopmentEndpoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevelopmentEndpoint.swift; sourceTree = "<group>"; };
 		388BA54424B17190DC3CBD6C /* EncryptionLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionLifecycleTests.swift; sourceTree = "<group>"; };
 		40EBA5FA15B66AEBE4033B4B /* ReactionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReactionUITests.swift; sourceTree = "<group>"; };
@@ -115,6 +130,7 @@
 		71C55CC82738BE53CA1CF1D4 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		71C9EF89EE0813A74E05D3D4 /* MessagingCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MessagingCore; path = Packages/MessagingCore; sourceTree = SOURCE_ROOT; };
 		7E5E3068B0B6DC7DBAB532CC /* NotificationService.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NotificationService.entitlements; sourceTree = "<group>"; };
+		7F6DBBCFE3B68BEDB76D1A21 /* NotificationNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNavigation.swift; sourceTree = "<group>"; };
 		827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrganizationUITests.swift; sourceTree = "<group>"; };
 		832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTimeline.swift; sourceTree = "<group>"; };
 		8B424C6F4AC85C78B1A51212 /* ConversationSearchBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSearchBar.swift; sourceTree = "<group>"; };
@@ -125,13 +141,19 @@
 		A8B2544FBAE494AC3B25B49F /* PushRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistration.swift; sourceTree = "<group>"; };
 		A9CB3F0019D6F6D8C373107D /* EncryptionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionUITests.swift; sourceTree = "<group>"; };
 		AC9D418986C30C4F6A0D3E79 /* MessageStore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MessageStore; path = Packages/MessageStore; sourceTree = SOURCE_ROOT; };
+		BBD21AF11824F42FB3E0DE46 /* GroupJoinView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupJoinView.swift; sourceTree = "<group>"; };
+		BD5764F5CEC7644EC23110AC /* NotificationAccessGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationAccessGateTests.swift; sourceTree = "<group>"; };
 		C1C395F08ECF2C05B5AAF89B /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
+		C45B2B0F98D48433E926D3B5 /* PushTokenCallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushTokenCallbackTests.swift; sourceTree = "<group>"; };
 		C4B4C1530960F6129C8EC8AD /* NotificationAccountTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationAccountTests.swift; sourceTree = "<group>"; };
+		CAF76316D7F572ECA650DC23 /* GroupChatState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupChatState.swift; sourceTree = "<group>"; };
 		CC7CDB26BA137152F2503309 /* ReplyUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyUITests.swift; sourceTree = "<group>"; };
 		D999DD559C833CD87788CAD5 /* XMPPiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XMPPiOSApp.swift; sourceTree = "<group>"; };
+		EA3471BC57BCF7C038498282 /* PushRegistrationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistrationState.swift; sourceTree = "<group>"; };
 		EAC07EFB739E1EFD8DF0DCA3 /* OutboxUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutboxUITests.swift; sourceTree = "<group>"; };
 		F001BEFD4DDC53B7961876FE /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		F011167791FD6608B0B26510 /* XMPPiOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = XMPPiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F29F51D890D21FD55BB2D510 /* NotificationNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNavigationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -187,7 +209,9 @@
 			isa = PBXGroup;
 			children = (
 				703EFFBB4A4E0FF89DDD9B2A /* EncryptionKeychain.swift */,
+				0D64D2C443130E517FB4227F /* NotificationAccessGate.swift */,
 				6A7EFE21E5ABA53391725448 /* NotificationAccount.swift */,
+				EA3471BC57BCF7C038498282 /* PushRegistrationState.swift */,
 				97F738E51D0098B3D95850BB /* SharedStorage.swift */,
 			);
 			path = Shared;
@@ -197,7 +221,10 @@
 			isa = PBXGroup;
 			children = (
 				388BA54424B17190DC3CBD6C /* EncryptionLifecycleTests.swift */,
+				BD5764F5CEC7644EC23110AC /* NotificationAccessGateTests.swift */,
 				C4B4C1530960F6129C8EC8AD /* NotificationAccountTests.swift */,
+				F29F51D890D21FD55BB2D510 /* NotificationNavigationTests.swift */,
+				C45B2B0F98D48433E926D3B5 /* PushTokenCallbackTests.swift */,
 				F001BEFD4DDC53B7961876FE /* README.md */,
 				131E8E6FF67B20A245542D39 /* SharedStorageTests.swift */,
 			);
@@ -220,6 +247,7 @@
 			children = (
 				24B51206177B769B64F7212B /* ConversationUITests.swift */,
 				A9CB3F0019D6F6D8C373107D /* EncryptionUITests.swift */,
+				113A93C794A0D6437CCAE333 /* GroupUITests.swift */,
 				672F8EB6B8BC64098369E462 /* LabConnectionUITests.swift */,
 				827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */,
 				EAC07EFB739E1EFD8DF0DCA3 /* OutboxUITests.swift */,
@@ -253,7 +281,11 @@
 				9B83163D7B25E749804F80AF /* ConversationView.swift */,
 				3343546173C8FA0AB546ECBF /* DevelopmentEndpoint.swift */,
 				272E25DD29F38AD395BDE164 /* EncryptionDetailsView.swift */,
+				CAF76316D7F572ECA650DC23 /* GroupChatState.swift */,
+				29D0F7FE889C5ECA318C15DC /* GroupDetailsView.swift */,
+				BBD21AF11824F42FB3E0DE46 /* GroupJoinView.swift */,
 				06754889A5E9FA0A851916A1 /* NotificationDiagnostics.swift */,
+				7F6DBBCFE3B68BEDB76D1A21 /* NotificationNavigation.swift */,
 				A8B2544FBAE494AC3B25B49F /* PushRegistration.swift */,
 				0311640D33AB3155A53A53A3 /* RootView.swift */,
 				D999DD559C833CD87788CAD5 /* XMPPiOSApp.swift */,
@@ -431,8 +463,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				F920C61454333DD0B5C72DD0 /* EncryptionKeychain.swift in Sources */,
+				790E75EB8C82D4041832860D /* NotificationAccessGate.swift in Sources */,
 				BA48F0DF4A1A5455A042F055 /* NotificationAccount.swift in Sources */,
 				417913C78643B9C802D67F05 /* NotificationService.swift in Sources */,
+				499E7E1A9669B8DAC6983612 /* PushRegistrationState.swift in Sources */,
 				821A596E851CCBD9728A4C87 /* SharedStorage.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -449,9 +483,15 @@
 				FC75AB6E225C09570BC09D49 /* DevelopmentEndpoint.swift in Sources */,
 				369DEFDBC3B4D3938F3C1527 /* EncryptionDetailsView.swift in Sources */,
 				1EA8019F74322EBE45220E3C /* EncryptionKeychain.swift in Sources */,
+				525544352D1196E5205127DF /* GroupChatState.swift in Sources */,
+				1048A0DA5C55818F6E908F4C /* GroupDetailsView.swift in Sources */,
+				5581B0609F6688C9C3868D17 /* GroupJoinView.swift in Sources */,
+				B37B871F7D7642ED3049C072 /* NotificationAccessGate.swift in Sources */,
 				DF0983FA3FDFD4E68EC27C66 /* NotificationAccount.swift in Sources */,
 				F89DE248D5F766E7151AC8A8 /* NotificationDiagnostics.swift in Sources */,
+				4D91772A57D7681DA852F974 /* NotificationNavigation.swift in Sources */,
 				75938C306D9B6543EB30A7AF /* PushRegistration.swift in Sources */,
+				57EE3016876A1EE8034033D3 /* PushRegistrationState.swift in Sources */,
 				E23C003181D2864649BEB0CA /* RootView.swift in Sources */,
 				C4FDD086DC3AD8D8FF0C472C /* SharedStorage.swift in Sources */,
 				473142DDB095B7B4EAD782BD /* XMPPiOSApp.swift in Sources */,
@@ -464,6 +504,7 @@
 			files = (
 				7E6C4263F5BA1BCBF4FC6C9C /* ConversationUITests.swift in Sources */,
 				68E84935703E72818760EDD8 /* EncryptionUITests.swift in Sources */,
+				3709C7E5332EEFFC9F51D2C4 /* GroupUITests.swift in Sources */,
 				EF7387F958D30472732FFADE /* LabConnectionUITests.swift in Sources */,
 				73C11D0503BE6524DD670DBD /* OrganizationUITests.swift in Sources */,
 				1EEF6DDECCEA1FBA9B0A2FAF /* OutboxUITests.swift in Sources */,
@@ -480,7 +521,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				FCB99E51AD55AA54A964431F /* EncryptionLifecycleTests.swift in Sources */,
+				3FBEB8AA01BC5062AF02BD11 /* NotificationAccessGateTests.swift in Sources */,
 				791F4FE97D241AC6A44A0B4F /* NotificationAccountTests.swift in Sources */,
+				8D51C2128F80DDF36183FF66 /* NotificationNavigationTests.swift in Sources */,
+				0ECC4EC93A1EAF5DC4ED45E5 /* PushTokenCallbackTests.swift in Sources */,
 				91E5E2C6F61406E3B3C48C8A /* SharedStorageTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -16,9 +16,9 @@ extension XMPPClient: OMEMOTransport {}
 /// commits its snapshot with the resulting message/ciphertext. A thrown operation cannot advance
 /// durable ratchets. There are no network calls or independent callbacks inside SQL transactions.
 public actor OMEMOService {
-    private let store: MessageStore
-    private let protection: StateProtection
-    private let gate = OperationGate()
+    let store: MessageStore
+    let protection: StateProtection
+    let gate = OperationGate()
     public init(store: MessageStore, protection: StateProtection) {
         self.store = store; self.protection = protection
     }
@@ -74,7 +74,7 @@ public actor OMEMOService {
         try await gate.run { try await self.refreshLocked(account: account, peer: peer, profile: profile, transport: transport) }
     }
 
-    private func refreshLocked(account: String, peer: String, profile requested: XMPPOMEMOProfile?,
+    func refreshLocked(account: String, peer: String, profile requested: XMPPOMEMOProfile?,
                                transport: any OMEMOTransport, updateSelection: Bool = true) async throws -> EncryptionOverview {
         let (revision, old) = try await load(account)
         var state = old
@@ -269,7 +269,7 @@ public actor OMEMOService {
         try await gate.run { try await self.flushBundlePublicationsLocked(account: account, transport: transport) }
     }
 
-    private func flushBundlePublicationsLocked(account: String, transport: any OMEMOTransport) async throws {
+    func flushBundlePublicationsLocked(account: String, transport: any OMEMOTransport) async throws {
         let (_, initial) = try await load(account)
         for name in initial.pendingBundlePublications.sorted() {
             guard let profile = XMPPOMEMOProfile(rawValue: name) else { throw OMEMOError.stateUnavailable }
@@ -282,7 +282,7 @@ public actor OMEMOService {
         }
     }
 
-    private func validatedDevices(_ ids: [UInt32]) throws -> [UInt32] {
+    func validatedDevices(_ ids: [UInt32]) throws -> [UInt32] {
         guard ids.count <= 200, Set(ids).count == ids.count,
               ids.allSatisfy({ $0 > 0 && $0 <= Int32.max }) else { throw OMEMOError.invalidContent }
         return ids
@@ -313,7 +313,8 @@ public actor OMEMOService {
             var ready = Set<String>()
             var blocked: [String: String] = [:]
             var firstFailure: OMEMOError?
-            for message in queued {
+            let (_, currentState) = try await self.load(account)
+            for message in queued where currentState.groupRooms[message.chatID] == nil {
                 do {
                     try Task.checkCancellation()
                     let wire = try await self.store.encryptedOutgoing(accountID: account, messageID: message.id)
@@ -356,9 +357,15 @@ public actor OMEMOService {
         let recipients = state.devices.filter { $0.profile == profile && $0.active && ($0.jid == peer || $0.jid == account) }
         guard !recipients.contains(where: { $0.trust == .undecided }) else { throw OMEMOError.trustRequired }
         let accepted = recipients.filter { $0.trust.permitsEncryption }
-        let local = try engine(state, profile)
         guard peer == account || accepted.contains(where: { $0.jid == peer }) else { throw OMEMOError.noDevices }
         guard !accepted.isEmpty else { throw OMEMOError.noDevices }
+        return try sealForRecipients(plaintext, profile: profile, accepted: accepted, state: &state)
+    }
+
+    func sealForRecipients(_ plaintext: Data, profile: XMPPOMEMOProfile, accepted: [EncryptionDevice],
+                           state: inout AccountEncryptionState) throws -> PreparedEnvelope {
+        guard !accepted.isEmpty, accepted.count <= 1024 else { throw OMEMOError.noDevices }
+        let local = try engine(state, profile)
         let sealed = try PayloadCrypto.seal(plaintext, profile: profile.crypto)
         var keys: [XMPPOMEMOKey] = []
         for device in accepted {
@@ -388,6 +395,9 @@ public actor OMEMOService {
 
     private func queueReactionsLocked(account: String, chatID: String, messageID: String, reactions: [String]) async throws -> String {
         let (_, state) = try await load(account)
+        if state.groupRooms[chatID] != nil {
+            return try await queueGroupReactionsLocked(account: account, room: chatID, messageID: messageID, reactions: reactions)
+        }
         guard state.profiles[chatID] == .modern,
               let target = try await store.message(accountID: account, messageID: messageID),
               target.chatID == chatID, target.encryptionProfile == XMPPOMEMOProfile.modern.rawValue,
@@ -414,6 +424,7 @@ public actor OMEMOService {
             do {
                 try Task.checkCancellation()
                 let (_, selected) = try await load(account)
+                if selected.groupRooms[update.chatID] != nil { continue }
                 guard selected.profiles[update.chatID] == .modern else { throw OMEMOError.unsupportedEncryptedReactions }
                 let overview = try await refreshLocked(account: account, peer: update.chatID, profile: .modern,
                                                        transport: transport, updateSelection: false)
@@ -449,6 +460,7 @@ public actor OMEMOService {
             throw OMEMOError.unsupportedEncryptedReactions
         }
         let saved = try JSONDecoder().decode(PreparedEnvelope.self, from: wire)
+        guard saved.groupMembers == nil else { throw OMEMOError.unsupportedProfile }
         let (_, state) = try await load(account)
         try validatePrepared(saved, state: state, account: account)
         return saved.envelope
@@ -489,6 +501,7 @@ public actor OMEMOService {
     public func outgoingEnvelope(account: String, messageID: String) async throws -> XMPPOMEMOEnvelope {
         guard let wire = try await store.encryptedOutgoing(accountID: account, messageID: messageID) else { throw OMEMOError.unavailable }
         let saved = try JSONDecoder().decode(PreparedEnvelope.self, from: wire)
+        guard saved.groupMembers == nil else { throw OMEMOError.unsupportedProfile }
         let (_, state) = try await load(account)
         try validatePrepared(saved, state: state, account: account)
         return saved.envelope
@@ -512,7 +525,7 @@ public actor OMEMOService {
                                           envelope: XMPPOMEMOEnvelope) async throws -> Bool {
         if let wire = try await store.encryptedOutgoing(accountID: account, messageID: messageID) {
             let saved = try JSONDecoder().decode(PreparedEnvelope.self, from: wire)
-            guard let intention = try await store.message(accountID: account, messageID: messageID),
+            guard saved.groupMembers == nil, let intention = try await store.message(accountID: account, messageID: messageID),
                   intention.isOutgoing, intention.senderID == account,
                   intention.chatID == bare(recipient), saved.envelope == envelope else { return false }
             do { return try await outgoingEnvelope(account: account, messageID: messageID) == envelope }
@@ -520,7 +533,7 @@ public actor OMEMOService {
         }
         if let wire = try await store.encryptedReaction(accountID: account, updateID: messageID) {
             let saved = try JSONDecoder().decode(PreparedEnvelope.self, from: wire)
-            guard let update = try await store.reactionUpdate(accountID: account, updateID: messageID),
+            guard saved.groupMembers == nil, let update = try await store.reactionUpdate(accountID: account, updateID: messageID),
                   update.actorID == account, update.chatID == bare(recipient), saved.envelope == envelope else { return false }
             do { return try await outgoingReactionEnvelope(account: account, updateID: messageID) == envelope }
             catch let error as OMEMOError where error == .trustRequired || error == .recipientSetChanged || error == .unsupportedEncryptedReactions { return false }
@@ -697,7 +710,7 @@ public actor OMEMOService {
         }
     }
 
-    private func ciphertextDigest(_ message: XMPPEncryptedMessage, key: XMPPOMEMOKey) throws -> String {
+    func ciphertextDigest(_ message: XMPPEncryptedMessage, key: XMPPOMEMOKey) throws -> String {
         let identity = IncomingCiphertextIdentity(profile: message.envelope.profile,
                                                   senderDeviceID: message.envelope.senderDeviceID,
                                                   key: key.data, iv: message.envelope.iv, payload: message.envelope.payload)
@@ -710,6 +723,11 @@ public actor OMEMOService {
     public func pendingConversations(account: String) async throws -> [String: Int] {
         var result: [String: Int] = [:]
         for item in try await store.pendingEncryptedIncoming(accountID: account) {
+            if let group = try? JSONDecoder().decode(RetainedGroupEnvelope.self, from: item.wire) {
+                guard group.message.sender == item.sender else { continue }
+                result[group.message.room, default: 0] += 1
+                continue
+            }
             let value = try JSONDecoder().decode(RetainedEnvelope.self, from: item.wire)
             guard let sender = boundedBareJID(value.from), sender == item.sender else { continue }
             switch value.provenance {
@@ -729,6 +747,12 @@ public actor OMEMOService {
         var firstFailure: (any Error)?
         for item in pending {
             do {
+                if let group = try? JSONDecoder().decode(RetainedGroupEnvelope.self, from: item.wire) {
+                    if let groupTransport = transport as? any OMEMOGroupTransport {
+                        _ = try await receiveGroup(account: account, message: group.message, transport: groupTransport, sentAt: group.sentAt)
+                    }
+                    continue
+                }
                 let value = try JSONDecoder().decode(RetainedEnvelope.self, from: item.wire)
                 _ = try await receive(account: account, message: XMPPEncryptedMessage(id: item.digest, from: value.from, to: value.to, originID: nil, envelope: value.envelope, provenance: value.provenance), transport: transport, sentAt: value.sentAt)
             } catch {
@@ -754,7 +778,7 @@ public actor OMEMOService {
         }
     }
 
-    private func load(_ account: String) async throws -> (Int, AccountEncryptionState) {
+    func load(_ account: String) async throws -> (Int, AccountEncryptionState) {
         guard let row = try await store.encryptionState(accountID: account) else { throw OMEMOError.unavailable }
         do {
             let state = try JSONDecoder().decode(AccountEncryptionState.self, from: protection.open(row.data, account: account))
@@ -762,11 +786,11 @@ public actor OMEMOService {
             return (row.revision, state)
         } catch { throw OMEMOError.stateUnavailable }
     }
-    private func encode(_ state: AccountEncryptionState, account: String) throws -> Data { try protection.seal(JSONEncoder().encode(state), account: account) }
-    private func save(_ state: AccountEncryptionState, revision: Int, account: String) async throws {
+    func encode(_ state: AccountEncryptionState, account: String) throws -> Data { try protection.seal(JSONEncoder().encode(state), account: account) }
+    func save(_ state: AccountEncryptionState, revision: Int, account: String) async throws {
         try await store.saveEncryptionState(accountID: account, expectedRevision: revision, data: encode(state, account: account))
     }
-    private func engine(_ state: AccountEncryptionState, _ profile: XMPPOMEMOProfile) throws -> OMEMOEngine {
+    func engine(_ state: AccountEncryptionState, _ profile: XMPPOMEMOProfile) throws -> OMEMOEngine {
         guard let data = state.engines[profile.rawValue] else { throw OMEMOError.stateUnavailable }
         let engine = try OMEMOEngine(snapshot: data)
         guard engine.profile == profile.crypto else { throw OMEMOError.stateUnavailable }
@@ -777,11 +801,11 @@ public actor OMEMOService {
                         signedPreKeyID: bundle.signedPreKeyID, signedPreKey: bundle.signedPreKey,
                         signedPreKeySignature: bundle.signedPreKeySignature, preKeys: bundle.preKeys)
     }
-    private func cryptoBundle(_ bundle: XMPPOMEMOBundle) -> DeviceBundle {
+    func cryptoBundle(_ bundle: XMPPOMEMOBundle) -> DeviceBundle {
         DeviceBundle(deviceID: bundle.deviceID, identityKey: bundle.identityKey, signedPreKeyID: bundle.signedPreKeyID,
                      signedPreKey: bundle.signedPreKey, signedPreKeySignature: bundle.signedPreKeySignature, preKeys: bundle.preKeys)
     }
-    private func encodeWire(_ envelope: XMPPOMEMOEnvelope) throws -> Data {
+    func encodeWire(_ envelope: XMPPOMEMOEnvelope) throws -> Data {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(envelope)
     }
@@ -794,7 +818,7 @@ public actor OMEMOService {
         guard parts.count == 2, parts.allSatisfy({ !$0.isEmpty }) else { return nil }
         return value
     }
-    private func bare(_ jid: String) -> String { String(jid.split(separator: "/", maxSplits: 1).first ?? "") }
+    func bare(_ jid: String) -> String { String(jid.split(separator: "/", maxSplits: 1).first ?? "") }
 }
 
 private struct RetainedEnvelope: Codable {
@@ -805,9 +829,10 @@ private struct RetainedEnvelope: Codable {
     let sentAt: Date?
 }
 
-private struct PreparedEnvelope: Codable {
+struct PreparedEnvelope: Codable {
     let envelope: XMPPOMEMOEnvelope
     let recipientIdentities: [String]
+    var groupMembers: [String]? = nil
 }
 
 private struct IncomingCiphertextIdentity: Codable {

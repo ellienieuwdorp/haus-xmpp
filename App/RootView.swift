@@ -34,6 +34,11 @@ struct RootView: View {
                                 Button("Enable notifications") { Task { await model.enableNotifications() } }
                                     .disabled(!model.isConnected || !model.encryptionReady)
                                     .accessibilityIdentifier("enableNotifications")
+                                Toggle("Message previews", isOn: Binding(get: { model.notificationPreviewsEnabled },
+                                    set: { enabled in Task { await model.setNotificationPreviews(enabled) } }))
+                                    .accessibilityIdentifier("notificationPreviews")
+                                Text("Show message text after decryption on this iPhone. Your iOS Show Previews setting still controls when it is revealed.")
+                                    .font(.footnote).foregroundStyle(.secondary)
                             }
                         }
                         Section("Development preview") {
@@ -49,6 +54,14 @@ struct RootView: View {
             }
         }
         .onChange(of: model.accountID) { _, _ in chatPath.removeAll() }
+        .onChange(of: model.notificationRoute, initial: true) { _, route in
+            guard let route else { return }
+            model.consumeNotificationRoute(route.id)
+            guard route.accountID == model.accountID else { return }
+            showingConnection = false
+            selectedTab = 0
+            chatPath = [route.chatID]
+        }
         .sheet(isPresented: $showingConnection) { ConnectionView(model: model) }
         .alert("Something needs attention", isPresented: Binding(
             get: { model.error != nil }, set: { if !$0 { model.error = nil } }
@@ -64,6 +77,7 @@ struct ChatListView: View {
     @State private var search = ""
     @State private var recipient = ""
     @State private var showingNewChat = false
+    @State private var newChatDetent: PresentationDetent = .medium
 
     private var searchTerm: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -96,7 +110,10 @@ struct ChatListView: View {
                     ForEach(visibleChats) { chat in
                         Button { path.append(chat.id) } label: {
                             HStack(spacing: 13) {
-                                Text(String(chat.title.prefix(1)).uppercased())
+                                Group {
+                                    if model.isGroup(chat.id) { Image(systemName: "person.2.fill") }
+                                    else { Text(String(chat.title.prefix(1)).uppercased()) }
+                                }
                                     .font(.title3.weight(.semibold))
                                     .foregroundStyle(.indigo)
                                     .frame(width: 48, height: 48)
@@ -145,7 +162,7 @@ struct ChatListView: View {
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Spacer()
-                Button { showingNewChat = true } label: {
+                Button { newChatDetent = .medium; showingNewChat = true } label: {
                     Image(systemName: "pencil")
                         .resizable()
                         .scaledToFit()
@@ -171,10 +188,21 @@ struct ChatListView: View {
                             }
                         }
                     }.disabled(recipient.isEmpty)
+                    Section {
+                        NavigationLink {
+                            GroupJoinView(model: model) { room in
+                                showingNewChat = false
+                                recipient = ""
+                                path.append(room)
+                            }.onAppear { newChatDetent = .large }
+                        } label: { Label("Join a group", systemImage: "person.2") }
+                        .disabled(!model.isConnected || !model.encryptionReady)
+                        .accessibilityIdentifier("newGroup")
+                    }
                 }
                 .navigationTitle("New conversation")
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showingNewChat = false } } }
-            }.presentationDetents([.medium])
+            }.presentationDetents([.medium, .large], selection: $newChatDetent)
         }
     }
 }

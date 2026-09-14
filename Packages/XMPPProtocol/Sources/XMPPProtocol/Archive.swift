@@ -1,10 +1,15 @@
 import Foundation
 
+public enum XMPPArchiveRejection: String, Sendable, Equatable { case unverifiableEncryptedGroup }
+
 public struct XMPPArchiveMessage: Sendable, Equatable {
     public let archiveID: String
     public let timestamp: Date
     public let message: XMPPMessage?
     public let encryptedMessage: XMPPEncryptedMessage?
+    public var encryptedGroupMessage: XMPPEncryptedGroupMessage? = nil
+    public var rejectedContent: XMPPArchiveRejection? = nil
+    public var rejectionArchive: String? = nil
 }
 
 public struct XMPPArchivePage: Sendable, Equatable {
@@ -23,6 +28,9 @@ struct ArchiveQuery {
     var identifiers: Set<String> = []
     var failure: Bool = false
     var handledTokens: [XMPPInboundToken] = []
+    var room: String? = nil
+    var knownRooms: Set<String> = []
+    var archiveOwner: String { room ?? accountBareJID }
 
     static let namespace = "urn:xmpp:mam:2"
     static func containsWrapper(_ node: XMLNode) -> Bool {
@@ -31,7 +39,7 @@ struct ArchiveQuery {
 
     mutating func receive(_ node: XMLNode) throws {
         guard node.name == "message", node.namespace == "jabber:client",
-              node.attributes["from"] == nil || node.attributes["from"] == accountBareJID,
+              (room == nil && node.attributes["from"] == nil) || node.attributes["from"] == archiveOwner,
               node.attributes["to"] == nil || node.attributes["to"] == accountFullJID else { throw XMPPIQError.malformedResponse }
         let result = try OMEMOWire.singleton(node, "result", Self.namespace)
         guard result.attributes["queryid"] == queryID, let id = result.attributes["id"], validArchiveID(id),
@@ -46,6 +54,24 @@ struct ArchiveQuery {
             identifiers.insert(id); return
         }
         var inner = try OMEMOWire.singleton(forwarded, "message", "jabber:client")
+        if inner.attributes["type"] == "groupchat", OMEMOWire.hasEncryptedContent(inner) {
+            do {
+                guard !Self.containsWrapper(inner), !Carbons.containsWrapper(inner), inner.child("forwarded", namespace: Carbons.forwarding) == nil else { throw XMPPGroupError.invalidMessage }
+                let group = try GroupChatWire.archivedMessage(inner, account: accountBareJID, archiveRoom: room, knownRooms: knownRooms, archiveID: id)
+                messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil, encryptedGroupMessage: group))
+            } catch {
+                // The outer archive provenance is valid. Record a deliberate rejection of
+                // unsupported/unverifiable inner content instead of blocking unrelated DMs.
+                messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil, rejectedContent: .unverifiableEncryptedGroup, rejectionArchive: archiveOwner))
+            }
+            identifiers.insert(id); return
+        }
+        guard !Self.containsWrapper(inner), !Carbons.containsWrapper(inner), inner.child("forwarded", namespace: Carbons.forwarding) == nil else { throw XMPPIQError.malformedResponse }
+        if room != nil {
+            // Non-encrypted room events carry no authenticated application content.
+            messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil))
+            identifiers.insert(id); return
+        }
         if inner.attributes["to"] == nil {
             // Prosody stores incoming/self messages without their redundant local recipient.
             // This normalization is permitted only after the own-archive wrapper is authenticated.
@@ -66,7 +92,7 @@ struct ArchiveQuery {
     }
 
     func finish(_ node: XMLNode) throws -> XMPPArchivePage {
-        guard !failure, node.attributes["from"] == nil || node.attributes["from"] == accountBareJID else { throw XMPPIQError.malformedResponse }
+        guard !failure, (room == nil && node.attributes["from"] == nil) || node.attributes["from"] == archiveOwner else { throw XMPPIQError.malformedResponse }
         let fin = try OMEMOWire.singleton(node, "fin", Self.namespace)
         guard fin.attributes["stable"] != "false", fin.attributes["stable"] != "0" else { throw XMPPIQError.malformedResponse }
         let complete: Bool

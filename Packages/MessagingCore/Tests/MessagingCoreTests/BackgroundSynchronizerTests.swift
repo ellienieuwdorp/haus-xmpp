@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import MessageStore
+import Darwin
 @testable import MessagingCore
 
 private actor BackgroundProbe {
@@ -16,6 +17,38 @@ private actor BackgroundProbe {
 }
 
 struct BackgroundSynchronizerTests {
+    @Test func presentationRunsWhileKernelLeaseHeldAndFailureStillReleasesIt() async throws {
+        enum PresentationFailure: Error { case cancelledAuthorization }
+        let directory = FileManager.default.temporaryDirectory.appending(path: "presentation-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appending(path: "messages.sqlite")
+        for shouldFail in [false, true] {
+            let store = try MessageStore(url: url)
+            try await store.acquireTransportOwnership()
+            let present: @Sendable (MessageNotification) throws -> Void = { batch in
+                #expect(batch.messageCount == 0)
+                let descriptor = Darwin.open(url.resolvingSymlinksInPath().path + ".transport-lock", O_RDWR | O_CLOEXEC)
+                #expect(descriptor >= 0)
+                guard descriptor >= 0 else { throw PresentationFailure.cancelledAuthorization }
+                defer { Darwin.close(descriptor) }
+                #expect(flock(descriptor, LOCK_EX | LOCK_NB) == -1)
+                #expect(errno == EWOULDBLOCK)
+                if shouldFail { throw PresentationFailure.cancelledAuthorization }
+            }
+            if shouldFail {
+                await #expect(throws: PresentationFailure.self) {
+                    try await finishBackgroundPresentation(store: store, accountID: "alice", presentation: present)
+                }
+            } else {
+                _ = try await finishBackgroundPresentation(store: store, accountID: "alice", presentation: present)
+            }
+            let nextOwner = try MessageStore(url: url)
+            try await nextOwner.acquireTransportOwnership()
+            try await nextOwner.close()
+        }
+        try FileManager.default.removeItem(at: directory)
+    }
+
     @Test func timeoutStopsTransportAndJoinsLateDurableCommit() async throws {
         let probe = BackgroundProbe()
         await #expect(throws: BackgroundSynchronizationError.deadlineExceeded) {

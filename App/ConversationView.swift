@@ -21,7 +21,7 @@ struct ConversationView: View {
     }
 
     private func authorName(_ sender: String) -> String {
-        sender == model.accountID ? "you" : (model.chats.first(where: { $0.id == chatID })?.title ?? sender)
+        sender == model.accountID ? "you" : (model.isGroup(chatID) ? sender : (model.chats.first(where: { $0.id == chatID })?.title ?? sender))
     }
 
     private func timelineMessage(_ message: ChatMessage) -> TimelineMessage {
@@ -43,7 +43,8 @@ struct ConversationView: View {
                                reply: message.reply.map { TimelineReply(author: authorName($0.senderID), body: $0.body) },
                                securityNotice: !model.isDemo && message.encryptionProfile == nil ? "Not encrypted" : nil,
                                reactions: emoji.map { TimelineReaction(emoji: $0, count: counts[$0]!, isSelected: selected.contains($0)) },
-                               canReact: model.canReact(to: message))
+                               canReact: model.canReact(to: message),
+                               author: model.isGroup(chatID) && !message.isOutgoing ? message.senderID : nil)
     }
 
     var body: some View {
@@ -105,7 +106,7 @@ struct ConversationView: View {
                 Menu {
                     Button("Search messages", systemImage: "magnifyingglass") { composing = false; showingSearch = true }
                     Button("Starred messages", systemImage: "star") { starredOnly = true }
-                    if !model.isDemo { Button("Encryption", systemImage: "lock.shield") { showingEncryption = true } }
+                    if !model.isDemo { Button(model.isGroup(chatID) ? "Group details" : "Encryption", systemImage: model.isGroup(chatID) ? "person.2" : "lock.shield") { showingEncryption = true } }
                 } label: { Image(systemName: "ellipsis") }
                 .accessibilityLabel("Conversation options")
             }
@@ -150,7 +151,7 @@ struct ConversationView: View {
                         .frame(width: 18, height: 18)
                 }
                 .buttonStyle(CircularGlassButtonStyle(diameter: 44))
-                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending)
+                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending || !model.canSend(to: chatID))
                 .accessibilityLabel("Send message").accessibilityIdentifier("sendMessage")
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
@@ -169,7 +170,10 @@ struct ConversationView: View {
         } message: { _ in
             Text("The recipient may already have it. Sending again could create a duplicate.")
         }
-        .sheet(isPresented: $showingEncryption) { EncryptionDetailsView(model: model, chatID: chatID) }
+         .sheet(isPresented: $showingEncryption) {
+            if model.isGroup(chatID) { GroupDetailsView(model: model, room: chatID) }
+            else { EncryptionDetailsView(model: model, chatID: chatID) }
+        }
         .task(id: chatID) { await model.openChat(chatID) }
         .onDisappear { model.closeChat(chatID) }
     }

@@ -33,8 +33,9 @@ public enum BackgroundSynchronizationError: Error, Sendable, Equatable {
 public struct BackgroundSynchronizer: Sendable {
     public init() {}
 
-    public func synchronize(databaseURL: URL, wrappingKey: Data, account: BackgroundAccount,
-                            timeBudget: Duration = .seconds(20)) async throws {
+    @discardableResult public func synchronize(databaseURL: URL, wrappingKey: Data, account: BackgroundAccount,
+                            timeBudget: Duration = .seconds(20),
+                            presentation: (@Sendable (MessageNotification) throws -> Void)? = nil) async throws -> MessageNotification {
         guard timeBudget > .zero, timeBudget <= .seconds(25) else {
             throw BackgroundSynchronizationError.invalidTimeBudget
         }
@@ -65,13 +66,32 @@ public struct BackgroundSynchronizer: Sendable {
             }, consume: {
                 try await consumeBackgroundEvents(client: client, encryption: encryption, account: account.accountID)
             }, stop: { await client.disconnectAndWait() })
-            try await store.close()
+            try Task.checkCancellation()
+            return try await finishBackgroundPresentation(store: store, accountID: account.accountID, presentation: presentation)
         } catch {
             // runBackgroundWork joins crypto, archive and reader work before reaching here.
             // close releases ownership only if this instance acquired it.
             try await store.close()
             throw error
         }
+    }
+}
+
+/// Keep the cross-process lease through the final synchronous authorization check and
+/// content handoff. The caller must still revalidate its current protected credentials;
+/// this cannot make local state and the operating system's presentation atomic.
+func finishBackgroundPresentation(store: MessageStore, accountID: String,
+                                  presentation: (@Sendable (MessageNotification) throws -> Void)?) async throws -> MessageNotification {
+    do {
+        try Task.checkCancellation()
+        let notification = try await store.takeMessageNotification(accountID: accountID)
+        try Task.checkCancellation()
+        try presentation?(notification)
+        try await store.close()
+        return notification
+    } catch {
+        try await store.close()
+        throw error
     }
 }
 
@@ -85,6 +105,11 @@ private func consumeBackgroundEvents(client: XMPPClient, encryption: OMEMOServic
                 // A failed decrypt can still be safely retained for later explicit trust.
                 // Storage failures and unretained content must stop before the next barrier.
                 guard try await encryption.hasDurableIncomingDisposition(account: account, message: message) else { throw error }
+            }
+        case .encryptedGroupMessage(let message):
+            do { _ = try await encryption.receiveGroup(account: account, message: message, transport: client) }
+            catch {
+                guard try await encryption.hasDurableGroupDisposition(account: account, message: message) else { throw error }
             }
         case .streamManagementBarrier(let token):
             try await client.acknowledgeInbound(token)

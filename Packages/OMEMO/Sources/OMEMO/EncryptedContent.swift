@@ -49,7 +49,7 @@ struct EncryptedContent: Equatable {
         return Data("<envelope xmlns='urn:xmpp:sce:1'><content>\(content)</content><rpad>\(Data(random).base64EncodedString())</rpad><from jid='\(escape(sender))'/><to jid='\(escape(recipient))'/></envelope>".utf8)
     }
 
-    static func decode(_ data: Data, sender: String, recipient: String, modern: Bool, sendingTime: Date? = nil) throws -> EncryptedContent {
+    static func decode(_ data: Data, sender: String, recipient: String, modern: Bool, sendingTime: Date? = nil, requireGroupAffixes: Bool = false) throws -> EncryptedContent {
         guard data.count <= 131_072, let text = String(data: data, encoding: .utf8) else { throw OMEMOError.invalidContent }
         if !modern {
             guard !text.isEmpty else { throw OMEMOError.invalidContent }
@@ -61,6 +61,9 @@ struct EncryptedContent: Equatable {
               root.match("rpad", ns).count == 1,
               root.match("content", ns).count == 1,
               root.match("from", ns).count <= 1, root.match("to", ns).count <= 1, root.match("time", ns).count <= 1 else { throw OMEMOError.invalidContent }
+        if requireGroupAffixes {
+            guard root.match("from", ns).count == 1, root.match("to", ns).count == 1 else { throw OMEMOError.invalidContent }
+        }
         // A present affix must match the authenticated direct-message context. Missing from is
         // permitted by XEP-0384; this client always emits it. Group traffic has a separate contract.
         if let from = root.match("from", ns).first {

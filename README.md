@@ -4,7 +4,7 @@ A new native iOS XMPP client, currently an early **local development prototype**
 
 The app builds and runs in the iOS simulator. It has a SwiftUI shell, UIKit conversation timeline, selectable messages, local stars/pins, swipe-to-reply with persisted quotes, native search controls and SQLite persistence. Our own Swift protocol stack connects through validated direct TLS and now exchanges legacy and modern OMEMO encrypted direct messages. Device trust and encryption live in an isolated business package; exact ciphertext and ratchet changes commit together before transport. Focused, pinned crypto dependencies are reused without maintaining a protocol/client fork.
 
-**This is not ready for personal conversations.** Encrypted direct messaging works in the local lab. Archive/stream synchronization, reactions, group workflows, media transfer and production notifications remain in development. The app explicitly limits network sends to the local lab. Sample conversations are local fixtures, clearly separated from lab accounts.
+**This is not ready for personal conversations.** Encrypted direct messaging, archive/stream recovery and modern reactions work in the lab. Private encrypted groups now pass joining, explicit device review, text/reaction exchange and reconnect recovery with an independent test peer. Decrypted notification previews and protected background persistence have passed physical iPhone checks on the isolated staging server. Network sending remains restricted to generated local/staging accounts; media transfer and the complete release validation matrix remain unfinished. Sample conversations use separate local fixtures.
 
 ## Build and run
 
@@ -20,7 +20,7 @@ swift test --package-path Packages/OMEMOCrypto
 swift test --package-path Packages/OMEMO
 ```
 
-Run the `XMPPiOS` test action in Xcode for simulator UI checks. The optional live lab UI test skips unless provided disposable credentials. See [current development status and checks](docs/development/omemo-milestone.md).
+Run the `XMPPiOS` test action in Xcode for simulator UI checks. The optional live lab UI test skips unless provided disposable credentials. See [production-readiness evidence](docs/development/production-readiness.md), [notification previews](docs/development/notification-previews.md), [encrypted groups](docs/development/group-conversations.md) and the [independent interoperability matrix](docs/development/interop-matrix.md).
 
 ## Direction
 

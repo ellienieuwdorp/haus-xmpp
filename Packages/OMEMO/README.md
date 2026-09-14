@@ -1,6 +1,6 @@
 # OMEMO business logic
 
-This package owns encrypted direct messaging policy and orchestration. It is independent of SwiftUI/UIKit, Keychain APIs, sockets and any hosted service. It depends on three focused packages: `OMEMOCrypto` for vetted cryptography, `XMPPProtocol` for typed wire values and the transport adapter, and `MessageStore` for atomic persistence.
+This package owns encrypted messaging policy and orchestration. The restricted modern private-group path is documented in [GROUPS.md](GROUPS.md). It is independent of SwiftUI/UIKit, Keychain APIs, sockets and any hosted service. It depends on three focused packages: `OMEMOCrypto` for vetted cryptography, `XMPPProtocol` for typed wire values and the transport adapter, and `MessageStore` for atomic persistence.
 
 `OMEMOService` coordinates device discovery, explicit fingerprint trust, profile selection, encrypted outbox preparation, incoming authentication, replay suppression and key-exchange acknowledgments. `StateProtection` accepts a device-local wrapping key supplied by the app. A mock `OMEMOTransport` runs the same logic in tests; the real adapter uses our own XMPP implementation.
 

@@ -4,12 +4,19 @@ import UserNotifications
 @MainActor
 final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     static let shared = PushRegistration()
-    private var currentToken: Data?
+    // One primary AppModel consumes this stream. A token received before subscription
+    // remains buffered; newer unsolicited callbacks supersede older buffered values.
+    private let unsolicited = AsyncStream<Data>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    // Ordering guard only. Never return this cached value instead of requesting APNs.
+    private var latestCallbackToken: Data?
     private var waiters: [UUID: CheckedContinuation<Data, any Error>] = [:]
     enum Failure: Error { case unavailable, denied }
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        let category = UNNotificationCategory(identifier: "message", actions: [], intentIdentifiers: [],
+            hiddenPreviewsBodyPlaceholder: "New message", options: [])
+        UNUserNotificationCenter.current().setNotificationCategories([category])
         return true
     }
 
@@ -27,10 +34,20 @@ final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificatio
         }
     }
 
+    static func refreshIfAuthorized() async throws -> Data? {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return nil }
+        return try await request()
+    }
+
+    static func unsolicitedTokens() -> AsyncStream<Data> { shared.unsolicited.stream }
+    static func isLatestToken(_ token: Data) -> Bool { shared.latestCallbackToken == token }
+
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        Self.shared.currentToken = deviceToken
+        Self.shared.latestCallbackToken = deviceToken
         let pending = Self.shared.waiters
         Self.shared.waiters.removeAll()
+        if pending.isEmpty { Self.shared.unsolicited.continuation.yield(deviceToken) }
         for waiter in pending.values { waiter.resume(returning: deviceToken) }
     }
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
@@ -41,5 +58,10 @@ final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificatio
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         // Foreground conversation UI already presents durable messages. No duplicate banner.
         []
+    }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        guard let destination = NotificationNavigation.destination(userInfo: response.notification.request.content.userInfo,
+                                                                   actionIdentifier: response.actionIdentifier) else { return }
+        await NotificationNavigation.shared.receive(destination)
     }
 }

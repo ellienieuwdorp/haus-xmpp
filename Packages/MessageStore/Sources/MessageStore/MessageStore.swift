@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 6 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 8 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -131,7 +131,34 @@ public actor MessageStore {
                 )
                 """)
             try connection.execute("CREATE INDEX IF NOT EXISTS reaction_target ON reaction_events(account_id,chat_id,target_wire_id,actor_id,updated_at,id)")
-            try connection.execute("PRAGMA user_version = 6")
+            try connection.execute("CREATE TABLE IF NOT EXISTS notification_preferences (account_id TEXT PRIMARY KEY, previews INTEGER NOT NULL DEFAULT 1)")
+            try connection.execute("""
+                CREATE TABLE IF NOT EXISTS notification_candidates (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, message_id TEXT NOT NULL,
+                    UNIQUE(account_id,message_id),
+                    FOREIGN KEY(account_id,message_id) REFERENCES messages(account_id,id)
+                )
+                """)
+            try connection.execute("""
+                CREATE TABLE IF NOT EXISTS group_message_references (
+                    account_id TEXT NOT NULL, room TEXT NOT NULL, message_id TEXT NOT NULL, stanza_id TEXT NOT NULL,
+                    PRIMARY KEY(account_id,message_id), FOREIGN KEY(account_id,message_id) REFERENCES messages(account_id,id) ON DELETE CASCADE
+                )
+                """)
+            try connection.execute("CREATE INDEX IF NOT EXISTS group_reference_target ON group_message_references(account_id,room,stanza_id)")
+            try connection.execute("""
+                CREATE TABLE IF NOT EXISTS group_ciphertext_messages (
+                    account_id TEXT NOT NULL, sender TEXT NOT NULL, digest TEXT NOT NULL, message_id TEXT NOT NULL,
+                    PRIMARY KEY(account_id,sender,digest), FOREIGN KEY(account_id,message_id) REFERENCES messages(account_id,id) ON DELETE CASCADE
+                )
+                """)
+            try connection.execute("""
+                CREATE TABLE IF NOT EXISTS archive_rejections (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, archive_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL, reason TEXT NOT NULL, UNIQUE(account_id,archive_id,message_id)
+                )
+                """)
+            try connection.execute("PRAGMA user_version = 8")
         }
     }
 
@@ -461,14 +488,14 @@ public actor MessageStore {
     /// Converts an already durable queued intention into exact ciphertext and commits the ratchet
     /// advancement in the SAME transaction. Never overwrites an existing encrypted attempt.
     public func sealQueuedOutgoing(accountID: String, messageID: String, profile: String,
-                                   expectedRevision: Int, state: Data, wire: Data) throws {
+                                   expectedRevision: Int, state: Data, wire: Data, authenticateWireID: Bool = true) throws {
         guard !profile.isEmpty, !wire.isEmpty, wire.count <= 1_048_576 else { throw MessageStoreError.invalidValue }
         try connection.transaction {
             guard try encryptedOutgoing(accountID: accountID, messageID: messageID) == nil,
                   try connection.query("SELECT state FROM outbox WHERE account_id=? AND message_id=?", [.text(accountID), .text(messageID)]).first?[0].string == "queued" else { throw MessageStoreError.invalidTransition }
             try writeEncryptionState(accountID: accountID, expectedRevision: expectedRevision, data: state)
             try connection.execute("INSERT INTO encrypted_outbox(account_id,message_id,wire) VALUES(?,?,?)", [.text(accountID), .text(messageID), .blob(wire)])
-            try connection.execute("UPDATE messages SET encryption_profile=?,wire_id=?,wire_id_authenticated=? WHERE account_id=? AND id=?", [.text(profile), profile == "modern" ? .text(messageID) : .null, .integer(profile == "modern" ? 1 : 0), .text(accountID), .text(messageID)])
+            try connection.execute("UPDATE messages SET encryption_profile=?,wire_id=?,wire_id_authenticated=? WHERE account_id=? AND id=?", [.text(profile), profile == "modern" && authenticateWireID ? .text(messageID) : .null, .integer(profile == "modern" && authenticateWireID ? 1 : 0), .text(accountID), .text(messageID)])
         }
     }
 
@@ -479,19 +506,29 @@ public actor MessageStore {
     /// Authenticated plaintext, consumed prekeys/ratchet changes and replay outcome are inseparable.
     /// A key-transport-only message commits state and replay outcome without creating an empty bubble.
     public func commitEncryptedIncoming(accountID: String, sender: String, digest: String,
-                                        expectedRevision: Int, state: Data, message: StoredMessage?, control: EncryptionControl? = nil, reaction: AuthenticatedReaction? = nil) throws {
+                                        expectedRevision: Int, state: Data, message: StoredMessage?, control: EncryptionControl? = nil, reaction: AuthenticatedReaction? = nil, groupRoom: String? = nil, roomStanzaID: String? = nil) throws {
         guard !sender.isEmpty, !digest.isEmpty,
               message.map({ $0.accountID == accountID && $0.senderID == sender && $0.encryptionProfile != nil }) ?? true else { throw MessageStoreError.invalidValue }
+        if let groupRoom {
+            guard message.map({ $0.chatID == groupRoom }) ?? reaction.map({ $0.chatID == groupRoom }) ?? false else { throw MessageStoreError.invalidValue }
+        } else if roomStanzaID != nil { throw MessageStoreError.invalidValue }
         try connection.transaction {
             guard try !hasEncryptedIncoming(accountID: accountID, sender: sender, digest: digest) else { throw MessageStoreError.invalidTransition }
             try writeEncryptionState(accountID: accountID, expectedRevision: expectedRevision, data: state)
             if let reaction {
                 guard message == nil, reaction.actorID == sender else { throw MessageStoreError.invalidValue }
-                try insertReactionEvent(accountID: accountID, reaction: reaction)
+                try insertReactionEvent(accountID: accountID, reaction: reaction, groupRoom: groupRoom)
             }
             if let message {
                 try connection.execute("INSERT INTO chats(account_id,id,title) VALUES(?,?,?) ON CONFLICT(account_id,id) DO NOTHING", [.text(accountID), .text(message.chatID), .text(message.chatID)])
-                _ = try insertMessageInTransaction(message)
+                let inserted = try insertMessageInTransaction(message)
+                if let groupRoom {
+                    try connection.execute("INSERT INTO group_ciphertext_messages VALUES(?,?,?,?)", [.text(accountID), .text(sender), .text(digest), .text(message.id)])
+                    if let roomStanzaID { try bindGroupReference(accountID: accountID, room: groupRoom, messageID: message.id, stanzaID: roomStanzaID) }
+                }
+                if inserted, !message.isOutgoing, message.senderID != accountID {
+                    try connection.execute("INSERT INTO notification_candidates(account_id,message_id) VALUES(?,?)", [.text(accountID), .text(message.id)])
+                }
             }
             try connection.execute("INSERT INTO encrypted_inbox(account_id,sender,digest) VALUES(?,?,?)", [.text(accountID), .text(sender), .text(digest)])
             try connection.execute("DELETE FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?", [.text(accountID), .text(sender), .text(digest)])
@@ -512,6 +549,44 @@ public actor MessageStore {
         }
     }
 
+    public func notificationPreviewsEnabled(accountID: String) throws -> Bool {
+        (try connection.query("SELECT previews FROM notification_preferences WHERE account_id=?", [.text(accountID)]).first?[0].integer ?? 1) != 0
+    }
+
+    public func setNotificationPreviews(accountID: String, enabled: Bool) throws {
+        try requireTransportOwnership()
+        guard !accountID.isEmpty else { throw MessageStoreError.invalidValue }
+        try connection.execute("INSERT INTO notification_preferences(account_id,previews) VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET previews=excluded.previews", [.text(accountID), .integer(enabled ? 1 : 0)])
+    }
+
+    /// The foreground owner has already presented these messages. This is notification
+    /// bookkeeping, not a read receipt. It cannot race the extension's transport owner.
+    public func dismissPendingMessageNotifications(accountID: String) throws {
+        try requireTransportOwnership()
+        try connection.execute("DELETE FROM notification_candidates WHERE account_id=?", [.text(accountID)])
+    }
+
+    /// Consume only authenticated incoming messages committed with their ratchet state.
+    /// Replayed ciphertext, key controls, plaintext and outgoing carbons never enter this queue.
+    /// Crash before this transaction leaves candidates for the next wakeup; after it, the OS
+    /// retains the original generic remote alert if delivery of this richer content fails.
+    public func takeMessageNotification(accountID: String) throws -> MessageNotification {
+        try requireTransportOwnership()
+        return try connection.transaction {
+            let values: [Value] = [.text(accountID)]
+            let count = try connection.query("SELECT COUNT(*),COUNT(DISTINCT m.chat_id) FROM notification_candidates n JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id WHERE n.account_id=?", values).first!
+            let newest = try connection.query("SELECT n.message_id FROM notification_candidates n JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id WHERE n.account_id=? ORDER BY m.sent_at DESC,n.sequence DESC LIMIT 1", values).first?[0].string
+            let latest = try newest.flatMap { try message(accountID: accountID, messageID: $0) }
+            let title = try latest.flatMap { message in
+                try connection.query("SELECT title FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(message.chatID)]).first?[0].string
+            }
+            let result = MessageNotification(latest: latest, chatTitle: title, messageCount: count[0].integer,
+                conversationCount: count[1].integer, previewsEnabled: try notificationPreviewsEnabled(accountID: accountID))
+            try dismissPendingMessageNotifications(accountID: accountID)
+            return result
+        }
+    }
+
     public func finishEncryptionControl(accountID: String, id: String) throws {
         try requireTransportOwnership()
         try connection.execute("UPDATE encryption_controls SET state='unconfirmed' WHERE account_id=? AND id=? AND state='submitting'", [.text(accountID), .text(id)])
@@ -526,12 +601,14 @@ public actor MessageStore {
     /// ciphertext envelope. Exact saved bytes fence replacement/cross-account associations here.
     /// An archived copy proves server acceptance even if a manual retry has returned it to queued.
     @discardableResult public func reconcileArchivedOutgoing(accountID: String, messageID: String,
-                                                              expectedEncryptedWire: Data) throws -> Bool {
+                                                              expectedEncryptedWire: Data, groupRoom: String? = nil, roomStanzaID: String? = nil) throws -> Bool {
         try requireTransportOwnership()
         guard !accountID.isEmpty, !messageID.isEmpty, !expectedEncryptedWire.isEmpty,
               expectedEncryptedWire.count <= 1_048_576 else { throw MessageStoreError.invalidValue }
         return try connection.transaction {
             guard try encryptedOutgoing(accountID: accountID, messageID: messageID) == expectedEncryptedWire else { return false }
+            if let groupRoom, let roomStanzaID { try bindGroupReference(accountID: accountID, room: groupRoom, messageID: messageID, stanzaID: roomStanzaID) }
+            else if roomStanzaID != nil { throw MessageStoreError.invalidValue }
             try connection.execute("""
                 UPDATE outbox SET state='serverAccepted',attempt_id=NULL WHERE account_id=? AND message_id=?
                 AND state IN ('queued','submitting','unconfirmed','failed','serverAccepted')
@@ -577,6 +654,21 @@ public actor MessageStore {
         }
     }
 
+    /// Bounded deliberate-rejection receipt for authenticated archive wrappers with
+    /// unsupported inner content. No plaintext, author claim or secret material is stored.
+    public func recordArchiveRejection(accountID: String, archiveID: String, messageID: String, reason: String) throws {
+        try requireTransportOwnership()
+        guard !accountID.isEmpty, accountID.utf8.count <= 3071, !archiveID.isEmpty, archiveID.utf8.count <= 3071, !messageID.isEmpty, messageID.utf8.count <= 1024,
+              reason == "unverifiableEncryptedGroup" else { throw MessageStoreError.invalidValue }
+        try connection.transaction {
+            try connection.execute("INSERT INTO archive_rejections(account_id,archive_id,message_id,reason) VALUES(?,?,?,?) ON CONFLICT(account_id,archive_id,message_id) DO NOTHING", [.text(accountID), .text(archiveID), .text(messageID), .text(reason)])
+            try connection.execute("DELETE FROM archive_rejections WHERE account_id=? AND sequence NOT IN (SELECT sequence FROM archive_rejections WHERE account_id=? ORDER BY sequence DESC LIMIT 1000)", [.text(accountID), .text(accountID)])
+        }
+    }
+    public func hasArchiveRejection(accountID: String, archiveID: String, messageID: String) throws -> Bool {
+        try !connection.query("SELECT 1 FROM archive_rejections WHERE account_id=? AND archive_id=? AND message_id=?", [.text(accountID), .text(archiveID), .text(messageID)]).isEmpty
+    }
+
     public func archiveCheckpoint(accountID: String, archiveID: String) throws -> ArchiveCheckpoint? {
         guard let row = try connection.query("SELECT revision,cursor FROM archive_checkpoints WHERE account_id=? AND archive_id=?", [.text(accountID), .text(archiveID)]).first else { return nil }
         return ArchiveCheckpoint(revision: row[0].integer, cursor: row[1].string)
@@ -600,9 +692,33 @@ public actor MessageStore {
         }
     }
 
+    /// Reference source stays separate: a room assigns stanza IDs after encryption.
+    public func reactionReference(accountID: String, messageID: String) throws -> String? {
+        guard let message = try message(accountID: accountID, messageID: messageID), message.encryptionProfile == "modern" else { return nil }
+        if message.wireIDAuthenticated { return message.wireID }
+        return try connection.query("SELECT stanza_id FROM group_message_references WHERE account_id=? AND message_id=? AND room=?", [.text(accountID), .text(messageID), .text(message.chatID)]).first?[0].string
+    }
+    private func bindGroupReference(accountID: String, room: String, messageID: String, stanzaID: String) throws {
+        guard !stanzaID.isEmpty, stanzaID.utf8.count <= 1024, !stanzaID.contains(where: { $0.isWhitespace }),
+              let message = try message(accountID: accountID, messageID: messageID), message.chatID == room,
+              message.encryptionProfile == "modern", !message.wireIDAuthenticated else { throw MessageStoreError.invalidValue }
+        if let old = try connection.query("SELECT room,stanza_id FROM group_message_references WHERE account_id=? AND message_id=?", [.text(accountID), .text(messageID)]).first {
+            guard old[0].string == room, old[1].string == stanzaID else { throw MessageStoreError.conflictingIdentity }
+            return
+        }
+        try connection.execute("INSERT INTO group_message_references VALUES(?,?,?,?)", [.text(accountID), .text(room), .text(messageID), .text(stanzaID)])
+    }
+    /// The caller supplies an authenticated archive assignment for the exact replayed ciphertext.
+    public func bindArchivedGroupReference(accountID: String, sender: String, digest: String, room: String, stanzaID: String) throws {
+        try connection.transaction {
+            guard let id = try connection.query("SELECT message_id FROM group_ciphertext_messages WHERE account_id=? AND sender=? AND digest=?", [.text(accountID), .text(sender), .text(digest)]).first?[0].string else { return }
+            try bindGroupReference(accountID: accountID, room: room, messageID: id, stanzaID: stanzaID)
+        }
+    }
+
     /// Resolve only a single authenticated modern origin ID within this account and conversation.
     public func reactionTarget(accountID: String, chatID: String, wireID: String) throws -> StoredMessage? {
-        let rows = try connection.query("SELECT \(Self.columns) FROM messages WHERE account_id=? AND chat_id=? AND wire_id=? AND wire_id_authenticated=1 AND encryption_profile='modern' LIMIT 2", [.text(accountID), .text(chatID), .text(wireID)])
+        let rows = try connection.query("SELECT \(Self.columns) FROM messages WHERE account_id=? AND chat_id=? AND encryption_profile='modern' AND ((wire_id=? AND wire_id_authenticated=1) OR id IN (SELECT message_id FROM group_message_references WHERE account_id=? AND room=? AND stanza_id=?)) LIMIT 2", [.text(accountID), .text(chatID), .text(wireID), .text(accountID), .text(chatID), .text(wireID)])
         guard rows.count == 1 else { return nil }
         return try Self.decode(rows[0])
     }
@@ -610,7 +726,7 @@ public actor MessageStore {
     /// Returns each authenticated actor's latest complete set, including an empty withdrawal.
     public func reactions(accountID: String, chatID: String, messageID: String) throws -> [AuthenticatedReaction] {
         guard let message = try message(accountID: accountID, messageID: messageID), message.chatID == chatID,
-              let wireID = message.wireID, message.wireIDAuthenticated,
+              let wireID = try reactionReference(accountID: accountID, messageID: messageID),
               try reactionTarget(accountID: accountID, chatID: chatID, wireID: wireID)?.id == messageID else { return [] }
         let rows = try connection.query("SELECT id,chat_id,actor_id,target_wire_id,reactions_json,updated_at FROM reaction_events WHERE account_id=? AND chat_id=? AND target_wire_id=? ORDER BY updated_at DESC,id DESC", [.text(accountID), .text(chatID), .text(wireID)])
         var seen: Set<String> = [], result: [AuthenticatedReaction] = []
@@ -630,14 +746,19 @@ public actor MessageStore {
         let ids = messageIDs.sorted()
         let placeholders = ids.map { _ in "?" }.joined(separator: ",")
         let rows = try connection.query("""
-            WITH requested AS (
-                SELECT id,wire_id FROM messages
-                WHERE account_id=? AND chat_id=? AND wire_id_authenticated=1
-                AND encryption_profile='modern' AND id IN (\(placeholders))
+            WITH valid_references AS (
+                SELECT account_id,chat_id,id,wire_id FROM messages WHERE account_id=? AND chat_id=? AND wire_id_authenticated=1 AND encryption_profile='modern'
+                UNION ALL
+                SELECT r.account_id,r.room,r.message_id,r.stanza_id FROM group_message_references r JOIN messages m
+                ON m.account_id=r.account_id AND m.id=r.message_id AND m.chat_id=r.room AND m.encryption_profile='modern'
+                WHERE r.account_id=? AND r.room=?
+            ), requested AS (
+                SELECT id,wire_id FROM valid_references
+                WHERE account_id=? AND chat_id=? AND id IN (\(placeholders))
             ), unique_targets AS (
                 SELECT r.id,r.wire_id FROM requested r WHERE (
-                    SELECT COUNT(*) FROM messages m WHERE m.account_id=? AND m.chat_id=?
-                    AND m.wire_id=r.wire_id AND m.wire_id_authenticated=1 AND m.encryption_profile='modern'
+                    SELECT COUNT(*) FROM valid_references m WHERE m.account_id=? AND m.chat_id=?
+                    AND m.wire_id=r.wire_id
                 )=1
             ), latest AS (
                 SELECT t.id AS message_id,e.id,e.chat_id,e.actor_id,e.target_wire_id,e.reactions_json,e.updated_at,
@@ -647,7 +768,7 @@ public actor MessageStore {
             )
             SELECT message_id,id,chat_id,actor_id,target_wire_id,reactions_json,updated_at
             FROM latest WHERE position=1 ORDER BY message_id,actor_id
-            """, [.text(accountID), .text(chatID)] + ids.map(Value.text) +
+            """, [.text(accountID), .text(chatID), .text(accountID), .text(chatID), .text(accountID), .text(chatID)] + ids.map(Value.text) +
                  [.text(accountID), .text(chatID), .text(accountID), .text(chatID)])
         var result: [String: [AuthenticatedReaction]] = [:]
         for row in rows {
@@ -659,11 +780,11 @@ public actor MessageStore {
         return result
     }
 
-    @discardableResult public func enqueueReaction(_ update: StoredReactionUpdate) throws -> Bool {
+    @discardableResult public func enqueueReaction(_ update: StoredReactionUpdate, groupRoom: String? = nil) throws -> Bool {
         guard update.actorID == update.accountID else { throw MessageStoreError.invalidValue }
         return try connection.transaction {
             let event = AuthenticatedReaction(id: update.id, chatID: update.chatID, actorID: update.actorID, targetWireID: update.targetWireID, reactions: update.reactions, updatedAt: update.createdAt)
-            try Self.validateReaction(accountID: update.accountID, reaction: event)
+            try Self.validateReaction(accountID: update.accountID, reaction: event, groupRoom: groupRoom)
             guard let target = try reactionTarget(accountID: update.accountID, chatID: update.chatID, wireID: update.targetWireID),
                   target.id == update.targetMessageID else { throw MessageStoreError.invalidValue }
             if let existing = try reactionUpdate(accountID: update.accountID, updateID: update.id) {
@@ -675,7 +796,7 @@ public actor MessageStore {
             guard try message(accountID: update.accountID, messageID: update.id) == nil,
                   try connection.query("SELECT 1 FROM encryption_controls WHERE account_id=? AND id=?", [.text(update.accountID), .text(update.id)]).isEmpty else { throw MessageStoreError.conflictingIdentity }
             try connection.execute("INSERT INTO reaction_updates(account_id,id,chat_id,target_message_id,target_wire_id,actor_id,reactions_json,created_at,state) VALUES(?,?,?,?,?,?,?,?,'queued')", [.text(update.accountID), .text(update.id), .text(update.chatID), .text(update.targetMessageID), .text(update.targetWireID), .text(update.actorID), .text(try Self.reactionJSON(update.reactions)), .real(update.createdAt.timeIntervalSince1970)])
-            try insertReactionEvent(accountID: update.accountID, reaction: event)
+            try insertReactionEvent(accountID: update.accountID, reaction: event, groupRoom: groupRoom)
             return true
         }
     }
@@ -745,16 +866,16 @@ public actor MessageStore {
         return try connection.query("SELECT changes()").first?[0].integer == 1
     }
 
-    private func insertReactionEvent(accountID: String, reaction: AuthenticatedReaction) throws {
-        try Self.validateReaction(accountID: accountID, reaction: reaction)
+    private func insertReactionEvent(accountID: String, reaction: AuthenticatedReaction, groupRoom: String? = nil) throws {
+        try Self.validateReaction(accountID: accountID, reaction: reaction, groupRoom: groupRoom)
         // Missing targets remain retained. Ambiguous/missing authenticated IDs never get a projection.
         // A replayed authenticated event ID cannot replace the first accepted content under that ID.
         try connection.execute("INSERT INTO reaction_events(account_id,actor_id,id,chat_id,target_wire_id,reactions_json,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(account_id,actor_id,id) DO NOTHING", [.text(accountID), .text(reaction.actorID), .text(reaction.id), .text(reaction.chatID), .text(reaction.targetWireID), .text(try Self.reactionJSON(reaction.reactions)), .real(reaction.updatedAt.timeIntervalSince1970)])
     }
 
-    private static func validateReaction(accountID: String, reaction: AuthenticatedReaction) throws {
+    private static func validateReaction(accountID: String, reaction: AuthenticatedReaction, groupRoom: String? = nil) throws {
         guard !accountID.isEmpty, !reaction.chatID.isEmpty, reaction.chatID.utf8.count <= 3071,
-              reaction.actorID == accountID || reaction.actorID == reaction.chatID,
+              (groupRoom == nil ? (reaction.actorID == accountID || reaction.actorID == reaction.chatID) : (groupRoom == reaction.chatID && !reaction.actorID.isEmpty && reaction.actorID.utf8.count <= 3071)),
               !reaction.id.isEmpty, reaction.id.utf8.count <= 1024, !reaction.targetWireID.isEmpty, reaction.targetWireID.utf8.count <= 1024,
               reaction.reactions.count <= 12, Set(reaction.reactions).count == reaction.reactions.count,
               reaction.reactions.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 }),
