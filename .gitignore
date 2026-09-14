@@ -1,0 +1,48 @@
+# macOS
+.DS_Store
+.AppleDouble
+
+# Xcode generated output and user state
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+*.hmap
+*.ipa
+*.dSYM/
+*.dSYM.zip
+*.xcarchive/
+
+# Swift Package Manager build state (retain Package.resolved)
+.build/
+.swiftpm/xcode/xcuserdata/
+
+# Tool caches / disposable research files
+work/
+.cache/
+.fastlane/report.xml
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+
+# Credentials and signing material
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.mobileprovision
+*.provisionprofile
+Secrets.xcconfig
+
+# Local databases, logs, and diagnostics
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-shm
+*.db-wal
+*.log
