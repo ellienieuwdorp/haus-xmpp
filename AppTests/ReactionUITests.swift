@@ -74,9 +74,9 @@ final class ReactionUITests: XCTestCase {
         capture(app, "Persistent reaction at accessibility text size")
     }
 
+    /// Long-pressing a bubble opens the actions overlay with the quick-reaction row above it.
     @MainActor private func openReactions(_ app: XCUIApplication, message: XCUIElement) {
         message.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1)
-        app.openReactionRow()
     }
     @MainActor private func capture(_ app: XCUIApplication, _ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)

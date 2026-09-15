@@ -47,7 +47,19 @@ struct ConversationView: View {
                                securityNotice: !model.isDemo && message.encryptionProfile == nil ? "Not encrypted" : nil,
                                reactions: emoji.map { TimelineReaction(emoji: $0, count: counts[$0]!, isSelected: selected.contains($0)) },
                                canReact: model.canReact(to: message),
+                               reactionUnavailableReason: reactionUnavailableReason(message),
                                author: isGroup && !message.isOutgoing ? message.senderID : nil)
+    }
+
+    /// One line under the disabled reaction row; mirrors the checks in `AppModel.canReact`.
+    private func reactionUnavailableReason(_ message: ChatMessage) -> String? {
+        guard !model.canReact(to: message) else { return nil }
+        if model.isDemo { return "Sample messages can't be reacted to" }
+        guard message.encryptionProfile == "modern" || message.encryptionProfile == "legacy" else { return "This message isn't encrypted" }
+        if isGroup { return model.canSend(to: chatID) ? "This message has no group identity yet" : "Join the group to react" }
+        guard let overview = model.encryptionOverview else { return "Checking \(title)'s encryption version…" }
+        if overview.profile == .modern, !message.wireIDAuthenticated { return "This message has no authenticated identity" }
+        return message.wireID == nil ? "This message has no identity to react to" : "Reactions aren't available for this message"
     }
 
     private var placeholder: String {
