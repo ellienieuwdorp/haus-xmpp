@@ -65,7 +65,7 @@ struct EncryptionDetailsView: View {
             return "\(missing) advertised \(missing == 1 ? "device has" : "devices have") no published keys. Ask them to open their chat app so it republishes them."
         }
         if owner == model.accountID { return "No other devices found" }
-        return "No devices advertised. Some servers only show a contact’s devices after they add you as a contact."
+        return "No encryption devices are published for this address in this version. Try the other encryption version below, or ask them to open their app so it publishes keys. Nothing is ever sent unencrypted."
     }
 
     @ViewBuilder private func devices(_ devices: [EncryptionDevice], owner: String) -> some View {

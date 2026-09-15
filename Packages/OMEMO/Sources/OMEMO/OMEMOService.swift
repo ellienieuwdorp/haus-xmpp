@@ -79,19 +79,22 @@ public actor OMEMOService {
         let (revision, old) = try await load(account)
         var state = old
         let profile: XMPPOMEMOProfile
+        var probedEmpty = false
         if let selected = requested ?? state.profiles[peer] { profile = selected }
         else {
             let legacy = try await transport.fetchOMEMODevices(for: peer, profile: .legacy)
             // Select a deployed profile once, never silently downgrade an existing conversation.
             profile = legacy.isEmpty ? .modern : .legacy
+            probedEmpty = legacy.isEmpty
         }
-        if updateSelection { state.profiles[peer] = profile }
+        var peerAdvertises = false
         let local = try engine(state, profile)
         var incompatible = false
         var unavailable: [String: Int] = [:]
         for owner in Array(Set([account, peer])).sorted() {
             let ids = try validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: profile))
             guard ids.count <= 200 else { throw OMEMOError.invalidContent }
+            if owner == peer, !ids.isEmpty { peerAdvertises = true }
             let otherProfile: XMPPOMEMOProfile = profile == .legacy ? .modern : .legacy
             let otherIDs = try validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: otherProfile))
             // Device IDs are not proof of physical identity across profiles. Conservatively block
@@ -131,6 +134,8 @@ public actor OMEMOService {
                 }
             }
         }
+        // An empty probe (offline server, missing node) must not pin a version the peer never published.
+        if updateSelection, !(probedEmpty && !peerAdvertises) { state.profiles[peer] = profile }
         if updateSelection { state.incompatiblePeers[peer] = incompatible }
         try await save(state, revision: revision, account: account)
         var result = try overview(state, account: account, peer: peer, profileOverride: profile, incompatibleOverride: incompatible)

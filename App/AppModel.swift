@@ -993,7 +993,13 @@ final class AppModel {
             let detail: String
             if case .stanza(let condition)? = error as? XMPPIQError { detail = condition } else { detail = String(describing: error).prefix(80).description }
             Logger(subsystem: "dev.xmpplab.ios", category: "encryption").error("Device refresh for \(chatID, privacy: .private) failed: \(detail, privacy: .public)")
-            encryptionStatus = (error as? OMEMOError)?.errorDescription ?? "Could not fetch encryption devices · \(detail)"
+            let friendly: String
+            switch detail {
+            case "remote-server-not-found", "remote-server-timeout": friendly = "Their server could not be reached. Try again in a moment."
+            case "forbidden", "not-authorized", "not-allowed": friendly = "Their server refused to share their devices."
+            default: friendly = "Could not fetch encryption devices · \(detail)"
+            }
+            encryptionStatus = (error as? OMEMOError)?.errorDescription ?? friendly
         }
     }
 

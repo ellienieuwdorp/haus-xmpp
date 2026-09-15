@@ -235,6 +235,25 @@ final class ServiceTests: XCTestCase {
         expectEqual(updated.unavailableDevices[f.bob], 1)
     }
 
+    func testEmptyProbeDoesNotPinAVersionThePeerNeverPublished() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.aStore.acquireTransportOwnership()
+        try await f.bStore.acquireTransportOwnership()
+        try await f.a.initialize(account: f.alice, transport: f.aTransport)
+        try await f.b.initialize(account: f.bob, transport: f.bTransport)
+        let legacy = await f.server.devices(f.bob, .legacy)
+        let modern = await f.server.devices(f.bob, .modern)
+        await f.server.publish(f.bob, [], .legacy)
+        await f.server.publish(f.bob, [], .modern)
+        let unreachable = try await f.a.refreshDevices(account: f.alice, peer: f.bob, transport: f.aTransport)
+        expectTrue(unreachable.devices.filter { $0.jid == f.bob }.isEmpty)
+        await f.server.publish(f.bob, legacy, .legacy)
+        await f.server.publish(f.bob, modern, .modern)
+        let recovered = try await f.a.refreshDevices(account: f.alice, peer: f.bob, transport: f.aTransport)
+        expectEqual(recovered.profile, .legacy)
+        expectFalse(recovered.devices.filter { $0.jid == f.bob && $0.active }.isEmpty)
+    }
+
     func testOwnSecondDeviceReceivesSameCiphertextAsPeer() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
