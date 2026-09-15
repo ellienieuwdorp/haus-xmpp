@@ -1,14 +1,30 @@
 import Foundation
 
-struct XMLNode: Sendable, Equatable {
-    let name: String
-    let namespace: String
-    let attributes: [String: String]
-    var text = ""
-    var children: [XMLNode] = []
+public struct XMLNode: Sendable, Equatable {
+    public let name: String
+    public let namespace: String
+    public let attributes: [String: String]
+    public var text = ""
+    public var children: [XMLNode] = []
 
-    func child(_ name: String, namespace: String) -> XMLNode? {
+    public init(name: String, namespace: String, attributes: [String: String], text: String = "", children: [XMLNode] = []) {
+        self.name = name; self.namespace = namespace; self.attributes = attributes; self.text = text; self.children = children
+    }
+
+    public func child(_ name: String, namespace: String) -> XMLNode? {
         children.first { $0.name == name && $0.namespace == namespace }
+    }
+    public func children(_ name: String, namespace: String) -> [XMLNode] {
+        children.filter { $0.name == name && $0.namespace == namespace }
+    }
+    /// Nesting depth of the deepest descendant; a leaf is 1.
+    public var depth: Int { 1 + (children.map(\.depth).max() ?? 0) }
+
+    /// One complete element outside any stream: a decrypted SCE payload. No declarations,
+    /// comments, CDATA, entities or external resources, and the element limit is shallow.
+    public static func parse(standalone data: Data, maxDepth: Int = MessageContent.maximumDepth) throws -> XMLNode {
+        guard let text = String(data: data, encoding: .utf8), !text.contains("<!"), !text.contains("<?") else { throw XMLStreamError.forbiddenDeclaration }
+        return try NodeParser.parse(text, maxDepth: maxDepth, singleRoot: true)
     }
 }
 
@@ -135,9 +151,12 @@ private final class NodeParser: NSObject, XMLParserDelegate {
     private var root: XMLNode?
     private var invalid = false
     private var prefixes: [String: [String]] = ["xml": ["http://www.w3.org/XML/1998/namespace"]]
+    private let maxDepth: Int
+    private let singleRoot: Bool
+    private init(maxDepth: Int, singleRoot: Bool) { self.maxDepth = maxDepth; self.singleRoot = singleRoot }
 
-    static func parse(_ xml: String) throws -> XMLNode {
-        let delegate = NodeParser()
+    static func parse(_ xml: String, maxDepth: Int = 66, singleRoot: Bool = false) throws -> XMLNode {
+        let delegate = NodeParser(maxDepth: maxDepth, singleRoot: singleRoot)
         let parser = XMLParser(data: Data(xml.utf8))
         parser.shouldProcessNamespaces = true
         parser.shouldReportNamespacePrefixes = true
@@ -153,7 +172,7 @@ private final class NodeParser: NSObject, XMLParserDelegate {
             let prefix = String(key.prefix { $0 != ":" })
             guard prefix == "xmlns" || prefixes[prefix]?.last?.isEmpty == false else { invalid = true; parser.abortParsing(); return }
         }
-        guard stack.count < 66, attributes.count <= 128 else { invalid = true; parser.abortParsing(); return }
+        guard stack.count < maxDepth, attributes.count <= 128 else { invalid = true; parser.abortParsing(); return }
         stack.append(XMLNode(name: name, namespace: namespaceURI ?? "", attributes: attributes))
     }
     func parser(_ parser: XMLParser, didStartMappingPrefix prefix: String, toURI namespaceURI: String) { prefixes[prefix, default: []].append(namespaceURI) }
@@ -167,7 +186,10 @@ private final class NodeParser: NSObject, XMLParserDelegate {
     }
     func parser(_ parser: XMLParser, didEndElement: String, namespaceURI: String?, qualifiedName: String?) {
         guard let node = stack.popLast() else { invalid = true; return }
-        if stack.isEmpty { root = node } else { stack[stack.count - 1].children.append(node) }
+        if stack.isEmpty {
+            if singleRoot, root != nil { invalid = true }
+            root = node
+        } else { stack[stack.count - 1].children.append(node) }
     }
     func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) { invalid = true }
     func parser(_ parser: XMLParser, validationErrorOccurred validationError: Error) { invalid = true }
