@@ -839,7 +839,9 @@ final class AppModel {
     func canReact(to message: StoredMessage) -> Bool {
         guard message.accountID == accountID, message.chatID == openChatID, message.encryptionProfile == "modern" else { return false }
         if isGroup(message.chatID) { return canSend(to: message.chatID) && reactableGroupMessages.contains(message.id) }
-        return message.wireIDAuthenticated && message.wireID != nil && encryptionOverview?.profile == .modern
+        if encryptionOverview?.profile == .modern { return message.wireIDAuthenticated && message.wireID != nil }
+        // Legacy peers (Conversations) only speak unencrypted XEP-0444, so those go out live.
+        return encryptionOverview?.profile == .legacy && message.wireID != nil && isConnected
     }
 
     func toggleReaction(_ emoji: String, messageID: String) async {
@@ -849,9 +851,17 @@ final class AppModel {
         guard let encryption, let message = messages.first(where: { $0.id == messageID }), canReact(to: message) else { return }
         let account = accountID, token = generation
         let mine = messageReactions[messageID]?.first(where: { $0.actorID == account })?.reactions ?? []
+        let next = mine.contains(emoji) ? [] : [emoji]
         do {
-            _ = try await encryption.queueReactions(account: account, chatID: message.chatID, messageID: messageID,
-                                                     reactions: mine.contains(emoji) ? [] : [emoji])
+            if encryptionOverview?.profile == .legacy, !isGroup(message.chatID) {
+                // ponytail: sent directly, not through the durable reaction outbox; move it there if offline reactions matter.
+                guard let client, let store, let wireID = message.wireID else { return }
+                let id = try await client.sendReaction(to: message.chatID, targetID: wireID, reactions: next)
+                try await store.recordReaction(accountID: account, reaction: AuthenticatedReaction(
+                    id: id, chatID: message.chatID, actorID: account, targetWireID: wireID, reactions: next, updatedAt: Date()))
+            } else {
+                _ = try await encryption.queueReactions(account: account, chatID: message.chatID, messageID: messageID, reactions: next)
+            }
             guard generation == token else { return }
             await refresh()
             startOutbox()

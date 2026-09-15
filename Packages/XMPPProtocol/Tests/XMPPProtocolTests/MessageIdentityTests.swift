@@ -77,3 +77,22 @@ private func stanza(_ xml: String) throws -> XMPPProtocol.XMLNode {
         #expect(try XMPPClient.parsedReaction(stanza(bad)) == nil)
     }
 }
+
+@Test func reactionRenderingRoundTripsThroughTheParserAndRejectsInvalidInput() throws {
+    // The server stamps `from` on delivery; the parser requires it.
+    func received(_ xml: String) throws -> (XMPPProtocol.XMLNode, XMPPReaction?) {
+        let sent = try stanza(xml)
+        let node = XMPPProtocol.XMLNode(name: sent.name, namespace: sent.namespace, attributes: sent.attributes.merging(["from": "me@example.test/ios"]) { $1 }, text: sent.text, children: sent.children)
+        return (node, XMPPClient.parsedReaction(node))
+    }
+    let (node, reaction) = try received(try XMPPClient.reactionXML(to: "a&b@example.test", targetID: "t<1>", reactions: ["👍", "❤️"], id: "r'1"))
+    let parsed = try #require(reaction)
+    #expect(parsed.id == "r'1" && parsed.targetID == "t<1>" && parsed.reactions == ["❤️", "👍"] && node.attributes["to"] == "a&b@example.test")
+    #expect(node.child("store", namespace: "urn:xmpp:hints") != nil && node.child("body", namespace: "jabber:client") == nil)
+    #expect(try received(try XMPPClient.reactionXML(to: "a@example.test", targetID: "t", reactions: [], id: "r2")).1?.reactions == [])
+    let invalid: [(String, String, [String], String)] = [("a b@example.test", "t", ["👍"], "r"), ("a@example.test", "", ["👍"], "r"), ("a@example.test", "t", [""], "r"),
+                                                       ("a@example.test", "t", ["bad\u{0001}"], "r"), ("a@example.test", "t", Array(repeating: "👍", count: 13), "r"), ("a@example.test", "t", ["👍"], "with space")]
+    for (to, target, reactions, id) in invalid {
+        #expect(throws: XMPPClientError.invalidConfiguration) { try XMPPClient.reactionXML(to: to, targetID: target, reactions: reactions, id: id) }
+    }
+}

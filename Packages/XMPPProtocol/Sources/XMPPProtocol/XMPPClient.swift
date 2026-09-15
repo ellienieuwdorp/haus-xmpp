@@ -191,6 +191,22 @@ public actor XMPPClient {
         return id
     }
 
+    /// Unencrypted XEP-0444, the only form legacy-OMEMO peers such as Conversations send or accept.
+    @discardableResult public func sendReaction(to: String, targetID: String, reactions: [String], id: String = UUID().uuidString) async throws -> String {
+        guard phase == .online else { throw XMPPClientError.notConnected }
+        try await write(Self.reactionXML(to: to, targetID: targetID, reactions: reactions, id: id))
+        return id
+    }
+
+    static func reactionXML(to: String, targetID: String, reactions: [String], id: String) throws -> String {
+        guard !to.isEmpty, to.utf8.count <= 3_071, !to.contains(where: { $0.isWhitespace }), validXMLText(to),
+              validMessageID(id), validMessageID(targetID), reactions.count <= 12,
+              reactions.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 && validXMLText($0) }) else { throw XMPPClientError.invalidConfiguration }
+        let elements = reactions.map { "<reaction>\(xmlEscaped($0))</reaction>" }.joined()
+        // Same shape Conversations emits: the complete set, a store hint, no body.
+        return "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'><reactions xmlns='urn:xmpp:reactions:0' id='\(xmlEscaped(targetID))'>\(elements)</reactions><store xmlns='urn:xmpp:hints'/></message>"
+    }
+
     /// Pure preflight for durable enqueueing; does not require a connected session.
     public static func validateMessage(to: String, body: String, id: String, reply: XMPPReply? = nil) throws {
         guard !to.isEmpty, to.utf8.count <= 3_071, !to.contains(where: { $0.isWhitespace }),
