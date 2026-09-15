@@ -1,4 +1,5 @@
 import Foundation
+import os
 import UIKit
 import UserNotifications
 import Observation
@@ -15,6 +16,8 @@ struct ChatSummary: Identifiable {
     var lastMessageAt: Date? = nil
     var lastMessageIsOutgoing = false
     var lastMessageState: OutgoingTransportState? = nil
+    /// Title for display: the stored title, or the address local part when the title is just the address.
+    var displayTitle: String { AppModel.displayName(for: id, title: title) }
 }
 
 typealias ChatMessage = StoredMessage
@@ -141,12 +144,27 @@ final class AppModel {
         } catch { if generation == token { self.error = "Could not load sample conversations." } }
     }
 
-    func connect(username: String, password: String, savedEndpoint: NotificationAccount? = nil) async -> Bool {
-        guard foreground, !quiescing, !isConnecting, username.range(of: #"^[a-z0-9][a-z0-9._-]{0,63}$"#, options: .regularExpression) != nil else {
-            error = "Use a simple local lab username, without @localhost."
+    /// Domains served by the development lab; they keep the disposable-account safeguards.
+    static let labDomains: Set<String> = ["localhost", "staging.example.net"]
+    var accountDomain: String { accountID.split(separator: "@", maxSplits: 1).last.map(String.init) ?? DevelopmentEndpoint.domain }
+    var isLabAccount: Bool { Self.labDomains.contains(accountDomain) }
+
+    /// `address` is a lab username or a full `name@domain`; `host` optionally overrides the server (direct TLS on 5223).
+    func connect(username address: String, password: String, host serverHost: String? = nil, savedEndpoint: NotificationAccount? = nil) async -> Bool {
+        let parts = address.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "@", maxSplits: 1).map(String.init)
+        let username = parts.first ?? ""
+        let requestedDomain = savedEndpoint?.domain ?? (parts.count == 2 ? parts[1].lowercased() : DevelopmentEndpoint.domain)
+        let localPattern = parts.count == 2 ? #"^[^@/\s]{1,64}$"# : #"^[a-z0-9][a-z0-9._-]{0,63}$"#
+        let domainPattern = #"^(localhost|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+)$"#
+        guard foreground, !quiescing, !isConnecting, username.range(of: localPattern, options: .regularExpression) != nil,
+              requestedDomain.range(of: domainPattern, options: .regularExpression) != nil else {
+            error = "Enter an address such as name@example.org."
             return false
         }
-        let requestedDomain = savedEndpoint?.domain ?? DevelopmentEndpoint.domain
+        let host: String
+        if let savedEndpoint { host = savedEndpoint.host }
+        else if Self.labDomains.contains(requestedDomain) { host = requestedDomain == "localhost" ? DevelopmentEndpoint.host : requestedDomain }
+        else { host = (serverHost ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased().isEmpty ? requestedDomain : serverHost!.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
         if let sessionAccount, sessionAccount.accountID != username + "@" + requestedDomain {
             await disconnect()
             guard foreground, !quiescing else { return false }
@@ -159,8 +177,8 @@ final class AppModel {
         let connection = XMPPClient(labCertificateAuthority: DevelopmentEndpoint.certificateAuthority)
         client = connection
         // Assign account before consuming events; scoped refresh rejects stale results.
-        let endpoint = savedEndpoint ?? Self.retainingPushSubscription(previous: sessionAccount, replacement: NotificationAccount(accountID: username + "@" + DevelopmentEndpoint.domain,
-            host: DevelopmentEndpoint.host, port: 5223, domain: DevelopmentEndpoint.domain,
+        let endpoint = savedEndpoint ?? Self.retainingPushSubscription(previous: sessionAccount, replacement: NotificationAccount(accountID: username + "@" + requestedDomain,
+            host: host, port: 5223, domain: requestedDomain,
             username: username, password: password, push: nil))
         let account = endpoint.accountID
         sessionAccount = endpoint
@@ -208,6 +226,13 @@ final class AppModel {
             self.error = "Could not connect. Check the server and account password."
             return false
         }
+    }
+
+    /// Disconnect and forget the selected account so the app returns to its signed-out state.
+    func signOut() async {
+        await disconnect()
+        selectAccount("")
+        preferences.removeObject(forKey: "lastAccount")
     }
 
     func disconnect() async {
@@ -619,9 +644,10 @@ final class AppModel {
               let client, let encryption, let store else { error = "Connect before joining a group."; return false }
         let room = room.trimmingCharacters(in: .whitespacesAndNewlines)
         let nickname = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
-        let domain = sessionAccount?.domain ?? DevelopmentEndpoint.domain
-        guard room.hasSuffix("@rooms." + domain), !room.contains("/"), !room.contains(where: { $0.isWhitespace }),
-              !nickname.isEmpty else { error = "Enter a group address at rooms.\(domain) and a nickname."; return false }
+        let domain = accountDomain
+        let roomAllowed = isLabAccount ? room.hasSuffix("@rooms." + domain) : (room.contains("@") && !room.hasPrefix("@") && !room.hasSuffix("@"))
+        guard roomAllowed, !room.contains("/"), !room.contains(where: { $0.isWhitespace }),
+              !nickname.isEmpty else { error = isLabAccount ? "Enter a group address at rooms.\(domain) and a nickname." : "Enter a group address such as room@conference.example.org and a nickname."; return false }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         let account = accountID, token = generation
@@ -733,8 +759,8 @@ final class AppModel {
             error = "Enter a contact address such as bob@localhost."
             return false
         }
-        guard isDemo || recipient.hasSuffix("@" + (sessionAccount?.domain ?? DevelopmentEndpoint.domain)) else {
-            error = "This development build only sends to local lab accounts."
+        guard isDemo || !isLabAccount || recipient.hasSuffix("@" + accountDomain) else {
+            error = "Lab accounts only message other accounts on the same lab server."
             return false
         }
         do {
@@ -752,7 +778,7 @@ final class AppModel {
         defer { isSending = false }
         let account = accountID
         let sample = isDemo
-        guard sample || isGroup(chatID) || chatID.hasSuffix("@" + (sessionAccount?.domain ?? DevelopmentEndpoint.domain)) else { return false }
+        guard sample || isGroup(chatID) || !isLabAccount || chatID.hasSuffix("@" + accountDomain) else { return false }
         if isGroup(chatID), !canSend(to: chatID) { error = "Wait until this account has joined the group before sending."; return false }
         if let source, source.accountID != account || source.chatID != chatID { return false }
         let reply = source.map { MessageReply(messageID: $0.id, senderID: $0.senderID, body: $0.body, wireID: !isGroup(chatID) && $0.isOutgoing && $0.transportState != nil ? $0.id : nil) }
@@ -963,7 +989,10 @@ final class AppModel {
             } else { encryptionStatus = "New messages are end-to-end encrypted" }
         } catch {
             guard accountID == account, generation == token, openChatID == chatID else { return }
-            encryptionStatus = (error as? OMEMOError)?.errorDescription ?? "Could not fetch encryption devices"
+            let detail: String
+            if case .stanza(let condition)? = error as? XMPPIQError { detail = condition } else { detail = String(describing: error).prefix(80).description }
+            Logger(subsystem: "dev.xmpplab.ios", category: "encryption").error("Device refresh for \(chatID, privacy: .private) failed: \(detail, privacy: .public)")
+            encryptionStatus = (error as? OMEMOError)?.errorDescription ?? "Could not fetch encryption devices · \(detail)"
         }
     }
 

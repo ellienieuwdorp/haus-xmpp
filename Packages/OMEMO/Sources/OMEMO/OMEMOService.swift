@@ -100,7 +100,13 @@ public actor OMEMOService {
                 state.devices[index].active = false
             }
             for id in ids where !(owner == account && id == local.deviceID) {
-                let bundle = try await transport.fetchOMEMOBundle(for: owner, deviceID: id, profile: profile)
+                let bundle: XMPPOMEMOBundle
+                do { bundle = try await transport.fetchOMEMOBundle(for: owner, deviceID: id, profile: profile) }
+                catch XMPPIQError.stanza(condition: "item-not-found") {
+                    // Device lists in the wild carry stale IDs whose bundles are gone. Such a device
+                    // cannot receive anything, so it stays inactive instead of failing the whole refresh.
+                    continue
+                }
                 try validateBundle(bundle, id: id, profile: profile)
                 if let index = state.devices.firstIndex(where: { $0.jid == owner && $0.profile == profile && $0.deviceID == id && $0.identityKey == bundle.identityKey }) {
                     let lastIdentity = state.devices.last { $0.jid == owner && $0.profile == profile && $0.deviceID == id }?.identityKey

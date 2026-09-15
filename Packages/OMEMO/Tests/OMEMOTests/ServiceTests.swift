@@ -18,7 +18,7 @@ actor PublicationServer {
     var bundles: [String: XMPPOMEMOBundle] = [:]
     func devices(_ jid: String, _ profile: XMPPOMEMOProfile) -> [UInt32] { lists[jid + profile.rawValue] ?? [] }
     func bundle(_ jid: String, _ id: UInt32, _ profile: XMPPOMEMOProfile) throws -> XMPPOMEMOBundle {
-        guard let value = bundles[jid + profile.rawValue + String(id)] else { throw OMEMOError.noDevices }
+        guard let value = bundles[jid + profile.rawValue + String(id)] else { throw XMPPIQError.stanza(condition: "item-not-found") }
         return value
     }
     func publish(_ jid: String, _ ids: [UInt32], _ profile: XMPPOMEMOProfile) { lists[jid + profile.rawValue] = ids }
@@ -221,6 +221,17 @@ final class ServiceTests: XCTestCase {
         do { try await f.a.setTrust(account: f.alice, deviceID: device.id, trust: .verified); XCTFail("Stale trust sheet accepted replacement") }
         catch { expectEqual(error as? OMEMOError, .identityChanged) }
         do { try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport); XCTFail("Sealed send may not ignore changed recipient") } catch {}
+    }
+
+    func testListedDeviceWithoutBundleIsSkippedNotFatal() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let before = try await f.a.overview(account: f.alice, peer: f.bob)
+        let active = before.devices.filter { $0.jid == f.bob && $0.active }.map(\.deviceID)
+        await f.server.publish(f.bob, active + [4_242], .modern)
+        let updated = try await f.a.refreshDevices(account: f.alice, peer: f.bob, transport: f.aTransport)
+        expectEqual(Set(updated.devices.filter { $0.jid == f.bob && $0.active }.map(\.deviceID)), Set(active))
+        expectFalse(updated.devices.contains { $0.deviceID == 4_242 })
     }
 
     func testOwnSecondDeviceReceivesSameCiphertextAsPeer() async throws {

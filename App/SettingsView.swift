@@ -22,7 +22,8 @@ struct SettingsView: View {
                 Button { showingConnection = true } label: { profileCard }
                     .buttonStyle(.plain)
                     .accessibilityHint("Opens sign in")
-                Button("Connect to local lab") { showingConnection = true }
+                Button(model.accountID.isEmpty ? "Sign in" : "Switch account") { showingConnection = true }
+                    .accessibilityIdentifier("Connect to local lab")
                 if model.isConnected {
                     Button("Disconnect") { Task { await model.disconnect() } }
                 }
@@ -72,9 +73,9 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .confirmationDialog("Sign out?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
-            Button("Sign Out", role: .destructive) { Task { await model.disconnect() } }
+            Button("Sign Out", role: .destructive) { Task { await model.signOut() } }
         } message: {
-            Text("Signing out removes this account’s messages and keys from this iPhone. Your other devices keep theirs.")
+            Text("You’ll need your password to sign in again. Messages and keys stay on this iPhone.")
         }
     }
 
