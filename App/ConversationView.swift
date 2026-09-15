@@ -75,8 +75,6 @@ struct ConversationView: View {
     }
 
     var body: some View {
-        // Read here, not in the toolbar builder, so the header re-renders when stored trust changes.
-        let trust = model.trustSummary(for: chatID)
         VStack(spacing: 0) {
             if showingSearch {
                 ConversationSearchBar(query: $query) {
@@ -123,23 +121,17 @@ struct ConversationView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button { sheet = .details } label: {
+                    // Name only: trust lives in Chat Details and the review card, so the header never flickers.
                     HStack(spacing: 9) {
                         ChatAvatar(name: title, isGroup: isGroup, size: 36)
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(title).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                            HStack(spacing: 4) {
-                                Image(systemName: trust.icon).font(.system(size: 10, weight: .semibold))
-                                Text(trust.subtitle)
-                            }
-                            .font(.caption2).foregroundStyle(trust.needsReview ? Color.orange : Color.secondary).lineLimit(1)
-                        }
+                        Text(title).font(.headline).foregroundStyle(.primary).lineLimit(1)
                     }
                     // Leading toolbar items size to content; give the header a fixed width so the name isn't squeezed out.
                     .frame(width: 236, height: 44, alignment: .leading)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("\(title), \(trust.subtitle)")
+                .accessibilityLabel(title)
                 .accessibilityHint("Shows conversation details")
                 .accessibilityIdentifier("chatDetails")
             }

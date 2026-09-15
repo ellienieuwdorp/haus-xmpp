@@ -76,7 +76,6 @@ struct ChatListView: View {
             }
         }
         .navigationTitle("Chats")
-        .navigationSubtitle(model.session.chatsSubtitle)
         .navigationBarTitleDisplayMode(.large)
         .searchable(text: $search, prompt: "Search")
         .toolbar {
@@ -93,6 +92,18 @@ struct ChatListView: View {
                     .frame(width: 30, height: 30)
                 }
                 .accessibilityLabel("Account")
+            }
+            // Connection progress is a quiet spinner that disappears; only a setup failure gets a glyph.
+            if model.isSettlingConnection {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ProgressView().controlSize(.small).accessibilityLabel("Connecting")
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else if model.connectionNeedsAttention {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showingSettings = true } label: { Image(systemName: "exclamationmark.circle").foregroundStyle(.orange) }
+                        .accessibilityLabel("Encryption setup needs attention")
+                }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showingSettings = true } label: { Label("Settings", systemImage: "gearshape") }

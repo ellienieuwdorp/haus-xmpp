@@ -29,15 +29,4 @@ enum SessionState: Equatable {
         case .needsAttention(let step, _): "Encryption setup needs attention (\(step))"
         }
     }
-
-    /// Under the Chats title; empty when there is nothing to say.
-    var chatsSubtitle: String {
-        switch self {
-        case .ready: ""
-        case .offline: "Offline"
-        case .connecting: "Connecting…"
-        case .connected: "Setting up…"
-        case .needsAttention: "Encryption needs attention"
-        }
-    }
 }

@@ -35,6 +35,9 @@ final class AppModel {
     private(set) var session: SessionState = .offline(reason: nil)
     var isConnected: Bool { session.isConnected }
     var encryptionReady: Bool { session.isReady }
+    /// The reconciler is working towards a usable session; the Chats bar shows a small spinner.
+    var isSettlingConnection: Bool { wantsConnection && !session.isReady && !connectionNeedsAttention }
+    var connectionNeedsAttention: Bool { if case .needsAttention = session { true } else { false } }
     /// Set when saved credentials were rejected; RootView presents the sign-in sheet.
     var signInRequested = false
     private(set) var isSending = false
@@ -568,6 +571,8 @@ final class AppModel {
     }
 
     private func selectAccount(_ account: String) {
+        // A reconnect of the same account keeps the open chat; refresh() reloads everything else.
+        guard account != accountID else { preferences.set(account, forKey: "lastAccount"); return }
         accountID = account
         groupChats = [:]
         reactableGroupMessages = []
@@ -917,8 +922,9 @@ final class AppModel {
     }
 
     func canReact(to message: StoredMessage) -> Bool {
-        guard message.accountID == accountID, message.chatID == openChatID, message.encryptionProfile == "modern" else { return false }
-        if isGroup(message.chatID) { return canSend(to: message.chatID) && reactableGroupMessages.contains(message.id) }
+        guard message.accountID == accountID, message.chatID == openChatID,
+              message.encryptionProfile == "modern" || message.encryptionProfile == "legacy" else { return false }
+        if isGroup(message.chatID) { return message.encryptionProfile == "modern" && canSend(to: message.chatID) && reactableGroupMessages.contains(message.id) }
         if encryptionOverview?.profile == .modern { return message.wireIDAuthenticated && message.wireID != nil }
         // Legacy peers (Conversations) only speak unencrypted XEP-0444; queued like everything else.
         return encryptionOverview?.profile == .legacy && message.wireID != nil

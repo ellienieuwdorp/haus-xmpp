@@ -40,6 +40,5 @@ final class SessionStateTests: XCTestCase {
         XCTAssertFalse(SessionState.ready.isConnectable)
         XCTAssertTrue(SessionState.connected(settingUp: "x").isConnected)
         XCTAssertFalse(SessionState.connected(settingUp: "x").isReady)
-        XCTAssertEqual(SessionState.ready.chatsSubtitle, "")
     }
 }
