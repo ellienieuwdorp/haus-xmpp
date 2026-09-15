@@ -40,7 +40,7 @@ struct GroupJoinView: View {
                 }.frame(maxWidth: .infinity)
             }
             .buttonStyle(.glassProminent).controlSize(.large)
-            .disabled(joining || !model.isConnected || room.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || nickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(joining || !model.session.isReady || room.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || nickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityIdentifier("joinGroup")
             .padding(.horizontal, 16).padding(.vertical, 8)
         }

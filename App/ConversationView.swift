@@ -59,7 +59,7 @@ struct ConversationView: View {
     private var placeholder: String {
         if model.isDemo { return "Message" }
         if model.encryptionNeedsReview { return "Sending paused until you review" }
-        return model.isConnected ? "Message" : "Message · sends when connected"
+        return model.session.isReady ? "Message" : "Message · sends when connected"
     }
 
     private func send() {
@@ -75,6 +75,8 @@ struct ConversationView: View {
     }
 
     var body: some View {
+        // Read here, not in the toolbar builder, so the header re-renders when stored trust changes.
+        let trust = model.trustSummary(for: chatID)
         VStack(spacing: 0) {
             if showingSearch {
                 ConversationSearchBar(query: $query) {
@@ -120,7 +122,6 @@ struct ConversationView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                let trust = model.trustSummary(for: chatID)
                 Button { sheet = .details } label: {
                     HStack(spacing: 9) {
                         ChatAvatar(name: title, isGroup: isGroup, size: 36)

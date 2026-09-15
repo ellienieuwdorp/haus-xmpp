@@ -20,6 +20,11 @@ struct RootView: View {
             showingSettings = false
             chatPath = [route.chatID]
         }
+        .onChange(of: model.signInRequested) { _, requested in
+            guard requested else { return }
+            model.signInRequested = false
+            showingConnection = true
+        }
         .sheet(isPresented: $showingConnection) { SignInView(model: model) }
         .sheet(isPresented: $showingSettings) {
             NavigationStack {

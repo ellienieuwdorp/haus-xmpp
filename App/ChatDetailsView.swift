@@ -49,11 +49,12 @@ extension AppModel {
             guard let group = groupChats[chatID], group.joined, group.issue == nil else { return ConversationTrust(level: .other, subtitle: encryptionStatus) }
             return ConversationTrust(level: .encrypted, subtitle: "\(group.members.count) members · Encrypted")
         }
-        let ready: Set<String> = ["End-to-end encryption", "New messages are end-to-end encrypted"]
-        guard ready.contains(encryptionStatus), let overview = encryptionOverview else {
+        // Stored device trust decides, whatever the socket is doing; a chat with usable trusted
+        // devices is encrypted while offline too, because queued messages are sealed for them.
+        let theirs = encryptionOverview?.devices.filter { $0.jid == chatID && $0.active } ?? []
+        guard theirs.contains(where: \.trust.permitsEncryption) else {
             return ConversationTrust(level: .other, subtitle: encryptionStatus)
         }
-        let theirs = overview.devices.filter { $0.jid == chatID && $0.active }
         let verified = !theirs.isEmpty && theirs.allSatisfy { $0.trust == .verified }
         return ConversationTrust(level: verified ? .verified : .encrypted, subtitle: verified ? "Encrypted · Verified" : "Encrypted")
     }

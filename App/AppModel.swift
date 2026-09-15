@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import os
 import UIKit
 import UserNotifications
@@ -30,9 +31,12 @@ final class AppModel {
     private(set) var groupChats: [String: GroupChatState] = [:]
     private(set) var reactableGroupMessages: Set<String> = []
     private(set) var accountID = ""
-    private(set) var connectionStatus = "Offline"
-    private(set) var isConnecting = false
-    private(set) var isConnected = false
+    /// The only connection state views read. Chat trust is derived from stored devices, not from this.
+    private(set) var session: SessionState = .offline(reason: nil)
+    var isConnected: Bool { session.isConnected }
+    var encryptionReady: Bool { session.isReady }
+    /// Set when saved credentials were rejected; RootView presents the sign-in sheet.
+    var signInRequested = false
     private(set) var isSending = false
     private(set) var receivedCount = 0
     var error: String?
@@ -45,8 +49,14 @@ final class AppModel {
     @ObservationIgnored private var activeEncryptionOperations = 0
     @ObservationIgnored private var acquiringOwnership = false
     @ObservationIgnored private var hasTransportOwnership = false
-    private(set) var encryptionReady = false
-    private(set) var encryptionStatus = "Preparing encryption…"
+    @ObservationIgnored private var reconnectTask: Task<Void, Never>?
+    @ObservationIgnored private var reconnectAttempt = 0
+    @ObservationIgnored private var userWantsOffline = false
+    @ObservationIgnored private var authenticationRejected = false
+    @ObservationIgnored private var reportedSetupFailure: String?
+    @ObservationIgnored private let pathMonitor = NWPathMonitor()
+    /// Status of the open chat's encryption (devices, trust, fetch problems). Never session state.
+    private(set) var encryptionStatus = "Setting up encryption…"
     private(set) var encryptionOverview: EncryptionOverview?
     private(set) var encryptionNeedsReview = false
     /// What the last device refresh saw on the server, for the Devices screen footer.
@@ -92,6 +102,11 @@ final class AppModel {
                 }
             }
         }
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            guard path.status == .satisfied else { return }
+            Task { @MainActor in self?.networkBecameReachable() }
+        }
+        pathMonitor.start(queue: .global(qos: .utility))
         do {
             let directory = try await SharedStorage.directory(testSessionID: testSessionID, migrate: true)
             store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
@@ -109,17 +124,18 @@ final class AppModel {
                     return
                 }
                 await refresh()
+                if let openChatID { await loadEncryptionDetails(for: openChatID, refreshFromServer: false) }
                 if testSessionID == nil, let saved = try NotificationAccount.load() {
                     sessionAccount = saved
-                    notificationStatus = "Configured for staging"
-                    _ = await connect(username: saved.username, password: saved.password, savedEndpoint: saved)
+                    if saved.push != nil { notificationStatus = "Configured for staging" }
+                    reconcile()
                 }
             }
         } catch { self.error = "Could not open local message storage." }
     }
 
     func loadDemo() async {
-        await disconnect()
+        await forgetAccount()
         let token = generation
         let account = "preview.local"
         selectAccount(account)
@@ -158,24 +174,26 @@ final class AppModel {
         let requestedDomain = savedEndpoint?.domain ?? (parts.count == 2 ? parts[1].lowercased() : DevelopmentEndpoint.domain)
         let localPattern = parts.count == 2 ? #"^[^@/\s]{1,64}$"# : #"^[a-z0-9][a-z0-9._-]{0,63}$"#
         let domainPattern = #"^(localhost|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+)$"#
-        guard foreground, !quiescing, !isConnecting, username.range(of: localPattern, options: .regularExpression) != nil,
+        guard foreground, !quiescing, !session.isConnecting else { return false }
+        guard username.range(of: localPattern, options: .regularExpression) != nil,
               requestedDomain.range(of: domainPattern, options: .regularExpression) != nil else {
             error = "Enter an address such as name@example.org."
             return false
         }
+        let manual = savedEndpoint == nil
+        if manual { userWantsOffline = false; authenticationRejected = false; reconnectAttempt = 0 }
         let host: String
         if let savedEndpoint { host = savedEndpoint.host }
         else if Self.labDomains.contains(requestedDomain) { host = requestedDomain == "localhost" ? DevelopmentEndpoint.host : requestedDomain }
         else { host = (serverHost ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased().isEmpty ? requestedDomain : serverHost!.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
         if let sessionAccount, sessionAccount.accountID != username + "@" + requestedDomain {
-            await disconnect()
+            await forgetAccount()
             guard foreground, !quiescing else { return false }
         }
         let priorEvents = eventTask
         let previous = resetSession()
         let token = generation
-        isConnecting = true
-        connectionStatus = "Connecting…"
+        session = .connecting(step: "Connecting…")
         let connection = XMPPClient(labCertificateAuthority: DevelopmentEndpoint.certificateAuthority)
         client = connection
         // Assign account before consuming events; scoped refresh rejects stale results.
@@ -208,36 +226,98 @@ final class AppModel {
             try await connection.connect(host: endpoint.host, port: endpoint.port, domain: endpoint.domain, username: username, password: password)
             guard generation == token, accountID == endpoint.accountID,
                   sessionAccount?.accountID == endpoint.accountID else { await connection.disconnect(); return false }
-            if endpoint.push != nil {
-                // Authentication has succeeded. Only now may a manually entered password
-                // replace the extension's previously working protected credentials.
-                do { try endpoint.save() }
-                catch {
-                    notificationStatus = "Needs attention"
-                    self.error = "Connected, but background credentials could not be saved. Enable notifications again before leaving the app."
-                }
+            // Authentication has succeeded. Only now may a manually entered password replace
+            // saved credentials, so the next launch and every reconnect can sign in unattended.
+            do { try endpoint.save() }
+            catch {
+                notificationStatus = "Needs attention"
+                self.error = "Connected, but the password could not be saved. You will be asked for it on the next launch."
             }
-            isConnecting = false
             await refreshPushRegistration(client: connection, session: endpoint, token: token)
             return true
         } catch {
             guard generation == token else { await connection.disconnect(); return false }
-            isConnecting = false
-            isConnected = false
-            connectionStatus = "Connection failed"
-            self.error = "Could not connect. Check the server and account password."
+            let message = Self.failureMessage(for: error)
+            session = .offline(reason: message)
+            if Self.isAuthenticationFailure(error) {
+                authenticationRejected = true
+                signInRequested = true
+            }
+            if manual { self.error = message }
+            reconcile()
             return false
         }
     }
 
+    nonisolated static func isAuthenticationFailure(_ error: any Error) -> Bool {
+        switch error as? XMPPClientError {
+        case .authenticationFailed, .authenticationUnavailable: true
+        default: false
+        }
+    }
+
+    nonisolated static func failureMessage(for error: any Error) -> String {
+        switch error {
+        case XMPPClientError.authenticationFailed: "The password was not accepted."
+        case XMPPClientError.authenticationUnavailable: "The server does not offer password sign-in over TLS."
+        case XMPPClientError.timedOut: "The server did not respond."
+        case MessageStoreError.transportOwnedElsewhere: "Another process is still using this account’s storage. Try again in a moment."
+        case is CancellationError: "Connection cancelled."
+        default: "Could not reach the server."
+        }
+    }
+
+    /// Reconnect delay for the given consecutive failure count: immediate, then 1, 2, 4 … 60 s with jitter.
+    nonisolated static func reconnectDelay(attempt: Int) -> Duration {
+        guard attempt > 0 else { return .zero }
+        let base = min(60.0, pow(2.0, Double(attempt - 1)))
+        return .seconds(base * Double.random(in: 1.0...1.25))
+    }
+
+    /// Desired state: connected whenever the app is in front with an account whose password still works.
+    private var wantsConnection: Bool {
+        foreground && !quiescing && !userWantsOffline && !authenticationRejected && sessionAccount != nil && !isDemo
+    }
+
+    /// The single place that turns "should be connected" into a `connect()` call. Every input
+    /// change (scene, network path, sign-in, disconnect) only updates state and calls this.
+    private func reconcile() {
+        guard wantsConnection, session.isConnectable, reconnectTask == nil, let saved = sessionAccount else { return }
+        let delay = Self.reconnectDelay(attempt: reconnectAttempt)
+        reconnectTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard let self, !Task.isCancelled else { return }
+            await self.lifecycleTask?.value
+            self.reconnectTask = nil
+            guard self.wantsConnection, self.session.isConnectable, self.sessionAccount == saved else { return }
+            self.reconnectAttempt += 1
+            _ = await self.connect(username: saved.username, password: saved.password, savedEndpoint: saved)
+        }
+    }
+
+    private func networkBecameReachable() {
+        guard wantsConnection, session.isConnectable else { return }
+        reconnectAttempt = 0
+        reconnectTask?.cancel(); reconnectTask = nil
+        reconcile()
+    }
+
     /// Disconnect and forget the selected account so the app returns to its signed-out state.
     func signOut() async {
-        await disconnect()
+        await forgetAccount()
         selectAccount("")
         preferences.removeObject(forKey: "lastAccount")
     }
 
+    /// Go offline until the next sign-in; credentials stay so the next launch reconnects.
     func disconnect() async {
+        userWantsOffline = true
+        reconnectTask?.cancel(); reconnectTask = nil
+        await quiesceTransport()
+    }
+
+    /// Erase credentials and the push subscription for the current account.
+    private func forgetAccount() async {
         quiescing = true
         generation = UUID() // Invalidate pending permission/registration before removing credentials.
         let token = generation
@@ -306,9 +386,8 @@ final class AppModel {
             guard let self else { return }
             if active {
                 guard self.foreground else { return }
-                if let saved = self.sessionAccount, !self.isConnected, !self.isConnecting {
-                    _ = await self.connect(username: saved.username, password: saved.password, savedEndpoint: saved)
-                }
+                self.reconnectAttempt = 0
+                self.reconcile()
                 if let client = self.client { try? await client.setClientActive(true) }
                 await self.refresh()
             } else {
@@ -506,13 +585,8 @@ final class AppModel {
         eventTask = nil
         let previous = client
         client = nil
-        isConnected = false
-        isConnecting = false
-        connectionStatus = "Offline"
-        encryptionReady = false
-        encryptionOverview = nil
-        encryptionNeedsReview = false
-        encryptionStatus = "Connect to prepare encryption"
+        reconnectTask?.cancel(); reconnectTask = nil
+        session = .offline(reason: nil)
         inboundMayAcknowledge = true
         for room in groupChats.keys { groupChats[room]?.joined = false }
         return previous
@@ -523,13 +597,13 @@ final class AppModel {
         switch event {
         case .state(let state):
             switch state {
-            case .connecting: connectionStatus = "Connecting…"
-            case .authenticating: connectionStatus = "Signing in…"
-            case .binding: connectionStatus = "Opening session…"
+            case .connecting: session = .connecting(step: "Connecting…")
+            case .authenticating: session = .connecting(step: "Signing in…")
+            case .binding: session = .connecting(step: "Opening session…")
             case .online:
-                connectionStatus = "Connected to lab"; isConnected = true; isConnecting = false
+                var step = "server features" { didSet { session = .connected(settingUp: step) } }
+                session = .connected(settingUp: step)
                 if let encryption, let client {
-                    var step = "server features"
                     do {
                         let features = try await client.discoveryFeatures()
                         if features.contains("urn:xmpp:carbons:2") { step = "carbons"; try await client.setCarbonsEnabled() }
@@ -539,13 +613,12 @@ final class AppModel {
                         try await rejoinKnownGroups(account: account, client: client, encryption: encryption, token: token)
                         if features.contains("urn:xmpp:mam:2"), let store {
                             step = "archive catch-up"
-                            connectionStatus = "Catching up…"
                             try await ArchiveSynchronizer(store: store).synchronize(account: account, client: client, encryption: encryption)
                         }
                         guard generation == token else { return }
-                        encryptionReady = true
-                        connectionStatus = "Connected to lab"
-                        encryptionStatus = "End-to-end encryption"
+                        session = .ready
+                        reconnectAttempt = 0
+                        reportedSetupFailure = nil
                         try? await encryption.retryPendingIncoming(account: account, transport: client)
                         guard generation == token else { return }
                         await flushEncryptionControls(account: account, client: client)
@@ -559,16 +632,23 @@ final class AppModel {
                         if case .stanza(let condition)? = error as? XMPPIQError { detail = condition }
                         else { detail = (error as? OMEMOError)?.errorDescription ?? String(describing: error).prefix(120).description }
                         Logger(subsystem: "dev.xmpplab.ios", category: "encryption").error("Encryption setup failed at \(step, privacy: .public): \(detail, privacy: .public)")
-                        encryptionStatus = "Encryption setup needs attention"
+                        session = .needsAttention(step: step, detail: detail)
                         encryptionDiagnostics = "Setup failed at \(step): \(detail)"
-                        self.error = "Could not prepare encryption (\(step): \(detail)). Your queued messages have not been sent."
+                        if reportedSetupFailure != detail {
+                            reportedSetupFailure = detail
+                            self.error = "Could not prepare encryption (\(step): \(detail)). Your queued messages have not been sent."
+                        }
+                        await refresh()
+                        guard generation == token else { return }
+                        // A half-alive session is a connection failure: end it and let the reconciler retry.
+                        await client.disconnect()
                     }
                 }
             case .disconnected(let reason):
                 for room in groupChats.keys { groupChats[room]?.joined = false }
                 drainTask?.cancel()
-                connectionStatus = "Offline"; isConnected = false; isConnecting = false
-                if reason != nil { error = "The lab connection ended. Delivery of any in-flight message is unconfirmed." }
+                if case .needsAttention = session {} else { session = .offline(reason: reason) }
+                reconcile()
             }
         case .reaction(let reaction):
             guard let encryption else { return }
@@ -864,7 +944,7 @@ final class AppModel {
 
     private func startOutbox() {
         outboxRequested = true
-        guard hasTransportOwnership, foreground, !quiescing, drainTask == nil, isConnected, encryptionReady, !isDemo,
+        guard hasTransportOwnership, foreground, !quiescing, drainTask == nil, session.isReady, !isDemo,
               let client, let outboxSender, let encryption, let store else { return }
         outboxRequested = false
         let joinedGroups = Set(groupChats.filter { $0.value.joined }.map(\.key))
@@ -987,6 +1067,7 @@ final class AppModel {
 
     func openChat(_ chatID: String) async {
         openChatID = chatID; messages = []; messageReactions = [:]; encryptionOverview = nil
+        encryptionStatus = "Setting up encryption…"; encryptionNeedsReview = false
         await refresh()
         if !isDemo { await loadEncryptionDetails(for: chatID) }
     }
@@ -1024,7 +1105,8 @@ final class AppModel {
             if overview.hasIncompatibleDevices { encryptionStatus = "Devices use incompatible encryption versions" }
             else if overview.needsTrust { encryptionStatus = "Review encryption devices" }
             else if !overview.devices.contains(where: { $0.jid == chatID && $0.active && $0.trust.permitsEncryption }) {
-                encryptionStatus = "No compatible encryption devices"
+                // Until this connection has fetched their devices, an empty cache is unknown, not absent.
+                encryptionStatus = refreshed ? "No compatible encryption devices" : "Setting up encryption…"
             } else { encryptionStatus = "New messages are end-to-end encrypted" }
         } catch {
             guard accountID == account, generation == token, openChatID == chatID else { return }
