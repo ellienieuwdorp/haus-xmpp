@@ -36,6 +36,7 @@
 		57EE3016876A1EE8034033D3 /* PushRegistrationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA3471BC57BCF7C038498282 /* PushRegistrationState.swift */; };
 		5F166C0A1D90C747BD73588F /* ConversationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */; };
 		606006C350363E0A14B82A19 /* ChatDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02E578F753BEA364EB18BB4D /* ChatDetailsView.swift */; };
+		64F05052C92000FB99DD045D /* MessageActionsOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3790FF0EAB5AF2B3F87358EE /* MessageActionsOverlay.swift */; };
 		68E84935703E72818760EDD8 /* EncryptionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9CB3F0019D6F6D8C373107D /* EncryptionUITests.swift */; };
 		728CFF70CFB117DBE2C87F11 /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = FDC9596D2F9805667807CD8E /* XMPPProtocol */; };
 		73C11D0503BE6524DD670DBD /* OrganizationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */; };
@@ -127,6 +128,7 @@
 		293B323A3D7EB1375E1F7124 /* XMPPiOSLifecycleTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = XMPPiOSLifecycleTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		29D0F7FE889C5ECA318C15DC /* GroupDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupDetailsView.swift; sourceTree = "<group>"; };
 		3343546173C8FA0AB546ECBF /* DevelopmentEndpoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevelopmentEndpoint.swift; sourceTree = "<group>"; };
+		3790FF0EAB5AF2B3F87358EE /* MessageActionsOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageActionsOverlay.swift; sourceTree = "<group>"; };
 		388BA54424B17190DC3CBD6C /* EncryptionLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionLifecycleTests.swift; sourceTree = "<group>"; };
 		3CAD55F8C67F101615618BE4 /* ChatListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListView.swift; sourceTree = "<group>"; };
 		40EBA5FA15B66AEBE4033B4B /* ReactionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReactionUITests.swift; sourceTree = "<group>"; };
@@ -304,6 +306,7 @@
 				CAF76316D7F572ECA650DC23 /* GroupChatState.swift */,
 				29D0F7FE889C5ECA318C15DC /* GroupDetailsView.swift */,
 				BBD21AF11824F42FB3E0DE46 /* GroupJoinView.swift */,
+				3790FF0EAB5AF2B3F87358EE /* MessageActionsOverlay.swift */,
 				06754889A5E9FA0A851916A1 /* NotificationDiagnostics.swift */,
 				7F6DBBCFE3B68BEDB76D1A21 /* NotificationNavigation.swift */,
 				A8B2544FBAE494AC3B25B49F /* PushRegistration.swift */,
@@ -513,6 +516,7 @@
 				525544352D1196E5205127DF /* GroupChatState.swift in Sources */,
 				1048A0DA5C55818F6E908F4C /* GroupDetailsView.swift in Sources */,
 				5581B0609F6688C9C3868D17 /* GroupJoinView.swift in Sources */,
+				64F05052C92000FB99DD045D /* MessageActionsOverlay.swift in Sources */,
 				B37B871F7D7642ED3049C072 /* NotificationAccessGate.swift in Sources */,
 				DF0983FA3FDFD4E68EC27C66 /* NotificationAccount.swift in Sources */,
 				F89DE248D5F766E7151AC8A8 /* NotificationDiagnostics.swift in Sources */,

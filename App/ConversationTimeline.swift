@@ -39,6 +39,8 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     var securityNotice: String? = nil
     var reactions: [TimelineReaction] = []
     var canReact: Bool = false
+    /// Shown under a disabled reaction row; nil when `canReact`.
+    var reactionUnavailableReason: String? = nil
     var author: String? = nil
 
     enum Status: String, Sendable, Equatable {
@@ -152,7 +154,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] collection, indexPath, id in
             guard let self, let row = rowsByID[id],
                   let cell = collection.dequeueReusableCell(withReuseIdentifier: "message", for: indexPath) as? MessageBubbleCell else { return nil }
-            cell.configure(row: row, toggleStar: { [weak self] in self?.onToggleStar(id) }, retry: { [weak self] in self?.onRetryMessage(id) }, reply: { [weak self] in self?.onReply(id) }, reaction: { [weak self] emoji in self?.onReaction(id, emoji) })
+            cell.configure(row: row, toggleStar: { [weak self] in self?.onToggleStar(id) }, retry: { [weak self] in self?.onRetryMessage(id) }, reply: { [weak self] in self?.onReply(id) }, reaction: { [weak self] emoji in self?.onReaction(id, emoji) },
+                           presentActions: { [weak self] context in
+                               guard let self, presentedViewController == nil else { return }
+                               MessageActionsOverlay.present(from: self, context: context)
+                           })
             return cell
         }
     }
@@ -231,6 +237,12 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         }
     }
 
+    /// The composer arrives as bottom safe area after the first apply; keyboard changes come the same way.
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        if followsBottom { scrollToBottom() }
+    }
+
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         // Layout changes during a keyboard transition are not a user's scroll intent.
         if scrollView.isDragging || scrollView.isDecelerating { followsBottom = isNearBottom }
@@ -256,13 +268,18 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     }
 
     private func scrollToBottom() {
+        // scrollToItem sizes the final cells first; the clamp then lands on the real content height.
+        if let last = rows.last, let path = dataSource.indexPath(for: last.message.id) {
+            collectionView.scrollToItem(at: path, at: .bottom, animated: false)
+            collectionView.layoutIfNeeded()
+        }
         collectionView.contentOffset.y = clampedOffset(.greatestFiniteMagnitude)
     }
 
 }
 
 @MainActor
-private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuInteractionDelegate, UIGestureRecognizerDelegate {
+private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizerDelegate {
     private static let pillHang: CGFloat = 12
     private var row: TimelineRow?
     private var message: TimelineMessage? { row?.message }
@@ -270,6 +287,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
     private var retry: () -> Void = {}
     private var replyAction: () -> Void = {}
     private var reactionAction: (String) -> Void = { _ in }
+    private var presentActions: (MessageActionsContext) -> Void = { _ in }
+    private let pressFeedback = UIImpactFeedbackGenerator(style: .medium)
     private var swipeReplyAction: (() -> Void)?
     private var crossedReplyThreshold = false
     private let replyFeedback = UIImpactFeedbackGenerator(style: .light)
@@ -287,8 +306,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
     private let quoteBody = UILabel()
     private var plainTextTop: NSLayoutConstraint!
     private var replyTextTop: NSLayoutConstraint!
-    private var selectAfterDismissal = false
-    private let bubble = BubbleView()
+    private let bubble = UIView()
     private let replyIndicator = UIImageView(image: UIImage(systemName: "arrowshape.turn.up.left.fill"))
     private var replyIndicatorLeading: NSLayoutConstraint!
     private let textView = MessageTextView()
@@ -311,7 +329,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
     override init(frame: CGRect) {
         super.init(frame: frame)
         bubble.translatesAutoresizingMaskIntoConstraints = false
-        bubble.shape = { [weak self] rect in self?.bubblePath(in: rect) ?? UIBezierPath(roundedRect: rect, cornerRadius: 20) }
+        bubble.clipsToBounds = true
         replyIndicator.translatesAutoresizingMaskIntoConstraints = false
         replyIndicator.contentMode = .scaleAspectFit
         replyIndicator.alpha = 0
@@ -325,7 +343,10 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
             replyIndicator.widthAnchor.constraint(equalToConstant: 24),
             replyIndicator.heightAnchor.constraint(equalToConstant: 24)
         ])
-        bubble.addInteraction(UIContextMenuInteraction(delegate: self))
+        let press = UILongPressGestureRecognizer(target: self, action: #selector(handlePress(_:)))
+        press.minimumPressDuration = 0.35
+        press.delegate = self
+        bubble.addGestureRecognizer(press)
         let replyPan = UIPanGestureRecognizer(target: self, action: #selector(handleReplyPan(_:)))
         replyPan.maximumNumberOfTouches = 1
         replyPan.delegate = self
@@ -428,7 +449,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         reactionRow.translatesAutoresizingMaskIntoConstraints = false
         reactionRow.axis = .horizontal
         reactionRow.spacing = 3
-        reactionRow.isUserInteractionEnabled = false
         reactionRow.isAccessibilityElement = false
         contentView.addSubview(reactionRow)
         reactionLeading = reactionRow.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 8)
@@ -457,11 +477,15 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     /// 20pt corners; the last bubble of a run gets a 6pt tail on its outer bottom corner.
+    private var corners: (bottomLeft: CGFloat, bottomRight: CGFloat) {
+        guard let row, row.endsRun else { return (20, 20) }
+        return row.message.isOutgoing ? (20, 6) : (6, 20)
+    }
+
+    /// Hit-testing twin of the continuous-corner configuration the bubble draws with.
     private func bubblePath(in rect: CGRect) -> UIBezierPath {
         let radius = min(20, rect.height / 2)
-        guard let row, row.endsRun else { return UIBezierPath(roundedRect: rect, cornerRadius: radius) }
-        let tail = min(6, radius)
-        let (bottomRight, bottomLeft) = row.message.isOutgoing ? (tail, radius) : (radius, tail)
+        let (bottomLeft, bottomRight) = (min(corners.bottomLeft, radius), min(corners.bottomRight, radius))
         let path = UIBezierPath()
         path.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
         path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
@@ -497,78 +521,35 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         return super.preferredLayoutAttributesFitting(layoutAttributes)
     }
 
-    private static func emojiImage(_ emoji: String) -> UIImage {
-        let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 24)]
-        let size = (emoji as NSString).size(withAttributes: attributes)
-        return UIGraphicsImageRenderer(size: size).image { _ in
-            (emoji as NSString).draw(at: .zero, withAttributes: attributes)
-        }.withRenderingMode(.alwaysOriginal)
-    }
-
-    func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
-        guard !isSelectingText, let message, bubblePath(in: bubble.bounds).contains(location) else { return nil }
-        let starAction = toggleStar
-        let retryAction = retry
-        let reply = replyAction
-        let react = reactionAction
-        return UIContextMenuConfiguration(identifier: message.id as NSString, previewProvider: nil) { [weak self] _ in
-            guard self != nil else { return nil }
-            var actions: [UIMenuElement] = [
-                UIAction(title: "Reply", image: UIImage(systemName: "arrowshape.turn.up.left")) { _ in reply() },
-                UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
-                    UIPasteboard.general.string = message.body
-                },
-                UIAction(title: "Select text", image: UIImage(systemName: "text.cursor")) { [weak self] _ in
-                    self?.selectAfterDismissal = true
-                },
-                UIAction(title: message.isStarred ? "Unstar message" : "Star message", image: UIImage(systemName: message.isStarred ? "star.slash" : "star")) { _ in starAction() }
-            ]
-            if message.canReact {
-                let selected = Set(message.reactions.filter(\.isSelected).map(\.emoji))
-                let reactions = TimelineReaction.choices.map { emoji in
-                    UIAction(title: emoji, image: Self.emojiImage(emoji), state: selected.contains(emoji) ? .on : .off) { _ in react(emoji) }
-                }
-                actions.insert(UIMenu(options: .displayInline, preferredElementSize: .small, children: reactions), at: 0)
-            }
-            if message.isOutgoing, message.status?.canRetry == true {
-                actions.append(UIAction(title: "Retry message", image: UIImage(systemName: "arrow.clockwise")) { _ in retryAction() })
-            }
-            return UIMenu(children: actions)
+    /// The one action list; the overlay menu and VoiceOver custom actions both read it.
+    private func actions() -> [MessageAction] {
+        guard let message else { return [] }
+        var actions: [MessageAction] = [
+            MessageAction(kind: .reply, title: "Reply", symbol: "arrowshape.turn.up.left", perform: replyAction),
+            MessageAction(kind: .copy, title: "Copy", symbol: "doc.on.doc") { UIPasteboard.general.string = message.body },
+            MessageAction(kind: .star, title: message.isStarred ? "Unstar message" : "Star message", symbol: message.isStarred ? "star.slash" : "star", perform: toggleStar),
+            MessageAction(kind: .selectText, title: "Select text", symbol: "text.cursor") { [weak self] in self?.beginTextSelection() }
+        ]
+        if message.isOutgoing, message.status?.canRetry == true {
+            actions.append(MessageAction(kind: .retry, title: "Retry message", symbol: "arrow.clockwise", perform: retry))
         }
+        return actions
     }
 
-    func contextMenuInteraction(_ interaction: UIContextMenuInteraction, previewForHighlightingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
-        bubblePreview()
-    }
-
-    func contextMenuInteraction(_ interaction: UIContextMenuInteraction, previewForDismissingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
-        bubblePreview()
-    }
-
-    func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willEndFor configuration: UIContextMenuConfiguration, animator: (any UIContextMenuInteractionAnimating)?) {
-        guard selectAfterDismissal else { return }
-        selectAfterDismissal = false
-        let id = configuration.identifier as? String
-        let select = { [weak self] in
-            guard let self, messageID == id else { return }
-            beginTextSelection()
-        }
-        if let animator { animator.addCompletion(select) } else { select() }
-    }
-
-    private func bubblePreview() -> UITargetedPreview {
-        let parameters = UIPreviewParameters()
-        parameters.backgroundColor = bubble.backgroundColor
-        parameters.visiblePath = bubblePath(in: bubble.bounds)
-        return UITargetedPreview(view: bubble, parameters: parameters)
+    @objc private func handlePress(_ press: UILongPressGestureRecognizer) {
+        guard press.state == .began, let message, let bubbleSnapshot = bubble.snapshotView(afterScreenUpdates: false) else { return }
+        pressFeedback.impactOccurred()
+        let reactions = message.reactions.isEmpty ? nil : reactionRow.snapshotView(afterScreenUpdates: false)
+        presentActions(MessageActionsContext(message: message, bubble: bubbleSnapshot, bubbleFrame: bubble.convert(bubble.bounds, to: nil),
+                                             reactions: reactions, reactionsFrame: reactionRow.convert(reactionRow.bounds, to: nil),
+                                             actions: actions(), react: reactionAction))
     }
 
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard !isSelectingText, messageID != nil, bubblePath(in: bubble.bounds).contains(gestureRecognizer.location(in: bubble)) else { return false }
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
         let velocity = pan.velocity(in: contentView)
-        return !isSelectingText && messageID != nil && pan.location(in: window).x > 24
-            && bubblePath(in: bubble.bounds).contains(pan.location(in: bubble))
-            && velocity.x > 0 && velocity.x > abs(velocity.y) * 1.5
+        return pan.location(in: window).x > 24 && velocity.x > 0 && velocity.x > abs(velocity.y) * 1.5
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRequireFailureOf otherGestureRecognizer: UIGestureRecognizer) -> Bool {
@@ -634,16 +615,19 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         textView.selectedRange = NSRange(location: 0, length: 0)
         messageID = nil
         row = nil
-        selectAfterDismissal = false
     }
 
-    func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void) {
+    func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,
+                   presentActions: @escaping (MessageActionsContext) -> Void) {
         let message = row.message
         self.row = row
         self.toggleStar = toggleStar
         self.retry = retry
         self.replyAction = reply
         self.reactionAction = reaction
+        self.presentActions = presentActions
+        bubble.cornerConfiguration = .corners(topLeftRadius: .fixed(20), topRightRadius: .fixed(20),
+                                              bottomLeftRadius: .fixed(corners.bottomLeft), bottomRightRadius: .fixed(corners.bottomRight))
         if messageID != message.id {
             resetReplySwipe(animated: false)
             _ = textView.resignFirstResponder()
@@ -695,30 +679,17 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         if let notice = message.securityNotice { descriptions.append(notice) }
         if !message.reactions.isEmpty { descriptions.append(message.reactions.map(\.accessibilityDescription).joined(separator: ", ")) }
         for pill in reactionRow.arrangedSubviews { pill.removeFromSuperview() }
-        for reaction in message.reactions { reactionRow.addArrangedSubview(ReactionPill(reaction)) }
+        for reaction in message.reactions {
+            reactionRow.addArrangedSubview(ReactionPill(reaction, onTap: message.canReact ? { [weak self] in self?.reactionAction(reaction.emoji) } : nil))
+        }
         textView.accessibilityLabel = descriptions.joined(separator: ", ")
-        textView.accessibilityCustomActions = [UIAccessibilityCustomAction(name: message.isStarred ? "Unstar message" : "Star message") { _ in
-            toggleStar()
-            return true
-        }]
-        textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: "Reply") { _ in reply(); return true })
-        textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: "Select text") { [weak self] _ in
-            self?.beginTextSelection()
-            return true
-        })
-        textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: "Copy") { _ in
-            UIPasteboard.general.string = message.body
-            return true
-        })
+        textView.accessibilityCustomActions = actions().map { action in UIAccessibilityCustomAction(name: action.title) { _ in action.perform(); return true } }
         if message.canReact {
             let selected = Set(message.reactions.filter(\.isSelected).map(\.emoji))
             for emoji in TimelineReaction.choices {
                 let actionName = "\(selected.contains(emoji) ? "Remove" : "Add") \(TimelineReaction.name(for: emoji)) reaction"
                 textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: actionName) { _ in reaction(emoji); return true })
             }
-        }
-        if canRetry {
-            textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: "Retry message") { _ in retry(); return true })
         }
         star.alpha = message.isStarred ? 1 : 0
         time.text = [message.securityNotice, message.sentAt?.formatted(date: .omitted, time: .shortened)].compactMap { $0 }.joined(separator: " · ")
@@ -731,30 +702,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIContextMenuIntera
         case .serverAccepted: status.image = UIImage(systemName: "checkmark")
         case nil: status.image = nil
         }
-        bubble.setNeedsLayout()
         setNeedsLayout()
-    }
-}
-
-/// Masks itself in its own layout pass so the tail shape always matches the final bubble size.
-@MainActor
-private final class BubbleView: UIView {
-    private let shapeMask = CAShapeLayer()
-    var shape: ((CGRect) -> UIBezierPath)?
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        layer.mask = shapeMask
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        shapeMask.frame = bounds
-        shapeMask.path = (shape?(bounds) ?? UIBezierPath(roundedRect: bounds, cornerRadius: 20)).cgPath
-        CATransaction.commit()
     }
 }
 
@@ -762,11 +710,14 @@ private final class BubbleView: UIView {
 @MainActor
 private final class ReactionPill: UIView {
     private let ring = UIView()
+    private let onTap: (() -> Void)?
 
-    init(_ reaction: TimelineReaction) {
+    init(_ reaction: TimelineReaction, onTap: (() -> Void)?) {
+        self.onTap = onTap
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         isAccessibilityElement = false
+        if onTap != nil { addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped))) }
         backgroundColor = .systemBackground
         layer.cornerRadius = 12
         layer.borderWidth = 1.5
@@ -805,6 +756,8 @@ private final class ReactionPill: UIView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    @objc private func tapped() { onTap?() }
 
     private func applyColors() {
         layer.borderColor = UIColor.systemBackground.cgColor
