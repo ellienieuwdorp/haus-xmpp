@@ -142,6 +142,38 @@ public struct AuthenticatedReaction: Sendable, Equatable {
         self.id = id; self.chatID = chatID; self.actorID = actorID; self.targetWireID = targetWireID; self.reactions = reactions.sorted()
         self.updatedAt = Date(timeIntervalSince1970: (updatedAt.timeIntervalSince1970 * 1_000).rounded() / 1_000)
     }
+
+    /// The projection row: reactions are one event kind among several.
+    public init?(_ event: MessageEvent) {
+        guard event.kind == .reaction, let values = try? JSONDecoder().decode([String].self, from: Data(event.payload.utf8)) else { return nil }
+        self.init(id: event.id, chatID: event.chatID, actorID: event.actorID, targetWireID: event.targetWireID, reactions: values, updatedAt: event.updatedAt)
+    }
+    public func event() throws -> MessageEvent {
+        MessageEvent(id: id, chatID: chatID, actorID: actorID, targetWireID: targetWireID, kind: .reaction,
+                     payload: String(decoding: try JSONEncoder().encode(reactions), as: UTF8.self), updatedAt: updatedAt)
+    }
+}
+
+/// Message-scoped events other peers or our own devices assert about a target message. Only
+/// `reaction` is accepted today; the other kinds are reserved so the schema does not move again.
+public enum MessageEventKind: String, Sendable, CaseIterable {
+    case reaction, retraction, correction, delivered, displayed
+}
+
+/// One row of `message_events`: idempotent per (account, actor, id); the newest per (target, actor, kind) wins.
+public struct MessageEvent: Sendable, Equatable {
+    public let id: String
+    public let chatID: String
+    public let actorID: String
+    public let targetWireID: String
+    public let kind: MessageEventKind
+    /// JSON whose shape is fixed per kind: a sorted emoji array for reactions.
+    public let payload: String
+    public let updatedAt: Date
+    public init(id: String, chatID: String, actorID: String, targetWireID: String, kind: MessageEventKind, payload: String, updatedAt: Date) {
+        self.id = id; self.chatID = chatID; self.actorID = actorID; self.targetWireID = targetWireID; self.kind = kind; self.payload = payload
+        self.updatedAt = Date(timeIntervalSince1970: (updatedAt.timeIntervalSince1970 * 1_000).rounded() / 1_000)
+    }
 }
 
 /// One row of the durable update outbox: every outgoing stanza that is not a chat message.

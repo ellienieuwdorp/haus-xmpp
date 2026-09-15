@@ -78,7 +78,8 @@ final class AppModel {
     @ObservationIgnored private var prepared = false
     @ObservationIgnored private var pushTokenTask: Task<Void, Never>?
     @ObservationIgnored private var notificationTapTask: Task<Void, Never>?
-    @ObservationIgnored private var inboundMayAcknowledge = true
+    /// Owns the durable-disposition rule for the current stream; replaced with the client.
+    @ObservationIgnored private var inbound: InboundProcessor?
     @ObservationIgnored private let testSessionID: String? = {
         #if DEBUG
         guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"],
@@ -592,7 +593,7 @@ final class AppModel {
         client = nil
         reconnectTask?.cancel(); reconnectTask = nil
         session = .offline(reason: nil)
-        inboundMayAcknowledge = true
+        inbound = nil
         for room in groupChats.keys { groupChats[room]?.joined = false }
         return previous
     }
@@ -655,52 +656,35 @@ final class AppModel {
                 if case .needsAttention = session {} else { session = .offline(reason: reason) }
                 reconcile()
             }
-        case .reaction(let reaction):
-            guard let encryption else { return }
-            do {
-                try await encryption.receivePlaintextReaction(account: account, reaction: reaction)
-                guard generation == token else { return }
-                await refresh()
-            } catch {
-                guard generation == token else { return }
-                inboundMayAcknowledge = false
-            }
-        case .encryptedMessage(let incoming):
-            receivedCount += 1
+        case .reaction, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier:
             guard let encryption, let client else { return }
+            if case .encryptedMessage = event { receivedCount += 1 }
+            // One processor per connection: it owns the "may acknowledge" rule for this stream.
+            if inbound?.client !== client { inbound = InboundProcessor(encryption: encryption, client: client, account: account) }
+            guard let inbound else { return }
             do {
-                _ = try await encryption.receive(account: account, message: incoming, transport: client)
+                let outcome = try await inbound.process(event)
                 guard generation == token else { return }
-                await flushEncryptionControls(account: account, client: client)
+                switch outcome {
+                case .stored:
+                    await flushEncryptionControls(account: account, client: client)
+                    guard generation == token else { return }
+                    await refresh()
+                case .retained(let problem):
+                    encryptionNeedsReview = true
+                    encryptionStatus = problem
+                    await refresh()
+                    guard generation == token else { return }
+                    if let openChatID { await loadEncryptionDetails(for: openChatID, refreshFromServer: false) }
+                case .acknowledged, .ignored: break
+                }
+            } catch InboundProcessor.Failure.unsavedInbound {
                 guard generation == token else { return }
-                await refresh()
+                self.error = "An incoming message could not be saved. Reconnect after checking local storage."
             } catch {
                 guard generation == token else { return }
-                let mayAcknowledge = (try? await encryption.hasDurableIncomingDisposition(account: account, message: incoming)) ?? false
-                guard generation == token else { return }
-                inboundMayAcknowledge = mayAcknowledge
-                encryptionNeedsReview = true
-                encryptionStatus = (error as? OMEMOError)?.errorDescription ?? "An encrypted message needs attention"
-                await refresh()
-                guard generation == token else { return }
-                if let openChatID { await loadEncryptionDetails(for: openChatID, refreshFromServer: false) }
-            }
-        case .encryptedGroupMessage(let incoming):
-            guard let encryption, let client else { return }
-            do {
-                _ = try await encryption.receiveGroup(account: account, message: incoming, transport: client)
-                guard generation == token else { return }
-                await flushEncryptionControls(account: account, client: client)
-                guard generation == token else { return }
-                await refresh()
-            } catch {
-                guard generation == token else { return }
-                let durable = (try? await encryption.hasDurableGroupDisposition(account: account, message: incoming)) ?? false
-                guard generation == token else { return }
-                inboundMayAcknowledge = durable
-                encryptionNeedsReview = true
-                encryptionStatus = (error as? OMEMOError)?.errorDescription ?? "A group message needs attention"
-                await refresh()
+                if case .streamManagementBarrier = event { self.error = "Could not save synchronization progress. Reconnect to recover safely." }
+                // Otherwise the processor withholds acknowledgement; the next barrier ends the stream.
             }
         case .groupPresence(let room):
             await updateGroupPresence(room, token: token)
@@ -715,22 +699,6 @@ final class AppModel {
             encryptionStatus = "An encrypted message could not be opened"
         case .streamAcknowledged:
             await refresh()
-        case .streamManagementBarrier(let barrier):
-            guard let client else { return }
-            if inboundMayAcknowledge {
-                do { try await client.acknowledgeInbound(barrier) }
-                catch {
-                    await client.disconnect()
-                    guard generation == token else { return }
-                    self.error = "Could not save synchronization progress. Reconnect to recover safely."
-                }
-            } else {
-                await client.disconnect()
-                guard generation == token else { return }
-                self.error = "An incoming message could not be saved. Reconnect after checking local storage."
-            }
-            guard generation == token else { return }
-            inboundMayAcknowledge = true
         case .message:
             // Encrypted conversations do not render unauthenticated plaintext injected by a peer
             // or server as though it had passed OMEMO authentication.
