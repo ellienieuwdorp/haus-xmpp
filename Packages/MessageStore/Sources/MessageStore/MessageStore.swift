@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 9 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 10 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -74,12 +74,6 @@ public actor MessageStore {
                     PRIMARY KEY(account_id,sender,digest)
                 )
                 """)
-            try connection.execute("""
-                CREATE TABLE IF NOT EXISTS encryption_controls (
-                    account_id TEXT NOT NULL,id TEXT NOT NULL,recipient TEXT NOT NULL,wire BLOB NOT NULL,
-                    state TEXT NOT NULL DEFAULT 'queued', PRIMARY KEY(account_id,id)
-                )
-                """)
             if version < 5 {
                 // SQLite cannot alter CHECK constraints. Rebuild only the outbox, preserving FIFO/tokens.
                 try connection.execute("ALTER TABLE outbox RENAME TO outbox_v4")
@@ -117,17 +111,36 @@ public actor MessageStore {
                 try connection.execute("UPDATE messages SET wire_id=id WHERE wire_id IS NULL AND outgoing=1 AND encryption_profile='legacy'")
             }
             try connection.execute("CREATE INDEX IF NOT EXISTS message_wire ON messages(account_id,chat_id,wire_id)")
+            // Every outgoing stanza that is not a chat message: reactions, key transports, later
+            // retractions/markers. One queue, one state machine, one replay rule (the sealed wire).
             try connection.execute("""
-                CREATE TABLE IF NOT EXISTS reaction_updates (
+                CREATE TABLE IF NOT EXISTS outgoing_updates (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, id TEXT NOT NULL,
-                    chat_id TEXT NOT NULL, target_message_id TEXT NOT NULL, target_wire_id TEXT NOT NULL,
-                    actor_id TEXT NOT NULL, reactions_json TEXT NOT NULL, created_at REAL NOT NULL,
+                    kind TEXT NOT NULL, chat_id TEXT NOT NULL, target_message_id TEXT, target_wire_id TEXT,
+                    reactions_json TEXT, created_at REAL NOT NULL,
                     state TEXT NOT NULL CHECK(state IN ('queued','submitting','unconfirmed','failed','serverAccepted')),
                     attempt_id TEXT, wire BLOB, UNIQUE(account_id,id),
                     FOREIGN KEY(account_id,target_message_id) REFERENCES messages(account_id,id)
                 )
                 """)
-            try connection.execute("CREATE INDEX IF NOT EXISTS reaction_update_queue ON reaction_updates(account_id,state,sequence)")
+            try connection.execute("CREATE INDEX IF NOT EXISTS outgoing_update_queue ON outgoing_updates(account_id,state,sequence)")
+            if version < 10 {
+                let tables = Set(try connection.query("SELECT name FROM sqlite_master WHERE type='table'").map { $0[0].string })
+                if tables.contains("reaction_updates") {
+                    try connection.execute("""
+                        INSERT INTO outgoing_updates(account_id,id,kind,chat_id,target_message_id,target_wire_id,reactions_json,created_at,state,attempt_id,wire)
+                        SELECT account_id,id,'reaction',chat_id,target_message_id,target_wire_id,reactions_json,created_at,state,attempt_id,wire FROM reaction_updates ORDER BY sequence
+                        """)
+                    try connection.execute("DROP TABLE reaction_updates")
+                }
+                if tables.contains("encryption_controls") {
+                    try connection.execute("""
+                        INSERT INTO outgoing_updates(account_id,id,kind,chat_id,created_at,state,wire)
+                        SELECT account_id,id,'keyTransport',recipient,strftime('%s','now'),state,wire FROM encryption_controls ORDER BY rowid
+                        """)
+                    try connection.execute("DROP TABLE encryption_controls")
+                }
+            }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS reaction_events (
                     account_id TEXT NOT NULL, actor_id TEXT NOT NULL, id TEXT NOT NULL,
@@ -163,7 +176,7 @@ public actor MessageStore {
                     message_id TEXT NOT NULL, reason TEXT NOT NULL, UNIQUE(account_id,archive_id,message_id)
                 )
                 """)
-            try connection.execute("PRAGMA user_version = 9")
+            try connection.execute("PRAGMA user_version = 10")
         }
     }
 
@@ -264,8 +277,7 @@ public actor MessageStore {
         try requireTransportOwnership()
         try connection.transaction {
             try connection.execute("UPDATE outbox SET state='unconfirmed',attempt_id=NULL WHERE state='submitting'")
-            try connection.execute("UPDATE encryption_controls SET state='unconfirmed' WHERE state='submitting'")
-            try connection.execute("UPDATE reaction_updates SET state='unconfirmed',attempt_id=NULL WHERE state='submitting'")
+            try connection.execute("UPDATE outgoing_updates SET state='unconfirmed',attempt_id=NULL WHERE state='submitting'")
         }
         transportOwnership.release()
     }
@@ -327,8 +339,7 @@ public actor MessageStore {
         try requireTransportOwnership()
         try connection.transaction {
             try connection.execute("UPDATE outbox SET state='unconfirmed',attempt_id=NULL WHERE account_id=? AND state='submitting'", [.text(accountID)])
-            try connection.execute("UPDATE encryption_controls SET state='unconfirmed' WHERE account_id=? AND state='submitting'", [.text(accountID)])
-            try connection.execute("UPDATE reaction_updates SET state='unconfirmed',attempt_id=NULL WHERE account_id=? AND state='submitting'", [.text(accountID)])
+            try connection.execute("UPDATE outgoing_updates SET state='unconfirmed',attempt_id=NULL WHERE account_id=? AND state='submitting'", [.text(accountID)])
         }
     }
 
@@ -460,12 +471,23 @@ public actor MessageStore {
         }
     }
 
+    /// A key transport is sealed the moment it exists: its wire never depends on later preparation.
     private func insertEncryptionControl(accountID: String, control: EncryptionControl) throws {
         guard !control.id.isEmpty, control.id.utf8.count <= 1024,
               !control.recipient.isEmpty, control.recipient.utf8.count <= 3071,
               !control.wire.isEmpty, control.wire.count <= 1_048_576 else { throw MessageStoreError.invalidValue }
-        try connection.execute("INSERT INTO encryption_controls(account_id,id,recipient,wire) VALUES(?,?,?,?)",
-                               [.text(accountID), .text(control.id), .text(control.recipient), .blob(control.wire)])
+        try insertUpdate(accountID: accountID, id: control.id, kind: .keyTransport, chatID: control.recipient, createdAt: Date(),
+                         targetMessageID: nil, targetWireID: nil, reactionsJSON: nil, wire: control.wire)
+    }
+
+    /// Outgoing stream message IDs must identify exactly one durable operation, whatever its kind.
+    private func insertUpdate(accountID: String, id: String, kind: StoredUpdate.Kind, chatID: String, createdAt: Date,
+                              targetMessageID: String?, targetWireID: String?, reactionsJSON: String?, wire: Data?) throws {
+        guard try message(accountID: accountID, messageID: id) == nil,
+              try connection.query("SELECT 1 FROM outgoing_updates WHERE account_id=? AND id=?", [.text(accountID), .text(id)]).isEmpty else { throw MessageStoreError.conflictingIdentity }
+        try connection.execute("INSERT INTO outgoing_updates(account_id,id,kind,chat_id,target_message_id,target_wire_id,reactions_json,created_at,state,wire) VALUES(?,?,?,?,?,?,?,?,'queued',?)",
+                               [.text(accountID), .text(id), .text(kind.rawValue), .text(chatID), targetMessageID.map(Value.text) ?? .null, targetWireID.map(Value.text) ?? .null,
+                                reactionsJSON.map(Value.text) ?? .null, .real(createdAt.timeIntervalSince1970), wire.map(Value.blob) ?? .null])
     }
 
     private func writeEncryptionState(accountID: String, expectedRevision: Int?, data: Data) throws {
@@ -544,16 +566,6 @@ public actor MessageStore {
         }
     }
 
-    public func claimEncryptionControl(accountID: String) throws -> EncryptionControl? {
-        try requireTransportOwnership()
-        return try connection.transaction {
-            guard let row = try connection.query("SELECT id,recipient,wire FROM encryption_controls WHERE account_id=? AND state='queued' ORDER BY rowid LIMIT 1", [.text(accountID)]).first,
-                  let wire = row[2].data else { return nil }
-            try connection.execute("UPDATE encryption_controls SET state='submitting' WHERE account_id=? AND id=?", [.text(accountID), .text(row[0].string)])
-            return EncryptionControl(id: row[0].string, recipient: row[1].string, wire: wire)
-        }
-    }
-
     public func notificationPreviewsEnabled(accountID: String) throws -> Bool {
         (try connection.query("SELECT previews FROM notification_preferences WHERE account_id=?", [.text(accountID)]).first?[0].integer ?? 1) != 0
     }
@@ -590,11 +602,6 @@ public actor MessageStore {
             try dismissPendingMessageNotifications(accountID: accountID)
             return result
         }
-    }
-
-    public func finishEncryptionControl(accountID: String, id: String) throws {
-        try requireTransportOwnership()
-        try connection.execute("UPDATE encryption_controls SET state='unconfirmed' WHERE account_id=? AND id=? AND state='submitting'", [.text(accountID), .text(id)])
     }
 
     public func message(accountID: String, messageID: String) throws -> StoredMessage? {
@@ -653,7 +660,7 @@ public actor MessageStore {
                     UPDATE outbox SET state='serverAccepted',attempt_id=NULL
                     WHERE account_id=? AND message_id=? AND state IN ('submitting','unconfirmed','serverAccepted')
                     """, [.text(accountID), .text(id)])
-                try connection.execute("UPDATE reaction_updates SET state='serverAccepted',attempt_id=NULL WHERE account_id=? AND id=? AND state IN ('submitting','unconfirmed','serverAccepted')", [.text(accountID), .text(id)])
+                try connection.execute("UPDATE outgoing_updates SET state='serverAccepted',attempt_id=NULL WHERE account_id=? AND id=? AND state IN ('submitting','unconfirmed','serverAccepted')", [.text(accountID), .text(id)])
             }
             return next
         }
@@ -802,10 +809,8 @@ public actor MessageStore {
                 guard comparison == existing else { throw MessageStoreError.conflictingIdentity }
                 return false
             }
-            // Outgoing stream message IDs must identify exactly one durable operation.
-            guard try message(accountID: update.accountID, messageID: update.id) == nil,
-                  try connection.query("SELECT 1 FROM encryption_controls WHERE account_id=? AND id=?", [.text(update.accountID), .text(update.id)]).isEmpty else { throw MessageStoreError.conflictingIdentity }
-            try connection.execute("INSERT INTO reaction_updates(account_id,id,chat_id,target_message_id,target_wire_id,actor_id,reactions_json,created_at,state) VALUES(?,?,?,?,?,?,?,?,'queued')", [.text(update.accountID), .text(update.id), .text(update.chatID), .text(update.targetMessageID), .text(update.targetWireID), .text(update.actorID), .text(try Self.reactionJSON(update.reactions)), .real(update.createdAt.timeIntervalSince1970)])
+            try insertUpdate(accountID: update.accountID, id: update.id, kind: .reaction, chatID: update.chatID, createdAt: update.createdAt,
+                             targetMessageID: update.targetMessageID, targetWireID: update.targetWireID, reactionsJSON: try Self.reactionJSON(update.reactions), wire: nil)
             try insertReactionEvent(accountID: update.accountID, reaction: event, groupRoom: groupRoom)
             return true
         }
@@ -817,81 +822,100 @@ public actor MessageStore {
     }
 
     public func queuedReactions(accountID: String) throws -> [StoredReactionUpdate] {
-        try connection.query("SELECT \(Self.reactionColumns) FROM reaction_updates WHERE account_id=? AND state='queued' ORDER BY sequence LIMIT 1000", [.text(accountID)]).map(Self.decodeReaction)
+        try connection.query("SELECT \(Self.reactionColumns) FROM outgoing_updates WHERE account_id=? AND kind='reaction' AND state='queued' ORDER BY sequence LIMIT 1000", [.text(accountID)]).map(Self.decodeReaction)
     }
 
     public func reactionUpdate(accountID: String, updateID: String) throws -> StoredReactionUpdate? {
-        try connection.query("SELECT \(Self.reactionColumns) FROM reaction_updates WHERE account_id=? AND id=?", [.text(accountID), .text(updateID)]).first.map(Self.decodeReaction)
+        try connection.query("SELECT \(Self.reactionColumns) FROM outgoing_updates WHERE account_id=? AND kind='reaction' AND id=?", [.text(accountID), .text(updateID)]).first.map(Self.decodeReaction)
     }
 
-    public func encryptedReaction(accountID: String, updateID: String) throws -> Data? {
-        try connection.query("SELECT wire FROM reaction_updates WHERE account_id=? AND id=?", [.text(accountID), .text(updateID)]).first?[0].data
+    public func queuedUpdates(accountID: String, kind: StoredUpdate.Kind) throws -> [StoredUpdate] {
+        try connection.query("SELECT \(Self.updateColumns) FROM outgoing_updates WHERE account_id=? AND kind=? AND state='queued' ORDER BY sequence LIMIT 1000", [.text(accountID), .text(kind.rawValue)]).map(Self.decodeUpdate)
     }
 
-    public func sealQueuedReaction(accountID: String, updateID: String, expectedRevision: Int, state: Data, wire: Data) throws {
+    public func update(accountID: String, updateID: String) throws -> StoredUpdate? {
+        try connection.query("SELECT \(Self.updateColumns) FROM outgoing_updates WHERE account_id=? AND id=?", [.text(accountID), .text(updateID)]).first.map(Self.decodeUpdate)
+    }
+
+    /// The sealed wire: exact plain stanza bytes, or the prepared envelope for an encrypted update.
+    public func updateWire(accountID: String, updateID: String) throws -> Data? {
+        try connection.query("SELECT wire FROM outgoing_updates WHERE account_id=? AND id=?", [.text(accountID), .text(updateID)]).first?[0].data
+    }
+
+    /// Converts a durable queued intention into exact ciphertext and commits the ratchet advancement
+    /// in the SAME transaction. Never overwrites an existing sealed wire.
+    public func sealQueuedUpdate(accountID: String, updateID: String, expectedRevision: Int, state: Data, wire: Data) throws {
         guard !wire.isEmpty, wire.count <= 1_048_576 else { throw MessageStoreError.invalidValue }
         try connection.transaction {
-            guard let update = try reactionUpdate(accountID: accountID, updateID: updateID), update.transportState == .queued,
-                  try encryptedReaction(accountID: accountID, updateID: updateID) == nil,
-                  try reactionTarget(accountID: accountID, chatID: update.chatID, wireID: update.targetWireID)?.id == update.targetMessageID else { throw MessageStoreError.invalidTransition }
+            guard try sealableUpdate(accountID: accountID, updateID: updateID), try updateWire(accountID: accountID, updateID: updateID) == nil else { throw MessageStoreError.invalidTransition }
             try writeEncryptionState(accountID: accountID, expectedRevision: expectedRevision, data: state)
-            try connection.execute("UPDATE reaction_updates SET wire=? WHERE account_id=? AND id=?", [.blob(wire), .text(accountID), .text(updateID)])
+            try connection.execute("UPDATE outgoing_updates SET wire=? WHERE account_id=? AND id=?", [.blob(wire), .text(accountID), .text(updateID)])
         }
     }
 
-    /// A plain XEP-0444 update for a legacy peer: the exact stanza is the wire, no ratchet state moves.
-    public func sealQueuedPlaintextReaction(accountID: String, updateID: String, wire: Data) throws {
+    /// A plain stanza for a legacy peer: the exact bytes are the wire, no ratchet state moves. Idempotent for identical bytes.
+    public func sealQueuedUpdate(accountID: String, updateID: String, wire: Data) throws {
         guard !wire.isEmpty, wire.count <= 1_048_576 else { throw MessageStoreError.invalidValue }
         try connection.transaction {
-            guard let update = try reactionUpdate(accountID: accountID, updateID: updateID), update.transportState == .queued,
-                  try reactionTarget(accountID: accountID, chatID: update.chatID, wireID: update.targetWireID)?.id == update.targetMessageID else { throw MessageStoreError.invalidTransition }
-            if let existing = try encryptedReaction(accountID: accountID, updateID: updateID) {
+            guard try sealableUpdate(accountID: accountID, updateID: updateID) else { throw MessageStoreError.invalidTransition }
+            if let existing = try updateWire(accountID: accountID, updateID: updateID) {
                 guard existing == wire else { throw MessageStoreError.invalidTransition }
                 return
             }
-            try connection.execute("UPDATE reaction_updates SET wire=? WHERE account_id=? AND id=?", [.blob(wire), .text(accountID), .text(updateID)])
+            try connection.execute("UPDATE outgoing_updates SET wire=? WHERE account_id=? AND id=?", [.blob(wire), .text(accountID), .text(updateID)])
         }
     }
 
-    public func claimNextReaction(accountID: String, updateIDs: Set<String>) throws -> ReactionSubmission? {
+    /// Queued, and for a reaction still bound to exactly the message it was queued against.
+    private func sealableUpdate(accountID: String, updateID: String) throws -> Bool {
+        guard let update = try update(accountID: accountID, updateID: updateID), update.transportState == .queued else { return false }
+        guard update.kind == .reaction else { return true }
+        guard let reaction = try reactionUpdate(accountID: accountID, updateID: updateID) else { return false }
+        return try reactionTarget(accountID: accountID, chatID: reaction.chatID, wireID: reaction.targetWireID)?.id == reaction.targetMessageID
+    }
+
+    /// FIFO by durable enqueue order across kinds. `nil` claims any sealed update.
+    public func claimNextUpdate(accountID: String, updateIDs: Set<String>? = nil) throws -> UpdateSubmission? {
         try Task.checkCancellation(); try requireTransportOwnership()
-        guard updateIDs.count <= 1000 else { throw MessageStoreError.invalidValue }
-        guard !updateIDs.isEmpty else { return nil }
+        if let updateIDs, updateIDs.isEmpty { return nil }
+        guard (updateIDs?.count ?? 0) <= 1000 else { throw MessageStoreError.invalidValue }
         return try connection.transaction {
-            let ordered = updateIDs.sorted()
-            let selection = ordered.map { _ in "?" }.joined(separator: ",")
-            guard let row = try connection.query("SELECT id FROM reaction_updates WHERE account_id=? AND state='queued' AND wire IS NOT NULL AND id IN (\(selection)) ORDER BY sequence LIMIT 1", [.text(accountID)] + ordered.map(Value.text)).first else { return nil }
+            let ordered = updateIDs?.sorted() ?? []
+            let selection = updateIDs == nil ? "" : " AND id IN (" + ordered.map { _ in "?" }.joined(separator: ",") + ")"
+            guard let row = try connection.query("SELECT id,wire FROM outgoing_updates WHERE account_id=? AND state='queued' AND wire IS NOT NULL" + selection + " ORDER BY sequence LIMIT 1", [.text(accountID)] + ordered.map(Value.text)).first,
+                  let wire = row[1].data else { return nil }
             let id = row[0].string, attempt = UUID().uuidString
-            try connection.execute("UPDATE reaction_updates SET state='submitting',attempt_id=? WHERE account_id=? AND id=?", [.text(attempt), .text(accountID), .text(id)])
-            guard let update = try reactionUpdate(accountID: accountID, updateID: id) else { throw MessageStoreError.invalidTransition }
-            return ReactionSubmission(update: update, attemptID: attempt)
+            try connection.execute("UPDATE outgoing_updates SET state='submitting',attempt_id=? WHERE account_id=? AND id=?", [.text(attempt), .text(accountID), .text(id)])
+            guard let update = try update(accountID: accountID, updateID: id) else { throw MessageStoreError.invalidTransition }
+            return UpdateSubmission(update: update, wire: wire, attemptID: attempt)
         }
     }
 
-    @discardableResult public func finishReactionSubmission(accountID: String, updateID: String, attemptID: String) throws -> Bool {
+    /// Call for BOTH successful socket writes and errors after claiming; socket completion is not delivery.
+    @discardableResult public func finishUpdateSubmission(accountID: String, updateID: String, attemptID: String) throws -> Bool {
         try requireTransportOwnership()
-        try connection.execute("UPDATE reaction_updates SET state='unconfirmed',attempt_id=NULL WHERE account_id=? AND id=? AND state='submitting' AND attempt_id=?", [.text(accountID), .text(updateID), .text(attemptID)])
+        try connection.execute("UPDATE outgoing_updates SET state='unconfirmed',attempt_id=NULL WHERE account_id=? AND id=? AND state='submitting' AND attempt_id=?", [.text(accountID), .text(updateID), .text(attemptID)])
         return try connection.query("SELECT changes()").first?[0].integer == 1
     }
 
     /// Only call when no socket operation was attempted.
-    @discardableResult public func releaseUnsentReactionSubmission(accountID: String, updateID: String, attemptID: String) throws -> Bool {
+    @discardableResult public func releaseUnsentUpdateSubmission(accountID: String, updateID: String, attemptID: String) throws -> Bool {
         try requireTransportOwnership()
-        try connection.execute("UPDATE reaction_updates SET state='queued',attempt_id=NULL WHERE account_id=? AND id=? AND state='submitting' AND attempt_id=?", [.text(accountID), .text(updateID), .text(attemptID)])
+        try connection.execute("UPDATE outgoing_updates SET state='queued',attempt_id=NULL WHERE account_id=? AND id=? AND state='submitting' AND attempt_id=?", [.text(accountID), .text(updateID), .text(attemptID)])
         return try connection.query("SELECT changes()").first?[0].integer == 1
     }
 
-    public func retryReaction(accountID: String, updateID: String) throws {
+    public func retryUpdate(accountID: String, updateID: String) throws {
         try requireTransportOwnership()
-        try connection.execute("UPDATE reaction_updates SET state='queued',attempt_id=NULL WHERE account_id=? AND id=? AND state IN ('unconfirmed','failed')", [.text(accountID), .text(updateID)])
+        try connection.execute("UPDATE outgoing_updates SET state='queued',attempt_id=NULL WHERE account_id=? AND id=? AND state IN ('unconfirmed','failed')", [.text(accountID), .text(updateID)])
         guard try connection.query("SELECT changes()").first?[0].integer == 1 else { throw MessageStoreError.invalidTransition }
     }
 
     /// Authenticated archive/carbon caller must also compare recipient/profile/envelope before use.
-    @discardableResult public func reconcileArchivedReaction(accountID: String, updateID: String, expectedEncryptedWire: Data) throws -> Bool {
+    @discardableResult public func reconcileArchivedUpdate(accountID: String, updateID: String, expectedWire: Data) throws -> Bool {
         try requireTransportOwnership()
-        guard try encryptedReaction(accountID: accountID, updateID: updateID) == expectedEncryptedWire else { return false }
-        try connection.execute("UPDATE reaction_updates SET state='serverAccepted',attempt_id=NULL WHERE account_id=? AND id=?", [.text(accountID), .text(updateID)])
+        guard try updateWire(accountID: accountID, updateID: updateID) == expectedWire else { return false }
+        try connection.execute("UPDATE outgoing_updates SET state='serverAccepted',attempt_id=NULL WHERE account_id=? AND id=?", [.text(accountID), .text(updateID)])
         return try connection.query("SELECT changes()").first?[0].integer == 1
     }
 
@@ -911,12 +935,18 @@ public actor MessageStore {
               reaction.updatedAt.timeIntervalSince1970.isFinite else { throw MessageStoreError.invalidValue }
     }
     private static func reactionJSON(_ values: [String]) throws -> String { String(decoding: try JSONEncoder().encode(values.sorted()), as: UTF8.self) }
-    private static let reactionColumns = "account_id,id,chat_id,target_message_id,target_wire_id,actor_id,reactions_json,created_at,state"
+    private static let reactionColumns = "account_id,id,chat_id,target_message_id,target_wire_id,reactions_json,created_at,state"
     private static func decodeReaction(_ row: [Value]) throws -> StoredReactionUpdate {
+        // Outgoing updates are always our own: the actor is the account.
         StoredReactionUpdate(id: row[1].string, accountID: row[0].string, chatID: row[2].string, targetMessageID: row[3].string,
-                             targetWireID: row[4].string, actorID: row[5].string,
-                             reactions: try JSONDecoder().decode([String].self, from: Data(row[6].string.utf8)),
-                             createdAt: Date(timeIntervalSince1970: row[7].double), transportState: OutgoingTransportState(rawValue: row[8].string))
+                             targetWireID: row[4].string, actorID: row[0].string,
+                             reactions: try JSONDecoder().decode([String].self, from: Data(row[5].string.utf8)),
+                             createdAt: Date(timeIntervalSince1970: row[6].double), transportState: OutgoingTransportState(rawValue: row[7].string))
+    }
+    private static let updateColumns = "account_id,id,kind,chat_id,state"
+    private static func decodeUpdate(_ row: [Value]) throws -> StoredUpdate {
+        guard let kind = StoredUpdate.Kind(rawValue: row[2].string) else { throw MessageStoreError.invalidValue }
+        return StoredUpdate(id: row[1].string, accountID: row[0].string, kind: kind, chatID: row[3].string, transportState: OutgoingTransportState(rawValue: row[4].string))
     }
 
     private static let columns = """

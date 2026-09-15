@@ -24,21 +24,21 @@ private func update(_ id: String = "reaction", reactions: [String] = ["👍"]) -
     #expect(try await !store.enqueueReaction(update()))
     #expect(try await store.messages(accountID: "self", chatID: "peer").count == 1)
     #expect(try await store.reactions(accountID: "self", chatID: "peer", messageID: "target").first?.reactions == ["👍"])
-    #expect(try await store.claimNextReaction(accountID: "self", updateIDs: ["reaction"]) == nil)
+    #expect(try await store.claimNextUpdate(accountID: "self", updateIDs: ["reaction"]) == nil)
     try await store.saveEncryptionState(accountID: "self", expectedRevision: nil, data: Data([1]))
     await #expect(throws: MessageStoreError.invalidTransition) {
-        try await store.sealQueuedReaction(accountID: "self", updateID: "reaction", expectedRevision: 0, state: Data([2]), wire: Data([3]))
+        try await store.sealQueuedUpdate(accountID: "self", updateID: "reaction", expectedRevision: 0, state: Data([2]), wire: Data([3]))
     }
-    #expect(try await store.encryptedReaction(accountID: "self", updateID: "reaction") == nil)
+    #expect(try await store.updateWire(accountID: "self", updateID: "reaction") == nil)
     #expect(try await store.encryptionState(accountID: "self")?.revision == 1)
-    try await store.sealQueuedReaction(accountID: "self", updateID: "reaction", expectedRevision: 1, state: Data([2]), wire: Data([3]))
-    let submission = try #require(await store.claimNextReaction(accountID: "self", updateIDs: ["reaction"]))
-    #expect(try await store.claimNextReaction(accountID: "self", updateIDs: ["reaction"]) == nil)
+    try await store.sealQueuedUpdate(accountID: "self", updateID: "reaction", expectedRevision: 1, state: Data([2]), wire: Data([3]))
+    let submission = try #require(await store.claimNextUpdate(accountID: "self", updateIDs: ["reaction"]))
+    #expect(try await store.claimNextUpdate(accountID: "self", updateIDs: ["reaction"]) == nil)
     try await store.saveStreamManagement(accountID: "self", expectedRevision: nil, data: Data([4]), acknowledgedMessageIDs: ["reaction"])
-    #expect(try await !store.finishReactionSubmission(accountID: "self", updateID: "reaction", attemptID: submission.attemptID))
+    #expect(try await !store.finishUpdateSubmission(accountID: "self", updateID: "reaction", attemptID: submission.attemptID))
     #expect(try await store.reactionUpdate(accountID: "self", updateID: "reaction")?.transportState == .serverAccepted)
-    await #expect(throws: MessageStoreError.invalidTransition) { try await store.retryReaction(accountID: "self", updateID: "reaction") }
-    #expect(try await store.encryptedReaction(accountID: "self", updateID: "reaction") == Data([3]))
+    await #expect(throws: MessageStoreError.invalidTransition) { try await store.retryUpdate(accountID: "self", updateID: "reaction") }
+    #expect(try await store.updateWire(accountID: "self", updateID: "reaction") == Data([3]))
 }
 
 @Test func reactionRecoveryPreservesExactBytesAndExplicitRetryRejectsLateClaim() async throws {
@@ -47,19 +47,19 @@ private func update(_ id: String = "reaction", reactions: [String] = ["👍"]) -
     try await store.acquireTransportOwnership(); try await target(store)
     try await store.enqueueReaction(update())
     try await store.saveEncryptionState(accountID: "self", expectedRevision: nil, data: Data([1]))
-    try await store.sealQueuedReaction(accountID: "self", updateID: "reaction", expectedRevision: 1, state: Data([2]), wire: Data([99]))
-    let old = try #require(await store.claimNextReaction(accountID: "self", updateIDs: ["reaction"]))
+    try await store.sealQueuedUpdate(accountID: "self", updateID: "reaction", expectedRevision: 1, state: Data([2]), wire: Data([99]))
+    let old = try #require(await store.claimNextUpdate(accountID: "self", updateIDs: ["reaction"]))
     let reopened = try MessageStore(url: url)
     #expect(try await reopened.reactionUpdate(accountID: "self", updateID: "reaction")?.transportState == .submitting)
     try await store.recoverInterruptedSubmissions(accountID: "self")
     #expect(try await store.queuedReactions(accountID: "self").isEmpty)
-    try await store.retryReaction(accountID: "self", updateID: "reaction")
-    let next = try #require(await store.claimNextReaction(accountID: "self", updateIDs: ["reaction"]))
+    try await store.retryUpdate(accountID: "self", updateID: "reaction")
+    let next = try #require(await store.claimNextUpdate(accountID: "self", updateIDs: ["reaction"]))
     #expect(old.attemptID != next.attemptID)
-    #expect(try await !store.finishReactionSubmission(accountID: "self", updateID: "reaction", attemptID: old.attemptID))
-    #expect(try await store.encryptedReaction(accountID: "self", updateID: "reaction") == Data([99]))
-    #expect(try await store.releaseUnsentReactionSubmission(accountID: "self", updateID: "reaction", attemptID: next.attemptID))
-    #expect(try await store.reconcileArchivedReaction(accountID: "self", updateID: "reaction", expectedEncryptedWire: Data([99])))
+    #expect(try await !store.finishUpdateSubmission(accountID: "self", updateID: "reaction", attemptID: old.attemptID))
+    #expect(try await store.updateWire(accountID: "self", updateID: "reaction") == Data([99]))
+    #expect(try await store.releaseUnsentUpdateSubmission(accountID: "self", updateID: "reaction", attemptID: next.attemptID))
+    #expect(try await store.reconcileArchivedUpdate(accountID: "self", updateID: "reaction", expectedWire: Data([99])))
     #expect(try await store.reactionUpdate(accountID: "self", updateID: "reaction")?.transportState == .serverAccepted)
 }
 
@@ -175,12 +175,12 @@ private func update(_ id: String = "reaction", reactions: [String] = ["👍"]) -
     // Our own plain reaction rides the same durable queue with the exact stanza as its wire.
     let queued = StoredReactionUpdate(id: "q1", accountID: "self", chatID: "peer", targetMessageID: "mine", targetWireID: "mine", actorID: "self", reactions: ["🔥"])
     #expect(try await store.enqueueReaction(queued))
-    #expect(try await store.claimNextReaction(accountID: "self", updateIDs: ["q1"]) == nil)
-    try await store.sealQueuedPlaintextReaction(accountID: "self", updateID: "q1", wire: Data("<message/>".utf8))
-    try await store.sealQueuedPlaintextReaction(accountID: "self", updateID: "q1", wire: Data("<message/>".utf8))
-    await #expect(throws: MessageStoreError.invalidTransition) { try await store.sealQueuedPlaintextReaction(accountID: "self", updateID: "q1", wire: Data("<other/>".utf8)) }
-    let claim = try #require(await store.claimNextReaction(accountID: "self", updateIDs: ["q1"]))
-    #expect(try await store.finishReactionSubmission(accountID: "self", updateID: "q1", attemptID: claim.attemptID))
+    #expect(try await store.claimNextUpdate(accountID: "self", updateIDs: ["q1"]) == nil)
+    try await store.sealQueuedUpdate(accountID: "self", updateID: "q1", wire: Data("<message/>".utf8))
+    try await store.sealQueuedUpdate(accountID: "self", updateID: "q1", wire: Data("<message/>".utf8))
+    await #expect(throws: MessageStoreError.invalidTransition) { try await store.sealQueuedUpdate(accountID: "self", updateID: "q1", wire: Data("<other/>".utf8)) }
+    let claim = try #require(await store.claimNextUpdate(accountID: "self", updateIDs: ["q1"]))
+    #expect(try await store.finishUpdateSubmission(accountID: "self", updateID: "q1", attemptID: claim.attemptID))
     #expect(try await store.reactionUpdate(accountID: "self", updateID: "q1")?.transportState == .unconfirmed)
     #expect(try await store.reactionsForChat(accountID: "self", chatID: "peer", messageIDs: ["mine"])["mine"]?.map(\.actorID) == ["peer", "self"])
     // A stranger's actor ID never records.

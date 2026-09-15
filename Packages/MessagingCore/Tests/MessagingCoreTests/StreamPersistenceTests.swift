@@ -50,4 +50,25 @@ struct StreamPersistenceTests {
         #expect(try await !adapter.permitsResumption(snapshot(journal: [.init(sequence: 1, xml: wire, messageID: "missing")])))
         #expect(try await !adapter.permitsResumption(snapshot(account: "mallory@localhost")))
     }
+
+    @Test func journaledUpdatesResumeOnlyAsTheirExactSealedWire() async throws {
+        let (store, adapter) = try await fixture()
+        try await store.upsertChat(accountID: "alice@localhost", chatID: "bob@localhost", title: "Bob")
+        try await store.insertMessage(.init(id: "target", accountID: "alice@localhost", chatID: "bob@localhost", senderID: "bob@localhost", body: "x",
+                                            encryptionProfile: "legacy", wireID: "wire-target"))
+        _ = try await store.enqueueReaction(.init(id: "r1", accountID: "alice@localhost", chatID: "bob@localhost", targetMessageID: "target",
+                                                  targetWireID: "wire-target", actorID: "alice@localhost", reactions: ["👍"]))
+        let xml = try XMPPClient.reactionXML(to: "bob@localhost", targetID: "wire-target", reactions: ["👍"], id: "r1")
+        // Unsealed: nothing may be replayed under this ID yet.
+        let entry = XMPPStreamJournalEntry(sequence: 1, xml: xml, messageID: "r1")
+        #expect(try await !adapter.permitsResumption(snapshot(journal: [entry])))
+        try await store.sealQueuedUpdate(accountID: "alice@localhost", updateID: "r1", wire: Data(xml.utf8))
+        #expect(try await adapter.permitsResumption(snapshot(journal: [entry])))
+        // One drifted entry anywhere in the journal refuses the whole resumption.
+        let drifted = XMPPStreamJournalEntry(sequence: 2, xml: xml.replacingOccurrences(of: "👍", with: "❤️"), messageID: "r1")
+        #expect(try await !adapter.permitsResumption(snapshot(journal: [entry, drifted])))
+        // Non-message stanzas in the journal are replayed as raw bytes and never consulted.
+        let iq = XMPPStreamJournalEntry(sequence: 2, xml: "<iq type='get' id='ping'/>", messageID: nil)
+        #expect(try await adapter.permitsResumption(snapshot(journal: [entry, iq])))
+    }
 }

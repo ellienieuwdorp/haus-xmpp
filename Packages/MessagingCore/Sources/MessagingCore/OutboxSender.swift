@@ -44,39 +44,6 @@ public actor OutboxSender {
             await didChange()
         }
     }
-    /// Group reactions have their own durable intentions and must pass a final membership/trust
-    /// check before transport. The same actor serializes them with ordinary message claims.
-    public func drainReactions(
-        accountID: String, updateIDs: Set<String>,
-        send: @Sendable (StoredReactionUpdate) async throws -> Void,
-        didChange: @Sendable () async -> Void = {}
-    ) async throws {
-        guard !running else { return }
-        running = true
-        defer { running = false }
-        while !Task.isCancelled {
-            guard let attempt = try await store.claimNextReaction(accountID: accountID, updateIDs: updateIDs) else { return }
-            await didChange()
-            if Task.isCancelled {
-                try await store.releaseUnsentReactionSubmission(accountID: accountID, updateID: attempt.update.id, attemptID: attempt.attemptID)
-                await didChange()
-                return
-            }
-            do { try await send(attempt.update) }
-            catch OutboxSendFailure.notAttempted {
-                try await store.releaseUnsentReactionSubmission(accountID: accountID, updateID: attempt.update.id, attemptID: attempt.attemptID)
-                await didChange()
-                throw OutboxSendFailure.notAttempted
-            } catch {
-                try await store.finishReactionSubmission(accountID: accountID, updateID: attempt.update.id, attemptID: attempt.attemptID)
-                await didChange()
-                throw error
-            }
-            try await store.finishReactionSubmission(accountID: accountID, updateID: attempt.update.id, attemptID: attempt.attemptID)
-            await didChange()
-        }
-    }
-
 }
 
 /// A caller may use this only if it has not invoked the transport at all (for example, a final

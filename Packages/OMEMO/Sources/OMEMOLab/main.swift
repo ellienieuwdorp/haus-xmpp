@@ -89,8 +89,9 @@ import XMPPProtocol
         let features = try await client.discoveryFeatures()
         if features.contains("urn:xmpp:carbons:2") { try await client.setCarbonsEnabled() }
         try await service.initialize(account: credentials.jid, transport: client)
-        try await service.flushKeyTransports(account: credentials.jid) { to, id, envelope in
-            try await client.sendEncryptedMessage(to: to, envelope: envelope, id: id)
+        try await service.flushUpdates(account: credentials.jid) { update, prepared in
+            guard case .encrypted(let to, let envelope) = prepared else { return }
+            try await client.sendEncryptedMessage(to: to, envelope: envelope, id: update.id)
         }
         let overview = try await service.refreshDevices(account: credentials.jid, peer: peer, profile: profile, transport: client)
         let identity = IdentityRecord(account: credentials.jid, profile: profile, deviceID: overview.localDeviceID, fingerprint: overview.localFingerprint)
@@ -144,8 +145,9 @@ import XMPPProtocol
             case .encryptedMessage(let incoming):
                 guard String(incoming.from.prefix { $0 != "/" }) == peer else { continue }
                 _ = try await service.receive(account: credentials.jid, message: incoming, transport: client)
-                try await service.flushKeyTransports(account: credentials.jid) { to, id, envelope in
-                    try await client.sendEncryptedMessage(to: to, envelope: envelope, id: id)
+                try await service.flushUpdates(account: credentials.jid) { update, prepared in
+                    guard case .encrypted(let to, let envelope) = prepared else { return }
+                    try await client.sendEncryptedMessage(to: to, envelope: envelope, id: update.id)
                 }
                 let messages = try await store.messages(accountID: credentials.jid, chatID: peer, limit: 1_000)
                 if messages.contains(where: { !$0.isOutgoing && $0.body == message.body && $0.encryptionProfile == profile.rawValue }) {

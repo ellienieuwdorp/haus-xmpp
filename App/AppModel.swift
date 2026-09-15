@@ -907,24 +907,18 @@ final class AppModel {
                 }, didChange: { [weak self] in
                     await self?.refresh()
                 })
-                let reactions = try await encryption.prepareAvailableReactions(account: account, transport: client)
-                if let self, self.generation == token, let issue = reactions.blockedChats[self.openChatID ?? ""] {
+                // Everything that is not a chat message rides one queue: reactions (plain, encrypted,
+                // group) and key transports. Preparation seals; the flush re-validates and sends.
+                let updates = try await encryption.prepareAvailableUpdates(account: account, transport: client)
+                if let self, self.generation == token, let issue = updates.blockedChats[self.openChatID ?? ""] {
                     self.encryptionStatus = issue
                     self.encryptionNeedsReview = true
                 }
-                try await encryption.flushPreparedReactions(account: account, preparedIDs: reactions.messageIDs) { to, id, envelope in
-                    _ = try await client.sendEncryptedMessage(to: to, envelope: envelope, id: id)
-                    try? await client.requestAcknowledgement()
-                }
-                try await outboxSender.drainReactions(accountID: account, updateIDs: reactions.plaintextIDs, send: { update in
-                    _ = try await client.sendReaction(to: update.chatID, targetID: update.targetWireID, reactions: update.reactions, id: update.id)
-                    try? await client.requestAcknowledgement()
-                }, didChange: { [weak self] in await self?.refresh() })
-                var groupReactionIDs = Set<String>()
+                var updateIDs = updates.messageIDs
                 for update in try await store.queuedReactions(accountID: account) where joinedGroups.contains(update.chatID) {
                     do {
                         try await encryption.prepareGroupReaction(account: account, updateID: update.id, room: update.chatID, transport: client)
-                        groupReactionIDs.insert(update.id)
+                        updateIDs.insert(update.id)
                     } catch {
                         if error is CancellationError { throw error }
                         if let self, self.generation == token {
@@ -933,13 +927,17 @@ final class AppModel {
                         }
                     }
                 }
-                try await outboxSender.drainReactions(accountID: account, updateIDs: groupReactionIDs, send: { update in
-                    let prepared: PreparedGroupMessage
-                    do { prepared = try await encryption.outgoingGroupReactionEnvelope(account: account, updateID: update.id, room: update.chatID, transport: client) }
-                    catch { throw OutboxSendFailure.notAttempted }
-                    _ = try await client.sendEncryptedGroupMessage(room: update.chatID, envelope: prepared.envelope, id: update.id, expectedMembers: prepared.members)
+                try await encryption.flushUpdates(account: account, updateIDs: updateIDs, groupTransport: client) { update, prepared in
+                    switch prepared {
+                    case .encrypted(let to, let envelope):
+                        _ = try await client.sendEncryptedMessage(to: to, envelope: envelope, id: update.id)
+                    case .group(let room, let envelope, let members):
+                        _ = try await client.sendEncryptedGroupMessage(room: room, envelope: envelope, id: update.id, expectedMembers: members)
+                    case .plainReaction(let to, let targetID, let reactions):
+                        _ = try await client.sendReaction(to: to, targetID: targetID, reactions: reactions, id: update.id)
+                    }
                     try? await client.requestAcknowledgement()
-                }, didChange: { [weak self] in await self?.refresh() })
+                }
                 await self?.refresh()
             } catch {
                 if let self, self.generation == token {
@@ -1100,10 +1098,8 @@ final class AppModel {
     private func flushEncryptionControls(account: String, client: XMPPClient) async {
         guard accountID == account, self.client === client else { return }
         try? await encryption?.flushBundlePublications(account: account, transport: client)
-        try? await encryption?.flushKeyTransports(account: account) { to, id, envelope in
-            _ = try await client.sendEncryptedMessage(to: to, envelope: envelope, id: id)
-            try? await client.requestAcknowledgement()
-        }
+        // Key transports are ordinary durable updates; the outbox drain sends them.
+        startOutbox()
     }
 
     func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = []; messageReactions = [:] } }

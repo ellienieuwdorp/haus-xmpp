@@ -102,9 +102,16 @@ actor OperationGate {
 }
 
 public struct EncryptionPreparation: Sendable {
+    /// Sealed and claimable now: messages, or every update kind (plain wire or envelope).
     public let messageIDs: Set<String>
     public let blockedChats: [String: String]
     let failure: OMEMOError?
-    /// Updates for legacy peers, sealed as the exact plain XEP-0444 stanza instead of an envelope.
-    public var plaintextIDs: Set<String> = []
+}
+
+/// What the transport must write for one claimed update, re-validated against current trust.
+public enum PreparedUpdate: Sendable, Equatable {
+    case encrypted(to: String, envelope: XMPPOMEMOEnvelope)
+    case group(room: String, envelope: XMPPOMEMOEnvelope, members: [String])
+    /// The exact plain stanza is the sealed wire; the serializer is deterministic for these inputs.
+    case plainReaction(to: String, targetID: String, reactions: [String])
 }

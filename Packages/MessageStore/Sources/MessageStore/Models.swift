@@ -144,7 +144,19 @@ public struct AuthenticatedReaction: Sendable, Equatable {
     }
 }
 
-public struct ReactionSubmission: Sendable, Equatable {
-    public let update: StoredReactionUpdate
+/// One row of the durable update outbox: every outgoing stanza that is not a chat message.
+/// The sealed wire is the exact bytes (or prepared envelope) that may ever be sent under this ID.
+public struct StoredUpdate: Sendable, Equatable {
+    public enum Kind: String, Sendable { case reaction, keyTransport }
+    public let id: String
+    public let accountID: String
+    public let kind: Kind
+    public let chatID: String
+    public var transportState: OutgoingTransportState?
+}
+
+public struct UpdateSubmission: Sendable, Equatable {
+    public let update: StoredUpdate
+    public let wire: Data
     public let attemptID: String
 }
