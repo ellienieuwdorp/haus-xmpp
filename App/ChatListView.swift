@@ -76,6 +76,7 @@ struct ChatListView: View {
             }
         }
         .navigationTitle("Chats")
+        .navigationSubtitle(model.session.chatsSubtitle)
         .navigationBarTitleDisplayMode(.large)
         .searchable(text: $search, prompt: "Search")
         .toolbar {
@@ -177,7 +178,7 @@ struct ChatListView: View {
                                 .background(Color(uiColor: AccentTheme.current.tint), in: RoundedRectangle(cornerRadius: 8))
                         }
                     }
-                    .disabled(!model.isConnected || !model.encryptionReady)
+                    .disabled(!model.session.isReady)
                     .accessibilityIdentifier("newGroup")
                 }
                 if !suggestedChats.isEmpty {

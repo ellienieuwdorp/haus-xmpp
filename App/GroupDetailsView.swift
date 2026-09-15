@@ -66,7 +66,7 @@ struct GroupDetailsView: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Refresh group", systemImage: "arrow.clockwise") { Task { await model.loadGroupDetails(room: room) } }
-                        .labelStyle(.iconOnly).disabled(!model.isConnected)
+                        .labelStyle(.iconOnly).disabled(!model.session.isReady)
                 }
             }
             .sheet(item: $selectedDevice) { device in

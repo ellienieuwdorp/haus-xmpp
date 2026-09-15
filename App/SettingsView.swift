@@ -11,9 +11,12 @@ struct SettingsView: View {
     private var domain: String { model.accountID.split(separator: "@").dropFirst().first.map(String.init) ?? "" }
 
     private var status: (color: Color, text: String) {
-        if model.isConnected { return (.green, "Connected · \(domain)") }
-        if model.isConnecting { return (.orange, "Connecting…") }
-        return (.gray, "Offline")
+        switch model.session {
+        case .ready: (.green, "Connected · \(domain)")
+        case .connecting, .connected: (.orange, model.session.label)
+        case .needsAttention: (.red, model.session.label)
+        case .offline: (.gray, model.session.label)
+        }
     }
 
     var body: some View {
@@ -24,7 +27,7 @@ struct SettingsView: View {
                     .accessibilityHint("Opens sign in")
                 Button(model.accountID.isEmpty ? "Sign in" : "Switch account") { showingConnection = true }
                     .accessibilityIdentifier("Connect to local lab")
-                if model.isConnected {
+                if model.session.isConnected {
                     Button("Disconnect") { Task { await model.disconnect() } }
                 }
             }
@@ -34,7 +37,7 @@ struct SettingsView: View {
                     Button { Task { await model.enableNotifications() } } label: {
                         Label { Text("Enable notifications") } icon: { SettingsIconTile(systemName: "bell.fill", color: .red) }
                     }
-                    .disabled(!model.isConnected || !model.encryptionReady)
+                    .disabled(!model.session.isReady)
                     .accessibilityIdentifier("enableNotifications")
                     Toggle("Message previews", isOn: Binding(get: { model.notificationPreviewsEnabled },
                         set: { enabled in Task { await model.setNotificationPreviews(enabled) } }))

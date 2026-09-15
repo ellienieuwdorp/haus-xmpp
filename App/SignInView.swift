@@ -30,7 +30,7 @@ struct SignInView: View {
         let override = server.trimmingCharacters(in: .whitespacesAndNewlines)
         return override.isEmpty ? domain : override.lowercased()
     }
-    private var canConnect: Bool { (!isLab || consent) && !address.isEmpty && !password.isEmpty && !model.isConnecting }
+    private var canConnect: Bool { (!isLab || consent) && !address.isEmpty && !password.isEmpty && !model.session.isConnecting }
 
     var body: some View {
         NavigationStack {
@@ -94,14 +94,14 @@ struct SignInView: View {
                                 }
                             }
                         } label: {
-                            Text(model.isConnecting ? "Connecting…" : "Connect")
+                            Text(model.session.isConnecting ? "Connecting…" : "Connect")
                                 .font(.headline)
                                 .frame(maxWidth: .infinity, minHeight: 50)
                         }
                         .buttonStyle(.glassProminent)
                         .buttonBorderShape(.capsule)
                         .disabled(!canConnect)
-                        Text(model.connectionStatus).font(.subheadline).foregroundStyle(.secondary)
+                        Text(model.session.label).font(.subheadline).foregroundStyle(.secondary)
                     }
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())

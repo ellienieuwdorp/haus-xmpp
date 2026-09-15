@@ -31,7 +31,7 @@ struct EncryptionDetailsView: View {
                             Text("OMEMO · compatible").tag(XMPPOMEMOProfile.legacy)
                             Text("OMEMO 2").tag(XMPPOMEMOProfile.modern)
                         }
-                        .disabled(!model.isConnected)
+                        .disabled(!model.session.isReady)
                     } header: { Text("This iPhone") } footer: {
                         Text(model.encryptionDiagnostics.isEmpty ? "Changing the version means reviewing its devices again." : "Changing the version means reviewing its devices again.\n\n\(model.encryptionDiagnostics)")
                             .textSelection(.enabled)
@@ -40,7 +40,7 @@ struct EncryptionDetailsView: View {
                     Section { Text(model.encryptionStatus).foregroundStyle(.secondary) }
                 }
             }
-            .task { if model.isConnected { await model.loadEncryptionDetails(for: chatID) } }
+            .task { await model.loadEncryptionDetails(for: chatID) }
             .navigationTitle("Devices & Encryption")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -48,7 +48,7 @@ struct EncryptionDetailsView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Refresh devices", systemImage: "arrow.clockwise") {
                         Task { await model.loadEncryptionDetails(for: chatID) }
-                    }.labelStyle(.iconOnly).disabled(!model.isConnected)
+                    }.labelStyle(.iconOnly).disabled(!model.session.isReady)
                 }
             }
             .sheet(item: $selectedDevice) { device in
@@ -218,13 +218,13 @@ struct DeviceFingerprintSheet: View {
                 if allowsMaintenance && device.active && device.trust.permitsEncryption {
                     Section {
                         Button("Repair encryption session", systemImage: "arrow.trianglehead.2.clockwise.rotate.90") { confirmingRepair = true }
-                            .disabled(!model.isConnected)
+                            .disabled(!model.session.isReady)
                     } footer: { Text("Use this if messages from this device cannot be opened.") }
                 }
                 if allowsMaintenance && device.active && device.jid == model.accountID {
                     Section {
                         Button("Remove old device", systemImage: "iphone.slash", role: .destructive) { confirmingRetirement = true }
-                            .disabled(!model.isConnected)
+                            .disabled(!model.session.isReady)
                     } footer: { Text("Sign out on that device first, or it may advertise itself again.") }
                 }
             }
