@@ -32,7 +32,10 @@ struct EncryptionDetailsView: View {
                             Text("OMEMO 2").tag(XMPPOMEMOProfile.modern)
                         }
                         .disabled(!model.isConnected)
-                    } header: { Text("This iPhone") } footer: { Text("Changing the version means reviewing its devices again.") }
+                    } header: { Text("This iPhone") } footer: {
+                        Text(model.encryptionDiagnostics.isEmpty ? "Changing the version means reviewing its devices again." : "Changing the version means reviewing its devices again.\n\n\(model.encryptionDiagnostics)")
+                            .textSelection(.enabled)
+                    }
                 } else {
                     Section { Text(model.encryptionStatus).foregroundStyle(.secondary) }
                 }

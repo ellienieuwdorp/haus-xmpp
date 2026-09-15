@@ -91,10 +91,12 @@ public actor OMEMOService {
         let local = try engine(state, profile)
         var incompatible = false
         var unavailable: [String: Int] = [:]
+        var advertised: [String: Int] = [:]
         for owner in Array(Set([account, peer])).sorted() {
             let ids = try validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: profile))
             guard ids.count <= 200 else { throw OMEMOError.invalidContent }
             if owner == peer, !ids.isEmpty { peerAdvertises = true }
+            advertised[owner] = ids.count
             let otherProfile: XMPPOMEMOProfile = profile == .legacy ? .modern : .legacy
             // The other version only feeds the incompatibility hint; an unreadable list there must not block this one.
             let otherIDs = (try? validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: otherProfile))) ?? []
@@ -145,6 +147,7 @@ public actor OMEMOService {
         try await save(state, revision: revision, account: account)
         var result = try overview(state, account: account, peer: peer, profileOverride: profile, incompatibleOverride: incompatible)
         result.unavailableDevices = unavailable
+        result.advertisedDevices = advertised
         return result
     }
 

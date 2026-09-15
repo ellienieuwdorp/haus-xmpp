@@ -49,6 +49,8 @@ final class AppModel {
     private(set) var encryptionStatus = "Preparing encryption…"
     private(set) var encryptionOverview: EncryptionOverview?
     private(set) var encryptionNeedsReview = false
+    /// What the last device refresh saw on the server, for the Devices screen footer.
+    private(set) var encryptionDiagnostics = ""
     @ObservationIgnored private var encryption: OMEMOService?
     var isDemo: Bool { accountID == "preview.local" }
 
@@ -982,7 +984,15 @@ final class AppModel {
             guard accountID == account, generation == token, openChatID == chatID else { return }
             encryptionOverview = overview
             encryptionNeedsReview = overview.needsTrust
-            Logger(subsystem: "dev.xmpplab.ios", category: "encryption").info("Device refresh: \(overview.devices.filter { $0.jid == chatID && $0.active }.count) active peer devices, \(overview.unavailableDevices[chatID] ?? 0) without keys, profile \(overview.profile.rawValue, privacy: .public)")
+            let summary = [chatID, account].map { owner -> String in
+                let name = owner == account ? "you" : AppModel.displayName(for: owner, title: nil)
+                let advertised = overview.advertisedDevices[owner] ?? 0
+                let missing = overview.unavailableDevices[owner] ?? 0
+                let active = overview.devices.filter { $0.jid == owner && $0.active && !(owner == account && $0.deviceID == overview.localDeviceID) }.count
+                return "\(name): \(advertised) advertised, \(active) usable" + (missing > 0 ? ", \(missing) without keys" : "")
+            }.joined(separator: " · ")
+            encryptionDiagnostics = "Last refresh (\(overview.profile == .legacy ? "OMEMO · compatible" : "OMEMO 2")): \(summary)"
+            Logger(subsystem: "dev.xmpplab.ios", category: "encryption").info("Device refresh: \(summary, privacy: .public)")
             if overview.hasIncompatibleDevices { encryptionStatus = "Devices use incompatible encryption versions" }
             else if overview.needsTrust { encryptionStatus = "Review encryption devices" }
             else if !overview.devices.contains(where: { $0.jid == chatID && $0.active && $0.trust.permitsEncryption }) {
@@ -1000,6 +1010,7 @@ final class AppModel {
             default: friendly = "Could not fetch encryption devices · \(detail)"
             }
             encryptionStatus = (error as? OMEMOError)?.errorDescription ?? friendly
+            encryptionDiagnostics = "Last refresh failed: \(detail)"
         }
     }
 

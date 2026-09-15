@@ -30,6 +30,8 @@ public struct EncryptionOverview: Sendable {
     public let hasIncompatibleDevices: Bool
     /// Advertised device IDs per owner whose bundle could not be fetched; they cannot be reviewed or messaged.
     public var unavailableDevices: [String: Int] = [:]
+    /// Device IDs each owner advertised in this version, before bundle checks.
+    public var advertisedDevices: [String: Int] = [:]
     public var needsTrust: Bool { devices.contains { $0.active && $0.trust == .undecided } }
 }
 
