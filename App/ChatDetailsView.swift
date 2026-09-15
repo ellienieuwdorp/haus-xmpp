@@ -60,6 +60,28 @@ extension AppModel {
     }
 }
 
+/// What Chat Details asks the conversation to open once it has popped back.
+enum ConversationIntent: Equatable {
+    case search(chatID: String), starred(chatID: String)
+}
+
+/// The trust capsule under a details hero; the small symbol keeps it a balanced pill.
+struct TrustPill: View {
+    let text: String
+    let systemImage: String
+    let color: Color
+
+    var body: some View {
+        Label(text, systemImage: systemImage)
+            .imageScale(.small)
+            .font(.footnote.weight(.semibold))
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .frame(minHeight: 26)
+            .foregroundStyle(color)
+            .background(color.opacity(0.14), in: Capsule())
+    }
+}
+
 /// Initial-letter circle in the contact's stable hue; a glyph for rooms.
 struct ChatAvatar: View {
     let name: String
@@ -84,66 +106,58 @@ struct ChatAvatar: View {
 struct ChatDetailsView: View {
     @Bindable var model: AppModel
     let chatID: String
-    var search: () -> Void = {}
-    var starred: () -> Void = {}
-    var openEncryption: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first(where: { $0.id == chatID })?.title) }
     private var isGroup: Bool { model.isGroup(chatID) }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    VStack(spacing: 6) {
-                        ChatAvatar(name: title, isGroup: isGroup, size: 96)
-                        Text(title).font(.title.weight(.bold)).padding(.top, 6)
-                        Text(chatID).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
-                        if !model.isDemo {
-                            let trust = model.trustSummary(for: chatID)
-                            Label(trust.pill, systemImage: trust.level == .verified ? "checkmark.shield" : trust.icon)
-                                .font(.footnote.weight(.semibold))
-                                .padding(.horizontal, 9).padding(.vertical, 3)
-                                .foregroundStyle(trust.color)
-                                .background(trust.color.opacity(0.14), in: Capsule())
-                                .padding(.top, 4)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    HStack(spacing: 8) {
-                        tile("Search", systemImage: "magnifyingglass", action: search)
-                        tile("Starred", systemImage: "star", action: starred)
+        List {
+            Section {
+                VStack(spacing: 6) {
+                    ChatAvatar(name: title, isGroup: isGroup, size: 96)
+                    Text(title).font(.title.weight(.bold)).padding(.top, 6)
+                    Text(chatID).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
+                    if !model.isDemo {
+                        let trust = model.trustSummary(for: chatID)
+                        TrustPill(text: trust.pill, systemImage: trust.level == .verified ? "checkmark.shield" : trust.icon, color: trust.color)
+                            .padding(.top, 4)
                     }
                 }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets())
-                .listRowSeparator(.hidden)
-                Section {
-                    Button {
-                        openEncryption()
-                    } label: {
-                        HStack {
-                            Label {
-                                Text(isGroup ? "Group details" : "Devices & Encryption").foregroundStyle(.primary)
-                            } icon: {
-                                Image(systemName: isGroup ? "person.2" : "key").foregroundStyle(.white)
-                                    .frame(width: 30, height: 30).background(.tint, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            }
-                            Spacer()
-                            if let count = deviceCount { Text(count).foregroundStyle(.secondary) }
-                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-                        }
-                    }
-                    .accessibilityIdentifier("encryptionDetails")
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                HStack(spacing: 8) {
+                    tile("Search", systemImage: "magnifyingglass") { leave(with: .search(chatID: chatID)) }
+                    tile("Starred", systemImage: "star") { leave(with: .starred(chatID: chatID)) }
                 }
             }
-            .listStyle(.insetGrouped)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            Section {
+                NavigationLink(value: isGroup ? ChatRoute.groupDetails(chatID) : .encryption(chatID)) {
+                    HStack {
+                        Label {
+                            Text(isGroup ? "Group details" : "Devices & Encryption").foregroundStyle(.primary)
+                        } icon: {
+                            Image(systemName: isGroup ? "person.2" : "key").foregroundStyle(.white)
+                                .frame(width: 30, height: 30).background(.tint, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                        Spacer()
+                        if let count = deviceCount { Text(count).foregroundStyle(.secondary) }
+                    }
+                }
+                .accessibilityIdentifier("encryptionDetails")
             }
         }
+        .listStyle(.insetGrouped)
+        .toolbarTitleDisplayMode(.inline)
+    }
+
+    /// Pop back to the conversation and let it open the requested mode.
+    private func leave(with intent: ConversationIntent) {
+        model.conversationIntent = intent
+        dismiss()
     }
 
     private var deviceCount: String? {

@@ -1,8 +1,14 @@
 import SwiftUI
 
+/// Everything pushed onto the Chats stack. Details and encryption are pages to the right of a chat;
+/// only the single-device fingerprint review stays modal.
+enum ChatRoute: Hashable {
+    case chat(String), details(String), encryption(String), groupDetails(String)
+}
+
 struct RootView: View {
     @Bindable var model: AppModel
-    @State private var chatPath: [String] = []
+    @State private var chatPath: [ChatRoute] = []
     @State private var showingConnection = false
     @State private var showingSettings = false
 
@@ -18,7 +24,7 @@ struct RootView: View {
             guard route.accountID == model.accountID else { return }
             showingConnection = false
             showingSettings = false
-            chatPath = [route.chatID]
+            chatPath = [.chat(route.chatID)]
         }
         .onChange(of: model.signInRequested) { _, requested in
             guard requested else { return }

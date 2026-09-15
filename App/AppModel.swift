@@ -42,6 +42,8 @@ final class AppModel {
     var connectionNeedsAttention: Bool { if case .needsAttention = session { true } else { false } }
     /// Set when saved credentials were rejected; RootView presents the sign-in sheet.
     var signInRequested = false
+    /// Chat Details asks the conversation below it to open search or starred after popping back.
+    var conversationIntent: ConversationIntent?
     private(set) var isSending = false
     private(set) var receivedCount = 0
     var error: String?

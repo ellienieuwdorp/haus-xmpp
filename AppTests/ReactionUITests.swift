@@ -43,7 +43,7 @@ final class ReactionUITests: XCTestCase {
             app.buttons["Accept without verifying"].tap()
             XCTAssertTrue(app.navigationBars["Devices & Encryption"].waitForExistence(timeout: 5))
         }
-        app.buttons["Done"].tap()
+        app.closeEncryptionDetails()
         let outgoing = app.textViews.containing(NSPredicate(format: "value == %@", marker)).matching(NSPredicate(format: "label BEGINSWITH %@", "You:")).firstMatch
         XCTAssertTrue(outgoing.waitForExistence(timeout: 10))
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Accepted by server"), object: outgoing)], timeout: 25)

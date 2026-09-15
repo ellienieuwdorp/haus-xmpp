@@ -42,7 +42,7 @@ final class EncryptionUITests: XCTestCase {
             XCTAssertTrue(app.navigationBars["Devices & Encryption"].waitForExistence(timeout: 5))
         }
         capture(app, "Accepted encryption devices")
-        app.buttons["Done"].tap()
+        app.closeEncryptionDetails()
         let response = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: bubbles)
         wait(for: [response], timeout: 30)
         XCTAssertTrue(bubbles.allElementsBoundByIndex.contains { $0.label.contains("Accepted by server") || $0.label.contains("Delivery unconfirmed") })
@@ -53,14 +53,14 @@ final class EncryptionUITests: XCTestCase {
         XCTAssertEqual(bubbles.count, 2)
         app.openEncryptionDetails()
         XCTAssertTrue(app.staticTexts["Accepted · not verified"].firstMatch.waitForExistence(timeout: 5))
-        app.buttons["Done"].tap()
+        app.closeEncryptionDetails()
         app.navigationBars.buttons["BackButton"].tap()
         connect(app)
         app.returnToChats(); chat.tap()
         XCTAssertEqual(bubbles.count, 2)
         app.openEncryptionDetails()
         XCTAssertFalse(rows.matching(NSPredicate(format: "label CONTAINS %@", "Review required")).firstMatch.exists)
-        app.buttons["Done"].tap()
+        app.closeEncryptionDetails()
     }
 
     @MainActor private func connect(_ app: XCUIApplication) {

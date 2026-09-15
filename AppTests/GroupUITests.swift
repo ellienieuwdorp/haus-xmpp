@@ -49,7 +49,7 @@ final class GroupUITests: XCTestCase {
             app.buttons["Accept without verifying"].tap()
             XCTAssertTrue(app.navigationBars["Group details"].waitForExistence(timeout: 15))
         }
-        app.buttons["Done"].tap()
+        app.closeEncryptionDetails()
         let echoed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: bubbles)
         wait(for: [echoed], timeout: 35)
         capture(app, "Authenticated group conversation")
