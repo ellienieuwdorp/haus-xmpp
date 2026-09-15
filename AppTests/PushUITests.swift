@@ -91,7 +91,7 @@ final class PushUITests: XCTestCase {
         let address = app.textFields["newChatAddress"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))
         address.tap(); address.typeText(peer)
-        app.buttons["Create conversation"].tap()
+        app.buttons["startChat"].tap()
         let composer = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         let marker = "Synthetic push bootstrap \(UUID().uuidString.prefix(8))"

@@ -112,11 +112,11 @@ struct ChatListView: View {
             DefaultToolbarItem(kind: .search, placement: .bottomBar)
             ToolbarSpacer(.flexible, placement: .bottomBar)
             ToolbarItem(placement: .bottomBar) {
+                // Let the bottom bar size the glyph; a declared circle keeps it round on iOS 26 and 27.
                 Button { newChatDetent = .medium; showingNewChat = true } label: {
-                    // Native bottom-bar glass keeps the button level with the search field on every iOS version.
                     Image(systemName: "square.and.pencil").font(.title3.weight(.medium))
-                        .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                 }
+                .buttonBorderShape(.circle)
                 .accessibilityLabel("New conversation")
                 .accessibilityIdentifier("newConversation")
                 .disabled(model.accountID.isEmpty)
@@ -128,10 +128,16 @@ struct ChatListView: View {
         .sheet(isPresented: $showingNewChat) { newChatSheet }
     }
 
+    private var recipientTerm: String { recipient.trimmingCharacters(in: .whitespacesAndNewlines) }
+
     private var suggestedChats: [ChatSummary] {
-        let term = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !term.isEmpty else { return sortedChats }
-        return sortedChats.filter { $0.title.localizedCaseInsensitiveContains(term) || $0.id.localizedCaseInsensitiveContains(term) }
+        guard !recipientTerm.isEmpty else { return sortedChats }
+        return sortedChats.filter { $0.title.localizedCaseInsensitiveContains(recipientTerm) || $0.id.localizedCaseInsensitiveContains(recipientTerm) }
+    }
+
+    /// A typed address that is not already a chat gets a "Start chat" row; createChat validates it.
+    private var offersNewAddress: Bool {
+        recipientTerm.contains("@") && !sortedChats.contains { $0.id.caseInsensitiveCompare(recipientTerm) == .orderedSame }
     }
 
     private func openFromSheet(_ chatID: String) {
@@ -157,30 +163,13 @@ struct ChatListView: View {
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                     .listRowSeparator(.hidden)
-                    Button {
-                        Task {
-                            let address = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if await model.createChat(address) { openFromSheet(address) }
-                        }
-                    } label: {
-                        Text("Create conversation").fontWeight(.semibold).frame(maxWidth: .infinity, minHeight: 44)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.large)
-                    .frame(maxWidth: .infinity)
-                    .disabled(recipient.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 0, trailing: 16))
-                    .listRowSeparator(.hidden)
                 }
                 Section {
                     NavigationLink {
                         GroupJoinView(model: model) { room in openFromSheet(room) }
-                            .onAppear { newChatDetent = .large }
                     } label: {
                         Label {
-                            Text("Join a group")
+                            Text("Join a Group by Address")
                         } icon: {
                             Image(systemName: "person.2")
                                 .font(.footnote.weight(.semibold))
@@ -192,8 +181,25 @@ struct ChatListView: View {
                     .disabled(!model.session.isReady)
                     .accessibilityIdentifier("newGroup")
                 }
-                if !suggestedChats.isEmpty {
+                if offersNewAddress || !suggestedChats.isEmpty {
                     Section("Suggested") {
+                        if offersNewAddress {
+                            Button {
+                                let address = recipientTerm
+                                Task { if await model.createChat(address) { openFromSheet(address) } }
+                            } label: {
+                                Label {
+                                    Text("Start chat with \(recipientTerm)").foregroundStyle(.primary).lineLimit(1)
+                                } icon: {
+                                    Image(systemName: "plus.message")
+                                        .foregroundStyle(Color(uiColor: AccentTheme.current.tint))
+                                        .frame(width: 40, height: 40)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("startChat")
+                        }
                         ForEach(suggestedChats) { chat in
                             Button { openFromSheet(chat.id) } label: {
                                 HStack(spacing: 12) {
@@ -217,6 +223,8 @@ struct ChatListView: View {
         }
         .presentationDetents([.medium, .large], selection: $newChatDetent)
         .presentationDragIndicator(.visible)
+        // Pinned so the sheet doesn't switch from glass to opaque when it reaches the top.
+        .presentationBackground(Color(.systemGroupedBackground))
     }
 }
 

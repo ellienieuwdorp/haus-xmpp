@@ -25,7 +25,7 @@ final class LabConnectionUITests: XCTestCase {
         XCTAssertTrue(recipient.waitForExistence(timeout: 5))
         recipient.tap()
         recipient.typeText(user + "@localhost")
-        app.buttons["Create conversation"].tap()
+        app.buttons["startChat"].tap()
         let field = app.textFields["messageComposer"]
         let input = field.exists ? field : app.textViews["messageComposer"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))

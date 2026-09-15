@@ -12,7 +12,7 @@ final class ReplyUITests: XCTestCase {
         let address = "reply-\(UUID().uuidString.prefix(6))@preview.local"
         app.textFields["newChatAddress"].tap()
         app.textFields["newChatAddress"].typeText(address)
-        app.buttons["Create conversation"].tap()
+        app.buttons["startChat"].tap()
         let row = app.buttons["chat.\(address)"]
         let input = app.textFields["messageComposer"].waitForExistence(timeout: 3) ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))

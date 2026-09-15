@@ -22,7 +22,7 @@ final class ReactionUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected")).firstMatch.waitForExistence(timeout: 25))
         app.returnToChats(); app.buttons["newConversation"].tap()
         app.textFields["newChatAddress"].tap(); app.textFields["newChatAddress"].typeText(peer)
-        app.buttons["Create conversation"].tap()
+        app.buttons["startChat"].tap()
         let composer = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         let marker = "A thoughtful detail \(UUID().uuidString.prefix(4))"

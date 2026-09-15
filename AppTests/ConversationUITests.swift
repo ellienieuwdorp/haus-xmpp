@@ -1,6 +1,20 @@
 import XCTest
 
 final class ConversationUITests: XCTestCase {
+    /// A chat with stored messages must never flash the empty placeholder while its list loads.
+    @MainActor func testOpeningChatNeverShowsEmptyPlaceholder() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo"]
+        app.isolateMessageStorage()
+        app.launch()
+        let alex = app.staticTexts["Alex"]
+        XCTAssertTrue(alex.waitForExistence(timeout: 15))
+        alex.tap()
+        XCTAssertFalse(app.staticTexts["No messages yet"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.textFields["messageComposer"].exists || app.textViews["messageComposer"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["No messages yet"].exists)
+    }
+
     @MainActor func testComposeSearchAndRelaunch() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]

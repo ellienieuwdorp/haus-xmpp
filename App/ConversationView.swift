@@ -110,7 +110,8 @@ struct ConversationView: View {
                 Task { await model.toggleReaction(emoji, messageID: id) }
             })
             .overlay {
-                if messages.isEmpty {
+                // Only an actual empty chat says so; while a load is pending the timeline stays blank.
+                if messages.isEmpty, model.messagesLoadedFor == chatID {
                     ContentUnavailableView(!searchTerm.isEmpty ? "No matching messages" : (starredOnly ? "No starred messages" : "No messages yet"),
                                            systemImage: !searchTerm.isEmpty ? "magnifyingglass" : (starredOnly ? "star" : "bubble.left"))
                 }
@@ -176,7 +177,7 @@ struct ConversationView: View {
         }
         .onChange(of: model.encryptionNeedsReview) { reviewDismissed = false }
         .onChange(of: model.encryptionStatus) { reviewDismissed = false }
-        .task(id: chatID) { await model.openChat(chatID) }
+        .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
         .onDisappear { model.closeChat(chatID) }
     }
 

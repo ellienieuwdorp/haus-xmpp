@@ -27,6 +27,8 @@ typealias ChatMessage = StoredMessage
 final class AppModel {
     private(set) var chats: [ChatSummary] = []
     private(set) var messages: [ChatMessage] = []
+    /// The chat whose messages `messages` currently holds; nil while a load is pending.
+    private(set) var messagesLoadedFor: String?
     private(set) var messageReactions: [String: [AuthenticatedReaction]] = [:]
     private(set) var groupChats: [String: GroupChatState] = [:]
     private(set) var reactableGroupMessages: Set<String> = []
@@ -1040,7 +1042,7 @@ final class AppModel {
     }
 
     func openChat(_ chatID: String) async {
-        openChatID = chatID; messages = []; messageReactions = [:]; encryptionOverview = nil
+        openChatID = chatID; messages = []; messagesLoadedFor = nil; messageReactions = [:]; encryptionOverview = nil
         encryptionStatus = "Setting up encryption…"; encryptionNeedsReview = false
         await refresh()
         if !isDemo { await loadEncryptionDetails(for: chatID) }
@@ -1158,7 +1160,7 @@ final class AppModel {
         startOutbox()
     }
 
-    func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = []; messageReactions = [:] } }
+    func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:] } }
 
     var notificationPreviewsEnabled = true
 
@@ -1247,6 +1249,7 @@ final class AppModel {
                 ChatSummary(id: $0, title: $0, preview: reviewPreview, isPinned: false)
             }
             messages = storedMessages
+            messagesLoadedFor = selected
             messageReactions = reactions
             reactableGroupMessages = groupReactionTargets
         } catch { self.error = "Could not read local conversations." }
