@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(os)
+import os
+#endif
 import Network
 import Security
 
@@ -534,12 +537,18 @@ public actor XMPPClient {
         guard OMEMOWire.bareJID(jid) == jid else { throw XMPPClientError.invalidConfiguration }
         do {
             let response = try await requestIQ(type: "get", to: jid, payload: "<pubsub xmlns='\(OMEMOWire.pubsub)'><items node='\(profile.devicesNode)' max_items='1'/></pubsub>")
-            let items = try Self.pubsubItems(response, node: profile.devicesNode)
-            guard items.children.count == 1 else { throw XMPPIQError.malformedResponse }
-            let item = try OMEMOWire.singleton(items, "item", OMEMOWire.pubsub)
-            guard item.attributes["id"] == "current", item.children.count == 1 else { throw XMPPIQError.malformedResponse }
-            return try OMEMOWire.parseDevices(item.children[0], profile: profile)
+            return try Self.logged(response, "devices \(profile.rawValue) of \(jid)") { try Self.decodeDeviceList(response, profile: profile) }
         } catch XMPPIQError.stanza(condition: "item-not-found") { return [] }
+    }
+
+    /// A node that exists but holds no item is an empty list, the same as a missing node.
+    static func decodeDeviceList(_ response: XMLNode, profile: XMPPOMEMOProfile) throws -> [UInt32] {
+        let items = try pubsubItems(response, node: profile.devicesNode)
+        if items.children.isEmpty { return [] }
+        guard items.children.count == 1 else { throw XMPPIQError.malformedResponse }
+        let item = try OMEMOWire.singleton(items, "item", OMEMOWire.pubsub)
+        guard item.attributes["id"] == "current", item.children.count == 1 else { throw XMPPIQError.malformedResponse }
+        return try OMEMOWire.parseDevices(item.children[0], profile: profile)
     }
 
     public func fetchOMEMOBundle(for jid: String, deviceID: UInt32, profile: XMPPOMEMOProfile) async throws -> XMPPOMEMOBundle {
@@ -547,11 +556,36 @@ public actor XMPPClient {
         let node = profile.bundlesNode(deviceID: deviceID)
         let selection = profile == .modern ? "<item id='\(deviceID)'/>" : ""
         let response = try await requestIQ(type: "get", to: jid, payload: "<pubsub xmlns='\(OMEMOWire.pubsub)'><items node='\(node)' max_items='1'>\(selection)</items></pubsub>")
-        let items = try Self.pubsubItems(response, node: node)
+        return try Self.logged(response, "bundle \(deviceID) of \(jid)") { try Self.decodeBundle(response, deviceID: deviceID, profile: profile) }
+    }
+
+    /// An existing bundle node with no item behaves like a missing one, so the caller can skip that device.
+    static func decodeBundle(_ response: XMLNode, deviceID: UInt32, profile: XMPPOMEMOProfile) throws -> XMPPOMEMOBundle {
+        let node = profile.bundlesNode(deviceID: deviceID)
+        let items = try pubsubItems(response, node: node)
+        if items.children.isEmpty { throw XMPPIQError.stanza(condition: "item-not-found") }
         guard items.children.count == 1 else { throw XMPPIQError.malformedResponse }
         let item = try OMEMOWire.singleton(items, "item", OMEMOWire.pubsub)
         guard item.children.count == 1, profile == .legacy || item.attributes["id"] == String(deviceID) else { throw XMPPIQError.malformedResponse }
         return try OMEMOWire.parseBundle(item.children[0], deviceID: deviceID, profile: profile)
+    }
+
+    /// Records the element outline (names and attributes, never text) of a public PEP response that failed to decode.
+    private static func logged<T>(_ response: XMLNode, _ what: String, _ decode: () throws -> T) throws -> T {
+        do { return try decode() }
+        catch XMPPIQError.malformedResponse {
+            #if canImport(os)
+            Logger(subsystem: "dev.xmpplab.ios", category: "xmpp").error("Malformed \(what, privacy: .public): \(outline(response), privacy: .public)")
+            #endif
+            throw XMPPIQError.malformedResponse
+        }
+    }
+
+    static func outline(_ node: XMLNode, depth: Int = 0) -> String {
+        guard depth < 6 else { return "…" }
+        let attributes = node.attributes.keys.sorted().map { "\($0)=\(node.attributes[$0]!.prefix(24))" }.joined(separator: " ")
+        let children = node.children.prefix(12).map { outline($0, depth: depth + 1) }.joined(separator: ",")
+        return "\(node.name)" + (attributes.isEmpty ? "" : "{\(attributes)}") + (node.children.isEmpty ? "" : "[\(children)]")
     }
 
     public func publishOMEMODevices(_ devices: [UInt32], profile: XMPPOMEMOProfile) async throws {

@@ -135,3 +135,12 @@ private func bundle(_ profile: XMPPOMEMOProfile) -> XMPPOMEMOBundle {
     let ambiguous = received.replacingOccurrences(of: "</received>", with: "</received><sent xmlns='urn:xmpp:carbons:2'/>")
     #expect(throws: (any Error).self) { try Carbons.unwrap(omemoNode(ambiguous), accountBareJID: "a@example.test", accountFullJID: "a@example.test/phone") }
 }
+
+@Test func emptyPubsubNodesReadAsMissing() throws {
+    let empty = "<iq type='result'><pubsub xmlns='http://jabber.org/protocol/pubsub'><items node='eu.siacs.conversations.axolotl.devicelist'/></pubsub></iq>"
+    #expect(try XMPPClient.decodeDeviceList(omemoNode(empty), profile: .legacy) == [])
+    let bundle = "<iq type='result'><pubsub xmlns='http://jabber.org/protocol/pubsub'><items node='eu.siacs.conversations.axolotl.bundles:7'/></pubsub></iq>"
+    #expect(throws: XMPPIQError.stanza(condition: "item-not-found")) { try XMPPClient.decodeBundle(omemoNode(bundle), deviceID: 7, profile: .legacy) }
+    let two = "<iq type='result'><pubsub xmlns='http://jabber.org/protocol/pubsub'><items node='eu.siacs.conversations.axolotl.devicelist'><item id='a'/><item id='b'/></items></pubsub></iq>"
+    #expect(throws: XMPPIQError.malformedResponse) { try XMPPClient.decodeDeviceList(omemoNode(two), profile: .legacy) }
+}

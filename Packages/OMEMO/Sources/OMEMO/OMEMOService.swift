@@ -96,7 +96,8 @@ public actor OMEMOService {
             guard ids.count <= 200 else { throw OMEMOError.invalidContent }
             if owner == peer, !ids.isEmpty { peerAdvertises = true }
             let otherProfile: XMPPOMEMOProfile = profile == .legacy ? .modern : .legacy
-            let otherIDs = try validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: otherProfile))
+            // The other version only feeds the incompatibility hint; an unreadable list there must not block this one.
+            let otherIDs = (try? validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: otherProfile))) ?? []
             // Device IDs are not proof of physical identity across profiles. Conservatively block
             // an advertised device that exists only in the other profile rather than omit it.
             if !Set(otherIDs).subtracting(ids).isEmpty { incompatible = true }
@@ -106,12 +107,16 @@ public actor OMEMOService {
             for id in ids where !(owner == account && id == local.deviceID) {
                 let bundle: XMPPOMEMOBundle
                 do { bundle = try await transport.fetchOMEMOBundle(for: owner, deviceID: id, profile: profile) }
-                catch XMPPIQError.stanza(condition: "item-not-found") {
-                    // Device lists in the wild carry stale IDs whose bundles are gone. Such a device
-                    // cannot receive anything, so it stays inactive instead of failing the whole refresh.
-                    unavailable[owner, default: 0] += 1
+                catch XMPPIQError.stanza(condition: "item-not-found"), XMPPIQError.malformedResponse {
+                    // Device lists in the wild carry stale IDs whose bundles are gone or unreadable. A device
+                    // reviewed earlier keeps its stored key rather than vanishing on a server hiccup; an
+                    // unknown one cannot be reviewed yet, so it is counted instead of failing the refresh.
+                    if let index = state.devices.lastIndex(where: { $0.jid == owner && $0.profile == profile && $0.deviceID == id }) {
+                        state.devices[index].active = true
+                    } else { unavailable[owner, default: 0] += 1 }
                     continue
                 }
+                // A bundle that fails validation still fails closed: it must never deactivate a reviewed key.
                 try validateBundle(bundle, id: id, profile: profile)
                 if let index = state.devices.firstIndex(where: { $0.jid == owner && $0.profile == profile && $0.deviceID == id && $0.identityKey == bundle.identityKey }) {
                     let lastIdentity = state.devices.last { $0.jid == owner && $0.profile == profile && $0.deviceID == id }?.identityKey
