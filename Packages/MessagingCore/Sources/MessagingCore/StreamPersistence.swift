@@ -16,14 +16,12 @@ public struct StreamPersistence: XMPPStreamManagementPersistence {
         self.encryption = encryption
     }
 
+    /// Every journaled message must be exactly one durable outgoing row of ours (message or update);
+    /// otherwise the stream starts fresh and the archive reconciles what the server kept.
     public func permitsResumption(_ snapshot: XMPPStreamManagementSnapshot) async throws -> Bool {
         guard snapshot.accountID == accountID else { return false }
         for entry in snapshot.journal where entry.messageID != nil {
-            if try await encryption.canReplayPlaintextReaction(account: accountID, xml: entry.xml) { continue }
-            guard let message = try? XMPPClient.decodeOutgoingEncryptedMessageXML(entry.xml, from: accountID),
-                  let recipient = message.to, message.id == entry.messageID,
-                  try await encryption.canReplayEncryptedMessage(account: accountID, messageID: message.id,
-                                                                  recipient: recipient, envelope: message.envelope) else { return false }
+            guard try await encryption.canReplay(account: accountID, xml: entry.xml) else { return false }
         }
         return true
     }
