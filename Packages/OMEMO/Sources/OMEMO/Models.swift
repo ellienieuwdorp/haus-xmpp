@@ -105,4 +105,6 @@ public struct EncryptionPreparation: Sendable {
     public let messageIDs: Set<String>
     public let blockedChats: [String: String]
     let failure: OMEMOError?
+    /// Updates for legacy peers, sealed as the exact plain XEP-0444 stanza instead of an envelope.
+    public var plaintextIDs: Set<String> = []
 }

@@ -172,6 +172,17 @@ private func update(_ id: String = "reaction", reactions: [String] = ["👍"]) -
     #expect(try await store.reactions(accountID: "self", chatID: "peer", messageID: "mine").first?.reactions == ["👍"])
     // Nothing here is an authenticated reference, so no encrypted reaction can be queued.
     #expect(try await store.reactionReference(accountID: "self", messageID: "mine") == nil)
+    // Our own plain reaction rides the same durable queue with the exact stanza as its wire.
+    let queued = StoredReactionUpdate(id: "q1", accountID: "self", chatID: "peer", targetMessageID: "mine", targetWireID: "mine", actorID: "self", reactions: ["🔥"])
+    #expect(try await store.enqueueReaction(queued))
+    #expect(try await store.claimNextReaction(accountID: "self", updateIDs: ["q1"]) == nil)
+    try await store.sealQueuedPlaintextReaction(accountID: "self", updateID: "q1", wire: Data("<message/>".utf8))
+    try await store.sealQueuedPlaintextReaction(accountID: "self", updateID: "q1", wire: Data("<message/>".utf8))
+    await #expect(throws: MessageStoreError.invalidTransition) { try await store.sealQueuedPlaintextReaction(accountID: "self", updateID: "q1", wire: Data("<other/>".utf8)) }
+    let claim = try #require(await store.claimNextReaction(accountID: "self", updateIDs: ["q1"]))
+    #expect(try await store.finishReactionSubmission(accountID: "self", updateID: "q1", attemptID: claim.attemptID))
+    #expect(try await store.reactionUpdate(accountID: "self", updateID: "q1")?.transportState == .unconfirmed)
+    #expect(try await store.reactionsForChat(accountID: "self", chatID: "peer", messageIDs: ["mine"])["mine"]?.map(\.actorID) == ["peer", "self"])
     // A stranger's actor ID never records.
     await #expect(throws: MessageStoreError.invalidValue) {
         try await store.recordReaction(accountID: "self", reaction: .init(id: "r3", chatID: "peer", actorID: "other", targetWireID: "mine", reactions: ["👍"], updatedAt: now))

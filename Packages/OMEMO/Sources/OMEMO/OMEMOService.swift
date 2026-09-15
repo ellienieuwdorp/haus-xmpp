@@ -421,10 +421,12 @@ public actor OMEMOService {
         if state.groupRooms[chatID] != nil {
             return try await queueGroupReactionsLocked(account: account, room: chatID, messageID: messageID, reactions: reactions)
         }
-        guard state.profiles[chatID] == .modern,
+        // Modern peers get an encrypted reaction to an authenticated reference. Legacy peers
+        // (Conversations) can only receive plain XEP-0444, so any unique stored wire ID will do.
+        guard let profile = state.profiles[chatID],
               let target = try await store.message(accountID: account, messageID: messageID),
-              target.chatID == chatID, target.encryptionProfile == XMPPOMEMOProfile.modern.rawValue,
-              target.wireIDAuthenticated, let wireID = target.wireID,
+              target.chatID == chatID, let wireID = target.wireID,
+              profile == .legacy || (target.encryptionProfile == XMPPOMEMOProfile.modern.rawValue && target.wireIDAuthenticated),
               let unique = try await store.reactionTarget(accountID: account, chatID: chatID, wireID: wireID), unique.id == target.id
         else { throw OMEMOError.unsupportedEncryptedReactions }
         let values = try ReactionContent.normalized(reactions)
@@ -441,13 +443,19 @@ public actor OMEMOService {
 
     private func prepareReactionsLocked(account: String, transport: any OMEMOTransport) async throws -> EncryptionPreparation {
         let queued = try await store.queuedReactions(accountID: account)
-        var ready = Set<String>(), blocked: [String: String] = [:]
+        var ready = Set<String>(), plaintext = Set<String>(), blocked: [String: String] = [:]
         var failure: OMEMOError?
         for update in queued {
             do {
                 try Task.checkCancellation()
                 let (_, selected) = try await load(account)
                 if selected.groupRooms[update.chatID] != nil { continue }
+                if selected.profiles[update.chatID] == .legacy {
+                    let stanza = try XMPPClient.reactionXML(to: update.chatID, targetID: update.targetWireID, reactions: update.reactions, id: update.id)
+                    try await store.sealQueuedPlaintextReaction(accountID: account, updateID: update.id, wire: Data(stanza.utf8))
+                    plaintext.insert(update.id)
+                    continue
+                }
                 guard selected.profiles[update.chatID] == .modern else { throw OMEMOError.unsupportedEncryptedReactions }
                 let overview = try await refreshLocked(account: account, peer: update.chatID, profile: .modern,
                                                        transport: transport, updateSelection: false)
@@ -473,7 +481,16 @@ public actor OMEMOService {
                 blocked[update.chatID] = (error as? OMEMOError)?.errorDescription ?? "The private reaction remains queued."
             }
         }
-        return EncryptionPreparation(messageIDs: ready, blockedChats: blocked, failure: failure)
+        return EncryptionPreparation(messageIDs: ready, blockedChats: blocked, failure: failure, plaintextIDs: plaintext)
+    }
+
+    /// SM may replay a journaled plain reaction only if it is byte-identical to the durable update.
+    public func canReplayPlaintextReaction(account: String, xml: String) async throws -> Bool {
+        guard let reaction = XMPPClient.decodeOutgoingReactionXML(xml, from: account),
+              let update = try await store.reactionUpdate(accountID: account, updateID: reaction.id),
+              update.actorID == account, update.chatID == bare(reaction.to ?? ""),
+              let wire = try await store.encryptedReaction(accountID: account, updateID: reaction.id) else { return false }
+        return wire == Data(xml.utf8)
     }
 
     public func outgoingReactionEnvelope(account: String, updateID: String) async throws -> XMPPOMEMOEnvelope {
@@ -530,6 +547,11 @@ public actor OMEMOService {
                                           reactions: values, updatedAt: min(sentAt ?? Date(), Date()))
         do { try await store.recordReaction(accountID: account, reaction: event) }
         catch MessageStoreError.invalidValue { return false }
+        // Our own plain send coming back from the archive proves the server accepted it.
+        if actor == account, let update = try await store.reactionUpdate(accountID: account, updateID: reaction.id), update.chatID == peer,
+           let wire = try await store.encryptedReaction(accountID: account, updateID: reaction.id) {
+            _ = try? await store.reconcileArchivedReaction(accountID: account, updateID: reaction.id, expectedEncryptedWire: wire)
+        }
         return true
     }
 

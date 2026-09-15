@@ -19,6 +19,7 @@ public struct StreamPersistence: XMPPStreamManagementPersistence {
     public func permitsResumption(_ snapshot: XMPPStreamManagementSnapshot) async throws -> Bool {
         guard snapshot.accountID == accountID else { return false }
         for entry in snapshot.journal where entry.messageID != nil {
+            if try await encryption.canReplayPlaintextReaction(account: accountID, xml: entry.xml) { continue }
             guard let message = try? XMPPClient.decodeOutgoingEncryptedMessageXML(entry.xml, from: accountID),
                   let recipient = message.to, message.id == entry.messageID,
                   try await encryption.canReplayEncryptedMessage(account: accountID, messageID: message.id,

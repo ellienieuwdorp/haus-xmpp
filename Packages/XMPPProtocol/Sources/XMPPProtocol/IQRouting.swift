@@ -52,6 +52,17 @@ extension XMPPClient {
         return try OMEMOWire.parseMessage(node)
     }
 
+    /// The plain XEP-0444 twin, for deciding whether a journaled reaction stanza may be replayed.
+    public nonisolated static func decodeOutgoingReactionXML(_ xml: String, from account: String) -> XMPPReaction? {
+        guard OMEMOWire.bareJID(account) == account else { return nil }
+        var parser = XMLStreamFramer()
+        guard let frames = try? parser.feed(Data(("<stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client'>" + xml + "</stream:stream>").utf8)) else { return nil }
+        let elements = frames.compactMap { frame -> XMLNode? in if case .element(let node) = frame { node } else { nil } }
+        guard elements.count == 1, let original = elements.first, original.attributes["from"] == nil || original.attributes["from"] == account else { return nil }
+        var attributes = original.attributes; attributes["from"] = account
+        return parsedReaction(XMLNode(name: original.name, namespace: original.namespace, attributes: attributes, text: original.text, children: original.children))
+    }
+
     /// Standalone parser for a complete stanza. Includes the same size, depth and namespace limits as the transport.
     public nonisolated static func decodeEncryptedMessageXML(_ xml: String) throws -> XMPPEncryptedMessage {
         var parser = XMLStreamFramer()

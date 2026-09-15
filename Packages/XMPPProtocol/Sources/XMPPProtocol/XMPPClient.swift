@@ -198,7 +198,7 @@ public actor XMPPClient {
         return id
     }
 
-    static func reactionXML(to: String, targetID: String, reactions: [String], id: String) throws -> String {
+    public static func reactionXML(to: String, targetID: String, reactions: [String], id: String) throws -> String {
         guard !to.isEmpty, to.utf8.count <= 3_071, !to.contains(where: { $0.isWhitespace }), validXMLText(to),
               validMessageID(id), validMessageID(targetID), reactions.count <= 12,
               reactions.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 && validXMLText($0) }) else { throw XMPPClientError.invalidConfiguration }

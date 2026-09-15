@@ -79,17 +79,17 @@ private func stanza(_ xml: String) throws -> XMPPProtocol.XMLNode {
 }
 
 @Test func reactionRenderingRoundTripsThroughTheParserAndRejectsInvalidInput() throws {
-    // The server stamps `from` on delivery; the parser requires it.
+    // Outgoing stanzas carry no `from`; the journal decoder stamps the account on before parsing.
     func received(_ xml: String) throws -> (XMPPProtocol.XMLNode, XMPPReaction?) {
-        let sent = try stanza(xml)
-        let node = XMPPProtocol.XMLNode(name: sent.name, namespace: sent.namespace, attributes: sent.attributes.merging(["from": "me@example.test/ios"]) { $1 }, text: sent.text, children: sent.children)
-        return (node, XMPPClient.parsedReaction(node))
+        (try stanza(xml), XMPPClient.decodeOutgoingReactionXML(xml, from: "me@example.test"))
     }
     let (node, reaction) = try received(try XMPPClient.reactionXML(to: "a&b@example.test", targetID: "t<1>", reactions: ["👍", "❤️"], id: "r'1"))
     let parsed = try #require(reaction)
     #expect(parsed.id == "r'1" && parsed.targetID == "t<1>" && parsed.reactions == ["❤️", "👍"] && node.attributes["to"] == "a&b@example.test")
     #expect(node.child("store", namespace: "urn:xmpp:hints") != nil && node.child("body", namespace: "jabber:client") == nil)
     #expect(try received(try XMPPClient.reactionXML(to: "a@example.test", targetID: "t", reactions: [], id: "r2")).1?.reactions == [])
+    #expect(XMPPClient.decodeOutgoingReactionXML("<message from='other@example.test' id='x'><reactions xmlns='urn:xmpp:reactions:0' id='t'/></message>", from: "me@example.test") == nil)
+    #expect(XMPPClient.decodeOutgoingReactionXML("<message id='x'><body>hi</body></message>", from: "me@example.test") == nil)
     let invalid: [(String, String, [String], String)] = [("a b@example.test", "t", ["👍"], "r"), ("a@example.test", "", ["👍"], "r"), ("a@example.test", "t", [""], "r"),
                                                        ("a@example.test", "t", ["bad\u{0001}"], "r"), ("a@example.test", "t", Array(repeating: "👍", count: 13), "r"), ("a@example.test", "t", ["👍"], "with space")]
     for (to, target, reactions, id) in invalid {

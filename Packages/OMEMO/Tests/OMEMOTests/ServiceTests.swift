@@ -731,14 +731,22 @@ final class ServiceTests: XCTestCase {
         expectTrue(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).isEmpty)
     }
 
-    func testLegacyReactionRequestFailsWithoutQueueOrPlaintextFallback() async throws {
+    func testLegacyReactionQueuesExactPlainStanzaAndPermitsOnlyIdenticalReplay() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.legacy)
         let outgoing = try await f.queue()
         try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
-        do { _ = try await f.a.queueReactions(account: f.alice, chatID: f.bob, messageID: outgoing.id, reactions: ["👍"]); XCTFail("Legacy reaction must not leak") }
-        catch { expectEqual(error as? OMEMOError, .unsupportedEncryptedReactions) }
-        expectTrue(try await f.aStore.queuedReactions(accountID: f.alice).isEmpty)
+        // A legacy peer can only receive plain XEP-0444, so the exact stanza becomes the durable wire.
+        let id = try await f.a.queueReactions(account: f.alice, chatID: f.bob, messageID: outgoing.id, reactions: ["👍"])
+        let prepared = try await f.a.prepareAvailableReactions(account: f.alice, transport: f.aTransport)
+        expectTrue(prepared.plaintextIDs == [id] && prepared.messageIDs.isEmpty && prepared.blockedChats.isEmpty)
+        let xml = String(decoding: try unwrap(try await f.aStore.encryptedReaction(accountID: f.alice, updateID: id)), as: UTF8.self)
+        expectEqual(xml, try XMPPClient.reactionXML(to: f.bob, targetID: outgoing.id, reactions: ["👍"], id: id))
+        expectTrue(try await f.a.canReplayPlaintextReaction(account: f.alice, xml: xml))
+        expectFalse(try await f.a.canReplayPlaintextReaction(account: f.alice, xml: xml.replacingOccurrences(of: "👍", with: "❤️")))
+        // Preparing again is idempotent, and nothing was ever sealed as an OMEMO envelope.
+        expectTrue(try await f.a.prepareAvailableReactions(account: f.alice, transport: f.aTransport).plaintextIDs == [id])
+        do { _ = try await f.a.outgoingReactionEnvelope(account: f.alice, updateID: id); XCTFail("plain wire is not an envelope") } catch {}
     }
 
     func testProtectedStateCannotMoveBetweenAccountsOrUseWrongKey() throws {

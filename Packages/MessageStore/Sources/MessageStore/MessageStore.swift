@@ -839,6 +839,20 @@ public actor MessageStore {
         }
     }
 
+    /// A plain XEP-0444 update for a legacy peer: the exact stanza is the wire, no ratchet state moves.
+    public func sealQueuedPlaintextReaction(accountID: String, updateID: String, wire: Data) throws {
+        guard !wire.isEmpty, wire.count <= 1_048_576 else { throw MessageStoreError.invalidValue }
+        try connection.transaction {
+            guard let update = try reactionUpdate(accountID: accountID, updateID: updateID), update.transportState == .queued,
+                  try reactionTarget(accountID: accountID, chatID: update.chatID, wireID: update.targetWireID)?.id == update.targetMessageID else { throw MessageStoreError.invalidTransition }
+            if let existing = try encryptedReaction(accountID: accountID, updateID: updateID) {
+                guard existing == wire else { throw MessageStoreError.invalidTransition }
+                return
+            }
+            try connection.execute("UPDATE reaction_updates SET wire=? WHERE account_id=? AND id=?", [.blob(wire), .text(accountID), .text(updateID)])
+        }
+    }
+
     public func claimNextReaction(accountID: String, updateIDs: Set<String>) throws -> ReactionSubmission? {
         try Task.checkCancellation(); try requireTransportOwnership()
         guard updateIDs.count <= 1000 else { throw MessageStoreError.invalidValue }
