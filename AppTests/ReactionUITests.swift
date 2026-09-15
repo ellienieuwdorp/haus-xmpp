@@ -19,8 +19,8 @@ final class ReactionUITests: XCTestCase {
         app.buttons["Connect"].tap()
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"]
         if allow.waitForExistence(timeout: 3) { allow.tap() }
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected to lab")).firstMatch.waitForExistence(timeout: 25))
-        app.buttons["Chats"].tap(); app.buttons["newConversation"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected")).firstMatch.waitForExistence(timeout: 25))
+        app.returnToChats(); app.buttons["newConversation"].tap()
         app.textFields["newChatAddress"].tap(); app.textFields["newChatAddress"].typeText(peer)
         app.buttons["Create conversation"].tap()
         let composer = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]

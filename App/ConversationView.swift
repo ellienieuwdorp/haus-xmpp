@@ -7,6 +7,7 @@ struct ConversationView: View {
     @State private var query = ""
     @State private var showingSearch = false
     @State private var sheet: Sheet?
+    @State private var pendingSheet: Sheet?
     @State private var starredOnly = false
     @State private var retryMessageID: String?
     @State private var replyingTo: ChatMessage?
@@ -118,7 +119,7 @@ struct ConversationView: View {
         .background(Color(uiColor: .systemBackground))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .principal) {
+            ToolbarItem(placement: .topBarLeading) {
                 let trust = model.trustSummary(for: chatID)
                 Button { sheet = .details } label: {
                     HStack(spacing: 9) {
@@ -132,13 +133,16 @@ struct ConversationView: View {
                             .font(.caption2).foregroundStyle(trust.needsReview ? Color.orange : Color.secondary).lineLimit(1)
                         }
                     }
-                    .frame(minHeight: 44)
+                    // Leading toolbar items size to content; give the header a fixed width so the name isn't squeezed out.
+                    .frame(width: 236, height: 44, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(title), \(trust.subtitle)")
                 .accessibilityHint("Shows conversation details")
                 .accessibilityIdentifier("chatDetails")
             }
+            .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button("Search messages", systemImage: "magnifyingglass") { composing = false; showingSearch = true }
@@ -162,13 +166,16 @@ struct ConversationView: View {
         } message: { _ in
             Text("The recipient may already have it. Sending again could create a duplicate.")
         }
-        .sheet(item: $sheet) { item in
+        .sheet(item: $sheet, onDismiss: {
+            // Swapping the item while a sheet is up is unreliable; present the next one after dismissal.
+            if let next = pendingSheet { pendingSheet = nil; sheet = next }
+        }) { item in
             switch item {
             case .details:
                 ChatDetailsView(model: model, chatID: chatID,
                                 search: { sheet = nil; composing = false; showingSearch = true },
                                 starred: { sheet = nil; starredOnly = true },
-                                openEncryption: { sheet = .encryption })
+                                openEncryption: { pendingSheet = .encryption; sheet = nil })
             case .encryption:
                 if isGroup { GroupDetailsView(model: model, room: chatID) }
                 else { EncryptionDetailsView(model: model, chatID: chatID) }

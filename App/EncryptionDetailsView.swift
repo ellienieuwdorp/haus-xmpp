@@ -37,6 +37,7 @@ struct EncryptionDetailsView: View {
                     Section { Text(model.encryptionStatus).foregroundStyle(.secondary) }
                 }
             }
+            .task { if model.isConnected { await model.loadEncryptionDetails(for: chatID) } }
             .navigationTitle("Devices & Encryption")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -130,7 +131,7 @@ struct FingerprintGrid: View {
         let groups = stride(from: 0, to: value.count, by: 8).map { String(value.dropFirst($0).prefix(8)) }
         Grid(horizontalSpacing: 8, verticalSpacing: 12) {
             ForEach(Array(stride(from: 0, to: groups.count, by: 4)), id: \.self) { start in
-                GridRow { ForEach(groups[start..<min(start + 4, groups.count)], id: \.self) { Text($0) } }
+                GridRow { ForEach(groups[start..<min(start + 4, groups.count)], id: \.self) { Text($0).lineLimit(1).minimumScaleFactor(0.7) } }
             }
         }
         .font(font).frame(maxWidth: .infinity).textSelection(.enabled)
@@ -172,23 +173,31 @@ struct DeviceFingerprintSheet: View {
                 }
                 .listRowBackground(Color.clear)
                 Section { FingerprintGrid(value: device.fingerprint).padding(.vertical, 8) }
+                // One button per row: a List row forwards taps to a single control.
                 Section {
-                    VStack(spacing: 10) {
-                        Button { review(.verified) } label: {
-                            Label("Fingerprints match · verify", systemImage: "checkmark.shield").frame(maxWidth: .infinity)
+                    Button { review(.verified) } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.shield")
+                            Text("Fingerprints match · verify")
                         }
-                        .buttonStyle(.glassProminent)
-                        Button { review(.accepted) } label: {
-                            Text("Accept without verifying").frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.glass)
+                        .frame(maxWidth: .infinity)
                     }
-                    .fontWeight(.semibold).controlSize(.large)
+                    .buttonStyle(.glassProminent)
+                    .frame(maxWidth: .infinity)
+                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 10, trailing: 0)).listRowSeparator(.hidden)
+                    Button { review(.accepted) } label: {
+                        Text("Accept without verifying").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.glass)
+                    .frame(maxWidth: .infinity)
+                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
                 }
-                .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                .fontWeight(.semibold).controlSize(.large)
                 .disabled(!device.active)
                 Section {
-                    Button("Block this device", systemImage: "hand.raised", role: .destructive) { review(.rejected) }
+                    Button(role: .destructive) { review(.rejected) } label: {
+                        Label("Block this device", systemImage: "hand.raised").foregroundStyle(.red)
+                    }
                 } footer: {
                     Text(device.active ? "Blocked devices are left out of new messages." : "No longer advertised. Its fingerprint is read-only.")
                 }

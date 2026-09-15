@@ -86,7 +86,7 @@ final class PushUITests: XCTestCase {
     }
 
     @MainActor private func establishEncryptedRoundTrip(_ app: XCUIApplication, peer: String) {
-        app.buttons["Chats"].tap()
+        app.returnToChats()
         app.buttons["newConversation"].tap()
         let address = app.textFields["newChatAddress"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))

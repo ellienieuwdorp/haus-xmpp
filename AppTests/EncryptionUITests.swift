@@ -13,7 +13,7 @@ final class EncryptionUITests: XCTestCase {
         app.isolateMessageStorage()
         app.launch()
         connect(app)
-        app.buttons["Chats"].tap()
+        app.returnToChats()
         app.buttons["newConversation"].tap()
         app.textFields["newChatAddress"].tap()
         app.textFields["newChatAddress"].typeText(peer)
@@ -56,7 +56,7 @@ final class EncryptionUITests: XCTestCase {
         app.buttons["Done"].tap()
         app.navigationBars.buttons["BackButton"].tap()
         connect(app)
-        app.buttons["Chats"].tap(); chat.tap()
+        app.returnToChats(); chat.tap()
         XCTAssertEqual(bubbles.count, 2)
         app.openEncryptionDetails()
         XCTAssertFalse(rows.matching(NSPredicate(format: "label CONTAINS %@", "Review required")).firstMatch.exists)
@@ -71,7 +71,7 @@ final class EncryptionUITests: XCTestCase {
         app.buttons["Connect"].tap()
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"]
         if allow.waitForExistence(timeout: 3) { allow.tap() }
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected to lab")).firstMatch.waitForExistence(timeout: 25))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected")).firstMatch.waitForExistence(timeout: 25))
     }
     @MainActor private func capture(_ app: XCUIApplication, _ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)

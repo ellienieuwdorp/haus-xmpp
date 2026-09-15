@@ -35,7 +35,7 @@ struct ConversationTrust {
 
 extension AppModel {
     /// A stored title, unless it is just the address; then the local part reads as the name.
-    static func displayName(for chatID: String, title: String?) -> String {
+    nonisolated static func displayName(for chatID: String, title: String?) -> String {
         if let title, !title.isEmpty, title != chatID { return title }
         return chatID.split(separator: "@", maxSplits: 1).first.map(String.init) ?? chatID
     }
@@ -49,7 +49,8 @@ extension AppModel {
             guard let group = groupChats[chatID], group.joined, group.issue == nil else { return ConversationTrust(level: .other, subtitle: encryptionStatus) }
             return ConversationTrust(level: .encrypted, subtitle: "\(group.members.count) members · Encrypted")
         }
-        guard encryptionStatus == "End-to-end encryption", let overview = encryptionOverview else {
+        let ready: Set<String> = ["End-to-end encryption", "New messages are end-to-end encrypted"]
+        guard ready.contains(encryptionStatus), let overview = encryptionOverview else {
             return ConversationTrust(level: .other, subtitle: encryptionStatus)
         }
         let theirs = overview.devices.filter { $0.jid == chatID && $0.active }
@@ -158,8 +159,10 @@ struct ChatDetailsView: View {
             }
             .frame(maxWidth: .infinity, minHeight: 44)
             .padding(.vertical, 8)
+            .foregroundStyle(.tint)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.roundedRectangle(radius: 26))
+        .buttonStyle(.plain)
     }
 }

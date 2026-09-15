@@ -12,7 +12,7 @@ final class GroupUITests: XCTestCase {
         app.isolateMessageStorage()
         app.launch()
         connect(app)
-        app.buttons["Chats"].tap(); app.buttons["newConversation"].tap()
+        app.returnToChats(); app.buttons["newConversation"].tap()
         XCTAssertTrue(app.buttons["newGroup"].waitForExistence(timeout: 5)); app.buttons["newGroup"].tap()
         XCTAssertTrue(app.textFields["groupAddress"].waitForExistence(timeout: 5))
         capture(app, "Group invitation form")
@@ -65,7 +65,7 @@ final class GroupUITests: XCTestCase {
         XCTAssertEqual(bubbles.count, 2, "Reactions must not create extra chat messages")
         app.terminate(); app.launch()
         connect(app)
-        app.buttons["Chats"].tap()
+        app.returnToChats()
         let restored = app.buttons["chat.\(room)"]
         XCTAssertTrue(restored.waitForExistence(timeout: 10)); restored.tap()
         XCTAssertEqual(bubbles.count, 2, "Archive catch-up must not duplicate authenticated messages")
@@ -86,7 +86,7 @@ final class GroupUITests: XCTestCase {
         app.buttons["Connect"].tap()
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"]
         if allow.waitForExistence(timeout: 2) { allow.tap() }
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected to lab")).firstMatch.waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected")).firstMatch.waitForExistence(timeout: 30))
     }
 
     @MainActor private func capture(_ app: XCUIApplication, _ name: String) {

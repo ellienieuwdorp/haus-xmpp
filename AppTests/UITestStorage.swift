@@ -23,3 +23,12 @@ extension XCUIApplication {
         if react.waitForExistence(timeout: 2) { react.tap() }
     }
 }
+
+extension XCUIApplication {
+    /// The root is always Chats; close the Settings sheet or pop a conversation to get back to it.
+    func returnToChats() {
+        if navigationBars["Settings"].exists, buttons["Done"].exists { buttons["Done"].tap(); return }
+        if buttons["Chats"].exists { buttons["Chats"].tap(); return }
+        if buttons["BackButton"].exists { buttons["BackButton"].tap() }
+    }
+}

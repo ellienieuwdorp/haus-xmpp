@@ -18,8 +18,8 @@ final class LabConnectionUITests: XCTestCase {
         app.switches["labConsent"].coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         XCTAssertTrue(app.buttons["Connect"].isEnabled)
         app.buttons["Connect"].tap()
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected to lab")).firstMatch.waitForExistence(timeout: 25))
-        app.buttons["Chats"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected")).firstMatch.waitForExistence(timeout: 25))
+        app.returnToChats()
         app.buttons["New conversation"].tap()
         let recipient = app.textFields["newChatAddress"]
         XCTAssertTrue(recipient.waitForExistence(timeout: 5))

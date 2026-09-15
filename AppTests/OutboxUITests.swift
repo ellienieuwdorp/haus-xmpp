@@ -19,9 +19,9 @@ final class OutboxUITests: XCTestCase {
             app.buttons["Connect"].tap()
             let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"]
             if allow.waitForExistence(timeout: 3) { allow.tap() }
-            XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected to lab")).firstMatch.waitForExistence(timeout: 25))
+            XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected")).firstMatch.waitForExistence(timeout: 25))
         }
-        connect(); app.buttons["Disconnect"].tap(); app.buttons["Chats"].tap()
+        connect(); app.buttons["Disconnect"].tap(); app.returnToChats()
         app.buttons["newConversation"].tap()
         app.textFields["newChatAddress"].tap(); app.textFields["newChatAddress"].typeText(peer)
         app.buttons["Create conversation"].tap()
@@ -38,7 +38,7 @@ final class OutboxUITests: XCTestCase {
         XCTAssertTrue(messages.firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(messages.firstMatch.label.contains("Waiting to send"))
         app.navigationBars.buttons["BackButton"].tap(); connect()
-        app.buttons["Chats"].tap(); chat.tap()
+        app.returnToChats(); chat.tap()
         app.openEncryptionDetails()
         let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "encryptionDevice."))
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 20))
@@ -56,7 +56,7 @@ final class OutboxUITests: XCTestCase {
         let sent = messages.matching(NSPredicate(format: "label CONTAINS %@", "Accepted by server")).firstMatch
         XCTAssertTrue(sent.waitForExistence(timeout: 15))
         app.terminate(); app.launch(); connect()
-        app.buttons["Chats"].tap(); chat.tap()
+        app.returnToChats(); chat.tap()
         XCTAssertEqual(messages.count, 2)
         let duplicate = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count > 2"), object: messages)
         duplicate.isInverted = true; wait(for: [duplicate], timeout: 3)

@@ -101,7 +101,7 @@ struct ChatListView: View {
             ToolbarSpacer(.flexible, placement: .bottomBar)
             ToolbarItem(placement: .bottomBar) {
                 Button { newChatDetent = .medium; showingNewChat = true } label: {
-                    Image(systemName: "square.and.pencil").font(.title3).frame(width: 52, height: 52).contentShape(Circle())
+                    Image(systemName: "square.and.pencil").font(.title3).frame(width: 32, height: 32).contentShape(Circle())
                 }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
@@ -109,6 +109,7 @@ struct ChatListView: View {
                 .accessibilityIdentifier("newConversation")
                 .disabled(model.accountID.isEmpty)
             }
+            .sharedBackgroundVisibility(.hidden)
         }
         .navigationDestination(for: String.self) { chatID in
             ConversationView(model: model, chatID: chatID)
@@ -187,11 +188,13 @@ struct ChatListView: View {
                                 HStack(spacing: 12) {
                                     Avatar(chat: chat, isGroup: model.isGroup(chat.id), size: 40)
                                     VStack(alignment: .leading) {
-                                        Text(chat.title).foregroundStyle(.primary)
+                                        Text(chat.displayTitle).foregroundStyle(.primary)
                                         Text(chat.id).font(.footnote).foregroundStyle(.secondary)
                                     }
                                 }
+                                .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -213,9 +216,9 @@ private struct Avatar: View {
 
     var body: some View {
         ZStack {
-            Circle().fill(Color(uiColor: AvatarPalette.color(for: chat.title)))
+            Circle().fill(Color(uiColor: AvatarPalette.color(for: chat.displayTitle)))
             if isGroup { Image(systemName: "person.2.fill").font(.system(size: size * 0.38, weight: .semibold)) }
-            else { Text(String(chat.title.prefix(1)).uppercased()).font(.system(size: size * 0.4, weight: .semibold)) }
+            else { Text(String(chat.displayTitle.prefix(1)).uppercased()).font(.system(size: size * 0.4, weight: .semibold)) }
         }
         .foregroundStyle(.white)
         .frame(width: size, height: size)
@@ -260,7 +263,7 @@ private struct ChatRow: View {
             Avatar(chat: chat, isGroup: isGroup)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Text(chat.title).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                    Text(chat.displayTitle).font(.headline).foregroundStyle(.primary).lineLimit(1)
                     Spacer(minLength: 8)
                     if chat.isPinned {
                         Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary).accessibilityHidden(true)
