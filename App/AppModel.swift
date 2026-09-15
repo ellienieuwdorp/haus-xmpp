@@ -570,6 +570,16 @@ final class AppModel {
                 connectionStatus = "Offline"; isConnected = false; isConnecting = false
                 if reason != nil { error = "The lab connection ended. Delivery of any in-flight message is unconfirmed." }
             }
+        case .reaction(let reaction):
+            guard let encryption else { return }
+            do {
+                try await encryption.receivePlaintextReaction(account: account, reaction: reaction)
+                guard generation == token else { return }
+                await refresh()
+            } catch {
+                guard generation == token else { return }
+                inboundMayAcknowledge = false
+            }
         case .encryptedMessage(let incoming):
             receivedCount += 1
             guard let encryption, let client else { return }

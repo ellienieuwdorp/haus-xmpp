@@ -111,6 +111,8 @@ private func consumeBackgroundEvents(client: XMPPClient, encryption: OMEMOServic
             catch {
                 guard try await encryption.hasDurableGroupDisposition(account: account, message: message) else { throw error }
             }
+        case .reaction(let reaction):
+            try await encryption.receivePlaintextReaction(account: account, reaction: reaction)
         case .streamManagementBarrier(let token):
             try await client.acknowledgeInbound(token)
         case .state(.disconnected):

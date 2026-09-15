@@ -172,6 +172,7 @@ private func queue(_ store: MessageStore, account: String = "a", id: String = "m
         DROP TABLE reaction_updates;
         DROP TABLE reaction_events;
         DROP INDEX authenticated_message_wire;
+        DROP INDEX message_wire;
         ALTER TABLE messages DROP COLUMN wire_id;
         ALTER TABLE messages DROP COLUMN wire_id_authenticated;
         PRAGMA user_version=4;

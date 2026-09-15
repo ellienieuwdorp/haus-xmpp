@@ -94,9 +94,12 @@ private func update(_ id: String = "reaction", reactions: [String] = ["👍"]) -
     let url = try reactionURL(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = try MessageStore(url: url)
     try await target(store, id: "untrusted", authenticated: false)
-    #expect(try await store.reactionTarget(accountID: "self", chatID: "peer", wireID: "wire") == nil)
+    // A peer-supplied ID projects alone, but never carries an outgoing encrypted reaction.
+    #expect(try await store.reactionTarget(accountID: "self", chatID: "peer", wireID: "wire")?.id == "untrusted")
     await #expect(throws: MessageStoreError.invalidValue) { try await store.enqueueReaction(update()) }
     try await target(store)
+    // The authenticated ID wins over the forged copy instead of being disabled by it.
+    #expect(try await store.reactionTarget(accountID: "self", chatID: "peer", wireID: "wire")?.id == "target")
     #expect(try await store.enqueueReaction(update()))
     try await target(store, id: "collision", actor: "self")
     #expect(try await store.reactionTarget(accountID: "self", chatID: "peer", wireID: "wire") == nil)
@@ -131,7 +134,8 @@ private func update(_ id: String = "reaction", reactions: [String] = ["👍"]) -
     #expect(bulk["target"]?.first(where: { $0.actorID == "peer" })?.reactions == [])
     #expect(bulk["target"]?.first(where: { $0.actorID == "self" })?.reactions == ["👍"])
     #expect(bulk["second"]?.first?.reactions == ["🔥"])
-    #expect(bulk["untrusted"] == nil && bulk["missing"] == nil)
+    // A unique peer-supplied ID projects the peer's unencrypted reaction; unknown targets never do.
+    #expect(bulk["untrusted"]?.first?.reactions == ["👍"] && bulk["missing"] == nil)
     #expect(try await store.reactionsForChat(accountID: "other", chatID: "peer", messageIDs: requested).isEmpty)
     #expect(try await store.reactionsForChat(accountID: "self", chatID: "other", messageIDs: requested).isEmpty)
     #expect(try await store.reactionsForChat(accountID: "self", chatID: "peer", messageIDs: []).isEmpty)
@@ -142,5 +146,34 @@ private func update(_ id: String = "reaction", reactions: [String] = ["👍"]) -
     #expect(collision["second"]?.first?.reactions == ["🔥"])
     await #expect(throws: MessageStoreError.invalidValue) {
         try await store.reactionsForChat(accountID: "self", chatID: "peer", messageIDs: Set((0...1000).map(String.init)))
+    }
+}
+
+@Test func plaintextReactionsProjectOntoLegacySendsAndPeerMessagesByStanzaID() async throws {
+    let url = try reactionURL(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
+    try await store.upsertChat(accountID: "self", chatID: "peer", title: "Peer")
+    // A legacy OMEMO send keeps its stanza ID as an unauthenticated wire ID once sealed.
+    try await store.enqueueOutgoing(StoredMessage(id: "mine", accountID: "self", chatID: "peer", senderID: "self", body: "Hi", isOutgoing: true, encryptionProfile: "pending"))
+    try await store.saveEncryptionState(accountID: "self", expectedRevision: nil, data: Data([1]))
+    try await store.sealQueuedOutgoing(accountID: "self", messageID: "mine", profile: "legacy", expectedRevision: 1, state: Data([2]), wire: Data([3]))
+    let mine = try #require(await store.message(accountID: "self", messageID: "mine"))
+    #expect(mine.wireID == "mine" && !mine.wireIDAuthenticated)
+    // The peer's own message carries its outer origin ID, unauthenticated.
+    try await store.insertMessage(StoredMessage(id: "theirs", accountID: "self", chatID: "peer", senderID: "peer", body: "Yo", encryptionProfile: "legacy", wireID: "theirs-origin"))
+    let now = Date(timeIntervalSince1970: 200)
+    try await store.recordReaction(accountID: "self", reaction: .init(id: "r1", chatID: "peer", actorID: "peer", targetWireID: "mine", reactions: ["👍"], updatedAt: now))
+    try await store.recordReaction(accountID: "self", reaction: .init(id: "r2", chatID: "peer", actorID: "peer", targetWireID: "theirs-origin", reactions: ["❤️"], updatedAt: now))
+    try await store.recordReaction(accountID: "self", reaction: .init(id: "r1", chatID: "peer", actorID: "peer", targetWireID: "mine", reactions: ["🔥"], updatedAt: now)) // replay keeps first
+    let projected = try await store.reactionsForChat(accountID: "self", chatID: "peer", messageIDs: ["mine", "theirs"])
+    #expect(projected["mine"]?.map(\.reactions) == [["👍"]])
+    #expect(projected["theirs"]?.map(\.reactions) == [["❤️"]])
+    #expect(try await store.reactions(accountID: "self", chatID: "peer", messageID: "mine").first?.reactions == ["👍"])
+    // Nothing here is an authenticated reference, so no encrypted reaction can be queued.
+    #expect(try await store.reactionReference(accountID: "self", messageID: "mine") == nil)
+    // A stranger's actor ID never records.
+    await #expect(throws: MessageStoreError.invalidValue) {
+        try await store.recordReaction(accountID: "self", reaction: .init(id: "r3", chatID: "peer", actorID: "other", targetWireID: "mine", reactions: ["👍"], updatedAt: now))
     }
 }

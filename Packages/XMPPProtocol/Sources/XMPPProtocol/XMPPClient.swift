@@ -29,6 +29,17 @@ public struct XMPPMessage: Sendable, Equatable {
     }
 }
 
+/// An unencrypted XEP-0444 reaction as widely deployed clients send it. The actor is only
+/// server-authenticated; the target identifier is untrusted until the store resolves it uniquely.
+public struct XMPPReaction: Sendable, Equatable {
+    public let id: String
+    public let from: String
+    public let to: String?
+    public let targetID: String
+    public let reactions: [String]
+    public let provenance: XMPPMessageProvenance
+}
+
 /// A caller-resolved direct-chat reply target plus a bounded plaintext fallback snapshot.
 /// IDs must come from the original wire message, never a generated local database ID.
 /// A nil ID emits only the quoted body, without structured reply/fallback metadata.
@@ -45,6 +56,7 @@ public struct XMPPReply: Sendable, Equatable {
 public enum XMPPEvent: Sendable, Equatable {
     case state(XMPPConnectionState)
     case message(XMPPMessage)
+    case reaction(XMPPReaction)
     case encryptedMessage(XMPPEncryptedMessage)
     case encryptedGroupMessage(XMPPEncryptedGroupMessage)
     case groupPresence(room: String)
@@ -238,6 +250,21 @@ public actor XMPPClient {
         let originID = candidate.flatMap { validMessageID($0) ? $0 : nil }
         return XMPPMessage(id: node.attributes["id"] ?? UUID().uuidString, from: from,
                            to: node.attributes["to"], body: body, originID: originID, type: node.attributes["type"], provenance: provenance)
+    }
+
+    static func parsedReaction(_ node: XMLNode, provenance: XMPPMessageProvenance = .direct) -> XMPPReaction? {
+        guard node.name == "message", node.namespace == "jabber:client",
+              node.attributes["type"] == nil || node.attributes["type"] == "chat" || node.attributes["type"] == "normal",
+              !OMEMOWire.hasEncryptedContent(node), !Carbons.containsWrapper(node),
+              let from = node.attributes["from"], !from.isEmpty else { return nil }
+        let nodes = node.children.filter { $0.name == "reactions" && $0.namespace == "urn:xmpp:reactions:0" }
+        guard nodes.count == 1, let target = nodes[0].attributes["id"], validMessageID(target),
+              nodes[0].children.count <= 48,
+              nodes[0].children.allSatisfy({ $0.name == "reaction" && $0.namespace == "urn:xmpp:reactions:0" && $0.children.isEmpty && validXMLText($0.text) }) else { return nil }
+        // XEP-0444 sends the complete set; an empty set withdraws. Duplicates are tolerated, not counted.
+        let values = Array(Set(nodes[0].children.map(\.text).filter { !$0.isEmpty && $0.utf8.count <= 64 })).sorted()
+        return XMPPReaction(id: node.attributes["id"].flatMap { validMessageID($0) ? $0 : nil } ?? UUID().uuidString, from: from,
+                            to: node.attributes["to"], targetID: target, reactions: values, provenance: provenance)
     }
 
     private func readLoop(_ conn: NWConnection, token: UUID) async {
@@ -474,6 +501,8 @@ public actor XMPPClient {
             catch { try emit(.encryptionFailure(from: node.attributes["from"] ?? "", id: node.attributes["id"])) }
         } else if provenance == .direct, let update = Self.deviceUpdate(node) {
             try emit(.omemoDevices(owner: update.owner, profile: update.profile, devices: update.devices))
+        } else if let reaction = Self.parsedReaction(node, provenance: provenance) {
+            try emit(.reaction(reaction))
         } else if let message = Self.parsedMessage(node, provenance: provenance) {
             try emit(.message(message))
         }

@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 8 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 9 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -112,6 +112,11 @@ public actor MessageStore {
                 try connection.execute("ALTER TABLE messages ADD COLUMN wire_id_authenticated INTEGER NOT NULL DEFAULT 0")
             }
             try connection.execute("CREATE INDEX IF NOT EXISTS authenticated_message_wire ON messages(account_id,chat_id,wire_id) WHERE wire_id_authenticated=1")
+            if version < 9 {
+                // Legacy direct sends kept no wire ID; peers react to that stanza ID unencrypted.
+                try connection.execute("UPDATE messages SET wire_id=id WHERE wire_id IS NULL AND outgoing=1 AND encryption_profile='legacy'")
+            }
+            try connection.execute("CREATE INDEX IF NOT EXISTS message_wire ON messages(account_id,chat_id,wire_id)")
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS reaction_updates (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, id TEXT NOT NULL,
@@ -158,7 +163,7 @@ public actor MessageStore {
                     message_id TEXT NOT NULL, reason TEXT NOT NULL, UNIQUE(account_id,archive_id,message_id)
                 )
                 """)
-            try connection.execute("PRAGMA user_version = 8")
+            try connection.execute("PRAGMA user_version = 9")
         }
     }
 
@@ -495,7 +500,7 @@ public actor MessageStore {
                   try connection.query("SELECT state FROM outbox WHERE account_id=? AND message_id=?", [.text(accountID), .text(messageID)]).first?[0].string == "queued" else { throw MessageStoreError.invalidTransition }
             try writeEncryptionState(accountID: accountID, expectedRevision: expectedRevision, data: state)
             try connection.execute("INSERT INTO encrypted_outbox(account_id,message_id,wire) VALUES(?,?,?)", [.text(accountID), .text(messageID), .blob(wire)])
-            try connection.execute("UPDATE messages SET encryption_profile=?,wire_id=?,wire_id_authenticated=? WHERE account_id=? AND id=?", [.text(profile), profile == "modern" && authenticateWireID ? .text(messageID) : .null, .integer(profile == "modern" && authenticateWireID ? 1 : 0), .text(accountID), .text(messageID)])
+            try connection.execute("UPDATE messages SET encryption_profile=?,wire_id=?,wire_id_authenticated=? WHERE account_id=? AND id=?", [.text(profile), authenticateWireID ? .text(messageID) : .null, .integer(profile == "modern" && authenticateWireID ? 1 : 0), .text(accountID), .text(messageID)])
         }
     }
 
@@ -716,17 +721,21 @@ public actor MessageStore {
         }
     }
 
-    /// Resolve only a single authenticated modern origin ID within this account and conversation.
+    /// Resolve a single wire ID within this account and conversation. An authenticated (SCE) ID
+    /// always wins; a peer-supplied one resolves only when nothing authenticated matches and it is
+    /// unique, so a forged ID cannot hijack or disable an authenticated target. Sending still
+    /// requires `reactionReference`.
     public func reactionTarget(accountID: String, chatID: String, wireID: String) throws -> StoredMessage? {
-        let rows = try connection.query("SELECT \(Self.columns) FROM messages WHERE account_id=? AND chat_id=? AND encryption_profile='modern' AND ((wire_id=? AND wire_id_authenticated=1) OR id IN (SELECT message_id FROM group_message_references WHERE account_id=? AND room=? AND stanza_id=?)) LIMIT 2", [.text(accountID), .text(chatID), .text(wireID), .text(accountID), .text(chatID), .text(wireID)])
-        guard rows.count == 1 else { return nil }
-        return try Self.decode(rows[0])
+        let rows = try connection.query("SELECT \(Self.columns) FROM messages WHERE account_id=? AND chat_id=? AND (wire_id=? OR id IN (SELECT message_id FROM group_message_references WHERE account_id=? AND room=? AND stanza_id=?)) ORDER BY wire_id_authenticated DESC LIMIT 2", [.text(accountID), .text(chatID), .text(wireID), .text(accountID), .text(chatID), .text(wireID)])
+        let matches = try rows.map(Self.decode)
+        guard let first = matches.first, matches.count == 1 || (first.wireIDAuthenticated && !matches[1].wireIDAuthenticated) else { return nil }
+        return first
     }
 
     /// Returns each authenticated actor's latest complete set, including an empty withdrawal.
     public func reactions(accountID: String, chatID: String, messageID: String) throws -> [AuthenticatedReaction] {
         guard let message = try message(accountID: accountID, messageID: messageID), message.chatID == chatID,
-              let wireID = try reactionReference(accountID: accountID, messageID: messageID),
+              let wireID = try reactionReference(accountID: accountID, messageID: messageID) ?? message.wireID,
               try reactionTarget(accountID: accountID, chatID: chatID, wireID: wireID)?.id == messageID else { return [] }
         let rows = try connection.query("SELECT id,chat_id,actor_id,target_wire_id,reactions_json,updated_at FROM reaction_events WHERE account_id=? AND chat_id=? AND target_wire_id=? ORDER BY updated_at DESC,id DESC", [.text(accountID), .text(chatID), .text(wireID)])
         var seen: Set<String> = [], result: [AuthenticatedReaction] = []
@@ -747,18 +756,19 @@ public actor MessageStore {
         let placeholders = ids.map { _ in "?" }.joined(separator: ",")
         let rows = try connection.query("""
             WITH valid_references AS (
-                SELECT account_id,chat_id,id,wire_id FROM messages WHERE account_id=? AND chat_id=? AND wire_id_authenticated=1 AND encryption_profile='modern'
+                SELECT account_id,chat_id,id,wire_id,wire_id_authenticated AS authenticated FROM messages WHERE account_id=? AND chat_id=? AND wire_id IS NOT NULL
                 UNION ALL
-                SELECT r.account_id,r.room,r.message_id,r.stanza_id FROM group_message_references r JOIN messages m
+                SELECT r.account_id,r.room,r.message_id,r.stanza_id,0 FROM group_message_references r JOIN messages m
                 ON m.account_id=r.account_id AND m.id=r.message_id AND m.chat_id=r.room AND m.encryption_profile='modern'
                 WHERE r.account_id=? AND r.room=?
             ), requested AS (
-                SELECT id,wire_id FROM valid_references
+                SELECT id,wire_id,authenticated FROM valid_references
                 WHERE account_id=? AND chat_id=? AND id IN (\(placeholders))
             ), unique_targets AS (
+                -- Same rule as reactionTarget: authenticated wins, unauthenticated must be alone.
                 SELECT r.id,r.wire_id FROM requested r WHERE (
                     SELECT COUNT(*) FROM valid_references m WHERE m.account_id=? AND m.chat_id=?
-                    AND m.wire_id=r.wire_id
+                    AND m.wire_id=r.wire_id AND m.authenticated>=r.authenticated
                 )=1
             ), latest AS (
                 SELECT t.id AS message_id,e.id,e.chat_id,e.actor_id,e.target_wire_id,e.reactions_json,e.updated_at,
@@ -799,6 +809,11 @@ public actor MessageStore {
             try insertReactionEvent(accountID: update.accountID, reaction: event, groupRoom: groupRoom)
             return true
         }
+    }
+
+    /// An unencrypted XEP-0444 event: the actor is server-authenticated only. Same projection rules.
+    public func recordReaction(accountID: String, reaction: AuthenticatedReaction) throws {
+        try insertReactionEvent(accountID: accountID, reaction: reaction)
     }
 
     public func queuedReactions(accountID: String) throws -> [StoredReactionUpdate] {

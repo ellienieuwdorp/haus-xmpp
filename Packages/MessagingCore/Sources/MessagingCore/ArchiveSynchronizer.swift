@@ -30,6 +30,8 @@ public struct ArchiveSynchronizer: Sendable {
                     } catch {
                         guard try await encryption.hasDurableIncomingDisposition(account: account, message: encrypted) else { throw error }
                     }
+                } else if let reaction = archived.reaction {
+                    try await encryption.receivePlaintextReaction(account: account, reaction: reaction, sentAt: archived.timestamp)
                 }
                 // Plaintext and unsupported content are deliberately excluded by this client's
                 // encrypted-only policy. They must never be rendered as authenticated messages.

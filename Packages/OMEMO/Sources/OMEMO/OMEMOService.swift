@@ -517,6 +517,22 @@ public actor OMEMOService {
         try await store.retryReaction(accountID: account, updateID: updateID)
     }
 
+    /// Conversations and most deployed clients react unencrypted even in OMEMO chats. The actor is
+    /// server-authenticated only; the untrusted target still has to resolve to one stored message.
+    /// Returns false for content this client ignores; throws only when storage fails.
+    @discardableResult
+    public func receivePlaintextReaction(account: String, reaction: XMPPReaction, sentAt: Date? = nil) async throws -> Bool {
+        let actor = bare(reaction.from)
+        let peer = actor == account ? bare(reaction.to ?? "") : actor
+        let values = reaction.reactions.filter(ReactionContent.isEmoji)
+        guard !actor.isEmpty, !peer.isEmpty, values.count <= 12 else { return false }
+        let event = AuthenticatedReaction(id: reaction.id, chatID: peer, actorID: actor, targetWireID: reaction.targetID,
+                                          reactions: values, updatedAt: min(sentAt ?? Date(), Date()))
+        do { try await store.recordReaction(accountID: account, reaction: event) }
+        catch MessageStoreError.invalidValue { return false }
+        return true
+    }
+
     public func reactions(account: String, chatID: String, messageID: String) async throws -> [AuthenticatedReaction] {
         try await store.reactions(accountID: account, chatID: chatID, messageID: messageID)
     }
@@ -674,7 +690,7 @@ public actor OMEMOService {
                 stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: peer, senderID: sender,
                                        body: content.body, sentAt: retained.sentAt ?? Date(), isOutgoing: sender == account,
                                        reply: content.reply, encryptionProfile: profile.rawValue,
-                                       wireID: content.originID, wireIDAuthenticated: content.originID != nil)
+                                       wireID: content.originID ?? message.originID, wireIDAuthenticated: content.originID != nil)
             }
             if let update = content.reaction {
                 guard profile == .modern, sender == account || sender == peer else { throw OMEMOError.invalidContent }

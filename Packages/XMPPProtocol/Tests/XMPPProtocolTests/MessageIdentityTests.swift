@@ -56,3 +56,24 @@ private func stanza(_ xml: String) throws -> XMPPProtocol.XMLNode {
         #expect(XMPPClient.parsedMessage(node)?.id == "stanza")
     }
 }
+
+@Test func parsingAcceptsUnencryptedXEP0444ReactionsAndKeepsThemOutOfPlaintextMessages() throws {
+    // Shape sent by Conversations: no body, complete set, store hint.
+    let node = try stanza("<message from='a@example.test/phone' to='me@example.test/ios' id='r1' type='chat'><reactions xmlns='urn:xmpp:reactions:0' id='target'><reaction>👍</reaction><reaction>👍</reaction><reaction>❤️</reaction></reactions><store xmlns='urn:xmpp:hints'/></message>")
+    let reaction = try #require(XMPPClient.parsedReaction(node))
+    #expect(reaction.id == "r1" && reaction.from == "a@example.test/phone" && reaction.targetID == "target")
+    #expect(reaction.reactions == ["❤️", "👍"])
+    #expect(XMPPClient.parsedMessage(node) == nil)
+    // An empty set is a withdrawal, not garbage.
+    #expect(try XMPPClient.parsedReaction(stanza("<message from='a@example.test' id='r2'><reactions xmlns='urn:xmpp:reactions:0' id='target'/></message>"))?.reactions == [])
+    for bad in [
+        "<message from='a@example.test' type='groupchat'><reactions xmlns='urn:xmpp:reactions:0' id='t'><reaction>👍</reaction></reactions></message>",
+        "<message from='a@example.test'><reactions xmlns='urn:xmpp:reactions:0'><reaction>👍</reaction></reactions></message>",
+        "<message from='a@example.test'><reactions xmlns='urn:wrong' id='t'><reaction>👍</reaction></reactions></message>",
+        "<message from='a@example.test'><reactions xmlns='urn:xmpp:reactions:0' id='t'><reaction><b/></reaction></reactions></message>",
+        "<message from='a@example.test'><reactions xmlns='urn:xmpp:reactions:0' id='t'/><reactions xmlns='urn:xmpp:reactions:0' id='u'/></message>",
+        "<message from='a@example.test'><encrypted xmlns='eu.siacs.conversations.axolotl'/><reactions xmlns='urn:xmpp:reactions:0' id='t'/></message>"
+    ] {
+        #expect(try XMPPClient.parsedReaction(stanza(bad)) == nil)
+    }
+}
