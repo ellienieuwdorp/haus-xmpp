@@ -245,7 +245,7 @@ extension OMEMOService {
         let (revision, old) = try await load(account)
         var state = old
         let recipients = try groupRecipients(state: state, members: overview.room.members, account: account)
-        if let wire = try await store.encryptedReaction(accountID: account, updateID: updateID) {
+        if let wire = try await store.updateWire(accountID: account, updateID: updateID) {
             let saved = try JSONDecoder().decode(PreparedEnvelope.self, from: wire)
             guard saved.groupMembers == overview.room.members, saved.envelope.profile == .modern,
                   saved.recipientIdentities.sorted() == recipients.map(\.id).sorted() else { throw OMEMOError.recipientSetChanged }
@@ -255,13 +255,13 @@ extension OMEMOService {
             sender: account, recipient: room, originID: update.id, modern: true)
         var saved = try sealForRecipients(plaintext, profile: .modern, accepted: recipients, state: &state)
         saved.groupMembers = overview.room.members
-        try await store.sealQueuedReaction(accountID: account, updateID: update.id, expectedRevision: revision,
+        try await store.sealQueuedUpdate(accountID: account, updateID: update.id, expectedRevision: revision,
             state: encode(state, account: account), wire: JSONEncoder().encode(saved))
     }
     public func outgoingGroupReactionEnvelope(account: String, updateID: String, room: String, transport: any OMEMOGroupTransport) async throws -> PreparedGroupMessage {
         try await gate.run {
             try await self.prepareGroupReactionLocked(account: account, updateID: updateID, room: room, transport: transport)
-            guard let wire = try await self.store.encryptedReaction(accountID: account, updateID: updateID) else { throw OMEMOError.unavailable }
+            guard let wire = try await self.store.updateWire(accountID: account, updateID: updateID) else { throw OMEMOError.unavailable }
             let saved = try JSONDecoder().decode(PreparedEnvelope.self, from: wire)
             guard let members = saved.groupMembers else { throw OMEMOError.invalidContent }
             return PreparedGroupMessage(envelope: saved.envelope, members: members)
@@ -270,10 +270,10 @@ extension OMEMOService {
 
     private func reconcileGroupEcho(account: String, message: XMPPEncryptedGroupMessage) async throws -> Bool {
         if let update = try await store.reactionUpdate(accountID: account, updateID: message.id), update.chatID == message.room,
-           update.actorID == account, let wire = try await store.encryptedReaction(accountID: account, updateID: message.id) {
+           update.actorID == account, let wire = try await store.updateWire(accountID: account, updateID: message.id) {
             let saved = try JSONDecoder().decode(PreparedEnvelope.self, from: wire)
             guard saved.groupMembers != nil, saved.envelope == message.envelope else { return false }
-            _ = try await store.reconcileArchivedReaction(accountID: account, updateID: message.id, expectedEncryptedWire: wire)
+            _ = try await store.reconcileArchivedUpdate(accountID: account, updateID: message.id, expectedWire: wire)
             return false
         }
         guard let intention = try await store.message(accountID: account, messageID: message.id), intention.chatID == message.room,

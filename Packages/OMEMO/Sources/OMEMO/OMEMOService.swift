@@ -437,13 +437,15 @@ public actor OMEMOService {
         return update.id
     }
 
-    public func prepareAvailableReactions(account: String, transport: any OMEMOTransport) async throws -> EncryptionPreparation {
-        try await gate.run { try await self.prepareReactionsLocked(account: account, transport: transport) }
+    /// Every update the drain may claim now: direct reactions sealed here (plain wire for legacy
+    /// peers, envelope for modern ones); key transports are sealed when they are created.
+    public func prepareAvailableUpdates(account: String, transport: any OMEMOTransport) async throws -> EncryptionPreparation {
+        try await gate.run { try await self.prepareUpdatesLocked(account: account, transport: transport) }
     }
 
-    private func prepareReactionsLocked(account: String, transport: any OMEMOTransport) async throws -> EncryptionPreparation {
+    private func prepareUpdatesLocked(account: String, transport: any OMEMOTransport) async throws -> EncryptionPreparation {
         let queued = try await store.queuedReactions(accountID: account)
-        var ready = Set<String>(), plaintext = Set<String>(), blocked: [String: String] = [:]
+        var ready = Set(try await store.queuedUpdates(accountID: account, kind: .keyTransport).map(\.id)), blocked: [String: String] = [:]
         var failure: OMEMOError?
         for update in queued {
             do {
@@ -451,16 +453,17 @@ public actor OMEMOService {
                 let (_, selected) = try await load(account)
                 if selected.groupRooms[update.chatID] != nil { continue }
                 if selected.profiles[update.chatID] == .legacy {
+                    // Legacy peers (Conversations) only speak unencrypted XEP-0444; the exact stanza is the wire.
                     let stanza = try XMPPClient.reactionXML(to: update.chatID, targetID: update.targetWireID, reactions: update.reactions, id: update.id)
-                    try await store.sealQueuedPlaintextReaction(accountID: account, updateID: update.id, wire: Data(stanza.utf8))
-                    plaintext.insert(update.id)
+                    try await store.sealQueuedUpdate(accountID: account, updateID: update.id, wire: Data(stanza.utf8))
+                    ready.insert(update.id)
                     continue
                 }
                 guard selected.profiles[update.chatID] == .modern else { throw OMEMOError.unsupportedEncryptedReactions }
                 let overview = try await refreshLocked(account: account, peer: update.chatID, profile: .modern,
                                                        transport: transport, updateSelection: false)
                 guard !overview.hasIncompatibleDevices else { throw OMEMOError.unsupportedProfile }
-                if let wire = try await store.encryptedReaction(accountID: account, updateID: update.id) {
+                if let wire = try await store.updateWire(accountID: account, updateID: update.id) {
                     let saved = try JSONDecoder().decode(PreparedEnvelope.self, from: wire)
                     let (_, state) = try await load(account)
                     try validatePrepared(saved, state: state, account: account)
@@ -471,8 +474,8 @@ public actor OMEMOService {
                                                                          reactions: update.reactions, sender: account,
                                                                          recipient: update.chatID, originID: update.id, modern: true)
                     let saved = try sealContent(plaintext, account: account, peer: update.chatID, profile: .modern, state: &state)
-                    try await store.sealQueuedReaction(accountID: account, updateID: update.id, expectedRevision: revision,
-                                                        state: encode(state, account: account), wire: JSONEncoder().encode(saved))
+                    try await store.sealQueuedUpdate(accountID: account, updateID: update.id, expectedRevision: revision,
+                                                     state: encode(state, account: account), wire: JSONEncoder().encode(saved))
                 }
                 ready.insert(update.id)
             } catch {
@@ -481,20 +484,49 @@ public actor OMEMOService {
                 blocked[update.chatID] = (error as? OMEMOError)?.errorDescription ?? "The private reaction remains queued."
             }
         }
-        return EncryptionPreparation(messageIDs: ready, blockedChats: blocked, failure: failure, plaintextIDs: plaintext)
+        return EncryptionPreparation(messageIDs: ready, blockedChats: blocked, failure: failure)
     }
 
-    /// SM may replay a journaled plain reaction only if it is byte-identical to the durable update.
-    public func canReplayPlaintextReaction(account: String, xml: String) async throws -> Bool {
-        guard let reaction = XMPPClient.decodeOutgoingReactionXML(xml, from: account),
-              let update = try await store.reactionUpdate(accountID: account, updateID: reaction.id),
-              update.actorID == account, update.chatID == bare(reaction.to ?? ""),
-              let wire = try await store.encryptedReaction(accountID: account, updateID: reaction.id) else { return false }
-        return wire == Data(xml.utf8)
+    /// SM may retransmit a journaled stanza only when it is exactly one durable outgoing row of ours:
+    /// a plain wire byte-for-byte, or a prepared envelope that still re-derives under current trust.
+    /// Anything else (unknown IDs, forged recipients, group ciphertext, drifted trust) refuses resumption.
+    public func canReplay(account: String, xml: String) async throws -> Bool {
+        guard let message = try? XMPPClient.decodeOutgoingEncryptedMessageXML(xml, from: account) else {
+            guard let reaction = XMPPClient.decodeOutgoingReactionXML(xml, from: account),
+                  let update = try await store.update(accountID: account, updateID: reaction.id), update.chatID == bare(reaction.to ?? ""),
+                  let wire = try await store.updateWire(accountID: account, updateID: reaction.id) else { return false }
+            return wire == Data(xml.utf8)
+        }
+        guard let recipient = message.to else { return false }
+        return try await canReplayEncrypted(account: account, messageID: message.id, recipient: recipient, envelope: message.envelope)
+    }
+
+    private func canReplayEncrypted(account: String, messageID: String, recipient: String, envelope: XMPPOMEMOEnvelope) async throws -> Bool {
+        if let wire = try await store.encryptedOutgoing(accountID: account, messageID: messageID) {
+            guard let saved = try? JSONDecoder().decode(PreparedEnvelope.self, from: wire), saved.groupMembers == nil,
+                  let intention = try await store.message(accountID: account, messageID: messageID),
+                  intention.isOutgoing, intention.senderID == account,
+                  intention.chatID == bare(recipient), saved.envelope == envelope else { return false }
+            do { return try await outgoingEnvelope(account: account, messageID: messageID) == envelope }
+            catch let error as OMEMOError where error == .trustRequired || error == .recipientSetChanged || error == .unsupportedEncryptedReactions { return false }
+        }
+        guard let update = try await store.update(accountID: account, updateID: messageID), update.chatID == bare(recipient),
+              let wire = try await store.updateWire(accountID: account, updateID: messageID) else { return false }
+        switch update.kind {
+        case .reaction:
+            guard let saved = try? JSONDecoder().decode(PreparedEnvelope.self, from: wire), saved.groupMembers == nil, saved.envelope == envelope else { return false }
+            do { return try await outgoingReactionEnvelope(account: account, updateID: messageID) == envelope }
+            catch let error as OMEMOError where error == .trustRequired || error == .recipientSetChanged || error == .unsupportedEncryptedReactions { return false }
+        case .keyTransport:
+            // Header-only, no recipient set to re-derive: exact bytes, addressed to one device we may still encrypt to.
+            guard (try? JSONDecoder().decode(XMPPOMEMOEnvelope.self, from: wire)) == envelope, envelope.keys.count == 1 else { return false }
+            let (_, state) = try await load(account)
+            return state.devices.contains { $0.jid == update.chatID && $0.profile == envelope.profile && $0.deviceID == envelope.keys[0].deviceID && $0.active && $0.trust.permitsEncryption }
+        }
     }
 
     public func outgoingReactionEnvelope(account: String, updateID: String) async throws -> XMPPOMEMOEnvelope {
-        guard let wire = try await store.encryptedReaction(accountID: account, updateID: updateID),
+        guard let wire = try await store.updateWire(accountID: account, updateID: updateID),
               let update = try await store.reactionUpdate(accountID: account, updateID: updateID) else { throw OMEMOError.unavailable }
         guard try await store.reactionTarget(accountID: account, chatID: update.chatID, wireID: update.targetWireID)?.id == update.targetMessageID else {
             throw OMEMOError.unsupportedEncryptedReactions
@@ -506,32 +538,53 @@ public actor OMEMOService {
         return saved.envelope
     }
 
-    /// Transport ownership is enforced by MessageStore. A preflight failure releases the
-    /// claim; an attempted send stays unconfirmed until SM/archive proves acceptance.
-    public func flushPreparedReactions(account: String, preparedIDs: Set<String>,
-        send: @Sendable (String, String, XMPPOMEMOEnvelope) async throws -> Void) async throws {
+    /// The one drain for every update kind. Transport ownership is enforced by MessageStore. A
+    /// preflight failure (trust, membership, malformed wire) releases the claim before any socket
+    /// use; an attempted send stays unconfirmed until SM/archive proves acceptance.
+    /// `updateIDs == nil` claims anything sealed; group rows need a group transport to re-check membership.
+    public func flushUpdates(account: String, updateIDs: Set<String>? = nil, groupTransport: (any OMEMOGroupTransport)? = nil,
+                             send: @Sendable (StoredUpdate, PreparedUpdate) async throws -> Void) async throws {
         while !Task.isCancelled {
-            guard let claim = try await store.claimNextReaction(accountID: account, updateIDs: preparedIDs) else { return }
-            let envelope: XMPPOMEMOEnvelope
+            guard let claim = try await store.claimNextUpdate(accountID: account, updateIDs: updateIDs) else { return }
+            let prepared: PreparedUpdate
             do {
                 try Task.checkCancellation()
-                envelope = try await outgoingReactionEnvelope(account: account, updateID: claim.update.id)
+                prepared = try await preparedUpdate(account: account, claim: claim, groupTransport: groupTransport)
             } catch {
-                try await store.releaseUnsentReactionSubmission(accountID: account, updateID: claim.update.id, attemptID: claim.attemptID)
+                try await store.releaseUnsentUpdateSubmission(accountID: account, updateID: claim.update.id, attemptID: claim.attemptID)
                 throw error
             }
             do {
-                try await send(claim.update.chatID, claim.update.id, envelope)
+                try await send(claim.update, prepared)
             } catch {
-                _ = try await store.finishReactionSubmission(accountID: account, updateID: claim.update.id, attemptID: claim.attemptID)
+                _ = try await store.finishUpdateSubmission(accountID: account, updateID: claim.update.id, attemptID: claim.attemptID)
                 throw error
             }
-            _ = try await store.finishReactionSubmission(accountID: account, updateID: claim.update.id, attemptID: claim.attemptID)
+            _ = try await store.finishUpdateSubmission(accountID: account, updateID: claim.update.id, attemptID: claim.attemptID)
         }
     }
 
-    public func retryReaction(account: String, updateID: String) async throws {
-        try await store.retryReaction(accountID: account, updateID: updateID)
+    private func preparedUpdate(account: String, claim: UpdateSubmission, groupTransport: (any OMEMOGroupTransport)?) async throws -> PreparedUpdate {
+        switch claim.update.kind {
+        case .keyTransport:
+            return .encrypted(to: claim.update.chatID, envelope: try JSONDecoder().decode(XMPPOMEMOEnvelope.self, from: claim.wire))
+        case .reaction:
+            if let saved = try? JSONDecoder().decode(PreparedEnvelope.self, from: claim.wire) {
+                if saved.groupMembers != nil {
+                    guard let groupTransport else { throw OMEMOError.unavailable }
+                    let group = try await outgoingGroupReactionEnvelope(account: account, updateID: claim.update.id, room: claim.update.chatID, transport: groupTransport)
+                    return .group(room: claim.update.chatID, envelope: group.envelope, members: group.members)
+                }
+                return .encrypted(to: claim.update.chatID, envelope: try await outgoingReactionEnvelope(account: account, updateID: claim.update.id))
+            }
+            guard let reaction = XMPPClient.decodeOutgoingReactionXML(String(decoding: claim.wire, as: UTF8.self), from: account),
+                  bare(reaction.to ?? "") == claim.update.chatID else { throw OMEMOError.invalidContent }
+            return .plainReaction(to: claim.update.chatID, targetID: reaction.targetID, reactions: reaction.reactions)
+        }
+    }
+
+    public func retryUpdate(account: String, updateID: String) async throws {
+        try await store.retryUpdate(accountID: account, updateID: updateID)
     }
 
     /// Conversations and most deployed clients react unencrypted even in OMEMO chats. The actor is
@@ -549,8 +602,9 @@ public actor OMEMOService {
         catch MessageStoreError.invalidValue { return false }
         // Our own plain send coming back from the archive proves the server accepted it.
         if actor == account, let update = try await store.reactionUpdate(accountID: account, updateID: reaction.id), update.chatID == peer,
-           let wire = try await store.encryptedReaction(accountID: account, updateID: reaction.id) {
-            _ = try? await store.reconcileArchivedReaction(accountID: account, updateID: reaction.id, expectedEncryptedWire: wire)
+           update.targetWireID == reaction.targetID, update.reactions == values.sorted(),
+           let wire = try await store.updateWire(accountID: account, updateID: reaction.id) {
+            _ = try? await store.reconcileArchivedUpdate(accountID: account, updateID: reaction.id, expectedWire: wire)
         }
         return true
     }
@@ -579,29 +633,6 @@ public actor OMEMOService {
     }
 
 
-    /// SM may retransmit only the exact, already prepared message and only while its
-    /// fingerprint-scoped recipient policy is still valid. Header-only controls currently
-    /// return false; they do not carry a saved recipient fingerprint set.
-    public func canReplayEncryptedMessage(account: String, messageID: String, recipient: String,
-                                          envelope: XMPPOMEMOEnvelope) async throws -> Bool {
-        if let wire = try await store.encryptedOutgoing(accountID: account, messageID: messageID) {
-            let saved = try JSONDecoder().decode(PreparedEnvelope.self, from: wire)
-            guard saved.groupMembers == nil, let intention = try await store.message(accountID: account, messageID: messageID),
-                  intention.isOutgoing, intention.senderID == account,
-                  intention.chatID == bare(recipient), saved.envelope == envelope else { return false }
-            do { return try await outgoingEnvelope(account: account, messageID: messageID) == envelope }
-            catch let error as OMEMOError where error == .trustRequired || error == .recipientSetChanged || error == .unsupportedEncryptedReactions { return false }
-        }
-        if let wire = try await store.encryptedReaction(accountID: account, updateID: messageID) {
-            let saved = try JSONDecoder().decode(PreparedEnvelope.self, from: wire)
-            guard saved.groupMembers == nil, let update = try await store.reactionUpdate(accountID: account, updateID: messageID),
-                  update.actorID == account, update.chatID == bare(recipient), saved.envelope == envelope else { return false }
-            do { return try await outgoingReactionEnvelope(account: account, updateID: messageID) == envelope }
-            catch let error as OMEMOError where error == .trustRequired || error == .recipientSetChanged || error == .unsupportedEncryptedReactions { return false }
-        }
-        return false
-    }
-
     /// Invoke only for the stanza inside a validated own-server archive wrapper. An exact
     /// ciphertext match proves this is our saved send, so untrusted outer IDs alone cannot
     /// promote an outgoing intention to server acceptance. Live echoes are not callers.
@@ -617,14 +648,17 @@ public actor OMEMOService {
             guard saved.envelope == message.envelope else { return false }
             return try await store.reconcileArchivedOutgoing(accountID: account, messageID: message.id, expectedEncryptedWire: wire)
         }
-        if let update = try await store.reactionUpdate(accountID: account, updateID: message.id),
-           update.actorID == account, update.chatID == bare(recipient),
-           let wire = try await store.encryptedReaction(accountID: account, updateID: message.id) {
-            let saved = try JSONDecoder().decode(PreparedEnvelope.self, from: wire)
-            guard saved.envelope == message.envelope else { return false }
-            return try await store.reconcileArchivedReaction(accountID: account, updateID: message.id, expectedEncryptedWire: wire)
+        if let update = try await store.update(accountID: account, updateID: message.id), update.chatID == bare(recipient),
+           let wire = try await store.updateWire(accountID: account, updateID: message.id) {
+            guard savedEnvelope(wire) == message.envelope else { return false }
+            return try await store.reconcileArchivedUpdate(accountID: account, updateID: message.id, expectedWire: wire)
         }
         return false
+    }
+
+    /// A sealed update wire is a prepared envelope (reactions) or a bare envelope (key transports).
+    nonisolated func savedEnvelope(_ wire: Data) -> XMPPOMEMOEnvelope? {
+        (try? JSONDecoder().decode(PreparedEnvelope.self, from: wire))?.envelope ?? (try? JSONDecoder().decode(XMPPOMEMOEnvelope.self, from: wire))
     }
 
     /// Persist ciphertext before asking for keys/trust or attempting decryption. This also covers
@@ -822,21 +856,6 @@ public actor OMEMOService {
             }
         }
         if let firstFailure { throw firstFailure }
-    }
-
-    public func flushKeyTransports(account: String,
-        send: @Sendable (String, String, XMPPOMEMOEnvelope) async throws -> Void) async throws {
-        while !Task.isCancelled {
-            guard let command = try await store.claimEncryptionControl(accountID: account) else { return }
-            do {
-                let envelope = try JSONDecoder().decode(XMPPOMEMOEnvelope.self, from: command.wire)
-                try await send(command.recipient, command.id, envelope)
-            } catch {
-                try await store.finishEncryptionControl(accountID: account, id: command.id)
-                throw error
-            }
-            try await store.finishEncryptionControl(accountID: account, id: command.id)
-        }
     }
 
     func load(_ account: String) async throws -> (Int, AccountEncryptionState) {
