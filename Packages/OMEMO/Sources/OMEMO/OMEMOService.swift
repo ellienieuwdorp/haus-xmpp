@@ -88,6 +88,7 @@ public actor OMEMOService {
         if updateSelection { state.profiles[peer] = profile }
         let local = try engine(state, profile)
         var incompatible = false
+        var unavailable: [String: Int] = [:]
         for owner in Array(Set([account, peer])).sorted() {
             let ids = try validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: profile))
             guard ids.count <= 200 else { throw OMEMOError.invalidContent }
@@ -105,6 +106,7 @@ public actor OMEMOService {
                 catch XMPPIQError.stanza(condition: "item-not-found") {
                     // Device lists in the wild carry stale IDs whose bundles are gone. Such a device
                     // cannot receive anything, so it stays inactive instead of failing the whole refresh.
+                    unavailable[owner, default: 0] += 1
                     continue
                 }
                 try validateBundle(bundle, id: id, profile: profile)
@@ -131,7 +133,9 @@ public actor OMEMOService {
         }
         if updateSelection { state.incompatiblePeers[peer] = incompatible }
         try await save(state, revision: revision, account: account)
-        return try overview(state, account: account, peer: peer, profileOverride: profile, incompatibleOverride: incompatible)
+        var result = try overview(state, account: account, peer: peer, profileOverride: profile, incompatibleOverride: incompatible)
+        result.unavailableDevices = unavailable
+        return result
     }
 
     public func overview(account: String, peer: String) async throws -> EncryptionOverview {

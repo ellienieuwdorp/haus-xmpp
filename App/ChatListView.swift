@@ -48,7 +48,7 @@ struct ChatListView: View {
                 }
             } else {
                 List {
-                    if !model.accountID.isEmpty {
+                    if model.isDemo || model.isLabAccount {
                         Text(model.isDemo ? "Sample conversations · stored on this device" : "Local development lab")
                             .font(.footnote).foregroundStyle(.secondary)
                             .listRowSeparator(.hidden)
@@ -101,15 +101,14 @@ struct ChatListView: View {
             ToolbarSpacer(.flexible, placement: .bottomBar)
             ToolbarItem(placement: .bottomBar) {
                 Button { newChatDetent = .medium; showingNewChat = true } label: {
-                    Image(systemName: "square.and.pencil").font(.title3).frame(width: 32, height: 32).contentShape(Circle())
+                    // Native bottom-bar glass keeps the button level with the search field on every iOS version.
+                    Image(systemName: "square.and.pencil").font(.title3.weight(.medium))
+                        .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
                 .accessibilityLabel("New conversation")
                 .accessibilityIdentifier("newConversation")
                 .disabled(model.accountID.isEmpty)
             }
-            .sharedBackgroundVisibility(.hidden)
         }
         .navigationDestination(for: String.self) { chatID in
             ConversationView(model: model, chatID: chatID)

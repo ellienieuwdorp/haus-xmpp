@@ -28,6 +28,8 @@ public struct EncryptionOverview: Sendable {
     public let localFingerprint: String
     public let devices: [EncryptionDevice]
     public let hasIncompatibleDevices: Bool
+    /// Advertised device IDs per owner whose bundle could not be fetched; they cannot be reviewed or messaged.
+    public var unavailableDevices: [String: Int] = [:]
     public var needsTrust: Bool { devices.contains { $0.active && $0.trust == .undecided } }
 }
 

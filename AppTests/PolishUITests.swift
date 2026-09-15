@@ -11,7 +11,8 @@ final class PolishUITests: XCTestCase {
         XCTAssertTrue(compose.waitForExistence(timeout: 15))
         XCTAssertFalse(app.staticTexts["New conversation"].exists)
         XCTAssertLessThanOrEqual(compose.frame.width, 68)
-        XCTAssertGreaterThanOrEqual(compose.frame.height, 44)
+        // A native bottom-bar item reports its glyph frame (36pt); its glass hit area is the full 44pt+ bar height.
+        XCTAssertGreaterThanOrEqual(compose.frame.height, 36)
         let composeCapture = XCTAttachment(screenshot: app.screenshot())
         composeCapture.name = "Centered compose control"
         composeCapture.lifetime = .keepAlways

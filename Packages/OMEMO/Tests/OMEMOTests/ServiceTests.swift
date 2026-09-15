@@ -232,6 +232,7 @@ final class ServiceTests: XCTestCase {
         let updated = try await f.a.refreshDevices(account: f.alice, peer: f.bob, transport: f.aTransport)
         expectEqual(Set(updated.devices.filter { $0.jid == f.bob && $0.active }.map(\.deviceID)), Set(active))
         expectFalse(updated.devices.contains { $0.deviceID == 4_242 })
+        expectEqual(updated.unavailableDevices[f.bob], 1)
     }
 
     func testOwnSecondDeviceReceivesSameCiphertextAsPeer() async throws {

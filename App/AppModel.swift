@@ -982,6 +982,7 @@ final class AppModel {
             guard accountID == account, generation == token, openChatID == chatID else { return }
             encryptionOverview = overview
             encryptionNeedsReview = overview.needsTrust
+            Logger(subsystem: "dev.xmpplab.ios", category: "encryption").info("Device refresh: \(overview.devices.filter { $0.jid == chatID && $0.active }.count) active peer devices, \(overview.unavailableDevices[chatID] ?? 0) without keys, profile \(overview.profile.rawValue, privacy: .public)")
             if overview.hasIncompatibleDevices { encryptionStatus = "Devices use incompatible encryption versions" }
             else if overview.needsTrust { encryptionStatus = "Review encryption devices" }
             else if !overview.devices.contains(where: { $0.jid == chatID && $0.active && $0.trust.permitsEncryption }) {

@@ -17,9 +17,9 @@ struct EncryptionDetailsView: View {
                         Section { Label("Some devices only support the other encryption version. Sending is paused so they are not silently left out.", systemImage: "exclamationmark.shield").font(.subheadline) }
                     }
                     Section {
-                        devices(overview.devices.filter { $0.jid == chatID && $0.jid != model.accountID })
+                        devices(overview.devices.filter { $0.jid == chatID && $0.jid != model.accountID }, owner: chatID)
                     } header: { Text("\(name)’s devices") } footer: { Text("Approve each device before your messages reach it.") }
-                    Section("Your other devices") { devices(overview.devices.filter { $0.jid == model.accountID }) }
+                    Section("Your other devices") { devices(overview.devices.filter { $0.jid == model.accountID }, owner: model.accountID) }
                     Section {
                         VStack(alignment: .leading, spacing: 6) {
                             LabeledContent("Device", value: String(overview.localDeviceID))
@@ -58,8 +58,18 @@ struct EncryptionDetailsView: View {
         }
     }
 
-    @ViewBuilder private func devices(_ devices: [EncryptionDevice]) -> some View {
-        if devices.isEmpty { Text("No other devices found").foregroundStyle(.secondary) }
+    /// Why a contact has nothing to review: keys missing on the server, or a list their server does not show us.
+    private func emptyExplanation(for owner: String) -> String {
+        let missing = model.encryptionOverview?.unavailableDevices[owner] ?? 0
+        if missing > 0 {
+            return "\(missing) advertised \(missing == 1 ? "device has" : "devices have") no published keys. Ask them to open their chat app so it republishes them."
+        }
+        if owner == model.accountID { return "No other devices found" }
+        return "No devices advertised. Some servers only show a contact’s devices after they add you as a contact."
+    }
+
+    @ViewBuilder private func devices(_ devices: [EncryptionDevice], owner: String) -> some View {
+        if devices.isEmpty { Text(emptyExplanation(for: owner)).foregroundStyle(.secondary) }
         ForEach(devices) { device in
             Button { selectedDevice = device } label: { DeviceRow(device: device) }
                 .buttonStyle(.plain)
