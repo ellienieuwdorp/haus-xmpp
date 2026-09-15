@@ -17,7 +17,7 @@ final class EncryptionUITests: XCTestCase {
         app.buttons["newConversation"].tap()
         app.textFields["newChatAddress"].tap()
         app.textFields["newChatAddress"].typeText(peer)
-        app.buttons["Create conversation"].tap()
+        app.buttons["startChat"].tap()
         let input = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         let marker = "Encrypted coffee ☕ \(UUID().uuidString.prefix(6))"
