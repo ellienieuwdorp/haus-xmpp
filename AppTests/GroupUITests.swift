@@ -56,7 +56,6 @@ final class GroupUITests: XCTestCase {
         let incoming = bubbles.matching(NSPredicate(format: "label BEGINSWITH %@", environment["XMPP_OMEMO_PEER"] ?? "omemo-")).firstMatch
         XCTAssertTrue(incoming.exists, "Group bubble identifies its authenticated real sender")
         incoming.press(forDuration: 1)
-        app.openReactionRow()
         let reaction = app.buttons["👍"]
         XCTAssertTrue(reaction.waitForExistence(timeout: 5)); reaction.tap()
         let reacted = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "2 thumbs up reactions"), object: incoming)

@@ -16,12 +16,6 @@ extension XCUIApplication {
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         row.tap()
     }
-
-    /// The reaction row is inline in the bubble menu; older builds kept it behind a "React" submenu.
-    func openReactionRow() {
-        let react = buttons["React"]
-        if react.waitForExistence(timeout: 2) { react.tap() }
-    }
 }
 
 extension XCUIApplication {

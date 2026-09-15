@@ -46,8 +46,12 @@ final class PolishUITests: XCTestCase {
         // The message body opens the same bubble-only actions as its footer.
         message.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1)
         XCTAssertTrue(app.buttons["Star message"].waitForExistence(timeout: 5))
+        // Sample messages cannot be reacted to: the row stays visible, disabled, with the reason under it.
+        XCTAssertTrue(app.staticTexts["reactionUnavailableReason"].exists)
+        XCTAssertTrue(app.buttons["👍"].exists)
+        XCTAssertFalse(app.buttons["👍"].isEnabled)
         let preview = XCTAttachment(screenshot: app.screenshot())
-        preview.name = "Bubble-only context preview"
+        preview.name = "Message actions overlay"
         preview.lifetime = .keepAlways
         add(preview)
         app.buttons["Star message"].tap()
