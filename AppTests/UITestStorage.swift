@@ -9,12 +9,21 @@ extension XCUIApplication {
         launchEnvironment["XMPP_UI_TEST_STORE"] = UUID().uuidString
     }
 
-    /// The conversation header opens chat details; the encryption sheet is one row inside.
+    /// The conversation header pushes chat details; the encryption page is one row further.
     func openEncryptionDetails() {
         buttons["chatDetails"].tap()
         let row = buttons["encryptionDetails"]
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         row.tap()
+    }
+
+    /// Pop the encryption page and chat details to land back in the conversation.
+    func closeEncryptionDetails() {
+        for _ in 0..<2 {
+            let back = navigationBars.buttons["BackButton"].firstMatch
+            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            back.tap()
+        }
     }
 
     /// The reaction row is inline in the bubble menu; older builds kept it behind a "React" submenu.

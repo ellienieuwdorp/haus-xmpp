@@ -6,22 +6,16 @@ struct ConversationView: View {
     @State private var draft = ""
     @State private var query = ""
     @State private var showingSearch = false
-    @State private var sheet: Sheet?
-    @State private var pendingSheet: Sheet?
     @State private var starredOnly = false
     @State private var retryMessageID: String?
     @State private var replyingTo: ChatMessage?
     @State private var reviewDismissed = false
     @FocusState private var composing: Bool
 
-    private enum Sheet: String, Identifiable {
-        case details, encryption
-        var id: String { rawValue }
-    }
-
     private var searchTerm: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first(where: { $0.id == chatID })?.title) }
     private var isGroup: Bool { model.isGroup(chatID) }
+    private var encryptionRoute: ChatRoute { isGroup ? .groupDetails(chatID) : .encryption(chatID) }
 
     private var messages: [ChatMessage] {
         model.messages.filter { message in
@@ -120,7 +114,7 @@ struct ConversationView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { sheet = .details } label: {
+                NavigationLink(value: ChatRoute.details(chatID)) {
                     // Name only: trust lives in Chat Details and the review card, so the header never flickers.
                     HStack(spacing: 9) {
                         ChatAvatar(name: title, isGroup: isGroup, size: 36)
@@ -140,7 +134,7 @@ struct ConversationView: View {
                 Menu {
                     Button("Search messages", systemImage: "magnifyingglass") { composing = false; showingSearch = true }
                     Button("Starred messages", systemImage: "star") { starredOnly = true }
-                    if !model.isDemo { Button(isGroup ? "Group details" : "Encryption", systemImage: isGroup ? "person.2" : "lock.shield") { sheet = .encryption } }
+                    if !model.isDemo { NavigationLink(value: encryptionRoute) { Label(isGroup ? "Group details" : "Encryption", systemImage: isGroup ? "person.2" : "lock.shield") } }
                 } label: { Image(systemName: "ellipsis") }
                 .accessibilityLabel("Conversation options")
             }
@@ -159,19 +153,12 @@ struct ConversationView: View {
         } message: { _ in
             Text("The recipient may already have it. Sending again could create a duplicate.")
         }
-        .sheet(item: $sheet, onDismiss: {
-            // Swapping the item while a sheet is up is unreliable; present the next one after dismissal.
-            if let next = pendingSheet { pendingSheet = nil; sheet = next }
-        }) { item in
-            switch item {
-            case .details:
-                ChatDetailsView(model: model, chatID: chatID,
-                                search: { sheet = nil; composing = false; showingSearch = true },
-                                starred: { sheet = nil; starredOnly = true },
-                                openEncryption: { pendingSheet = .encryption; sheet = nil })
-            case .encryption:
-                if isGroup { GroupDetailsView(model: model, room: chatID) }
-                else { EncryptionDetailsView(model: model, chatID: chatID) }
+        .onChange(of: model.conversationIntent) { _, intent in
+            // Chat Details pops back and leaves what it wants opened here.
+            switch intent {
+            case .search(let id) where id == chatID: model.conversationIntent = nil; composing = false; showingSearch = true
+            case .starred(let id) where id == chatID: model.conversationIntent = nil; starredOnly = true
+            default: break
             }
         }
         .onChange(of: model.encryptionNeedsReview) { reviewDismissed = false }
@@ -193,7 +180,7 @@ struct ConversationView: View {
                 }
             }
             HStack(spacing: 8) {
-                Button { sheet = .encryption } label: { Text("Review device").frame(maxWidth: .infinity).padding(.vertical, 4) }
+                NavigationLink(value: encryptionRoute) { Text("Review device").frame(maxWidth: .infinity).padding(.vertical, 4) }
                     .buttonStyle(.borderedProminent)
                 Button { reviewDismissed = true } label: { Text("Later").frame(maxWidth: .infinity).padding(.vertical, 4) }
                     .buttonStyle(.bordered)

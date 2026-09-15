@@ -118,7 +118,7 @@ final class PushUITests: XCTestCase {
             XCTAssertTrue(app.navigationBars["Devices & Encryption"].waitForExistence(timeout: 5))
         }
         XCTAssertFalse(devices.matching(NSPredicate(format: "label CONTAINS %@", "Review required")).firstMatch.exists)
-        app.buttons["Done"].tap()
+        app.closeEncryptionDetails()
         let bubbles = app.textViews.containing(NSPredicate(format: "value == %@", marker))
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: bubbles)], timeout: 40)
         let outgoing = bubbles.matching(NSPredicate(format: "label BEGINSWITH %@", "You:")).firstMatch

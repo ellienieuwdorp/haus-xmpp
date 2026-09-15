@@ -51,7 +51,7 @@ final class OutboxUITests: XCTestCase {
             app.buttons["Accept without verifying"].tap()
             XCTAssertTrue(app.navigationBars["Devices & Encryption"].waitForExistence(timeout: 5))
         }
-        app.buttons["Done"].tap()
+        app.closeEncryptionDetails()
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: messages)], timeout: 30)
         let sent = messages.matching(NSPredicate(format: "label CONTAINS %@", "Accepted by server")).firstMatch
         XCTAssertTrue(sent.waitForExistence(timeout: 15))

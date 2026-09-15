@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ChatListView: View {
     @Bindable var model: AppModel
-    @Binding var path: [String]
+    @Binding var path: [ChatRoute]
     @Binding var showingConnection: Bool
     @Binding var showingSettings: Bool
     @State private var search = ""
@@ -55,7 +55,7 @@ struct ChatListView: View {
                             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 4, trailing: 16))
                     }
                     ForEach(visibleChats) { chat in
-                        Button { path.append(chat.id) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id)) }
+                        Button { path.append(.chat(chat.id)) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id)) }
                             .buttonStyle(.plain)
                             .listRowInsets(EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16))
                             .accessibilityValue(chat.isPinned ? "Pinned" : "")
@@ -122,8 +122,13 @@ struct ChatListView: View {
                 .disabled(model.accountID.isEmpty)
             }
         }
-        .navigationDestination(for: String.self) { chatID in
-            ConversationView(model: model, chatID: chatID)
+        .navigationDestination(for: ChatRoute.self) { route in
+            switch route {
+            case .chat(let chatID): ConversationView(model: model, chatID: chatID)
+            case .details(let chatID): ChatDetailsView(model: model, chatID: chatID)
+            case .encryption(let chatID): EncryptionDetailsView(model: model, chatID: chatID)
+            case .groupDetails(let room): GroupDetailsView(model: model, room: room)
+            }
         }
         .sheet(isPresented: $showingNewChat) { newChatSheet }
     }
@@ -137,7 +142,7 @@ struct ChatListView: View {
     private func openFromSheet(_ chatID: String) {
         showingNewChat = false
         recipient = ""
-        path.append(chatID)
+        path.append(.chat(chatID))
     }
 
     private var newChatSheet: some View {

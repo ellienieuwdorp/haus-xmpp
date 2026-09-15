@@ -5,58 +5,54 @@ import XMPPProtocol
 struct EncryptionDetailsView: View {
     @Bindable var model: AppModel
     let chatID: String
-    @Environment(\.dismiss) private var dismiss
     @State private var selectedDevice: EncryptionDevice?
     private var name: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
 
     var body: some View {
-        NavigationStack {
-            List {
-                if let overview = model.encryptionOverview {
-                    if overview.hasIncompatibleDevices {
-                        Section { Label("Some devices only support the other encryption version. Sending is paused so they are not silently left out.", systemImage: "exclamationmark.shield").font(.subheadline) }
+        List {
+            if let overview = model.encryptionOverview {
+                if overview.hasIncompatibleDevices {
+                    Section { Label("Some devices only support the other encryption version. Sending is paused so they are not silently left out.", systemImage: "exclamationmark.shield").font(.subheadline) }
+                }
+                Section {
+                    devices(overview.devices.filter { $0.jid == chatID && $0.jid != model.accountID }, owner: chatID)
+                } header: { Text("\(name)’s devices") } footer: { Text("Approve each device before your messages reach it.") }
+                Section("Your other devices") { devices(overview.devices.filter { $0.jid == model.accountID }, owner: model.accountID) }
+                Section {
+                    VStack(alignment: .leading, spacing: 6) {
+                        LabeledContent("Device", value: String(overview.localDeviceID))
+                        FingerprintGrid(value: overview.localFingerprint, font: .system(.footnote, design: .monospaced))
                     }
-                    Section {
-                        devices(overview.devices.filter { $0.jid == chatID && $0.jid != model.accountID }, owner: chatID)
-                    } header: { Text("\(name)’s devices") } footer: { Text("Approve each device before your messages reach it.") }
-                    Section("Your other devices") { devices(overview.devices.filter { $0.jid == model.accountID }, owner: model.accountID) }
-                    Section {
-                        VStack(alignment: .leading, spacing: 6) {
-                            LabeledContent("Device", value: String(overview.localDeviceID))
-                            FingerprintGrid(value: overview.localFingerprint, font: .system(.footnote, design: .monospaced))
-                        }
-                        Picker("Encryption version", selection: Binding(get: { overview.profile }, set: { profile in
-                            Task { await model.loadEncryptionDetails(for: chatID, profile: profile) }
-                        })) {
-                            Text("OMEMO · compatible").tag(XMPPOMEMOProfile.legacy)
-                            Text("OMEMO 2").tag(XMPPOMEMOProfile.modern)
-                        }
-                        .disabled(!model.session.isReady)
-                    } header: { Text("This iPhone") } footer: {
-                        Text(model.encryptionDiagnostics.isEmpty ? "Changing the version means reviewing its devices again." : "Changing the version means reviewing its devices again.\n\n\(model.encryptionDiagnostics)")
-                            .textSelection(.enabled)
+                    Picker("Encryption version", selection: Binding(get: { overview.profile }, set: { profile in
+                        Task { await model.loadEncryptionDetails(for: chatID, profile: profile) }
+                    })) {
+                        Text("OMEMO · compatible").tag(XMPPOMEMOProfile.legacy)
+                        Text("OMEMO 2").tag(XMPPOMEMOProfile.modern)
                     }
-                } else {
-                    Section { Text(model.encryptionStatus).foregroundStyle(.secondary) }
+                    .disabled(!model.session.isReady)
+                } header: { Text("This iPhone") } footer: {
+                    Text(model.encryptionDiagnostics.isEmpty ? "Changing the version means reviewing its devices again." : "Changing the version means reviewing its devices again.\n\n\(model.encryptionDiagnostics)")
+                        .textSelection(.enabled)
                 }
+            } else {
+                Section { Text(model.encryptionStatus).foregroundStyle(.secondary) }
             }
-            .task { await model.loadEncryptionDetails(for: chatID) }
-            .navigationTitle("Devices & Encryption")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Refresh devices", systemImage: "arrow.clockwise") {
-                        Task { await model.loadEncryptionDetails(for: chatID) }
-                    }.labelStyle(.iconOnly).disabled(!model.session.isReady)
-                }
+        }
+        .task { await model.loadEncryptionDetails(for: chatID) }
+        .navigationTitle("Devices & Encryption")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Refresh devices", systemImage: "arrow.clockwise") {
+                    Task { await model.loadEncryptionDetails(for: chatID) }
+                }.labelStyle(.iconOnly).disabled(!model.session.isReady)
             }
-            .sheet(item: $selectedDevice) { device in
-                DeviceFingerprintSheet(model: model, chatID: chatID, device: device,
-                                       name: device.jid == model.accountID ? nil : name, allowsMaintenance: true) { trust in
-                    selectedDevice = nil
-                    Task { await model.setDeviceTrust(device, trust: trust, chatID: chatID) }
-                }
+        }
+        .sheet(item: $selectedDevice) { device in
+            DeviceFingerprintSheet(model: model, chatID: chatID, device: device,
+                                   name: device.jid == model.accountID ? nil : name, allowsMaintenance: true) { trust in
+                selectedDevice = nil
+                Task { await model.setDeviceTrust(device, trust: trust, chatID: chatID) }
             }
         }
     }
@@ -122,13 +118,16 @@ struct DeviceRow: View {
                 .font(.system(size: 18)).foregroundStyle(.secondary)
                 .frame(width: 36, height: 36)
                 .background(Color(.tertiarySystemFill), in: Circle())
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Device \(String(device.deviceID))").foregroundStyle(.primary)
-                Label(status ?? device.reviewStatus, systemImage: device.active ? device.badge.symbol : "iphone.slash")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(device.active ? device.badge.color : .secondary)
-            }
+            Text("Device \(String(device.deviceID))").foregroundStyle(.primary)
             Spacer(minLength: 8)
+            // A plain HStack, not a Label: List pads a Label's icon column to body metrics and leaves a gap.
+            HStack(spacing: 4) {
+                Image(systemName: device.active ? device.badge.symbol : "iphone.slash")
+                Text(status ?? device.reviewStatus).multilineTextAlignment(.trailing)
+            }
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(device.active ? device.badge.color : .secondary)
+            .layoutPriority(1)
             Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
         }
         .frame(minHeight: 44)
@@ -207,25 +206,29 @@ struct DeviceFingerprintSheet: View {
                 }
                 .fontWeight(.semibold).controlSize(.large)
                 .disabled(!device.active)
-                Section {
-                    Button(role: .destructive) { review(.rejected) } label: {
-                        Label("Block this device", systemImage: "hand.raised").foregroundStyle(.red)
-                    }
-                } footer: {
-                    Text(device.active ? "Blocked devices are left out of new messages." : "No longer advertised. Its fingerprint is read-only.")
-                }
-                .disabled(!device.active)
                 if allowsMaintenance && device.active && device.trust.permitsEncryption {
                     Section {
                         Button("Repair encryption session", systemImage: "arrow.trianglehead.2.clockwise.rotate.90") { confirmingRepair = true }
                             .disabled(!model.session.isReady)
                     } footer: { Text("Use this if messages from this device cannot be opened.") }
                 }
-                if allowsMaintenance && device.active && device.jid == model.accountID {
-                    Section {
-                        Button("Remove old device", systemImage: "iphone.slash", role: .destructive) { confirmingRetirement = true }
-                            .disabled(!model.session.isReady)
-                    } footer: { Text("Sign out on that device first, or it may advertise itself again.") }
+                Section {
+                    Button(role: .destructive) { review(.rejected) } label: {
+                        Label("Block this device", systemImage: "hand.raised").foregroundStyle(.red)
+                    }
+                    .disabled(!device.active)
+                    if allowsMaintenance && device.active && device.jid == model.accountID {
+                        Button(role: .destructive) { confirmingRetirement = true } label: {
+                            Label("Remove old device", systemImage: "iphone.slash").foregroundStyle(.red)
+                        }
+                        .disabled(!model.session.isReady)
+                    }
+                } footer: {
+                    Text(device.active
+                         ? (allowsMaintenance && device.jid == model.accountID
+                            ? "Blocked devices are left out of new messages. Removing an old device takes it off your account’s advertised devices; sign out on it first, or it may advertise itself again."
+                            : "Blocked devices are left out of new messages.")
+                         : "No longer advertised. Its fingerprint is read-only.")
                 }
             }
             .navigationTitle("Device \(String(device.deviceID))")
