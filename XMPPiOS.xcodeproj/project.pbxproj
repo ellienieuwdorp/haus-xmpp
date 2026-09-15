@@ -17,6 +17,7 @@
 		1EEF6DDECCEA1FBA9B0A2FAF /* OutboxUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAC07EFB739E1EFD8DF0DCA3 /* OutboxUITests.swift */; };
 		2767972D202828F227DCCE8E /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 66D03BA1F4C19B5809A1DA26 /* XMPPProtocol */; };
 		2C2E8D4B3C2387440EC9F2DC /* XMPPNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 9056316202CE7B7657FF164B /* XMPPNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		2FFE952C53400F76AED4A8D2 /* AppearanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F0BD595A789CC0D74B679AC /* AppearanceView.swift */; };
 		369DEFDBC3B4D3938F3C1527 /* EncryptionDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 272E25DD29F38AD395BDE164 /* EncryptionDetailsView.swift */; };
 		3709C7E5332EEFFC9F51D2C4 /* GroupUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113A93C794A0D6437CCAE333 /* GroupUITests.swift */; };
 		3B26288FD8F9E04925C82818 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E21866AA2D5D03C11041986F /* Theme.swift */; };
@@ -33,6 +34,7 @@
 		565E2244C18990588EFB56B6 /* ReactionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40EBA5FA15B66AEBE4033B4B /* ReactionUITests.swift */; };
 		57EE3016876A1EE8034033D3 /* PushRegistrationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA3471BC57BCF7C038498282 /* PushRegistrationState.swift */; };
 		5F166C0A1D90C747BD73588F /* ConversationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */; };
+		606006C350363E0A14B82A19 /* ChatDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02E578F753BEA364EB18BB4D /* ChatDetailsView.swift */; };
 		68E84935703E72818760EDD8 /* EncryptionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9CB3F0019D6F6D8C373107D /* EncryptionUITests.swift */; };
 		728CFF70CFB117DBE2C87F11 /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = FDC9596D2F9805667807CD8E /* XMPPProtocol */; };
 		73C11D0503BE6524DD670DBD /* OrganizationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */; };
@@ -109,6 +111,7 @@
 
 /* Begin PBXFileReference section */
 		0025A6ABF07DBBF6BF577B0C /* XMPPProtocol */ = {isa = PBXFileReference; lastKnownFileType = folder; name = XMPPProtocol; path = Packages/XMPPProtocol; sourceTree = SOURCE_ROOT; };
+		02E578F753BEA364EB18BB4D /* ChatDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDetailsView.swift; sourceTree = "<group>"; };
 		0311640D33AB3155A53A53A3 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		06754889A5E9FA0A851916A1 /* NotificationDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationDiagnostics.swift; sourceTree = "<group>"; };
 		09336CE7482840B04C804E1D /* OMEMO */ = {isa = PBXFileReference; lastKnownFileType = folder; name = OMEMO; path = Packages/OMEMO; sourceTree = SOURCE_ROOT; };
@@ -135,6 +138,7 @@
 		71C55CC82738BE53CA1CF1D4 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		71C9EF89EE0813A74E05D3D4 /* MessagingCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MessagingCore; path = Packages/MessagingCore; sourceTree = SOURCE_ROOT; };
 		7E5E3068B0B6DC7DBAB532CC /* NotificationService.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NotificationService.entitlements; sourceTree = "<group>"; };
+		7F0BD595A789CC0D74B679AC /* AppearanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceView.swift; sourceTree = "<group>"; };
 		7F6DBBCFE3B68BEDB76D1A21 /* NotificationNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNavigation.swift; sourceTree = "<group>"; };
 		827C4F9873CFF99B1860E25B /* OrganizationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrganizationUITests.swift; sourceTree = "<group>"; };
 		832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTimeline.swift; sourceTree = "<group>"; };
@@ -282,7 +286,9 @@
 			isa = PBXGroup;
 			children = (
 				C1C395F08ECF2C05B5AAF89B /* App.entitlements */,
+				7F0BD595A789CC0D74B679AC /* AppearanceView.swift */,
 				2820963E2FB064DD0BAD839F /* AppModel.swift */,
+				02E578F753BEA364EB18BB4D /* ChatDetailsView.swift */,
 				3CAD55F8C67F101615618BE4 /* ChatListView.swift */,
 				60CDCE362B275821D181D99A /* CircularGlassButtonStyle.swift */,
 				8B424C6F4AC85C78B1A51212 /* ConversationSearchBar.swift */,
@@ -488,6 +494,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				FC4281063E554402B9A2C568 /* AppModel.swift in Sources */,
+				2FFE952C53400F76AED4A8D2 /* AppearanceView.swift in Sources */,
+				606006C350363E0A14B82A19 /* ChatDetailsView.swift in Sources */,
 				E57C443B766B4EB72095CE81 /* ChatListView.swift in Sources */,
 				14259EDA76E8B6B4C53D4E92 /* CircularGlassButtonStyle.swift in Sources */,
 				EFB84D5EC3319705EABE26D4 /* ConversationSearchBar.swift in Sources */,

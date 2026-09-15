@@ -21,13 +21,13 @@ final class ReactionUITests: XCTestCase {
         if allow.waitForExistence(timeout: 3) { allow.tap() }
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected to lab")).firstMatch.waitForExistence(timeout: 25))
         app.buttons["Chats"].tap(); app.buttons["newConversation"].tap()
-        app.textFields["name@server"].tap(); app.textFields["name@server"].typeText(peer)
+        app.textFields["newChatAddress"].tap(); app.textFields["newChatAddress"].typeText(peer)
         app.buttons["Create conversation"].tap()
         let composer = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         let marker = "A thoughtful detail \(UUID().uuidString.prefix(4))"
         composer.tap(); composer.typeText(marker); app.buttons["sendMessage"].tap()
-        app.buttons["encryptionDetails"].tap()
+        app.openEncryptionDetails()
         let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "encryptionDevice."))
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 15))
         let version = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "OMEMO · compatible")).firstMatch
@@ -41,7 +41,7 @@ final class ReactionUITests: XCTestCase {
             pending.tap()
             XCTAssertTrue(app.buttons["Accept without verifying"].waitForExistence(timeout: 5))
             app.buttons["Accept without verifying"].tap()
-            XCTAssertTrue(app.navigationBars["Encryption"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.navigationBars["Devices & Encryption"].waitForExistence(timeout: 5))
         }
         app.buttons["Done"].tap()
         let outgoing = app.textViews.containing(NSPredicate(format: "value == %@", marker)).matching(NSPredicate(format: "label BEGINSWITH %@", "You:")).firstMatch
@@ -76,8 +76,7 @@ final class ReactionUITests: XCTestCase {
 
     @MainActor private func openReactions(_ app: XCUIApplication, message: XCUIElement) {
         message.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1)
-        XCTAssertTrue(app.buttons["React"].waitForExistence(timeout: 5))
-        app.buttons["React"].tap()
+        app.openReactionRow()
     }
     @MainActor private func capture(_ app: XCUIApplication, _ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)

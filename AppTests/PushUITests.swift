@@ -88,7 +88,7 @@ final class PushUITests: XCTestCase {
     @MainActor private func establishEncryptedRoundTrip(_ app: XCUIApplication, peer: String) {
         app.buttons["Chats"].tap()
         app.buttons["newConversation"].tap()
-        let address = app.textFields["name@server"]
+        let address = app.textFields["newChatAddress"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))
         address.tap(); address.typeText(peer)
         app.buttons["Create conversation"].tap()
@@ -100,8 +100,8 @@ final class PushUITests: XCTestCase {
         let queued = app.textViews.containing(NSPredicate(format: "value == %@", marker))
             .matching(NSPredicate(format: "label BEGINSWITH %@", "You:")).firstMatch
         XCTAssertTrue(queued.waitForExistence(timeout: 5), "Send must durably enqueue before fingerprint review")
-        app.buttons["encryptionDetails"].tap()
-        XCTAssertTrue(app.navigationBars["Encryption"].waitForExistence(timeout: 5))
+        app.openEncryptionDetails()
+        XCTAssertTrue(app.navigationBars["Devices & Encryption"].waitForExistence(timeout: 5))
         let devices = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "encryptionDevice."))
         XCTAssertTrue(devices.firstMatch.waitForExistence(timeout: 20))
         // Approval goes through the displayed fingerprint UI for generated fixture devices.
@@ -115,7 +115,7 @@ final class PushUITests: XCTestCase {
             let accept = app.buttons["Accept without verifying"]
             XCTAssertTrue(accept.waitForExistence(timeout: 5))
             accept.tap()
-            XCTAssertTrue(app.navigationBars["Encryption"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.navigationBars["Devices & Encryption"].waitForExistence(timeout: 5))
         }
         XCTAssertFalse(devices.matching(NSPredicate(format: "label CONTAINS %@", "Review required")).firstMatch.exists)
         app.buttons["Done"].tap()

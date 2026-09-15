@@ -3,37 +3,122 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var model: AppModel
     @Binding var showingConnection: Bool
+    @AppStorage(AccentTheme.storageKey) private var accentRaw = AccentTheme.indigo.rawValue
+    @State private var confirmingSignOut = false
+
+    private var accent: AccentTheme { AccentTheme(rawValue: accentRaw) ?? .indigo }
+    private var localPart: String { model.accountID.split(separator: "@").first.map(String.init) ?? "" }
+    private var domain: String { model.accountID.split(separator: "@").dropFirst().first.map(String.init) ?? "" }
+
+    private var status: (color: Color, text: String) {
+        if model.isConnected { return (.green, "Connected · \(domain)") }
+        if model.isConnecting { return (.orange, "Connecting…") }
+        return (.gray, "Offline")
+    }
 
     var body: some View {
-                    List {
-                        Section("Account") {
-                            LabeledContent("Connection", value: model.connectionStatus)
-                            Button("Connect to local lab") { showingConnection = true }
-                            if model.isConnected {
-                                Button("Disconnect") { Task { await model.disconnect() } }
-                            }
-                        }
-                        if model.accountID.hasSuffix("@staging.example.net") {
-                            Section("Notifications") {
-                                LabeledContent("Status", value: model.notificationStatus)
-                                Button("Enable notifications") { Task { await model.enableNotifications() } }
-                                    .disabled(!model.isConnected || !model.encryptionReady)
-                                    .accessibilityIdentifier("enableNotifications")
-                                Toggle("Message previews", isOn: Binding(get: { model.notificationPreviewsEnabled },
-                                    set: { enabled in Task { await model.setNotificationPreviews(enabled) } }))
-                                    .accessibilityIdentifier("notificationPreviews")
-                                Text("Show message text after decryption on this iPhone. Your iOS Show Previews setting still controls when it is revealed.")
-                                    .font(.footnote).foregroundStyle(.secondary)
-                            }
-                        }
-                        Section("Development preview") {
-                            Text("Received lab messages: \(model.receivedCount)")
-                                .accessibilityIdentifier("labReceivedCount")
-                            Text("This development build supports encrypted direct messages between local test accounts. Archive recovery is enabled. Push delivery is being validated on the staging server.")
-                                .foregroundStyle(.secondary)
-                            Button("Explore sample conversations") { Task { await model.loadDemo() } }
-                        }
+        List {
+            Section {
+                Button { showingConnection = true } label: { profileCard }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens sign in")
+                Button("Connect to local lab") { showingConnection = true }
+                if model.isConnected {
+                    Button("Disconnect") { Task { await model.disconnect() } }
+                }
+            }
+            if model.accountID.hasSuffix("@staging.example.net") {
+                Section {
+                    LabeledContent("Status", value: model.notificationStatus)
+                    Button { Task { await model.enableNotifications() } } label: {
+                        Label { Text("Enable notifications") } icon: { SettingsIconTile(systemName: "bell.fill", color: .red) }
                     }
-                    .navigationTitle("Settings")
+                    .disabled(!model.isConnected || !model.encryptionReady)
+                    .accessibilityIdentifier("enableNotifications")
+                    Toggle("Message previews", isOn: Binding(get: { model.notificationPreviewsEnabled },
+                        set: { enabled in Task { await model.setNotificationPreviews(enabled) } }))
+                        .accessibilityIdentifier("notificationPreviews")
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    Text("Show message text after decryption on this iPhone. Your iOS Show Previews setting still controls when it is revealed.")
+                }
+            }
+            Section {
+                NavigationLink {
+                    AppearanceView()
+                } label: {
+                    LabeledContent {
+                        Text(accent.title)
+                    } label: {
+                        Label { Text("Appearance") } icon: { SettingsIconTile(systemName: "paintpalette.fill", color: Color(uiColor: .label)) }
+                    }
+                }
+            }
+            Section("Development") {
+                HStack(spacing: 12) {
+                    SettingsIconTile(systemName: "tray.and.arrow.down.fill", color: .gray)
+                    Text("Received lab messages: \(model.receivedCount)")
+                        .accessibilityIdentifier("labReceivedCount")
+                }
+                Button { Task { await model.loadDemo() } } label: {
+                    Label { Text("Explore sample conversations") } icon: { SettingsIconTile(systemName: "sparkles", color: .blue) }
+                }
+            }
+            Section {
+                Button("Sign Out", role: .destructive) { confirmingSignOut = true }
+                    .disabled(model.accountID.isEmpty)
+            }
+        }
+        .navigationTitle("Settings")
+        .confirmationDialog("Sign out?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
+            Button("Sign Out", role: .destructive) { Task { await model.disconnect() } }
+        } message: {
+            Text("Signing out removes this account’s messages and keys from this iPhone. Your other devices keep theirs.")
+        }
+    }
+
+    private var profileCard: some View {
+        HStack(spacing: 14) {
+            Circle()
+                .fill(Color(uiColor: model.accountID.isEmpty ? .systemGray3 : AvatarPalette.color(for: model.accountID)))
+                .frame(width: 60, height: 60)
+                .overlay {
+                    if let initial = localPart.first {
+                        Text(String(initial).uppercased()).font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
+                    } else {
+                        Image(systemName: "person.fill").font(.system(size: 26)).foregroundStyle(.white)
+                    }
+                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(localPart.isEmpty ? "Not signed in" : localPart).font(.title3.weight(.bold))
+                if !model.accountID.isEmpty {
+                    Text(model.accountID).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                }
+                HStack(spacing: 6) {
+                    Circle().fill(status.color).frame(width: 8, height: 8)
+                    Text(status.text)
+                }
+                .font(.footnote).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+    }
+}
+
+/// 30pt rounded colour tile with a white glyph, like iOS Settings rows.
+struct SettingsIconTile: View {
+    let systemName: String
+    let color: Color
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(color)
+            .frame(width: 30, height: 30)
+            .overlay { Image(systemName: systemName).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white) }
+            .accessibilityHidden(true)
     }
 }

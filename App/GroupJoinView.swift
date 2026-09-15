@@ -10,19 +10,19 @@ struct GroupJoinView: View {
     var body: some View {
         Form {
             Section {
-                TextField("group@rooms.server", text: $room)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.emailAddress)
-                    .accessibilityLabel("Group address").accessibilityIdentifier("groupAddress")
-                TextField("Your nickname", text: $nickname)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .accessibilityIdentifier("groupNickname")
-            } header: { Text("Group invitation") }
-            footer: { Text("Use the address of a group you already belong to. Your nickname is visible to its members.") }
-            Section {
-                Label("Private, encrypted groups", systemImage: "lock.shield")
-                Text("The group must be members-only and share its members’ addresses. You’ll review everyone’s encryption devices before sending.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            }
+                LabeledContent("Address") {
+                    TextField("group@rooms.server", text: $room)
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.emailAddress)
+                        .accessibilityLabel("Group address").accessibilityIdentifier("groupAddress")
+                }
+                LabeledContent("Nickname") {
+                    TextField("Your nickname", text: $nickname)
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .accessibilityIdentifier("groupNickname")
+                }
+            } footer: { Text("Members-only, encrypted groups you already belong to.") }
         }
         .navigationTitle("Join a group").navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) {
@@ -37,12 +37,12 @@ struct GroupJoinView: View {
                 HStack(spacing: 10) {
                     if joining { ProgressView().tint(.white) }
                     Text(joining ? "Checking group…" : "Join group").fontWeight(.semibold)
-                }.frame(maxWidth: .infinity).frame(minHeight: 44)
+                }.frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent).controlSize(.large)
             .disabled(joining || !model.isConnected || room.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || nickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityIdentifier("joinGroup")
-            .padding(.horizontal, 16).padding(.vertical, 8).background(.bar)
+            .padding(.horizontal, 16).padding(.vertical, 8)
         }
         .task { if nickname.isEmpty { nickname = String(model.accountID.prefix { $0 != "@" }) } }
     }

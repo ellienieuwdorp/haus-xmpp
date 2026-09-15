@@ -21,7 +21,7 @@ final class LabConnectionUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected to lab")).firstMatch.waitForExistence(timeout: 25))
         app.buttons["Chats"].tap()
         app.buttons["New conversation"].tap()
-        let recipient = app.textFields["name@server"]
+        let recipient = app.textFields["newChatAddress"]
         XCTAssertTrue(recipient.waitForExistence(timeout: 5))
         recipient.tap()
         recipient.typeText(user + "@localhost")

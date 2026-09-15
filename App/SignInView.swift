@@ -17,33 +17,75 @@ struct SignInView: View {
         #endif
     }
 
+    private var canConnect: Bool { consent && !username.isEmpty && !password.isEmpty && !model.isConnecting }
+
     var body: some View {
         NavigationStack {
-            Form {
+            List {
                 Section {
-                    Text("Connect a disposable account on the local development server. New messages require end-to-end encryption and approved recipient devices.")
-                    TextField("Username", text: $username)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("labUsername")
-                    SecureField("Password", text: $password).accessibilityIdentifier("labPassword")
+                    VStack(spacing: 8) {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 72, height: 72)
+                            .overlay { Image(systemName: "bubble.left.fill").font(.system(size: 34)).foregroundStyle(.white) }
+                            .accessibilityHidden(true)
+                        Text("Sign in").font(.title.bold()).padding(.top, 6)
+                        Text("Use your lab account.").foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
+                }
+                Section {
+                    row("Address") {
+                        TextField("name", text: $username)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .textContentType(.username)
+                            .accessibilityIdentifier("labUsername")
+                    }
+                    row("Password") {
+                        SecureField("Required", text: $password)
+                            .textContentType(.password)
+                            .accessibilityIdentifier("labPassword")
+                    }
                     Toggle("Use a disposable lab account", isOn: $consent)
                         .accessibilityIdentifier("labConsent")
                 } footer: {
-                    Text("\(DevelopmentEndpoint.host):5223 · Direct TLS. The lab certificate must be trusted by this connection. Enabling notifications stores this account in this device’s protected Keychain for background synchronization.")
+                    Text("\(DevelopmentEndpoint.host):5223 · Direct TLS")
                 }
                 Section {
-                    Button(model.isConnecting ? "Connecting…" : "Connect") {
-                        Task {
-                            if await model.connect(username: username, password: password) {
-                                password = ""
-                                dismiss()
+                    VStack(spacing: 16) {
+                        Button {
+                            Task {
+                                if await model.connect(username: username, password: password) {
+                                    password = ""
+                                    dismiss()
+                                }
                             }
+                        } label: {
+                            Text(model.isConnecting ? "Connecting…" : "Connect")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity, minHeight: 50)
                         }
-                    }.disabled(!consent || username.isEmpty || password.isEmpty || model.isConnecting)
-                    Text(model.connectionStatus).foregroundStyle(.secondary)
+                        .buttonStyle(.glassProminent)
+                        .buttonBorderShape(.capsule)
+                        .disabled(!canConnect)
+                        Text(model.connectionStatus).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
                 }
             }
-            .navigationTitle(DevelopmentEndpoint.domain == "localhost" ? "Local lab" : "Staging lab")
+            .toolbarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+        }
+    }
+
+    private func row<Field: View>(_ title: String, @ViewBuilder field: () -> Field) -> some View {
+        HStack(spacing: 12) {
+            Text(title).foregroundStyle(.secondary).frame(width: 88, alignment: .leading)
+            field()
         }
     }
 }

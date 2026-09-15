@@ -12,9 +12,24 @@ struct GroupDetailsView: View {
         NavigationStack {
             List {
                 Section {
-                    Text(room).font(.headline).textSelection(.enabled)
-                    Label(state.status, systemImage: state.needsReview ? "exclamationmark.shield" : "lock.shield")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                    let pill: Color = state.needsReview ? .orange : .green
+                    VStack(spacing: 6) {
+                        Image(systemName: "person.2.fill")
+                            .font(.system(size: 40)).foregroundStyle(.white)
+                            .frame(width: 96, height: 96)
+                            .background(Color(uiColor: AvatarPalette.color(for: room)), in: Circle())
+                        Text(String(room.prefix { $0 != "@" })).font(.title2.bold()).padding(.top, 6)
+                        Text(room).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+                        Label(state.needsReview ? "Devices need review" : "Encrypted", systemImage: state.needsReview ? "exclamationmark.shield" : "lock.fill")
+                            .font(.footnote.weight(.semibold)).foregroundStyle(pill)
+                            .padding(.horizontal, 9).padding(.vertical, 3)
+                            .background(pill.opacity(0.15), in: Capsule())
+                            .padding(.top, 4)
+                        if state.issue != nil || !state.joined {
+                            Text(state.status).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        }
+                    }
+                    .frame(maxWidth: .infinity).padding(.vertical, 8)
                 }
                 ForEach(state.members, id: \.self) { member in
                     Section {
@@ -25,16 +40,8 @@ struct GroupDetailsView: View {
                             Text(member == model.accountID ? "This iPhone" : "No compatible devices found").foregroundStyle(.secondary)
                         }
                         ForEach(devices) { device in
-                            Button { selectedDevice = device } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: device.trust == .verified ? "checkmark.shield" : "iphone")
-                                        .frame(width: 24).foregroundStyle(.secondary)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Device \(String(device.deviceID))").foregroundStyle(.primary)
-                                        Text(status(device)).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }.frame(minHeight: 44, alignment: .leading)
-                            }.buttonStyle(.plain).accessibilityIdentifier("groupDevice.\(device.deviceID)")
+                            Button { selectedDevice = device } label: { DeviceRow(device: device, status: status(device)) }
+                                .buttonStyle(.plain).accessibilityIdentifier("groupDevice.\(device.deviceID)")
                         }
                     } header: { Text(member == model.accountID ? "You · \(member)" : member).textCase(nil) }
                 }
@@ -50,79 +57,30 @@ struct GroupDetailsView: View {
                             }.buttonStyle(.plain).accessibilityIdentifier("groupDevice.\(device.deviceID)")
                         }
                     } header: { Text("Previous members") }
-                    footer: { Text("Currently advertised devices can be reviewed for earlier messages. Retired keys require prior approval. Reviewing a previous member does not add them to current recipients.") }
+                    footer: { Text("Reviewing a previous member does not add them to current recipients.") }
                 }
-                Section {
-                    Text("Everyone’s active devices must be approved. Blocking a device pauses sending to the whole group so nobody is silently left out.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
+                Section {} footer: { Text("Blocking a device pauses sending to the whole group.") }
             }
             .navigationTitle("Group details").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done", systemImage: "checkmark") { dismiss() }.labelStyle(.iconOnly)
-                }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Refresh group", systemImage: "arrow.clockwise") { Task { await model.loadGroupDetails(room: room) } }
                         .labelStyle(.iconOnly).disabled(!model.isConnected)
                 }
             }
             .sheet(item: $selectedDevice) { device in
-                GroupFingerprintView(model: model, room: room, device: device)
+                DeviceFingerprintSheet(model: model, chatID: room, device: device,
+                                       name: device.jid == model.accountID ? nil : String(device.jid.prefix { $0 != "@" })) { trust in
+                    Task { await model.setDeviceTrust(device, trust: trust, chatID: room); selectedDevice = nil }
+                }
             }
         }
         .task { await model.loadGroupDetails(room: room) }
     }
 
     private func status(_ device: EncryptionDevice) -> String {
-        if !device.active { return "No longer advertised" }
-        if device.identityChanged && device.trust == .undecided { return "Identity changed · review required" }
-        switch device.trust {
-        case .undecided: return "Review required"
-        case .accepted: return "Accepted · not verified"
-        case .verified: return "Verified"
-        case .rejected: return "Blocked · group sending paused"
-        }
-    }
-}
-
-private struct GroupFingerprintView: View {
-    @Bindable var model: AppModel
-    let room: String
-    let device: EncryptionDevice
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Text(device.jid).font(.headline)
-                    LabeledContent("Device", value: String(device.deviceID))
-                    Text(stride(from: 0, to: device.fingerprint.count, by: 8).map {
-                        String(device.fingerprint.dropFirst($0).prefix(8))
-                    }.joined(separator: " "))
-                    .font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
-                    .accessibilityLabel("Fingerprint \(device.fingerprint)")
-                } header: { Text("Compare this fingerprint") }
-                Section {
-                    Button("Fingerprints match · verify", systemImage: "checkmark.shield") { review(.verified) }
-                    Button("Accept without verifying", systemImage: "lock") { review(.accepted) }
-                    Button("Block this device", systemImage: "hand.raised", role: .destructive) { review(.rejected) }
-                } footer: { Text("Compare with this member over a channel you trust. Accepting without comparison does not verify their identity.") }
-                .disabled(!device.active)
-                if !device.active {
-                    Section {
-                        Text("This device is no longer advertised. Its fingerprint is read-only; earlier messages require prior approval.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .navigationTitle("Device fingerprint").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { dismiss() }.labelStyle(.iconOnly) } }
-        }
-    }
-    private func review(_ trust: DeviceTrust) {
-        Task { await model.setDeviceTrust(device, trust: trust, chatID: room); dismiss() }
+        device.active && device.trust == .rejected ? "Blocked · group sending paused" : device.reviewStatus
     }
 }
 
@@ -133,10 +91,8 @@ private struct GroupLocalFingerprintView: View {
         List {
             Section {
                 LabeledContent("Device", value: String(deviceID))
-                Text(stride(from: 0, to: fingerprint.count, by: 8).map { String(fingerprint.dropFirst($0).prefix(8)) }.joined(separator: " "))
-                    .font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
-                    .accessibilityLabel("Fingerprint \(fingerprint)")
-            } footer: { Text("Let other members compare this fingerprint through a channel they trust to verify this iPhone.") }
+                FingerprintGrid(value: fingerprint).padding(.vertical, 8)
+            } footer: { Text("Other members verify this iPhone by comparing this fingerprint.") }
         }
         .navigationTitle("Your fingerprint").navigationBarTitleDisplayMode(.inline)
     }

@@ -23,7 +23,7 @@ final class OutboxUITests: XCTestCase {
         }
         connect(); app.buttons["Disconnect"].tap(); app.buttons["Chats"].tap()
         app.buttons["newConversation"].tap()
-        app.textFields["name@server"].tap(); app.textFields["name@server"].typeText(peer)
+        app.textFields["newChatAddress"].tap(); app.textFields["newChatAddress"].typeText(peer)
         app.buttons["Create conversation"].tap()
         let input = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
         input.tap()
@@ -39,7 +39,7 @@ final class OutboxUITests: XCTestCase {
         XCTAssertTrue(messages.firstMatch.label.contains("Waiting to send"))
         app.navigationBars.buttons["BackButton"].tap(); connect()
         app.buttons["Chats"].tap(); chat.tap()
-        app.buttons["encryptionDetails"].tap()
+        app.openEncryptionDetails()
         let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "encryptionDevice."))
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 20))
         for _ in 0..<20 {
@@ -49,7 +49,7 @@ final class OutboxUITests: XCTestCase {
             pending.tap()
             XCTAssertTrue(app.buttons["Accept without verifying"].waitForExistence(timeout: 5))
             app.buttons["Accept without verifying"].tap()
-            XCTAssertTrue(app.navigationBars["Encryption"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.navigationBars["Devices & Encryption"].waitForExistence(timeout: 5))
         }
         app.buttons["Done"].tap()
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: messages)], timeout: 30)

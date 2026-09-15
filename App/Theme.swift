@@ -55,7 +55,8 @@ enum AvatarPalette {
         UIColor(red: 0.72, green: 0.53, blue: 0.23, alpha: 1), UIColor(red: 0.35, green: 0.63, blue: 0.35, alpha: 1),
     ]
     static func color(for name: String) -> UIColor {
-        let hash = name.unicodeScalars.reduce(5381) { ($0 &* 33) &+ Int($1.value) }
-        return colors[abs(hash) % colors.count]
+        var hash: UInt32 = 2_166_136_261
+        for scalar in name.lowercased().unicodeScalars { hash = (hash ^ scalar.value) &* 16_777_619 }
+        return colors[Int(hash % UInt32(colors.count))]
     }
 }

@@ -8,4 +8,18 @@ extension XCUIApplication {
         }
         launchEnvironment["XMPP_UI_TEST_STORE"] = UUID().uuidString
     }
+
+    /// The conversation header opens chat details; the encryption sheet is one row inside.
+    func openEncryptionDetails() {
+        buttons["chatDetails"].tap()
+        let row = buttons["encryptionDetails"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.tap()
+    }
+
+    /// The reaction row is inline in the bubble menu; older builds kept it behind a "React" submenu.
+    func openReactionRow() {
+        let react = buttons["React"]
+        if react.waitForExistence(timeout: 2) { react.tap() }
+    }
 }

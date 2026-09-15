@@ -10,8 +10,8 @@ final class ReplyUITests: XCTestCase {
         XCTAssertTrue(app.buttons["newConversation"].waitForExistence(timeout: 15))
         app.buttons["newConversation"].tap()
         let address = "reply-\(UUID().uuidString.prefix(6))@preview.local"
-        app.textFields["name@server"].tap()
-        app.textFields["name@server"].typeText(address)
+        app.textFields["newChatAddress"].tap()
+        app.textFields["newChatAddress"].typeText(address)
         app.buttons["Create conversation"].tap()
         let row = app.buttons["chat.\(address)"]
         let input = app.textFields["messageComposer"].waitForExistence(timeout: 3) ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
