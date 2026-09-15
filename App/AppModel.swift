@@ -529,12 +529,16 @@ final class AppModel {
             case .online:
                 connectionStatus = "Connected to lab"; isConnected = true; isConnecting = false
                 if let encryption, let client {
+                    var step = "server features"
                     do {
                         let features = try await client.discoveryFeatures()
-                        if features.contains("urn:xmpp:carbons:2") { try await client.setCarbonsEnabled() }
+                        if features.contains("urn:xmpp:carbons:2") { step = "carbons"; try await client.setCarbonsEnabled() }
+                        step = "publishing this phone’s keys"
                         try await encryption.initialize(account: account, transport: client)
+                        step = "rejoining groups"
                         try await rejoinKnownGroups(account: account, client: client, encryption: encryption, token: token)
                         if features.contains("urn:xmpp:mam:2"), let store {
+                            step = "archive catch-up"
                             connectionStatus = "Catching up…"
                             try await ArchiveSynchronizer(store: store).synchronize(account: account, client: client, encryption: encryption)
                         }
@@ -551,8 +555,13 @@ final class AppModel {
                         if let openChatID { await loadEncryptionDetails(for: openChatID) }
                     } catch {
                         guard generation == token else { return }
+                        let detail: String
+                        if case .stanza(let condition)? = error as? XMPPIQError { detail = condition }
+                        else { detail = (error as? OMEMOError)?.errorDescription ?? String(describing: error).prefix(120).description }
+                        Logger(subsystem: "dev.xmpplab.ios", category: "encryption").error("Encryption setup failed at \(step, privacy: .public): \(detail, privacy: .public)")
                         encryptionStatus = "Encryption setup needs attention"
-                        self.error = "Could not prepare encryption. Your queued messages have not been sent."
+                        encryptionDiagnostics = "Setup failed at \(step): \(detail)"
+                        self.error = "Could not prepare encryption (\(step): \(detail)). Your queued messages have not been sent."
                     }
                 }
             case .disconnected(let reason):
@@ -978,7 +987,8 @@ final class AppModel {
         let token = generation
         do {
             let overview: EncryptionOverview
-            if refreshFromServer, hasTransportOwnership, encryptionReady, isConnected, let client {
+            let refreshed = refreshFromServer && hasTransportOwnership && encryptionReady && isConnected && client != nil
+            if refreshed, let client {
                 overview = try await encryption.refreshDevices(account: account, peer: chatID, profile: profile, transport: client)
             } else { overview = try await encryption.overview(account: account, peer: chatID) }
             guard accountID == account, generation == token, openChatID == chatID else { return }
@@ -991,7 +1001,11 @@ final class AppModel {
                 let active = overview.devices.filter { $0.jid == owner && $0.active && !(owner == account && $0.deviceID == overview.localDeviceID) }.count
                 return "\(name): \(advertised) advertised, \(active) usable" + (missing > 0 ? ", \(missing) without keys" : "")
             }.joined(separator: " · ")
-            encryptionDiagnostics = "Last refresh (\(overview.profile == .legacy ? "OMEMO · compatible" : "OMEMO 2")): \(summary)"
+            if refreshed {
+                encryptionDiagnostics = "Last refresh (\(overview.profile == .legacy ? "OMEMO · compatible" : "OMEMO 2")): \(summary)"
+            } else if !encryptionDiagnostics.hasPrefix("Setup failed") {
+                encryptionDiagnostics = isConnected ? "Not refreshed: encryption setup has not completed on this connection." : "Not refreshed: offline."
+            }
             Logger(subsystem: "dev.xmpplab.ios", category: "encryption").info("Device refresh: \(summary, privacy: .public)")
             if overview.hasIncompatibleDevices { encryptionStatus = "Devices use incompatible encryption versions" }
             else if overview.needsTrust { encryptionStatus = "Review encryption devices" }
