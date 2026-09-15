@@ -199,40 +199,27 @@ public actor XMPPClient {
     }
 
     public static func reactionXML(to: String, targetID: String, reactions: [String], id: String) throws -> String {
-        guard !to.isEmpty, to.utf8.count <= 3_071, !to.contains(where: { $0.isWhitespace }), validXMLText(to),
-              validMessageID(id), validMessageID(targetID), reactions.count <= 12,
-              reactions.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 && validXMLText($0) }) else { throw XMPPClientError.invalidConfiguration }
-        let elements = reactions.map { "<reaction>\(xmlEscaped($0))</reaction>" }.joined()
+        guard MessageContent.validAddress(to), MessageContent.validIdentifier(id) else { throw XMPPClientError.invalidConfiguration }
+        let content = try MessageContent(body: "", reaction: .init(targetID: targetID, reactions: reactions)).xml()
         // Same shape Conversations emits: the complete set, a store hint, no body.
-        return "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'><reactions xmlns='urn:xmpp:reactions:0' id='\(xmlEscaped(targetID))'>\(elements)</reactions><store xmlns='urn:xmpp:hints'/></message>"
+        return "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(content)<store xmlns='urn:xmpp:hints'/></message>"
     }
 
     /// Pure preflight for durable enqueueing; does not require a connected session.
     public static func validateMessage(to: String, body: String, id: String, reply: XMPPReply? = nil) throws {
-        guard !to.isEmpty, to.utf8.count <= 3_071, !to.contains(where: { $0.isWhitespace }),
-              !body.isEmpty, body.utf8.count <= 65_536,
-              validMessageID(id), validXMLText(to), validXMLText(body) else { throw XMPPClientError.invalidConfiguration }
+        guard MessageContent.validAddress(to), !body.isEmpty, body.utf8.count <= 65_536,
+              MessageContent.validIdentifier(id), MessageContent.validXMLText(body) else { throw XMPPClientError.invalidConfiguration }
         if let reply {
-            guard reply.id.map(validMessageID) ?? true, !reply.to.isEmpty, reply.to.utf8.count <= 3_071,
-                  !reply.to.contains(where: { $0.isWhitespace }), validXMLText(reply.to),
-                  !reply.body.isEmpty, reply.body.utf8.count <= 16_384, validXMLText(reply.body),
+            guard reply.id.map(MessageContent.validIdentifier) ?? true, MessageContent.validAddress(reply.to),
+                  !reply.body.isEmpty, reply.body.utf8.count <= 16_384, MessageContent.validXMLText(reply.body),
                   replyFallback(reply.body).utf8.count + body.utf8.count <= 65_536 else { throw XMPPClientError.invalidConfiguration }
         }
     }
 
     static func messageXML(to: String, body: String, id: String, reply: XMPPReply? = nil) throws -> String {
         try validateMessage(to: to, body: body, id: id, reply: reply)
-        let escapedID = xmlEscaped(id)
-        var wireBody = body
-        var extensionXML = ""
-        if let reply {
-            let fallback = replyFallback(reply.body)
-            wireBody = fallback + body
-            if let replyID = reply.id {
-                extensionXML = "<reply xmlns='urn:xmpp:reply:0' to='\(xmlEscaped(reply.to))' id='\(xmlEscaped(replyID))'/><fallback xmlns='urn:xmpp:fallback:0' for='urn:xmpp:reply:0'><body start='0' end='\(fallback.unicodeScalars.count)'/></fallback>"
-            }
-        }
-        return "<message to='\(xmlEscaped(to))' type='chat' id='\(escapedID)'><body>\(xmlEscaped(wireBody))</body><origin-id xmlns='urn:xmpp:sid:0' id='\(escapedID)'/>\(extensionXML)</message>"
+        let content = try MessageContent(body: body, reply: reply.map { .init(id: $0.id, to: $0.to, quote: replyFallback($0.body)) }, originID: id).xml()
+        return "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(content)</message>"
     }
 
     private static func replyFallback(_ body: String) -> String {
@@ -241,46 +228,26 @@ public actor XMPPClient {
         return normalized.components(separatedBy: "\n").map { "> " + $0 }.joined(separator: "\n") + "\n"
     }
 
-    private static func validMessageID(_ id: String) -> Bool {
-        // Keep attribute normalization from changing a caller's durable identifier.
-        !id.isEmpty && id.utf8.count <= 1_024 && !id.contains(where: { $0.isWhitespace }) && validXMLText(id)
-    }
-
-    private static func validXMLText(_ value: String) -> Bool {
-        value.unicodeScalars.allSatisfy {
-            $0.value == 9 || $0.value == 10 || $0.value == 13 ||
-            (0x20...0xD7FF).contains($0.value) || (0xE000...0xFFFD).contains($0.value) ||
-            (0x10000...0x10FFFF).contains($0.value)
-        }
-    }
-
-    static func parsedMessage(_ node: XMLNode, provenance: XMPPMessageProvenance = .direct) -> XMPPMessage? {
+    /// Payload of an unencrypted direct stanza. Ambiguous extensions are dropped, never fatal.
+    private static func plainContent(_ node: XMLNode) -> (from: String, content: MessageContent)? {
         guard node.name == "message", node.namespace == "jabber:client",
               node.attributes["type"] == nil || node.attributes["type"] == "chat" || node.attributes["type"] == "normal",
               !OMEMOWire.hasEncryptedContent(node), !Carbons.containsWrapper(node),
               let from = node.attributes["from"], !from.isEmpty,
-              let body = node.child("body", namespace: "jabber:client")?.text, !body.isEmpty else { return nil }
-        let origins = node.children.filter { $0.name == "origin-id" && $0.namespace == "urn:xmpp:sid:0" }
-        // Multiple origin IDs are ambiguous; never pick one based on XML order.
-        let candidate = origins.count == 1 ? origins[0].attributes["id"] : nil
-        let originID = candidate.flatMap { validMessageID($0) ? $0 : nil }
-        return XMPPMessage(id: node.attributes["id"] ?? UUID().uuidString, from: from,
-                           to: node.attributes["to"], body: body, originID: originID, type: node.attributes["type"], provenance: provenance)
+              let content = try? MessageContent.decode(node, strict: false) else { return nil }
+        return (from, content)
+    }
+
+    static func parsedMessage(_ node: XMLNode, provenance: XMPPMessageProvenance = .direct) -> XMPPMessage? {
+        guard let (from, content) = plainContent(node), !content.text.isEmpty else { return nil }
+        return XMPPMessage(id: node.attributes["id"] ?? UUID().uuidString, from: from, to: node.attributes["to"],
+                           body: content.text, originID: content.originID, type: node.attributes["type"], provenance: provenance)
     }
 
     static func parsedReaction(_ node: XMLNode, provenance: XMPPMessageProvenance = .direct) -> XMPPReaction? {
-        guard node.name == "message", node.namespace == "jabber:client",
-              node.attributes["type"] == nil || node.attributes["type"] == "chat" || node.attributes["type"] == "normal",
-              !OMEMOWire.hasEncryptedContent(node), !Carbons.containsWrapper(node),
-              let from = node.attributes["from"], !from.isEmpty else { return nil }
-        let nodes = node.children.filter { $0.name == "reactions" && $0.namespace == "urn:xmpp:reactions:0" }
-        guard nodes.count == 1, let target = nodes[0].attributes["id"], validMessageID(target),
-              nodes[0].children.count <= 48,
-              nodes[0].children.allSatisfy({ $0.name == "reaction" && $0.namespace == "urn:xmpp:reactions:0" && $0.children.isEmpty && validXMLText($0.text) }) else { return nil }
-        // XEP-0444 sends the complete set; an empty set withdraws. Duplicates are tolerated, not counted.
-        let values = Array(Set(nodes[0].children.map(\.text).filter { !$0.isEmpty && $0.utf8.count <= 64 })).sorted()
-        return XMPPReaction(id: node.attributes["id"].flatMap { validMessageID($0) ? $0 : nil } ?? UUID().uuidString, from: from,
-                            to: node.attributes["to"], targetID: target, reactions: values, provenance: provenance)
+        guard let (from, content) = plainContent(node), let reaction = content.reaction else { return nil }
+        return XMPPReaction(id: node.attributes["id"].flatMap { MessageContent.validIdentifier($0) ? $0 : nil } ?? UUID().uuidString, from: from,
+                            to: node.attributes["to"], targetID: reaction.targetID, reactions: reaction.reactions, provenance: provenance)
     }
 
     private func readLoop(_ conn: NWConnection, token: UUID) async {
@@ -680,7 +647,7 @@ public actor XMPPClient {
         guard iqRequests.count < 64 else { throw XMPPIQError.requestLimit }
         if let to {
             guard !to.isEmpty, to.utf8.count <= 3_071, !to.contains(where: { $0.isWhitespace }),
-                  Self.validXMLText(to) else { throw XMPPClientError.invalidConfiguration }
+                  MessageContent.validXMLText(to) else { throw XMPPClientError.invalidConfiguration }
         }
         let id = UUID().uuidString
         let token = generation
