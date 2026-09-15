@@ -64,7 +64,7 @@ public struct BackgroundSynchronizer: Sendable {
                 try await ArchiveSynchronizer(store: store).synchronize(
                     account: account.accountID, client: client, encryption: encryption)
             }, consume: {
-                try await consumeBackgroundEvents(client: client, encryption: encryption, account: account.accountID)
+                try await consumeBackgroundEvents(client.events, processor: InboundProcessor(encryption: encryption, client: client, account: account.accountID))
             }, stop: { await client.disconnectAndWait() })
             try Task.checkCancellation()
             return try await finishBackgroundPresentation(store: store, accountID: account.accountID, presentation: presentation)
@@ -95,37 +95,14 @@ func finishBackgroundPresentation(store: MessageStore, accountID: String,
     }
 }
 
-private func consumeBackgroundEvents(client: XMPPClient, encryption: OMEMOService, account: String) async throws {
-    for await event in client.events {
+/// The extension persists exactly what the app would: the processor decides, this loop only
+/// ends on disconnect. No automatic trust changes, no outbox, no plaintext (the processor
+/// ignores `.message`); a storage failure propagates so the sync stops before the next barrier.
+func consumeBackgroundEvents(_ events: AsyncStream<XMPPEvent>, processor: InboundProcessor) async throws {
+    for await event in events {
         try Task.checkCancellation()
-        switch event {
-        case .encryptedMessage(let message):
-            do { _ = try await encryption.receive(account: account, message: message, transport: client) }
-            catch {
-                // A failed decrypt can still be safely retained for later explicit trust.
-                // Storage failures and unretained content must stop before the next barrier.
-                guard try await encryption.hasDurableIncomingDisposition(account: account, message: message) else { throw error }
-            }
-        case .encryptedGroupMessage(let message):
-            do { _ = try await encryption.receiveGroup(account: account, message: message, transport: client) }
-            catch {
-                guard try await encryption.hasDurableGroupDisposition(account: account, message: message) else { throw error }
-            }
-        case .reaction(let reaction):
-            try await encryption.receivePlaintextReaction(account: account, reaction: reaction)
-        case .streamManagementBarrier(let token):
-            try await client.acknowledgeInbound(token)
-        case .state(.disconnected):
-            throw BackgroundSynchronizationError.connectionEnded
-        case .message, .encryptionFailure:
-            // Explicit encrypted-only policy rejects plaintext/malformed encryption.
-            break
-        case .omemoDevices:
-            // No automatic trust changes. Next foreground discovery refreshes devices;
-            // incoming decryption itself discovers unknown keys and retains pending input.
-            break
-        default: break
-        }
+        if case .state(.disconnected) = event { throw BackgroundSynchronizationError.connectionEnded }
+        _ = try await processor.process(event)
     }
     try Task.checkCancellation()
     throw BackgroundSynchronizationError.connectionEnded

@@ -42,6 +42,8 @@ public extension XMPPStreamManagementPersistence {
 public struct XMPPInboundToken: Sendable, Equatable {
     public let session: UUID
     public let sequence: UInt64
+    /// A token only counts once it matches the live session, so constructing one proves nothing.
+    public init(session: UUID, sequence: UInt64) { self.session = session; self.sequence = sequence }
 }
 
 public enum XMPPStreamManagementError: Error, Sendable { case invalidState, invalidAcknowledgement, journalFull, staleToken }
