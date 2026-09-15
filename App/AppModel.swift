@@ -12,6 +12,9 @@ struct ChatSummary: Identifiable {
     let title: String
     let preview: String
     let isPinned: Bool
+    var lastMessageAt: Date? = nil
+    var lastMessageIsOutgoing = false
+    var lastMessageState: OutgoingTransportState? = nil
 }
 
 typealias ChatMessage = StoredMessage
@@ -1108,7 +1111,9 @@ final class AppModel {
             let known = Set(storedChats.map(\.id))
             let reviewPreview = "Encrypted message needs attention"
             chats = storedChats.map { ChatSummary(id: $0.id, title: $0.title,
-                preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage?.body ?? ""), isPinned: $0.isPinned) }
+                preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage?.body ?? ""), isPinned: $0.isPinned,
+                lastMessageAt: $0.lastMessage?.sentAt, lastMessageIsOutgoing: $0.lastMessage?.isOutgoing ?? false,
+                lastMessageState: $0.lastMessage?.transportState) }
             chats += pending.keys.filter { !known.contains($0) }.sorted().map {
                 ChatSummary(id: $0, title: $0, preview: reviewPreview, isPinned: false)
             }
