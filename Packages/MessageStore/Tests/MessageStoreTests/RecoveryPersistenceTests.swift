@@ -134,12 +134,59 @@ private func queue(_ store: MessageStore, account: String = "a", id: String = "m
         try await store.saveEncryptionState(accountID: "a", expectedRevision: 1, data: Data([2]), control: control)
     }
     #expect(try await store.encryptionState(accountID: "a")?.revision == 1)
-    #expect(try await store.claimEncryptionControl(accountID: "a")?.wire == control.wire)
+    let claim = try #require(await store.claimNextUpdate(accountID: "a"))
+    #expect(claim.wire == control.wire && claim.update.kind == .keyTransport && claim.update.chatID == "peer")
     let reader = try MessageStore(url: url)
-    #expect(try await store.claimEncryptionControl(accountID: "a") == nil)
+    #expect(try await store.claimNextUpdate(accountID: "a") == nil)
     #expect(try await reader.encryptionState(accountID: "a")?.data == Data([1]))
-    try await store.finishEncryptionControl(accountID: "a", id: control.id)
-    #expect(try await store.claimEncryptionControl(accountID: "a") == nil)
+    #expect(try await store.finishUpdateSubmission(accountID: "a", updateID: control.id, attemptID: claim.attemptID))
+    #expect(try await store.claimNextUpdate(accountID: "a") == nil)
+    #expect(try await store.update(accountID: "a", updateID: control.id)?.transportState == .unconfirmed)
+}
+
+@Test func migrationV9MovesReactionUpdatesAndKeyTransportsIntoOneQueueInOrder() async throws {
+    let url = try recoveryURL()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    try await store.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
+    try await store.insertMessage(StoredMessage(id: "t", accountID: "a", chatID: "peer", senderID: "peer", body: "x", encryptionProfile: "modern", wireID: "w", wireIDAuthenticated: true))
+    try await store.close()
+    var db: OpaquePointer?
+    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+    let sql = """
+        BEGIN IMMEDIATE;
+        DROP TABLE outgoing_updates;
+        CREATE TABLE reaction_updates(sequence INTEGER PRIMARY KEY AUTOINCREMENT,account_id TEXT NOT NULL,id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,target_message_id TEXT NOT NULL,target_wire_id TEXT NOT NULL,actor_id TEXT NOT NULL,reactions_json TEXT NOT NULL,
+        created_at REAL NOT NULL,state TEXT NOT NULL,attempt_id TEXT,wire BLOB,UNIQUE(account_id,id));
+        CREATE TABLE encryption_controls(account_id TEXT NOT NULL,id TEXT NOT NULL,recipient TEXT NOT NULL,wire BLOB NOT NULL,
+        state TEXT NOT NULL DEFAULT 'queued',PRIMARY KEY(account_id,id));
+        INSERT INTO encryption_controls VALUES('a','k1','peer',X'0102','queued');
+        INSERT INTO reaction_updates(account_id,id,chat_id,target_message_id,target_wire_id,actor_id,reactions_json,created_at,state,wire)
+        VALUES('a','r1','peer','t','w','a','["👍"]',100,'unconfirmed',X'03');
+        INSERT INTO reaction_updates(account_id,id,chat_id,target_message_id,target_wire_id,actor_id,reactions_json,created_at,state,wire)
+        VALUES('a','r2','peer','t','w','a','["❤️"]',101,'queued',NULL);
+        PRAGMA user_version=9;
+        COMMIT;
+        """
+    #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
+    sqlite3_close(db)
+    let migrated = try MessageStore(url: url)
+    try await migrated.acquireTransportOwnership()
+    let r1 = try #require(await migrated.reactionUpdate(accountID: "a", updateID: "r1"))
+    #expect(r1.reactions == ["👍"] && r1.transportState == .unconfirmed && r1.actorID == "a" && r1.targetWireID == "w")
+    #expect(try await migrated.updateWire(accountID: "a", updateID: "r1") == Data([3]))
+    #expect(try await migrated.queuedReactions(accountID: "a").map(\.id) == ["r2"])
+    #expect(try await migrated.queuedUpdates(accountID: "a", kind: .keyTransport).map(\.id) == ["k1"])
+    // Only sealed rows are claimable; the key transport arrived sealed.
+    let claim = try #require(await migrated.claimNextUpdate(accountID: "a"))
+    #expect(claim.update.id == "k1" && claim.wire == Data([1, 2]))
+    #expect(try await migrated.claimNextUpdate(accountID: "a") == nil)
+    try await migrated.close()
+    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+    #expect(sqlite3_exec(db, "SELECT 1 FROM reaction_updates", nil, nil, nil) != SQLITE_OK)
+    #expect(sqlite3_exec(db, "SELECT 1 FROM encryption_controls", nil, nil, nil) != SQLITE_OK)
+    sqlite3_close(db)
 }
 
 @Test func migrationV4PreservesCiphertextTrustHistoryAndActiveClaim() async throws {
@@ -169,7 +216,7 @@ private func queue(_ store: MessageStore, account: String = "a", id: String = "m
         CREATE INDEX outbox_queue ON outbox(account_id,state,sequence);
         DROP TABLE stream_management;
         DROP TABLE archive_checkpoints;
-        DROP TABLE reaction_updates;
+        DROP TABLE outgoing_updates;
         DROP TABLE reaction_events;
         DROP INDEX authenticated_message_wire;
         DROP INDEX message_wire;
