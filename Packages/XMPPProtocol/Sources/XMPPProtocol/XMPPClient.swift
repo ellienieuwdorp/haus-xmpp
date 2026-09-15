@@ -82,6 +82,12 @@ public actor XMPPClient {
     private var connection: NWConnection?
     private var reader: Task<Void, Never>?
     private var deadline: Task<Void, Never>?
+    private var liveness: Task<Void, Never>?
+    /// Counts inbound reads; a probe that does not move it means the socket is dead.
+    private var inboundActivity: UInt64 = 0
+    /// Silence longer than this gets a probe; a probe unanswered within `probeTimeout` ends the stream.
+    static let silenceInterval: Duration = .seconds(60)
+    static let probeTimeout: Duration = .seconds(15)
     private var generation = UUID()
     private var phase: Phase = .idle
     private var framer = XMLStreamFramer()
@@ -143,7 +149,9 @@ public actor XMPPClient {
             }
             complete(SecTrustEvaluateWithError(trustRef, nil))
         }, queue)
-        let conn = NWConnection(host: NWEndpoint.Host(host), port: endpointPort, using: NWParameters(tls: tls))
+        let tcp = NWProtocolTCP.Options()
+        tcp.enableKeepalive = true; tcp.keepaliveIdle = 30; tcp.keepaliveInterval = 10; tcp.keepaliveCount = 3
+        let conn = NWConnection(host: NWEndpoint.Host(host), port: endpointPort, using: NWParameters(tls: tls, tcp: tcp))
         connection = conn
         deadline = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(20)) } catch { return }
@@ -288,6 +296,7 @@ public actor XMPPClient {
             while generation == token && !Task.isCancelled {
                 let data = try await Self.receive(conn)
                 guard generation == token else { return }
+                inboundActivity &+= 1
                 for frame in try framer.feed(data) {
                     guard generation == token else { return }
                     switch frame {
@@ -490,8 +499,26 @@ public actor XMPPClient {
         if presence { try await write("<presence/>") }
         guard generation == token else { throw XMPPClientError.connectionClosed }
         phase = .online; deadline?.cancel(); deadline = nil
+        liveness = Task { [weak self] in await self?.livenessLoop(token: token) }
         try emit(.state(.online(jid: boundJID)))
         handshake?.resume(); handshake = nil
+    }
+
+    /// The socket can die without an error (NAT timeout, network change). After a silent
+    /// interval, ask the server for proof of life; any inbound bytes count as the answer.
+    private func livenessLoop(token: UUID) async {
+        while generation == token, phase == .online {
+            let seen = inboundActivity
+            guard (try? await Task.sleep(for: Self.silenceInterval)) != nil, generation == token, phase == .online else { return }
+            if inboundActivity != seen { continue }
+            do {
+                if smOffered, streamManagement != nil { try await write("<r xmlns='urn:xmpp:sm:3'/>") }
+                else { Task { [weak self] in _ = try? await self?.requestIQ(type: "get", to: nil, payload: "<ping xmlns='urn:xmpp:ping'/>") } }
+            } catch { return }
+            let atProbe = inboundActivity
+            guard (try? await Task.sleep(for: Self.probeTimeout)) != nil, generation == token else { return }
+            if inboundActivity == atProbe { finish("Connection lost", error: XMPPClientError.timedOut); return }
+        }
     }
 
     func groupAccount() throws -> String {
@@ -745,6 +772,7 @@ public actor XMPPClient {
         // sees work cancelled by an earlier error/disconnect (including an archive abort).
         reader?.cancel()
         deadline?.cancel(); deadline = nil
+        liveness?.cancel(); liveness = nil
         password = ""; phase = .idle; csiOffered = false
         if case .dropped = continuation.yield(.state(.disconnected(reason))) { continuation.finish() }
     }
