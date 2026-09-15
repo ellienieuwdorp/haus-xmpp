@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 10 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 11 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -141,14 +141,25 @@ public actor MessageStore {
                     try connection.execute("DROP TABLE encryption_controls")
                 }
             }
+            // Every message-scoped event peers assert: reactions now, retractions/corrections/receipts
+            // later. One table, one idempotency rule, one target resolution.
             try connection.execute("""
-                CREATE TABLE IF NOT EXISTS reaction_events (
+                CREATE TABLE IF NOT EXISTS message_events (
                     account_id TEXT NOT NULL, actor_id TEXT NOT NULL, id TEXT NOT NULL,
-                    chat_id TEXT NOT NULL, target_wire_id TEXT NOT NULL, reactions_json TEXT NOT NULL, updated_at REAL NOT NULL,
+                    chat_id TEXT NOT NULL, target_wire_id TEXT NOT NULL,
+                    kind TEXT NOT NULL CHECK(kind IN ('reaction','retraction','correction','delivered','displayed')),
+                    payload_json TEXT NOT NULL, updated_at REAL NOT NULL,
                     PRIMARY KEY(account_id,actor_id,id)
                 )
                 """)
-            try connection.execute("CREATE INDEX IF NOT EXISTS reaction_target ON reaction_events(account_id,chat_id,target_wire_id,actor_id,updated_at,id)")
+            if version < 11, try !connection.query("SELECT name FROM sqlite_master WHERE type='table' AND name='reaction_events'").isEmpty {
+                try connection.execute("""
+                    INSERT INTO message_events(account_id,actor_id,id,chat_id,target_wire_id,kind,payload_json,updated_at)
+                    SELECT account_id,actor_id,id,chat_id,target_wire_id,'reaction',reactions_json,updated_at FROM reaction_events
+                    """)
+                try connection.execute("DROP TABLE reaction_events")
+            }
+            try connection.execute("CREATE INDEX IF NOT EXISTS event_target ON message_events(account_id,chat_id,target_wire_id,kind,actor_id,updated_at,id)")
             try connection.execute("CREATE TABLE IF NOT EXISTS notification_preferences (account_id TEXT PRIMARY KEY, previews INTEGER NOT NULL DEFAULT 1)")
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS notification_candidates (
@@ -176,7 +187,7 @@ public actor MessageStore {
                     message_id TEXT NOT NULL, reason TEXT NOT NULL, UNIQUE(account_id,archive_id,message_id)
                 )
                 """)
-            try connection.execute("PRAGMA user_version = 10")
+            try connection.execute("PRAGMA user_version = 11")
         }
     }
 
@@ -544,7 +555,7 @@ public actor MessageStore {
             try writeEncryptionState(accountID: accountID, expectedRevision: expectedRevision, data: state)
             if let reaction {
                 guard message == nil, reaction.actorID == sender else { throw MessageStoreError.invalidValue }
-                try insertReactionEvent(accountID: accountID, reaction: reaction, groupRoom: groupRoom)
+                try insertEvent(accountID: accountID, event: try reaction.event(), groupRoom: groupRoom)
             }
             if let message {
                 try connection.execute("INSERT INTO chats(account_id,id,title) VALUES(?,?,?) ON CONFLICT(account_id,id) DO NOTHING", [.text(accountID), .text(message.chatID), .text(message.chatID)])
@@ -741,22 +752,33 @@ public actor MessageStore {
 
     /// Returns each authenticated actor's latest complete set, including an empty withdrawal.
     public func reactions(accountID: String, chatID: String, messageID: String) throws -> [AuthenticatedReaction] {
+        try events(accountID: accountID, chatID: chatID, messageID: messageID).compactMap(AuthenticatedReaction.init)
+    }
+
+    /// Each actor's latest event per kind for one message, sorted by actor.
+    public func events(accountID: String, chatID: String, messageID: String) throws -> [MessageEvent] {
         guard let message = try message(accountID: accountID, messageID: messageID), message.chatID == chatID,
               let wireID = try reactionReference(accountID: accountID, messageID: messageID) ?? message.wireID,
               try reactionTarget(accountID: accountID, chatID: chatID, wireID: wireID)?.id == messageID else { return [] }
-        let rows = try connection.query("SELECT id,chat_id,actor_id,target_wire_id,reactions_json,updated_at FROM reaction_events WHERE account_id=? AND chat_id=? AND target_wire_id=? ORDER BY updated_at DESC,id DESC", [.text(accountID), .text(chatID), .text(wireID)])
-        var seen: Set<String> = [], result: [AuthenticatedReaction] = []
-        for row in rows where seen.insert(row[2].string).inserted {
-            result.append(AuthenticatedReaction(id: row[0].string, chatID: row[1].string, actorID: row[2].string, targetWireID: row[3].string,
-                                                reactions: try JSONDecoder().decode([String].self, from: Data(row[4].string.utf8)), updatedAt: Date(timeIntervalSince1970: row[5].double)))
+        let rows = try connection.query("SELECT \(Self.eventColumns) FROM message_events WHERE account_id=? AND chat_id=? AND target_wire_id=? ORDER BY updated_at DESC,id DESC", [.text(accountID), .text(chatID), .text(wireID)])
+        var seen: Set<String> = [], result: [MessageEvent] = []
+        for row in rows {
+            let event = try Self.decodeEvent(row)
+            if seen.insert(event.actorID + "\u{0}" + event.kind.rawValue).inserted { result.append(event) }
         }
-        return result.sorted { $0.actorID < $1.actorID }
+        return result.sorted { ($0.actorID, $0.kind.rawValue) < ($1.actorID, $1.kind.rawValue) }
     }
 
-    /// One bounded query for a displayed timeline. Ambiguity is checked against the entire
-    /// conversation, including colliding message IDs outside the displayed page.
     public func reactionsForChat(accountID: String, chatID: String,
                                  messageIDs: Set<String>) throws -> [String: [AuthenticatedReaction]] {
+        try eventsForChat(accountID: accountID, chatID: chatID, messageIDs: messageIDs)
+            .compactMapValues { events in let reactions = events.compactMap(AuthenticatedReaction.init); return reactions.isEmpty ? nil : reactions }
+    }
+
+    /// One bounded query for a displayed timeline: every kind, latest per actor. Ambiguity is
+    /// checked against the entire conversation, including colliding message IDs outside the page.
+    public func eventsForChat(accountID: String, chatID: String,
+                              messageIDs: Set<String>) throws -> [String: [MessageEvent]] {
         guard messageIDs.count <= 1000 else { throw MessageStoreError.invalidValue }
         guard !messageIDs.isEmpty else { return [:] }
         let ids = messageIDs.sorted()
@@ -778,30 +800,25 @@ public actor MessageStore {
                     AND m.wire_id=r.wire_id AND m.authenticated>=r.authenticated
                 )=1
             ), latest AS (
-                SELECT t.id AS message_id,e.id,e.chat_id,e.actor_id,e.target_wire_id,e.reactions_json,e.updated_at,
-                ROW_NUMBER() OVER (PARTITION BY t.id,e.actor_id ORDER BY e.updated_at DESC,e.id DESC) AS position
-                FROM unique_targets t JOIN reaction_events e
+                SELECT t.id AS message_id,e.id,e.chat_id,e.actor_id,e.target_wire_id,e.kind,e.payload_json,e.updated_at,
+                ROW_NUMBER() OVER (PARTITION BY t.id,e.actor_id,e.kind ORDER BY e.updated_at DESC,e.id DESC) AS position
+                FROM unique_targets t JOIN message_events e
                 ON e.account_id=? AND e.chat_id=? AND e.target_wire_id=t.wire_id
             )
-            SELECT message_id,id,chat_id,actor_id,target_wire_id,reactions_json,updated_at
-            FROM latest WHERE position=1 ORDER BY message_id,actor_id
+            SELECT message_id,id,chat_id,actor_id,target_wire_id,kind,payload_json,updated_at
+            FROM latest WHERE position=1 ORDER BY message_id,actor_id,kind
             """, [.text(accountID), .text(chatID), .text(accountID), .text(chatID), .text(accountID), .text(chatID)] + ids.map(Value.text) +
                  [.text(accountID), .text(chatID), .text(accountID), .text(chatID)])
-        var result: [String: [AuthenticatedReaction]] = [:]
-        for row in rows {
-            result[row[0].string, default: []].append(AuthenticatedReaction(
-                id: row[1].string, chatID: row[2].string, actorID: row[3].string, targetWireID: row[4].string,
-                reactions: try JSONDecoder().decode([String].self, from: Data(row[5].string.utf8)),
-                updatedAt: Date(timeIntervalSince1970: row[6].double)))
-        }
+        var result: [String: [MessageEvent]] = [:]
+        for row in rows { result[row[0].string, default: []].append(try Self.decodeEvent(Array(row.dropFirst()))) }
         return result
     }
 
     @discardableResult public func enqueueReaction(_ update: StoredReactionUpdate, groupRoom: String? = nil) throws -> Bool {
         guard update.actorID == update.accountID else { throw MessageStoreError.invalidValue }
         return try connection.transaction {
-            let event = AuthenticatedReaction(id: update.id, chatID: update.chatID, actorID: update.actorID, targetWireID: update.targetWireID, reactions: update.reactions, updatedAt: update.createdAt)
-            try Self.validateReaction(accountID: update.accountID, reaction: event, groupRoom: groupRoom)
+            let event = try AuthenticatedReaction(id: update.id, chatID: update.chatID, actorID: update.actorID, targetWireID: update.targetWireID, reactions: update.reactions, updatedAt: update.createdAt).event()
+            try Self.validateEvent(accountID: update.accountID, event: event, groupRoom: groupRoom)
             guard let target = try reactionTarget(accountID: update.accountID, chatID: update.chatID, wireID: update.targetWireID),
                   target.id == update.targetMessageID else { throw MessageStoreError.invalidValue }
             if let existing = try reactionUpdate(accountID: update.accountID, updateID: update.id) {
@@ -811,14 +828,14 @@ public actor MessageStore {
             }
             try insertUpdate(accountID: update.accountID, id: update.id, kind: .reaction, chatID: update.chatID, createdAt: update.createdAt,
                              targetMessageID: update.targetMessageID, targetWireID: update.targetWireID, reactionsJSON: try Self.reactionJSON(update.reactions), wire: nil)
-            try insertReactionEvent(accountID: update.accountID, reaction: event, groupRoom: groupRoom)
+            try insertEvent(accountID: update.accountID, event: event, groupRoom: groupRoom)
             return true
         }
     }
 
     /// An unencrypted XEP-0444 event: the actor is server-authenticated only. Same projection rules.
     public func recordReaction(accountID: String, reaction: AuthenticatedReaction) throws {
-        try insertReactionEvent(accountID: accountID, reaction: reaction)
+        try insertEvent(accountID: accountID, event: try reaction.event())
     }
 
     public func queuedReactions(accountID: String) throws -> [StoredReactionUpdate] {
@@ -919,20 +936,36 @@ public actor MessageStore {
         return try connection.query("SELECT changes()").first?[0].integer == 1
     }
 
-    private func insertReactionEvent(accountID: String, reaction: AuthenticatedReaction, groupRoom: String? = nil) throws {
-        try Self.validateReaction(accountID: accountID, reaction: reaction, groupRoom: groupRoom)
+    private func insertEvent(accountID: String, event: MessageEvent, groupRoom: String? = nil) throws {
+        try Self.validateEvent(accountID: accountID, event: event, groupRoom: groupRoom)
         // Missing targets remain retained. Ambiguous/missing authenticated IDs never get a projection.
         // A replayed authenticated event ID cannot replace the first accepted content under that ID.
-        try connection.execute("INSERT INTO reaction_events(account_id,actor_id,id,chat_id,target_wire_id,reactions_json,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(account_id,actor_id,id) DO NOTHING", [.text(accountID), .text(reaction.actorID), .text(reaction.id), .text(reaction.chatID), .text(reaction.targetWireID), .text(try Self.reactionJSON(reaction.reactions)), .real(reaction.updatedAt.timeIntervalSince1970)])
+        try connection.execute("INSERT INTO message_events(account_id,actor_id,id,chat_id,target_wire_id,kind,payload_json,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(account_id,actor_id,id) DO NOTHING", [.text(accountID), .text(event.actorID), .text(event.id), .text(event.chatID), .text(event.targetWireID), .text(event.kind.rawValue), .text(event.payload), .real(event.updatedAt.timeIntervalSince1970)])
     }
 
-    private static func validateReaction(accountID: String, reaction: AuthenticatedReaction, groupRoom: String? = nil) throws {
-        guard !accountID.isEmpty, !reaction.chatID.isEmpty, reaction.chatID.utf8.count <= 3071,
-              (groupRoom == nil ? (reaction.actorID == accountID || reaction.actorID == reaction.chatID) : (groupRoom == reaction.chatID && !reaction.actorID.isEmpty && reaction.actorID.utf8.count <= 3071)),
-              !reaction.id.isEmpty, reaction.id.utf8.count <= 1024, !reaction.targetWireID.isEmpty, reaction.targetWireID.utf8.count <= 1024,
-              reaction.reactions.count <= 12, Set(reaction.reactions).count == reaction.reactions.count,
-              reaction.reactions.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 }),
-              reaction.updatedAt.timeIntervalSince1970.isFinite else { throw MessageStoreError.invalidValue }
+    /// Who may assert what about a message, by kind. Shape rules for the payload live here too.
+    private static func validateEvent(accountID: String, event: MessageEvent, groupRoom: String? = nil) throws {
+        guard !accountID.isEmpty, !event.chatID.isEmpty, event.chatID.utf8.count <= 3071,
+              !event.id.isEmpty, event.id.utf8.count <= 1024, !event.targetWireID.isEmpty, event.targetWireID.utf8.count <= 1024,
+              event.updatedAt.timeIntervalSince1970.isFinite else { throw MessageStoreError.invalidValue }
+        switch event.kind {
+        case .reaction:
+            // Any participant may react: us, the direct peer, or a member of the room.
+            guard groupRoom == nil ? (event.actorID == accountID || event.actorID == event.chatID)
+                    : (groupRoom == event.chatID && !event.actorID.isEmpty && event.actorID.utf8.count <= 3071),
+                  let reactions = try? JSONDecoder().decode([String].self, from: Data(event.payload.utf8)),
+                  reactions.count <= 12, Set(reactions).count == reactions.count,
+                  reactions.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 }) else { throw MessageStoreError.invalidValue }
+        case .retraction, .correction, .delivered, .displayed:
+            // Reserved: accepted once their wire support lands, with sender-only / peer-only rules.
+            throw MessageStoreError.invalidValue
+        }
+    }
+    private static let eventColumns = "id,chat_id,actor_id,target_wire_id,kind,payload_json,updated_at"
+    private static func decodeEvent(_ row: [Value]) throws -> MessageEvent {
+        guard let kind = MessageEventKind(rawValue: row[4].string) else { throw MessageStoreError.invalidValue }
+        return MessageEvent(id: row[0].string, chatID: row[1].string, actorID: row[2].string, targetWireID: row[3].string,
+                            kind: kind, payload: row[5].string, updatedAt: Date(timeIntervalSince1970: row[6].double))
     }
     private static func reactionJSON(_ values: [String]) throws -> String { String(decoding: try JSONEncoder().encode(values.sorted()), as: UTF8.self) }
     private static let reactionColumns = "account_id,id,chat_id,target_message_id,target_wire_id,reactions_json,created_at,state"

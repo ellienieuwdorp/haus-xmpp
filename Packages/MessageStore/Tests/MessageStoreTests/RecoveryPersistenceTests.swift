@@ -189,6 +189,45 @@ private func queue(_ store: MessageStore, account: String = "a", id: String = "m
     sqlite3_close(db)
 }
 
+@Test func migrationV10MovesReactionEventsIntoMessageEventsAndKeepsProjection() async throws {
+    let url = try recoveryURL()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    try await store.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
+    try await store.insertMessage(StoredMessage(id: "t", accountID: "a", chatID: "peer", senderID: "peer", body: "x", encryptionProfile: "modern", wireID: "w", wireIDAuthenticated: true))
+    try await store.close()
+    var db: OpaquePointer?
+    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+    let sql = """
+        BEGIN IMMEDIATE;
+        DROP TABLE message_events;
+        CREATE TABLE reaction_events(account_id TEXT NOT NULL,actor_id TEXT NOT NULL,id TEXT NOT NULL,chat_id TEXT NOT NULL,
+        target_wire_id TEXT NOT NULL,reactions_json TEXT NOT NULL,updated_at REAL NOT NULL,PRIMARY KEY(account_id,actor_id,id));
+        INSERT INTO reaction_events VALUES('a','peer','e1','peer','w','["👍"]',100);
+        INSERT INTO reaction_events VALUES('a','peer','e2','peer','w','["❤️"]',101);
+        INSERT INTO reaction_events VALUES('a','a','e3','peer','w','[]',102);
+        PRAGMA user_version=10;
+        COMMIT;
+        """
+    #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
+    sqlite3_close(db)
+    let migrated = try MessageStore(url: url)
+    let projected = try await migrated.reactionsForChat(accountID: "a", chatID: "peer", messageIDs: ["t"])["t"]
+    #expect(projected?.map(\.actorID) == ["a", "peer"])
+    #expect(projected?.map(\.reactions) == [[], ["❤️"]])
+    let events = try await migrated.events(accountID: "a", chatID: "peer", messageID: "t")
+    #expect(events.map(\.kind) == [.reaction, .reaction] && events.map(\.id) == ["e3", "e2"])
+    // The replay rule survived: the first accepted content under an ID stays.
+    try await migrated.acquireTransportOwnership()
+    try await migrated.recordReaction(accountID: "a", reaction: .init(id: "e2", chatID: "peer", actorID: "peer", targetWireID: "w", reactions: ["🔥"], updatedAt: Date(timeIntervalSince1970: 300)))
+    #expect(try await migrated.reactions(accountID: "a", chatID: "peer", messageID: "t").last?.reactions == ["❤️"])
+    try await migrated.close()
+    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+    #expect(sqlite3_exec(db, "SELECT 1 FROM reaction_events", nil, nil, nil) != SQLITE_OK)
+    #expect(sqlite3_exec(db, "INSERT INTO message_events VALUES('a','peer','bad','peer','w','poke','{}',1)", nil, nil, nil) != SQLITE_OK)
+    sqlite3_close(db)
+}
+
 @Test func migrationV4PreservesCiphertextTrustHistoryAndActiveClaim() async throws {
     let url = try recoveryURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
@@ -217,7 +256,7 @@ private func queue(_ store: MessageStore, account: String = "a", id: String = "m
         DROP TABLE stream_management;
         DROP TABLE archive_checkpoints;
         DROP TABLE outgoing_updates;
-        DROP TABLE reaction_events;
+        DROP TABLE message_events;
         DROP INDEX authenticated_message_wire;
         DROP INDEX message_wire;
         ALTER TABLE messages DROP COLUMN wire_id;
