@@ -28,12 +28,16 @@ struct MessageActionsContext {
 /// Full-screen blur, the bubble at its real size, quick reactions above it and the action list below.
 /// Replaces UIContextMenuInteraction, which cannot host a tappable accessory above its preview.
 /// The controller is presented and dismissed without UIKit animation; the view animates itself so the
-/// bubble starts and ends exactly where the live one is.
+/// bubble starts and ends exactly where the live one is and pops the way the system menu does.
 @MainActor
 enum MessageActionsOverlay {
     static func present(from presenter: UIViewController, context: MessageActionsContext) {
-        let safeArea = presenter.view.window?.safeAreaInsets ?? .zero
-        let controller = UIHostingController(rootView: MessageActionsOverlayView(context: context, safeArea: safeArea, finish: { _ in }))
+        let window = presenter.view.window
+        let safeArea = window?.safeAreaInsets ?? .zero
+        // A real screenshot blurred by us: system materials tint as much as they blur, and the design
+        // wants the timeline recognisable behind an 18 pt Gaussian blur and a light scrim.
+        let backdrop = window.map { w in UIGraphicsImageRenderer(bounds: w.bounds).image { _ in w.drawHierarchy(in: w.bounds, afterScreenUpdates: false) } }
+        let controller = UIHostingController(rootView: MessageActionsOverlayView(context: context, backdrop: backdrop, safeArea: safeArea, finish: { _ in }))
         controller.rootView.finish = { [weak controller] completion in controller?.dismiss(animated: false, completion: completion) }
         controller.view.backgroundColor = .clear
         controller.modalPresentationStyle = .overFullScreen
@@ -43,9 +47,13 @@ enum MessageActionsOverlay {
 
 struct MessageActionsOverlayView: View {
     let context: MessageActionsContext
+    let backdrop: UIImage?
     let safeArea: UIEdgeInsets
     var finish: ((() -> Void)?) -> Void
-    @State private var shown = false
+    /// Blur, pill and menu are in; the bubble sits at its clamped position.
+    @State private var entered = false
+    /// The brief lift at the start of the press, like the system menu's preview.
+    @State private var lifted = false
     @State private var choosingEmoji = false
     @State private var keyboardHeight: CGFloat = 0
     @AppStorage("recentReactions") private var recentReactions = ""
@@ -54,7 +62,8 @@ struct MessageActionsOverlayView: View {
 
     private static let gap: CGFloat = 14
     private static let pillHeight: CGFloat = 52
-    private static let spring = Animation.spring(duration: 0.34, bounce: 0.18)
+    private static let enter = Animation.spring(duration: 0.38, bounce: 0.28)
+    private static let leave = Animation.spring(duration: 0.24, bounce: 0)
     private var reduceMotion: Bool { UIAccessibility.isReduceMotionEnabled }
     private var message: TimelineMessage { context.message }
     private var tint: Color { Color(uiColor: (AccentTheme(rawValue: accent) ?? .indigo).tint) }
@@ -72,22 +81,19 @@ struct MessageActionsOverlayView: View {
             let fitScale = min(1, max(0.3, (bottom - top - Self.pillHeight - reasonHeight - recentsHeight - menuHeight - 2 * Self.gap) / block.height))
             let groupHeight = Self.pillHeight + reasonHeight + recentsHeight + Self.gap + block.height * fitScale + Self.gap + (choosingEmoji ? 0 : menuHeight)
             let groupTop = min(max(top, block.minY - Self.pillHeight - reasonHeight - Self.gap), max(top, bottom - groupHeight))
-            // Before and after the transition the bubble sits exactly where the live one is.
-            let scale = shown ? fitScale : 1
-            let bubbleTop = shown ? groupTop + Self.pillHeight + reasonHeight + recentsHeight + Self.gap : block.minY
+            let bubbleTop = entered ? groupTop + Self.pillHeight + reasonHeight + recentsHeight + Self.gap : block.minY
+            let scale = entered ? fitScale : 1
             let alignment: Alignment = message.isOutgoing ? .trailing : .leading
             let pillAnchor: UnitPoint = message.isOutgoing ? .bottomTrailing : .bottomLeading
             let menuAnchor: UnitPoint = message.isOutgoing ? .topTrailing : .topLeading
 
             ZStack(alignment: .topLeading) {
-                // Design: 18 px blur over a light scrim with the timeline still faintly visible. Two ultra-thin
-                // layers blur twice with little tint; a thin/regular material washes the bubbles out.
-                Rectangle().fill(.clear).background(.ultraThinMaterial)
-                Rectangle().fill(.clear).background(.ultraThinMaterial)
-                Color(uiColor: .systemBackground).opacity(colorScheme == .dark ? 0.3 : 0.2)
+                backdropView(size: geo.size)
+                    .opacity(entered ? 1 : 0)
                     .contentShape(Rectangle())
                     .onTapGesture { dismiss(nil) }
                     .accessibilityAddTraits(.isButton).accessibilityLabel("Dismiss")
+                // Pill and menu live at their final positions and only scale from the bubble's edge.
                 VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 6) {
                     reactionPill
                     if let reason = message.reactionUnavailableReason {
@@ -96,35 +102,29 @@ struct MessageActionsOverlayView: View {
                     }
                     if choosingEmoji, !recents.isEmpty { recentsRow }
                 }
+                .scaleEffect(entered ? 1 : 0.5, anchor: pillAnchor)
+                .opacity(entered ? 1 : 0)
                 .frame(width: geo.size.width - 32, alignment: alignment)
-                .offset(x: 16, y: shown ? groupTop : block.minY - Self.pillHeight - reasonHeight)
-                .scaleEffect(shown ? 1 : 0.8, anchor: pillAnchor)
-                .opacity(shown ? 1 : 0)
+                .offset(x: 16, y: groupTop)
                 snapshot(context.bubble, frame: context.bubbleFrame, scale: scale, anchor: block.minY, top: bubbleTop)
-                    .shadow(color: .black.opacity(shown ? 0.18 : 0), radius: 14, y: 12)
+                    .shadow(color: .black.opacity(entered ? 0.18 : 0), radius: 14, y: 12)
                 if let reactions = context.reactions {
                     snapshot(reactions, frame: context.reactionsFrame, scale: scale, anchor: block.minY, top: bubbleTop)
                 }
                 if !choosingEmoji {
                     menu
+                        .scaleEffect(entered ? 1 : 0.5, anchor: menuAnchor)
+                        .opacity(entered ? 1 : 0)
                         .frame(width: geo.size.width - 32, alignment: alignment)
-                        .offset(x: 16, y: bubbleTop + block.height * scale + Self.gap)
-                        .scaleEffect(shown ? 1 : 0.8, anchor: menuAnchor)
-                        .opacity(shown ? 1 : 0)
+                        .offset(x: 16, y: groupTop + Self.pillHeight + reasonHeight + recentsHeight + Self.gap + block.height * fitScale + Self.gap)
                         .transition(.scale(scale: 0.9, anchor: menuAnchor).combined(with: .opacity))
                 }
             }
-            .compositingGroup()
-            .opacity(shown ? 1 : 0)
-            .animation(reduceMotion ? nil : Self.spring, value: shown)
-            .animation(reduceMotion ? nil : Self.spring, value: choosingEmoji)
+            .animation(reduceMotion ? nil : Self.enter, value: choosingEmoji)
             .gesture(DragGesture(minimumDistance: 30).onEnded { _ in dismiss(nil) })
         }
         .ignoresSafeArea()
-        .onAppear {
-            context.setSourceHidden(true)
-            if reduceMotion { shown = true } else { withAnimation(Self.spring) { shown = true } }
-        }
+        .onAppear(perform: enter)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
             guard let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
                   let screen = (note.object as? UIScreen) ?? UIScreen.main as UIScreen? else { return }
@@ -132,20 +132,52 @@ struct MessageActionsOverlayView: View {
         }
     }
 
+    /// The snapshot already covers the live bubble exactly, so hiding the live one is invisible.
+    /// Then: lift the bubble, and let the blur, pill and menu spring in around it.
+    private func enter() {
+        context.setSourceHidden(true)
+        if reduceMotion { entered = true; return }
+        withAnimation(.spring(duration: 0.18, bounce: 0.35)) { lifted = true }
+        withAnimation(Self.enter) { entered = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            withAnimation(.spring(duration: 0.3, bounce: 0.25)) { lifted = false }
+        }
+    }
+
     /// Reverses the entrance, then removes the controller and shows the live bubble again.
     private func dismiss(_ completion: (() -> Void)?) {
-        if reduceMotion { shown = false } else { withAnimation(Self.spring) { shown = false } }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0 : 0.3)) {
+        if reduceMotion { entered = false } else { withAnimation(Self.leave) { entered = false } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0 : 0.24)) {
             context.setSourceHidden(false)
             finish(completion)
         }
     }
 
+    @ViewBuilder private func backdropView(size: CGSize) -> some View {
+        ZStack {
+            if let backdrop {
+                // Oversize, blur, then clip, so the blur's soft edge falls outside the screen.
+                Image(uiImage: backdrop).resizable()
+                    .frame(width: size.width + 80, height: size.height + 80)
+                    .blur(radius: 18)
+                    .frame(width: size.width, height: size.height)
+                    .clipped()
+            } else {
+                Color(uiColor: .systemBackground)
+            }
+            (colorScheme == .dark ? Color.black.opacity(0.45) : Color.white.opacity(0.35))
+        }
+        .frame(width: size.width, height: size.height)
+    }
+
+    /// The lift grows from the bubble's centre; a fit scale (bubble taller than the screen) keeps the
+    /// outer edge fixed so the group stays against its side of the timeline.
     private func snapshot(_ view: UIView, frame: CGRect, scale: CGFloat, anchor: CGFloat, top: CGFloat) -> some View {
         SnapshotView(view: view)
             .frame(width: frame.width, height: frame.height)
+            .scaleEffect(lifted ? 1.05 : 1, anchor: .center)
             .scaleEffect(scale, anchor: message.isOutgoing ? .topTrailing : .topLeading)
-            .offset(x: frame.minX + (message.isOutgoing ? frame.width * (1 - scale) : 0), y: top + (frame.minY - anchor) * scale)
+            .offset(x: frame.minX, y: top + (frame.minY - anchor) * scale)
     }
 
     private var reactionPill: some View {

@@ -114,7 +114,9 @@ struct ChatListView: View {
             ToolbarItem(placement: .bottomBar) {
                 // Our own fixed glass circle: the bar's automatic shape came out as a capsule on iOS 27.
                 Button { newChatDetent = .medium; showingNewChat = true } label: {
-                    Image(systemName: "square.and.pencil").font(.title3.weight(.medium))
+                    // The pencil tip extends the glyph's box upward, so mathematical centring reads low.
+                    // Nudge so the square, the visual anchor, sits on the circle's centre.
+                    Image(systemName: "square.and.pencil").font(.title3.weight(.medium)).offset(x: 0.5, y: -1.5)
                 }
                 .buttonStyle(CircularGlassButtonStyle(diameter: 50, tinted: false))
                 .accessibilityLabel("New conversation")
