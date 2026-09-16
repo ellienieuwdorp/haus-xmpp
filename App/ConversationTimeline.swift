@@ -542,7 +542,11 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         let reactions = message.reactions.isEmpty ? nil : reactionRow.snapshotView(afterScreenUpdates: false)
         presentActions(MessageActionsContext(message: message, bubble: bubbleSnapshot, bubbleFrame: bubble.convert(bubble.bounds, to: nil),
                                              reactions: reactions, reactionsFrame: reactionRow.convert(reactionRow.bounds, to: nil),
-                                             actions: actions(), react: reactionAction))
+                                             actions: actions(), react: reactionAction,
+                                             setSourceHidden: { [weak self] hidden in
+                                                 self?.bubble.alpha = hidden ? 0 : 1
+                                                 self?.reactionRow.alpha = hidden ? 0 : 1
+                                             }))
     }
 
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {

@@ -21,27 +21,30 @@ struct MessageActionsContext {
     let reactionsFrame: CGRect
     let actions: [MessageAction]
     let react: (String) -> Void
+    /// Hides the live bubble while its snapshot is on screen, so a moved snapshot never shows a twin.
+    let setSourceHidden: (Bool) -> Void
 }
 
 /// Full-screen blur, the bubble at its real size, quick reactions above it and the action list below.
 /// Replaces UIContextMenuInteraction, which cannot host a tappable accessory above its preview.
+/// The controller is presented and dismissed without UIKit animation; the view animates itself so the
+/// bubble starts and ends exactly where the live one is.
 @MainActor
 enum MessageActionsOverlay {
     static func present(from presenter: UIViewController, context: MessageActionsContext) {
         let safeArea = presenter.view.window?.safeAreaInsets ?? .zero
-        let controller = UIHostingController(rootView: MessageActionsOverlayView(context: context, safeArea: safeArea, dismiss: { _ in }))
-        controller.rootView.dismiss = { [weak controller] completion in controller?.dismiss(animated: true, completion: completion) }
+        let controller = UIHostingController(rootView: MessageActionsOverlayView(context: context, safeArea: safeArea, finish: { _ in }))
+        controller.rootView.finish = { [weak controller] completion in controller?.dismiss(animated: false, completion: completion) }
         controller.view.backgroundColor = .clear
         controller.modalPresentationStyle = .overFullScreen
-        controller.modalTransitionStyle = .crossDissolve
-        presenter.present(controller, animated: !UIAccessibility.isReduceMotionEnabled)
+        presenter.present(controller, animated: false)
     }
 }
 
 struct MessageActionsOverlayView: View {
     let context: MessageActionsContext
     let safeArea: UIEdgeInsets
-    var dismiss: ((() -> Void)?) -> Void
+    var finish: ((() -> Void)?) -> Void
     @State private var shown = false
     @State private var choosingEmoji = false
     @State private var keyboardHeight: CGFloat = 0
@@ -51,6 +54,8 @@ struct MessageActionsOverlayView: View {
 
     private static let gap: CGFloat = 14
     private static let pillHeight: CGFloat = 52
+    private static let spring = Animation.spring(duration: 0.34, bounce: 0.18)
+    private var reduceMotion: Bool { UIAccessibility.isReduceMotionEnabled }
     private var message: TimelineMessage { context.message }
     private var tint: Color { Color(uiColor: (AccentTheme(rawValue: accent) ?? .indigo).tint) }
     private var recents: [String] { recentReactions.split(separator: ",").map(String.init).filter { !$0.isEmpty } }
@@ -64,15 +69,22 @@ struct MessageActionsOverlayView: View {
             let block = context.reactions == nil ? context.bubbleFrame : context.bubbleFrame.union(context.reactionsFrame)
             let top = safeArea.top + 8
             let bottom = geo.size.height - max(safeArea.bottom, keyboardHeight) - 8
-            let scale = min(1, max(0.3, (bottom - top - Self.pillHeight - reasonHeight - recentsHeight - menuHeight - 2 * Self.gap) / block.height))
-            let groupHeight = Self.pillHeight + reasonHeight + recentsHeight + Self.gap + block.height * scale + Self.gap + (choosingEmoji ? 0 : menuHeight)
+            let fitScale = min(1, max(0.3, (bottom - top - Self.pillHeight - reasonHeight - recentsHeight - menuHeight - 2 * Self.gap) / block.height))
+            let groupHeight = Self.pillHeight + reasonHeight + recentsHeight + Self.gap + block.height * fitScale + Self.gap + (choosingEmoji ? 0 : menuHeight)
             let groupTop = min(max(top, block.minY - Self.pillHeight - reasonHeight - Self.gap), max(top, bottom - groupHeight))
-            let bubbleTop = groupTop + Self.pillHeight + reasonHeight + recentsHeight + Self.gap
+            // Before and after the transition the bubble sits exactly where the live one is.
+            let scale = shown ? fitScale : 1
+            let bubbleTop = shown ? groupTop + Self.pillHeight + reasonHeight + recentsHeight + Self.gap : block.minY
             let alignment: Alignment = message.isOutgoing ? .trailing : .leading
+            let pillAnchor: UnitPoint = message.isOutgoing ? .bottomTrailing : .bottomLeading
+            let menuAnchor: UnitPoint = message.isOutgoing ? .topTrailing : .topLeading
 
             ZStack(alignment: .topLeading) {
+                // Design: 18 px blur over a light scrim with the timeline still faintly visible. Two ultra-thin
+                // layers blur twice with little tint; a thin/regular material washes the bubbles out.
                 Rectangle().fill(.clear).background(.ultraThinMaterial)
-                Color(uiColor: .systemBackground).opacity(colorScheme == .dark ? 0.45 : 0.35)
+                Rectangle().fill(.clear).background(.ultraThinMaterial)
+                Color(uiColor: .systemBackground).opacity(colorScheme == .dark ? 0.3 : 0.2)
                     .contentShape(Rectangle())
                     .onTapGesture { dismiss(nil) }
                     .accessibilityAddTraits(.isButton).accessibilityLabel("Dismiss")
@@ -85,10 +97,11 @@ struct MessageActionsOverlayView: View {
                     if choosingEmoji, !recents.isEmpty { recentsRow }
                 }
                 .frame(width: geo.size.width - 32, alignment: alignment)
-                .offset(x: 16, y: groupTop)
-                .transition(.scale(scale: 0.9, anchor: message.isOutgoing ? .bottomTrailing : .bottomLeading).combined(with: .opacity))
+                .offset(x: 16, y: shown ? groupTop : block.minY - Self.pillHeight - reasonHeight)
+                .scaleEffect(shown ? 1 : 0.8, anchor: pillAnchor)
+                .opacity(shown ? 1 : 0)
                 snapshot(context.bubble, frame: context.bubbleFrame, scale: scale, anchor: block.minY, top: bubbleTop)
-                    .shadow(color: .black.opacity(0.18), radius: 14, y: 12)
+                    .shadow(color: .black.opacity(shown ? 0.18 : 0), radius: 14, y: 12)
                 if let reactions = context.reactions {
                     snapshot(reactions, frame: context.reactionsFrame, scale: scale, anchor: block.minY, top: bubbleTop)
                 }
@@ -96,17 +109,35 @@ struct MessageActionsOverlayView: View {
                     menu
                         .frame(width: geo.size.width - 32, alignment: alignment)
                         .offset(x: 16, y: bubbleTop + block.height * scale + Self.gap)
-                        .transition(.scale(scale: 0.9, anchor: message.isOutgoing ? .topTrailing : .topLeading).combined(with: .opacity))
+                        .scaleEffect(shown ? 1 : 0.8, anchor: menuAnchor)
+                        .opacity(shown ? 1 : 0)
+                        .transition(.scale(scale: 0.9, anchor: menuAnchor).combined(with: .opacity))
                 }
             }
-            .animation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(duration: 0.3), value: choosingEmoji)
+            .compositingGroup()
+            .opacity(shown ? 1 : 0)
+            .animation(reduceMotion ? nil : Self.spring, value: shown)
+            .animation(reduceMotion ? nil : Self.spring, value: choosingEmoji)
             .gesture(DragGesture(minimumDistance: 30).onEnded { _ in dismiss(nil) })
         }
         .ignoresSafeArea()
+        .onAppear {
+            context.setSourceHidden(true)
+            if reduceMotion { shown = true } else { withAnimation(Self.spring) { shown = true } }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
             guard let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
                   let screen = (note.object as? UIScreen) ?? UIScreen.main as UIScreen? else { return }
             keyboardHeight = max(0, screen.bounds.height - frame.minY)
+        }
+    }
+
+    /// Reverses the entrance, then removes the controller and shows the live bubble again.
+    private func dismiss(_ completion: (() -> Void)?) {
+        if reduceMotion { shown = false } else { withAnimation(Self.spring) { shown = false } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0 : 0.3)) {
+            context.setSourceHidden(false)
+            finish(completion)
         }
     }
 

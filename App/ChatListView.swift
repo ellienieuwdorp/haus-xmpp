@@ -112,15 +112,16 @@ struct ChatListView: View {
             DefaultToolbarItem(kind: .search, placement: .bottomBar)
             ToolbarSpacer(.flexible, placement: .bottomBar)
             ToolbarItem(placement: .bottomBar) {
-                // Let the bottom bar size the glyph; a declared circle keeps it round on iOS 26 and 27.
+                // Our own fixed glass circle: the bar's automatic shape came out as a capsule on iOS 27.
                 Button { newChatDetent = .medium; showingNewChat = true } label: {
                     Image(systemName: "square.and.pencil").font(.title3.weight(.medium))
                 }
-                .buttonBorderShape(.circle)
+                .buttonStyle(CircularGlassButtonStyle(diameter: 50, tinted: false))
                 .accessibilityLabel("New conversation")
                 .accessibilityIdentifier("newConversation")
                 .disabled(model.accountID.isEmpty)
             }
+            .sharedBackgroundVisibility(.hidden)
         }
         .navigationDestination(for: ChatRoute.self) { route in
             switch route {
@@ -145,6 +146,23 @@ struct ChatListView: View {
         recipientTerm.contains("@") && !sortedChats.contains { $0.id.caseInsensitiveCompare(recipientTerm) == .orderedSame }
     }
 
+    private var startChatRow: some View {
+        Button {
+            let address = recipientTerm
+            Task { if await model.createChat(address) { openFromSheet(address) } }
+        } label: {
+            Label {
+                Text("Start chat with \(recipientTerm)").foregroundStyle(.primary).lineLimit(1)
+            } icon: {
+                Image(systemName: "plus.message.fill")
+                    .foregroundStyle(Color(uiColor: AccentTheme.current.tint))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("startChat")
+    }
+
     private func openFromSheet(_ chatID: String) {
         showingNewChat = false
         recipient = ""
@@ -154,20 +172,18 @@ struct ChatListView: View {
     private var newChatSheet: some View {
         NavigationStack {
             List {
+                // An input row, not a search field: it filters Suggested and, given an address, starts a chat right below.
                 Section {
-                    HStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        Image(systemName: "at").foregroundStyle(.secondary)
                         TextField("Name or address", text: $recipient)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                             .keyboardType(.emailAddress)
                             .accessibilityIdentifier("newChatAddress")
                     }
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 44)
-                    .background(Color(.tertiarySystemFill), in: Capsule())
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                    .listRowSeparator(.hidden)
+                    if offersNewAddress {
+                        startChatRow
+                    }
                 }
                 Section {
                     NavigationLink {
@@ -186,25 +202,8 @@ struct ChatListView: View {
                     .disabled(!model.session.isReady)
                     .accessibilityIdentifier("newGroup")
                 }
-                if offersNewAddress || !suggestedChats.isEmpty {
+                if !suggestedChats.isEmpty {
                     Section("Suggested") {
-                        if offersNewAddress {
-                            Button {
-                                let address = recipientTerm
-                                Task { if await model.createChat(address) { openFromSheet(address) } }
-                            } label: {
-                                Label {
-                                    Text("Start chat with \(recipientTerm)").foregroundStyle(.primary).lineLimit(1)
-                                } icon: {
-                                    Image(systemName: "plus.message")
-                                        .foregroundStyle(Color(uiColor: AccentTheme.current.tint))
-                                        .frame(width: 40, height: 40)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("startChat")
-                        }
                         ForEach(suggestedChats) { chat in
                             Button { openFromSheet(chat.id) } label: {
                                 HStack(spacing: 12) {
