@@ -4,7 +4,7 @@ import XMPPProtocol
 
 /// One list of what a message can do. The long-press overlay and VoiceOver custom actions both read it.
 struct MessageAction: Identifiable {
-    enum Kind: String { case reply, copy, selectText, star, retry }
+    enum Kind: String { case reply, copy, selectText, star, retry, edit, unsend }
     let kind: Kind
     let title: String
     let symbol: String
@@ -225,9 +225,9 @@ struct MessageActionsOverlayView: View {
             ForEach(context.actions) { action in
                 Button { dismiss(action.perform) } label: {
                     HStack {
-                        Text(action.title).font(.body).foregroundStyle(.primary)
+                        Text(action.title).font(.body).foregroundStyle(action.kind == .unsend ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
                         Spacer(minLength: 12)
-                        Image(systemName: action.symbol).font(.body).foregroundStyle(.primary)
+                        Image(systemName: action.symbol).font(.body).foregroundStyle(action.kind == .unsend ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
                     }
                     .padding(.horizontal, 16).frame(minHeight: 44)
                     .contentShape(Rectangle())
