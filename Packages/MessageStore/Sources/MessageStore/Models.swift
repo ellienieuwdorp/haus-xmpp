@@ -40,6 +40,8 @@ public struct StoredChat: Identifiable, Equatable, Sendable {
     public let title: String
     public let isPinned: Bool
     public let lastMessage: StoredMessage?
+    /// SHA-1 of the verified avatar bytes on disk; nil when none is known.
+    public var avatarHash: String? = nil
 }
 
 public enum MessageStoreError: Error, Equatable, Sendable {

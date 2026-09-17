@@ -63,6 +63,7 @@ import XMPPProtocol
                     timeout.cancel()
                     return
                 }
+            case .avatarMetadata(let owner, let metadata): print("AVATAR \(owner) \(metadata?.id ?? "removed")")
             case .encryptedMessage, .omemoDevices, .encryptionFailure, .streamAcknowledged: break
             case .state, .encryptedGroupMessage, .groupPresence, .reaction: break
             case .message(let message):
@@ -146,6 +147,7 @@ import XMPPProtocol
                 _ = try await client.sendMessage(to: to, body: answer, id: replyID,
                                                  reply: XMPPReply(id: sourceID, to: message.from, body: source))
             case .state(.disconnected): throw XMPPClientError.connectionClosed
+            case .avatarMetadata(let owner, let metadata): print("AVATAR \(owner) \(metadata?.id ?? "removed")")
             case .encryptedMessage, .omemoDevices, .encryptionFailure, .streamAcknowledged: break
             case .state, .encryptedGroupMessage, .groupPresence, .reaction: break
             }

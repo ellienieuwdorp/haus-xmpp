@@ -11,10 +11,13 @@ public struct NotificationPreview: Sendable, Equatable {
     public let hasNewMessage: Bool
     public let includesMessageText: Bool
     public let destination: NotificationDestination?
+    /// The single conversation's verified avatar hash, shown only when the text preview is.
+    public let avatarHash: String?
 
     public init(_ batch: MessageNotification) {
         hasNewMessage = batch.messageCount > 0 && batch.latest != nil
         includesMessageText = hasNewMessage && batch.previewsEnabled && batch.conversationCount == 1
+        avatarHash = includesMessageText ? batch.chatAvatarHash : nil
         destination = hasNewMessage && batch.conversationCount == 1
             ? batch.latest.flatMap { NotificationDestination(accountID: $0.accountID, messageID: $0.id) } : nil
         guard hasNewMessage, let latest = batch.latest else {

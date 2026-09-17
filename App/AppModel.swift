@@ -14,6 +14,7 @@ struct ChatSummary: Identifiable {
     let title: String
     let preview: String
     let isPinned: Bool
+    var avatarHash: String? = nil
     var lastMessageAt: Date? = nil
     var lastMessageIsOutgoing = false
     var lastMessageState: OutgoingTransportState? = nil
@@ -32,6 +33,11 @@ final class AppModel {
     private(set) var messageReactions: [String: [AuthenticatedReaction]] = [:]
     private(set) var groupChats: [String: GroupChatState] = [:]
     private(set) var reactableGroupMessages: Set<String> = []
+    /// Verified avatar thumbnails by chat address, plus the account's own under its address.
+    private(set) var avatars: [String: UIImage] = [:]
+    /// Addresses whose avatar was checked on this session; a PEP notify clears its entry.
+    @ObservationIgnored private var avatarChecked: Set<String> = []
+    @ObservationIgnored private var storageRoot: URL?
     private(set) var accountID = ""
     /// The only connection state views read. Chat trust is derived from stored devices, not from this.
     private(set) var session: SessionState = .offline(reason: nil)
@@ -117,6 +123,7 @@ final class AppModel {
         pathMonitor.start(queue: .global(qos: .utility))
         do {
             let directory = try await SharedStorage.directory(testSessionID: testSessionID, migrate: true)
+            storageRoot = directory
             store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
             if let store {
                 outboxSender = OutboxSender(store: store)
@@ -581,6 +588,8 @@ final class AppModel {
         accountID = account
         groupChats = [:]
         reactableGroupMessages = []
+        avatars = [:]
+        avatarChecked = []
         chats = []
         messages = []
         messageReactions = [:]
@@ -636,6 +645,8 @@ final class AppModel {
                         guard generation == token else { return }
                         startOutbox()
                         if let openChatID { await loadEncryptionDetails(for: openChatID) }
+                        avatarChecked = []
+                        await loadAvatar(for: account)
                     } catch {
                         guard generation == token else { return }
                         let detail: String
@@ -699,6 +710,10 @@ final class AppModel {
             if let openChatID, owner == openChatID || owner == accountID || groupChats[openChatID]?.members.contains(owner) == true {
                 await loadEncryptionDetails(for: openChatID)
             }
+        case .avatarMetadata(let owner, _):
+            // The server pushed a change; re-fetch through the one lazy path so the hash check applies.
+            avatarChecked.remove(owner)
+            if owner == account || chats.contains(where: { $0.id == owner }) { await loadAvatar(for: owner) }
         case .encryptionFailure:
             encryptionStatus = "An encrypted message could not be opened"
         case .streamAcknowledged:
@@ -712,6 +727,64 @@ final class AppModel {
     }
 
     func isGroup(_ chatID: String) -> Bool { groupChats[chatID] != nil }
+
+    /// Lazily checks one contact's avatar (or the account's own when `chatID == accountID`) once per
+    /// session: XEP-0084 metadata, the bytes only when the hash changed, vCard when PEP has nothing.
+    /// Bytes are hash-verified by the client and decoded within a pixel budget before anything shows.
+    func loadAvatar(for chatID: String) async {
+        guard !isDemo, !isGroup(chatID), session.isReady, let client, let store, let storageRoot,
+              !avatarChecked.contains(chatID) else { return }
+        let account = accountID
+        let token = generation
+        avatarChecked.insert(chatID)
+        let stored = chatID == account ? preferences.string(forKey: "avatar.\(account)") : chats.first { $0.id == chatID }?.avatarHash
+        do {
+            var hash: String?
+            var fetched: (hash: String, data: Data)?
+            do {
+                if let metadata = try await client.fetchAvatarMetadata(for: chatID) {
+                    hash = metadata.id
+                    if metadata.id != stored { fetched = (metadata.id, try await client.fetchAvatarData(for: chatID, id: metadata.id)) }
+                }
+            } catch XMPPIQError.stanza {
+                // No PEP node, no PEP at all, or a presence-gated node we may not read: XEP-0153 vCard
+                // (servers mirror PEP avatars into it, XEP-0398) is the one place left to look.
+                if let photo = try await client.fetchVCardPhoto(for: chatID) {
+                    hash = photo.id
+                    if photo.id != stored { fetched = (photo.id, photo.data) }
+                }
+            }
+            guard generation == token, accountID == account else { return }
+            if let fetched {
+                try AvatarStore.save(fetched.data, root: storageRoot, account: account, hash: fetched.hash)
+                if let image = AvatarStore.image(root: storageRoot, account: account, hash: fetched.hash) {
+                    avatars[chatID] = image
+                } else {
+                    try? FileManager.default.removeItem(at: AvatarStore.url(root: storageRoot, account: account, hash: fetched.hash))
+                    hash = nil
+                }
+            }
+            if hash == nil { avatars[chatID] = nil }
+            if chatID == account { preferences.set(hash, forKey: "avatar.\(account)") }
+            else if hash != stored { try await store.setAvatarHash(accountID: account, chatID: chatID, hash: hash) }
+        } catch XMPPIQError.requestLimit {
+            avatarChecked.remove(chatID) // the row's next appearance retries once the IQ window has room
+        } catch {
+            // Keep whatever is stored; a failed fetch is not a removed avatar.
+        }
+    }
+
+    /// Thumbnails for stored hashes not yet in memory, e.g. after launch or an account switch.
+    private func loadStoredAvatars(_ stored: [StoredChat]) {
+        guard let storageRoot else { return }
+        let account = accountID
+        var wanted = stored.compactMap { chat in chat.avatarHash.map { (chat.id, $0) } }
+        if let own = preferences.string(forKey: "avatar.\(account)") { wanted.append((account, own)) }
+        // ponytail: decoded on the main actor; the files are ≤512 KiB and become 256 px thumbnails. Move off-main if the list ever stutters.
+        for (id, hash) in wanted where avatars[id] == nil {
+            avatars[id] = AvatarStore.image(root: storageRoot, account: account, hash: hash)
+        }
+    }
     func canSend(to chatID: String) -> Bool {
         guard isGroup(chatID) else { return true }
         return isConnected && encryptionReady && groupChats[chatID]?.joined == true
@@ -1242,9 +1315,10 @@ final class AppModel {
                 groupChats[room] = value
             }
             let known = Set(storedChats.map(\.id))
+            loadStoredAvatars(storedChats)
             let reviewPreview = "Encrypted message needs attention"
             chats = storedChats.map { ChatSummary(id: $0.id, title: $0.title,
-                preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage?.body ?? ""), isPinned: $0.isPinned,
+                preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage?.body ?? ""), isPinned: $0.isPinned, avatarHash: $0.avatarHash,
                 lastMessageAt: $0.lastMessage?.sentAt, lastMessageIsOutgoing: $0.lastMessage?.isOutgoing ?? false,
                 lastMessageState: $0.lastMessage?.transportState) }
             chats += pending.keys.filter { !known.contains($0) }.sorted().map {

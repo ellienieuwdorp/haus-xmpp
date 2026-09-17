@@ -13,6 +13,7 @@
 		1048A0DA5C55818F6E908F4C /* GroupDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29D0F7FE889C5ECA318C15DC /* GroupDetailsView.swift */; };
 		10D4A99046FBA70E9DA9374C /* PushUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458E132229BD40D81BDBBF78 /* PushUITests.swift */; };
 		14259EDA76E8B6B4C53D4E92 /* CircularGlassButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60CDCE362B275821D181D99A /* CircularGlassButtonStyle.swift */; };
+		16CFD5F0889F8CBB5F4EAD7B /* AvatarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B384057910D0B7F09E667C4 /* AvatarStore.swift */; };
 		17A325600E79D8A8156382ED /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B83163D7B25E749804F80AF /* ConversationView.swift */; };
 		1EA8019F74322EBE45220E3C /* EncryptionKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 703EFFBB4A4E0FF89DDD9B2A /* EncryptionKeychain.swift */; };
 		1EEF6DDECCEA1FBA9B0A2FAF /* OutboxUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAC07EFB739E1EFD8DF0DCA3 /* OutboxUITests.swift */; };
@@ -51,6 +52,7 @@
 		8EAA0FEA4C802F4E5C6AE385 /* OMEMO in Frameworks */ = {isa = PBXBuildFile; productRef = BBB3036FB6B2351360EF2939 /* OMEMO */; };
 		8FB4D40A8733E90C432DF781 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = F001BEFD4DDC53B7961876FE /* README.md */; };
 		91E5E2C6F61406E3B3C48C8A /* SharedStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 131E8E6FF67B20A245542D39 /* SharedStorageTests.swift */; };
+		B273AAD1EDB231D66D44C0A1 /* AvatarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B384057910D0B7F09E667C4 /* AvatarStore.swift */; };
 		B37B871F7D7642ED3049C072 /* NotificationAccessGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D64D2C443130E517FB4227F /* NotificationAccessGate.swift */; };
 		B9295B0FF8C5639FCD26A317 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = 97379906848496F5DE6ECB98 /* MessageStore */; };
 		BA48F0DF4A1A5455A042F055 /* NotificationAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A7EFE21E5ABA53391725448 /* NotificationAccount.swift */; };
@@ -134,6 +136,7 @@
 		40EBA5FA15B66AEBE4033B4B /* ReactionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReactionUITests.swift; sourceTree = "<group>"; };
 		42CFC68CD43A67165491DDB9 /* UITestStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestStorage.swift; sourceTree = "<group>"; };
 		458E132229BD40D81BDBBF78 /* PushUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushUITests.swift; sourceTree = "<group>"; };
+		4B384057910D0B7F09E667C4 /* AvatarStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarStore.swift; sourceTree = "<group>"; };
 		60CDCE362B275821D181D99A /* CircularGlassButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircularGlassButtonStyle.swift; sourceTree = "<group>"; };
 		672F8EB6B8BC64098369E462 /* LabConnectionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabConnectionUITests.swift; sourceTree = "<group>"; };
 		6A7EFE21E5ABA53391725448 /* NotificationAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationAccount.swift; sourceTree = "<group>"; };
@@ -226,6 +229,7 @@
 		1F815F47EFBBCCDB1AC51F7A /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				4B384057910D0B7F09E667C4 /* AvatarStore.swift */,
 				703EFFBB4A4E0FF89DDD9B2A /* EncryptionKeychain.swift */,
 				0D64D2C443130E517FB4227F /* NotificationAccessGate.swift */,
 				6A7EFE21E5ABA53391725448 /* NotificationAccount.swift */,
@@ -489,6 +493,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B273AAD1EDB231D66D44C0A1 /* AvatarStore.swift in Sources */,
 				F920C61454333DD0B5C72DD0 /* EncryptionKeychain.swift in Sources */,
 				790E75EB8C82D4041832860D /* NotificationAccessGate.swift in Sources */,
 				BA48F0DF4A1A5455A042F055 /* NotificationAccount.swift in Sources */,
@@ -504,6 +509,7 @@
 			files = (
 				FC4281063E554402B9A2C568 /* AppModel.swift in Sources */,
 				2FFE952C53400F76AED4A8D2 /* AppearanceView.swift in Sources */,
+				16CFD5F0889F8CBB5F4EAD7B /* AvatarStore.swift in Sources */,
 				606006C350363E0A14B82A19 /* ChatDetailsView.swift in Sources */,
 				E57C443B766B4EB72095CE81 /* ChatListView.swift in Sources */,
 				14259EDA76E8B6B4C53D4E92 /* CircularGlassButtonStyle.swift in Sources */,

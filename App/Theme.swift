@@ -46,6 +46,37 @@ enum AccentTheme: String, CaseIterable, Identifiable {
     var swatch: Color { Color(uiColor: bubble) }
 }
 
+/// The one avatar circle: a verified image when the contact has one, otherwise their initial in a
+/// hue keyed by address (`key`) so the same chat looks the same in every screen.
+struct ChatAvatar: View {
+    let key: String
+    let name: String
+    var image: UIImage? = nil
+    var isGroup = false
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                Circle().fill(key.isEmpty ? Color(.systemGray3) : Color(uiColor: AvatarPalette.color(for: key)))
+                if isGroup {
+                    Image(systemName: "person.2.fill").font(.system(size: size * 0.42, weight: .medium))
+                } else if let initial = name.first {
+                    Text(String(initial).uppercased()).font(.system(size: size * 0.42, weight: .semibold))
+                } else {
+                    Image(systemName: "person.fill").font(.system(size: size * 0.42))
+                }
+            }
+        }
+        .foregroundStyle(.white)
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .accessibilityHidden(true)
+    }
+}
+
 /// Stable per-name avatar colour so a contact keeps its hue across launches.
 enum AvatarPalette {
     static let colors: [UIColor] = [

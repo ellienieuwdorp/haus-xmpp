@@ -63,7 +63,7 @@ public actor InboundProcessor {
             do { try await client.acknowledgeInbound(token) }
             catch { await client.disconnect(); throw error }
             return .acknowledged
-        case .state, .message, .groupPresence, .omemoDevices, .encryptionFailure, .streamAcknowledged:
+        case .state, .message, .groupPresence, .omemoDevices, .avatarMetadata, .encryptionFailure, .streamAcknowledged:
             return .ignored
         }
     }

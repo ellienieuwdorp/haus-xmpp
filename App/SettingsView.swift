@@ -84,16 +84,7 @@ struct SettingsView: View {
 
     private var profileCard: some View {
         HStack(spacing: 14) {
-            Circle()
-                .fill(Color(uiColor: model.accountID.isEmpty ? .systemGray3 : AvatarPalette.color(for: model.accountID)))
-                .frame(width: 60, height: 60)
-                .overlay {
-                    if let initial = localPart.first {
-                        Text(String(initial).uppercased()).font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
-                    } else {
-                        Image(systemName: "person.fill").font(.system(size: 26)).foregroundStyle(.white)
-                    }
-                }
+            ChatAvatar(key: model.accountID, name: localPart, image: model.avatars[model.accountID], size: 60)
             VStack(alignment: .leading, spacing: 2) {
                 Text(localPart.isEmpty ? "Not signed in" : localPart).font(.title3.weight(.bold))
                 if !model.accountID.isEmpty {
