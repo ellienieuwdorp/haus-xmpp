@@ -184,6 +184,9 @@ extension OMEMOService {
             reaction = AuthenticatedReaction(id: content.originID ?? digest, chatID: message.room, actorID: message.sender,
                 targetWireID: update.targetWireID, reactions: update.reactions,
                 updatedAt: min(content.timestamp ?? retained.sentAt, Date()))
+        } else if content.retraction != nil {
+            // ponytail: group retract/edit is not projected yet; commit the ratchet, show nothing.
+            stored = nil; reaction = nil
         } else {
             guard !content.body.isEmpty else { throw OMEMOError.invalidContent }
             stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: message.room, senderID: message.sender,

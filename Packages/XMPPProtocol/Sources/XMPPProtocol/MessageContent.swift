@@ -24,10 +24,17 @@ public struct MessageContent: Sendable, Equatable {
     public var body: String
     public var reply: Reply?
     public var reaction: Reaction?
+    /// XEP-0424: wire identity of an own message to unsend. Carries no other content; the
+    /// fallback body is emitted by the encoder and dropped by the decoder.
+    public var retraction: String?
+    /// XEP-0308: wire identity of the own message this body replaces.
+    public var correction: String?
     public var originID: String?
 
-    public init(body: String, reply: Reply? = nil, reaction: Reaction? = nil, originID: String? = nil) {
-        self.body = body; self.reply = reply; self.reaction = reaction; self.originID = originID
+    public static let retractionFallback = "This person attempted to retract a previous message, but it's unsupported by your client."
+
+    public init(body: String, reply: Reply? = nil, reaction: Reaction? = nil, retraction: String? = nil, correction: String? = nil, originID: String? = nil) {
+        self.body = body; self.reply = reply; self.reaction = reaction; self.retraction = retraction; self.correction = correction; self.originID = originID
     }
 
     /// The full `<body>` text, quote included.
@@ -37,9 +44,17 @@ public struct MessageContent: Sendable, Equatable {
     public static let maximumReactionCount = 12
 
     public func xml() throws -> String {
-        guard Self.validXMLText(body), (!body.isEmpty || reaction != nil),
-              originID.map(Self.validIdentifier) ?? true else { throw XMPPClientError.invalidConfiguration }
+        guard Self.validXMLText(body), (!body.isEmpty || reaction != nil || retraction != nil),
+              originID.map(Self.validIdentifier) ?? true,
+              retraction.map(Self.validIdentifier) ?? true, correction.map(Self.validIdentifier) ?? true,
+              retraction == nil || (body.isEmpty && reply == nil && reaction == nil && correction == nil),
+              correction == nil || !body.isEmpty else { throw XMPPClientError.invalidConfiguration }
         var xml = ""
+        if let retraction {
+            xml += "<retract xmlns='urn:xmpp:message-retract:1' id='\(xmlEscaped(retraction))'/>"
+            xml += "<fallback xmlns='urn:xmpp:fallback:0' for='urn:xmpp:message-retract:1'/><body xmlns='jabber:client'>\(xmlEscaped(Self.retractionFallback))</body>"
+        }
+        if let correction { xml += "<replace xmlns='urn:xmpp:message-correct:0' id='\(xmlEscaped(correction))'/>" }
         if let reply {
             guard reply.id.map(Self.validIdentifier) ?? true, Self.validAddress(reply.to),
                   !reply.quote.isEmpty, Self.validXMLText(reply.quote) else { throw XMPPClientError.invalidConfiguration }
@@ -110,7 +125,25 @@ public struct MessageContent: Sendable, Equatable {
                 }
             }
         }
-        return MessageContent(body: body, reply: reply, reaction: reaction, originID: originID)
+        // A retraction is the whole message: its fallback body is never shown, and any other
+        // content next to it is a contradiction (tampering when authenticated, dropped otherwise).
+        let retracts = node.children("retract", namespace: "urn:xmpp:message-retract:1")
+        var retraction: String?
+        if retracts.count > 1 { try ambiguous() }
+        else if let retract = retracts.first {
+            if let id = retract.attributes["id"], validIdentifier(id), retract.children.isEmpty { retraction = id } else { try ambiguous() }
+        }
+        let replaces = node.children("replace", namespace: "urn:xmpp:message-correct:0")
+        var correction: String?
+        if replaces.count > 1 { try ambiguous() }
+        else if let replace = replaces.first {
+            if let id = replace.attributes["id"], validIdentifier(id), replace.children.isEmpty, !body.isEmpty { correction = id } else { try ambiguous() }
+        }
+        if retraction != nil {
+            if reaction != nil || correction != nil { try ambiguous() }
+            body = ""; reply = nil; reaction = nil; correction = nil
+        }
+        return MessageContent(body: body, reply: reply, reaction: reaction, retraction: retraction, correction: correction, originID: originID)
     }
 
     /// Complete set, deduplicated and sorted, so equal intentions produce equal bytes.

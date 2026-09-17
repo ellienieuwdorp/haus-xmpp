@@ -437,30 +437,64 @@ public actor OMEMOService {
         return update.id
     }
 
-    /// Every update the drain may claim now: direct reactions sealed here (plain wire for legacy
-    /// peers, envelope for modern ones); key transports are sealed when they are created.
+    /// Unsend one of our own messages (XEP-0424). Modern peers get it inside the envelope; legacy
+    /// peers a plain stanza, exactly like reactions. Projected immediately, sent through the outbox.
+    @discardableResult
+    public func queueRetraction(account: String, chatID: String, messageID: String) async throws -> String {
+        try await gate.run { try await self.queueMessageUpdateLocked(account: account, chatID: chatID, messageID: messageID, kind: .retraction, body: "") }
+    }
+
+    /// Rewrite one of our own messages (XEP-0308). The new body is encrypted for every peer; for
+    /// legacy peers the reference travels outside the ciphertext, bound like a legacy reaction.
+    @discardableResult
+    public func queueCorrection(account: String, chatID: String, messageID: String, body: String) async throws -> String {
+        try await gate.run { try await self.queueMessageUpdateLocked(account: account, chatID: chatID, messageID: messageID, kind: .correction, body: body) }
+    }
+
+    private func queueMessageUpdateLocked(account: String, chatID: String, messageID: String, kind: StoredUpdate.Kind, body: String) async throws -> String {
+        let (_, state) = try await load(account)
+        // ponytail: direct chats only; rooms need the group envelope path and a real-JID actor rule.
+        guard state.groupRooms[chatID] == nil, let profile = state.profiles[chatID],
+              let target = try await store.message(accountID: account, messageID: messageID),
+              target.chatID == chatID, target.isOutgoing, target.senderID == account, let wireID = target.wireID,
+              profile == .legacy || (target.encryptionProfile == XMPPOMEMOProfile.modern.rawValue && target.wireIDAuthenticated),
+              try await store.reactionTarget(accountID: account, chatID: chatID, wireID: wireID)?.id == target.id
+        else { throw OMEMOError.unsupportedMessageUpdate }
+        let id = UUID().uuidString
+        _ = try await store.enqueueMessageUpdate(accountID: account, id: id, kind: kind, chatID: chatID, targetMessageID: messageID, body: body)
+        return id
+    }
+
+    /// Every update the drain may claim now: direct reactions, retractions and corrections sealed here
+    /// (plain wire for legacy peers, envelope for modern ones); key transports are sealed when they are created.
     public func prepareAvailableUpdates(account: String, transport: any OMEMOTransport) async throws -> EncryptionPreparation {
         try await gate.run { try await self.prepareUpdatesLocked(account: account, transport: transport) }
     }
 
     private func prepareUpdatesLocked(account: String, transport: any OMEMOTransport) async throws -> EncryptionPreparation {
-        let queued = try await store.queuedReactions(accountID: account)
+        let queued = try await store.queuedUpdates(accountID: account, kind: .reaction)
+            + store.queuedUpdates(accountID: account, kind: .retraction) + store.queuedUpdates(accountID: account, kind: .correction)
         var ready = Set(try await store.queuedUpdates(accountID: account, kind: .keyTransport).map(\.id)), blocked: [String: String] = [:]
         var failure: OMEMOError?
         for update in queued {
             do {
                 try Task.checkCancellation()
+                guard let targetWireID = update.targetWireID else { throw OMEMOError.invalidContent }
                 let (_, selected) = try await load(account)
                 if selected.groupRooms[update.chatID] != nil { continue }
-                if selected.profiles[update.chatID] == .legacy {
-                    // Legacy peers (Conversations) only speak unencrypted XEP-0444; the exact stanza is the wire.
-                    let stanza = try XMPPClient.reactionXML(to: update.chatID, targetID: update.targetWireID, reactions: update.reactions, id: update.id)
+                let legacy = selected.profiles[update.chatID] == .legacy
+                if legacy, update.kind != .correction {
+                    // Legacy peers (Conversations) only speak unencrypted XEP-0444/0424; the exact stanza is the wire.
+                    let stanza = update.kind == .reaction
+                        ? try XMPPClient.reactionXML(to: update.chatID, targetID: targetWireID, reactions: try reactions(of: update), id: update.id)
+                        : try XMPPClient.retractionXML(to: update.chatID, targetID: targetWireID, id: update.id)
                     try await store.sealQueuedUpdate(accountID: account, updateID: update.id, wire: Data(stanza.utf8))
                     ready.insert(update.id)
                     continue
                 }
-                guard selected.profiles[update.chatID] == .modern else { throw OMEMOError.unsupportedEncryptedReactions }
-                let overview = try await refreshLocked(account: account, peer: update.chatID, profile: .modern,
+                let profile: XMPPOMEMOProfile = legacy ? .legacy : .modern
+                guard selected.profiles[update.chatID] == profile else { throw update.kind == .reaction ? OMEMOError.unsupportedEncryptedReactions : .unsupportedMessageUpdate }
+                let overview = try await refreshLocked(account: account, peer: update.chatID, profile: profile,
                                                        transport: transport, updateSelection: false)
                 guard !overview.hasIncompatibleDevices else { throw OMEMOError.unsupportedProfile }
                 if let wire = try await store.updateWire(accountID: account, updateID: update.id) {
@@ -470,10 +504,20 @@ public actor OMEMOService {
                 } else {
                     let (revision, old) = try await load(account)
                     var state = old
-                    let plaintext = try EncryptedContent.encodeReaction(targetWireID: update.targetWireID,
-                                                                         reactions: update.reactions, sender: account,
-                                                                         recipient: update.chatID, originID: update.id, modern: true)
-                    let saved = try sealContent(plaintext, account: account, peer: update.chatID, profile: .modern, state: &state)
+                    let plaintext: Data
+                    switch update.kind {
+                    case .reaction:
+                        plaintext = try EncryptedContent.encodeReaction(targetWireID: targetWireID, reactions: try reactions(of: update), sender: account,
+                                                                        recipient: update.chatID, originID: update.id, modern: true)
+                    case .retraction:
+                        plaintext = try EncryptedContent.encodeRetraction(targetWireID: targetWireID, sender: account, recipient: update.chatID, originID: update.id, modern: true)
+                    case .correction:
+                        guard let body = update.payload.flatMap(MessageEvent.correctionBody) else { throw OMEMOError.invalidContent }
+                        plaintext = try EncryptedContent.encode(body: body, reply: nil, sender: account, recipient: update.chatID,
+                                                                modern: !legacy, originID: update.id, correction: targetWireID)
+                    case .keyTransport: throw OMEMOError.invalidContent
+                    }
+                    let saved = try sealContent(plaintext, account: account, peer: update.chatID, profile: profile, state: &state)
                     try await store.sealQueuedUpdate(accountID: account, updateID: update.id, expectedRevision: revision,
                                                      state: encode(state, account: account), wire: JSONEncoder().encode(saved))
                 }
@@ -481,10 +525,15 @@ public actor OMEMOService {
             } catch {
                 if error is CancellationError { throw error }
                 if failure == nil { failure = (error as? OMEMOError) ?? .unavailable }
-                blocked[update.chatID] = (error as? OMEMOError)?.errorDescription ?? "The private reaction remains queued."
+                blocked[update.chatID] = (error as? OMEMOError)?.errorDescription ?? "The private update remains queued."
             }
         }
         return EncryptionPreparation(messageIDs: ready, blockedChats: blocked, failure: failure)
+    }
+
+    private func reactions(of update: StoredUpdate) throws -> [String] {
+        guard let payload = update.payload, let values = try? JSONDecoder().decode([String].self, from: Data(payload.utf8)) else { throw OMEMOError.invalidContent }
+        return values
     }
 
     /// SM may retransmit a journaled stanza only when it is exactly one durable outgoing row of ours:
@@ -492,16 +541,17 @@ public actor OMEMOService {
     /// Anything else (unknown IDs, forged recipients, group ciphertext, drifted trust) refuses resumption.
     public func canReplay(account: String, xml: String) async throws -> Bool {
         guard let message = try? XMPPClient.decodeOutgoingEncryptedMessageXML(xml, from: account) else {
-            guard let reaction = XMPPClient.decodeOutgoingReactionXML(xml, from: account),
-                  let update = try await store.update(accountID: account, updateID: reaction.id), update.chatID == bare(reaction.to ?? ""),
-                  let wire = try await store.updateWire(accountID: account, updateID: reaction.id) else { return false }
+            let plain: (id: String, to: String?)? = XMPPClient.decodeOutgoingReactionXML(xml, from: account).map { ($0.id, $0.to) }
+                ?? XMPPClient.decodeOutgoingRetractionXML(xml, from: account).map { ($0.id, $0.to) }
+            guard let plain, let update = try await store.update(accountID: account, updateID: plain.id), update.chatID == bare(plain.to ?? ""),
+                  let wire = try await store.updateWire(accountID: account, updateID: plain.id) else { return false }
             return wire == Data(xml.utf8)
         }
         guard let recipient = message.to else { return false }
-        return try await canReplayEncrypted(account: account, messageID: message.id, recipient: recipient, envelope: message.envelope)
+        return try await canReplayEncrypted(account: account, messageID: message.id, recipient: recipient, envelope: message.envelope, replaces: message.replaces)
     }
 
-    private func canReplayEncrypted(account: String, messageID: String, recipient: String, envelope: XMPPOMEMOEnvelope) async throws -> Bool {
+    private func canReplayEncrypted(account: String, messageID: String, recipient: String, envelope: XMPPOMEMOEnvelope, replaces: String? = nil) async throws -> Bool {
         if let wire = try await store.encryptedOutgoing(accountID: account, messageID: messageID) {
             guard let saved = try? JSONDecoder().decode(PreparedEnvelope.self, from: wire), saved.groupMembers == nil,
                   let intention = try await store.message(accountID: account, messageID: messageID),
@@ -513,10 +563,11 @@ public actor OMEMOService {
         guard let update = try await store.update(accountID: account, updateID: messageID), update.chatID == bare(recipient),
               let wire = try await store.updateWire(accountID: account, updateID: messageID) else { return false }
         switch update.kind {
-        case .reaction:
-            guard let saved = try? JSONDecoder().decode(PreparedEnvelope.self, from: wire), saved.groupMembers == nil, saved.envelope == envelope else { return false }
-            do { return try await outgoingReactionEnvelope(account: account, updateID: messageID) == envelope }
-            catch let error as OMEMOError where error == .trustRequired || error == .recipientSetChanged || error == .unsupportedEncryptedReactions { return false }
+        case .reaction, .retraction, .correction:
+            guard let saved = try? JSONDecoder().decode(PreparedEnvelope.self, from: wire), saved.groupMembers == nil, saved.envelope == envelope,
+                  replaces == nil || (update.kind == .correction && replaces == update.targetWireID) else { return false }
+            do { return try await outgoingUpdateEnvelope(account: account, updateID: messageID) == envelope }
+            catch let error as OMEMOError where error == .trustRequired || error == .recipientSetChanged || error == .unsupportedEncryptedReactions || error == .unsupportedMessageUpdate { return false }
         case .keyTransport:
             // Header-only, no recipient set to re-derive: exact bytes, addressed to one device we may still encrypt to.
             guard (try? JSONDecoder().decode(XMPPOMEMOEnvelope.self, from: wire)) == envelope, envelope.keys.count == 1 else { return false }
@@ -525,11 +576,13 @@ public actor OMEMOService {
         }
     }
 
-    public func outgoingReactionEnvelope(account: String, updateID: String) async throws -> XMPPOMEMOEnvelope {
+    /// The sealed envelope of a message-scoped update (reaction, retraction, correction), re-validated
+    /// against current trust and against the target still resolving to the message it was queued for.
+    public func outgoingUpdateEnvelope(account: String, updateID: String) async throws -> XMPPOMEMOEnvelope {
         guard let wire = try await store.updateWire(accountID: account, updateID: updateID),
-              let update = try await store.reactionUpdate(accountID: account, updateID: updateID) else { throw OMEMOError.unavailable }
-        guard try await store.reactionTarget(accountID: account, chatID: update.chatID, wireID: update.targetWireID)?.id == update.targetMessageID else {
-            throw OMEMOError.unsupportedEncryptedReactions
+              let update = try await store.update(accountID: account, updateID: updateID), let targetWireID = update.targetWireID else { throw OMEMOError.unavailable }
+        guard try await store.reactionTarget(accountID: account, chatID: update.chatID, wireID: targetWireID)?.id == update.targetMessageID else {
+            throw update.kind == .reaction ? OMEMOError.unsupportedEncryptedReactions : .unsupportedMessageUpdate
         }
         let saved = try JSONDecoder().decode(PreparedEnvelope.self, from: wire)
         guard saved.groupMembers == nil else { throw OMEMOError.unsupportedProfile }
@@ -575,11 +628,18 @@ public actor OMEMOService {
                     let group = try await outgoingGroupReactionEnvelope(account: account, updateID: claim.update.id, room: claim.update.chatID, transport: groupTransport)
                     return .group(room: claim.update.chatID, envelope: group.envelope, members: group.members)
                 }
-                return .encrypted(to: claim.update.chatID, envelope: try await outgoingReactionEnvelope(account: account, updateID: claim.update.id))
+                return .encrypted(to: claim.update.chatID, envelope: try await outgoingUpdateEnvelope(account: account, updateID: claim.update.id))
             }
             guard let reaction = XMPPClient.decodeOutgoingReactionXML(String(decoding: claim.wire, as: UTF8.self), from: account),
                   bare(reaction.to ?? "") == claim.update.chatID else { throw OMEMOError.invalidContent }
             return .plainReaction(to: claim.update.chatID, targetID: reaction.targetID, reactions: reaction.reactions)
+        case .retraction, .correction:
+            if (try? JSONDecoder().decode(PreparedEnvelope.self, from: claim.wire)) != nil {
+                return .encrypted(to: claim.update.chatID, envelope: try await outgoingUpdateEnvelope(account: account, updateID: claim.update.id))
+            }
+            guard claim.update.kind == .retraction, let retraction = XMPPClient.decodeOutgoingRetractionXML(String(decoding: claim.wire, as: UTF8.self), from: account),
+                  bare(retraction.to ?? "") == claim.update.chatID else { throw OMEMOError.invalidContent }
+            return .plainRetraction(to: claim.update.chatID, targetID: retraction.targetID)
         }
     }
 
@@ -605,6 +665,23 @@ public actor OMEMOService {
            update.targetWireID == reaction.targetID, update.reactions == values.sorted(),
            let wire = try await store.updateWire(accountID: account, updateID: reaction.id) {
             _ = try? await store.reconcileArchivedUpdate(accountID: account, updateID: reaction.id, expectedWire: wire)
+        }
+        return true
+    }
+
+    /// The plain XEP-0424 twin of `receivePlaintextReaction`: server-authenticated actor, untrusted target.
+    @discardableResult
+    public func receivePlaintextRetraction(account: String, retraction: XMPPRetraction, sentAt: Date? = nil) async throws -> Bool {
+        let actor = bare(retraction.from)
+        let peer = actor == account ? bare(retraction.to ?? "") : actor
+        guard !actor.isEmpty, !peer.isEmpty else { return false }
+        let event = MessageEvent(id: retraction.id, chatID: peer, actorID: actor, targetWireID: retraction.targetID, kind: .retraction, payload: "{}", updatedAt: min(sentAt ?? Date(), Date()))
+        do { try await store.recordEvent(accountID: account, event: event) }
+        catch MessageStoreError.invalidValue { return false }
+        if actor == account, let update = try await store.update(accountID: account, updateID: retraction.id), update.kind == .retraction,
+           update.chatID == peer, update.targetWireID == retraction.targetID,
+           let wire = try await store.updateWire(accountID: account, updateID: retraction.id) {
+            _ = try? await store.reconcileArchivedUpdate(accountID: account, updateID: retraction.id, expectedWire: wire)
         }
         return true
     }
@@ -687,7 +764,7 @@ public actor OMEMOService {
         if try await store.hasEncryptedIncoming(accountID: account, sender: sender, digest: digest) { return false }
         let previous = try await store.pendingEncryptedIncoming(accountID: account).first { $0.sender == sender && $0.digest == digest }
         var retained = try previous.map { try JSONDecoder().decode(RetainedEnvelope.self, from: $0.wire) }
-            ?? RetainedEnvelope(from: message.from, to: message.to, envelope: message.envelope, provenance: message.provenance, sentAt: sentAt ?? Date())
+            ?? RetainedEnvelope(from: message.from, to: message.to, envelope: message.envelope, provenance: message.provenance, sentAt: sentAt ?? Date(), replaces: message.replaces)
         if let previous, let sentAt, retained.sentAt != sentAt {
             // The cipher digest identifies the addressed key/payload. Require the entire
             // envelope and conversation context too before changing durable metadata.
@@ -707,7 +784,7 @@ public actor OMEMOService {
                 throw OMEMOError.invalidContent
             }
             retained = RetainedEnvelope(from: retained.from, to: retained.to, envelope: retained.envelope,
-                                        provenance: retained.provenance, sentAt: sentAt)
+                                        provenance: retained.provenance, sentAt: sentAt, replaces: retained.replaces)
             guard try await store.replacePendingEncryptedIncomingContext(accountID: account, sender: sender, digest: digest,
                     expectedWire: previous.wire, wire: JSONEncoder().encode(retained)) else { throw OMEMOError.concurrentChange }
         }
@@ -738,11 +815,23 @@ public actor OMEMOService {
         let material = try local.decrypt(RatchetCiphertext(data: key.data, isPreKey: key.keyExchange), from: address)
         var stored: StoredMessage?
         var reaction: AuthenticatedReaction?
+        var event: MessageEvent?
         if let payload = message.envelope.payload {
             let plaintext = try PayloadCrypto.open(SealedPayload(payload: payload, keyMaterial: material, iv: message.envelope.iv), profile: profile.crypto)
             let content = try EncryptedContent.decode(plaintext, sender: sender, recipient: sender == account ? peer : account,
                                                        modern: profile == .modern, sendingTime: retained.sentAt)
-            if !content.body.isEmpty {
+            let date = min(content.timestamp ?? retained.sentAt ?? Date(), Date())
+            // A legacy correction reference sits outside the ciphertext, bound like a legacy reaction.
+            let correction = content.correction ?? (profile == .legacy ? retained.replaces : nil)
+            if let target = content.retraction {
+                guard profile == .modern, sender == account || sender == peer else { throw OMEMOError.invalidContent }
+                event = MessageEvent(id: content.originID ?? digest, chatID: peer, actorID: sender, targetWireID: target, kind: .retraction, payload: "{}", updatedAt: date)
+            } else if let target = correction, !content.body.isEmpty {
+                // An edit is a projection on the original bubble, never a second bubble.
+                guard sender == account || sender == peer else { throw OMEMOError.invalidContent }
+                event = MessageEvent(id: content.originID ?? message.originID ?? message.id, chatID: peer, actorID: sender, targetWireID: target,
+                                     kind: .correction, payload: try MessageEvent.correctionPayload(content.body), updatedAt: date)
+            } else if !content.body.isEmpty {
                 stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: peer, senderID: sender,
                                        body: content.body, sentAt: retained.sentAt ?? Date(), isOutgoing: sender == account,
                                        reply: content.reply, encryptionProfile: profile.rawValue,
@@ -750,7 +839,6 @@ public actor OMEMOService {
             }
             if let update = content.reaction {
                 guard profile == .modern, sender == account || sender == peer else { throw OMEMOError.invalidContent }
-                let date = min(content.timestamp ?? retained.sentAt ?? Date(), Date())
                 reaction = AuthenticatedReaction(id: content.originID ?? digest, chatID: peer, actorID: sender,
                                                  targetWireID: update.targetWireID, reactions: update.reactions, updatedAt: date)
             }
@@ -768,11 +856,11 @@ public actor OMEMOService {
         state.engines[profile.rawValue] = try local.snapshot()
         if key.keyExchange { state.pendingBundlePublications.insert(profile.rawValue) }
         try await store.commitEncryptedIncoming(accountID: account, sender: sender, digest: digest, expectedRevision: revision,
-                                                state: encode(state, account: account), message: stored, control: control, reaction: reaction)
+                                                state: encode(state, account: account), message: stored, control: control, reaction: reaction, event: event)
         // The authenticated message is already durable. A network error must not turn
         // success into a decryption failure; the pending publication survives a restart.
         if key.keyExchange { try? await flushBundlePublicationsLocked(account: account, transport: transport) }
-        return stored != nil || reaction != nil
+        return stored != nil || reaction != nil || event != nil
     }
 
     /// A stream/archive acknowledgment is safe after either an authenticated commit or
@@ -849,7 +937,7 @@ public actor OMEMOService {
                     continue
                 }
                 let value = try JSONDecoder().decode(RetainedEnvelope.self, from: item.wire)
-                _ = try await receive(account: account, message: XMPPEncryptedMessage(id: item.digest, from: value.from, to: value.to, originID: nil, envelope: value.envelope, provenance: value.provenance), transport: transport, sentAt: value.sentAt)
+                _ = try await receive(account: account, message: XMPPEncryptedMessage(id: item.digest, from: value.from, to: value.to, originID: nil, envelope: value.envelope, provenance: value.provenance, replaces: value.replaces), transport: transport, sentAt: value.sentAt)
             } catch {
                 if error is CancellationError { throw error }
                 if firstFailure == nil { firstFailure = error }
@@ -907,6 +995,8 @@ private struct RetainedEnvelope: Codable {
     let envelope: XMPPOMEMOEnvelope
     let provenance: XMPPMessageProvenance
     let sentAt: Date?
+    /// Outer legacy correction reference, kept with the ciphertext so a trust retry still applies it.
+    var replaces: String? = nil
 }
 
 struct PreparedEnvelope: Codable {

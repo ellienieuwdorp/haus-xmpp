@@ -636,7 +636,7 @@ final class ServiceTests: XCTestCase {
             let id = try await bobService.queueReactions(account: f.bob, chatID: f.alice, messageID: target.id, reactions: values)
             let prepared = try await bobService.prepareAvailableUpdates(account: f.bob, transport: f.bTransport)
             expectTrue(prepared.messageIDs.contains(id))
-            let envelope = try await bobService.outgoingReactionEnvelope(account: f.bob, updateID: id)
+            let envelope = try await bobService.outgoingUpdateEnvelope(account: f.bob, updateID: id)
             expectNotNil(envelope.payload)
             try await bobService.flushUpdates(account: f.bob, updateIDs: prepared.messageIDs) { update, prepared in
                 guard case .encrypted(let recipient, let reactionEnvelope) = prepared else { return XCTFail("direct reaction is an envelope") }
@@ -654,7 +654,7 @@ final class ServiceTests: XCTestCase {
             expectFalse(try await f.a.receive(account: f.alice, message: XMPPEncryptedMessage(id: id, from: f.bob, to: f.alice, originID: nil, envelope: envelope), transport: OfflineTransport()))
             // A manual retry is immutable and the receiver deduplicates it.
             try await bobService.retryUpdate(account: f.bob, updateID: id)
-            expectEqual(try await bobService.outgoingReactionEnvelope(account: f.bob, updateID: id), envelope)
+            expectEqual(try await bobService.outgoingUpdateEnvelope(account: f.bob, updateID: id), envelope)
             // Finish the retry so the following iteration has only its new update queued.
             let next = try await bobService.prepareAvailableUpdates(account: f.bob, transport: f.bTransport)
             try await bobService.flushUpdates(account: f.bob, updateIDs: next.messageIDs) { _, _ in }
@@ -670,10 +670,10 @@ final class ServiceTests: XCTestCase {
         let target = try unwrap(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).first)
         let olderID = try await f.b.queueReactions(account: f.bob, chatID: f.alice, messageID: target.id, reactions: ["👍"])
         _ = try await f.b.prepareAvailableUpdates(account: f.bob, transport: f.bTransport)
-        let older = try await f.b.outgoingReactionEnvelope(account: f.bob, updateID: olderID)
+        let older = try await f.b.outgoingUpdateEnvelope(account: f.bob, updateID: olderID)
         let newerID = try await f.b.queueReactions(account: f.bob, chatID: f.alice, messageID: target.id, reactions: ["❤️"])
         _ = try await f.b.prepareAvailableUpdates(account: f.bob, transport: f.bTransport)
-        let newer = try await f.b.outgoingReactionEnvelope(account: f.bob, updateID: newerID)
+        let newer = try await f.b.outgoingUpdateEnvelope(account: f.bob, updateID: newerID)
         let newerMessage = XMPPEncryptedMessage(id: newerID, from: f.bob, to: f.alice, originID: nil, envelope: newer)
         _ = try await f.a.receive(account: f.alice, message: newerMessage, transport: f.aTransport, sentAt: Date(timeIntervalSince1970: 1_700_000_100))
         let olderMessage = XMPPEncryptedMessage(id: olderID, from: f.bob, to: f.alice, originID: nil, envelope: older)
@@ -681,7 +681,7 @@ final class ServiceTests: XCTestCase {
         expectEqual(try await f.a.reactions(account: f.alice, chatID: f.bob, messageID: outgoing.id).first?.reactions, ["❤️"])
         let futureID = try await f.b.queueReactions(account: f.bob, chatID: f.alice, messageID: target.id, reactions: ["😄"])
         _ = try await f.b.prepareAvailableUpdates(account: f.bob, transport: f.bTransport)
-        let future = try await f.b.outgoingReactionEnvelope(account: f.bob, updateID: futureID)
+        let future = try await f.b.outgoingUpdateEnvelope(account: f.bob, updateID: futureID)
         _ = try await f.a.receive(account: f.alice, message: XMPPEncryptedMessage(id: futureID, from: f.bob, to: f.alice, originID: nil, envelope: future), transport: f.aTransport, sentAt: Date.distantFuture)
         let projected = try await f.a.reactions(account: f.alice, chatID: f.bob, messageID: outgoing.id)
         expectTrue(try unwrap(projected.first).updatedAt <= Date())
@@ -755,7 +755,7 @@ final class ServiceTests: XCTestCase {
         expectFalse(try await f.a.canReplay(account: f.alice, xml: xml.replacingOccurrences(of: "👍", with: "❤️")))
         // Preparing again is idempotent, and nothing was ever sealed as an OMEMO envelope.
         expectTrue(try await f.a.prepareAvailableUpdates(account: f.alice, transport: f.aTransport).messageIDs == [id])
-        do { _ = try await f.a.outgoingReactionEnvelope(account: f.alice, updateID: id); XCTFail("plain wire is not an envelope") } catch {}
+        do { _ = try await f.a.outgoingUpdateEnvelope(account: f.alice, updateID: id); XCTFail("plain wire is not an envelope") } catch {}
         // The drain resolves the plain wire back into the deterministic serializer inputs.
         let bob = f.bob, targetID = outgoing.id
         try await f.a.flushUpdates(account: f.alice, updateIDs: [id]) { update, prepared in
@@ -785,7 +785,7 @@ final class ServiceTests: XCTestCase {
         let reactionID = try await f.b.queueReactions(account: f.bob, chatID: f.alice, messageID: target.id, reactions: ["👍"])
         let prepared = try await f.b.prepareAvailableUpdates(account: f.bob, transport: f.bTransport)
         expectEqual(prepared.messageIDs, [transport.id, reactionID])
-        let reaction = try await f.b.outgoingReactionEnvelope(account: f.bob, updateID: reactionID)
+        let reaction = try await f.b.outgoingUpdateEnvelope(account: f.bob, updateID: reactionID)
         expectTrue(try await f.b.canReplay(account: f.bob, xml: XMPPClient.encryptedMessageXML(to: f.alice, envelope: reaction, id: reactionID)))
         // Blocking the addressed device revokes every envelope prepared for it, header-only ones included.
         let device = try unwrap(try await f.b.overview(account: f.bob, peer: f.alice).devices.first { $0.jid == f.alice && $0.active })

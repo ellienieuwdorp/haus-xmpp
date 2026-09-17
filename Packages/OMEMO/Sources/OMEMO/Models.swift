@@ -37,10 +37,11 @@ public struct EncryptionOverview: Sendable {
 
 public enum OMEMOError: Error, Equatable, Sendable, LocalizedError {
     case unavailable, noDevices, trustRequired, identityChanged, notForThisDevice
-    case invalidContent, stateUnavailable, unsupportedProfile, concurrentChange, recipientSetChanged, cannotRetireCurrentDevice, unsupportedEncryptedReactions
+    case invalidContent, stateUnavailable, unsupportedProfile, concurrentChange, recipientSetChanged, cannotRetireCurrentDevice, unsupportedEncryptedReactions, unsupportedMessageUpdate
     public var errorDescription: String? {
         switch self {
         case .unsupportedEncryptedReactions: "Private reactions require OMEMO 2 and an authenticated message reference. Nothing was sent unencrypted."
+        case .unsupportedMessageUpdate: "This message can't be unsent or edited from here. Nothing was sent unencrypted."
         case .cannotRetireCurrentDevice: "This device cannot be removed while it is in use."
         case .unavailable: "Encryption is not ready. Connect to finish setting it up."
         case .noDevices: "No compatible encryption devices were found. Your message is waiting safely on this device."
@@ -114,4 +115,5 @@ public enum PreparedUpdate: Sendable, Equatable {
     case group(room: String, envelope: XMPPOMEMOEnvelope, members: [String])
     /// The exact plain stanza is the sealed wire; the serializer is deterministic for these inputs.
     case plainReaction(to: String, targetID: String, reactions: [String])
+    case plainRetraction(to: String, targetID: String)
 }

@@ -387,7 +387,7 @@ public actor MessageStore {
             (SELECT MAX(sent_at) FROM messages m WHERE m.account_id=c.account_id AND m.chat_id=c.id) DESC, c.id
             """, [.text(accountID)])
         return try rows.map { row in
-            let latest = try messages(accountID: accountID, chatID: row[0].string, limit: 1).first
+            let latest = try messages(accountID: accountID, chatID: row[0].string, limit: 1).first.map { try $0.applying(events(accountID: accountID, chatID: $0.chatID, messageID: $0.id)) }
             return StoredChat(id: row[0].string, accountID: accountID, title: row[1].string,
                               isPinned: row[2].integer != 0, lastMessage: latest)
         }
@@ -544,11 +544,11 @@ public actor MessageStore {
     /// Authenticated plaintext, consumed prekeys/ratchet changes and replay outcome are inseparable.
     /// A key-transport-only message commits state and replay outcome without creating an empty bubble.
     public func commitEncryptedIncoming(accountID: String, sender: String, digest: String,
-                                        expectedRevision: Int, state: Data, message: StoredMessage?, control: EncryptionControl? = nil, reaction: AuthenticatedReaction? = nil, groupRoom: String? = nil, roomStanzaID: String? = nil) throws {
+                                        expectedRevision: Int, state: Data, message: StoredMessage?, control: EncryptionControl? = nil, reaction: AuthenticatedReaction? = nil, event: MessageEvent? = nil, groupRoom: String? = nil, roomStanzaID: String? = nil) throws {
         guard !sender.isEmpty, !digest.isEmpty,
               message.map({ $0.accountID == accountID && $0.senderID == sender && $0.encryptionProfile != nil }) ?? true else { throw MessageStoreError.invalidValue }
         if let groupRoom {
-            guard message.map({ $0.chatID == groupRoom }) ?? reaction.map({ $0.chatID == groupRoom }) ?? false else { throw MessageStoreError.invalidValue }
+            guard message.map({ $0.chatID == groupRoom }) ?? reaction.map({ $0.chatID == groupRoom }) ?? false, event == nil else { throw MessageStoreError.invalidValue }
         } else if roomStanzaID != nil { throw MessageStoreError.invalidValue }
         try connection.transaction {
             guard try !hasEncryptedIncoming(accountID: accountID, sender: sender, digest: digest) else { throw MessageStoreError.invalidTransition }
@@ -556,6 +556,11 @@ public actor MessageStore {
             if let reaction {
                 guard message == nil, reaction.actorID == sender else { throw MessageStoreError.invalidValue }
                 try insertEvent(accountID: accountID, event: try reaction.event(), groupRoom: groupRoom)
+            }
+            if let event {
+                // A retraction or correction is authenticated content about another message, never a bubble of its own.
+                guard message == nil, event.actorID == sender, event.kind == .retraction || event.kind == .correction else { throw MessageStoreError.invalidValue }
+                try insertEvent(accountID: accountID, event: event)
             }
             if let message {
                 try connection.execute("INSERT INTO chats(account_id,id,title) VALUES(?,?,?) ON CONFLICT(account_id,id) DO NOTHING", [.text(accountID), .text(message.chatID), .text(message.chatID)])
@@ -604,7 +609,7 @@ public actor MessageStore {
             let values: [Value] = [.text(accountID)]
             let count = try connection.query("SELECT COUNT(*),COUNT(DISTINCT m.chat_id) FROM notification_candidates n JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id WHERE n.account_id=?", values).first!
             let newest = try connection.query("SELECT n.message_id FROM notification_candidates n JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id WHERE n.account_id=? ORDER BY m.sent_at DESC,n.sequence DESC LIMIT 1", values).first?[0].string
-            let latest = try newest.flatMap { try message(accountID: accountID, messageID: $0) }
+            let latest = try newest.flatMap { try message(accountID: accountID, messageID: $0) }.map { try $0.applying(events(accountID: accountID, chatID: $0.chatID, messageID: $0.id)) }
             let title = try latest.flatMap { message in
                 try connection.query("SELECT title FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(message.chatID)]).first?[0].string
             }
@@ -764,10 +769,13 @@ public actor MessageStore {
         var seen: Set<String> = [], result: [MessageEvent] = []
         for row in rows {
             let event = try Self.decodeEvent(row)
+            // Only the sender may unsend or rewrite a message; anyone else's claim is not a projection.
+            guard !Self.senderOnly(event.kind) || event.actorID == message.senderID else { continue }
             if seen.insert(event.actorID + "\u{0}" + event.kind.rawValue).inserted { result.append(event) }
         }
         return result.sorted { ($0.actorID, $0.kind.rawValue) < ($1.actorID, $1.kind.rawValue) }
     }
+    private static func senderOnly(_ kind: MessageEventKind) -> Bool { kind == .retraction || kind == .correction }
 
     public func reactionsForChat(accountID: String, chatID: String,
                                  messageIDs: Set<String>) throws -> [String: [AuthenticatedReaction]] {
@@ -804,6 +812,9 @@ public actor MessageStore {
                 ROW_NUMBER() OVER (PARTITION BY t.id,e.actor_id,e.kind ORDER BY e.updated_at DESC,e.id DESC) AS position
                 FROM unique_targets t JOIN message_events e
                 ON e.account_id=? AND e.chat_id=? AND e.target_wire_id=t.wire_id
+                JOIN messages m ON m.account_id=e.account_id AND m.chat_id=e.chat_id AND m.id=t.id
+                -- Only the sender may unsend or rewrite a message.
+                WHERE e.kind NOT IN ('retraction','correction') OR e.actor_id=m.sender_id
             )
             SELECT message_id,id,chat_id,actor_id,target_wire_id,kind,payload_json,updated_at
             FROM latest WHERE position=1 ORDER BY message_id,actor_id,kind
@@ -836,6 +847,37 @@ public actor MessageStore {
     /// An unencrypted XEP-0444 event: the actor is server-authenticated only. Same projection rules.
     public func recordReaction(accountID: String, reaction: AuthenticatedReaction) throws {
         try insertEvent(accountID: accountID, event: try reaction.event())
+    }
+
+    /// Any inbound message-scoped event whose actor the caller has authenticated (or, for plain
+    /// stanzas, the server has). Idempotent per (actor, id); a missing target is retained.
+    public func recordEvent(accountID: String, event: MessageEvent) throws {
+        try connection.transaction { try insertEvent(accountID: accountID, event: event) }
+    }
+
+    /// Unsend or rewrite one of our own messages: the queued stanza and its optimistic projection,
+    /// in one transaction. The outbox seals the wire later; the event is what the timeline shows now.
+    @discardableResult public func enqueueMessageUpdate(accountID: String, id: String, kind: StoredUpdate.Kind, chatID: String,
+                                                       targetMessageID: String, body: String = "", createdAt: Date = Date()) throws -> Bool {
+        let eventKind: MessageEventKind
+        switch kind { case .retraction: eventKind = .retraction; case .correction: eventKind = .correction; default: throw MessageStoreError.invalidValue }
+        guard let target = try message(accountID: accountID, messageID: targetMessageID), target.chatID == chatID,
+              target.isOutgoing, target.senderID == accountID,
+              let wireID = try reactionReference(accountID: accountID, messageID: targetMessageID) ?? target.wireID,
+              try reactionTarget(accountID: accountID, chatID: chatID, wireID: wireID)?.id == targetMessageID else { throw MessageStoreError.invalidValue }
+        let payload = eventKind == .correction ? try MessageEvent.correctionPayload(body) : "{}"
+        let event = MessageEvent(id: id, chatID: chatID, actorID: accountID, targetWireID: wireID, kind: eventKind, payload: payload, updatedAt: createdAt)
+        try Self.validateEvent(accountID: accountID, event: event)
+        return try connection.transaction {
+            if let existing = try update(accountID: accountID, updateID: id) {
+                guard existing.kind == kind, existing.chatID == chatID, existing.targetMessageID == targetMessageID, existing.payload == payload else { throw MessageStoreError.conflictingIdentity }
+                return false
+            }
+            try insertUpdate(accountID: accountID, id: id, kind: kind, chatID: chatID, createdAt: event.updatedAt,
+                             targetMessageID: targetMessageID, targetWireID: wireID, reactionsJSON: payload, wire: nil)
+            try insertEvent(accountID: accountID, event: event)
+            return true
+        }
     }
 
     public func queuedReactions(accountID: String) throws -> [StoredReactionUpdate] {
@@ -886,9 +928,9 @@ public actor MessageStore {
     /// Queued, and for a reaction still bound to exactly the message it was queued against.
     private func sealableUpdate(accountID: String, updateID: String) throws -> Bool {
         guard let update = try update(accountID: accountID, updateID: updateID), update.transportState == .queued else { return false }
-        guard update.kind == .reaction else { return true }
-        guard let reaction = try reactionUpdate(accountID: accountID, updateID: updateID) else { return false }
-        return try reactionTarget(accountID: accountID, chatID: reaction.chatID, wireID: reaction.targetWireID)?.id == reaction.targetMessageID
+        guard update.kind != .keyTransport else { return true }
+        guard let targetWireID = update.targetWireID, let targetMessageID = update.targetMessageID else { return false }
+        return try reactionTarget(accountID: accountID, chatID: update.chatID, wireID: targetWireID)?.id == targetMessageID
     }
 
     /// FIFO by durable enqueue order across kinds. `nil` claims any sealed update.
@@ -938,9 +980,20 @@ public actor MessageStore {
 
     private func insertEvent(accountID: String, event: MessageEvent, groupRoom: String? = nil) throws {
         try Self.validateEvent(accountID: accountID, event: event, groupRoom: groupRoom)
+        var event = event
+        if Self.senderOnly(event.kind), try reactionTarget(accountID: accountID, chatID: event.chatID, wireID: event.targetWireID) == nil,
+           let original = try connection.query("SELECT target_wire_id FROM message_events WHERE account_id=? AND chat_id=? AND actor_id=? AND id=? AND kind='correction'",
+                                               [.text(accountID), .text(event.chatID), .text(event.actorID), .text(event.targetWireID)]).first?[0].string {
+            // XEP-0308 lets a correction name the previous correction instead of the original; the chain is one hop per event.
+            event = MessageEvent(id: event.id, chatID: event.chatID, actorID: event.actorID, targetWireID: original, kind: event.kind, payload: event.payload, updatedAt: event.updatedAt)
+        }
         // Missing targets remain retained. Ambiguous/missing authenticated IDs never get a projection.
         // A replayed authenticated event ID cannot replace the first accepted content under that ID.
         try connection.execute("INSERT INTO message_events(account_id,actor_id,id,chat_id,target_wire_id,kind,payload_json,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(account_id,actor_id,id) DO NOTHING", [.text(accountID), .text(event.actorID), .text(event.id), .text(event.chatID), .text(event.targetWireID), .text(event.kind.rawValue), .text(event.payload), .real(event.updatedAt.timeIntervalSince1970)])
+        if event.kind == .retraction, let target = try reactionTarget(accountID: accountID, chatID: event.chatID, wireID: event.targetWireID), target.senderID == event.actorID {
+            // An unsent message no longer deserves an alert; a corrected one alerts with its new text through the projection.
+            try connection.execute("DELETE FROM notification_candidates WHERE account_id=? AND message_id=?", [.text(accountID), .text(target.id)])
+        }
     }
 
     /// Who may assert what about a message, by kind. Shape rules for the payload live here too.
@@ -956,8 +1009,13 @@ public actor MessageStore {
                   let reactions = try? JSONDecoder().decode([String].self, from: Data(event.payload.utf8)),
                   reactions.count <= 12, Set(reactions).count == reactions.count,
                   reactions.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 }) else { throw MessageStoreError.invalidValue }
-        case .retraction, .correction, .delivered, .displayed:
-            // Reserved: accepted once their wire support lands, with sender-only / peer-only rules.
+        case .retraction, .correction:
+            // Direct chats only for now: us or the peer may claim; the read side keeps only the sender's claim.
+            // ponytail: rooms need a real-JID actor (muc_nonanonymous) and a room-scoped rule; add with group retract/edit.
+            guard groupRoom == nil, event.actorID == accountID || event.actorID == event.chatID,
+                  event.kind == .retraction || MessageEvent.correctionBody(event.payload) != nil else { throw MessageStoreError.invalidValue }
+        case .delivered, .displayed:
+            // Reserved: accepted once their wire support lands, with peer-only rules.
             throw MessageStoreError.invalidValue
         }
     }
@@ -976,10 +1034,12 @@ public actor MessageStore {
                              reactions: try JSONDecoder().decode([String].self, from: Data(row[5].string.utf8)),
                              createdAt: Date(timeIntervalSince1970: row[6].double), transportState: OutgoingTransportState(rawValue: row[7].string))
     }
-    private static let updateColumns = "account_id,id,kind,chat_id,state"
+    private static let updateColumns = "account_id,id,kind,chat_id,state,target_message_id,target_wire_id,reactions_json"
     private static func decodeUpdate(_ row: [Value]) throws -> StoredUpdate {
         guard let kind = StoredUpdate.Kind(rawValue: row[2].string) else { throw MessageStoreError.invalidValue }
-        return StoredUpdate(id: row[1].string, accountID: row[0].string, kind: kind, chatID: row[3].string, transportState: OutgoingTransportState(rawValue: row[4].string))
+        func text(_ value: Value) -> String? { if case .null = value { nil } else { value.string } }
+        return StoredUpdate(id: row[1].string, accountID: row[0].string, kind: kind, chatID: row[3].string, transportState: OutgoingTransportState(rawValue: row[4].string),
+                            targetMessageID: text(row[5]), targetWireID: text(row[6]), payload: text(row[7]))
     }
 
     private static let columns = """

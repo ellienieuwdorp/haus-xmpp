@@ -10,12 +10,17 @@ struct EncryptedContent: Equatable {
     let body: String
     let reply: MessageReply?
     var reaction: ReactionContent? = nil
+    /// XEP-0424 / XEP-0308 references, authenticated only inside a modern envelope.
+    var retraction: String? = nil
+    var correction: String? = nil
     var originID: String? = nil
     var timestamp: Date? = nil
 
-    static func encode(body: String, reply: MessageReply?, sender: String, recipient: String, modern: Bool, originID: String? = nil) throws -> Data {
+    /// `correction` rides inside a modern envelope; for legacy the caller puts it on the outer stanza.
+    static func encode(body: String, reply: MessageReply?, sender: String, recipient: String, modern: Bool, originID: String? = nil, correction: String? = nil) throws -> Data {
         guard !body.isEmpty, body.utf8.count <= 16_384, MessageContent.validXMLText(body),
-              MessageContent.validAddress(sender), MessageContent.validAddress(recipient) else { throw OMEMOError.invalidContent }
+              MessageContent.validAddress(sender), MessageContent.validAddress(recipient),
+              correction.map(MessageContent.validIdentifier) ?? true else { throw OMEMOError.invalidContent }
         if let reply {
             guard !reply.messageID.isEmpty, reply.messageID.utf8.count <= 1024,
                   MessageContent.validXMLText(reply.messageID), MessageContent.validAddress(reply.senderID),
@@ -25,7 +30,7 @@ struct EncryptedContent: Equatable {
         }
         let quote = reply.map { "> \($0.senderID)\n" + $0.body.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").split(separator: "\n", omittingEmptySubsequences: false).map { "> \($0)\n" }.joined() + "\n" } ?? ""
         if !modern { return Data((quote + body).utf8) }
-        let content = MessageContent(body: body, reply: reply.map { .init(id: $0.wireID, to: $0.senderID, quote: quote) }, originID: originID)
+        let content = MessageContent(body: body, reply: reply.map { .init(id: $0.wireID, to: $0.senderID, quote: quote) }, correction: correction, originID: originID)
         return try wrap(content, sender: sender, recipient: recipient)
     }
 
@@ -33,6 +38,13 @@ struct EncryptedContent: Equatable {
                                recipient: String, originID: String, modern: Bool) throws -> Data {
         guard modern else { throw OMEMOError.unsupportedEncryptedReactions }
         let content = MessageContent(body: "", reaction: .init(targetID: targetWireID, reactions: reactions), originID: originID)
+        return try wrap(content, sender: sender, recipient: recipient)
+    }
+
+    /// Legacy peers get a plain XEP-0424 stanza instead; there is no envelope to authenticate it in.
+    static func encodeRetraction(targetWireID: String, sender: String, recipient: String, originID: String, modern: Bool) throws -> Data {
+        guard modern else { throw OMEMOError.unsupportedMessageUpdate }
+        let content = MessageContent(body: "", retraction: targetWireID, originID: originID)
         return try wrap(content, sender: sender, recipient: recipient)
     }
 
@@ -77,12 +89,13 @@ struct EncryptedContent: Equatable {
             timestamp = parsed
         }
         guard let content = try? MessageContent.decode(root.children("content", namespace: ns)[0], strict: true),
-              !content.body.isEmpty || content.reaction != nil else { throw OMEMOError.invalidContent }
+              !content.body.isEmpty || content.reaction != nil || content.retraction != nil else { throw OMEMOError.invalidContent }
         let reply = content.reply.flatMap { reply in
             reply.id.map { MessageReply(messageID: $0, senderID: reply.to, body: unquote(reply.quote, author: reply.to), wireID: $0) }
         }
         return EncryptedContent(body: content.body, reply: reply,
                                 reaction: content.reaction.map { ReactionContent(targetWireID: $0.targetID, reactions: $0.reactions) },
+                                retraction: content.retraction, correction: content.correction,
                                 originID: content.originID, timestamp: timestamp)
     }
 

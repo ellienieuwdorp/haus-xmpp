@@ -53,10 +53,23 @@ public struct XMPPReply: Sendable, Equatable {
     }
 }
 
+/// An unencrypted XEP-0424 retraction; same trust as a plain reaction.
+public struct XMPPRetraction: Sendable, Equatable {
+    public let id: String
+    public let from: String
+    public let to: String?
+    public let targetID: String
+    public let provenance: XMPPMessageProvenance
+    public init(id: String, from: String, to: String?, targetID: String, provenance: XMPPMessageProvenance = .direct) {
+        self.id = id; self.from = from; self.to = to; self.targetID = targetID; self.provenance = provenance
+    }
+}
+
 public enum XMPPEvent: Sendable, Equatable {
     case state(XMPPConnectionState)
     case message(XMPPMessage)
     case reaction(XMPPReaction)
+    case retraction(XMPPRetraction)
     case encryptedMessage(XMPPEncryptedMessage)
     case encryptedGroupMessage(XMPPEncryptedGroupMessage)
     case groupPresence(room: String)
@@ -206,6 +219,19 @@ public actor XMPPClient {
         return id
     }
 
+    /// Unencrypted XEP-0424 for legacy-OMEMO peers; the reference cannot ride inside their ciphertext.
+    @discardableResult public func sendRetraction(to: String, targetID: String, id: String = UUID().uuidString) async throws -> String {
+        guard phase == .online else { throw XMPPClientError.notConnected }
+        try await write(Self.retractionXML(to: to, targetID: targetID, id: id))
+        return id
+    }
+
+    public static func retractionXML(to: String, targetID: String, id: String) throws -> String {
+        guard MessageContent.validAddress(to), MessageContent.validIdentifier(id) else { throw XMPPClientError.invalidConfiguration }
+        let content = try MessageContent(body: "", retraction: targetID).xml()
+        return "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(content)<store xmlns='urn:xmpp:hints'/></message>"
+    }
+
     public static func reactionXML(to: String, targetID: String, reactions: [String], id: String) throws -> String {
         guard MessageContent.validAddress(to), MessageContent.validIdentifier(id) else { throw XMPPClientError.invalidConfiguration }
         let content = try MessageContent(body: "", reaction: .init(targetID: targetID, reactions: reactions)).xml()
@@ -250,6 +276,12 @@ public actor XMPPClient {
         guard let (from, content) = plainContent(node), !content.text.isEmpty else { return nil }
         return XMPPMessage(id: node.attributes["id"] ?? UUID().uuidString, from: from, to: node.attributes["to"],
                            body: content.text, originID: content.originID, type: node.attributes["type"], provenance: provenance)
+    }
+
+    static func parsedRetraction(_ node: XMLNode, provenance: XMPPMessageProvenance = .direct) -> XMPPRetraction? {
+        guard let (from, content) = plainContent(node), let target = content.retraction else { return nil }
+        return XMPPRetraction(id: node.attributes["id"].flatMap { MessageContent.validIdentifier($0) ? $0 : nil } ?? UUID().uuidString, from: from,
+                              to: node.attributes["to"], targetID: target, provenance: provenance)
     }
 
     static func parsedReaction(_ node: XMLNode, provenance: XMPPMessageProvenance = .direct) -> XMPPReaction? {
@@ -388,7 +420,7 @@ public actor XMPPClient {
                 // Respond to XEP-0199 pings; reject other unsupported requests explicitly.
                 if node.attributes["type"] == "get", node.children.count == 1,
                    node.child("query", namespace: "http://jabber.org/protocol/disco#info") != nil {
-                    let features = ["http://jabber.org/protocol/disco#info", "urn:xmpp:ping"] + XMPPOMEMOProfile.allCases.flatMap { [$0.namespace, $0.devicesNode + "+notify"] }
+                    let features = ["http://jabber.org/protocol/disco#info", "urn:xmpp:ping", "urn:xmpp:message-retract:1", "urn:xmpp:message-correct:0"] + XMPPOMEMOProfile.allCases.flatMap { [$0.namespace, $0.devicesNode + "+notify"] }
                     let query = "<query xmlns='http://jabber.org/protocol/disco#info'><identity category='client' type='phone' name='XMPP Lab'/>" + features.map { "<feature var='\($0)'/>" }.joined() + "</query>"
                     try await write("<iq type='result' id='\(xmlEscaped(id))'\(to)>\(query)</iq>")
                 } else if node.child("ping", namespace: "urn:xmpp:ping") != nil {
@@ -511,6 +543,8 @@ public actor XMPPClient {
             catch { try emit(.encryptionFailure(from: node.attributes["from"] ?? "", id: node.attributes["id"])) }
         } else if provenance == .direct, let update = Self.deviceUpdate(node) {
             try emit(.omemoDevices(owner: update.owner, profile: update.profile, devices: update.devices))
+        } else if let retraction = Self.parsedRetraction(node, provenance: provenance) {
+            try emit(.retraction(retraction))
         } else if let reaction = Self.parsedReaction(node, provenance: provenance) {
             try emit(.reaction(reaction))
         } else if let message = Self.parsedMessage(node, provenance: provenance) {
@@ -523,9 +557,10 @@ public actor XMPPClient {
         _ = try await requestIQ(type: "set", to: nil, payload: "<\(enabled ? "enable" : "disable") xmlns='urn:xmpp:carbons:2'/>")
     }
 
-    @discardableResult public func sendEncryptedMessage(to: String, envelope: XMPPOMEMOEnvelope, id: String) async throws -> String {
+    /// `replaces` is the legacy-OMEMO correction reference, which has to travel outside the ciphertext.
+    @discardableResult public func sendEncryptedMessage(to: String, envelope: XMPPOMEMOEnvelope, id: String, replaces: String? = nil) async throws -> String {
         guard phase == .online else { throw XMPPClientError.notConnected }
-        try await write(Self.encryptedMessageXML(to: to, envelope: envelope, id: id))
+        try await write(Self.encryptedMessageXML(to: to, envelope: envelope, id: id, replaces: replaces))
         return id
     }
 
