@@ -95,7 +95,7 @@ struct ChatDetailsView: View {
             Section {
                 VStack(spacing: 6) {
                     ChatAvatar(key: chatID, name: title, image: model.avatars[chatID], isGroup: isGroup, size: 96)
-                        .task(id: chatID) { await model.loadAvatar(for: chatID) }
+                        .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
                     Text(title).font(.title.weight(.bold)).padding(.top, 6)
                     Text(chatID).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
                     if !model.isDemo {

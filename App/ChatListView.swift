@@ -57,7 +57,7 @@ struct ChatListView: View {
                     ForEach(visibleChats) { chat in
                         Button { path.append(.chat(chat.id)) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatars[chat.id]) }
                             .buttonStyle(.plain)
-                            .task(id: chat.id) { await model.loadAvatar(for: chat.id) }
+                            .task(id: "\(chat.id)|\(model.session.isReady)") { await model.loadAvatar(for: chat.id) }
                             .listRowInsets(EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16))
                             .accessibilityValue(chat.isPinned ? "Pinned" : "")
                             .accessibilityIdentifier("chat.\(chat.id)")

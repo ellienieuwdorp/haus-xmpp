@@ -131,7 +131,7 @@ struct ConversationView: View {
                     // Name only: trust lives in Chat Details and the review card, so the header never flickers.
                     HStack(spacing: 9) {
                         ChatAvatar(key: chatID, name: title, image: model.avatars[chatID], isGroup: isGroup, size: 36)
-                            .task(id: chatID) { await model.loadAvatar(for: chatID) }
+                            .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
                         Text(title).font(.headline).foregroundStyle(.primary).lineLimit(1)
                     }
                     // Leading toolbar items size to content; give the header a fixed width so the name isn't squeezed out.

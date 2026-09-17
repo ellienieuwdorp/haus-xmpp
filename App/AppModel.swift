@@ -746,8 +746,9 @@ final class AppModel {
                     hash = metadata.id
                     if metadata.id != stored { fetched = (metadata.id, try await client.fetchAvatarData(for: chatID, id: metadata.id)) }
                 }
-            } catch XMPPIQError.stanza(condition: "item-not-found"), XMPPIQError.stanza(condition: "feature-not-implemented"),
-                    XMPPIQError.stanza(condition: "service-unavailable") {
+            } catch XMPPIQError.stanza {
+                // No PEP node, no PEP at all, or a presence-gated node we may not read: XEP-0153 vCard
+                // (servers mirror PEP avatars into it, XEP-0398) is the one place left to look.
                 if let photo = try await client.fetchVCardPhoto(for: chatID) {
                     hash = photo.id
                     if photo.id != stored { fetched = (photo.id, photo.data) }
