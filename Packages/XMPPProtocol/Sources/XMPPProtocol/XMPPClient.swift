@@ -564,9 +564,14 @@ public actor XMPPClient {
         _ = try await requestIQ(type: "set", to: ownBare, payload: payload)
     }
 
-    public func discoveryFeatures(for jid: String? = nil) async throws -> Set<String> {
+    /// The raw disco#info query node: features plus any data forms (XEP-0128) the entity publishes.
+    func discoveryInfo(for jid: String? = nil) async throws -> XMLNode {
         let response = try await requestIQ(type: "get", to: jid, payload: "<query xmlns='http://jabber.org/protocol/disco#info'/>")
-        let query = try OMEMOWire.singleton(response, "query", "http://jabber.org/protocol/disco#info")
+        return try OMEMOWire.singleton(response, "query", "http://jabber.org/protocol/disco#info")
+    }
+
+    public func discoveryFeatures(for jid: String? = nil) async throws -> Set<String> {
+        let query = try await discoveryInfo(for: jid)
         let features = query.children.filter { $0.name == "feature" && $0.namespace == query.namespace }
         guard features.count <= 1_024, features.allSatisfy({ $0.attributes["var"]?.isEmpty == false }) else { throw XMPPIQError.malformedResponse }
         return Set(features.compactMap { $0.attributes["var"] })
