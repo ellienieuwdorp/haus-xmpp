@@ -563,17 +563,18 @@ public actor MessageStore {
             """, [.text(accountID), .text(accountID)]).map(decodeRow)
     }
 
-    /// Records (or clears) the background task carrying this file so a relaunch can reattach.
-    public func setAttachmentUploadTask(accountID: String, messageID: String, taskID: Int?) throws {
-        try connection.execute("UPDATE attachments SET task_id=? WHERE account_id=? AND message_id=? AND upload_state='pending'",
-                               [taskID.map(Value.integer) ?? .null, .text(accountID), .text(messageID)])
+    /// Records the background task carrying this file and the slot's GET URL, so a relaunch can
+    /// reattach and a finished task knows where the bytes landed. Nil clears both for a new slot.
+    public func setAttachmentUploadTask(accountID: String, messageID: String, taskID: Int?, url: String?) throws {
+        guard (taskID == nil) == (url == nil), url.map({ $0.utf8.count <= 2_048 }) ?? true else { throw MessageStoreError.invalidValue }
+        try connection.execute("UPDATE attachments SET task_id=?,url=? WHERE account_id=? AND message_id=? AND upload_state='pending'",
+                               [taskID.map(Value.integer) ?? .null, url.map(Value.text) ?? .null, .text(accountID), .text(messageID)])
     }
 
-    /// The PUT returned success: the ciphertext at `url` is what every later attempt shares.
-    public func markAttachmentUploaded(accountID: String, messageID: String, url: String, cipherHash: String) throws {
-        guard url.utf8.count <= 2_048, cipherHash.utf8.count <= 64 else { throw MessageStoreError.invalidValue }
-        try connection.execute("UPDATE attachments SET upload_state='uploaded',url=?,cipher_hash=?,task_id=NULL WHERE account_id=? AND message_id=? AND upload_state='pending'",
-                               [.text(url), .text(cipherHash), .text(accountID), .text(messageID)])
+    /// The PUT returned success: the ciphertext at the recorded URL is what every attempt shares.
+    public func markAttachmentUploaded(accountID: String, messageID: String) throws {
+        try connection.execute("UPDATE attachments SET upload_state='uploaded',task_id=NULL WHERE account_id=? AND message_id=? AND upload_state='pending' AND url IS NOT NULL",
+                               [.text(accountID), .text(messageID)])
     }
 
     public func encryptedOutgoing(accountID: String, messageID: String) throws -> Data? {

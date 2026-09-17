@@ -30,23 +30,26 @@ private func media(_ id: String, body: String = "", attachment: StoredAttachment
     #expect(try await store!.attachmentsAwaitingUpload(accountID: "a").map(\.id) == ["photo"])
     #expect(try await store!.claimNextOutgoing(accountID: "a")?.message.id == "text")
     #expect(try await store!.claimNextOutgoing(accountID: "a") == nil)
-    try await store!.setAttachmentUploadTask(accountID: "a", messageID: "photo", taskID: 7)
+    // Without a slot there is nothing to mark: the file stays pending.
+    try await store!.markAttachmentUploaded(accountID: "a", messageID: "photo")
+    #expect(try await store!.attachmentsAwaitingUpload(accountID: "a").count == 1)
+    try await store!.setAttachmentUploadTask(accountID: "a", messageID: "photo", taskID: 7, url: "https://u/x")
     store = nil
     // A relaunch sees the same pending file and its task, never a half-sent message.
     let reopened = try MessageStore(url: url)
     try await reopened.acquireTransportOwnership()
     let pending = try #require(await reopened.attachmentsAwaitingUpload(accountID: "a").first)
-    #expect(pending.attachment?.uploadTaskID == 7 && pending.attachment?.uploadState == .pending && pending.attachment?.url == nil)
+    #expect(pending.attachment?.uploadTaskID == 7 && pending.attachment?.uploadState == .pending && pending.attachment?.url == "https://u/x")
     #expect(try await reopened.claimNextOutgoing(accountID: "a") == nil)
-    try await reopened.markAttachmentUploaded(accountID: "a", messageID: "photo", url: "https://u/x", cipherHash: "cc")
+    try await reopened.markAttachmentUploaded(accountID: "a", messageID: "photo")
     #expect(try await reopened.attachmentsAwaitingUpload(accountID: "a").isEmpty)
     let claimed = try #require(await reopened.claimNextOutgoing(accountID: "a"))
     #expect(claimed.message.id == "photo")
     #expect(claimed.message.attachment == StoredAttachment(name: "beach.jpg", mediaType: "image/jpeg", size: 1234, width: 800, height: 600,
-                                                           hash: "ab" + String(repeating: "0", count: 62), cipherHash: "cc", secret: Data([1, 2, 3]),
+                                                           hash: "ab" + String(repeating: "0", count: 62), secret: Data([1, 2, 3]),
                                                            url: "https://u/x", uploadState: .uploaded))
-    // Marking twice or after upload is a no-op, never a second URL.
-    try await reopened.markAttachmentUploaded(accountID: "a", messageID: "photo", url: "https://u/other", cipherHash: "dd")
+    // A new slot can no longer replace the URL a peer may already hold.
+    try await reopened.setAttachmentUploadTask(accountID: "a", messageID: "photo", taskID: 9, url: "https://u/other")
     #expect(try await reopened.message(accountID: "a", messageID: "photo")?.attachment?.url == "https://u/x")
 }
 
