@@ -148,7 +148,7 @@ struct ConversationView: View {
             }, onEdit: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
                 beginEditing(message)
-            }, onUnsend: { unsendMessageID = $0 })
+            }, onUnsend: { composing = false; unsendMessageID = $0 })
             .overlay {
                 // Only an actual empty chat says so; while a load is pending the timeline stays blank.
                 if messages.isEmpty, model.messagesLoadedFor == chatID {
