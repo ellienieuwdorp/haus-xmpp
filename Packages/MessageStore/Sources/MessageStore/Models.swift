@@ -15,10 +15,14 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public let isOutgoing: Bool
     public var isStarred: Bool
     public var transportState: OutgoingTransportState?
+    /// The one file this message shares; `body` is then its caption and may be empty.
+    public var attachment: StoredAttachment?
 
     public init(id: String, accountID: String, chatID: String, senderID: String, body: String,
                 sentAt: Date = Date(), isOutgoing: Bool = false, isStarred: Bool = false,
-                transportState: OutgoingTransportState? = nil, reply: MessageReply? = nil, encryptionProfile: String? = nil, wireID: String? = nil, wireIDAuthenticated: Bool = false) {
+                transportState: OutgoingTransportState? = nil, reply: MessageReply? = nil, encryptionProfile: String? = nil, wireID: String? = nil, wireIDAuthenticated: Bool = false,
+                attachment: StoredAttachment? = nil) {
+        self.attachment = attachment
         self.id = id
         self.accountID = accountID
         self.chatID = chatID
@@ -32,6 +36,35 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
         self.isStarred = isStarred
         self.transportState = transportState
     }
+}
+
+/// Metadata and transfer state of a shared file. Bytes live in the file cache keyed by `hash`,
+/// never in the database; the key and IV are sealed by the encryption layer and opaque here.
+public struct StoredAttachment: Sendable, Equatable, Codable {
+    public enum UploadState: String, Sendable, Codable { case pending, uploaded }
+    public var name: String
+    public var mediaType: String
+    public var size: Int
+    public var width: Int?
+    public var height: Int?
+    /// Hex SHA-256 of the plaintext; empty when the sender gave none (legacy `aesgcm://`).
+    public var hash: String
+    public var cipherHash: String?
+    public var secret: Data
+    public var url: String?
+    /// Nil for received files. A queued message is not sendable until this is `uploaded`.
+    public var uploadState: UploadState?
+    public var uploadTaskID: Int?
+
+    public init(name: String, mediaType: String, size: Int, width: Int? = nil, height: Int? = nil, hash: String, cipherHash: String? = nil,
+                secret: Data, url: String? = nil, uploadState: UploadState? = nil, uploadTaskID: Int? = nil) {
+        self.name = name; self.mediaType = mediaType; self.size = size; self.width = width; self.height = height
+        self.hash = hash; self.cipherHash = cipherHash; self.secret = secret; self.url = url; self.uploadState = uploadState; self.uploadTaskID = uploadTaskID
+    }
+    public var isImage: Bool { mediaType.hasPrefix("image/") }
+    public var isVideo: Bool { mediaType.hasPrefix("video/") }
+    /// Chat-list and notification stand-in for an empty caption.
+    public var kindLabel: String { isImage ? "Photo" : isVideo ? "Video" : mediaType.hasPrefix("audio/") ? "Audio" : "File" }
 }
 
 public struct StoredChat: Identifiable, Equatable, Sendable {

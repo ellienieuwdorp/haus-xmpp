@@ -153,7 +153,7 @@ extension MessageContent {
 }
 
 extension Data {
-    init?(hex: String) {
+    public init?(hex: String) {
         guard hex.count % 2 == 0 else { return nil }
         var bytes: [UInt8] = []
         var index = hex.startIndex
