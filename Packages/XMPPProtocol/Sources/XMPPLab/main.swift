@@ -63,7 +63,7 @@ import XMPPProtocol
                     timeout.cancel()
                     return
                 }
-            case .encryptedMessage, .omemoDevices, .encryptionFailure, .streamAcknowledged: break
+            case .encryptedMessage, .omemoDevices, .avatarMetadata, .encryptionFailure, .streamAcknowledged: break
             case .state, .encryptedGroupMessage, .groupPresence, .reaction: break
             case .message(let message):
                 if let expected = env["XMPP_LAB_EXPECT_BODY"], message.body != expected { throw XMPPClientError.unexpectedProtocol }
@@ -146,7 +146,7 @@ import XMPPProtocol
                 _ = try await client.sendMessage(to: to, body: answer, id: replyID,
                                                  reply: XMPPReply(id: sourceID, to: message.from, body: source))
             case .state(.disconnected): throw XMPPClientError.connectionClosed
-            case .encryptedMessage, .omemoDevices, .encryptionFailure, .streamAcknowledged: break
+            case .encryptedMessage, .omemoDevices, .avatarMetadata, .encryptionFailure, .streamAcknowledged: break
             case .state, .encryptedGroupMessage, .groupPresence, .reaction: break
             }
         }

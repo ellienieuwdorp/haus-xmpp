@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 11 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 12 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -187,7 +187,11 @@ public actor MessageStore {
                     message_id TEXT NOT NULL, reason TEXT NOT NULL, UNIQUE(account_id,archive_id,message_id)
                 )
                 """)
-            try connection.execute("PRAGMA user_version = 11")
+            // v12: the verified XEP-0084/0153 avatar hash; the bytes live as a file beside the database.
+            if version < 12, try connection.query("SELECT 1 FROM pragma_table_info('chats') WHERE name='avatar_hash'").isEmpty {
+                try connection.execute("ALTER TABLE chats ADD COLUMN avatar_hash TEXT")
+            }
+            try connection.execute("PRAGMA user_version = 12")
         }
     }
 
@@ -382,15 +386,21 @@ public actor MessageStore {
 
     public func chats(accountID: String) throws -> [StoredChat] {
         let rows = try connection.query("""
-            SELECT c.id,c.title,c.pinned FROM chats c WHERE c.account_id=?
+            SELECT c.id,c.title,c.pinned,c.avatar_hash FROM chats c WHERE c.account_id=?
             ORDER BY c.pinned DESC,
             (SELECT MAX(sent_at) FROM messages m WHERE m.account_id=c.account_id AND m.chat_id=c.id) DESC, c.id
             """, [.text(accountID)])
         return try rows.map { row in
             let latest = try messages(accountID: accountID, chatID: row[0].string, limit: 1).first
             return StoredChat(id: row[0].string, accountID: accountID, title: row[1].string,
-                              isPinned: row[2].integer != 0, lastMessage: latest)
+                              isPinned: row[2].integer != 0, lastMessage: latest, avatarHash: row[3].optionalString)
         }
+    }
+
+    /// Records which verified avatar a chat shows; nil when the contact removed theirs.
+    public func setAvatarHash(accountID: String, chatID: String, hash: String?) throws {
+        try connection.execute("UPDATE chats SET avatar_hash=? WHERE account_id=? AND id=?",
+                               [hash.map(Value.text) ?? .null, .text(accountID), .text(chatID)])
     }
 
     /// Returns the latest page in chronological order. Cursor uses both timestamp and ID for ties.
@@ -605,11 +615,11 @@ public actor MessageStore {
             let count = try connection.query("SELECT COUNT(*),COUNT(DISTINCT m.chat_id) FROM notification_candidates n JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id WHERE n.account_id=?", values).first!
             let newest = try connection.query("SELECT n.message_id FROM notification_candidates n JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id WHERE n.account_id=? ORDER BY m.sent_at DESC,n.sequence DESC LIMIT 1", values).first?[0].string
             let latest = try newest.flatMap { try message(accountID: accountID, messageID: $0) }
-            let title = try latest.flatMap { message in
-                try connection.query("SELECT title FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(message.chatID)]).first?[0].string
+            let chat = try latest.flatMap { message in
+                try connection.query("SELECT title,avatar_hash FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(message.chatID)]).first
             }
-            let result = MessageNotification(latest: latest, chatTitle: title, messageCount: count[0].integer,
-                conversationCount: count[1].integer, previewsEnabled: try notificationPreviewsEnabled(accountID: accountID))
+            let result = MessageNotification(latest: latest, chatTitle: chat?[0].string, chatAvatarHash: chat?[1].optionalString,
+                messageCount: count[0].integer, conversationCount: count[1].integer, previewsEnabled: try notificationPreviewsEnabled(accountID: accountID))
             try dismissPendingMessageNotifications(accountID: accountID)
             return result
         }
@@ -1016,6 +1026,7 @@ private enum Value {
     case text(String), integer(Int), real(Double), blob(Data), null
     var data: Data? { if case let .blob(value) = self { return value }; return nil }
     var string: String { if case let .text(value) = self { return value }; return "" }
+    var optionalString: String? { if case let .text(value) = self { return value }; return nil }
     var integer: Int { if case let .integer(value) = self { return value }; return 0 }
     var double: Double {
         if case let .real(value) = self { return value }

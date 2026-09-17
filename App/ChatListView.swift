@@ -55,8 +55,9 @@ struct ChatListView: View {
                             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 4, trailing: 16))
                     }
                     ForEach(visibleChats) { chat in
-                        Button { path.append(.chat(chat.id)) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id)) }
+                        Button { path.append(.chat(chat.id)) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatars[chat.id]) }
                             .buttonStyle(.plain)
+                            .task(id: chat.id) { await model.loadAvatar(for: chat.id) }
                             .listRowInsets(EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16))
                             .accessibilityValue(chat.isPinned ? "Pinned" : "")
                             .accessibilityIdentifier("chat.\(chat.id)")
@@ -81,15 +82,7 @@ struct ChatListView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button { showingConnection = true } label: {
-                    ZStack {
-                        Circle().fill(model.accountID.isEmpty ? Color(.systemGray3) : Color(uiColor: AvatarPalette.color(for: model.accountID)))
-                        if let accountInitial {
-                            Text(accountInitial).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
-                        } else {
-                            Image(systemName: "person.fill").font(.subheadline).foregroundStyle(.white)
-                        }
-                    }
-                    .frame(width: 30, height: 30)
+                    ChatAvatar(key: model.accountID, name: accountInitial ?? "", image: model.avatars[model.accountID], size: 30)
                 }
                 .accessibilityLabel("Account")
             }
@@ -209,7 +202,7 @@ struct ChatListView: View {
                         ForEach(suggestedChats) { chat in
                             Button { openFromSheet(chat.id) } label: {
                                 HStack(spacing: 12) {
-                                    Avatar(chat: chat, isGroup: model.isGroup(chat.id), size: 40)
+                                    ChatAvatar(key: chat.id, name: chat.displayTitle, image: model.avatars[chat.id], isGroup: model.isGroup(chat.id), size: 40)
                                     VStack(alignment: .leading) {
                                         Text(chat.displayTitle).foregroundStyle(.primary)
                                         Text(chat.id).font(.footnote).foregroundStyle(.secondary)
@@ -234,26 +227,10 @@ struct ChatListView: View {
     }
 }
 
-private struct Avatar: View {
-    let chat: ChatSummary
-    let isGroup: Bool
-    var size: CGFloat = 52
-
-    var body: some View {
-        ZStack {
-            Circle().fill(Color(uiColor: AvatarPalette.color(for: chat.displayTitle)))
-            if isGroup { Image(systemName: "person.2.fill").font(.system(size: size * 0.38, weight: .semibold)) }
-            else { Text(String(chat.displayTitle.prefix(1)).uppercased()).font(.system(size: size * 0.4, weight: .semibold)) }
-        }
-        .foregroundStyle(.white)
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
-    }
-}
-
 private struct ChatRow: View {
     let chat: ChatSummary
     let isGroup: Bool
+    var avatar: UIImage? = nil
 
     private static let dayMonth: DateFormatter = { let f = DateFormatter(); f.dateFormat = "dd/MM"; return f }()
 
@@ -285,7 +262,7 @@ private struct ChatRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Avatar(chat: chat, isGroup: isGroup)
+            ChatAvatar(key: chat.id, name: chat.displayTitle, image: avatar, isGroup: isGroup, size: 52)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(chat.displayTitle).font(.headline).foregroundStyle(.primary).lineLimit(1)

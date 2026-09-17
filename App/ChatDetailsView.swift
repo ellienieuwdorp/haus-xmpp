@@ -82,27 +82,6 @@ struct TrustPill: View {
     }
 }
 
-/// Initial-letter circle in the contact's stable hue; a glyph for rooms.
-struct ChatAvatar: View {
-    let name: String
-    var isGroup = false
-    let size: CGFloat
-
-    var body: some View {
-        ZStack {
-            Circle().fill(Color(uiColor: AvatarPalette.color(for: name)))
-            if isGroup {
-                Image(systemName: "person.2.fill").font(.system(size: size * 0.42, weight: .medium))
-            } else {
-                Text(name.prefix(1).uppercased()).font(.system(size: size * 0.42, weight: .semibold))
-            }
-        }
-        .foregroundStyle(.white)
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
-    }
-}
-
 struct ChatDetailsView: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -115,7 +94,8 @@ struct ChatDetailsView: View {
         List {
             Section {
                 VStack(spacing: 6) {
-                    ChatAvatar(name: title, isGroup: isGroup, size: 96)
+                    ChatAvatar(key: chatID, name: title, image: model.avatars[chatID], isGroup: isGroup, size: 96)
+                        .task(id: chatID) { await model.loadAvatar(for: chatID) }
                     Text(title).font(.title.weight(.bold)).padding(.top, 6)
                     Text(chatID).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
                     if !model.isDemo {
