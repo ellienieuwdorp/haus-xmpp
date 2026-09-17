@@ -389,10 +389,8 @@ public actor XMPPClient {
                 let to = node.attributes["from"].map { " to='\(xmlEscaped($0))'" } ?? ""
                 // Respond to XEP-0199 pings; reject other unsupported requests explicitly.
                 if node.attributes["type"] == "get", node.children.count == 1,
-                   node.child("query", namespace: "http://jabber.org/protocol/disco#info") != nil {
-                    let features = ["http://jabber.org/protocol/disco#info", "urn:xmpp:ping", AvatarWire.metadataNode + "+notify"] + XMPPOMEMOProfile.allCases.flatMap { [$0.namespace, $0.devicesNode + "+notify"] }
-                    let query = "<query xmlns='http://jabber.org/protocol/disco#info'><identity category='client' type='phone' name='XMPP Lab'/>" + features.map { "<feature var='\($0)'/>" }.joined() + "</query>"
-                    try await write("<iq type='result' id='\(xmlEscaped(id))'\(to)>\(query)</iq>")
+                   let query = node.child("query", namespace: "http://jabber.org/protocol/disco#info") {
+                    try await write("<iq type='result' id='\(xmlEscaped(id))'\(to)>\(EntityCapabilities.discoInfoQuery(node: query.attributes["node"]))</iq>")
                 } else if node.child("ping", namespace: "urn:xmpp:ping") != nil {
                     try await write("<iq type='result' id='\(xmlEscaped(id))'\(to)/>")
                 } else {
@@ -465,7 +463,7 @@ public actor XMPPClient {
     }
 
     private func becomeOnline(token: UUID, presence: Bool = true) async throws {
-        if presence { try await write("<presence/>") }
+        if presence { try await write("<presence>\(EntityCapabilities.presenceElement)</presence>") }
         guard generation == token else { throw XMPPClientError.connectionClosed }
         phase = .online; deadline?.cancel(); deadline = nil
         liveness = Task { [weak self] in await self?.livenessLoop(token: token) }
