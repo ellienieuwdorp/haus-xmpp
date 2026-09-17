@@ -59,9 +59,11 @@ extension XMPPClient {
     }
 
     /// The first server component advertising XEP-0363, or nil when the server offers none.
-    /// Each probe is an IQ addressed to the exact component so the reply scope stays strict.
+    /// Components hang off the server domain (an unaddressed items query returns the account's
+    /// own items); each probe is then addressed to the exact component so the reply scope stays strict.
     public func uploadService() async throws -> XMPPUploadService? {
-        for item in try await discoveryItems() {
+        guard phase == .online, !domain.isEmpty else { throw XMPPClientError.notConnected }
+        for item in try await discoveryItems(for: domain) {
             let info: XMLNode
             do { info = try await discoveryInfo(for: item) } catch XMPPIQError.stanza { continue }
             if let service = XMPPUploadService.decode(jid: item, info: info) { return service }
