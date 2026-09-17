@@ -40,6 +40,19 @@ public struct XMPPReaction: Sendable, Equatable {
     public let provenance: XMPPMessageProvenance
 }
 
+/// A peer's unencrypted XEP-0184 receipt or XEP-0333 marker. The actor is server-authenticated only.
+public struct XMPPReceipt: Sendable, Equatable {
+    public let id: String
+    public let from: String
+    public let to: String?
+    public let targetID: String
+    public let kind: MessageContent.Receipt.Kind
+    public let provenance: XMPPMessageProvenance
+    public init(id: String, from: String, to: String?, targetID: String, kind: MessageContent.Receipt.Kind, provenance: XMPPMessageProvenance = .direct) {
+        self.id = id; self.from = from; self.to = to; self.targetID = targetID; self.kind = kind; self.provenance = provenance
+    }
+}
+
 /// A caller-resolved direct-chat reply target plus a bounded plaintext fallback snapshot.
 /// IDs must come from the original wire message, never a generated local database ID.
 /// A nil ID emits only the quoted body, without structured reply/fallback metadata.
@@ -57,6 +70,7 @@ public enum XMPPEvent: Sendable, Equatable {
     case state(XMPPConnectionState)
     case message(XMPPMessage)
     case reaction(XMPPReaction)
+    case receipt(XMPPReceipt)
     case encryptedMessage(XMPPEncryptedMessage)
     case encryptedGroupMessage(XMPPEncryptedGroupMessage)
     case groupPresence(room: String)
@@ -206,6 +220,19 @@ public actor XMPPClient {
         return id
     }
 
+    /// Unencrypted receipt/marker for legacy peers; modern peers get the same element inside SCE.
+    @discardableResult public func sendReceipt(to: String, targetID: String, kind: MessageContent.Receipt.Kind, id: String = UUID().uuidString) async throws -> String {
+        guard phase == .online else { throw XMPPClientError.notConnected }
+        try await write(Self.receiptXML(to: to, targetID: targetID, kind: kind, id: id))
+        return id
+    }
+
+    public static func receiptXML(to: String, targetID: String, kind: MessageContent.Receipt.Kind, id: String) throws -> String {
+        guard MessageContent.validAddress(to), MessageContent.validIdentifier(id) else { throw XMPPClientError.invalidConfiguration }
+        let content = try MessageContent(body: "", receipt: .init(targetID: targetID, kind: kind)).xml()
+        return "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(content)<store xmlns='urn:xmpp:hints'/></message>"
+    }
+
     public static func reactionXML(to: String, targetID: String, reactions: [String], id: String) throws -> String {
         guard MessageContent.validAddress(to), MessageContent.validIdentifier(id) else { throw XMPPClientError.invalidConfiguration }
         let content = try MessageContent(body: "", reaction: .init(targetID: targetID, reactions: reactions)).xml()
@@ -224,9 +251,10 @@ public actor XMPPClient {
         }
     }
 
-    static func messageXML(to: String, body: String, id: String, reply: XMPPReply? = nil) throws -> String {
+    static func messageXML(to: String, body: String, id: String, reply: XMPPReply? = nil, requestReceipt: Bool = false, markable: Bool = false) throws -> String {
         try validateMessage(to: to, body: body, id: id, reply: reply)
-        let content = try MessageContent(body: body, reply: reply.map { .init(id: $0.id, to: $0.to, quote: replyFallback($0.body)) }, originID: id).xml()
+        let content = try MessageContent(body: body, reply: reply.map { .init(id: $0.id, to: $0.to, quote: replyFallback($0.body)) },
+                                         requestsReceipt: requestReceipt, markable: markable, originID: id).xml()
         return "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(content)</message>"
     }
 
@@ -250,6 +278,12 @@ public actor XMPPClient {
         guard let (from, content) = plainContent(node), !content.text.isEmpty else { return nil }
         return XMPPMessage(id: node.attributes["id"] ?? UUID().uuidString, from: from, to: node.attributes["to"],
                            body: content.text, originID: content.originID, type: node.attributes["type"], provenance: provenance)
+    }
+
+    static func parsedReceipt(_ node: XMLNode, provenance: XMPPMessageProvenance = .direct) -> XMPPReceipt? {
+        guard let (from, content) = plainContent(node), let receipt = content.receipt else { return nil }
+        return XMPPReceipt(id: node.attributes["id"].flatMap { MessageContent.validIdentifier($0) ? $0 : nil } ?? UUID().uuidString, from: from,
+                           to: node.attributes["to"], targetID: receipt.targetID, kind: receipt.kind, provenance: provenance)
     }
 
     static func parsedReaction(_ node: XMLNode, provenance: XMPPMessageProvenance = .direct) -> XMPPReaction? {
@@ -388,7 +422,7 @@ public actor XMPPClient {
                 // Respond to XEP-0199 pings; reject other unsupported requests explicitly.
                 if node.attributes["type"] == "get", node.children.count == 1,
                    node.child("query", namespace: "http://jabber.org/protocol/disco#info") != nil {
-                    let features = ["http://jabber.org/protocol/disco#info", "urn:xmpp:ping"] + XMPPOMEMOProfile.allCases.flatMap { [$0.namespace, $0.devicesNode + "+notify"] }
+                    let features = ["http://jabber.org/protocol/disco#info", "urn:xmpp:ping", "urn:xmpp:receipts", "urn:xmpp:chat-markers:0"] + XMPPOMEMOProfile.allCases.flatMap { [$0.namespace, $0.devicesNode + "+notify"] }
                     let query = "<query xmlns='http://jabber.org/protocol/disco#info'><identity category='client' type='phone' name='XMPP Lab'/>" + features.map { "<feature var='\($0)'/>" }.joined() + "</query>"
                     try await write("<iq type='result' id='\(xmlEscaped(id))'\(to)>\(query)</iq>")
                 } else if node.child("ping", namespace: "urn:xmpp:ping") != nil {
@@ -513,6 +547,8 @@ public actor XMPPClient {
             try emit(.omemoDevices(owner: update.owner, profile: update.profile, devices: update.devices))
         } else if let reaction = Self.parsedReaction(node, provenance: provenance) {
             try emit(.reaction(reaction))
+        } else if let receipt = Self.parsedReceipt(node, provenance: provenance) {
+            try emit(.receipt(receipt))
         } else if let message = Self.parsedMessage(node, provenance: provenance) {
             try emit(.message(message))
         }
@@ -523,9 +559,9 @@ public actor XMPPClient {
         _ = try await requestIQ(type: "set", to: nil, payload: "<\(enabled ? "enable" : "disable") xmlns='urn:xmpp:carbons:2'/>")
     }
 
-    @discardableResult public func sendEncryptedMessage(to: String, envelope: XMPPOMEMOEnvelope, id: String) async throws -> String {
+    @discardableResult public func sendEncryptedMessage(to: String, envelope: XMPPOMEMOEnvelope, id: String, requestReceipt: Bool = false, markable: Bool = false) async throws -> String {
         guard phase == .online else { throw XMPPClientError.notConnected }
-        try await write(Self.encryptedMessageXML(to: to, envelope: envelope, id: id))
+        try await write(Self.encryptedMessageXML(to: to, envelope: envelope, id: id, requestReceipt: requestReceipt, markable: markable))
         return id
     }
 

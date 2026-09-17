@@ -43,6 +43,13 @@ enum AccentTheme: String, CaseIterable, Identifiable {
         default: return .white
         }
     }
+    /// The read-receipt glyph: blue, chosen per bubble so it stays visible on the accent fill.
+    var readReceipt: UIColor {
+        switch self {
+        case .lime, .crab, .sky: return UIColor(red: 0.05, green: 0.28, blue: 0.75, alpha: 1)
+        default: return UIColor(red: 0.6, green: 0.9, blue: 1, alpha: 1)
+        }
+    }
     var swatch: Color { Color(uiColor: bubble) }
 }
 

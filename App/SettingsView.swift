@@ -49,6 +49,20 @@ struct SettingsView: View {
                 }
             }
             Section {
+                Toggle(isOn: Binding(get: { model.accountPreferences.deliveryReceipts }, set: { on in Task { await model.updatePreferences { $0.deliveryReceipts = on } } })) {
+                    Label { Text("Delivery receipts") } icon: { SettingsIconTile(systemName: "checkmark.message.fill", color: .green) }
+                }
+                .accessibilityIdentifier("deliveryReceipts")
+                Toggle(isOn: Binding(get: { model.accountPreferences.readReceipts }, set: { on in Task { await model.updatePreferences { $0.readReceipts = on } } })) {
+                    Label { Text("Read receipts") } icon: { SettingsIconTile(systemName: "eye.fill", color: .blue) }
+                }
+                .accessibilityIdentifier("readReceipts")
+            } header: {
+                Text("Privacy")
+            } footer: {
+                Text("Tell contacts when their messages reach this iPhone and when you read them. Turning one off also stops asking contacts for it. You still see what contacts send you.")
+            }
+            Section {
                 NavigationLink {
                     AppearanceView()
                 } label: {

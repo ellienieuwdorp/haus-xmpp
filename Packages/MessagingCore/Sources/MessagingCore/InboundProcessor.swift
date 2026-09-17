@@ -57,6 +57,9 @@ public actor InboundProcessor {
         case .reaction(let reaction):
             do { _ = try await encryption.receivePlaintextReaction(account: account, reaction: reaction); return .stored }
             catch { mayAcknowledge = false; throw error }
+        case .receipt(let receipt):
+            do { _ = try await encryption.receivePlaintextReceipt(account: account, receipt: receipt); return .stored }
+            catch { mayAcknowledge = false; throw error }
         case .streamManagementBarrier(let token):
             defer { mayAcknowledge = true }
             guard mayAcknowledge else { await client.disconnect(); throw Failure.unsavedInbound }

@@ -42,13 +42,27 @@ struct ConversationView: View {
             return left == right ? $0 < $1 : left < right
         }
         return TimelineMessage(id: message.id, body: message.body, isOutgoing: message.isOutgoing, isStarred: message.isStarred,
-                               sentAt: message.sentAt, status: message.transportState.flatMap { TimelineMessage.Status(rawValue: $0.rawValue) },
+                               sentAt: message.sentAt, status: status(message),
                                reply: message.reply.map { TimelineReply(author: authorName($0.senderID), body: $0.body) },
                                securityNotice: !model.isDemo && message.encryptionProfile == nil ? "Not encrypted" : nil,
                                reactions: emoji.map { TimelineReaction(emoji: $0, count: counts[$0]!, isSelected: selected.contains($0)) },
                                canReact: model.canReact(to: message),
                                reactionUnavailableReason: reactionUnavailableReason(message),
                                author: isGroup && !message.isOutgoing ? message.senderID : nil)
+    }
+
+    /// Clock while the outbox works, one check once the server holds it, two once the peer confirmed
+    /// delivery, tinted once read. Own messages from the archive or a carbon have no outbox row: the
+    /// server already holds them, so they start at the single check.
+    private func status(_ message: ChatMessage) -> TimelineMessage.Status? {
+        guard message.isOutgoing else { return nil }
+        let transport = message.transportState ?? .serverAccepted
+        guard transport == .serverAccepted else { return TimelineMessage.Status(rawValue: transport.rawValue) }
+        switch model.messageReceipts[message.id] {
+        case .displayed?: return .displayed
+        case .delivered?: return .delivered
+        default: return .serverAccepted
+        }
     }
 
     /// One line under the disabled reaction row; mirrors the checks in `AppModel.canReact`.
@@ -114,6 +128,10 @@ struct ConversationView: View {
                 composing = true
             }, onReaction: { id, emoji in
                 Task { await model.toggleReaction(emoji, messageID: id) }
+            }, onDisplayed: { id in
+                // Only the newest received message is marked; XEP-0333 makes a marker cover everything before it.
+                guard id == model.messages.last(where: { !$0.isOutgoing })?.id else { return }
+                Task { await model.markDisplayed(id) }
             })
             .overlay {
                 // Only an actual empty chat says so; while a load is pending the timeline stays blank.

@@ -10,6 +10,7 @@ struct EncryptedContent: Equatable {
     let body: String
     let reply: MessageReply?
     var reaction: ReactionContent? = nil
+    var receipt: MessageContent.Receipt? = nil
     var originID: String? = nil
     var timestamp: Date? = nil
 
@@ -34,6 +35,11 @@ struct EncryptedContent: Equatable {
         guard modern else { throw OMEMOError.unsupportedEncryptedReactions }
         let content = MessageContent(body: "", reaction: .init(targetID: targetWireID, reactions: reactions), originID: originID)
         return try wrap(content, sender: sender, recipient: recipient)
+    }
+
+    /// A receipt or read marker for a modern peer rides inside the envelope so the read message ID is never on the wire in clear.
+    static func encodeReceipt(targetWireID: String, kind: MessageContent.Receipt.Kind, sender: String, recipient: String, originID: String) throws -> Data {
+        try wrap(MessageContent(body: "", receipt: .init(targetID: targetWireID, kind: kind), originID: originID), sender: sender, recipient: recipient)
     }
 
     private static func wrap(_ content: MessageContent, sender: String, recipient: String) throws -> Data {
@@ -77,13 +83,13 @@ struct EncryptedContent: Equatable {
             timestamp = parsed
         }
         guard let content = try? MessageContent.decode(root.children("content", namespace: ns)[0], strict: true),
-              !content.body.isEmpty || content.reaction != nil else { throw OMEMOError.invalidContent }
+              !content.body.isEmpty || content.reaction != nil || content.receipt != nil else { throw OMEMOError.invalidContent }
         let reply = content.reply.flatMap { reply in
             reply.id.map { MessageReply(messageID: $0, senderID: reply.to, body: unquote(reply.quote, author: reply.to), wireID: $0) }
         }
         return EncryptedContent(body: content.body, reply: reply,
                                 reaction: content.reaction.map { ReactionContent(targetWireID: $0.targetID, reactions: $0.reactions) },
-                                originID: content.originID, timestamp: timestamp)
+                                receipt: content.receipt, originID: content.originID, timestamp: timestamp)
     }
 
     // Remove only the exact quotation syntax emitted by this adapter. Foreign fallback

@@ -114,4 +114,5 @@ public enum PreparedUpdate: Sendable, Equatable {
     case group(room: String, envelope: XMPPOMEMOEnvelope, members: [String])
     /// The exact plain stanza is the sealed wire; the serializer is deterministic for these inputs.
     case plainReaction(to: String, targetID: String, reactions: [String])
+    case plainReceipt(to: String, targetID: String, kind: MessageContent.Receipt.Kind)
 }

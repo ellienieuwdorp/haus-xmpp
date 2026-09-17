@@ -30,6 +30,9 @@ final class AppModel {
     /// The chat whose messages `messages` currently holds; nil while a load is pending.
     private(set) var messagesLoadedFor: String?
     private(set) var messageReactions: [String: [AuthenticatedReaction]] = [:]
+    /// The peer's strongest receipt per own message in the open chat: delivered or displayed.
+    private(set) var messageReceipts: [String: MessageEventKind] = [:]
+    private(set) var accountPreferences = AccountPreferences()
     private(set) var groupChats: [String: GroupChatState] = [:]
     private(set) var reactableGroupMessages: Set<String> = []
     private(set) var accountID = ""
@@ -149,20 +152,26 @@ final class AppModel {
         selectAccount(account)
         guard generation == token, let store else { return }
         do {
-            let samples: [(String, String, [String])] = [
-                ("alex@preview.local", "Alex", ["Found a quiet spot by the water. Coffee tomorrow?", "That sounds perfect. Around ten?", "Ten it is ☕️"]),
-                ("maya@preview.local", "Maya", ["A little reminder to take the scenic route.", "Always. See you this weekend!"]),
-                ("notes@preview.local", "Notes to self", ["A place for the things worth keeping. Try starring this message."])
+            // Each chat's sent message shows one receipt state: read (Alex), delivered (Maya), accepted (Notes).
+            let samples: [(String, String, [String], MessageEventKind?)] = [
+                ("alex@preview.local", "Alex", ["Found a quiet spot by the water. Coffee tomorrow?", "That sounds perfect. Around ten?", "Ten it is ☕️"], .displayed),
+                ("maya@preview.local", "Maya", ["A little reminder to take the scenic route.", "Always. See you this weekend!"], .delivered),
+                ("notes@preview.local", "Notes to self", ["A place for the things worth keeping. Try starring this message.", "Starred things stay at the top of the list."], nil)
             ]
-            for (chatID, title, bodies) in samples {
+            for (chatID, title, bodies, receipt) in samples {
                 try await store.upsertChat(accountID: account, chatID: chatID, title: title)
                 for (index, body) in bodies.enumerated() {
                     let outgoing = index == 1
+                    let id = "sample-\(chatID)-\(index)"
                     try await store.insertMessage(StoredMessage(
-                        id: "sample-\(chatID)-\(index)", accountID: account, chatID: chatID,
+                        id: id, accountID: account, chatID: chatID,
                         senderID: outgoing ? account : chatID, body: body,
-                        sentAt: Date(timeIntervalSince1970: 1_789_380_000 + Double(index)), isOutgoing: outgoing
+                        sentAt: Date(timeIntervalSince1970: 1_789_380_000 + Double(index)), isOutgoing: outgoing, wireID: outgoing ? id : nil
                     ))
+                    if outgoing, let receipt {
+                        try await store.recordReceipt(accountID: account, event: MessageEvent(id: id + "-receipt", chatID: chatID, actorID: chatID, targetWireID: id,
+                                                                                            kind: receipt, payload: "{}", updatedAt: Date(timeIntervalSince1970: 1_789_380_010)))
+                    }
                 }
             }
             guard generation == token else { return }
@@ -583,7 +592,7 @@ final class AppModel {
         reactableGroupMessages = []
         chats = []
         messages = []
-        messageReactions = [:]
+        messageReactions = [:]; messageReceipts = [:]
         openChatID = nil
         preferences.set(account, forKey: "lastAccount")
     }
@@ -660,7 +669,7 @@ final class AppModel {
                 if case .needsAttention = session {} else { session = .offline(reason: reason) }
                 reconcile()
             }
-        case .reaction, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier:
+        case .reaction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier:
             guard let encryption, let client else { return }
             if case .encryptedMessage = event { receivedCount += 1 }
             // One processor per connection: it owns the "may acknowledge" rule for this stream.
@@ -930,6 +939,8 @@ final class AppModel {
         let token = generation
         drainTask = Task { [weak self] in
             do {
+                // Whether we ask for receipts and read markers is decided per send from the stored switches.
+                let switches = try await store.accountPreferences(accountID: account)
                 let preparation = try await encryption.prepareAvailableMessages(account: account, transport: client)
                 if let self, self.generation == token, let issue = preparation.blockedChats[self.openChatID ?? ""] {
                     self.encryptionStatus = issue
@@ -959,7 +970,8 @@ final class AppModel {
                         let envelope: XMPPOMEMOEnvelope
                         do { envelope = try await encryption.outgoingEnvelope(account: account, messageID: message.id) }
                         catch { throw OutboxSendFailure.notAttempted }
-                        _ = try await client.sendEncryptedMessage(to: message.chatID, envelope: envelope, id: message.id)
+                        _ = try await client.sendEncryptedMessage(to: message.chatID, envelope: envelope, id: message.id,
+                                                                  requestReceipt: switches.deliveryReceipts, markable: switches.readReceipts)
                     }
                     try? await client.requestAcknowledgement()
                 }, didChange: { [weak self] in
@@ -993,6 +1005,8 @@ final class AppModel {
                         _ = try await client.sendEncryptedGroupMessage(room: room, envelope: envelope, id: update.id, expectedMembers: members)
                     case .plainReaction(let to, let targetID, let reactions):
                         _ = try await client.sendReaction(to: to, targetID: targetID, reactions: reactions, id: update.id)
+                    case .plainReceipt(let to, let targetID, let kind):
+                        _ = try await client.sendReceipt(to: to, targetID: targetID, kind: kind, id: update.id)
                     }
                     try? await client.requestAcknowledgement()
                 }
@@ -1044,7 +1058,7 @@ final class AppModel {
     }
 
     func openChat(_ chatID: String) async {
-        openChatID = chatID; messages = []; messagesLoadedFor = nil; messageReactions = [:]; encryptionOverview = nil
+        openChatID = chatID; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; encryptionOverview = nil
         encryptionStatus = "Setting up encryption…"; encryptionNeedsReview = false
         await refresh()
         if !isDemo { await loadEncryptionDetails(for: chatID) }
@@ -1162,22 +1176,40 @@ final class AppModel {
         startOutbox()
     }
 
-    func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:] } }
+    func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:] } }
 
     var notificationPreviewsEnabled = true
 
-    func setNotificationPreviews(_ enabled: Bool) async {
+    func setNotificationPreviews(_ enabled: Bool) async { await updatePreferences { $0.notificationPreviews = enabled } }
+
+    /// Every per-account switch is one row written under the transport lease; the store enforces the receipt switches.
+    func updatePreferences(_ change: (inout AccountPreferences) -> Void) async {
         guard foreground, !quiescing, let store, !accountID.isEmpty else { return }
         let account = accountID
         let token = generation
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
+        var updated = accountPreferences
+        change(&updated)
         do {
             if !hasTransportOwnership { try await acquireForegroundOwnership(store, token: token) }
             guard generation == token else { return }
-            try await store.setNotificationPreviews(accountID: account, enabled: enabled)
-            if accountID == account { notificationPreviewsEnabled = enabled }
-        } catch { self.error = "Could not save notification preferences." }
+            try await store.setAccountPreferences(accountID: account, updated)
+            if accountID == account { accountPreferences = updated; notificationPreviewsEnabled = updated.notificationPreviews }
+        } catch { self.error = "Could not save preferences." }
+    }
+
+    /// The timeline showed the newest received message while the app is in front: queue the read marker.
+    func markDisplayed(_ messageID: String) async {
+        guard foreground, !quiescing, hasTransportOwnership, !isDemo, let encryption,
+              let message = messages.first(where: { $0.id == messageID }), !message.isOutgoing, message.chatID == openChatID,
+              message.encryptionProfile == "modern" || message.encryptionProfile == "legacy" else { return }
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
+        let account = accountID, token = generation
+        let queued = (try? await encryption.queueReceipt(account: account, chatID: message.chatID, messageID: messageID, kind: .marker)) ?? nil
+        guard queued != nil, generation == token else { return }
+        startOutbox()
     }
 
     func toggleStar(_ id: String) async {
@@ -1217,10 +1249,16 @@ final class AppModel {
             if let selected {
                 storedMessages = try await store.messages(accountID: account, chatID: selected, limit: 1000)
             } else { storedMessages = [] }
-            let reactions: [String: [AuthenticatedReaction]]
+            var reactions: [String: [AuthenticatedReaction]] = [:], receipts: [String: MessageEventKind] = [:]
             if let selected {
-                reactions = try await store.reactionsForChat(accountID: account, chatID: selected, messageIDs: Set(storedMessages.map(\.id)))
-            } else { reactions = [:] }
+                // One bounded query for the timeline: reactions, delivery and read receipts together.
+                for (id, events) in try await store.eventsForChat(accountID: account, chatID: selected, messageIDs: Set(storedMessages.map(\.id))) {
+                    let projected = events.compactMap(AuthenticatedReaction.init)
+                    if !projected.isEmpty { reactions[id] = projected }
+                    if events.contains(where: { $0.kind == .displayed }) { receipts[id] = .displayed }
+                    else if events.contains(where: { $0.kind == .delivered }) { receipts[id] = .delivered }
+                }
+            }
             var groupReactionTargets = Set<String>()
             if let selected, rooms[selected] != nil {
                 for message in storedMessages where message.encryptionProfile == "modern" {
@@ -1231,7 +1269,8 @@ final class AppModel {
                 }
             }
             guard accountID == account, openChatID == selected else { return }
-            notificationPreviewsEnabled = try await store.notificationPreviewsEnabled(accountID: account)
+            accountPreferences = try await store.accountPreferences(accountID: account)
+            notificationPreviewsEnabled = accountPreferences.notificationPreviews
             if foreground, hasTransportOwnership, !quiescing {
                 try await store.dismissPendingMessageNotifications(accountID: account)
             }
@@ -1253,6 +1292,7 @@ final class AppModel {
             messages = storedMessages
             messagesLoadedFor = selected
             messageReactions = reactions
+            messageReceipts = receipts
             reactableGroupMessages = groupReactionTargets
         } catch { self.error = "Could not read local conversations." }
     }
