@@ -59,6 +59,7 @@
 		DA7ABDAD69B9B845CA2E058E /* SessionStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD707B3D294792E9F43B2286 /* SessionStateTests.swift */; };
 		DF0983FA3FDFD4E68EC27C66 /* NotificationAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A7EFE21E5ABA53391725448 /* NotificationAccount.swift */; };
 		E23C003181D2864649BEB0CA /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0311640D33AB3155A53A53A3 /* RootView.swift */; };
+		E49E72869129F2533B8A6524 /* RevisionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6613C30B70B4BB811C03B8 /* RevisionUITests.swift */; };
 		E57C443B766B4EB72095CE81 /* ChatListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CAD55F8C67F101615618BE4 /* ChatListView.swift */; };
 		E7DCC1F8290E7DA1D09CE758 /* OMEMO in Frameworks */ = {isa = PBXBuildFile; productRef = FAF842F0DE5C507F8D57F430 /* OMEMO */; };
 		EE44B46D3A68EEA246467DB4 /* ReplyUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC7CDB26BA137152F2503309 /* ReplyUITests.swift */; };
@@ -155,6 +156,7 @@
 		A8B2544FBAE494AC3B25B49F /* PushRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistration.swift; sourceTree = "<group>"; };
 		A9CB3F0019D6F6D8C373107D /* EncryptionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionUITests.swift; sourceTree = "<group>"; };
 		AC9D418986C30C4F6A0D3E79 /* MessageStore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MessageStore; path = Packages/MessageStore; sourceTree = SOURCE_ROOT; };
+		AE6613C30B70B4BB811C03B8 /* RevisionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RevisionUITests.swift; sourceTree = "<group>"; };
 		BBD21AF11824F42FB3E0DE46 /* GroupJoinView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupJoinView.swift; sourceTree = "<group>"; };
 		BD5764F5CEC7644EC23110AC /* NotificationAccessGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationAccessGateTests.swift; sourceTree = "<group>"; };
 		BFFF37D62D089579FDC17D78 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -274,6 +276,7 @@
 				458E132229BD40D81BDBBF78 /* PushUITests.swift */,
 				40EBA5FA15B66AEBE4033B4B /* ReactionUITests.swift */,
 				CC7CDB26BA137152F2503309 /* ReplyUITests.swift */,
+				AE6613C30B70B4BB811C03B8 /* RevisionUITests.swift */,
 				42CFC68CD43A67165491DDB9 /* UITestStorage.swift */,
 			);
 			path = AppTests;
@@ -547,6 +550,7 @@
 				10D4A99046FBA70E9DA9374C /* PushUITests.swift in Sources */,
 				565E2244C18990588EFB56B6 /* ReactionUITests.swift in Sources */,
 				EE44B46D3A68EEA246467DB4 /* ReplyUITests.swift in Sources */,
+				E49E72869129F2533B8A6524 /* RevisionUITests.swift in Sources */,
 				40D62336483129A255BB1524 /* UITestStorage.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

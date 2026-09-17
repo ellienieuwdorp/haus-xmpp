@@ -64,6 +64,82 @@ final class RevisionUITests: XCTestCase {
         XCTAssertTrue(placeholder.waitForExistence(timeout: 10))
     }
 
+    /// The lab echo peer corrects its echo of a "#edit" message and retracts its echo of a "#unsend"
+    /// message, so the inbound half is exercised against real OMEMO traffic.
+    @MainActor func testPeerEditsAndUnsendsApplyToTheOriginalBubble() throws {
+        continueAfterFailure = false
+        let env = ProcessInfo.processInfo.environment
+        guard let user = env["XMPP_LAB_USERNAME"], let password = env["XMPP_LAB_PASSWORD"], let peer = env["XMPP_OMEMO_PEER"] else {
+            throw XCTSkip("Requires the lab echo peer")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["-lab-ui-test"]
+        app.launchEnvironment = ["XMPP_LAB_USERNAME": user, "XMPP_LAB_PASSWORD": password]
+        app.isolateMessageStorage()
+        app.launch()
+        app.buttons["Settings"].tap(); app.buttons["Connect to local lab"].tap()
+        let consent = app.switches["labConsent"]
+        XCTAssertTrue(consent.waitForExistence(timeout: 5))
+        consent.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        app.buttons["Connect"].tap()
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"]
+        if allow.waitForExistence(timeout: 3) { allow.tap() }
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected")).firstMatch.waitForExistence(timeout: 25))
+        app.returnToChats(); app.buttons["newConversation"].tap()
+        app.textFields["newChatAddress"].tap(); app.textFields["newChatAddress"].typeText(peer)
+        app.buttons["startChat"].tap()
+        let composer = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        app.openEncryptionDetails()
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "encryptionDevice."))
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 15))
+        for _ in 0..<20 {
+            let pending = rows.matching(NSPredicate(format: "label CONTAINS %@", "Review required")).firstMatch
+            if !pending.exists { break }
+            pending.tap()
+            XCTAssertTrue(app.buttons["Accept without verifying"].waitForExistence(timeout: 5))
+            app.buttons["Accept without verifying"].tap()
+            XCTAssertTrue(app.navigationBars["Devices & Encryption"].waitForExistence(timeout: 5))
+        }
+        app.closeEncryptionDetails()
+
+        // Peer edit: the echo arrives, then its correction rewrites that same bubble.
+        let marker = "Draft \(UUID().uuidString.prefix(4))"
+        composer.tap(); composer.typeText(marker + " #edit"); app.buttons["sendMessage"].tap()
+        let echo = app.textViews.containing(NSPredicate(format: "value == %@", marker + " #edit")).matching(NSPredicate(format: "NOT (label BEGINSWITH %@)", "You:")).firstMatch
+        XCTAssertTrue(echo.waitForExistence(timeout: 30))
+        let corrected = app.textViews.containing(NSPredicate(format: "value == %@", marker + " (edited by peer)")).firstMatch
+        XCTAssertTrue(corrected.waitForExistence(timeout: 30))
+        XCTAssertTrue(corrected.label.contains("edited"))
+        XCTAssertFalse(echo.exists, "the correction replaced the echo instead of adding a bubble")
+        XCTAssertEqual(app.textViews.matching(NSPredicate(format: "label CONTAINS %@", marker)).count, 2, "our message and the peer's edited echo")
+        capture(app, "Peer edit applied in place")
+
+        // Peer unsend: the echo becomes the placeholder.
+        let second = "Gone \(UUID().uuidString.prefix(4))"
+        composer.tap(); composer.typeText(second + " #unsend"); app.buttons["sendMessage"].tap()
+        let unsentEcho = app.textViews.containing(NSPredicate(format: "value == %@", "Message unsent")).firstMatch
+        XCTAssertTrue(unsentEcho.waitForExistence(timeout: 40))
+        XCTAssertFalse(app.textViews.containing(NSPredicate(format: "value == %@", second + " #unsend")).matching(NSPredicate(format: "NOT (label BEGINSWITH %@)", "You:")).firstMatch.exists)
+        capture(app, "Peer unsend applied in place")
+
+        // Our own edit and unsend round-trip through the outbox and reach server acceptance.
+        let mine = app.textViews.containing(NSPredicate(format: "value == %@", second + " #unsend")).matching(NSPredicate(format: "label BEGINSWITH %@", "You:")).firstMatch
+        XCTAssertTrue(mine.waitForExistence(timeout: 5))
+        mine.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Edit"].waitForExistence(timeout: 5)); app.buttons["Edit"].tap()
+        composer.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap(); composer.typeText(" more"); app.buttons["sendMessage"].tap()
+        let edited = app.textViews.containing(NSPredicate(format: "value == %@", second + " #unsend more")).firstMatch
+        XCTAssertTrue(edited.waitForExistence(timeout: 10))
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "edited"), object: edited)], timeout: 10)
+        edited.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Unsend"].waitForExistence(timeout: 5)); app.buttons["Unsend"].tap()
+        let confirm = app.sheets.buttons["Unsend"].exists ? app.sheets.buttons["Unsend"] : app.buttons["Unsend"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5)); confirm.tap()
+        XCTAssertTrue(app.textViews.containing(NSPredicate(format: "value == %@", "You unsent a message")).firstMatch.waitForExistence(timeout: 10))
+        capture(app, "Own edit and unsend in the lab")
+    }
+
     @MainActor private func capture(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
