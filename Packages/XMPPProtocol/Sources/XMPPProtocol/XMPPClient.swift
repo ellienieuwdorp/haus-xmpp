@@ -91,7 +91,7 @@ public actor XMPPClient {
     private var generation = UUID()
     private var phase: Phase = .idle
     private var framer = XMLStreamFramer()
-    private var domain = ""
+    private(set) var domain = ""
     private var username = ""
     private var password = ""
     private var bindID = ""

@@ -62,7 +62,7 @@ extension XMPPClient {
     /// Components hang off the server domain (an unaddressed items query returns the account's
     /// own items); each probe is then addressed to the exact component so the reply scope stays strict.
     public func uploadService() async throws -> XMPPUploadService? {
-        guard phase == .online, !domain.isEmpty else { throw XMPPClientError.notConnected }
+        guard !domain.isEmpty else { throw XMPPClientError.notConnected }
         for item in try await discoveryItems(for: domain) {
             let info: XMLNode
             do { info = try await discoveryInfo(for: item) } catch XMPPIQError.stanza { continue }
