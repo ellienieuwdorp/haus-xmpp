@@ -846,7 +846,7 @@ final class AppModel {
                 case .stored:
                     await flushEncryptionControls(account: account, client: client)
                     guard generation == token else { return }
-                    await refresh()
+                    refreshSoon()
                 case .retained(let problem):
                     encryptionNeedsReview = true
                     encryptionStatus = problem
@@ -879,7 +879,7 @@ final class AppModel {
         case .encryptionFailure:
             encryptionStatus = "An encrypted message could not be opened"
         case .streamAcknowledged:
-            await refresh()
+            refreshSoon()
         case .message:
             // Encrypted conversations do not render unauthenticated plaintext injected by a peer
             // or server as though it had passed OMEMO authentication.
@@ -1148,7 +1148,7 @@ final class AppModel {
             _ = try await encryption.queueReactions(account: account, chatID: message.chatID, messageID: messageID,
                                                      reactions: mine.contains(emoji) ? [] : [emoji])
             guard generation == token else { return }
-            await refresh()
+            await refresh(.openChat)
             startOutbox()
         } catch {
             if generation == token { self.error = (error as? OMEMOError)?.errorDescription ?? "Could not save your reaction." }
@@ -1330,6 +1330,10 @@ final class AppModel {
     func openChat(_ chatID: String) async {
         openChatID = chatID; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]; encryptionOverview = nil
         encryptionStatus = "Setting up encryption…"; encryptionNeedsReview = false
+        // First paint: the newest screenful now, before the chat list and the rest of the history.
+        let account = accountID
+        if let store, let publish = try? await loadTimeline(store: store, account: account, chat: chatID, isGroup: isGroup(chatID), limit: 50),
+           accountID == account, openChatID == chatID, messagesLoadedFor != chatID { publish() }
         await refresh()
         if !isDemo { await loadEncryptionDetails(for: chatID) }
     }
@@ -1488,7 +1492,7 @@ final class AppModel {
         guard let message = messages.first(where: { $0.id == id }), let store else { return }
         do {
             try await store.setStarred(accountID: accountID, messageID: id, starred: !message.isStarred)
-            await refresh()
+            await refresh(.openChat)
         } catch { self.error = "Could not update starred message." }
     }
 
@@ -1496,82 +1500,104 @@ final class AppModel {
         guard let store else { return }
         do {
             try await store.setPinned(accountID: accountID, chatID: chat.id, pinned: !chat.isPinned)
-            await refresh()
+            await refresh(.chats)
         } catch { self.error = "Could not update pinned conversation." }
     }
 
-    private func refresh() async {
-        guard let store else { return }
-        let account = accountID
-        let selected = openChatID
-        do {
-            let storedChats = try await store.chats(accountID: account)
-            let pending = try await encryption?.pendingConversations(account: account) ?? [:]
-            let rooms: [String: [String]]
-            if let encryption, !isDemo, !account.isEmpty, try await store.encryptionState(accountID: account) != nil {
-                rooms = try await encryption.knownGroupRooms(account: account)
-            } else { rooms = [:] }
-            let existingChatIDs = Set(storedChats.map(\.id))
-            for peer in pending.keys where !existingChatIDs.contains(peer) {
-                // A retained first-contact message needs a discoverable review entry and
-                // a durable conversation for pinning or queuing a reply before approval.
-                try await store.upsertChat(accountID: account, chatID: peer, title: peer)
-            }
-            let storedMessages: [StoredMessage]
-            if let selected {
-                storedMessages = try await store.messages(accountID: account, chatID: selected, limit: 1000)
-            } else { storedMessages = [] }
-            var reactions: [String: [AuthenticatedReaction]] = [:], receipts: [String: MessageEventKind] = [:]
-            var events: [String: [MessageEvent]] = [:]
-            if let selected {
-                // One bounded query for the timeline: reactions, delivery and read receipts, retractions and corrections together.
-                events = try await store.eventsForChat(accountID: account, chatID: selected, messageIDs: Set(storedMessages.map(\.id)))
-                for (id, events) in events {
-                    let projected = events.compactMap(AuthenticatedReaction.init)
-                    if !projected.isEmpty { reactions[id] = projected }
-                    if events.contains(where: { $0.kind == .displayed }) { receipts[id] = .displayed }
-                    else if events.contains(where: { $0.kind == .delivered }) { receipts[id] = .delivered }
+    @ObservationIgnored private lazy var reload = CoalescedReload { [weak self] scope in await self?.load(scope) }
+
+    /// Returns after a load that started after this call; concurrent calls share one follow-up load.
+    private func refresh(_ scope: CoalescedReload.Scope = .all) async { await reload.request(scope) }
+
+    /// The event loop handles one event at a time, so awaiting there would serialise a burst into one load each.
+    /// Counted as an operation so a background transition still joins it before releasing the lease.
+    private func refreshSoon(_ scope: CoalescedReload.Scope = .all) {
+        activeEncryptionOperations += 1
+        Task { await refresh(scope); activeEncryptionOperations -= 1 }
+    }
+
+    /// Reads one chat's newest messages with their projected events; the caller checks its fences, then publishes.
+    private func loadTimeline(store: MessageStore, account: String, chat: String, isGroup: Bool, limit: Int) async throws -> @MainActor () -> Void {
+        let storedMessages = try await store.messages(accountID: account, chatID: chat, limit: limit)
+        var reactions: [String: [AuthenticatedReaction]] = [:], receipts: [String: MessageEventKind] = [:]
+        // One bounded query for the timeline: reactions, delivery and read receipts, retractions and corrections together.
+        let events = try await store.eventsForChat(accountID: account, chatID: chat, messageIDs: Set(storedMessages.map(\.id)))
+        for (id, events) in events {
+            let projected = events.compactMap(AuthenticatedReaction.init)
+            if !projected.isEmpty { reactions[id] = projected }
+            if events.contains(where: { $0.kind == .displayed }) { receipts[id] = .displayed }
+            else if events.contains(where: { $0.kind == .delivered }) { receipts[id] = .delivered }
+        }
+        var groupReactionTargets = Set<String>()
+        if isGroup {
+            for message in storedMessages where message.encryptionProfile == "modern" {
+                if let reference = try await store.reactionReference(accountID: account, messageID: message.id),
+                   try await store.reactionTarget(accountID: account, chatID: chat, wireID: reference)?.id == message.id {
+                    groupReactionTargets.insert(message.id)
                 }
             }
-            var groupReactionTargets = Set<String>()
-            if let selected, rooms[selected] != nil {
-                for message in storedMessages where message.encryptionProfile == "modern" {
-                    if let reference = try await store.reactionReference(accountID: account, messageID: message.id),
-                       try await store.reactionTarget(accountID: account, chatID: selected, wireID: reference)?.id == message.id {
-                        groupReactionTargets.insert(message.id)
-                    }
-                }
-            }
-            guard accountID == account, openChatID == selected else { return }
-            accountPreferences = try await store.accountPreferences(accountID: account)
-            notificationPreviewsEnabled = accountPreferences.notificationPreviews
-            if foreground, hasTransportOwnership, !quiescing {
-                try await store.dismissPendingMessageNotifications(accountID: account)
-            }
-            guard accountID == account, openChatID == selected else { return }
-            for (room, members) in rooms {
-                var value = groupChats[room] ?? GroupChatState()
-                value.members = members
-                groupChats[room] = value
-            }
-            let known = Set(storedChats.map(\.id))
-            loadStoredAvatars(storedChats)
-            let reviewPreview = "Encrypted message needs attention"
-            var summaries = storedChats.map { ChatSummary(id: $0.id, title: $0.title,
-                preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage.map { $0.isRetracted ? "Message unsent" : ($0.body.isEmpty ? ($0.attachment?.kindLabel ?? "") : $0.body) } ?? ""), isPinned: $0.isPinned, avatarHash: $0.avatarHash,
-                lastMessageAt: $0.lastMessage?.sentAt, lastMessageIsOutgoing: $0.lastMessage?.isOutgoing ?? false,
-                lastMessageState: $0.lastMessage?.transportState, lastMessageReceipt: $0.lastMessageReceipt) }
-            summaries += pending.keys.filter { !known.contains($0) }.sorted().map {
-                ChatSummary(id: $0, title: $0, preview: reviewPreview, isPinned: false)
-            }
-            // A reorder (pin, new activity) animates; List only does so inside an explicit transaction.
-            withAnimation(summaries.map(\.id) == chats.map(\.id) ? nil : .default) { chats = summaries }
+        }
+        return { [self] in
             messages = storedMessages.map { $0.applying(events[$0.id] ?? []) }
-            messagesLoadedFor = selected
+            messagesLoadedFor = chat
             messageReactions = reactions
             messageReceipts = receipts
             reactableGroupMessages = groupReactionTargets
-            if let selected { loadAttachments(storedMessages, chat: selected) }
+            loadAttachments(storedMessages, chat: chat)
+        }
+    }
+
+    private func load(_ scope: CoalescedReload.Scope) async {
+        guard let store else { return }
+        let account = accountID
+        do {
+            if scope.contains(.chats) { try await loadChats(store: store, account: account) }
+            guard scope.contains(.openChat), accountID == account, let selected = openChatID else { return }
+            // Every chat-list load, join and rejoin mirrors the known rooms into groupChats.
+            let publish = try await loadTimeline(store: store, account: account, chat: selected, isGroup: isGroup(selected), limit: 1000)
+            // A chat opened meanwhile requests its own load.
+            guard accountID == account, openChatID == selected else { return }
+            publish()
         } catch { self.error = "Could not read local conversations." }
+    }
+
+    /// The chat list does not depend on which chat is open, so only the account fences it.
+    private func loadChats(store: MessageStore, account: String) async throws {
+        let storedChats = try await store.chats(accountID: account)
+        let pending = try await encryption?.pendingConversations(account: account) ?? [:]
+        let rooms: [String: [String]]
+        if let encryption, !isDemo, !account.isEmpty, try await store.encryptionState(accountID: account) != nil {
+            rooms = try await encryption.knownGroupRooms(account: account)
+        } else { rooms = [:] }
+        let existingChatIDs = Set(storedChats.map(\.id))
+        for peer in pending.keys where !existingChatIDs.contains(peer) {
+            // A retained first-contact message needs a discoverable review entry and
+            // a durable conversation for pinning or queuing a reply before approval.
+            try await store.upsertChat(accountID: account, chatID: peer, title: peer)
+        }
+        guard accountID == account else { return }
+        accountPreferences = try await store.accountPreferences(accountID: account)
+        notificationPreviewsEnabled = accountPreferences.notificationPreviews
+        if foreground, hasTransportOwnership, !quiescing {
+            try await store.dismissPendingMessageNotifications(accountID: account)
+        }
+        guard accountID == account else { return }
+        for (room, members) in rooms {
+            var value = groupChats[room] ?? GroupChatState()
+            value.members = members
+            groupChats[room] = value
+        }
+        let known = Set(storedChats.map(\.id))
+        loadStoredAvatars(storedChats)
+        let reviewPreview = "Encrypted message needs attention"
+        var summaries = storedChats.map { ChatSummary(id: $0.id, title: $0.title,
+            preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage.map { $0.isRetracted ? "Message unsent" : ($0.body.isEmpty ? ($0.attachment?.kindLabel ?? "") : $0.body) } ?? ""), isPinned: $0.isPinned, avatarHash: $0.avatarHash,
+            lastMessageAt: $0.lastMessage?.sentAt, lastMessageIsOutgoing: $0.lastMessage?.isOutgoing ?? false,
+            lastMessageState: $0.lastMessage?.transportState, lastMessageReceipt: $0.lastMessageReceipt) }
+        summaries += pending.keys.filter { !known.contains($0) }.sorted().map {
+            ChatSummary(id: $0, title: $0, preview: reviewPreview, isPinned: false)
+        }
+        // A reorder (pin, new activity) animates; List only does so inside an explicit transaction.
+        withAnimation(summaries.map(\.id) == chats.map(\.id) ? nil : .default) { chats = summaries }
     }
 }
