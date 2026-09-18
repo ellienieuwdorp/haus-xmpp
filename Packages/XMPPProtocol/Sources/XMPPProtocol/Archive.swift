@@ -8,6 +8,7 @@ public struct XMPPArchiveMessage: Sendable, Equatable {
     public let message: XMPPMessage?
     public let encryptedMessage: XMPPEncryptedMessage?
     public var reaction: XMPPReaction? = nil
+    public var retraction: XMPPRetraction? = nil
     public var receipt: XMPPReceipt? = nil
     public var encryptedGroupMessage: XMPPEncryptedGroupMessage? = nil
     public var rejectedContent: XMPPArchiveRejection? = nil
@@ -87,11 +88,12 @@ struct ArchiveQuery {
         // Reuse already authenticated own-account forwarding provenance; archive ID and time are separate.
         let provenance: XMPPMessageProvenance = sender == accountBareJID ? .sentCarbon : .receivedCarbon
         let encrypted = OMEMOWire.hasEncryptedContent(inner) ? try OMEMOWire.parseMessage(inner, provenance: provenance) : nil
-        let reaction = encrypted == nil ? XMPPClient.parsedReaction(inner, provenance: provenance) : nil
-        let receipt = encrypted == nil && reaction == nil ? XMPPClient.parsedReceipt(inner, provenance: provenance) : nil
-        let plain = encrypted == nil && reaction == nil && receipt == nil ? XMPPClient.parsedMessage(inner, provenance: provenance) : nil
+        let retraction = encrypted == nil ? XMPPClient.parsedRetraction(inner, provenance: provenance) : nil
+        let reaction = encrypted == nil && retraction == nil ? XMPPClient.parsedReaction(inner, provenance: provenance) : nil
+        let receipt = encrypted == nil && reaction == nil && retraction == nil ? XMPPClient.parsedReceipt(inner, provenance: provenance) : nil
+        let plain = encrypted == nil && reaction == nil && receipt == nil && retraction == nil ? XMPPClient.parsedMessage(inner, provenance: provenance) : nil
         // Preserve an archive position even for a stanza type the current client cannot display.
-        messages.append(.init(archiveID: id, timestamp: timestamp, message: plain, encryptedMessage: encrypted, reaction: reaction, receipt: receipt))
+        messages.append(.init(archiveID: id, timestamp: timestamp, message: plain, encryptedMessage: encrypted, reaction: reaction, retraction: retraction, receipt: receipt))
         identifiers.insert(id)
     }
 

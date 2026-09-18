@@ -26,7 +26,10 @@ struct ConversationView: View {
     @State private var showingSearch = false
     @State private var starredOnly = false
     @State private var retryMessageID: String?
+    @State private var unsendMessageID: String?
     @State private var replyingTo: ChatMessage?
+    /// The own message whose text is in the composer; sending queues a correction instead of a message.
+    @State private var editing: ChatMessage?
     @State private var reviewDismissed = false
     @FocusState private var composing: Bool
 
@@ -59,16 +62,34 @@ struct ConversationView: View {
             let right = TimelineReaction.choices.firstIndex(of: $1) ?? Int.max
             return left == right ? $0 < $1 : left < right
         }
+        // A quote keeps its snapshot text unless the quoted message has since been unsent.
+        let quotedUnsent = message.reply.map { reply in model.messages.contains { $0.id == reply.messageID && $0.isRetracted } } ?? false
+        let canRevise = model.canRevise(message)
         return TimelineMessage(id: message.id, body: message.body, isOutgoing: message.isOutgoing, isStarred: message.isStarred,
                                attachment: message.attachment.map { TimelineAttachment(name: $0.name, mediaType: $0.mediaType, size: $0.size, width: $0.width, height: $0.height,
                                                                                        localURL: model.attachmentFiles[message.id]) },
                                sentAt: message.sentAt, status: status(message),
-                               reply: message.reply.map { TimelineReply(author: authorName($0.senderID), body: $0.body) },
+                               reply: message.reply.map { TimelineReply(author: authorName($0.senderID), body: quotedUnsent ? "Message unsent" : $0.body) },
                                securityNotice: !model.isDemo && message.encryptionProfile == nil ? "Not encrypted" : nil,
-                               reactions: emoji.map { TimelineReaction(emoji: $0, count: counts[$0]!, isSelected: selected.contains($0)) },
-                               canReact: model.canReact(to: message),
-                               reactionUnavailableReason: reactionUnavailableReason(message),
-                               author: isGroup && !message.isOutgoing ? message.senderID : nil)
+                               reactions: message.isRetracted ? [] : emoji.map { TimelineReaction(emoji: $0, count: counts[$0]!, isSelected: selected.contains($0)) },
+                               canReact: !message.isRetracted && model.canReact(to: message),
+                               reactionUnavailableReason: message.isRetracted ? nil : reactionUnavailableReason(message),
+                               author: isGroup && !message.isOutgoing ? message.senderID : nil,
+                               isRetracted: message.isRetracted, isEdited: message.isEdited, canEdit: canRevise && !message.body.isEmpty, canUnsend: canRevise)
+    }
+
+    private func beginEditing(_ message: ChatMessage) {
+        editing = message
+        replyingTo = nil
+        draft = message.body
+        showingSearch = false
+        query = ""
+        composing = true
+    }
+
+    private func cancelEditing() {
+        if editing != nil { draft = "" }
+        editing = nil
     }
 
     /// Clock while the outbox works, one check once the server holds it, two once the peer confirmed
@@ -106,6 +127,15 @@ struct ConversationView: View {
         let text = draft
         let account = model.accountID
         let reply = replyingTo
+        if let editing {
+            Task {
+                if await model.edit(messageID: editing.id, body: text), draft == text, model.accountID == account {
+                    draft = ""
+                    if self.editing?.id == editing.id { self.editing = nil }
+                }
+            }
+            return
+        }
         Task {
             if await model.send(text, to: chatID, replyingTo: reply), draft == text, model.accountID == account {
                 draft = ""
@@ -177,13 +207,17 @@ struct ConversationView: View {
             }
             ConversationTimeline(messages: messages.map(timelineMessage), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
+                cancelEditing()
                 replyingTo = message
                 showingSearch = false
                 query = ""
                 composing = true
             }, onReaction: { id, emoji in
                 Task { await model.toggleReaction(emoji, messageID: id) }
-            }, onDisplayed: { id in
+            }, onEdit: { id in
+                guard let message = model.messages.first(where: { $0.id == id }) else { return }
+                beginEditing(message)
+            }, onUnsend: { composing = false; unsendMessageID = $0 }, onDisplayed: { id in
                 // Only the newest received message is marked; XEP-0333 makes a marker cover everything before it.
                 guard id == model.messages.last(where: { !$0.isOutgoing })?.id else { return }
                 Task { await model.markDisplayed(id) }
@@ -240,6 +274,18 @@ struct ConversationView: View {
         } message: { _ in
             Text("The recipient may already have it. Sending again could create a duplicate.")
         }
+        .confirmationDialog("Unsend this message?", isPresented: Binding(
+            get: { unsendMessageID != nil }, set: { if !$0 { unsendMessageID = nil } }
+        ), titleVisibility: .visible, presenting: unsendMessageID) { id in
+            Button("Unsend", role: .destructive) {
+                Task { await model.unsend(messageID: id) }
+                if editing?.id == id { cancelEditing() }
+                unsendMessageID = nil
+            }
+            Button("Cancel", role: .cancel) { unsendMessageID = nil }
+        } message: { _ in
+            Text("It disappears here. \(title) may still see it if their app doesn't support unsending.")
+        }
         .onChange(of: model.conversationIntent) { _, intent in
             // Chat Details pops back and leaves what it wants opened here.
             switch intent {
@@ -289,17 +335,19 @@ struct ConversationView: View {
     private var composer: some View {
         GlassEffectContainer(spacing: 8) {
             VStack(spacing: 8) {
-                if let reply = replyingTo {
+                // The same strip carries a reply target or, in edit mode, the message being rewritten.
+                if let reply = replyingTo ?? editing {
+                    let isEdit = editing != nil
                     HStack(spacing: 10) {
                         RoundedRectangle(cornerRadius: 2).fill(.tint).frame(width: 3)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("Replying to \(authorName(reply.senderID))").font(.footnote.weight(.semibold)).foregroundStyle(.tint)
+                            Text(isEdit ? "Editing message" : "Replying to \(authorName(reply.senderID))").font(.footnote.weight(.semibold)).foregroundStyle(.tint)
                             Text(reply.body).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                        Button { replyingTo = nil } label: {
+                        Button { if isEdit { cancelEditing() } else { replyingTo = nil } } label: {
                             Image(systemName: "xmark").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary).frame(width: 44, height: 44)
                         }
-                        .accessibilityLabel("Cancel reply").accessibilityIdentifier("cancelReply")
+                        .accessibilityLabel(isEdit ? "Cancel edit" : "Cancel reply").accessibilityIdentifier(isEdit ? "cancelEdit" : "cancelReply")
                     }
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 14).padding(.vertical, 4)
@@ -323,11 +371,11 @@ struct ConversationView: View {
                         .focused($composing)
                         .accessibilityIdentifier("messageComposer")
                     Button(action: send) {
-                        Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold))
+                        Image(systemName: editing == nil ? "arrow.up" : "checkmark").font(.system(size: 17, weight: .bold))
                     }
                     .buttonStyle(CircularGlassButtonStyle(diameter: 34))
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending || !model.canSend(to: chatID))
-                    .accessibilityLabel("Send message").accessibilityIdentifier("sendMessage")
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending || !model.canSend(to: chatID) || (editing != nil && draft == editing?.body))
+                    .accessibilityLabel(editing == nil ? "Send message" : "Save edit").accessibilityIdentifier("sendMessage")
                 }
                 .frame(minHeight: 44)
                 // A capsule at one line; the same radius keeps five lines readable.

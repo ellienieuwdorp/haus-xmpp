@@ -66,10 +66,23 @@ public struct XMPPReply: Sendable, Equatable {
     }
 }
 
+/// An unencrypted XEP-0424 retraction; same trust as a plain reaction.
+public struct XMPPRetraction: Sendable, Equatable {
+    public let id: String
+    public let from: String
+    public let to: String?
+    public let targetID: String
+    public let provenance: XMPPMessageProvenance
+    public init(id: String, from: String, to: String?, targetID: String, provenance: XMPPMessageProvenance = .direct) {
+        self.id = id; self.from = from; self.to = to; self.targetID = targetID; self.provenance = provenance
+    }
+}
+
 public enum XMPPEvent: Sendable, Equatable {
     case state(XMPPConnectionState)
     case message(XMPPMessage)
     case reaction(XMPPReaction)
+    case retraction(XMPPRetraction)
     case receipt(XMPPReceipt)
     case encryptedMessage(XMPPEncryptedMessage)
     case encryptedGroupMessage(XMPPEncryptedGroupMessage)
@@ -222,6 +235,19 @@ public actor XMPPClient {
         return id
     }
 
+    /// Unencrypted XEP-0424 for legacy-OMEMO peers; the reference cannot ride inside their ciphertext.
+    @discardableResult public func sendRetraction(to: String, targetID: String, id: String = UUID().uuidString) async throws -> String {
+        guard phase == .online else { throw XMPPClientError.notConnected }
+        try await write(Self.retractionXML(to: to, targetID: targetID, id: id))
+        return id
+    }
+
+    public static func retractionXML(to: String, targetID: String, id: String) throws -> String {
+        guard MessageContent.validAddress(to), MessageContent.validIdentifier(id) else { throw XMPPClientError.invalidConfiguration }
+        let content = try MessageContent(body: "", retraction: targetID).xml()
+        return "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(content)<store xmlns='urn:xmpp:hints'/></message>"
+    }
+
     /// Unencrypted receipt/marker for legacy peers; modern peers get the same element inside SCE.
     @discardableResult public func sendReceipt(to: String, targetID: String, kind: MessageContent.Receipt.Kind, id: String = UUID().uuidString) async throws -> String {
         guard phase == .online else { throw XMPPClientError.notConnected }
@@ -280,6 +306,12 @@ public actor XMPPClient {
         guard let (from, content) = plainContent(node), !content.text.isEmpty else { return nil }
         return XMPPMessage(id: node.attributes["id"] ?? UUID().uuidString, from: from, to: node.attributes["to"],
                            body: content.text, originID: content.originID, type: node.attributes["type"], provenance: provenance)
+    }
+
+    static func parsedRetraction(_ node: XMLNode, provenance: XMPPMessageProvenance = .direct) -> XMPPRetraction? {
+        guard let (from, content) = plainContent(node), let target = content.retraction else { return nil }
+        return XMPPRetraction(id: node.attributes["id"].flatMap { MessageContent.validIdentifier($0) ? $0 : nil } ?? UUID().uuidString, from: from,
+                              to: node.attributes["to"], targetID: target, provenance: provenance)
     }
 
     static func parsedReceipt(_ node: XMLNode, provenance: XMPPMessageProvenance = .direct) -> XMPPReceipt? {
@@ -545,6 +577,8 @@ public actor XMPPClient {
             catch { try emit(.encryptionFailure(from: node.attributes["from"] ?? "", id: node.attributes["id"])) }
         } else if provenance == .direct, let update = Self.deviceUpdate(node) {
             try emit(.omemoDevices(owner: update.owner, profile: update.profile, devices: update.devices))
+        } else if let retraction = Self.parsedRetraction(node, provenance: provenance) {
+            try emit(.retraction(retraction))
         } else if provenance == .direct, let update = Self.avatarUpdate(node) {
             try emit(.avatarMetadata(owner: update.owner, metadata: update.metadata))
         } else if let reaction = Self.parsedReaction(node, provenance: provenance) {
@@ -561,9 +595,10 @@ public actor XMPPClient {
         _ = try await requestIQ(type: "set", to: nil, payload: "<\(enabled ? "enable" : "disable") xmlns='urn:xmpp:carbons:2'/>")
     }
 
-    @discardableResult public func sendEncryptedMessage(to: String, envelope: XMPPOMEMOEnvelope, id: String, requestReceipt: Bool = false, markable: Bool = false) async throws -> String {
+    /// `replaces` is the legacy-OMEMO correction reference, which has to travel outside the ciphertext.
+    @discardableResult public func sendEncryptedMessage(to: String, envelope: XMPPOMEMOEnvelope, id: String, requestReceipt: Bool = false, markable: Bool = false, replaces: String? = nil) async throws -> String {
         guard phase == .online else { throw XMPPClientError.notConnected }
-        try await write(Self.encryptedMessageXML(to: to, envelope: envelope, id: id, requestReceipt: requestReceipt, markable: markable))
+        try await write(Self.encryptedMessageXML(to: to, envelope: envelope, id: id, requestReceipt: requestReceipt, markable: markable, replaces: replaces))
         return id
     }
 

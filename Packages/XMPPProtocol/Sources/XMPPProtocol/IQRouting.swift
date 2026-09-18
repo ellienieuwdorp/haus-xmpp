@@ -32,8 +32,19 @@ struct IQReplyScope: Sendable {
 
 extension XMPPClient {
     /// Pure encoding used to persist the exact ciphertext before any network write.
-    public nonisolated static func encryptedMessageXML(to: String, envelope: XMPPOMEMOEnvelope, id: String, requestReceipt: Bool = false, markable: Bool = false) throws -> String {
-        try OMEMOWire.messageXML(to: to, envelope: envelope, id: id, requestReceipt: requestReceipt, markable: markable)
+    public nonisolated static func encryptedMessageXML(to: String, envelope: XMPPOMEMOEnvelope, id: String, requestReceipt: Bool = false, markable: Bool = false, replaces: String? = nil) throws -> String {
+        try OMEMOWire.messageXML(to: to, envelope: envelope, id: id, requestReceipt: requestReceipt, markable: markable, replaces: replaces)
+    }
+
+    /// The plain XEP-0424 twin of `decodeOutgoingReactionXML`.
+    public nonisolated static func decodeOutgoingRetractionXML(_ xml: String, from account: String) -> XMPPRetraction? {
+        guard OMEMOWire.bareJID(account) == account else { return nil }
+        var parser = XMLStreamFramer()
+        guard let frames = try? parser.feed(Data(("<stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client'>" + xml + "</stream:stream>").utf8)) else { return nil }
+        let elements = frames.compactMap { frame -> XMLNode? in if case .element(let node) = frame { node } else { nil } }
+        guard elements.count == 1, let original = elements.first, original.attributes["from"] == nil || original.attributes["from"] == account else { return nil }
+        var attributes = original.attributes; attributes["from"] = account
+        return parsedRetraction(XMLNode(name: original.name, namespace: original.namespace, attributes: attributes, text: original.text, children: original.children))
     }
 
     /// Decode saved outgoing ciphertext for fingerprint-scoped replay authorization.

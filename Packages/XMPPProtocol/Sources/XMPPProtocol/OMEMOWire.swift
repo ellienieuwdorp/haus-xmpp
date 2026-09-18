@@ -65,11 +65,13 @@ public struct XMPPEncryptedMessage: Sendable, Equatable {
     /// Unencrypted outer `<request/>` / `<markable/>`: the sender wants a receipt or read marker back.
     public var requestsReceipt = false
     public var markable = false
+    /// Untrusted XEP-0308 reference outside the ciphertext, the only place legacy OMEMO can carry it.
+    public var replaces: String? = nil
 
     public init(id: String, from: String, to: String?, originID: String?, envelope: XMPPOMEMOEnvelope, provenance: XMPPMessageProvenance = .direct,
-                requestsReceipt: Bool = false, markable: Bool = false) {
+                requestsReceipt: Bool = false, markable: Bool = false, replaces: String? = nil) {
         self.id = id; self.from = from; self.to = to; self.originID = originID; self.envelope = envelope; self.provenance = provenance
-        self.requestsReceipt = requestsReceipt; self.markable = markable
+        self.requestsReceipt = requestsReceipt; self.markable = markable; self.replaces = replaces
     }
 }
 
@@ -256,21 +258,26 @@ enum OMEMOWire {
         if let id = node.attributes["id"], !validStanzaID(id) { throw XMPPIQError.malformedResponse }
         let origins = node.children.filter { $0.name == "origin-id" && $0.namespace == "urn:xmpp:sid:0" }
         let origin = origins.count == 1 ? origins[0].attributes["id"] : nil
+        let replaces = node.children.filter { $0.name == "replace" && $0.namespace == "urn:xmpp:message-correct:0" }
+        let replace = replaces.count == 1 ? replaces[0].attributes["id"] : nil
         return XMPPEncryptedMessage(id: node.attributes["id"] ?? UUID().uuidString, from: from, to: node.attributes["to"],
                                     originID: origin.flatMap { validStanzaID($0) ? $0 : nil }, envelope: try parseEnvelope(encrypted), provenance: provenance,
                                     requestsReceipt: !node.children("request", namespace: "urn:xmpp:receipts").isEmpty,
-                                    markable: !node.children("markable", namespace: "urn:xmpp:chat-markers:0").isEmpty)
+                                    markable: !node.children("markable", namespace: "urn:xmpp:chat-markers:0").isEmpty,
+                                    replaces: replace.flatMap { validStanzaID($0) ? $0 : nil })
     }
     static func validStanzaID(_ value: String) -> Bool {
         !value.isEmpty && value.utf8.count <= 1_024 && !value.contains(where: { $0.isWhitespace }) &&
         value.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7f && $0.value != 0xfffe && $0.value != 0xffff }
     }
-    static func messageXML(to: String, envelope: XMPPOMEMOEnvelope, id: String, requestReceipt: Bool = false, markable: Bool = false) throws -> String {
-        guard bareJID(to) != nil, validStanzaID(id) else { throw XMPPClientError.invalidConfiguration }
+    static func messageXML(to: String, envelope: XMPPOMEMOEnvelope, id: String, requestReceipt: Bool = false, markable: Bool = false, replaces: String? = nil) throws -> String {
+        guard bareJID(to) != nil, validStanzaID(id), replaces.map(validStanzaID) ?? true else { throw XMPPClientError.invalidConfiguration }
         // No body or reply metadata is emitted outside the encrypted payload. Receipt requests carry no
-        // content, so they ride outside where every deployed client (Conversations, slixmpp) reads them.
+        // content, so they ride outside where every deployed client (Conversations, slixmpp) reads them;
+        // a legacy correction reference rides outside because legacy OMEMO has no envelope to hold it.
         let hints = (requestReceipt ? "<request xmlns='urn:xmpp:receipts'/>" : "") + (markable ? "<markable xmlns='urn:xmpp:chat-markers:0'/>" : "")
-        let result = "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(try envelopeXML(envelope))<origin-id xmlns='urn:xmpp:sid:0' id='\(xmlEscaped(id))'/><store xmlns='urn:xmpp:hints'/><encryption xmlns='urn:xmpp:eme:0' namespace='\(envelope.profile.namespace)' name='OMEMO'/>\(hints)</message>"
+        let replace = replaces.map { "<replace xmlns='urn:xmpp:message-correct:0' id='\(xmlEscaped($0))'/>" } ?? ""
+        let result = "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(try envelopeXML(envelope))\(replace)<origin-id xmlns='urn:xmpp:sid:0' id='\(xmlEscaped(id))'/><store xmlns='urn:xmpp:hints'/><encryption xmlns='urn:xmpp:eme:0' namespace='\(envelope.profile.namespace)' name='OMEMO'/>\(hints)</message>"
         guard result.utf8.count <= 1_048_000 else { throw XMPPClientError.invalidConfiguration }
         return result
     }

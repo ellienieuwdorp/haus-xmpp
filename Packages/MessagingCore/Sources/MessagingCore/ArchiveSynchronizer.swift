@@ -32,6 +32,8 @@ public struct ArchiveSynchronizer: Sendable {
                     }
                 } else if let reaction = archived.reaction {
                     try await encryption.receivePlaintextReaction(account: account, reaction: reaction, sentAt: archived.timestamp)
+                } else if let retraction = archived.retraction {
+                    try await encryption.receivePlaintextRetraction(account: account, retraction: retraction, sentAt: archived.timestamp)
                 } else if let receipt = archived.receipt {
                     try await encryption.receivePlaintextReceipt(account: account, receipt: receipt, sentAt: archived.timestamp)
                 }

@@ -8,7 +8,7 @@ public enum EntityCapabilities {
     public static let node = "https://xmpplab.dev/ios"
     public static let identity = "client/phone//XMPP Lab"
     public static var features: [String] {
-        ["http://jabber.org/protocol/disco#info", "http://jabber.org/protocol/caps", "urn:xmpp:ping", "urn:xmpp:receipts", "urn:xmpp:chat-markers:0", AvatarWire.metadataNode + "+notify"]
+        ["http://jabber.org/protocol/disco#info", "http://jabber.org/protocol/caps", "urn:xmpp:ping", "urn:xmpp:receipts", "urn:xmpp:chat-markers:0", "urn:xmpp:message-retract:1", "urn:xmpp:message-correct:0", AvatarWire.metadataNode + "+notify"]
             + XMPPOMEMOProfile.allCases.flatMap { [$0.namespace, $0.devicesNode + "+notify"] }
     }
 

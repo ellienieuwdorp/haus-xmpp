@@ -185,6 +185,7 @@ final class AppModel {
                 try await store.upsertChat(accountID: account, chatID: chatID, title: title)
                 for (index, body) in bodies.enumerated() {
                     let outgoing = index == 1
+                    // An own wire ID lets sample messages show receipts and be unsent or edited (projection only, nothing is sent).
                     let id = "sample-\(chatID)-\(index)"
                     try await store.insertMessage(StoredMessage(
                         id: id, accountID: account, chatID: chatID,
@@ -816,7 +817,7 @@ final class AppModel {
                 if case .needsAttention = session {} else { session = .offline(reason: reason) }
                 reconcile()
             }
-        case .reaction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier:
+        case .reaction, .retraction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier:
             guard let encryption, let client else { return }
             if case .encryptedMessage = event { receivedCount += 1 }
             // One processor per connection: it owns the "may acknowledge" rule for this stream.
@@ -1138,6 +1139,46 @@ final class AppModel {
         }
     }
 
+    /// Own direct messages with a resolvable reference can be unsent or rewritten; sample chats project only.
+    func canRevise(_ message: StoredMessage) -> Bool {
+        guard message.accountID == accountID, message.chatID == openChatID, message.isOutgoing, !message.isRetracted, !isGroup(message.chatID) else { return false }
+        if isDemo { return true }
+        // ponytail: rooms wait for the group envelope path; mirrors the direct-chat half of canReact.
+        return canReact(to: message)
+    }
+
+    func unsend(messageID: String) async { await revise(messageID: messageID, body: nil) }
+    func edit(messageID: String, body: String) async -> Bool { await revise(messageID: messageID, body: body) }
+
+    @discardableResult private func revise(messageID: String, body: String?) async -> Bool {
+        guard let store, let message = messages.first(where: { $0.id == messageID }), canRevise(message) else { return false }
+        if let body {
+            guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, body.utf8.count <= 16_384, body != message.body else { return false }
+        }
+        let account = accountID, token = generation
+        do {
+            if isDemo {
+                guard let wireID = message.wireID else { return false }
+                let kind: MessageEventKind = body == nil ? .retraction : .correction
+                try await store.recordEvent(accountID: account, event: MessageEvent(id: UUID().uuidString, chatID: message.chatID, actorID: account, targetWireID: wireID,
+                    kind: kind, payload: body.map { try MessageEvent.correctionPayload($0) } ?? "{}", updatedAt: Date()))
+            } else {
+                guard hasTransportOwnership, foreground, !quiescing, let encryption else { return false }
+                activeEncryptionOperations += 1
+                defer { activeEncryptionOperations -= 1 }
+                if let body { _ = try await encryption.queueCorrection(account: account, chatID: message.chatID, messageID: messageID, body: body) }
+                else { _ = try await encryption.queueRetraction(account: account, chatID: message.chatID, messageID: messageID) }
+            }
+            guard generation == token else { return false }
+            await refresh()
+            startOutbox()
+            return true
+        } catch {
+            if generation == token { self.error = (error as? OMEMOError)?.errorDescription ?? (body == nil ? "Could not unsend this message." : "Could not save your edit.") }
+            return false
+        }
+    }
+
     private func startOutbox() {
         outboxRequested = true
         guard hasTransportOwnership, foreground, !quiescing, drainTask == nil, session.isReady, !isDemo,
@@ -1209,11 +1250,15 @@ final class AppModel {
                 try await encryption.flushUpdates(account: account, updateIDs: updateIDs, groupTransport: client) { update, prepared in
                     switch prepared {
                     case .encrypted(let to, let envelope):
-                        _ = try await client.sendEncryptedMessage(to: to, envelope: envelope, id: update.id)
+                        // A legacy correction carries its reference outside the ciphertext; the sealed target is the reference.
+                        let replaces = update.kind == .correction && envelope.profile == .legacy ? update.targetWireID : nil
+                        _ = try await client.sendEncryptedMessage(to: to, envelope: envelope, id: update.id, replaces: replaces)
                     case .group(let room, let envelope, let members):
                         _ = try await client.sendEncryptedGroupMessage(room: room, envelope: envelope, id: update.id, expectedMembers: members)
                     case .plainReaction(let to, let targetID, let reactions):
                         _ = try await client.sendReaction(to: to, targetID: targetID, reactions: reactions, id: update.id)
+                    case .plainRetraction(let to, let targetID):
+                        _ = try await client.sendRetraction(to: to, targetID: targetID, id: update.id)
                     case .plainReceipt(let to, let targetID, let kind):
                         _ = try await client.sendReceipt(to: to, targetID: targetID, kind: kind, id: update.id)
                     }
@@ -1461,9 +1506,11 @@ final class AppModel {
                 storedMessages = try await store.messages(accountID: account, chatID: selected, limit: 1000)
             } else { storedMessages = [] }
             var reactions: [String: [AuthenticatedReaction]] = [:], receipts: [String: MessageEventKind] = [:]
+            var events: [String: [MessageEvent]] = [:]
             if let selected {
-                // One bounded query for the timeline: reactions, delivery and read receipts together.
-                for (id, events) in try await store.eventsForChat(accountID: account, chatID: selected, messageIDs: Set(storedMessages.map(\.id))) {
+                // One bounded query for the timeline: reactions, delivery and read receipts, retractions and corrections together.
+                events = try await store.eventsForChat(accountID: account, chatID: selected, messageIDs: Set(storedMessages.map(\.id)))
+                for (id, events) in events {
                     let projected = events.compactMap(AuthenticatedReaction.init)
                     if !projected.isEmpty { reactions[id] = projected }
                     if events.contains(where: { $0.kind == .displayed }) { receipts[id] = .displayed }
@@ -1495,13 +1542,13 @@ final class AppModel {
             loadStoredAvatars(storedChats)
             let reviewPreview = "Encrypted message needs attention"
             chats = storedChats.map { ChatSummary(id: $0.id, title: $0.title,
-                preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage.map { $0.body.isEmpty ? ($0.attachment?.kindLabel ?? "") : $0.body } ?? ""), isPinned: $0.isPinned, avatarHash: $0.avatarHash,
+                preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage.map { $0.isRetracted ? "Message unsent" : ($0.body.isEmpty ? ($0.attachment?.kindLabel ?? "") : $0.body) } ?? ""), isPinned: $0.isPinned, avatarHash: $0.avatarHash,
                 lastMessageAt: $0.lastMessage?.sentAt, lastMessageIsOutgoing: $0.lastMessage?.isOutgoing ?? false,
                 lastMessageState: $0.lastMessage?.transportState) }
             chats += pending.keys.filter { !known.contains($0) }.sorted().map {
                 ChatSummary(id: $0, title: $0, preview: reviewPreview, isPinned: false)
             }
-            messages = storedMessages
+            messages = storedMessages.map { $0.applying(events[$0.id] ?? []) }
             messagesLoadedFor = selected
             messageReactions = reactions
             messageReceipts = receipts

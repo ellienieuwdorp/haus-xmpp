@@ -6,7 +6,8 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public let accountID: String
     public let chatID: String
     public let senderID: String
-    public let body: String
+    /// The stored body is immutable; `applying(_:)` returns a copy carrying the sender's latest correction.
+    public var body: String
     public let reply: MessageReply?
     public var encryptionProfile: String?
     public let wireID: String?
@@ -17,6 +18,23 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public var transportState: OutgoingTransportState?
     /// The one file this message shares; `body` is then its caption and may be empty.
     public var attachment: StoredAttachment?
+    /// Projection flags, set only by `applying(_:)`; never persisted.
+    public var isRetracted = false
+    public var isEdited = false
+
+    /// The message as its sender now asserts it: unsent, or carrying the latest correction body.
+    /// `events` must come from `events`/`eventsForChat`, which already enforce who may say what.
+    public func applying(_ events: [MessageEvent]) -> StoredMessage {
+        var result = self
+        for event in events where event.actorID == senderID {
+            switch event.kind {
+            case .retraction: result.isRetracted = true; result.isEdited = false; result.body = ""; result.attachment = nil
+            case .correction: if !result.isRetracted, let body = MessageEvent.correctionBody(event.payload) { result.body = body; result.isEdited = true }
+            default: break
+            }
+        }
+        return result
+    }
 
     public init(id: String, accountID: String, chatID: String, senderID: String, body: String,
                 sentAt: Date = Date(), isOutgoing: Bool = false, isStarred: Bool = false,
@@ -209,20 +227,33 @@ public struct MessageEvent: Sendable, Equatable {
         self.id = id; self.chatID = chatID; self.actorID = actorID; self.targetWireID = targetWireID; self.kind = kind; self.payload = payload
         self.updatedAt = Date(timeIntervalSince1970: (updatedAt.timeIntervalSince1970 * 1_000).rounded() / 1_000)
     }
+
+    /// A correction's payload is the replacement body as one JSON string; a retraction's is `{}`.
+    public static func correctionPayload(_ body: String) throws -> String {
+        guard !body.isEmpty, body.utf8.count <= 65_536 else { throw MessageStoreError.invalidValue }
+        return String(decoding: try JSONEncoder().encode(body), as: UTF8.self)
+    }
+    public static func correctionBody(_ payload: String) -> String? {
+        guard let body = try? JSONDecoder().decode(String.self, from: Data(payload.utf8)), !body.isEmpty, body.utf8.count <= 65_536 else { return nil }
+        return body
+    }
 }
 
 /// One row of the durable update outbox: every outgoing stanza that is not a chat message.
 /// The sealed wire is the exact bytes (or prepared envelope) that may ever be sent under this ID.
 public struct StoredUpdate: Sendable, Equatable {
     /// `receipt` is a XEP-0184 `<received/>`, `marker` a XEP-0333 `<displayed/>`; both name a peer message.
-    public enum Kind: String, Sendable { case reaction, keyTransport, receipt, marker }
+    public enum Kind: String, Sendable { case reaction, keyTransport, receipt, marker, retraction, correction }
     public let id: String
     public let accountID: String
     public let kind: Kind
     public let chatID: String
     public var transportState: OutgoingTransportState?
+    /// Message-scoped kinds (reaction, receipt, marker, retraction, correction) name the message they were queued against.
     public var targetMessageID: String? = nil
     public var targetWireID: String? = nil
+    /// The kind's own payload: a sorted emoji array for reactions, the JSON body for corrections.
+    public var payload: String? = nil
 }
 
 /// Per-account switches. Receipt switches gate both what we ask for and what we send back.
