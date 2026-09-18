@@ -178,16 +178,16 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                            presentActions: { [weak self] context in
                                guard let self, presentedViewController == nil else { return }
                                MessageActionsOverlay.present(from: self, context: context)
-                           }, openAttachment: { [weak self] url in self?.preview(url) })
+                           }, openAttachment: { [weak self] url in self?.preview(url, title: row.message.attachment?.name) })
             return cell
         }
     }
 
     /// One native viewer for photos, video and documents: zoom, play, share.
     private let previewSource = PreviewSource()
-    private func preview(_ url: URL) {
+    private func preview(_ url: URL, title: String?) {
         guard presentedViewController == nil else { return }
-        previewSource.url = url
+        previewSource.item = .init(url: url, title: title)
         let viewer = QLPreviewController()
         viewer.dataSource = previewSource
         present(viewer, animated: true)
@@ -310,9 +310,16 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 
 @MainActor
 private final class PreviewSource: NSObject, QLPreviewControllerDataSource {
-    var url: URL?
-    func numberOfPreviewItems(in controller: QLPreviewController) -> Int { url == nil ? 0 : 1 }
-    func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> any QLPreviewItem { (url ?? URL(fileURLWithPath: "/")) as NSURL }
+    /// Immutable so Quick Look may read it from any thread. The title is the sender's file
+    /// name; the cache file itself is named after its hash.
+    final class Item: NSObject, QLPreviewItem, Sendable {
+        let previewItemURL: URL?
+        let previewItemTitle: String?
+        init(url: URL, title: String?) { previewItemURL = url; previewItemTitle = title }
+    }
+    var item: Item?
+    func numberOfPreviewItems(in controller: QLPreviewController) -> Int { item == nil ? 0 : 1 }
+    func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> any QLPreviewItem { item ?? Item(url: URL(fileURLWithPath: "/"), title: nil) }
 }
 
 @MainActor

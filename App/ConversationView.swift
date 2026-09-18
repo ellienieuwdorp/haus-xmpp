@@ -292,16 +292,15 @@ struct ConversationView: View {
                             Button("Photo or Video", systemImage: "photo.on.rectangle") { showingPhotoPicker = true }
                             Button("File", systemImage: "doc") { importingFile = true }
                         } label: {
-                            if attaching { ProgressView().frame(width: 34, height: 34) }
-                            else { Image(systemName: "plus").font(.system(size: 17, weight: .semibold)).frame(width: 34, height: 34).contentShape(Circle()) }
+                            if attaching { ProgressView().frame(width: 44, height: 44) }
+                            else { Image(systemName: "plus").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44).contentShape(Rectangle()) }
                         }
                         .disabled(attaching || model.isSending)
-                        .padding(.leading, 5).padding(.bottom, 5)
                         .accessibilityLabel("Attach a file").accessibilityIdentifier("attachFile")
                     }
                     TextField(placeholder, text: $draft, axis: .vertical)
                         .lineLimit(1...5)
-                        .padding(.leading, model.canSendAttachments && !isGroup ? 4 : 16).padding(.vertical, 11)
+                        .padding(.leading, model.canSendAttachments && !isGroup ? 0 : 16).padding(.vertical, 11)
                         .focused($composing)
                         .accessibilityIdentifier("messageComposer")
                     Button(action: send) {
