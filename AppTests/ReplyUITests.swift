@@ -1,6 +1,31 @@
 import XCTest
 
 final class ReplyUITests: XCTestCase {
+    /// A rightward swipe belongs to the bubble it starts on (reply); started beside a bubble it is the back swipe.
+    @MainActor func testSwipeOnBubbleRepliesAndBesideItGoesBack() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demo-long"]
+        app.isolateMessageStorage()
+        app.launch()
+        let history = app.staticTexts["History"]
+        XCTAssertTrue(history.waitForExistence(timeout: 15))
+        history.tap()
+        // 250 is received and short, so the right half of its row is empty.
+        let received = app.textViews.containing(NSPredicate(format: "value == %@", "History message 250")).firstMatch
+        XCTAssertTrue(received.waitForExistence(timeout: 5))
+        let onBubble = received.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+        onBubble.press(forDuration: 0.05, thenDragTo: onBubble.withOffset(CGVector(dx: 120, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.1)
+        XCTAssertTrue(app.buttons["cancelReply"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["sendMessage"].exists, "A reply swipe must not pop the chat")
+        app.buttons["cancelReply"].tap()
+        let timeline = app.collectionViews["conversation.timeline"]
+        let beside = timeline.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: timeline.frame.width * 0.7, dy: received.frame.midY - timeline.frame.minY))
+        // The system completes the pop on release velocity, so this drag ends moving; a held slow drag springs back.
+        beside.press(forDuration: 0.05, thenDragTo: beside.withOffset(CGVector(dx: 260, dy: 0)), withVelocity: .fast, thenHoldForDuration: 0)
+        XCTAssertTrue(app.buttons["newConversation"].waitForExistence(timeout: 5), "A swipe beside a bubble goes back to Chats")
+        XCTAssertFalse(app.buttons["sendMessage"].exists)
+    }
+
     @MainActor func testSwipeReplyCancelPersistAndSearch() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
