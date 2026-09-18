@@ -120,7 +120,7 @@ struct ConversationView: View {
     private var placeholder: String {
         if model.isDemo { return "Message" }
         if model.encryptionNeedsReview { return "Sending paused until you review" }
-        return model.session.isReady ? "Message" : "Message · sends when connected"
+        return "Message"
     }
 
     private func send() {
