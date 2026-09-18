@@ -53,6 +53,41 @@ final class ConversationUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["11 messages found"].waitForExistence(timeout: 5))
     }
 
+    private func composer(in app: XCUIApplication) -> XCUIElement {
+        // A multiline SwiftUI TextField is exposed as a text view on some runtimes.
+        let field = app.textFields["messageComposer"]
+        return field.exists ? field : app.textViews["messageComposer"]
+    }
+
+    /// A long draft wraps and the composer grows upward: send stays above the keyboard, the newest message above the composer.
+    @MainActor func testLongDraftGrowsTheComposer() throws {
+        let app = openLongChat()
+        let input = composer(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        let oneLine = input.frame.height
+        input.typeText(String(repeating: "wrapping words ", count: 8))
+        XCTAssertGreaterThan(input.frame.height, oneLine * 1.8)
+        XCTAssertTrue(app.buttons["sendMessage"].isHittable)
+        XCTAssertTrue(bubble(250, in: app).isHittable)
+    }
+
+    /// Sending always returns to the newest message, even from far up in history.
+    @MainActor func testSendingFromHistoryReturnsToTheNewestMessage() throws {
+        let app = openLongChat()
+        XCTAssertTrue(bubble(250, in: app).waitForExistence(timeout: 5))
+        let timeline = app.collectionViews["conversation.timeline"]
+        for _ in 0..<3 { timeline.swipeDown(velocity: .fast) }
+        XCTAssertFalse(bubble(250, in: app).isHittable)
+        let input = composer(in: app)
+        input.tap()
+        input.typeText("Back to the bottom")
+        app.buttons["sendMessage"].tap()
+        let sent = app.textViews.containing(NSPredicate(format: "value == %@", "Back to the bottom")).firstMatch
+        XCTAssertTrue(sent.waitForExistence(timeout: 5))
+        XCTAssertTrue(sent.isHittable)
+    }
+
     @MainActor func testComposeSearchAndRelaunch() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]

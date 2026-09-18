@@ -185,6 +185,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var actionsVisible = false
     private var heldUpdate: (() -> Void)?
     private var restoresKeyboard = false
+    /// A send is two updates a few milliseconds apart (queued, then accepted). The second supersedes the first apply's
+    /// completion, so what the first decided is owed until a completion runs.
+    private var owesFollow = false
+    private var owesSlide = false
+    private var sliding = false
     private var bottomInset: CGFloat = 0
     private var composerHeight: NSLayoutConstraint!
     /// Content position at the visible bottom edge, so an inset change can put the same messages back above the composer.
@@ -214,8 +219,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         container.addSubview(collectionView)
         // The composer rides the keyboard guide, so it follows an interactive dismiss; SwiftUI's own avoidance is off.
         composerHost.safeAreaRegions = []
-        // Only for its invalidation: the intrinsic size is measured without a width, where a long draft never wraps.
-        composerHost.sizingOptions = .intrinsicContentSize
         composerHeight = composerHost.view.heightAnchor.constraint(equalToConstant: 60)
         composerHost.view.backgroundColor = .clear
         composerHost.view.translatesAutoresizingMaskIntoConstraints = false
@@ -281,14 +284,18 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         guard uniqueRows != rows || accentChanged else { return }
         self.accent = accent
         // Only a message arriving at the tail moves, and only when the reader is at the tail; nothing else animates.
-        let oldIDs = rows.map(\.message.id), newIDs = uniqueRows.map(\.message.id)
-        let appended = !oldIDs.isEmpty && newIDs.count > oldIDs.count && Array(newIDs.prefix(oldIDs.count)) == oldIDs
+        // Judged from the tail alone: the loaded window is the newest N, so its head moves as messages arrive.
+        let newIDs = uniqueRows.map(\.message.id)
+        let tailStart = rows.last.flatMap { newIDs.lastIndex(of: $0.message.id) }.map { $0 + 1 } ?? newIDs.count
+        let appended = tailStart < newIDs.count
         // Sending always returns to the newest message, wherever the reader was.
-        let sentOwn = appended && uniqueRows[oldIDs.count...].contains { $0.message.isOutgoing }
+        let sentOwn = uniqueRows[tailStart...].contains { $0.message.isOutgoing }
         let wasNearBottom = isNearBottom
-        let shouldFollow = rows.isEmpty || wasNearBottom || sentOwn
+        let shouldFollow = rows.isEmpty || wasNearBottom || sentOwn || owesFollow
         // From far up in history a send jumps; a slide would cross cells that were never drawn.
-        let slidesIn = appended && wasNearBottom && view.window != nil && !UIAccessibility.isReduceMotionEnabled
+        let slidesIn = (appended && wasNearBottom || owesSlide) && view.window != nil && !UIAccessibility.isReduceMotionEnabled
+        owesFollow = shouldFollow
+        owesSlide = slidesIn
         let anchor = visibleAnchor()
         let previous = rowsByID
         rows = uniqueRows
@@ -305,15 +312,22 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self, revision == currentRevision else { return }
             collectionView.layoutIfNeeded()
+            owesFollow = false
+            owesSlide = false
             if slidesIn {
                 // Settle the final offset first so the new cells exist, then play the distance back.
                 let start = collectionView.contentOffset.y
                 scrollToBottom()
                 let end = collectionView.contentOffset.y
                 collectionView.contentOffset.y = start
-                UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) { self.collectionView.contentOffset.y = end }
+                sliding = true
+                UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) { self.collectionView.contentOffset.y = end } completion: { [weak self] _ in
+                    guard let self else { return }
+                    sliding = false
+                    if followsBottom { scrollToBottom() }
+                }
             } else if shouldFollow {
-                scrollToBottom()
+                followBottom()
             } else if let anchor, let indexPath = dataSource.indexPath(for: anchor.id),
                       let attributes = collectionView.layoutAttributesForItem(at: indexPath) {
                 collectionView.contentOffset.y = clampedOffset(attributes.frame.minY - anchor.distanceFromTop)
@@ -373,7 +387,17 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     func setComposer(_ composer: AnyView?) {
         loadViewIfNeeded()
         composerHost.view.isHidden = composer == nil
-        if let composer { composerHost.rootView = composer }
+        // The composer reports the height it wants at this width; the host's intrinsic size is measured without a
+        // width, where a long draft never wraps.
+        if let composer {
+            composerHost.rootView = AnyView(composer.fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { [weak self] height in
+                    guard let self, abs(composerHeight.constant - height) > 0.5 else { return }
+                    composerHeight.constant = height
+                    view.setNeedsLayout()
+                }
+                .frame(maxHeight: .infinity, alignment: .bottom))
+        }
         view.setNeedsLayout()
     }
 
@@ -382,7 +406,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         let size = collectionView.bounds.size
         if previousSize != size {
             previousSize = size
-            if followsBottom { scrollToBottom() }
+            if followsBottom { followBottom() }
         }
         updateBottomInset()
     }
@@ -390,27 +414,23 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     /// Messages end above the composer, or above the keyboard while the composer is hidden. This runs inside the
     /// keyboard's animation, so the inset and offset move with it.
     private func updateBottomInset() {
-        let fitted = composerHost.sizeThatFits(in: CGSize(width: view.bounds.width, height: .greatestFiniteMagnitude)).height
-        if abs(composerHeight.constant - fitted) > 0.5 {
-            composerHeight.constant = fitted
-            view.layoutIfNeeded()
-            return
-        }
         let top = composerHost.view.isHidden ? view.keyboardLayoutGuide.layoutFrame.minY : composerHost.view.frame.minY
         let inset = max(0, view.bounds.maxY - top)
         // An interactive dismiss starts at the composer's top edge rather than the keyboard's.
         view.keyboardLayoutGuide.keyboardDismissPadding = composerHost.view.isHidden ? 0 : composerHost.view.bounds.height
         // adjustedContentInset adds the safe area back, so the visible inset is exactly `inset`.
+        // UIKit shifts the offset itself when the safe area changes under it, so that counts as an inset change too.
         let content = inset - collectionView.safeAreaInsets.bottom
-        if collectionView.contentInset.bottom != content {
+        let safeAreaMoved = abs(collectionView.contentInset.bottom - content) > 0.5
+        if safeAreaMoved {
             collectionView.contentInset.bottom = content
             collectionView.verticalScrollIndicatorInsets.bottom = content
         }
-        guard abs(inset - bottomInset) > 0.5 else { return }
+        guard safeAreaMoved || abs(inset - bottomInset) > 0.5 else { return }
         bottomInset = inset
         // A finger on the list owns the offset, as during an interactive keyboard dismissal.
         if !collectionView.isTracking {
-            if followsBottom { scrollToBottom() }
+            if followsBottom { followBottom() }
             // Reading history: keep the same messages above the composer instead of letting it cover them.
             else { collectionView.contentOffset.y = clampedOffset(bottomEdgeY - collectionView.bounds.height + inset) }
         }
@@ -422,7 +442,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     /// The composer arrives as bottom safe area after the first apply; keyboard changes come the same way.
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
-        if followsBottom { scrollToBottom() }
+        if followsBottom { followBottom() }
+        view.setNeedsLayout()
     }
 
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
@@ -458,6 +479,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         return min(maximum, max(minimum, value))
     }
 
+    /// A status tick landing mid-slide must not cut it short; the slide settles at the bottom itself.
+    private func followBottom() { if !sliding { scrollToBottom() } }
+
     private func scrollToBottom() {
         // scrollToItem sizes the final cells first; the clamp then lands on the real content height.
         if let last = rows.last, let path = dataSource.indexPath(for: last.message.id) {
@@ -465,6 +489,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             collectionView.layoutIfNeeded()
         }
         collectionView.contentOffset.y = clampedOffset(.greatestFiniteMagnitude)
+        recordBottomEdge()
     }
 
 }
