@@ -14,10 +14,15 @@ private struct PickedMovie: Transferable {
     }
 }
 
+/// The draft lives outside `ConversationView`'s state so typing only invalidates the composer, never the timeline.
+@MainActor @Observable final class ComposerState {
+    var draft = ""
+}
+
 struct ConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
-    @State private var draft = ""
+    @State private var composerState = ComposerState()
     @State private var showingPhotoPicker = false
     @State private var photoItem: PhotosPickerItem?
     @State private var importingFile = false
@@ -48,7 +53,13 @@ struct ConversationView: View {
         sender == model.accountID ? "you" : (isGroup ? sender : title)
     }
 
-    private func timelineMessage(_ message: ChatMessage) -> TimelineMessage {
+    private var timelineMessages: [TimelineMessage] {
+        // One set per pass keeps the quoted-unsent lookup linear.
+        let retracted = Set(model.messages.lazy.filter(\.isRetracted).map(\.id))
+        return messages.map { timelineMessage($0, retracted: retracted) }
+    }
+
+    private func timelineMessage(_ message: ChatMessage, retracted: Set<String>) -> TimelineMessage {
         var counts: [String: Int] = [:]
         var selected: Set<String> = []
         for update in model.messageReactions[message.id] ?? [] {
@@ -63,7 +74,7 @@ struct ConversationView: View {
             return left == right ? $0 < $1 : left < right
         }
         // A quote keeps its snapshot text unless the quoted message has since been unsent.
-        let quotedUnsent = message.reply.map { reply in model.messages.contains { $0.id == reply.messageID && $0.isRetracted } } ?? false
+        let quotedUnsent = message.reply.map { retracted.contains($0.messageID) } ?? false
         let canRevise = model.canRevise(message)
         return TimelineMessage(id: message.id, body: message.body, isOutgoing: message.isOutgoing, isStarred: message.isStarred,
                                attachment: message.attachment.map { TimelineAttachment(name: $0.name, mediaType: $0.mediaType, size: $0.size, width: $0.width, height: $0.height,
@@ -81,14 +92,14 @@ struct ConversationView: View {
     private func beginEditing(_ message: ChatMessage) {
         editing = message
         replyingTo = nil
-        draft = message.body
+        composerState.draft = message.body
         showingSearch = false
         query = ""
         composing = true
     }
 
     private func cancelEditing() {
-        if editing != nil { draft = "" }
+        if editing != nil { composerState.draft = "" }
         editing = nil
     }
 
@@ -117,28 +128,23 @@ struct ConversationView: View {
         return message.wireID == nil ? "This message has no identity to react to" : "Reactions aren't available for this message"
     }
 
-    private var placeholder: String {
-        if model.isDemo { return "Message" }
-        if model.encryptionNeedsReview { return "Sending paused until you review" }
-        return "Message"
-    }
-
     private func send() {
-        let text = draft
+        let state = composerState
+        let text = state.draft
         let account = model.accountID
         let reply = replyingTo
         if let editing {
             Task {
-                if await model.edit(messageID: editing.id, body: text), draft == text, model.accountID == account {
-                    draft = ""
+                if await model.edit(messageID: editing.id, body: text), state.draft == text, model.accountID == account {
+                    state.draft = ""
                     if self.editing?.id == editing.id { self.editing = nil }
                 }
             }
             return
         }
         Task {
-            if await model.send(text, to: chatID, replyingTo: reply), draft == text, model.accountID == account {
-                draft = ""
+            if await model.send(text, to: chatID, replyingTo: reply), state.draft == text, model.accountID == account {
+                state.draft = ""
                 if replyingTo?.id == reply?.id { replyingTo = nil }
             }
         }
@@ -148,12 +154,13 @@ struct ConversationView: View {
     private func attach(_ prepare: @escaping () async throws -> PreparedAttachment) {
         guard !attaching else { return }
         attaching = true
-        let caption = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let state = composerState
+        let caption = state.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         Task {
             defer { attaching = false }
             do {
                 let prepared = try await prepare()
-                if await model.sendAttachment(prepared, caption: caption, to: chatID), draft.trimmingCharacters(in: .whitespacesAndNewlines) == caption { draft = "" }
+                if await model.sendAttachment(prepared, caption: caption, to: chatID), state.draft.trimmingCharacters(in: .whitespacesAndNewlines) == caption { state.draft = "" }
             } catch {
                 model.error = (error as? LocalizedError)?.errorDescription ?? "This file could not be attached."
             }
@@ -205,7 +212,7 @@ struct ConversationView: View {
             if !model.isDemo, model.encryptionNeedsReview, !reviewDismissed {
                 trustReviewCard
             }
-            ConversationTimeline(messages: messages.map(timelineMessage), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
+            ConversationTimeline(messages: timelineMessages, onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
                 cancelEditing()
                 replyingTo = message
@@ -261,7 +268,11 @@ struct ConversationView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !showingSearch { composer }
+            if !showingSearch {
+                ConversationComposer(model: model, chatID: chatID, state: composerState, replyingTo: $replyingTo, editing: editing, attaching: attaching,
+                                     composing: $composing, authorName: authorName, onSend: send, onCancelEditing: cancelEditing,
+                                     onPickPhoto: { showingPhotoPicker = true }, onPickFile: { importingFile = true })
+            }
         }
         .confirmationDialog("Send this message again?", isPresented: Binding(
             get: { retryMessageID != nil }, set: { if !$0 { retryMessageID = nil } }
@@ -331,8 +342,32 @@ struct ConversationView: View {
         .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .padding(.horizontal, 8).padding(.top, 4)
     }
+}
 
-    private var composer: some View {
+/// The only view that reads the draft while rendering. Explicit inputs, so a hosting controller can own it later.
+struct ConversationComposer: View {
+    let model: AppModel
+    let chatID: String
+    @Bindable var state: ComposerState
+    @Binding var replyingTo: ChatMessage?
+    let editing: ChatMessage?
+    let attaching: Bool
+    var composing: FocusState<Bool>.Binding
+    let authorName: (String) -> String
+    let onSend: () -> Void
+    let onCancelEditing: () -> Void
+    let onPickPhoto: () -> Void
+    let onPickFile: () -> Void
+
+    private var isGroup: Bool { model.isGroup(chatID) }
+
+    private var placeholder: String {
+        if model.isDemo { return "Message" }
+        if model.encryptionNeedsReview { return "Sending paused until you review" }
+        return "Message"
+    }
+
+    var body: some View {
         GlassEffectContainer(spacing: 8) {
             VStack(spacing: 8) {
                 // The same strip carries a reply target or, in edit mode, the message being rewritten.
@@ -344,7 +379,7 @@ struct ConversationView: View {
                             Text(isEdit ? "Editing message" : "Replying to \(authorName(reply.senderID))").font(.footnote.weight(.semibold)).foregroundStyle(.tint)
                             Text(reply.body).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                        Button { if isEdit { cancelEditing() } else { replyingTo = nil } } label: {
+                        Button { if isEdit { onCancelEditing() } else { replyingTo = nil } } label: {
                             Image(systemName: "xmark").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary).frame(width: 44, height: 44)
                         }
                         .accessibilityLabel(isEdit ? "Cancel edit" : "Cancel reply").accessibilityIdentifier(isEdit ? "cancelEdit" : "cancelReply")
@@ -356,8 +391,8 @@ struct ConversationView: View {
                 HStack(alignment: .bottom, spacing: 4) {
                     if model.canSendAttachments, !isGroup {
                         Menu {
-                            Button("Photo or Video", systemImage: "photo.on.rectangle") { showingPhotoPicker = true }
-                            Button("File", systemImage: "doc") { importingFile = true }
+                            Button("Photo or Video", systemImage: "photo.on.rectangle", action: onPickPhoto)
+                            Button("File", systemImage: "doc", action: onPickFile)
                         } label: {
                             if attaching { ProgressView().frame(width: 44, height: 44) }
                             else { Image(systemName: "plus").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44).contentShape(Rectangle()) }
@@ -365,16 +400,16 @@ struct ConversationView: View {
                         .disabled(attaching || model.isSending)
                         .accessibilityLabel("Attach a file").accessibilityIdentifier("attachFile")
                     }
-                    TextField(placeholder, text: $draft, axis: .vertical)
+                    TextField(placeholder, text: $state.draft, axis: .vertical)
                         .lineLimit(1...5)
                         .padding(.leading, model.canSendAttachments && !isGroup ? 0 : 16).padding(.vertical, 11)
-                        .focused($composing)
+                        .focused(composing)
                         .accessibilityIdentifier("messageComposer")
-                    Button(action: send) {
+                    Button(action: onSend) {
                         Image(systemName: editing == nil ? "arrow.up" : "checkmark").font(.system(size: 17, weight: .bold))
                     }
                     .buttonStyle(CircularGlassButtonStyle(diameter: 34))
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending || !model.canSend(to: chatID) || (editing != nil && draft == editing?.body))
+                    .disabled(state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending || !model.canSend(to: chatID) || (editing != nil && state.draft == editing?.body))
                     .accessibilityLabel(editing == nil ? "Send message" : "Save edit").accessibilityIdentifier("sendMessage")
                 }
                 .frame(minHeight: 44)
