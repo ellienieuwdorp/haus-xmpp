@@ -186,6 +186,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var heldUpdate: (() -> Void)?
     private var restoresKeyboard = false
     private var bottomInset: CGFloat = 0
+    private var composerHeight: NSLayoutConstraint!
+    /// Content position at the visible bottom edge, so an inset change can put the same messages back above the composer.
+    private var bottomEdgeY: CGFloat = 0
 
     override func loadView() {
         let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(64)))
@@ -211,7 +214,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         container.addSubview(collectionView)
         // The composer rides the keyboard guide, so it follows an interactive dismiss; SwiftUI's own avoidance is off.
         composerHost.safeAreaRegions = []
+        // Only for its invalidation: the intrinsic size is measured without a width, where a long draft never wraps.
         composerHost.sizingOptions = .intrinsicContentSize
+        composerHeight = composerHost.view.heightAnchor.constraint(equalToConstant: 60)
         composerHost.view.backgroundColor = .clear
         composerHost.view.translatesAutoresizingMaskIntoConstraints = false
         composerHost.view.isHidden = true
@@ -221,6 +226,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             composerHost.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             composerHost.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             composerHost.view.bottomAnchor.constraint(equalTo: container.keyboardLayoutGuide.topAnchor),
+            composerHeight,
         ])
         composerHost.didMove(toParent: self)
         view = container
@@ -313,6 +319,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                 collectionView.contentOffset.y = clampedOffset(attributes.frame.minY - anchor.distanceFromTop)
             }
             followsBottom = shouldFollow || isNearBottom
+            recordBottomEdge()
         }
     }
 
@@ -383,6 +390,12 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     /// Messages end above the composer, or above the keyboard while the composer is hidden. This runs inside the
     /// keyboard's animation, so the inset and offset move with it.
     private func updateBottomInset() {
+        let fitted = composerHost.sizeThatFits(in: CGSize(width: view.bounds.width, height: .greatestFiniteMagnitude)).height
+        if abs(composerHeight.constant - fitted) > 0.5 {
+            composerHeight.constant = fitted
+            view.layoutIfNeeded()
+            return
+        }
         let top = composerHost.view.isHidden ? view.keyboardLayoutGuide.layoutFrame.minY : composerHost.view.frame.minY
         let inset = max(0, view.bounds.maxY - top)
         // An interactive dismiss starts at the composer's top edge rather than the keyboard's.
@@ -394,12 +407,17 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             collectionView.verticalScrollIndicatorInsets.bottom = content
         }
         guard abs(inset - bottomInset) > 0.5 else { return }
-        let delta = inset - bottomInset
         bottomInset = inset
-        if followsBottom { scrollToBottom() }
-        // Reading history: keep the same messages above the composer instead of letting it cover them.
-        else { collectionView.contentOffset.y = clampedOffset(collectionView.contentOffset.y + delta) }
+        // A finger on the list owns the offset, as during an interactive keyboard dismissal.
+        if !collectionView.isTracking {
+            if followsBottom { scrollToBottom() }
+            // Reading history: keep the same messages above the composer instead of letting it cover them.
+            else { collectionView.contentOffset.y = clampedOffset(bottomEdgeY - collectionView.bounds.height + inset) }
+        }
+        recordBottomEdge()
     }
+
+    private func recordBottomEdge() { bottomEdgeY = collectionView.contentOffset.y + collectionView.bounds.height - bottomInset }
 
     /// The composer arrives as bottom safe area after the first apply; keyboard changes come the same way.
     override func viewSafeAreaInsetsDidChange() {
@@ -416,6 +434,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         // Layout changes during a keyboard transition are not a user's scroll intent.
         guard scrollView.isDragging || scrollView.isDecelerating else { return }
         followsBottom = isNearBottom
+        recordBottomEdge()
         // A few screens early, so older messages are usually in place before the reader arrives.
         if scrollView.contentOffset.y + scrollView.adjustedContentInset.top < 1200 { onReachTop() }
     }
