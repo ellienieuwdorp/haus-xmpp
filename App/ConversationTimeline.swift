@@ -620,17 +620,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// SF Symbols has no double check; two checkmarks overlapped by about half a glyph read as one.
-    private static func doubleCheck(_ configuration: UIImage.SymbolConfiguration?) -> UIImage? {
-        guard let check = UIImage(systemName: "checkmark", withConfiguration: configuration) else { return nil }
-        let offset = (check.size.width * 0.45).rounded()
-        let size = CGSize(width: check.size.width + offset, height: check.size.height)
-        return UIGraphicsImageRenderer(size: size).image { _ in
-            check.draw(at: .zero)
-            check.draw(at: CGPoint(x: offset, y: 0))
-        }.withRenderingMode(.alwaysTemplate)
-    }
-
     /// 20pt corners; the last bubble of a run gets a 6pt tail on its outer bottom corner.
     private var corners: (bottomLeft: CGFloat, bottomRight: CGFloat) {
         guard let row, row.endsRun else { return (20, 20) }
@@ -936,7 +925,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         case .queued, .submitting, .unconfirmed: status.image = UIImage(systemName: "clock")
         case .failed: status.image = UIImage(systemName: "exclamationmark.circle")
         case .serverAccepted: status.image = UIImage(systemName: "checkmark")
-        case .delivered, .displayed: status.image = Self.doubleCheck(status.preferredSymbolConfiguration)
+        case .delivered, .displayed: status.image = UIImage.doubleCheck(status.preferredSymbolConfiguration)
         case nil: status.image = nil
         }
         setNeedsLayout()
