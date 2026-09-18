@@ -93,6 +93,8 @@ public struct StoredChat: Identifiable, Equatable, Sendable {
     public let lastMessage: StoredMessage?
     /// SHA-1 of the verified avatar bytes on disk; nil when none is known.
     public var avatarHash: String? = nil
+    /// Strongest receipt on an outgoing `lastMessage`: `.displayed`, `.delivered` or nil.
+    public var lastMessageReceipt: MessageEventKind? = nil
 }
 
 public enum MessageStoreError: Error, Equatable, Sendable {

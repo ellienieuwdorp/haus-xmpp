@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import os
+import SwiftUI
 import UIKit
 import UserNotifications
 import Observation
@@ -18,8 +19,10 @@ struct ChatSummary: Identifiable {
     var lastMessageAt: Date? = nil
     var lastMessageIsOutgoing = false
     var lastMessageState: OutgoingTransportState? = nil
+    var lastMessageReceipt: MessageEventKind? = nil
     /// Title for display: the stored title, or the address local part when the title is just the address.
     var displayTitle: String { AppModel.displayName(for: id, title: title) }
+    var listIdentity: String { "\(isPinned)|\(id)" }
 }
 
 typealias ChatMessage = StoredMessage
@@ -1555,13 +1558,15 @@ final class AppModel {
             let known = Set(storedChats.map(\.id))
             loadStoredAvatars(storedChats)
             let reviewPreview = "Encrypted message needs attention"
-            chats = storedChats.map { ChatSummary(id: $0.id, title: $0.title,
+            var summaries = storedChats.map { ChatSummary(id: $0.id, title: $0.title,
                 preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage.map { $0.isRetracted ? "Message unsent" : ($0.body.isEmpty ? ($0.attachment?.kindLabel ?? "") : $0.body) } ?? ""), isPinned: $0.isPinned, avatarHash: $0.avatarHash,
                 lastMessageAt: $0.lastMessage?.sentAt, lastMessageIsOutgoing: $0.lastMessage?.isOutgoing ?? false,
-                lastMessageState: $0.lastMessage?.transportState) }
-            chats += pending.keys.filter { !known.contains($0) }.sorted().map {
+                lastMessageState: $0.lastMessage?.transportState, lastMessageReceipt: $0.lastMessageReceipt) }
+            summaries += pending.keys.filter { !known.contains($0) }.sorted().map {
                 ChatSummary(id: $0, title: $0, preview: reviewPreview, isPinned: false)
             }
+            // A reorder (pin, new activity) animates; List only does so inside an explicit transaction.
+            withAnimation(summaries.map(\.id) == chats.map(\.id) ? nil : .default) { chats = summaries }
             messages = storedMessages.map { $0.applying(events[$0.id] ?? []) }
             messagesLoadedFor = selected
             messageReactions = reactions
