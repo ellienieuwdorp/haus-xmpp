@@ -196,18 +196,23 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                            presentActions: { [weak self] context in
                                guard let self, presentedViewController == nil else { return }
                                MessageActionsOverlay.present(from: self, context: context)
-                           }, openAttachment: { [weak self] url in self?.preview(url, title: row.message.attachment?.name) })
+                           }, openAttachment: { [weak self] url in self?.preview(url, title: row.message.attachment?.name, isImage: row.message.attachment?.isImage == true) })
             return cell
         }
     }
 
-    /// One native viewer for photos, video and documents: zoom, play, share.
+    /// Photos get the swipe-to-dismiss viewer with Save; Quick Look plays video and shows documents.
     private let previewSource = PreviewSource()
-    private func preview(_ url: URL, title: String?) {
+    private func preview(_ url: URL, title: String?, isImage: Bool) {
         guard presentedViewController == nil else { return }
+        if isImage, let image = UIImage(contentsOfFile: url.path) {
+            present(ImageViewer(image: image, url: url), animated: true)
+            return
+        }
         previewSource.item = .init(url: url, title: title)
         let viewer = QLPreviewController()
         viewer.dataSource = previewSource
+        viewer.delegate = previewSource
         present(viewer, animated: true)
     }
 
@@ -336,7 +341,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 }
 
 @MainActor
-private final class PreviewSource: NSObject, QLPreviewControllerDataSource {
+private final class PreviewSource: NSObject, QLPreviewControllerDataSource, @preconcurrency QLPreviewControllerDelegate {
     /// Immutable so Quick Look may read it from any thread. The title is the sender's file
     /// name; the cache file itself is named after its hash.
     final class Item: NSObject, QLPreviewItem, Sendable {
@@ -345,6 +350,8 @@ private final class PreviewSource: NSObject, QLPreviewControllerDataSource {
         init(url: URL, title: String?) { previewItemURL = url; previewItemTitle = title }
     }
     var item: Item?
+    /// A delivered file is not a draft: no Markup.
+    func previewController(_ controller: QLPreviewController, editingModeFor previewItem: any QLPreviewItem) -> QLPreviewItemEditingMode { .disabled }
     func numberOfPreviewItems(in controller: QLPreviewController) -> Int { item == nil ? 0 : 1 }
     func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> any QLPreviewItem { item ?? Item(url: URL(fileURLWithPath: "/"), title: nil) }
 }
@@ -706,6 +713,11 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             return
         }
         guard let url = attachment.localURL else { mediaSpinner.startAnimating(); return }
+        if let hit = AttachmentThumbnails.cached(for: url) {
+            media.image = hit
+            media.contentMode = .scaleAspectFill
+            return
+        }
         mediaSpinner.startAnimating()
         let id = messageID
         Task { [weak self] in
