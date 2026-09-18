@@ -125,6 +125,8 @@ struct TimelineRow: Equatable {
 /// Native baseline for the first transport milestone. Composer and message state belong to the parent.
 struct ConversationTimeline: UIViewControllerRepresentable {
     let messages: [TimelineMessage]
+    /// Hosted above the keyboard by the controller; nil hides it (search).
+    var composer: AnyView? = nil
     var onToggleStar: (String) -> Void
     var onRetryMessage: (String) -> Void = { _ in }
     var onReply: (String) -> Void = { _ in }
@@ -141,6 +143,7 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: ConversationTimelineController, context: Context) {
+        controller.setComposer(composer)
         controller.update(messages: messages, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onDisplayed: onDisplayed)
     }
 }
@@ -169,6 +172,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var followsBottom = true
     private weak var contentPopGesture: UIGestureRecognizer?
     private var contentPopWasEnabled = false
+    private let composerHost = UIHostingController(rootView: AnyView(EmptyView()))
+    private var bottomInset: CGFloat = 0
 
     override func loadView() {
         let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(64)))
@@ -187,7 +192,26 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         collectionView.delegate = self
         collectionView.accessibilityIdentifier = "conversation.timeline"
         collectionView.register(MessageBubbleCell.self, forCellWithReuseIdentifier: "message")
-        view = collectionView
+        let container = UIView()
+        container.backgroundColor = .systemBackground
+        collectionView.frame = container.bounds
+        collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        container.addSubview(collectionView)
+        // The composer rides the keyboard guide, so it follows an interactive dismiss; SwiftUI's own avoidance is off.
+        composerHost.safeAreaRegions = []
+        composerHost.sizingOptions = .intrinsicContentSize
+        composerHost.view.backgroundColor = .clear
+        composerHost.view.translatesAutoresizingMaskIntoConstraints = false
+        composerHost.view.isHidden = true
+        addChild(composerHost)
+        container.addSubview(composerHost.view)
+        NSLayoutConstraint.activate([
+            composerHost.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            composerHost.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            composerHost.view.bottomAnchor.constraint(equalTo: container.keyboardLayoutGuide.topAnchor),
+        ])
+        composerHost.didMove(toParent: self)
+        view = container
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] collection, indexPath, id in
             guard let self, let row = rowsByID[id],
                   let cell = collection.dequeueReusableCell(withReuseIdentifier: "message", for: indexPath) as? MessageBubbleCell else { return nil }
@@ -285,6 +309,13 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         gesture.isEnabled = false
     }
 
+    func setComposer(_ composer: AnyView?) {
+        loadViewIfNeeded()
+        composerHost.view.isHidden = composer == nil
+        if let composer { composerHost.rootView = composer }
+        view.setNeedsLayout()
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         let size = collectionView.bounds.size
@@ -292,6 +323,28 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             previousSize = size
             if followsBottom { scrollToBottom() }
         }
+        updateBottomInset()
+    }
+
+    /// Messages end above the composer, or above the keyboard while the composer is hidden. This runs inside the
+    /// keyboard's animation, so the inset and offset move with it.
+    private func updateBottomInset() {
+        let top = composerHost.view.isHidden ? view.keyboardLayoutGuide.layoutFrame.minY : composerHost.view.frame.minY
+        let inset = max(0, view.bounds.maxY - top)
+        // An interactive dismiss starts at the composer's top edge rather than the keyboard's.
+        view.keyboardLayoutGuide.keyboardDismissPadding = composerHost.view.isHidden ? 0 : composerHost.view.bounds.height
+        // adjustedContentInset adds the safe area back, so the visible inset is exactly `inset`.
+        let content = inset - collectionView.safeAreaInsets.bottom
+        if collectionView.contentInset.bottom != content {
+            collectionView.contentInset.bottom = content
+            collectionView.verticalScrollIndicatorInsets.bottom = content
+        }
+        guard abs(inset - bottomInset) > 0.5 else { return }
+        let delta = inset - bottomInset
+        bottomInset = inset
+        if followsBottom { scrollToBottom() }
+        // Reading history: keep the same messages above the composer instead of letting it cover them.
+        else { collectionView.contentOffset.y = clampedOffset(collectionView.contentOffset.y + delta) }
     }
 
     /// The composer arrives as bottom safe area after the first apply; keyboard changes come the same way.

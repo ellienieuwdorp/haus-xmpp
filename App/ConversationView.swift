@@ -17,6 +17,8 @@ private struct PickedMovie: Transferable {
 /// The draft lives outside `ConversationView`'s state so typing only invalidates the composer, never the timeline.
 @MainActor @Observable final class ComposerState {
     var draft = ""
+    /// Focus requested by the conversation; the composer lives in its own hosting controller, where a parent `@FocusState` cannot reach.
+    var focused = false
 }
 
 struct ConversationView: View {
@@ -36,7 +38,6 @@ struct ConversationView: View {
     /// The own message whose text is in the composer; sending queues a correction instead of a message.
     @State private var editing: ChatMessage?
     @State private var reviewDismissed = false
-    @FocusState private var composing: Bool
 
     private var searchTerm: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first(where: { $0.id == chatID })?.title) }
@@ -95,7 +96,7 @@ struct ConversationView: View {
         composerState.draft = message.body
         showingSearch = false
         query = ""
-        composing = true
+        composerState.focused = true
     }
 
     private func cancelEditing() {
@@ -212,23 +213,26 @@ struct ConversationView: View {
             if !model.isDemo, model.encryptionNeedsReview, !reviewDismissed {
                 trustReviewCard
             }
-            ConversationTimeline(messages: timelineMessages, onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
+            ConversationTimeline(messages: timelineMessages, composer: showingSearch ? nil : AnyView(composer), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
                 cancelEditing()
                 replyingTo = message
                 showingSearch = false
                 query = ""
-                composing = true
+                composerState.focused = true
             }, onReaction: { id, emoji in
                 Task { await model.toggleReaction(emoji, messageID: id) }
             }, onEdit: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
                 beginEditing(message)
-            }, onUnsend: { composing = false; unsendMessageID = $0 }, onDisplayed: { id in
+            }, onUnsend: { composerState.focused = false; unsendMessageID = $0 }, onDisplayed: { id in
                 // Only the newest received message is marked; XEP-0333 makes a marker cover everything before it.
                 guard id == model.messages.last(where: { !$0.isOutgoing })?.id else { return }
                 Task { await model.markDisplayed(id) }
             })
+            // The controller pins the composer to the keyboard itself and insets the messages to match.
+            .ignoresSafeArea(.keyboard)
+            .ignoresSafeArea(.container, edges: .bottom)
             .overlay {
                 // Only an actual empty chat says so; while a load is pending the timeline stays blank.
                 if messages.isEmpty, model.messagesLoadedFor == chatID {
@@ -260,18 +264,11 @@ struct ConversationView: View {
             .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button("Search messages", systemImage: "magnifyingglass") { composing = false; showingSearch = true }
+                    Button("Search messages", systemImage: "magnifyingglass") { composerState.focused = false; showingSearch = true }
                     Button("Starred messages", systemImage: "star") { starredOnly = true }
                     if !model.isDemo { NavigationLink(value: encryptionRoute) { Label(isGroup ? "Group details" : "Encryption", systemImage: isGroup ? "person.2" : "lock.shield") } }
                 } label: { Image(systemName: "ellipsis") }
                 .accessibilityLabel("Conversation options")
-            }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !showingSearch {
-                ConversationComposer(model: model, chatID: chatID, state: composerState, replyingTo: $replyingTo, editing: editing, attaching: attaching,
-                                     composing: $composing, authorName: authorName, onSend: send, onCancelEditing: cancelEditing,
-                                     onPickPhoto: { showingPhotoPicker = true }, onPickFile: { importingFile = true })
             }
         }
         .confirmationDialog("Send this message again?", isPresented: Binding(
@@ -300,7 +297,7 @@ struct ConversationView: View {
         .onChange(of: model.conversationIntent) { _, intent in
             // Chat Details pops back and leaves what it wants opened here.
             switch intent {
-            case .search(let id) where id == chatID: model.conversationIntent = nil; composing = false; showingSearch = true
+            case .search(let id) where id == chatID: model.conversationIntent = nil; composerState.focused = false; showingSearch = true
             case .starred(let id) where id == chatID: model.conversationIntent = nil; starredOnly = true
             default: break
             }
@@ -316,6 +313,14 @@ struct ConversationView: View {
         }
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
         .onDisappear { model.closeChat(chatID) }
+    }
+
+    /// Hosted inside the timeline controller, outside this view's environment, so the accent travels with it.
+    private var composer: some View {
+        ConversationComposer(model: model, chatID: chatID, state: composerState, replyingTo: $replyingTo, editing: editing, attaching: attaching,
+                             authorName: authorName, onSend: send, onCancelEditing: cancelEditing,
+                             onPickPhoto: { showingPhotoPicker = true }, onPickFile: { importingFile = true })
+            .tint(Color(uiColor: AccentTheme.current.tint))
     }
 
     private var trustReviewCard: some View {
@@ -352,7 +357,7 @@ struct ConversationComposer: View {
     @Binding var replyingTo: ChatMessage?
     let editing: ChatMessage?
     let attaching: Bool
-    var composing: FocusState<Bool>.Binding
+    @FocusState private var focused: Bool
     let authorName: (String) -> String
     let onSend: () -> Void
     let onCancelEditing: () -> Void
@@ -403,7 +408,7 @@ struct ConversationComposer: View {
                     TextField(placeholder, text: $state.draft, axis: .vertical)
                         .lineLimit(1...5)
                         .padding(.leading, model.canSendAttachments && !isGroup ? 0 : 16).padding(.vertical, 11)
-                        .focused(composing)
+                        .focused($focused)
                         .accessibilityIdentifier("messageComposer")
                     Button(action: onSend) {
                         Image(systemName: editing == nil ? "arrow.up" : "checkmark").font(.system(size: 17, weight: .bold))
@@ -418,5 +423,7 @@ struct ConversationComposer: View {
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
+        .onChange(of: state.focused) { _, wanted in focused = wanted }
+        .onChange(of: focused) { _, isFocused in state.focused = isFocused }
     }
 }
