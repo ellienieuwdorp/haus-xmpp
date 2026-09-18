@@ -54,9 +54,7 @@ struct ChatListView: View {
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 4, trailing: 16))
                     }
-                    // Pin state is part of the row identity: List then removes and inserts the row. Moving the very cell
-                    // whose swipe action is still closing slides it the wrong way and snaps it into place.
-                    ForEach(visibleChats, id: \.listIdentity) { chat in
+                    ForEach(visibleChats) { chat in
                         Button { path.append(.chat(chat.id)) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatars[chat.id]) }
                             .buttonStyle(.plain)
                             .task(id: "\(chat.id)|\(model.session.isReady)") { await model.loadAvatar(for: chat.id) }
@@ -71,6 +69,10 @@ struct ChatListView: View {
                     }
                 }
                 .listStyle(.plain)
+                // A pin change crossfades the whole list: List moves the row whose swipe action is still closing the
+                // wrong way, and a remove/insert overlaps the rows. ponytail: resets scroll to the top on pin/unpin.
+                .id(visibleChats.filter(\.isPinned).map(\.id))
+                .transition(.opacity)
                 .overlay {
                     if visibleChats.isEmpty {
                         ContentUnavailableView.search(text: searchTerm)

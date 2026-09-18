@@ -22,7 +22,6 @@ struct ChatSummary: Identifiable {
     var lastMessageReceipt: MessageEventKind? = nil
     /// Title for display: the stored title, or the address local part when the title is just the address.
     var displayTitle: String { AppModel.displayName(for: id, title: title) }
-    var listIdentity: String { "\(isPinned)|\(id)" }
 }
 
 typealias ChatMessage = StoredMessage

@@ -302,7 +302,8 @@ final class ImageViewer: UIViewController, UIScrollViewDelegate, UIGestureRecogn
     }
 
     @objc private func save() {
-        saveButton.isEnabled = false
+        // Not isEnabled: a disabled glass button dims the confirmation glyph to near invisible.
+        saveButton.isUserInteractionEnabled = false
         let url = url
         Task {
             var saved = false
@@ -314,13 +315,14 @@ final class ImageViewer: UIViewController, UIScrollViewDelegate, UIGestureRecogn
                 }) != nil
             }
             UINotificationFeedbackGenerator().notificationOccurred(saved ? .success : .error)
-            saveButton.configuration?.image = UIImage(systemName: saved ? "checkmark" : "exclamationmark.triangle")
+            // Pinned white: the glass configuration renders a swapped-in template glyph dark.
+            saveButton.configuration?.image = UIImage(systemName: saved ? "checkmark" : "exclamationmark.triangle")?.withTintColor(.white, renderingMode: .alwaysOriginal)
             saveButton.accessibilityLabel = saved ? "Saved to Photos" : "Could not save. Allow adding photos in Settings."
             UIAccessibility.post(notification: .announcement, argument: saveButton.accessibilityLabel)
             try? await Task.sleep(for: .seconds(2))
             saveButton.configuration?.image = UIImage(systemName: "square.and.arrow.down")
             saveButton.accessibilityLabel = "Save to Photos"
-            saveButton.isEnabled = true
+            saveButton.isUserInteractionEnabled = true
         }
     }
 }
