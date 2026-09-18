@@ -44,7 +44,7 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     var author: String? = nil
 
     enum Status: String, Sendable, Equatable {
-        case queued, submitting, unconfirmed, failed, serverAccepted
+        case queued, submitting, unconfirmed, failed, serverAccepted, delivered, displayed
 
         var accessibilityDescription: String {
             switch self {
@@ -53,6 +53,8 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
             case .unconfirmed: "Delivery unconfirmed"
             case .failed: "Not sent"
             case .serverAccepted: "Accepted by server"
+            case .delivered: "Delivered"
+            case .displayed: "Read"
             }
         }
 
@@ -99,6 +101,8 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     var onRetryMessage: (String) -> Void = { _ in }
     var onReply: (String) -> Void = { _ in }
     var onReaction: (String, String) -> Void = { _, _ in }
+    /// A received message's cell came on screen; the model decides whether that is a read marker.
+    var onDisplayed: (String) -> Void = { _ in }
     // Observed so a stored accent change re-renders visible bubbles.
     @AppStorage(AccentTheme.storageKey) private var accent = ""
 
@@ -107,7 +111,7 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: ConversationTimelineController, context: Context) {
-        controller.update(messages: messages, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction)
+        controller.update(messages: messages, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onDisplayed: onDisplayed)
     }
 }
 
@@ -127,6 +131,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var onRetryMessage: (String) -> Void = { _ in }
     private var onReply: (String) -> Void = { _ in }
     private var onReaction: (String, String) -> Void = { _, _ in }
+    private var onDisplayed: (String) -> Void = { _ in }
     private var previousSize: CGSize = .zero
     private var revision = 0
     private var followsBottom = true
@@ -163,12 +168,13 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         }
     }
 
-    func update(messages incoming: [TimelineMessage], accent: String = "", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in }) {
+    func update(messages incoming: [TimelineMessage], accent: String = "", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in }, onDisplayed: @escaping (String) -> Void = { _ in }) {
         loadViewIfNeeded()
         self.onToggleStar = onToggleStar
         self.onRetryMessage = onRetryMessage
         self.onReply = onReply
         self.onReaction = onReaction
+        self.onDisplayed = onDisplayed
         // The durable store supplies unique IDs. Avoid a diffable crash if a caller repeats an ID.
         var seen = Set<String>()
         let uniqueRows = TimelineRow.rows(for: incoming.filter { seen.insert($0.id).inserted })
@@ -241,6 +247,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
         if followsBottom { scrollToBottom() }
+    }
+
+    func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        guard let id = dataSource.itemIdentifier(for: indexPath), let row = rowsByID[id], !row.message.isOutgoing else { return }
+        onDisplayed(id)
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -438,6 +449,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             symbol.isAccessibilityElement = false
             symbol.setContentCompressionResistancePriority(.required, for: .horizontal)
         }
+        // One width for every state, so a bubble never resizes as its message is accepted, delivered and read.
+        status.widthAnchor.constraint(equalToConstant: 18).isActive = true
         time.font = .preferredFont(forTextStyle: .caption2)
         time.adjustsFontForContentSizeCategory = true
         time.isAccessibilityElement = false
@@ -475,6 +488,17 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// SF Symbols has no double check; two checkmarks overlapped by about half a glyph read as one.
+    private static func doubleCheck(_ configuration: UIImage.SymbolConfiguration?) -> UIImage? {
+        guard let check = UIImage(systemName: "checkmark", withConfiguration: configuration) else { return nil }
+        let offset = (check.size.width * 0.45).rounded()
+        let size = CGSize(width: check.size.width + offset, height: check.size.height)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            check.draw(at: .zero)
+            check.draw(at: CGPoint(x: offset, y: 0))
+        }.withRenderingMode(.alwaysTemplate)
+    }
 
     /// 20pt corners; the last bubble of a run gets a 6pt tail on its outer bottom corner.
     private var corners: (bottomLeft: CGFloat, bottomRight: CGFloat) {
@@ -699,11 +723,12 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         time.text = [message.securityNotice, message.sentAt?.formatted(date: .omitted, time: .shortened)].compactMap { $0 }.joined(separator: " · ")
         time.isHidden = message.sentAt == nil && message.securityNotice == nil
         status.isHidden = !message.isOutgoing || message.status == nil
-        status.tintColor = message.status == .failed ? .systemRed : meta
+        status.tintColor = message.status == .failed ? .systemRed : message.status == .displayed ? theme.readReceipt : meta
         switch message.status {
         case .queued, .submitting, .unconfirmed: status.image = UIImage(systemName: "clock")
         case .failed: status.image = UIImage(systemName: "exclamationmark.circle")
         case .serverAccepted: status.image = UIImage(systemName: "checkmark")
+        case .delivered, .displayed: status.image = Self.doubleCheck(status.preferredSymbolConfiguration)
         case nil: status.image = nil
         }
         setNeedsLayout()

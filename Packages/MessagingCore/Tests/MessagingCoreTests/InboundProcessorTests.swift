@@ -48,6 +48,20 @@ struct InboundProcessorTests {
         #expect(try await appStore.events(accountID: account, chatID: peer, messageID: "t").map(\.kind) == [.reaction])
     }
 
+    /// A plain receipt from the peer projects onto our own message; one for the peer's own message is refused.
+    @Test func peerReceiptsProjectOntoOwnMessagesOnly() async throws {
+        let (store, processor) = try await fixture()
+        try await store.insertMessage(StoredMessage(id: "mine", accountID: account, chatID: peer, senderID: account, body: "sent", isOutgoing: true, encryptionProfile: "legacy", wireID: "mine"))
+        let delivered = XMPPReceipt(id: "d1", from: peer + "/phone", to: account, targetID: "mine", kind: .delivered)
+        let displayed = XMPPReceipt(id: "d2", from: peer + "/phone", to: account, targetID: "mine", kind: .displayed)
+        let forged = XMPPReceipt(id: "d3", from: peer + "/phone", to: account, targetID: "w", kind: .displayed)
+        #expect(try await processor.process(.receipt(delivered)) == .stored)
+        #expect(try await processor.process(.receipt(displayed)) == .stored)
+        #expect(try await processor.process(.receipt(forged)) == .stored) // ignored, not fatal
+        #expect(try await store.events(accountID: account, chatID: peer, messageID: "mine").map(\.kind) == [.delivered, .displayed])
+        #expect(try await store.events(accountID: account, chatID: peer, messageID: "t").isEmpty)
+    }
+
     /// A stanza without a durable disposition withholds the next barrier and ends the stream.
     @Test func undisposedInboundRefusesTheBarrier() async throws {
         let (store, processor) = try await fixture()

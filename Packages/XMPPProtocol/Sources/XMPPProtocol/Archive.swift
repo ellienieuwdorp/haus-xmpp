@@ -8,6 +8,7 @@ public struct XMPPArchiveMessage: Sendable, Equatable {
     public let message: XMPPMessage?
     public let encryptedMessage: XMPPEncryptedMessage?
     public var reaction: XMPPReaction? = nil
+    public var receipt: XMPPReceipt? = nil
     public var encryptedGroupMessage: XMPPEncryptedGroupMessage? = nil
     public var rejectedContent: XMPPArchiveRejection? = nil
     public var rejectionArchive: String? = nil
@@ -87,9 +88,10 @@ struct ArchiveQuery {
         let provenance: XMPPMessageProvenance = sender == accountBareJID ? .sentCarbon : .receivedCarbon
         let encrypted = OMEMOWire.hasEncryptedContent(inner) ? try OMEMOWire.parseMessage(inner, provenance: provenance) : nil
         let reaction = encrypted == nil ? XMPPClient.parsedReaction(inner, provenance: provenance) : nil
-        let plain = encrypted == nil && reaction == nil ? XMPPClient.parsedMessage(inner, provenance: provenance) : nil
+        let receipt = encrypted == nil && reaction == nil ? XMPPClient.parsedReceipt(inner, provenance: provenance) : nil
+        let plain = encrypted == nil && reaction == nil && receipt == nil ? XMPPClient.parsedMessage(inner, provenance: provenance) : nil
         // Preserve an archive position even for a stanza type the current client cannot display.
-        messages.append(.init(archiveID: id, timestamp: timestamp, message: plain, encryptedMessage: encrypted, reaction: reaction))
+        messages.append(.init(archiveID: id, timestamp: timestamp, message: plain, encryptedMessage: encrypted, reaction: reaction, receipt: receipt))
         identifiers.insert(id)
     }
 

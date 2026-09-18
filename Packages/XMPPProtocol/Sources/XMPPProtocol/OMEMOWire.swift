@@ -62,9 +62,14 @@ public struct XMPPEncryptedMessage: Sendable, Equatable {
     public let originID: String?
     public let envelope: XMPPOMEMOEnvelope
     public let provenance: XMPPMessageProvenance
+    /// Unencrypted outer `<request/>` / `<markable/>`: the sender wants a receipt or read marker back.
+    public var requestsReceipt = false
+    public var markable = false
 
-    public init(id: String, from: String, to: String?, originID: String?, envelope: XMPPOMEMOEnvelope, provenance: XMPPMessageProvenance = .direct) {
+    public init(id: String, from: String, to: String?, originID: String?, envelope: XMPPOMEMOEnvelope, provenance: XMPPMessageProvenance = .direct,
+                requestsReceipt: Bool = false, markable: Bool = false) {
         self.id = id; self.from = from; self.to = to; self.originID = originID; self.envelope = envelope; self.provenance = provenance
+        self.requestsReceipt = requestsReceipt; self.markable = markable
     }
 }
 
@@ -252,16 +257,20 @@ enum OMEMOWire {
         let origins = node.children.filter { $0.name == "origin-id" && $0.namespace == "urn:xmpp:sid:0" }
         let origin = origins.count == 1 ? origins[0].attributes["id"] : nil
         return XMPPEncryptedMessage(id: node.attributes["id"] ?? UUID().uuidString, from: from, to: node.attributes["to"],
-                                    originID: origin.flatMap { validStanzaID($0) ? $0 : nil }, envelope: try parseEnvelope(encrypted), provenance: provenance)
+                                    originID: origin.flatMap { validStanzaID($0) ? $0 : nil }, envelope: try parseEnvelope(encrypted), provenance: provenance,
+                                    requestsReceipt: !node.children("request", namespace: "urn:xmpp:receipts").isEmpty,
+                                    markable: !node.children("markable", namespace: "urn:xmpp:chat-markers:0").isEmpty)
     }
     static func validStanzaID(_ value: String) -> Bool {
         !value.isEmpty && value.utf8.count <= 1_024 && !value.contains(where: { $0.isWhitespace }) &&
         value.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7f && $0.value != 0xfffe && $0.value != 0xffff }
     }
-    static func messageXML(to: String, envelope: XMPPOMEMOEnvelope, id: String) throws -> String {
+    static func messageXML(to: String, envelope: XMPPOMEMOEnvelope, id: String, requestReceipt: Bool = false, markable: Bool = false) throws -> String {
         guard bareJID(to) != nil, validStanzaID(id) else { throw XMPPClientError.invalidConfiguration }
-        // No body or reply metadata is emitted outside the encrypted payload.
-        let result = "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(try envelopeXML(envelope))<origin-id xmlns='urn:xmpp:sid:0' id='\(xmlEscaped(id))'/><store xmlns='urn:xmpp:hints'/><encryption xmlns='urn:xmpp:eme:0' namespace='\(envelope.profile.namespace)' name='OMEMO'/></message>"
+        // No body or reply metadata is emitted outside the encrypted payload. Receipt requests carry no
+        // content, so they ride outside where every deployed client (Conversations, slixmpp) reads them.
+        let hints = (requestReceipt ? "<request xmlns='urn:xmpp:receipts'/>" : "") + (markable ? "<markable xmlns='urn:xmpp:chat-markers:0'/>" : "")
+        let result = "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(try envelopeXML(envelope))<origin-id xmlns='urn:xmpp:sid:0' id='\(xmlEscaped(id))'/><store xmlns='urn:xmpp:hints'/><encryption xmlns='urn:xmpp:eme:0' namespace='\(envelope.profile.namespace)' name='OMEMO'/>\(hints)</message>"
         guard result.utf8.count <= 1_048_000 else { throw XMPPClientError.invalidConfiguration }
         return result
     }

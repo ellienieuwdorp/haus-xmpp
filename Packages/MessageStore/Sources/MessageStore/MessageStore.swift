@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 12 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 13 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -160,7 +160,13 @@ public actor MessageStore {
                 try connection.execute("DROP TABLE reaction_events")
             }
             try connection.execute("CREATE INDEX IF NOT EXISTS event_target ON message_events(account_id,chat_id,target_wire_id,kind,actor_id,updated_at,id)")
-            try connection.execute("CREATE TABLE IF NOT EXISTS notification_preferences (account_id TEXT PRIMARY KEY, previews INTEGER NOT NULL DEFAULT 1)")
+            if version < 13, try !connection.query("SELECT name FROM sqlite_master WHERE type='table' AND name='notification_preferences'").isEmpty {
+                // One row per account was always the shape; receipts add two switches beside previews.
+                try connection.execute("ALTER TABLE notification_preferences RENAME TO account_preferences")
+                try connection.execute("ALTER TABLE account_preferences ADD COLUMN delivery_receipts INTEGER NOT NULL DEFAULT 1")
+                try connection.execute("ALTER TABLE account_preferences ADD COLUMN read_receipts INTEGER NOT NULL DEFAULT 1")
+            }
+            try connection.execute("CREATE TABLE IF NOT EXISTS account_preferences (account_id TEXT PRIMARY KEY, previews INTEGER NOT NULL DEFAULT 1, delivery_receipts INTEGER NOT NULL DEFAULT 1, read_receipts INTEGER NOT NULL DEFAULT 1)")
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS notification_candidates (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, message_id TEXT NOT NULL,
@@ -187,11 +193,11 @@ public actor MessageStore {
                     message_id TEXT NOT NULL, reason TEXT NOT NULL, UNIQUE(account_id,archive_id,message_id)
                 )
                 """)
-            // v12: the verified XEP-0084/0153 avatar hash; the bytes live as a file beside the database.
-            if version < 12, try connection.query("SELECT 1 FROM pragma_table_info('chats') WHERE name='avatar_hash'").isEmpty {
+            // v13 (v12 on the avatars-only tree; the column check keeps it idempotent): the verified XEP-0084/0153 avatar hash; the bytes live as a file beside the database.
+            if version < 13, try connection.query("SELECT 1 FROM pragma_table_info('chats') WHERE name='avatar_hash'").isEmpty {
                 try connection.execute("ALTER TABLE chats ADD COLUMN avatar_hash TEXT")
             }
-            try connection.execute("PRAGMA user_version = 12")
+            try connection.execute("PRAGMA user_version = 13")
         }
     }
 
@@ -554,7 +560,8 @@ public actor MessageStore {
     /// Authenticated plaintext, consumed prekeys/ratchet changes and replay outcome are inseparable.
     /// A key-transport-only message commits state and replay outcome without creating an empty bubble.
     public func commitEncryptedIncoming(accountID: String, sender: String, digest: String,
-                                        expectedRevision: Int, state: Data, message: StoredMessage?, control: EncryptionControl? = nil, reaction: AuthenticatedReaction? = nil, groupRoom: String? = nil, roomStanzaID: String? = nil) throws {
+                                        expectedRevision: Int, state: Data, message: StoredMessage?, control: EncryptionControl? = nil, reaction: AuthenticatedReaction? = nil,
+                                        event: MessageEvent? = nil, groupRoom: String? = nil, roomStanzaID: String? = nil) throws {
         guard !sender.isEmpty, !digest.isEmpty,
               message.map({ $0.accountID == accountID && $0.senderID == sender && $0.encryptionProfile != nil }) ?? true else { throw MessageStoreError.invalidValue }
         if let groupRoom {
@@ -566,6 +573,11 @@ public actor MessageStore {
             if let reaction {
                 guard message == nil, reaction.actorID == sender else { throw MessageStoreError.invalidValue }
                 try insertEvent(accountID: accountID, event: try reaction.event(), groupRoom: groupRoom)
+            }
+            if let event {
+                guard message == nil, reaction == nil, groupRoom == nil, event.actorID == sender,
+                      event.kind == .delivered || event.kind == .displayed else { throw MessageStoreError.invalidValue }
+                try insertEvent(accountID: accountID, event: event)
             }
             if let message {
                 try connection.execute("INSERT INTO chats(account_id,id,title) VALUES(?,?,?) ON CONFLICT(account_id,id) DO NOTHING", [.text(accountID), .text(message.chatID), .text(message.chatID)])
@@ -587,14 +599,24 @@ public actor MessageStore {
         }
     }
 
-    public func notificationPreviewsEnabled(accountID: String) throws -> Bool {
-        (try connection.query("SELECT previews FROM notification_preferences WHERE account_id=?", [.text(accountID)]).first?[0].integer ?? 1) != 0
-    }
+    public func notificationPreviewsEnabled(accountID: String) throws -> Bool { try accountPreferences(accountID: accountID).notificationPreviews }
 
     public func setNotificationPreviews(accountID: String, enabled: Bool) throws {
+        var preferences = try accountPreferences(accountID: accountID)
+        preferences.notificationPreviews = enabled
+        try setAccountPreferences(accountID: accountID, preferences)
+    }
+
+    public func accountPreferences(accountID: String) throws -> AccountPreferences {
+        guard let row = try connection.query("SELECT previews,delivery_receipts,read_receipts FROM account_preferences WHERE account_id=?", [.text(accountID)]).first else { return AccountPreferences() }
+        return AccountPreferences(notificationPreviews: row[0].integer != 0, deliveryReceipts: row[1].integer != 0, readReceipts: row[2].integer != 0)
+    }
+
+    public func setAccountPreferences(accountID: String, _ preferences: AccountPreferences) throws {
         try requireTransportOwnership()
         guard !accountID.isEmpty else { throw MessageStoreError.invalidValue }
-        try connection.execute("INSERT INTO notification_preferences(account_id,previews) VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET previews=excluded.previews", [.text(accountID), .integer(enabled ? 1 : 0)])
+        try connection.execute("INSERT INTO account_preferences(account_id,previews,delivery_receipts,read_receipts) VALUES(?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET previews=excluded.previews,delivery_receipts=excluded.delivery_receipts,read_receipts=excluded.read_receipts",
+                               [.text(accountID), .integer(preferences.notificationPreviews ? 1 : 0), .integer(preferences.deliveryReceipts ? 1 : 0), .integer(preferences.readReceipts ? 1 : 0)])
     }
 
     /// The foreground owner has already presented these messages. This is notification
@@ -848,6 +870,42 @@ public actor MessageStore {
         try insertEvent(accountID: accountID, event: try reaction.event())
     }
 
+    /// A peer's receipt or marker, plain or authenticated, about one of our own messages.
+    public func recordReceipt(accountID: String, event: MessageEvent) throws {
+        guard event.kind == .delivered || event.kind == .displayed else { throw MessageStoreError.invalidValue }
+        try insertEvent(accountID: accountID, event: event)
+    }
+
+    /// Queue `<received/>` (`.receipt`) or `<displayed/>` (`.marker`) for a peer message. The per-account
+    /// switch is enforced here, the one place every path goes through; nil means nothing was queued.
+    /// A receipt is one row per message. A marker is cumulative, so one queued row per chat is kept
+    /// and replaced only by a newer target; once submitting it is immutable and a newer target is a new row.
+    public func enqueueReceipt(accountID: String, chatID: String, targetMessageID: String, kind: StoredUpdate.Kind, createdAt: Date = Date()) throws -> String? {
+        guard kind == .receipt || kind == .marker, !accountID.isEmpty else { throw MessageStoreError.invalidValue }
+        let preferences = try accountPreferences(accountID: accountID)
+        guard kind == .receipt ? preferences.deliveryReceipts : preferences.readReceipts else { return nil }
+        return try connection.transaction {
+            guard let target = try message(accountID: accountID, messageID: targetMessageID), target.chatID == chatID, !target.isOutgoing,
+                  let wireID = target.wireID, try reactionTarget(accountID: accountID, chatID: chatID, wireID: wireID)?.id == target.id else { throw MessageStoreError.invalidValue }
+            let existing = try connection.query("""
+                SELECT u.state FROM outgoing_updates u JOIN messages m ON m.account_id=u.account_id AND m.id=u.target_message_id
+                WHERE u.account_id=? AND u.kind=? AND u.chat_id=? AND (u.target_message_id=? OR (?='marker' AND m.sent_at>=?))
+                """, [.text(accountID), .text(kind.rawValue), .text(chatID), .text(targetMessageID), .text(kind.rawValue), .real(target.sentAt.timeIntervalSince1970)])
+            if !existing.isEmpty { return nil } // Already asserted this, or something newer, for this chat.
+            if kind == .marker {
+                try connection.execute("DELETE FROM outgoing_updates WHERE account_id=? AND kind='marker' AND chat_id=? AND state='queued'", [.text(accountID), .text(chatID)])
+            }
+            let id = UUID().uuidString
+            try insertUpdate(accountID: accountID, id: id, kind: kind, chatID: chatID, createdAt: createdAt,
+                             targetMessageID: targetMessageID, targetWireID: wireID, reactionsJSON: nil, wire: nil)
+            return id
+        }
+    }
+
+    public func queuedReceipts(accountID: String) throws -> [StoredUpdate] {
+        try connection.query("SELECT \(Self.updateColumns) FROM outgoing_updates WHERE account_id=? AND kind IN ('receipt','marker') AND state='queued' ORDER BY sequence LIMIT 1000", [.text(accountID)]).map(Self.decodeUpdate)
+    }
+
     public func queuedReactions(accountID: String) throws -> [StoredReactionUpdate] {
         try connection.query("SELECT \(Self.reactionColumns) FROM outgoing_updates WHERE account_id=? AND kind='reaction' AND state='queued' ORDER BY sequence LIMIT 1000", [.text(accountID)]).map(Self.decodeReaction)
     }
@@ -948,6 +1006,11 @@ public actor MessageStore {
 
     private func insertEvent(accountID: String, event: MessageEvent, groupRoom: String? = nil) throws {
         try Self.validateEvent(accountID: accountID, event: event, groupRoom: groupRoom)
+        if event.kind == .delivered || event.kind == .displayed,
+           let target = try reactionTarget(accountID: accountID, chatID: event.chatID, wireID: event.targetWireID), !target.isOutgoing {
+            // A peer can only confirm our messages. An unknown target is retained: it may still arrive from the archive.
+            throw MessageStoreError.invalidValue
+        }
         // Missing targets remain retained. Ambiguous/missing authenticated IDs never get a projection.
         // A replayed authenticated event ID cannot replace the first accepted content under that ID.
         try connection.execute("INSERT INTO message_events(account_id,actor_id,id,chat_id,target_wire_id,kind,payload_json,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(account_id,actor_id,id) DO NOTHING", [.text(accountID), .text(event.actorID), .text(event.id), .text(event.chatID), .text(event.targetWireID), .text(event.kind.rawValue), .text(event.payload), .real(event.updatedAt.timeIntervalSince1970)])
@@ -966,8 +1029,11 @@ public actor MessageStore {
                   let reactions = try? JSONDecoder().decode([String].self, from: Data(event.payload.utf8)),
                   reactions.count <= 12, Set(reactions).count == reactions.count,
                   reactions.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 }) else { throw MessageStoreError.invalidValue }
-        case .retraction, .correction, .delivered, .displayed:
-            // Reserved: accepted once their wire support lands, with sender-only / peer-only rules.
+        case .delivered, .displayed:
+            // Only the direct peer confirms delivery or reading; group receipts are not accepted.
+            guard groupRoom == nil, event.actorID == event.chatID, event.payload == "{}" else { throw MessageStoreError.invalidValue }
+        case .retraction, .correction:
+            // Reserved: accepted once their wire support lands, with sender-only rules.
             throw MessageStoreError.invalidValue
         }
     }
@@ -986,10 +1052,11 @@ public actor MessageStore {
                              reactions: try JSONDecoder().decode([String].self, from: Data(row[5].string.utf8)),
                              createdAt: Date(timeIntervalSince1970: row[6].double), transportState: OutgoingTransportState(rawValue: row[7].string))
     }
-    private static let updateColumns = "account_id,id,kind,chat_id,state"
+    private static let updateColumns = "account_id,id,kind,chat_id,state,target_message_id,target_wire_id"
     private static func decodeUpdate(_ row: [Value]) throws -> StoredUpdate {
         guard let kind = StoredUpdate.Kind(rawValue: row[2].string) else { throw MessageStoreError.invalidValue }
-        return StoredUpdate(id: row[1].string, accountID: row[0].string, kind: kind, chatID: row[3].string, transportState: OutgoingTransportState(rawValue: row[4].string))
+        return StoredUpdate(id: row[1].string, accountID: row[0].string, kind: kind, chatID: row[3].string, transportState: OutgoingTransportState(rawValue: row[4].string),
+                            targetMessageID: row[5].string.isEmpty ? nil : row[5].string, targetWireID: row[6].string.isEmpty ? nil : row[6].string)
     }
 
     private static let columns = """
