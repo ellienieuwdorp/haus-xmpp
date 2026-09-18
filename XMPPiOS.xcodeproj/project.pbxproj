@@ -36,6 +36,7 @@
 		5581B0609F6688C9C3868D17 /* GroupJoinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBD21AF11824F42FB3E0DE46 /* GroupJoinView.swift */; };
 		565E2244C18990588EFB56B6 /* ReactionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40EBA5FA15B66AEBE4033B4B /* ReactionUITests.swift */; };
 		57EE3016876A1EE8034033D3 /* PushRegistrationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA3471BC57BCF7C038498282 /* PushRegistrationState.swift */; };
+		588AE08166DD3AFEC5C2ACA6 /* CoalescedReloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE61654F2F711464512D6703 /* CoalescedReloadTests.swift */; };
 		5F166C0A1D90C747BD73588F /* ConversationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */; };
 		606006C350363E0A14B82A19 /* ChatDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02E578F753BEA364EB18BB4D /* ChatDetailsView.swift */; };
 		64F05052C92000FB99DD045D /* MessageActionsOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3790FF0EAB5AF2B3F87358EE /* MessageActionsOverlay.swift */; };
@@ -46,6 +47,7 @@
 		790E75EB8C82D4041832860D /* NotificationAccessGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D64D2C443130E517FB4227F /* NotificationAccessGate.swift */; };
 		791F4FE97D241AC6A44A0B4F /* NotificationAccountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4B4C1530960F6129C8EC8AD /* NotificationAccountTests.swift */; };
 		7E6C4263F5BA1BCBF4FC6C9C /* ConversationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24B51206177B769B64F7212B /* ConversationUITests.swift */; };
+		80C4272C64B18765C87CEAC4 /* CoalescedReload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64881C29F7536BBBCC65470E /* CoalescedReload.swift */; };
 		817111520A55373B387F2F40 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = AFC1C801720A06EEB5CC2DFD /* MessageStore */; };
 		821A596E851CCBD9728A4C87 /* SharedStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97F738E51D0098B3D95850BB /* SharedStorage.swift */; };
 		8A211ED028F5061BAE138553 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = F283B99C4452326F2C17009D /* MessageStore */; };
@@ -141,6 +143,7 @@
 		458E132229BD40D81BDBBF78 /* PushUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushUITests.swift; sourceTree = "<group>"; };
 		4B384057910D0B7F09E667C4 /* AvatarStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarStore.swift; sourceTree = "<group>"; };
 		60CDCE362B275821D181D99A /* CircularGlassButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircularGlassButtonStyle.swift; sourceTree = "<group>"; };
+		64881C29F7536BBBCC65470E /* CoalescedReload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoalescedReload.swift; sourceTree = "<group>"; };
 		672F8EB6B8BC64098369E462 /* LabConnectionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabConnectionUITests.swift; sourceTree = "<group>"; };
 		6A7EFE21E5ABA53391725448 /* NotificationAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationAccount.swift; sourceTree = "<group>"; };
 		6D35E35D95E7FEF0796F95F7 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -178,6 +181,7 @@
 		E21866AA2D5D03C11041986F /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		EA3471BC57BCF7C038498282 /* PushRegistrationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistrationState.swift; sourceTree = "<group>"; };
 		EAC07EFB739E1EFD8DF0DCA3 /* OutboxUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutboxUITests.swift; sourceTree = "<group>"; };
+		EE61654F2F711464512D6703 /* CoalescedReloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoalescedReloadTests.swift; sourceTree = "<group>"; };
 		F001BEFD4DDC53B7961876FE /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		F011167791FD6608B0B26510 /* XMPPiOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = XMPPiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F2338E6EC558F142033D0682 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -249,6 +253,7 @@
 		3DF5195482AD2E1D62D87B9E /* AppLifecycleTests */ = {
 			isa = PBXGroup;
 			children = (
+				EE61654F2F711464512D6703 /* CoalescedReloadTests.swift */,
 				388BA54424B17190DC3CBD6C /* EncryptionLifecycleTests.swift */,
 				BD5764F5CEC7644EC23110AC /* NotificationAccessGateTests.swift */,
 				C4B4C1530960F6129C8EC8AD /* NotificationAccountTests.swift */,
@@ -312,6 +317,7 @@
 				02E578F753BEA364EB18BB4D /* ChatDetailsView.swift */,
 				3CAD55F8C67F101615618BE4 /* ChatListView.swift */,
 				60CDCE362B275821D181D99A /* CircularGlassButtonStyle.swift */,
+				64881C29F7536BBBCC65470E /* CoalescedReload.swift */,
 				8B424C6F4AC85C78B1A51212 /* ConversationSearchBar.swift */,
 				832B2C9B949BF73D12ED9103 /* ConversationTimeline.swift */,
 				9B83163D7B25E749804F80AF /* ConversationView.swift */,
@@ -525,6 +531,7 @@
 				606006C350363E0A14B82A19 /* ChatDetailsView.swift in Sources */,
 				E57C443B766B4EB72095CE81 /* ChatListView.swift in Sources */,
 				14259EDA76E8B6B4C53D4E92 /* CircularGlassButtonStyle.swift in Sources */,
+				80C4272C64B18765C87CEAC4 /* CoalescedReload.swift in Sources */,
 				EFB84D5EC3319705EABE26D4 /* ConversationSearchBar.swift in Sources */,
 				5F166C0A1D90C747BD73588F /* ConversationTimeline.swift in Sources */,
 				17A325600E79D8A8156382ED /* ConversationView.swift in Sources */,
@@ -575,6 +582,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				588AE08166DD3AFEC5C2ACA6 /* CoalescedReloadTests.swift in Sources */,
 				FCB99E51AD55AA54A964431F /* EncryptionLifecycleTests.swift in Sources */,
 				3FBEB8AA01BC5062AF02BD11 /* NotificationAccessGateTests.swift in Sources */,
 				791F4FE97D241AC6A44A0B4F /* NotificationAccountTests.swift in Sources */,
