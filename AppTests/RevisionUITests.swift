@@ -90,14 +90,23 @@ final class RevisionUITests: XCTestCase {
         app.buttons["startChat"].tap()
         let composer = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        // As in ReactionUITests: a queued first message before reviewing the peer's devices.
+        composer.tap(); composer.typeText("Hello \(UUID().uuidString.prefix(4))"); app.buttons["sendMessage"].tap()
         app.openEncryptionDetails()
         let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "encryptionDevice."))
         XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 15))
+        // The echo peer speaks OMEMO 2 only; same selection steps as ReactionUITests.
+        let version = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "OMEMO · compatible")).firstMatch
+        for _ in 0..<5 { if version.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(version.isHittable); version.tap()
+        XCTAssertTrue(app.buttons["OMEMO 2"].waitForExistence(timeout: 5)); app.buttons["OMEMO 2"].tap()
+        for _ in 0..<5 { if rows.firstMatch.isHittable { break }; app.swipeDown() }
         for _ in 0..<20 {
             let pending = rows.matching(NSPredicate(format: "label CONTAINS %@", "Review required")).firstMatch
             if !pending.exists { break }
+            for _ in 0..<5 { if pending.isHittable { break }; app.swipeUp() }
             pending.tap()
-            XCTAssertTrue(app.buttons["Accept without verifying"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["Accept without verifying"].waitForExistence(timeout: 10))
             app.buttons["Accept without verifying"].tap()
             XCTAssertTrue(app.navigationBars["Devices & Encryption"].waitForExistence(timeout: 5))
         }
