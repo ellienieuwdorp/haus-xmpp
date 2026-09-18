@@ -81,6 +81,7 @@ final class AppModel {
     @ObservationIgnored private var client: XMPPClient?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var openChatID: String?
+    @ObservationIgnored private var encryptionDetailsChatID: String?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var prepared = false
     @ObservationIgnored private var pushTokenTask: Task<Void, Never>?
@@ -1072,13 +1073,15 @@ final class AppModel {
         if isGroup(chatID) { await loadGroupDetails(room: chatID, refreshFromServer: refreshFromServer); return }
         let account = accountID
         let token = generation
+        // The pushed details pages cover the conversation, which clears openChatID; the latest request is the fence.
+        encryptionDetailsChatID = chatID
         do {
             let overview: EncryptionOverview
             let refreshed = refreshFromServer && hasTransportOwnership && encryptionReady && isConnected && client != nil
             if refreshed, let client {
                 overview = try await encryption.refreshDevices(account: account, peer: chatID, profile: profile, transport: client)
             } else { overview = try await encryption.overview(account: account, peer: chatID) }
-            guard accountID == account, generation == token, openChatID == chatID else { return }
+            guard accountID == account, generation == token, encryptionDetailsChatID == chatID else { return }
             encryptionOverview = overview
             encryptionNeedsReview = overview.needsTrust
             let summary = [chatID, account].map { owner -> String in
@@ -1101,7 +1104,7 @@ final class AppModel {
                 encryptionStatus = refreshed ? "No compatible encryption devices" : "Setting up encryption…"
             } else { encryptionStatus = "New messages are end-to-end encrypted" }
         } catch {
-            guard accountID == account, generation == token, openChatID == chatID else { return }
+            guard accountID == account, generation == token, encryptionDetailsChatID == chatID else { return }
             let detail: String
             if case .stanza(let condition)? = error as? XMPPIQError { detail = condition } else { detail = String(describing: error).prefix(80).description }
             Logger(subsystem: "dev.xmpplab.ios", category: "encryption").error("Device refresh for \(chatID, privacy: .private) failed: \(detail, privacy: .public)")

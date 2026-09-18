@@ -131,6 +131,8 @@ struct DeviceRow: View {
             Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
         }
         .frame(minHeight: 44)
+        // The Spacer is not hittable on its own under a plain button style: the whole row is the target.
+        .contentShape(Rectangle())
     }
 }
 
