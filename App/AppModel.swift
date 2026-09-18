@@ -32,6 +32,11 @@ final class AppModel {
     private(set) var messages: [ChatMessage] = []
     /// The chat whose messages `messages` currently holds; nil while a load is pending.
     private(set) var messagesLoadedFor: String?
+    /// How many of the open chat's newest messages are loaded; scrolling to the top and searching raise it.
+    // ponytail: each page re-reads the whole window and search stops at the ceiling; page by cursor and search in the store when chats outgrow it.
+    @ObservationIgnored private var timelineWindow = AppModel.timelinePage
+    @ObservationIgnored private var loadingOlder = false
+    private static let timelinePage = 100, timelineCeiling = 1000
     private(set) var messageReactions: [String: [AuthenticatedReaction]] = [:]
     /// The peer's strongest receipt per own message in the open chat: delivered or displayed.
     private(set) var messageReceipts: [String: MessageEventKind] = [:]
@@ -198,6 +203,16 @@ final class AppModel {
                         try await store.recordReceipt(accountID: account, event: MessageEvent(id: id + "-receipt", chatID: chatID, actorID: chatID, targetWireID: id,
                                                                                             kind: receipt, payload: "{}", updatedAt: Date(timeIntervalSince1970: 1_789_380_010)))
                     }
+                }
+            }
+            // Long enough to cross several timeline pages; only tests and scroll checks ask for it.
+            if ProcessInfo.processInfo.arguments.contains("-demo-long") {
+                let chatID = "history@preview.local"
+                try await store.upsertChat(accountID: account, chatID: chatID, title: "History")
+                for index in 1...250 {
+                    try await store.insertMessage(StoredMessage(id: "sample-history-\(index)", accountID: account, chatID: chatID, senderID: index.isMultiple(of: 3) ? account : chatID,
+                                                                body: "History message \(index)" + (index.isMultiple(of: 7) ? ", with a second sentence so some bubbles wrap onto another line." : ""),
+                                                                sentAt: Date(timeIntervalSince1970: 1_789_300_000 + Double(index) * 60), isOutgoing: index.isMultiple(of: 3)))
                 }
             }
             // One sample photo, drawn here so no asset ships: exercises the bubble thumbnail and the viewer.
@@ -1328,7 +1343,7 @@ final class AppModel {
     }
 
     func openChat(_ chatID: String) async {
-        openChatID = chatID; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]; encryptionOverview = nil
+        openChatID = chatID; timelineWindow = AppModel.timelinePage; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]; encryptionOverview = nil
         encryptionStatus = "Setting up encryption…"; encryptionNeedsReview = false
         // First paint: the newest screenful now, before the chat list and the rest of the history.
         let account = accountID
@@ -1452,6 +1467,15 @@ final class AppModel {
         startOutbox()
     }
 
+    /// The reader reached the oldest loaded message. A full window means the store may hold more.
+    func loadOlderMessages(all: Bool = false) async {
+        guard !loadingOlder, openChatID != nil, timelineWindow < AppModel.timelineCeiling, all || messages.count >= timelineWindow else { return }
+        loadingOlder = true
+        defer { loadingOlder = false }
+        timelineWindow = all ? AppModel.timelineCeiling : min(AppModel.timelineCeiling, timelineWindow + AppModel.timelinePage)
+        await refresh(.openChat)
+    }
+
     func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:] } }
 
     var notificationPreviewsEnabled = true
@@ -1554,7 +1578,7 @@ final class AppModel {
             if scope.contains(.chats) { try await loadChats(store: store, account: account) }
             guard scope.contains(.openChat), accountID == account, let selected = openChatID else { return }
             // Every chat-list load, join and rejoin mirrors the known rooms into groupChats.
-            let publish = try await loadTimeline(store: store, account: account, chat: selected, isGroup: isGroup(selected), limit: 1000)
+            let publish = try await loadTimeline(store: store, account: account, chat: selected, isGroup: isGroup(selected), limit: timelineWindow)
             // A chat opened meanwhile requests its own load.
             guard accountID == account, openChatID == selected else { return }
             publish()

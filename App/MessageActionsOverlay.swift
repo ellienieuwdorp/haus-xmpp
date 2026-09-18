@@ -31,7 +31,8 @@ struct MessageActionsContext {
 /// bubble starts and ends exactly where the live one is and pops the way the system menu does.
 @MainActor
 enum MessageActionsOverlay {
-    static func present(from presenter: UIViewController, context: MessageActionsContext) {
+    /// `onDismiss` runs once the overlay is gone, before the chosen action; its argument says whether one was chosen.
+    static func present(from presenter: UIViewController, context: MessageActionsContext, onDismiss: @escaping (Bool) -> Void = { _ in }) {
         let window = presenter.view.window
         let safeArea = window?.safeAreaInsets ?? .zero
         // A real screenshot blurred by us: system materials tint as much as they blur, and the design
@@ -41,7 +42,9 @@ enum MessageActionsOverlay {
         context.setSourceHidden(true)
         let backdrop = window.flatMap(blurred)
         let controller = UIHostingController(rootView: MessageActionsOverlayView(context: context, backdrop: backdrop, safeArea: safeArea, finish: { _ in }))
-        controller.rootView.finish = { [weak controller] completion in controller?.dismiss(animated: false, completion: completion) }
+        controller.rootView.finish = { [weak controller] completion in
+            controller?.dismiss(animated: false) { onDismiss(completion != nil); completion?() }
+        }
         controller.view.backgroundColor = .clear
         controller.modalPresentationStyle = .overFullScreen
         presenter.present(controller, animated: false)

@@ -135,6 +135,10 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     var onUnsend: (String) -> Void = { _ in }
     /// A received message's cell came on screen; the model decides whether that is a read marker.
     var onDisplayed: (String) -> Void = { _ in }
+    /// The long-press menu put the keyboard away and nothing else claimed focus; bring it back.
+    var onRestoreComposerFocus: () -> Void = {}
+    /// The user scrolled to the oldest loaded message.
+    var onReachTop: () -> Void = {}
     // Observed so a stored accent change re-renders visible bubbles.
     @AppStorage(AccentTheme.storageKey) private var accent = ""
 
@@ -145,6 +149,8 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: ConversationTimelineController, context: Context) {
         controller.setComposer(composer)
         controller.update(messages: messages, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onDisplayed: onDisplayed)
+        controller.onRestoreComposerFocus = onRestoreComposerFocus
+        controller.onReachTop = onReachTop
     }
 }
 
@@ -173,6 +179,12 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private weak var contentPopGesture: UIGestureRecognizer?
     private var contentPopWasEnabled = false
     private let composerHost = UIHostingController(rootView: AnyView(EmptyView()))
+    var onRestoreComposerFocus: () -> Void = {}
+    var onReachTop: () -> Void = {}
+    /// While the long-press menu is up the timeline holds still: its snapshot sits at the bubble's captured frame.
+    private var actionsVisible = false
+    private var heldUpdate: (() -> Void)?
+    private var restoresKeyboard = false
     private var bottomInset: CGFloat = 0
 
     override func loadView() {
@@ -217,9 +229,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                   let cell = collection.dequeueReusableCell(withReuseIdentifier: "message", for: indexPath) as? MessageBubbleCell else { return nil }
             cell.configure(row: row, toggleStar: { [weak self] in self?.onToggleStar(id) }, retry: { [weak self] in self?.onRetryMessage(id) }, reply: { [weak self] in self?.onReply(id) }, reaction: { [weak self] emoji in self?.onReaction(id, emoji) },
                            edit: { [weak self] in self?.onEdit(id) }, unsend: { [weak self] in self?.onUnsend(id) },
+                           willPresentActions: { [weak self] in self?.putKeyboardAwayForActions() },
                            presentActions: { [weak self] context in
                                guard let self, presentedViewController == nil else { return }
-                               MessageActionsOverlay.present(from: self, context: context)
+                               actionsVisible = true
+                               MessageActionsOverlay.present(from: self, context: context) { [weak self] choseAction in self?.actionsDismissed(choseAction: choseAction) }
                            }, openAttachment: { [weak self] url in self?.preview(url, title: row.message.attachment?.name, isImage: row.message.attachment?.isImage == true) })
             return cell
         }
@@ -243,6 +257,10 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     func update(messages incoming: [TimelineMessage], accent: String = "", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in },
                 onEdit: @escaping (String) -> Void = { _ in }, onUnsend: @escaping (String) -> Void = { _ in }, onDisplayed: @escaping (String) -> Void = { _ in }) {
         loadViewIfNeeded()
+        if actionsVisible {
+            heldUpdate = { [weak self] in self?.update(messages: incoming, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onDisplayed: onDisplayed) }
+            return
+        }
         self.onToggleStar = onToggleStar
         self.onRetryMessage = onRetryMessage
         self.onReply = onReply
@@ -256,7 +274,15 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         let accentChanged = accent != self.accent
         guard uniqueRows != rows || accentChanged else { return }
         self.accent = accent
-        let shouldFollow = rows.isEmpty || isNearBottom
+        // Only a message arriving at the tail moves, and only when the reader is at the tail; nothing else animates.
+        let oldIDs = rows.map(\.message.id), newIDs = uniqueRows.map(\.message.id)
+        let appended = !oldIDs.isEmpty && newIDs.count > oldIDs.count && Array(newIDs.prefix(oldIDs.count)) == oldIDs
+        // Sending always returns to the newest message, wherever the reader was.
+        let sentOwn = appended && uniqueRows[oldIDs.count...].contains { $0.message.isOutgoing }
+        let wasNearBottom = isNearBottom
+        let shouldFollow = rows.isEmpty || wasNearBottom || sentOwn
+        // From far up in history a send jumps; a slide would cross cells that were never drawn.
+        let slidesIn = appended && wasNearBottom && view.window != nil && !UIAccessibility.isReduceMotionEnabled
         let anchor = visibleAnchor()
         let previous = rowsByID
         rows = uniqueRows
@@ -273,13 +299,20 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self, revision == currentRevision else { return }
             collectionView.layoutIfNeeded()
-            if shouldFollow {
+            if slidesIn {
+                // Settle the final offset first so the new cells exist, then play the distance back.
+                let start = collectionView.contentOffset.y
+                scrollToBottom()
+                let end = collectionView.contentOffset.y
+                collectionView.contentOffset.y = start
+                UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) { self.collectionView.contentOffset.y = end }
+            } else if shouldFollow {
                 scrollToBottom()
             } else if let anchor, let indexPath = dataSource.indexPath(for: anchor.id),
                       let attributes = collectionView.layoutAttributesForItem(at: indexPath) {
                 collectionView.contentOffset.y = clampedOffset(attributes.frame.minY - anchor.distanceFromTop)
             }
-            followsBottom = isNearBottom
+            followsBottom = shouldFollow || isNearBottom
         }
     }
 
@@ -307,6 +340,27 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         contentPopWasEnabled = gesture.isEnabled
         contentPopGesture = gesture
         gesture.isEnabled = false
+    }
+
+    /// Before the cell captures its frame: the keyboard would cover the menu, and an animated dismissal would move
+    /// the bubble out from under its snapshot, so it goes at once and the layout settles first.
+    private func putKeyboardAwayForActions() {
+        guard presentedViewController == nil else { return }
+        restoresKeyboard = view.keyboardLayoutGuide.layoutFrame.height > view.safeAreaInsets.bottom + 100
+        guard restoresKeyboard else { return }
+        UIView.performWithoutAnimation {
+            view.endEditing(true)
+            view.layoutIfNeeded()
+        }
+    }
+
+    private func actionsDismissed(choseAction: Bool) {
+        actionsVisible = false
+        heldUpdate?()
+        heldUpdate = nil
+        // Reply and edit focus the composer themselves; text selection and the unsend dialog must keep it away.
+        if restoresKeyboard, !choseAction { onRestoreComposerFocus() }
+        restoresKeyboard = false
     }
 
     func setComposer(_ composer: AnyView?) {
@@ -360,7 +414,10 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         // Layout changes during a keyboard transition are not a user's scroll intent.
-        if scrollView.isDragging || scrollView.isDecelerating { followsBottom = isNearBottom }
+        guard scrollView.isDragging || scrollView.isDecelerating else { return }
+        followsBottom = isNearBottom
+        // A few screens early, so older messages are usually in place before the reader arrives.
+        if scrollView.contentOffset.y + scrollView.adjustedContentInset.top < 1200 { onReachTop() }
     }
 
     private var isNearBottom: Bool {
@@ -432,6 +489,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private var editAction: () -> Void = {}
     private var unsendAction: () -> Void = {}
     private var presentActions: (MessageActionsContext) -> Void = { _ in }
+    private var willPresentActions: () -> Void = {}
     private let pressFeedback = UIImpactFeedbackGenerator(style: .medium)
     private var swipeReplyAction: (() -> Void)?
     private var crossedReplyThreshold = false
@@ -792,7 +850,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     }
 
     @objc private func handlePress(_ press: UILongPressGestureRecognizer) {
-        guard press.state == .began, let message, let bubbleSnapshot = bubble.snapshotView(afterScreenUpdates: false) else { return }
+        guard press.state == .began, let message else { return }
+        willPresentActions()
+        guard let bubbleSnapshot = bubble.snapshotView(afterScreenUpdates: false) else { return }
         pressFeedback.impactOccurred()
         let reactions = message.reactions.isEmpty ? nil : reactionRow.snapshotView(afterScreenUpdates: false)
         presentActions(MessageActionsContext(message: message, bubble: bubbleSnapshot, bubbleFrame: bubble.convert(bubble.bounds, to: nil),
@@ -878,7 +938,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
 
     func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,
                    edit: @escaping () -> Void = {}, unsend: @escaping () -> Void = {},
-                   presentActions: @escaping (MessageActionsContext) -> Void, openAttachment: @escaping (URL) -> Void = { _ in }) {
+                   willPresentActions: @escaping () -> Void = {}, presentActions: @escaping (MessageActionsContext) -> Void, openAttachment: @escaping (URL) -> Void = { _ in }) {
         let message = row.message
         self.row = row
         self.toggleStar = toggleStar
@@ -888,6 +948,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         self.editAction = edit
         self.unsendAction = unsend
         self.presentActions = presentActions
+        self.willPresentActions = willPresentActions
         self.openAttachment = openAttachment
         bubble.cornerConfiguration = .corners(topLeftRadius: .fixed(20), topRightRadius: .fixed(20),
                                               bottomLeftRadius: .fixed(corners.bottomLeft), bottomRightRadius: .fixed(corners.bottomRight))

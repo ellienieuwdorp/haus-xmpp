@@ -229,7 +229,7 @@ struct ConversationView: View {
                 // Only the newest received message is marked; XEP-0333 makes a marker cover everything before it.
                 guard id == model.messages.last(where: { !$0.isOutgoing })?.id else { return }
                 Task { await model.markDisplayed(id) }
-            })
+            }, onRestoreComposerFocus: { composerState.focused = true }, onReachTop: { Task { await model.loadOlderMessages() } })
             // The controller pins the composer to the keyboard itself and insets the messages to match.
             .ignoresSafeArea(.keyboard)
             .ignoresSafeArea(.container, edges: .bottom)
@@ -302,6 +302,8 @@ struct ConversationView: View {
             default: break
             }
         }
+        // Search and the starred filter read the loaded messages, so they need the whole window rather than the newest page.
+        .onChange(of: showingSearch || starredOnly) { _, filtering in if filtering { Task { await model.loadOlderMessages(all: true) } } }
         .onChange(of: model.encryptionNeedsReview) { reviewDismissed = false }
         .onChange(of: model.encryptionStatus) { reviewDismissed = false }
         .photosPicker(isPresented: $showingPhotoPicker, selection: $photoItem, matching: .any(of: [.images, .videos]))

@@ -15,6 +15,44 @@ final class ConversationUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["No messages yet"].exists)
     }
 
+    private func openLongChat() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demo-long"]
+        app.isolateMessageStorage()
+        app.launch()
+        let history = app.staticTexts["History"]
+        XCTAssertTrue(history.waitForExistence(timeout: 15))
+        history.tap()
+        return app
+    }
+
+    private func bubble(_ index: Int, in app: XCUIApplication) -> XCUIElement {
+        app.textViews.containing(NSPredicate(format: "value == %@", "History message \(index)")).firstMatch
+    }
+
+    /// Only the newest page is loaded on open; scrolling up pages the rest in until the first message is reachable.
+    @MainActor func testLongChatOpensAtNewestAndPagesBackToTheFirstMessage() throws {
+        let app = openLongChat()
+        XCTAssertTrue(bubble(250, in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(bubble(250, in: app).isHittable, "A chat opens on its newest message, above the composer")
+        let timeline = app.collectionViews["conversation.timeline"]
+        for _ in 0..<60 where !bubble(1, in: app).exists { timeline.swipeDown(velocity: .fast) }
+        XCTAssertTrue(bubble(1, in: app).exists, "Older pages load as the reader scrolls up")
+    }
+
+    /// Search covers messages older than the newest page.
+    @MainActor func testSearchReachesBeyondTheNewestPage() throws {
+        let app = openLongChat()
+        XCTAssertTrue(bubble(250, in: app).waitForExistence(timeout: 5))
+        app.buttons["Conversation options"].tap()
+        app.buttons["Search messages"].tap()
+        let search = app.searchFields["messageSearch"]
+        XCTAssertTrue(search.waitForExistence(timeout: 4))
+        search.typeText("History message 12")
+        // 12 and 120 through 129, all outside the newest hundred.
+        XCTAssertTrue(app.staticTexts["11 messages found"].waitForExistence(timeout: 5))
+    }
+
     @MainActor func testComposeSearchAndRelaunch() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]
