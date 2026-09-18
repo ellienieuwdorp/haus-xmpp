@@ -22,6 +22,13 @@ targets:
     type: application
     platform: iOS
     sources: [App, Shared]
+    # Merged into the generated Info.plist. Without this key Core Animation caps iPhone animations at 60 Hz.
+    info:
+      path: App/Info.plist
+      properties:
+        CADisableMinimumFrameDurationOnPhone: true
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
     dependencies:
       - package: XMPPProtocol
       - package: MessageStore

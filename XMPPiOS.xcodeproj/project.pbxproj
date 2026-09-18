@@ -180,6 +180,7 @@
 		EAC07EFB739E1EFD8DF0DCA3 /* OutboxUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutboxUITests.swift; sourceTree = "<group>"; };
 		F001BEFD4DDC53B7961876FE /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		F011167791FD6608B0B26510 /* XMPPiOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = XMPPiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F2338E6EC558F142033D0682 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F29F51D890D21FD55BB2D510 /* NotificationNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNavigationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -319,6 +320,7 @@
 				CAF76316D7F572ECA650DC23 /* GroupChatState.swift */,
 				29D0F7FE889C5ECA318C15DC /* GroupDetailsView.swift */,
 				BBD21AF11824F42FB3E0DE46 /* GroupJoinView.swift */,
+				F2338E6EC558F142033D0682 /* Info.plist */,
 				3790FF0EAB5AF2B3F87358EE /* MessageActionsOverlay.swift */,
 				06754889A5E9FA0A851916A1 /* NotificationDiagnostics.swift */,
 				7F6DBBCFE3B68BEDB76D1A21 /* NotificationNavigation.swift */,
@@ -677,6 +679,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "XMPP Lab";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to your local XMPP development server.";
@@ -811,6 +814,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "XMPP Lab";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to your local XMPP development server.";
