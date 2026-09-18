@@ -53,7 +53,7 @@ final class OutboxUITests: XCTestCase {
         }
         app.closeEncryptionDetails()
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: messages)], timeout: 30)
-        let sent = messages.matching(NSPredicate(format: "label CONTAINS %@", "Accepted by server")).firstMatch
+        let sent = messages.matching(serverHeldLabel).firstMatch
         XCTAssertTrue(sent.waitForExistence(timeout: 15))
         app.terminate(); app.launch(); connect()
         app.returnToChats(); chat.tap()

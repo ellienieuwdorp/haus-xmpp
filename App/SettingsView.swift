@@ -49,6 +49,20 @@ struct SettingsView: View {
                 }
             }
             Section {
+                Toggle(isOn: Binding(get: { model.accountPreferences.deliveryReceipts }, set: { on in Task { await model.updatePreferences { $0.deliveryReceipts = on } } })) {
+                    Label { Text("Delivery receipts") } icon: { SettingsIconTile(systemName: "checkmark.message.fill", color: .green) }
+                }
+                .accessibilityIdentifier("deliveryReceipts")
+                Toggle(isOn: Binding(get: { model.accountPreferences.readReceipts }, set: { on in Task { await model.updatePreferences { $0.readReceipts = on } } })) {
+                    Label { Text("Read receipts") } icon: { SettingsIconTile(systemName: "eye.fill", color: .blue) }
+                }
+                .accessibilityIdentifier("readReceipts")
+            } header: {
+                Text("Privacy")
+            } footer: {
+                Text("Tell contacts when their messages reach this iPhone and when you read them. Turning one off also stops asking contacts for it. You still see what contacts send you.")
+            }
+            Section {
                 NavigationLink {
                     AppearanceView()
                 } label: {
@@ -84,16 +98,7 @@ struct SettingsView: View {
 
     private var profileCard: some View {
         HStack(spacing: 14) {
-            Circle()
-                .fill(Color(uiColor: model.accountID.isEmpty ? .systemGray3 : AvatarPalette.color(for: model.accountID)))
-                .frame(width: 60, height: 60)
-                .overlay {
-                    if let initial = localPart.first {
-                        Text(String(initial).uppercased()).font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
-                    } else {
-                        Image(systemName: "person.fill").font(.system(size: 26)).foregroundStyle(.white)
-                    }
-                }
+            ChatAvatar(key: model.accountID, name: localPart, image: model.avatars[model.accountID], size: 60)
             VStack(alignment: .leading, spacing: 2) {
                 Text(localPart.isEmpty ? "Not signed in" : localPart).font(.title3.weight(.bold))
                 if !model.accountID.isEmpty {

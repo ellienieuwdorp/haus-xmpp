@@ -40,6 +40,19 @@ public struct XMPPReaction: Sendable, Equatable {
     public let provenance: XMPPMessageProvenance
 }
 
+/// A peer's unencrypted XEP-0184 receipt or XEP-0333 marker. The actor is server-authenticated only.
+public struct XMPPReceipt: Sendable, Equatable {
+    public let id: String
+    public let from: String
+    public let to: String?
+    public let targetID: String
+    public let kind: MessageContent.Receipt.Kind
+    public let provenance: XMPPMessageProvenance
+    public init(id: String, from: String, to: String?, targetID: String, kind: MessageContent.Receipt.Kind, provenance: XMPPMessageProvenance = .direct) {
+        self.id = id; self.from = from; self.to = to; self.targetID = targetID; self.kind = kind; self.provenance = provenance
+    }
+}
+
 /// A caller-resolved direct-chat reply target plus a bounded plaintext fallback snapshot.
 /// IDs must come from the original wire message, never a generated local database ID.
 /// A nil ID emits only the quoted body, without structured reply/fallback metadata.
@@ -57,10 +70,13 @@ public enum XMPPEvent: Sendable, Equatable {
     case state(XMPPConnectionState)
     case message(XMPPMessage)
     case reaction(XMPPReaction)
+    case receipt(XMPPReceipt)
     case encryptedMessage(XMPPEncryptedMessage)
     case encryptedGroupMessage(XMPPEncryptedGroupMessage)
     case groupPresence(room: String)
     case omemoDevices(owner: String, profile: XMPPOMEMOProfile, devices: [UInt32])
+    /// A contact's PEP avatar changed; nil means it was removed. The bytes are fetched lazily.
+    case avatarMetadata(owner: String, metadata: XMPPAvatarMetadata?)
     case encryptionFailure(from: String, id: String?)
     /// Consume previous events durably before acknowledging this token.
     case streamManagementBarrier(XMPPInboundToken)
@@ -206,6 +222,19 @@ public actor XMPPClient {
         return id
     }
 
+    /// Unencrypted receipt/marker for legacy peers; modern peers get the same element inside SCE.
+    @discardableResult public func sendReceipt(to: String, targetID: String, kind: MessageContent.Receipt.Kind, id: String = UUID().uuidString) async throws -> String {
+        guard phase == .online else { throw XMPPClientError.notConnected }
+        try await write(Self.receiptXML(to: to, targetID: targetID, kind: kind, id: id))
+        return id
+    }
+
+    public static func receiptXML(to: String, targetID: String, kind: MessageContent.Receipt.Kind, id: String) throws -> String {
+        guard MessageContent.validAddress(to), MessageContent.validIdentifier(id) else { throw XMPPClientError.invalidConfiguration }
+        let content = try MessageContent(body: "", receipt: .init(targetID: targetID, kind: kind)).xml()
+        return "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(content)<store xmlns='urn:xmpp:hints'/></message>"
+    }
+
     public static func reactionXML(to: String, targetID: String, reactions: [String], id: String) throws -> String {
         guard MessageContent.validAddress(to), MessageContent.validIdentifier(id) else { throw XMPPClientError.invalidConfiguration }
         let content = try MessageContent(body: "", reaction: .init(targetID: targetID, reactions: reactions)).xml()
@@ -224,9 +253,10 @@ public actor XMPPClient {
         }
     }
 
-    static func messageXML(to: String, body: String, id: String, reply: XMPPReply? = nil) throws -> String {
+    static func messageXML(to: String, body: String, id: String, reply: XMPPReply? = nil, requestReceipt: Bool = false, markable: Bool = false) throws -> String {
         try validateMessage(to: to, body: body, id: id, reply: reply)
-        let content = try MessageContent(body: body, reply: reply.map { .init(id: $0.id, to: $0.to, quote: replyFallback($0.body)) }, originID: id).xml()
+        let content = try MessageContent(body: body, reply: reply.map { .init(id: $0.id, to: $0.to, quote: replyFallback($0.body)) },
+                                         requestsReceipt: requestReceipt, markable: markable, originID: id).xml()
         return "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(content)</message>"
     }
 
@@ -250,6 +280,12 @@ public actor XMPPClient {
         guard let (from, content) = plainContent(node), !content.text.isEmpty else { return nil }
         return XMPPMessage(id: node.attributes["id"] ?? UUID().uuidString, from: from, to: node.attributes["to"],
                            body: content.text, originID: content.originID, type: node.attributes["type"], provenance: provenance)
+    }
+
+    static func parsedReceipt(_ node: XMLNode, provenance: XMPPMessageProvenance = .direct) -> XMPPReceipt? {
+        guard let (from, content) = plainContent(node), let receipt = content.receipt else { return nil }
+        return XMPPReceipt(id: node.attributes["id"].flatMap { MessageContent.validIdentifier($0) ? $0 : nil } ?? UUID().uuidString, from: from,
+                           to: node.attributes["to"], targetID: receipt.targetID, kind: receipt.kind, provenance: provenance)
     }
 
     static func parsedReaction(_ node: XMLNode, provenance: XMPPMessageProvenance = .direct) -> XMPPReaction? {
@@ -387,10 +423,8 @@ public actor XMPPClient {
                 let to = node.attributes["from"].map { " to='\(xmlEscaped($0))'" } ?? ""
                 // Respond to XEP-0199 pings; reject other unsupported requests explicitly.
                 if node.attributes["type"] == "get", node.children.count == 1,
-                   node.child("query", namespace: "http://jabber.org/protocol/disco#info") != nil {
-                    let features = ["http://jabber.org/protocol/disco#info", "urn:xmpp:ping"] + XMPPOMEMOProfile.allCases.flatMap { [$0.namespace, $0.devicesNode + "+notify"] }
-                    let query = "<query xmlns='http://jabber.org/protocol/disco#info'><identity category='client' type='phone' name='XMPP Lab'/>" + features.map { "<feature var='\($0)'/>" }.joined() + "</query>"
-                    try await write("<iq type='result' id='\(xmlEscaped(id))'\(to)>\(query)</iq>")
+                   let query = node.child("query", namespace: "http://jabber.org/protocol/disco#info") {
+                    try await write("<iq type='result' id='\(xmlEscaped(id))'\(to)>\(EntityCapabilities.discoInfoQuery(node: query.attributes["node"]))</iq>")
                 } else if node.child("ping", namespace: "urn:xmpp:ping") != nil {
                     try await write("<iq type='result' id='\(xmlEscaped(id))'\(to)/>")
                 } else {
@@ -463,7 +497,7 @@ public actor XMPPClient {
     }
 
     private func becomeOnline(token: UUID, presence: Bool = true) async throws {
-        if presence { try await write("<presence/>") }
+        if presence { try await write("<presence>\(EntityCapabilities.presenceElement)</presence>") }
         guard generation == token else { throw XMPPClientError.connectionClosed }
         phase = .online; deadline?.cancel(); deadline = nil
         liveness = Task { [weak self] in await self?.livenessLoop(token: token) }
@@ -511,8 +545,12 @@ public actor XMPPClient {
             catch { try emit(.encryptionFailure(from: node.attributes["from"] ?? "", id: node.attributes["id"])) }
         } else if provenance == .direct, let update = Self.deviceUpdate(node) {
             try emit(.omemoDevices(owner: update.owner, profile: update.profile, devices: update.devices))
+        } else if provenance == .direct, let update = Self.avatarUpdate(node) {
+            try emit(.avatarMetadata(owner: update.owner, metadata: update.metadata))
         } else if let reaction = Self.parsedReaction(node, provenance: provenance) {
             try emit(.reaction(reaction))
+        } else if let receipt = Self.parsedReceipt(node, provenance: provenance) {
+            try emit(.receipt(receipt))
         } else if let message = Self.parsedMessage(node, provenance: provenance) {
             try emit(.message(message))
         }
@@ -523,9 +561,9 @@ public actor XMPPClient {
         _ = try await requestIQ(type: "set", to: nil, payload: "<\(enabled ? "enable" : "disable") xmlns='urn:xmpp:carbons:2'/>")
     }
 
-    @discardableResult public func sendEncryptedMessage(to: String, envelope: XMPPOMEMOEnvelope, id: String) async throws -> String {
+    @discardableResult public func sendEncryptedMessage(to: String, envelope: XMPPOMEMOEnvelope, id: String, requestReceipt: Bool = false, markable: Bool = false) async throws -> String {
         guard phase == .online else { throw XMPPClientError.notConnected }
-        try await write(Self.encryptedMessageXML(to: to, envelope: envelope, id: id))
+        try await write(Self.encryptedMessageXML(to: to, envelope: envelope, id: id, requestReceipt: requestReceipt, markable: markable))
         return id
     }
 
@@ -672,6 +710,62 @@ public actor XMPPClient {
               item.attributes["id"] == "current", item.children.count == 1,
               let devices = try? OMEMOWire.parseDevices(item.children[0], profile: profile) else { return nil }
         return (owner, profile, devices)
+    }
+
+    /// XEP-0084 metadata; nil when the contact publishes no avatar. `item-not-found` and a server
+    /// without PEP both throw so the caller can fall back to the vCard photo.
+    public func fetchAvatarMetadata(for jid: String) async throws -> XMPPAvatarMetadata? {
+        guard OMEMOWire.bareJID(jid) == jid else { throw XMPPClientError.invalidConfiguration }
+        let response = try await requestIQ(type: "get", to: jid, payload: "<pubsub xmlns='\(OMEMOWire.pubsub)'><items node='\(AvatarWire.metadataNode)' max_items='1'/></pubsub>")
+        return try Self.logged(response, "avatar metadata of \(jid)") { try Self.decodeAvatarMetadata(response) }
+    }
+
+    static func decodeAvatarMetadata(_ response: XMLNode) throws -> XMPPAvatarMetadata? {
+        let items = try pubsubItems(response, node: AvatarWire.metadataNode)
+        if items.children.isEmpty { return nil }
+        guard items.children.count == 1 else { throw XMPPIQError.malformedResponse }
+        let item = try OMEMOWire.singleton(items, "item", OMEMOWire.pubsub)
+        guard item.children.count == 1 else { throw XMPPIQError.malformedResponse }
+        return try AvatarWire.parseMetadata(item.children[0])
+    }
+
+    /// The bytes behind a metadata id, verified against it before they are returned.
+    public func fetchAvatarData(for jid: String, id: String) async throws -> Data {
+        guard OMEMOWire.bareJID(jid) == jid, AvatarWire.validHash(id) else { throw XMPPClientError.invalidConfiguration }
+        let response = try await requestIQ(type: "get", to: jid, payload: "<pubsub xmlns='\(OMEMOWire.pubsub)'><items node='\(AvatarWire.dataNode)'><item id='\(id)'/></items></pubsub>")
+        return try Self.logged(response, "avatar data of \(jid)") { try Self.decodeAvatarData(response, id: id) }
+    }
+
+    static func decodeAvatarData(_ response: XMLNode, id: String) throws -> Data {
+        let items = try pubsubItems(response, node: AvatarWire.dataNode)
+        guard items.children.count == 1 else { throw XMPPIQError.stanza(condition: "item-not-found") }
+        let item = try OMEMOWire.singleton(items, "item", OMEMOWire.pubsub)
+        guard item.attributes["id"]?.lowercased() == id.lowercased(), item.children.count == 1 else { throw XMPPIQError.malformedResponse }
+        let data = try AvatarWire.parseData(item.children[0])
+        guard AvatarWire.hash(data) == id.lowercased() else { throw XMPPIQError.malformedResponse }
+        return data
+    }
+
+    /// XEP-0153 fallback for contacts without PEP: the vCard photo, keyed by its own SHA-1.
+    public func fetchVCardPhoto(for jid: String) async throws -> (id: String, type: String, data: Data)? {
+        guard OMEMOWire.bareJID(jid) == jid else { throw XMPPClientError.invalidConfiguration }
+        let response = try await requestIQ(type: "get", to: jid, payload: "<vCard xmlns='\(AvatarWire.vcardNamespace)'/>")
+        return try Self.logged(response, "vCard photo of \(jid)") {
+            let vcard = try OMEMOWire.singleton(response, "vCard", AvatarWire.vcardNamespace)
+            guard let photo = try AvatarWire.parseVCardPhoto(vcard) else { return nil }
+            return (AvatarWire.hash(photo.data), photo.type, photo.data)
+        }
+    }
+
+    static func avatarUpdate(_ message: XMLNode) -> (owner: String, metadata: XMPPAvatarMetadata?)? {
+        guard message.name == "message", message.namespace == "jabber:client", let owner = message.attributes["from"],
+              OMEMOWire.bareJID(owner) == owner,
+              let event = try? OMEMOWire.singleton(message, "event", OMEMOWire.eventNamespace),
+              let items = try? OMEMOWire.singleton(event, "items", OMEMOWire.eventNamespace),
+              items.attributes["node"] == AvatarWire.metadataNode, items.children.count == 1,
+              let item = try? OMEMOWire.singleton(items, "item", OMEMOWire.eventNamespace), item.children.count == 1 else { return nil }
+        // An empty <metadata/> is a valid "avatar removed" event, so the optional result is kept as is.
+        do { return (owner, try AvatarWire.parseMetadata(item.children[0])) } catch { return nil }
     }
 
     func requestIQ(type: String, to: String?, payload: String) async throws -> XMLNode {

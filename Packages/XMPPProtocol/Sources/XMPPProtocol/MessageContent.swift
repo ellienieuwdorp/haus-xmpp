@@ -19,17 +19,30 @@ public struct MessageContent: Sendable, Equatable {
         public let reactions: [String]
         public init(targetID: String, reactions: [String]) { self.targetID = targetID; self.reactions = reactions }
     }
+    /// XEP-0184 `<received/>` or XEP-0333 `<displayed/>` about one of the peer's messages.
+    public struct Receipt: Sendable, Equatable {
+        public enum Kind: String, Sendable, Equatable { case delivered, displayed }
+        public let targetID: String
+        public let kind: Kind
+        public init(targetID: String, kind: Kind) { self.targetID = targetID; self.kind = kind }
+    }
 
     /// Body text after the reply quote, if any.
     public var body: String
     public var reply: Reply?
     public var reaction: Reaction?
+    public var receipt: Receipt?
+    /// `<request xmlns='urn:xmpp:receipts'/>` and `<markable xmlns='urn:xmpp:chat-markers:0'/>` on a message we send.
+    public var requestsReceipt: Bool
+    public var markable: Bool
     public var originID: String?
     /// One shared file. `body` is then its caption, which may be empty.
     public var fileSharing: FileSharing?
 
-    public init(body: String, reply: Reply? = nil, reaction: Reaction? = nil, originID: String? = nil, fileSharing: FileSharing? = nil) {
-        self.body = body; self.reply = reply; self.reaction = reaction; self.originID = originID; self.fileSharing = fileSharing
+    public init(body: String, reply: Reply? = nil, reaction: Reaction? = nil, receipt: Receipt? = nil,
+                requestsReceipt: Bool = false, markable: Bool = false, originID: String? = nil, fileSharing: FileSharing? = nil) {
+        self.body = body; self.reply = reply; self.reaction = reaction; self.receipt = receipt
+        self.requestsReceipt = requestsReceipt; self.markable = markable; self.originID = originID; self.fileSharing = fileSharing
     }
 
     /// The full `<body>` text, quote included.
@@ -47,7 +60,7 @@ public struct MessageContent: Sendable, Equatable {
     public static let maximumReactionCount = 12
 
     public func xml() throws -> String {
-        guard Self.validXMLText(body), (!body.isEmpty || reaction != nil || fileSharing != nil),
+        guard Self.validXMLText(body), (!body.isEmpty || reaction != nil || receipt != nil || fileSharing != nil),
               originID.map(Self.validIdentifier) ?? true else { throw XMPPClientError.invalidConfiguration }
         var xml = ""
         if let reply {
@@ -72,6 +85,13 @@ public struct MessageContent: Sendable, Equatable {
             xml += "<reactions xmlns='urn:xmpp:reactions:0' id='\(xmlEscaped(reaction.targetID))'>"
             xml += values.map { "<reaction>\(xmlEscaped($0))</reaction>" }.joined() + "</reactions>"
         }
+        if let receipt {
+            guard Self.validIdentifier(receipt.targetID) else { throw XMPPClientError.invalidConfiguration }
+            xml += receipt.kind == .delivered ? "<received xmlns='urn:xmpp:receipts' id='\(xmlEscaped(receipt.targetID))'/>"
+                                             : "<displayed xmlns='urn:xmpp:chat-markers:0' id='\(xmlEscaped(receipt.targetID))'/>"
+        }
+        if requestsReceipt { xml += "<request xmlns='urn:xmpp:receipts'/>" }
+        if markable { xml += "<markable xmlns='urn:xmpp:chat-markers:0'/>" }
         if let originID { xml += "<origin-id xmlns='urn:xmpp:sid:0' id='\(xmlEscaped(originID))'/>" }
         return xml
     }
@@ -125,6 +145,18 @@ public struct MessageContent: Sendable, Equatable {
                 }
             } else { try ambiguous() }
         }
+        // A receipt names exactly one target; two receipts or a receipt of both kinds is ambiguous.
+        var receipt: Receipt?
+        let received = node.children("received", namespace: "urn:xmpp:receipts")
+        let displayed = node.children("displayed", namespace: "urn:xmpp:chat-markers:0")
+        if received.count + displayed.count > 1 { try ambiguous() }
+        else if let marker = received.first ?? displayed.first {
+            if let id = marker.attributes["id"], validIdentifier(id), marker.children.isEmpty, marker.text.isEmpty {
+                receipt = Receipt(targetID: id, kind: received.isEmpty ? .displayed : .delivered)
+            } else { try ambiguous() }
+        }
+        let requestsReceipt = !node.children("request", namespace: "urn:xmpp:receipts").isEmpty
+        let markable = !node.children("markable", namespace: "urn:xmpp:chat-markers:0").isEmpty
 
         var reply: Reply?
         let references = node.children("reply", namespace: "urn:xmpp:reply:0")
@@ -144,7 +176,8 @@ public struct MessageContent: Sendable, Equatable {
                 }
             }
         }
-        return MessageContent(body: body, reply: reply, reaction: reaction, originID: originID, fileSharing: fileSharing)
+        return MessageContent(body: body, reply: reply, reaction: reaction, receipt: receipt,
+                              requestsReceipt: requestsReceipt, markable: markable, originID: originID, fileSharing: fileSharing)
     }
 
     /// Complete set, deduplicated and sorted, so equal intentions produce equal bytes.

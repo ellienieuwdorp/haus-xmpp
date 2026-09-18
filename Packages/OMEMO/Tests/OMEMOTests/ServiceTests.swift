@@ -787,11 +787,61 @@ final class ServiceTests: XCTestCase {
         expectEqual(prepared.messageIDs, [transport.id, reactionID])
         let reaction = try await f.b.outgoingReactionEnvelope(account: f.bob, updateID: reactionID)
         expectTrue(try await f.b.canReplay(account: f.bob, xml: XMPPClient.encryptedMessageXML(to: f.alice, envelope: reaction, id: reactionID)))
+        // An encrypted delivery receipt and read marker.
+        let receiptID = try unwrap(try await f.b.queueReceipt(account: f.bob, chatID: f.alice, messageID: target.id, kind: .receipt))
+        let markerID = try unwrap(try await f.b.queueReceipt(account: f.bob, chatID: f.alice, messageID: target.id, kind: .marker))
+        let sealed = try await f.b.prepareAvailableUpdates(account: f.bob, transport: f.bTransport)
+        expectTrue(sealed.messageIDs.isSuperset(of: [receiptID, markerID]))
+        let receipt = try await f.b.outgoingUpdateEnvelope(account: f.bob, updateID: receiptID)
+        let marker = try await f.b.outgoingUpdateEnvelope(account: f.bob, updateID: markerID)
+        expectTrue(try await f.b.canReplay(account: f.bob, xml: XMPPClient.encryptedMessageXML(to: f.alice, envelope: receipt, id: receiptID)))
+        expectTrue(try await f.b.canReplay(account: f.bob, xml: XMPPClient.encryptedMessageXML(to: f.alice, envelope: marker, id: markerID)))
+        expectFalse(try await f.b.canReplay(account: f.bob, xml: XMPPClient.encryptedMessageXML(to: f.alice, envelope: marker, id: receiptID)))
         // Blocking the addressed device revokes every envelope prepared for it, header-only ones included.
         let device = try unwrap(try await f.b.overview(account: f.bob, peer: f.alice).devices.first { $0.jid == f.alice && $0.active })
         try await f.b.setTrust(account: f.bob, deviceID: device.id, trust: .rejected)
         expectFalse(try await f.b.canReplay(account: f.bob, xml: XMPPClient.encryptedMessageXML(to: f.alice, envelope: response, id: transport.id)))
         expectFalse(try await f.b.canReplay(account: f.bob, xml: XMPPClient.encryptedMessageXML(to: f.alice, envelope: reaction, id: reactionID)))
+        expectFalse(try await f.b.canReplay(account: f.bob, xml: XMPPClient.encryptedMessageXML(to: f.alice, envelope: receipt, id: receiptID)))
+    }
+
+    func testRequestedReceiptsAndReadMarkersRoundTripInsideTheEnvelope() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let outgoing = try await f.queue("Please confirm")
+        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
+        let text = try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id)
+        // The outer `<request/>` is what Bob's inbound path sees; his delivery receipt is queued durably at commit time.
+        let asked = try XMPPClient.decodeOutgoingEncryptedMessageXML(try XMPPClient.encryptedMessageXML(to: f.bob, envelope: text, id: outgoing.id, requestReceipt: true, markable: true), from: f.alice)
+        expectTrue(try await f.b.receive(account: f.bob, message: asked, transport: f.bTransport))
+        let received = try unwrap(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).first)
+        var queued = try await f.bStore.queuedReceipts(accountID: f.bob)
+        expectEqual(queued.map(\.kind), [.receipt])
+        expectEqual(queued.first?.targetMessageID, received.id)
+        // Reading it once queues one marker; showing it again does not.
+        expectNotNil(try await f.b.queueReceipt(account: f.bob, chatID: f.alice, messageID: received.id, kind: .marker))
+        expectNil(try await f.b.queueReceipt(account: f.bob, chatID: f.alice, messageID: received.id, kind: .marker))
+        queued = try await f.bStore.queuedReceipts(accountID: f.bob)
+        expectEqual(queued.map(\.kind), [.receipt, .marker])
+        let prepared = try await f.b.prepareAvailableUpdates(account: f.bob, transport: f.bTransport)
+        let aliceService = f.a, aliceTransport = f.aTransport, alice = f.alice, bob = f.bob
+        try await f.b.flushUpdates(account: f.bob, updateIDs: prepared.messageIDs) { update, prepared in
+            guard case .encrypted(let recipient, let envelope) = prepared else { return XCTFail("direct receipts are envelopes") }
+            let message = XMPPEncryptedMessage(id: update.id, from: bob, to: recipient, originID: update.id, envelope: envelope)
+            let changed = try await aliceService.receive(account: alice, message: message, transport: aliceTransport)
+            XCTAssertEqual(changed, envelope.payload != nil)
+        }
+        let events = try await f.aStore.events(accountID: f.alice, chatID: f.bob, messageID: outgoing.id)
+        expectEqual(events.map(\.kind), [.delivered, .displayed])
+        expectTrue(events.allSatisfy { $0.actorID == f.bob })
+        expectEqual(try await f.aStore.messages(accountID: f.alice, chatID: f.bob).count, 1)
+        // Switching delivery receipts off means nothing is queued for the next request.
+        try await f.bStore.setAccountPreferences(accountID: f.bob, AccountPreferences(deliveryReceipts: false))
+        let second = try await f.queue("Again", id: UUID().uuidString)
+        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
+        let again = try XMPPClient.decodeOutgoingEncryptedMessageXML(try XMPPClient.encryptedMessageXML(to: f.bob, envelope: try await f.a.outgoingEnvelope(account: f.alice, messageID: second.id), id: second.id, requestReceipt: true), from: f.alice)
+        expectTrue(try await f.b.receive(account: f.bob, message: again, transport: f.bTransport))
+        expectTrue(try await f.bStore.queuedReceipts(accountID: f.bob).isEmpty)
     }
 
     func testProtectedStateCannotMoveBetweenAccountsOrUseWrongKey() throws {
