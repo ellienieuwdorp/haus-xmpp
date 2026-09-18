@@ -1,6 +1,7 @@
 import QuickLook
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 
 struct TimelineReply: Sendable, Equatable {
     let author: String
@@ -176,8 +177,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var previousSize: CGSize = .zero
     private var revision = 0
     private var followsBottom = true
-    private weak var contentPopGesture: UIGestureRecognizer?
-    private var contentPopWasEnabled = false
     private let composerHost = UIHostingController(rootView: AnyView(EmptyView()))
     var onRestoreComposerFocus: () -> Void = {}
     var onReachTop: () -> Void = {}
@@ -213,6 +212,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         collectionView.delegate = self
         collectionView.accessibilityIdentifier = "conversation.timeline"
         collectionView.register(MessageBubbleCell.self, forCellWithReuseIdentifier: "message")
+        collectionView.addGestureRecognizer(TouchGate(down: { [weak self] point in self?.reserveSwipe(forBubbleAt: point) }, up: { [weak self] in self?.releaseSwipe() }))
         let container = UIView()
         container.backgroundColor = .systemBackground
         collectionView.frame = container.bounds
@@ -338,32 +338,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         }
     }
 
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        reserveContentSwipeForReply()
-    }
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        reserveContentSwipeForReply()
-    }
-
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
-        if let contentPopGesture { contentPopGesture.isEnabled = contentPopWasEnabled }
-        contentPopGesture = nil
-    }
-
-    private func reserveContentSwipeForReply() {
-        guard contentPopGesture == nil else { return }
-        guard let gesture = navigationController?.interactiveContentPopGestureRecognizer else {
-            return
-        }
-        contentPopWasEnabled = gesture.isEnabled
-        contentPopGesture = gesture
-        gesture.isEnabled = false
-    }
-
     /// Before the cell captures its frame: the keyboard would cover the menu, and an animated dismissal would move
     /// the bubble out from under its snapshot, so it goes at once and the layout settles first.
     private func putKeyboardAwayForActions() {
@@ -385,6 +359,29 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         // Reply and edit focus the composer themselves; text selection and the unsend dialog must keep it away.
         if restoresKeyboard, !choseAction { onRestoreComposerFocus() }
         restoresKeyboard = false
+    }
+
+    /// A rightward swipe that starts on a bubble is a reply; anywhere else it is the system's swipe back. The system
+    /// recognizer takes no failure requirement from ours (each ends up waiting for the other), so it is switched off
+    /// for the length of a touch that starts on a bubble.
+    private weak var reservedPopGesture: UIGestureRecognizer?
+
+    private func reserveSwipe(forBubbleAt point: CGPoint) {
+        guard let path = collectionView.indexPathForItem(at: point), let cell = collectionView.cellForItem(at: path) as? MessageBubbleCell,
+              cell.bubbleContains(collectionView.convert(point, to: cell)),
+              let gesture = navigationController?.interactiveContentPopGestureRecognizer, gesture.isEnabled else { return }
+        gesture.isEnabled = false
+        reservedPopGesture = gesture
+    }
+
+    private func releaseSwipe() {
+        reservedPopGesture?.isEnabled = true
+        reservedPopGesture = nil
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        releaseSwipe()
     }
 
     func setComposer(_ composer: AnyView?) {
@@ -914,8 +911,11 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
                                              }))
     }
 
+    /// `point` is in the cell's coordinates.
+    func bubbleContains(_ point: CGPoint) -> Bool { messageID != nil && bubblePath(in: bubble.bounds).contains(convert(point, to: bubble)) }
+
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard !isSelectingText, messageID != nil, bubblePath(in: bubble.bounds).contains(gestureRecognizer.location(in: bubble)) else { return false }
+        guard !isSelectingText, bubbleContains(gestureRecognizer.location(in: self)) else { return false }
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
         let velocity = pan.velocity(in: contentView)
         return pan.location(in: window).x > 24 && velocity.x > 0 && velocity.x > abs(velocity.y) * 1.5
@@ -1181,6 +1181,30 @@ private final class MessageTextView: UITextView {
         }
         return resigned
     }
+}
+
+/// Reports where a touch lands and when it is over. It never recognizes, so it blocks nothing.
+private final class TouchGate: UIGestureRecognizer {
+    private let down: (CGPoint) -> Void
+    private let up: () -> Void
+
+    init(down: @escaping (CGPoint) -> Void, up: @escaping () -> Void) {
+        self.down = down
+        self.up = up
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesEnded = false
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let touch = touches.first, let view { down(touch.location(in: view)) }
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { state = .failed }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { state = .failed }
+    // Also reached when another recognizer wins and UIKit fails this one: the touch is spoken for either way.
+    override func reset() { up() }
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
 }
 
 /// A horizontal message action must not start vertical scrolling or keyboard dismissal.
