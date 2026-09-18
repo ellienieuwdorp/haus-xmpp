@@ -34,6 +34,8 @@ public struct ArchiveSynchronizer: Sendable {
                     try await encryption.receivePlaintextReaction(account: account, reaction: reaction, sentAt: archived.timestamp)
                 } else if let retraction = archived.retraction {
                     try await encryption.receivePlaintextRetraction(account: account, retraction: retraction, sentAt: archived.timestamp)
+                } else if let receipt = archived.receipt {
+                    try await encryption.receivePlaintextReceipt(account: account, receipt: receipt, sentAt: archived.timestamp)
                 }
                 // Plaintext and unsupported content are deliberately excluded by this client's
                 // encrypted-only policy. They must never be rendered as authenticated messages.

@@ -43,7 +43,45 @@ enum AccentTheme: String, CaseIterable, Identifiable {
         default: return .white
         }
     }
+    /// The read-receipt glyph: blue, chosen per bubble so it stays visible on the accent fill.
+    var readReceipt: UIColor {
+        switch self {
+        case .lime, .crab, .sky: return UIColor(red: 0.05, green: 0.28, blue: 0.75, alpha: 1)
+        default: return UIColor(red: 0.6, green: 0.9, blue: 1, alpha: 1)
+        }
+    }
     var swatch: Color { Color(uiColor: bubble) }
+}
+
+/// The one avatar circle: a verified image when the contact has one, otherwise their initial in a
+/// hue keyed by address (`key`) so the same chat looks the same in every screen.
+struct ChatAvatar: View {
+    let key: String
+    let name: String
+    var image: UIImage? = nil
+    var isGroup = false
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                Circle().fill(key.isEmpty ? Color(.systemGray3) : Color(uiColor: AvatarPalette.color(for: key)))
+                if isGroup {
+                    Image(systemName: "person.2.fill").font(.system(size: size * 0.42, weight: .medium))
+                } else if let initial = name.first {
+                    Text(String(initial).uppercased()).font(.system(size: size * 0.42, weight: .semibold))
+                } else {
+                    Image(systemName: "person.fill").font(.system(size: size * 0.42))
+                }
+            }
+        }
+        .foregroundStyle(.white)
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .accessibilityHidden(true)
+    }
 }
 
 /// Stable per-name avatar colour so a contact keeps its hue across launches.

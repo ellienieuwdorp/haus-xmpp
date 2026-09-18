@@ -11,7 +11,9 @@ final class OrganizationUITests: XCTestCase {
         let row = app.buttons["chat.alex@preview.local"]
         row.press(forDuration: 1)
         XCTAssertFalse(app.buttons["Pin"].exists, "Pin must not appear on long press")
-        if app.buttons["BackButton"].exists { app.buttons["BackButton"].tap() }
+        // A one-second press ends as a tap that pushes the chat; give the push time to land before popping.
+        if app.buttons["BackButton"].waitForExistence(timeout: 2) { app.buttons["BackButton"].tap() }
+        XCTAssertTrue(row.waitForExistence(timeout: 3))
         row.swipeLeft()
         if app.buttons["Unpin"].waitForExistence(timeout: 1) {
             app.buttons["Unpin"].tap()

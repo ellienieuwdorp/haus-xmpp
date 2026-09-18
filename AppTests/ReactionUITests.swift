@@ -46,7 +46,7 @@ final class ReactionUITests: XCTestCase {
         app.closeEncryptionDetails()
         let outgoing = app.textViews.containing(NSPredicate(format: "value == %@", marker)).matching(NSPredicate(format: "label BEGINSWITH %@", "You:")).firstMatch
         XCTAssertTrue(outgoing.waitForExistence(timeout: 10))
-        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Accepted by server"), object: outgoing)], timeout: 25)
+        wait(for: [XCTNSPredicateExpectation(predicate: serverHeldLabel, object: outgoing)], timeout: 25)
         let originalWidth = outgoing.frame.width
         openReactions(app, message: outgoing)
         capture(app, "Encrypted reaction menu")

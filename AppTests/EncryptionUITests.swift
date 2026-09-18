@@ -45,7 +45,7 @@ final class EncryptionUITests: XCTestCase {
         app.closeEncryptionDetails()
         let response = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: bubbles)
         wait(for: [response], timeout: 30)
-        XCTAssertTrue(bubbles.allElementsBoundByIndex.contains { $0.label.contains("Accepted by server") || $0.label.contains("Delivery unconfirmed") })
+        XCTAssertTrue(bubbles.allElementsBoundByIndex.contains { serverHeldLabel.evaluate(with: $0) || $0.label.contains("Delivery unconfirmed") })
         capture(app, "Encrypted independent peer round trip")
         app.terminate(); app.launch()
         let chat = app.buttons["chat.\(peer)"]

@@ -58,6 +58,8 @@ public struct StoredChat: Identifiable, Equatable, Sendable {
     public let title: String
     public let isPinned: Bool
     public let lastMessage: StoredMessage?
+    /// SHA-1 of the verified avatar bytes on disk; nil when none is known.
+    public var avatarHash: String? = nil
 }
 
 public enum MessageStoreError: Error, Equatable, Sendable {
@@ -172,8 +174,8 @@ public struct AuthenticatedReaction: Sendable, Equatable {
     }
 }
 
-/// Message-scoped events other peers or our own devices assert about a target message. Only
-/// `reaction` is accepted today; the other kinds are reserved so the schema does not move again.
+/// Message-scoped events other peers or our own devices assert about a target message. Reactions
+/// and receipts (`delivered`, `displayed`) are accepted; retraction and correction are reserved.
 public enum MessageEventKind: String, Sendable, CaseIterable {
     case reaction, retraction, correction, delivered, displayed
 }
@@ -207,17 +209,28 @@ public struct MessageEvent: Sendable, Equatable {
 /// One row of the durable update outbox: every outgoing stanza that is not a chat message.
 /// The sealed wire is the exact bytes (or prepared envelope) that may ever be sent under this ID.
 public struct StoredUpdate: Sendable, Equatable {
-    public enum Kind: String, Sendable { case reaction, keyTransport, retraction, correction }
+    /// `receipt` is a XEP-0184 `<received/>`, `marker` a XEP-0333 `<displayed/>`; both name a peer message.
+    public enum Kind: String, Sendable { case reaction, keyTransport, receipt, marker, retraction, correction }
     public let id: String
     public let accountID: String
     public let kind: Kind
     public let chatID: String
     public var transportState: OutgoingTransportState?
-    /// Message-scoped kinds (reaction, retraction, correction) name the message they were queued against.
+    /// Message-scoped kinds (reaction, receipt, marker, retraction, correction) name the message they were queued against.
     public var targetMessageID: String? = nil
     public var targetWireID: String? = nil
     /// The kind's own payload: a sorted emoji array for reactions, the JSON body for corrections.
     public var payload: String? = nil
+}
+
+/// Per-account switches. Receipt switches gate both what we ask for and what we send back.
+public struct AccountPreferences: Sendable, Equatable {
+    public var notificationPreviews = true
+    public var deliveryReceipts = true
+    public var readReceipts = true
+    public init(notificationPreviews: Bool = true, deliveryReceipts: Bool = true, readReceipts: Bool = true) {
+        self.notificationPreviews = notificationPreviews; self.deliveryReceipts = deliveryReceipts; self.readReceipts = readReceipts
+    }
 }
 
 public struct UpdateSubmission: Sendable, Equatable {

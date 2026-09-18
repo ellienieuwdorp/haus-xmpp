@@ -53,3 +53,45 @@ struct UpdateFlushTests {
         }
     }
 }
+
+
+/// Receipts and read markers are update kinds like any other: sealed plain for a legacy peer, exact bytes on replay.
+struct ReceiptFlushTests {
+    private func fixture(_ body: (MessageStore, OMEMOService) async throws -> Void) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "receipt-flush-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
+        try await store.acquireTransportOwnership()
+        do {
+            try await store.upsertChat(accountID: "alice@localhost", chatID: "bob@localhost", title: "Bob")
+            try await store.insertMessage(.init(id: "target", accountID: "alice@localhost", chatID: "bob@localhost", senderID: "bob@localhost", body: "Fixture",
+                isOutgoing: false, encryptionProfile: "legacy", wireID: "wire-target"))
+            try await body(store, OMEMOService(store: store, protection: try StateProtection(key: Data(repeating: 7, count: 32))))
+        } catch { try await store.close(); try? FileManager.default.removeItem(at: directory); throw error }
+        try await store.close(); try FileManager.default.removeItem(at: directory)
+    }
+
+    @Test func plainReceiptAndMarkerFlushAsThemselvesAndReplayOnlyAsExactBytes() async throws {
+        try await fixture { store, encryption async throws in
+            let receipt = try #require(try await store.enqueueReceipt(accountID: "alice@localhost", chatID: "bob@localhost", targetMessageID: "target", kind: .receipt))
+            let marker = try #require(try await store.enqueueReceipt(accountID: "alice@localhost", chatID: "bob@localhost", targetMessageID: "target", kind: .marker))
+            let receiptXML = try XMPPClient.receiptXML(to: "bob@localhost", targetID: "wire-target", kind: .delivered, id: receipt)
+            let markerXML = try XMPPClient.receiptXML(to: "bob@localhost", targetID: "wire-target", kind: .displayed, id: marker)
+            // Unsealed rows are not claimable and not replayable.
+            #expect(try await !encryption.canReplay(account: "alice@localhost", xml: receiptXML))
+            try await store.sealQueuedUpdate(accountID: "alice@localhost", updateID: receipt, wire: Data(receiptXML.utf8))
+            try await store.sealQueuedUpdate(accountID: "alice@localhost", updateID: marker, wire: Data(markerXML.utf8))
+            try await encryption.flushUpdates(account: "alice@localhost", updateIDs: [receipt, marker]) { update, prepared in
+                #expect(prepared == .plainReceipt(to: "bob@localhost", targetID: "wire-target", kind: update.kind == .marker ? .displayed : .delivered))
+            }
+            #expect(try await store.update(accountID: "alice@localhost", updateID: marker)?.transportState == .unconfirmed)
+            #expect(try await encryption.canReplay(account: "alice@localhost", xml: receiptXML))
+            #expect(try await encryption.canReplay(account: "alice@localhost", xml: markerXML))
+            #expect(try await !encryption.canReplay(account: "alice@localhost", xml: markerXML.replacingOccurrences(of: "wire-target", with: "other")))
+            // The peer's stanza ID coming back through the archive proves server acceptance.
+            let echoed = try #require(XMPPClient.decodeOutgoingReceiptXML(markerXML, from: "alice@localhost"))
+            #expect(try await !encryption.receivePlaintextReceipt(account: "alice@localhost", receipt: echoed))
+            #expect(try await store.update(accountID: "alice@localhost", updateID: marker)?.transportState == .serverAccepted)
+        }
+    }
+}

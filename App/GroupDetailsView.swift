@@ -11,10 +11,7 @@ struct GroupDetailsView: View {
         List {
             Section {
                 VStack(spacing: 6) {
-                    Image(systemName: "person.2.fill")
-                        .font(.system(size: 40)).foregroundStyle(.white)
-                        .frame(width: 96, height: 96)
-                        .background(Color(uiColor: AvatarPalette.color(for: room)), in: Circle())
+                    ChatAvatar(key: room, name: room, isGroup: true, size: 96)
                     Text(String(room.prefix { $0 != "@" })).font(.title2.bold()).padding(.top, 6)
                     Text(room).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
                     TrustPill(text: state.needsReview ? "Devices need review" : "Encrypted",

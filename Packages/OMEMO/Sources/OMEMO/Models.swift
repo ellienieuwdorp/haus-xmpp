@@ -116,4 +116,5 @@ public enum PreparedUpdate: Sendable, Equatable {
     /// The exact plain stanza is the sealed wire; the serializer is deterministic for these inputs.
     case plainReaction(to: String, targetID: String, reactions: [String])
     case plainRetraction(to: String, targetID: String)
+    case plainReceipt(to: String, targetID: String, kind: MessageContent.Receipt.Kind)
 }

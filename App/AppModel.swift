@@ -14,6 +14,7 @@ struct ChatSummary: Identifiable {
     let title: String
     let preview: String
     let isPinned: Bool
+    var avatarHash: String? = nil
     var lastMessageAt: Date? = nil
     var lastMessageIsOutgoing = false
     var lastMessageState: OutgoingTransportState? = nil
@@ -30,8 +31,16 @@ final class AppModel {
     /// The chat whose messages `messages` currently holds; nil while a load is pending.
     private(set) var messagesLoadedFor: String?
     private(set) var messageReactions: [String: [AuthenticatedReaction]] = [:]
+    /// The peer's strongest receipt per own message in the open chat: delivered or displayed.
+    private(set) var messageReceipts: [String: MessageEventKind] = [:]
+    private(set) var accountPreferences = AccountPreferences()
     private(set) var groupChats: [String: GroupChatState] = [:]
     private(set) var reactableGroupMessages: Set<String> = []
+    /// Verified avatar thumbnails by chat address, plus the account's own under its address.
+    private(set) var avatars: [String: UIImage] = [:]
+    /// Addresses whose avatar was checked on this session; a PEP notify clears its entry.
+    @ObservationIgnored private var avatarChecked: Set<String> = []
+    @ObservationIgnored private var storageRoot: URL?
     private(set) var accountID = ""
     /// The only connection state views read. Chat trust is derived from stored devices, not from this.
     private(set) var session: SessionState = .offline(reason: nil)
@@ -78,6 +87,7 @@ final class AppModel {
     @ObservationIgnored private var client: XMPPClient?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var openChatID: String?
+    @ObservationIgnored private var encryptionDetailsChatID: String?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var prepared = false
     @ObservationIgnored private var pushTokenTask: Task<Void, Never>?
@@ -117,6 +127,7 @@ final class AppModel {
         pathMonitor.start(queue: .global(qos: .utility))
         do {
             let directory = try await SharedStorage.directory(testSessionID: testSessionID, migrate: true)
+            storageRoot = directory
             store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
             if let store {
                 outboxSender = OutboxSender(store: store)
@@ -149,21 +160,27 @@ final class AppModel {
         selectAccount(account)
         guard generation == token, let store else { return }
         do {
-            let samples: [(String, String, [String])] = [
-                ("alex@preview.local", "Alex", ["Found a quiet spot by the water. Coffee tomorrow?", "That sounds perfect. Around ten?", "Ten it is ☕️"]),
-                ("maya@preview.local", "Maya", ["A little reminder to take the scenic route.", "Always. See you this weekend!"]),
-                ("notes@preview.local", "Notes to self", ["A place for the things worth keeping. Try starring this message."])
+            // Each chat's sent message shows one receipt state: read (Alex), delivered (Maya), accepted (Notes).
+            let samples: [(String, String, [String], MessageEventKind?)] = [
+                ("alex@preview.local", "Alex", ["Found a quiet spot by the water. Coffee tomorrow?", "That sounds perfect. Around ten?", "Ten it is ☕️"], .displayed),
+                ("maya@preview.local", "Maya", ["A little reminder to take the scenic route.", "Always. See you this weekend!"], .delivered),
+                ("notes@preview.local", "Notes to self", ["A place for the things worth keeping. Try starring this message.", "Starred things stay at the top of the list."], nil)
             ]
-            for (chatID, title, bodies) in samples {
+            for (chatID, title, bodies, receipt) in samples {
                 try await store.upsertChat(accountID: account, chatID: chatID, title: title)
                 for (index, body) in bodies.enumerated() {
                     let outgoing = index == 1
-                    // A wire ID lets sample messages be unsent and edited (projection only, nothing is sent).
+                    // An own wire ID lets sample messages show receipts and be unsent or edited (projection only, nothing is sent).
+                    let id = "sample-\(chatID)-\(index)"
                     try await store.insertMessage(StoredMessage(
-                        id: "sample-\(chatID)-\(index)", accountID: account, chatID: chatID,
+                        id: id, accountID: account, chatID: chatID,
                         senderID: outgoing ? account : chatID, body: body,
-                        sentAt: Date(timeIntervalSince1970: 1_789_380_000 + Double(index)), isOutgoing: outgoing, wireID: "sample-\(chatID)-\(index)"
+                        sentAt: Date(timeIntervalSince1970: 1_789_380_000 + Double(index)), isOutgoing: outgoing, wireID: outgoing ? id : nil
                     ))
+                    if outgoing, let receipt {
+                        try await store.recordReceipt(accountID: account, event: MessageEvent(id: id + "-receipt", chatID: chatID, actorID: chatID, targetWireID: id,
+                                                                                            kind: receipt, payload: "{}", updatedAt: Date(timeIntervalSince1970: 1_789_380_010)))
+                    }
                 }
             }
             guard generation == token else { return }
@@ -582,9 +599,11 @@ final class AppModel {
         accountID = account
         groupChats = [:]
         reactableGroupMessages = []
+        avatars = [:]
+        avatarChecked = []
         chats = []
         messages = []
-        messageReactions = [:]
+        messageReactions = [:]; messageReceipts = [:]
         openChatID = nil
         preferences.set(account, forKey: "lastAccount")
     }
@@ -637,6 +656,8 @@ final class AppModel {
                         guard generation == token else { return }
                         startOutbox()
                         if let openChatID { await loadEncryptionDetails(for: openChatID) }
+                        avatarChecked = []
+                        await loadAvatar(for: account)
                     } catch {
                         guard generation == token else { return }
                         let detail: String
@@ -661,7 +682,7 @@ final class AppModel {
                 if case .needsAttention = session {} else { session = .offline(reason: reason) }
                 reconcile()
             }
-        case .reaction, .retraction, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier:
+        case .reaction, .retraction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier:
             guard let encryption, let client else { return }
             if case .encryptedMessage = event { receivedCount += 1 }
             // One processor per connection: it owns the "may acknowledge" rule for this stream.
@@ -700,6 +721,10 @@ final class AppModel {
             if let openChatID, owner == openChatID || owner == accountID || groupChats[openChatID]?.members.contains(owner) == true {
                 await loadEncryptionDetails(for: openChatID)
             }
+        case .avatarMetadata(let owner, _):
+            // The server pushed a change; re-fetch through the one lazy path so the hash check applies.
+            avatarChecked.remove(owner)
+            if owner == account || chats.contains(where: { $0.id == owner }) { await loadAvatar(for: owner) }
         case .encryptionFailure:
             encryptionStatus = "An encrypted message could not be opened"
         case .streamAcknowledged:
@@ -713,6 +738,64 @@ final class AppModel {
     }
 
     func isGroup(_ chatID: String) -> Bool { groupChats[chatID] != nil }
+
+    /// Lazily checks one contact's avatar (or the account's own when `chatID == accountID`) once per
+    /// session: XEP-0084 metadata, the bytes only when the hash changed, vCard when PEP has nothing.
+    /// Bytes are hash-verified by the client and decoded within a pixel budget before anything shows.
+    func loadAvatar(for chatID: String) async {
+        guard !isDemo, !isGroup(chatID), session.isReady, let client, let store, let storageRoot,
+              !avatarChecked.contains(chatID) else { return }
+        let account = accountID
+        let token = generation
+        avatarChecked.insert(chatID)
+        let stored = chatID == account ? preferences.string(forKey: "avatar.\(account)") : chats.first { $0.id == chatID }?.avatarHash
+        do {
+            var hash: String?
+            var fetched: (hash: String, data: Data)?
+            do {
+                if let metadata = try await client.fetchAvatarMetadata(for: chatID) {
+                    hash = metadata.id
+                    if metadata.id != stored { fetched = (metadata.id, try await client.fetchAvatarData(for: chatID, id: metadata.id)) }
+                }
+            } catch XMPPIQError.stanza {
+                // No PEP node, no PEP at all, or a presence-gated node we may not read: XEP-0153 vCard
+                // (servers mirror PEP avatars into it, XEP-0398) is the one place left to look.
+                if let photo = try await client.fetchVCardPhoto(for: chatID) {
+                    hash = photo.id
+                    if photo.id != stored { fetched = (photo.id, photo.data) }
+                }
+            }
+            guard generation == token, accountID == account else { return }
+            if let fetched {
+                try AvatarStore.save(fetched.data, root: storageRoot, account: account, hash: fetched.hash)
+                if let image = AvatarStore.image(root: storageRoot, account: account, hash: fetched.hash) {
+                    avatars[chatID] = image
+                } else {
+                    try? FileManager.default.removeItem(at: AvatarStore.url(root: storageRoot, account: account, hash: fetched.hash))
+                    hash = nil
+                }
+            }
+            if hash == nil { avatars[chatID] = nil }
+            if chatID == account { preferences.set(hash, forKey: "avatar.\(account)") }
+            else if hash != stored { try await store.setAvatarHash(accountID: account, chatID: chatID, hash: hash) }
+        } catch XMPPIQError.requestLimit {
+            avatarChecked.remove(chatID) // the row's next appearance retries once the IQ window has room
+        } catch {
+            // Keep whatever is stored; a failed fetch is not a removed avatar.
+        }
+    }
+
+    /// Thumbnails for stored hashes not yet in memory, e.g. after launch or an account switch.
+    private func loadStoredAvatars(_ stored: [StoredChat]) {
+        guard let storageRoot else { return }
+        let account = accountID
+        var wanted = stored.compactMap { chat in chat.avatarHash.map { (chat.id, $0) } }
+        if let own = preferences.string(forKey: "avatar.\(account)") { wanted.append((account, own)) }
+        // ponytail: decoded on the main actor; the files are ≤512 KiB and become 256 px thumbnails. Move off-main if the list ever stutters.
+        for (id, hash) in wanted where avatars[id] == nil {
+            avatars[id] = AvatarStore.image(root: storageRoot, account: account, hash: hash)
+        }
+    }
     func canSend(to chatID: String) -> Bool {
         guard isGroup(chatID) else { return true }
         return isConnected && encryptionReady && groupChats[chatID]?.joined == true
@@ -971,6 +1054,8 @@ final class AppModel {
         let token = generation
         drainTask = Task { [weak self] in
             do {
+                // Whether we ask for receipts and read markers is decided per send from the stored switches.
+                let switches = try await store.accountPreferences(accountID: account)
                 let preparation = try await encryption.prepareAvailableMessages(account: account, transport: client)
                 if let self, self.generation == token, let issue = preparation.blockedChats[self.openChatID ?? ""] {
                     self.encryptionStatus = issue
@@ -1000,7 +1085,8 @@ final class AppModel {
                         let envelope: XMPPOMEMOEnvelope
                         do { envelope = try await encryption.outgoingEnvelope(account: account, messageID: message.id) }
                         catch { throw OutboxSendFailure.notAttempted }
-                        _ = try await client.sendEncryptedMessage(to: message.chatID, envelope: envelope, id: message.id)
+                        _ = try await client.sendEncryptedMessage(to: message.chatID, envelope: envelope, id: message.id,
+                                                                  requestReceipt: switches.deliveryReceipts, markable: switches.readReceipts)
                     }
                     try? await client.requestAcknowledgement()
                 }, didChange: { [weak self] in
@@ -1038,6 +1124,8 @@ final class AppModel {
                         _ = try await client.sendReaction(to: to, targetID: targetID, reactions: reactions, id: update.id)
                     case .plainRetraction(let to, let targetID):
                         _ = try await client.sendRetraction(to: to, targetID: targetID, id: update.id)
+                    case .plainReceipt(let to, let targetID, let kind):
+                        _ = try await client.sendReceipt(to: to, targetID: targetID, kind: kind, id: update.id)
                     }
                     try? await client.requestAcknowledgement()
                 }
@@ -1089,7 +1177,7 @@ final class AppModel {
     }
 
     func openChat(_ chatID: String) async {
-        openChatID = chatID; messages = []; messagesLoadedFor = nil; messageReactions = [:]; encryptionOverview = nil
+        openChatID = chatID; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; encryptionOverview = nil
         encryptionStatus = "Setting up encryption…"; encryptionNeedsReview = false
         await refresh()
         if !isDemo { await loadEncryptionDetails(for: chatID) }
@@ -1103,13 +1191,15 @@ final class AppModel {
         if isGroup(chatID) { await loadGroupDetails(room: chatID, refreshFromServer: refreshFromServer); return }
         let account = accountID
         let token = generation
+        // The pushed details pages cover the conversation, which clears openChatID; the latest request is the fence.
+        encryptionDetailsChatID = chatID
         do {
             let overview: EncryptionOverview
             let refreshed = refreshFromServer && hasTransportOwnership && encryptionReady && isConnected && client != nil
             if refreshed, let client {
                 overview = try await encryption.refreshDevices(account: account, peer: chatID, profile: profile, transport: client)
             } else { overview = try await encryption.overview(account: account, peer: chatID) }
-            guard accountID == account, generation == token, openChatID == chatID else { return }
+            guard accountID == account, generation == token, encryptionDetailsChatID == chatID else { return }
             encryptionOverview = overview
             encryptionNeedsReview = overview.needsTrust
             let summary = [chatID, account].map { owner -> String in
@@ -1132,7 +1222,7 @@ final class AppModel {
                 encryptionStatus = refreshed ? "No compatible encryption devices" : "Setting up encryption…"
             } else { encryptionStatus = "New messages are end-to-end encrypted" }
         } catch {
-            guard accountID == account, generation == token, openChatID == chatID else { return }
+            guard accountID == account, generation == token, encryptionDetailsChatID == chatID else { return }
             let detail: String
             if case .stanza(let condition)? = error as? XMPPIQError { detail = condition } else { detail = String(describing: error).prefix(80).description }
             Logger(subsystem: "dev.xmpplab.ios", category: "encryption").error("Device refresh for \(chatID, privacy: .private) failed: \(detail, privacy: .public)")
@@ -1207,22 +1297,40 @@ final class AppModel {
         startOutbox()
     }
 
-    func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:] } }
+    func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:] } }
 
     var notificationPreviewsEnabled = true
 
-    func setNotificationPreviews(_ enabled: Bool) async {
+    func setNotificationPreviews(_ enabled: Bool) async { await updatePreferences { $0.notificationPreviews = enabled } }
+
+    /// Every per-account switch is one row written under the transport lease; the store enforces the receipt switches.
+    func updatePreferences(_ change: (inout AccountPreferences) -> Void) async {
         guard foreground, !quiescing, let store, !accountID.isEmpty else { return }
         let account = accountID
         let token = generation
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
+        var updated = accountPreferences
+        change(&updated)
         do {
             if !hasTransportOwnership { try await acquireForegroundOwnership(store, token: token) }
             guard generation == token else { return }
-            try await store.setNotificationPreviews(accountID: account, enabled: enabled)
-            if accountID == account { notificationPreviewsEnabled = enabled }
-        } catch { self.error = "Could not save notification preferences." }
+            try await store.setAccountPreferences(accountID: account, updated)
+            if accountID == account { accountPreferences = updated; notificationPreviewsEnabled = updated.notificationPreviews }
+        } catch { self.error = "Could not save preferences." }
+    }
+
+    /// The timeline showed the newest received message while the app is in front: queue the read marker.
+    func markDisplayed(_ messageID: String) async {
+        guard foreground, !quiescing, hasTransportOwnership, !isDemo, let encryption,
+              let message = messages.first(where: { $0.id == messageID }), !message.isOutgoing, message.chatID == openChatID,
+              message.encryptionProfile == "modern" || message.encryptionProfile == "legacy" else { return }
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
+        let account = accountID, token = generation
+        let queued = (try? await encryption.queueReceipt(account: account, chatID: message.chatID, messageID: messageID, kind: .marker)) ?? nil
+        guard queued != nil, generation == token else { return }
+        startOutbox()
     }
 
     func toggleStar(_ id: String) async {
@@ -1262,13 +1370,18 @@ final class AppModel {
             if let selected {
                 storedMessages = try await store.messages(accountID: account, chatID: selected, limit: 1000)
             } else { storedMessages = [] }
-            // One query brings every message-scoped event; reactions render as pills, retractions and
-            // corrections are folded into the message itself.
-            let events: [String: [MessageEvent]]
+            var reactions: [String: [AuthenticatedReaction]] = [:], receipts: [String: MessageEventKind] = [:]
+            var events: [String: [MessageEvent]] = [:]
             if let selected {
+                // One bounded query for the timeline: reactions, delivery and read receipts, retractions and corrections together.
                 events = try await store.eventsForChat(accountID: account, chatID: selected, messageIDs: Set(storedMessages.map(\.id)))
-            } else { events = [:] }
-            let reactions = events.compactMapValues { events in let reactions = events.compactMap(AuthenticatedReaction.init); return reactions.isEmpty ? nil : reactions }
+                for (id, events) in events {
+                    let projected = events.compactMap(AuthenticatedReaction.init)
+                    if !projected.isEmpty { reactions[id] = projected }
+                    if events.contains(where: { $0.kind == .displayed }) { receipts[id] = .displayed }
+                    else if events.contains(where: { $0.kind == .delivered }) { receipts[id] = .delivered }
+                }
+            }
             var groupReactionTargets = Set<String>()
             if let selected, rooms[selected] != nil {
                 for message in storedMessages where message.encryptionProfile == "modern" {
@@ -1279,7 +1392,8 @@ final class AppModel {
                 }
             }
             guard accountID == account, openChatID == selected else { return }
-            notificationPreviewsEnabled = try await store.notificationPreviewsEnabled(accountID: account)
+            accountPreferences = try await store.accountPreferences(accountID: account)
+            notificationPreviewsEnabled = accountPreferences.notificationPreviews
             if foreground, hasTransportOwnership, !quiescing {
                 try await store.dismissPendingMessageNotifications(accountID: account)
             }
@@ -1290,9 +1404,10 @@ final class AppModel {
                 groupChats[room] = value
             }
             let known = Set(storedChats.map(\.id))
+            loadStoredAvatars(storedChats)
             let reviewPreview = "Encrypted message needs attention"
             chats = storedChats.map { ChatSummary(id: $0.id, title: $0.title,
-                preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage.map { $0.isRetracted ? "Message unsent" : $0.body } ?? ""), isPinned: $0.isPinned,
+                preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage.map { $0.isRetracted ? "Message unsent" : $0.body } ?? ""), isPinned: $0.isPinned, avatarHash: $0.avatarHash,
                 lastMessageAt: $0.lastMessage?.sentAt, lastMessageIsOutgoing: $0.lastMessage?.isOutgoing ?? false,
                 lastMessageState: $0.lastMessage?.transportState) }
             chats += pending.keys.filter { !known.contains($0) }.sorted().map {
@@ -1301,6 +1416,7 @@ final class AppModel {
             messages = storedMessages.map { $0.applying(events[$0.id] ?? []) }
             messagesLoadedFor = selected
             messageReactions = reactions
+            messageReceipts = receipts
             reactableGroupMessages = groupReactionTargets
         } catch { self.error = "Could not read local conversations." }
     }
