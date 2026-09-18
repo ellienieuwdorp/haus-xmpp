@@ -890,7 +890,8 @@ public actor OMEMOService {
                 stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: peer, senderID: sender,
                                        body: content.body, sentAt: retained.sentAt ?? Date(), isOutgoing: sender == account,
                                        reply: content.reply, encryptionProfile: profile.rawValue,
-                                       wireID: content.originID ?? message.originID, wireIDAuthenticated: content.originID != nil,
+                                       // XEP-0444 targets the stanza id in 1:1 chats; peers without origin-id (Conversations) still get one.
+                                       wireID: content.originID ?? message.originID ?? message.id, wireIDAuthenticated: content.originID != nil,
                                        attachment: try content.fileSharing.map { try storedAttachment($0, account: account) })
             }
             if let update = content.reaction, event == nil {

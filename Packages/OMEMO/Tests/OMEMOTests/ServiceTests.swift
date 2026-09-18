@@ -740,6 +740,17 @@ final class ServiceTests: XCTestCase {
         expectTrue(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).isEmpty)
     }
 
+    func testLegacyMessageWithoutOriginIDIsReactableByStanzaID() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.legacy)
+        let outgoing = try await f.queue()
+        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
+        let envelope = try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id)
+        let bare = XMPPEncryptedMessage(id: "stanza-id", from: f.alice + "/phone", to: f.bob, originID: nil, envelope: envelope)
+        expectTrue(try await f.b.receive(account: f.bob, message: bare, transport: f.bTransport))
+        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).first?.wireID, "stanza-id")
+    }
+
     func testLegacyReactionQueuesExactPlainStanzaAndPermitsOnlyIdenticalReplay() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.legacy)

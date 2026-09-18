@@ -72,7 +72,9 @@ struct TrustPill: View {
     let color: Color
 
     var body: some View {
-        Label(text, systemImage: systemImage)
+        // Label's default icon gap reads as two separate things at footnote size.
+        HStack(spacing: 3) { Image(systemName: systemImage); Text(text) }
+            .accessibilityElement(children: .combine)
             .imageScale(.small)
             .font(.footnote.weight(.semibold))
             .padding(.horizontal, 10).padding(.vertical, 5)
