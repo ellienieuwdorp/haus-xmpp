@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import UIKit
 import XMPPProtocol
@@ -31,8 +32,13 @@ struct MessageActionsContext {
 /// bubble starts and ends exactly where the live one is and pops the way the system menu does.
 @MainActor
 enum MessageActionsOverlay {
+    /// The press path is synchronous on the main thread; these intervals show in Instruments (os_signpost, category MessageMenu).
+    static let signposter = OSSignposter(subsystem: "dev.xmpplab.ios", category: "MessageMenu")
+
     /// `onDismiss` runs once the overlay is gone, before the chosen action; its argument says whether one was chosen.
     static func present(from presenter: UIViewController, context: MessageActionsContext, onDismiss: @escaping (Bool) -> Void = { _ in }) {
+        let presenting = signposter.beginInterval("present")
+        defer { signposter.endInterval("present", presenting) }
         let window = presenter.view.window
         let safeArea = window?.safeAreaInsets ?? .zero
         // A real screenshot blurred by us: system materials tint as much as they blur, and the design
@@ -55,10 +61,14 @@ enum MessageActionsOverlay {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = true
-        let shot = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
-        guard let input = CIImage(image: shot) else { return nil }
-        let output = input.clampedToExtent().applyingGaussianBlur(sigma: 18).cropped(to: input.extent)
-        return ciContext.createCGImage(output, from: input.extent).map { UIImage(cgImage: $0) }
+        let shot = signposter.withIntervalSignpost("snapshot") {
+            UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+        }
+        return signposter.withIntervalSignpost("blur") {
+            guard let input = CIImage(image: shot) else { return nil }
+            let output = input.clampedToExtent().applyingGaussianBlur(sigma: 18).cropped(to: input.extent)
+            return ciContext.createCGImage(output, from: input.extent).map { UIImage(cgImage: $0) }
+        }
     }
 }
 
