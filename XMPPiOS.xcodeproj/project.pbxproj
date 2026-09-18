@@ -10,6 +10,7 @@
 		067C9FCB7127E3720B9EED04 /* SessionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 898614ED82A08708E37CF601 /* SessionState.swift */; };
 		06EBBE691608536D4BCD2A50 /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 9D3BA1F6BA1BAE2CD370EA2E /* XMPPProtocol */; };
 		0ECC4EC93A1EAF5DC4ED45E5 /* PushTokenCallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C45B2B0F98D48433E926D3B5 /* PushTokenCallbackTests.swift */; };
+		0EE1E497A05EED44CA1D2465 /* Attachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = A043B6261E59AEEF94B0E0A9 /* Attachments.swift */; };
 		1048A0DA5C55818F6E908F4C /* GroupDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29D0F7FE889C5ECA318C15DC /* GroupDetailsView.swift */; };
 		10D4A99046FBA70E9DA9374C /* PushUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458E132229BD40D81BDBBF78 /* PushUITests.swift */; };
 		14259EDA76E8B6B4C53D4E92 /* CircularGlassButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60CDCE362B275821D181D99A /* CircularGlassButtonStyle.swift */; };
@@ -155,6 +156,7 @@
 		9056316202CE7B7657FF164B /* XMPPNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = XMPPNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		97F738E51D0098B3D95850BB /* SharedStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedStorage.swift; sourceTree = "<group>"; };
 		9B83163D7B25E749804F80AF /* ConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationView.swift; sourceTree = "<group>"; };
+		A043B6261E59AEEF94B0E0A9 /* Attachments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Attachments.swift; sourceTree = "<group>"; };
 		A510E4E14CCDC43B6EEA364F /* PolishUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PolishUITests.swift; sourceTree = "<group>"; };
 		A8B2544FBAE494AC3B25B49F /* PushRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistration.swift; sourceTree = "<group>"; };
 		A9CB3F0019D6F6D8C373107D /* EncryptionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionUITests.swift; sourceTree = "<group>"; };
@@ -302,6 +304,7 @@
 				C1C395F08ECF2C05B5AAF89B /* App.entitlements */,
 				7F0BD595A789CC0D74B679AC /* AppearanceView.swift */,
 				2820963E2FB064DD0BAD839F /* AppModel.swift */,
+				A043B6261E59AEEF94B0E0A9 /* Attachments.swift */,
 				02E578F753BEA364EB18BB4D /* ChatDetailsView.swift */,
 				3CAD55F8C67F101615618BE4 /* ChatListView.swift */,
 				60CDCE362B275821D181D99A /* CircularGlassButtonStyle.swift */,
@@ -512,6 +515,7 @@
 			files = (
 				FC4281063E554402B9A2C568 /* AppModel.swift in Sources */,
 				2FFE952C53400F76AED4A8D2 /* AppearanceView.swift in Sources */,
+				0EE1E497A05EED44CA1D2465 /* Attachments.swift in Sources */,
 				16CFD5F0889F8CBB5F4EAD7B /* AvatarStore.swift in Sources */,
 				606006C350363E0A14B82A19 /* ChatDetailsView.swift in Sources */,
 				E57C443B766B4EB72095CE81 /* ChatListView.swift in Sources */,
@@ -670,8 +674,10 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "XMPP Lab";
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to your local XMPP development server.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIFileSharingEnabled = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -802,8 +808,10 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "XMPP Lab";
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to your local XMPP development server.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIFileSharingEnabled = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

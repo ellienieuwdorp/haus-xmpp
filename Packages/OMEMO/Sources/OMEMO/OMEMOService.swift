@@ -369,7 +369,7 @@ public actor OMEMOService {
         guard state.incompatiblePeers[message.chatID] != true else { throw OMEMOError.unsupportedProfile }
         let plaintext = try EncryptedContent.encode(body: message.body, reply: message.reply,
                                                     sender: account, recipient: message.chatID, modern: profile == .modern,
-                                                    originID: message.id)
+                                                    originID: message.id, fileSharing: message.attachment.map { try fileSharing(for: $0, account: account) })
         let saved = try sealContent(plaintext, account: account, peer: message.chatID, profile: profile, state: &state)
         try await store.sealQueuedOutgoing(accountID: account, messageID: message.id, profile: profile.rawValue,
                                            expectedRevision: revision, state: encode(state, account: account), wire: JSONEncoder().encode(saved))
@@ -801,11 +801,12 @@ public actor OMEMOService {
             let plaintext = try PayloadCrypto.open(SealedPayload(payload: payload, keyMaterial: material, iv: message.envelope.iv), profile: profile.crypto)
             let content = try EncryptedContent.decode(plaintext, sender: sender, recipient: sender == account ? peer : account,
                                                        modern: profile == .modern, sendingTime: retained.sentAt)
-            if !content.body.isEmpty {
+            if !content.body.isEmpty || content.fileSharing != nil {
                 stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: peer, senderID: sender,
                                        body: content.body, sentAt: retained.sentAt ?? Date(), isOutgoing: sender == account,
                                        reply: content.reply, encryptionProfile: profile.rawValue,
-                                       wireID: content.originID ?? message.originID, wireIDAuthenticated: content.originID != nil)
+                                       wireID: content.originID ?? message.originID, wireIDAuthenticated: content.originID != nil,
+                                       attachment: try content.fileSharing.map { try storedAttachment($0, account: account) })
             }
             if let update = content.reaction {
                 guard profile == .modern, sender == account || sender == peer else { throw OMEMOError.invalidContent }

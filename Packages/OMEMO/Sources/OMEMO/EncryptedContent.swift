@@ -13,9 +13,11 @@ struct EncryptedContent: Equatable {
     var receipt: MessageContent.Receipt? = nil
     var originID: String? = nil
     var timestamp: Date? = nil
+    var fileSharing: MessageContent.FileSharing? = nil
 
-    static func encode(body: String, reply: MessageReply?, sender: String, recipient: String, modern: Bool, originID: String? = nil) throws -> Data {
-        guard !body.isEmpty, body.utf8.count <= 16_384, MessageContent.validXMLText(body),
+    static func encode(body: String, reply: MessageReply?, sender: String, recipient: String, modern: Bool, originID: String? = nil,
+                       fileSharing: MessageContent.FileSharing? = nil) throws -> Data {
+        guard !body.isEmpty || fileSharing != nil, body.utf8.count <= 16_384, MessageContent.validXMLText(body),
               MessageContent.validAddress(sender), MessageContent.validAddress(recipient) else { throw OMEMOError.invalidContent }
         if let reply {
             guard !reply.messageID.isEmpty, reply.messageID.utf8.count <= 1024,
@@ -25,8 +27,14 @@ struct EncryptedContent: Equatable {
             else { throw OMEMOError.invalidContent }
         }
         let quote = reply.map { "> \($0.senderID)\n" + $0.body.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").split(separator: "\n", omittingEmptySubsequences: false).map { "> \($0)\n" }.joined() + "\n" } ?? ""
-        if !modern { return Data((quote + body).utf8) }
-        let content = MessageContent(body: body, reply: reply.map { .init(id: $0.wireID, to: $0.senderID, quote: quote) }, originID: originID)
+        if !modern {
+            // Legacy OMEMO has no envelope: the file rides as an `aesgcm://` body (XEP-0454), so it
+            // must be encrypted, and a caption becomes the lines above the link.
+            guard let fileSharing else { return Data((quote + body).utf8) }
+            guard let link = fileSharing.aesgcmURL else { throw OMEMOError.invalidContent }
+            return Data((quote + (body.isEmpty ? "" : body + "\n") + link).utf8)
+        }
+        let content = MessageContent(body: body, reply: reply.map { .init(id: $0.wireID, to: $0.senderID, quote: quote) }, originID: originID, fileSharing: fileSharing)
         return try wrap(content, sender: sender, recipient: recipient)
     }
 
@@ -53,6 +61,12 @@ struct EncryptedContent: Equatable {
         guard data.count <= 131_072, let text = String(data: data, encoding: .utf8) else { throw OMEMOError.invalidContent }
         if !modern {
             guard !text.isEmpty else { throw OMEMOError.invalidContent }
+            // A trailing `aesgcm://` line is a shared file; everything above it is the caption.
+            var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+            if let last = lines.last, let file = MessageContent.FileSharing.fromAESGCMBody(String(last)) {
+                lines.removeLast()
+                return EncryptedContent(body: lines.joined(separator: "\n").trimmingCharacters(in: .newlines), reply: nil, fileSharing: file)
+            }
             return EncryptedContent(body: text, reply: nil)
         }
         guard let root = try? XMPPProtocol.XMLNode.parse(standalone: data) else { throw OMEMOError.invalidContent }
@@ -83,13 +97,13 @@ struct EncryptedContent: Equatable {
             timestamp = parsed
         }
         guard let content = try? MessageContent.decode(root.children("content", namespace: ns)[0], strict: true),
-              !content.body.isEmpty || content.reaction != nil || content.receipt != nil else { throw OMEMOError.invalidContent }
+              !content.body.isEmpty || content.reaction != nil || content.receipt != nil || content.fileSharing != nil else { throw OMEMOError.invalidContent }
         let reply = content.reply.flatMap { reply in
             reply.id.map { MessageReply(messageID: $0, senderID: reply.to, body: unquote(reply.quote, author: reply.to), wireID: $0) }
         }
         return EncryptedContent(body: content.body, reply: reply,
                                 reaction: content.reaction.map { ReactionContent(targetWireID: $0.targetID, reactions: $0.reactions) },
-                                receipt: content.receipt, originID: content.originID, timestamp: timestamp)
+                                receipt: content.receipt, originID: content.originID, timestamp: timestamp, fileSharing: content.fileSharing)
     }
 
     // Remove only the exact quotation syntax emitted by this adapter. Foreign fallback

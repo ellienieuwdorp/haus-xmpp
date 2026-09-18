@@ -36,33 +36,48 @@ public struct MessageContent: Sendable, Equatable {
     public var requestsReceipt: Bool
     public var markable: Bool
     public var originID: String?
+    /// One shared file. `body` is then its caption, which may be empty.
+    public var fileSharing: FileSharing?
 
     public init(body: String, reply: Reply? = nil, reaction: Reaction? = nil, receipt: Receipt? = nil,
-                requestsReceipt: Bool = false, markable: Bool = false, originID: String? = nil) {
+                requestsReceipt: Bool = false, markable: Bool = false, originID: String? = nil, fileSharing: FileSharing? = nil) {
         self.body = body; self.reply = reply; self.reaction = reaction; self.receipt = receipt
-        self.requestsReceipt = requestsReceipt; self.markable = markable; self.originID = originID
+        self.requestsReceipt = requestsReceipt; self.markable = markable; self.originID = originID; self.fileSharing = fileSharing
     }
 
     /// The full `<body>` text, quote included.
     public var text: String { (reply?.quote ?? "") + body }
 
+    /// Body text a client without XEP-0447 sees: the URL (legacy `aesgcm://` form when
+    /// encrypted) after the caption. The range is declared as a fallback so we can strip it.
+    private var fileFallback: String? {
+        guard let fileSharing else { return nil }
+        let link = fileSharing.aesgcmURL ?? fileSharing.url
+        return body.isEmpty ? link : "\n" + link
+    }
+
     public static let maximumDepth = 16
     public static let maximumReactionCount = 12
 
     public func xml() throws -> String {
-        guard Self.validXMLText(body), (!body.isEmpty || reaction != nil || receipt != nil),
+        guard Self.validXMLText(body), (!body.isEmpty || reaction != nil || receipt != nil || fileSharing != nil),
               originID.map(Self.validIdentifier) ?? true else { throw XMPPClientError.invalidConfiguration }
         var xml = ""
         if let reply {
             guard reply.id.map(Self.validIdentifier) ?? true, Self.validAddress(reply.to),
                   !reply.quote.isEmpty, Self.validXMLText(reply.quote) else { throw XMPPClientError.invalidConfiguration }
         }
-        if !body.isEmpty || reply != nil {
-            xml += "<body xmlns='jabber:client'>\(xmlEscaped(text))</body>"
+        if !body.isEmpty || reply != nil || fileSharing != nil {
+            xml += "<body xmlns='jabber:client'>\(xmlEscaped(text + (fileFallback ?? "")))</body>"
         }
         if let reply, let id = reply.id {
             xml += "<reply xmlns='urn:xmpp:reply:0' to='\(xmlEscaped(reply.to))' id='\(xmlEscaped(id))'/>"
             xml += "<fallback xmlns='urn:xmpp:fallback:0' for='urn:xmpp:reply:0'><body start='0' end='\(reply.quote.unicodeScalars.count)'/></fallback>"
+        }
+        if let fileSharing, let fallback = fileFallback {
+            xml += try fileSharing.xml()
+            let start = text.unicodeScalars.count
+            xml += "<fallback xmlns='urn:xmpp:fallback:0' for='\(FileSharing.namespace)'><body start='\(start)' end='\(start + fallback.unicodeScalars.count)'/></fallback>"
         }
         if let reaction {
             let values = try Self.normalizedReactions(reaction.reactions)
@@ -112,6 +127,24 @@ public struct MessageContent: Sendable, Equatable {
             } else { try ambiguous() }
         }
 
+        var fileSharing: FileSharing?
+        let files = node.children("file-sharing", namespace: FileSharing.namespace)
+        if files.count > 1 { try ambiguous() }
+        else if let file = files.first {
+            if let decoded = FileSharing.decode(file) {
+                fileSharing = decoded
+                // Strip the URL we (or a like-minded sender) appended for clients without XEP-0447.
+                let ranges = node.children("fallback", namespace: "urn:xmpp:fallback:0").filter { $0.attributes["for"] == FileSharing.namespace }
+                    .flatMap { $0.children("body", namespace: "urn:xmpp:fallback:0") }
+                let scalars = Array(body.unicodeScalars)
+                if ranges.count == 1, let start = ranges[0].attributes["start"].flatMap(Int.init), let end = ranges[0].attributes["end"].flatMap(Int.init),
+                   start >= 0, start < end, end <= scalars.count {
+                    body = String(String.UnicodeScalarView(scalars[..<start] + scalars[end...]))
+                } else if ranges.isEmpty, body.trimmingCharacters(in: .whitespacesAndNewlines) == decoded.url {
+                    body = ""
+                }
+            } else { try ambiguous() }
+        }
         // A receipt names exactly one target; two receipts or a receipt of both kinds is ambiguous.
         var receipt: Receipt?
         let received = node.children("received", namespace: "urn:xmpp:receipts")
@@ -144,7 +177,7 @@ public struct MessageContent: Sendable, Equatable {
             }
         }
         return MessageContent(body: body, reply: reply, reaction: reaction, receipt: receipt,
-                              requestsReceipt: requestsReceipt, markable: markable, originID: originID)
+                              requestsReceipt: requestsReceipt, markable: markable, originID: originID, fileSharing: fileSharing)
     }
 
     /// Complete set, deduplicated and sorted, so equal intentions produce equal bytes.

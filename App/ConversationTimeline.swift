@@ -1,3 +1,4 @@
+import QuickLook
 import SwiftUI
 import UIKit
 
@@ -28,11 +29,30 @@ struct TimelineReaction: Sendable, Equatable {
     }
 }
 
+struct TimelineAttachment: Sendable, Equatable {
+    let name: String
+    let mediaType: String
+    let size: Int
+    let width: Int?
+    let height: Int?
+    /// Plaintext on disk once sent or downloaded and verified; nil while it is still fetching.
+    var localURL: URL? = nil
+    var isImage: Bool { mediaType.hasPrefix("image/") }
+    var isVideo: Bool { mediaType.hasPrefix("video/") }
+    var showsPreview: Bool { isImage || isVideo }
+    var aspectRatio: CGFloat {
+        guard let width, let height, width > 0, height > 0 else { return 4 / 3 }
+        return CGFloat(width) / CGFloat(height)
+    }
+    var kindLabel: String { isImage ? "Photo" : isVideo ? "Video" : "File" }
+}
+
 struct TimelineMessage: Identifiable, Sendable, Equatable {
     let id: String
     let body: String
     let isOutgoing: Bool
     let isStarred: Bool
+    var attachment: TimelineAttachment? = nil
     var sentAt: Date? = nil
     var status: Status? = nil
     var reply: TimelineReply? = nil
@@ -163,9 +183,19 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                            presentActions: { [weak self] context in
                                guard let self, presentedViewController == nil else { return }
                                MessageActionsOverlay.present(from: self, context: context)
-                           })
+                           }, openAttachment: { [weak self] url in self?.preview(url, title: row.message.attachment?.name) })
             return cell
         }
+    }
+
+    /// One native viewer for photos, video and documents: zoom, play, share.
+    private let previewSource = PreviewSource()
+    private func preview(_ url: URL, title: String?) {
+        guard presentedViewController == nil else { return }
+        previewSource.item = .init(url: url, title: title)
+        let viewer = QLPreviewController()
+        viewer.dataSource = previewSource
+        present(viewer, animated: true)
     }
 
     func update(messages incoming: [TimelineMessage], accent: String = "", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in }, onDisplayed: @escaping (String) -> Void = { _ in }) {
@@ -290,10 +320,35 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 }
 
 @MainActor
+private final class PreviewSource: NSObject, QLPreviewControllerDataSource {
+    /// Immutable so Quick Look may read it from any thread. The title is the sender's file
+    /// name; the cache file itself is named after its hash.
+    final class Item: NSObject, QLPreviewItem, Sendable {
+        let previewItemURL: URL?
+        let previewItemTitle: String?
+        init(url: URL, title: String?) { previewItemURL = url; previewItemTitle = title }
+    }
+    var item: Item?
+    func numberOfPreviewItems(in controller: QLPreviewController) -> Int { item == nil ? 0 : 1 }
+    func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> any QLPreviewItem { item ?? Item(url: URL(fileURLWithPath: "/"), title: nil) }
+}
+
+@MainActor
 private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizerDelegate {
     private static let pillHang: CGFloat = 12
     private var row: TimelineRow?
     private var message: TimelineMessage? { row?.message }
+    private var openAttachment: (URL) -> Void = { _ in }
+    private let attachmentArea = UIView()
+    private let media = UIImageView()
+    private let mediaSpinner = UIActivityIndicatorView(style: .medium)
+    private let fileIcon = UIImageView(image: UIImage(systemName: "doc.fill"))
+    private let fileName = UILabel()
+    private let fileDetail = UILabel()
+    private var attachmentHeight: NSLayoutConstraint!
+    private var plainAttachmentTop: NSLayoutConstraint!
+    private var replyAttachmentTop: NSLayoutConstraint!
+    private var textHeight: NSLayoutConstraint!
     private var toggleStar: () -> Void = {}
     private var retry: () -> Void = {}
     private var replyAction: () -> Void = {}
@@ -423,6 +478,49 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             quoteLabels.topAnchor.constraint(equalTo: quote.topAnchor, constant: 6),
             quoteLabels.bottomAnchor.constraint(equalTo: quote.bottomAnchor, constant: -6)
         ])
+        // Media and file cards sit above the text; the bubble's own corners clip them.
+        attachmentArea.translatesAutoresizingMaskIntoConstraints = false
+        attachmentArea.clipsToBounds = true
+        attachmentArea.isAccessibilityElement = false
+        attachmentArea.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleAttachmentTap)))
+        bubble.addSubview(attachmentArea)
+        media.translatesAutoresizingMaskIntoConstraints = false
+        media.contentMode = .scaleAspectFill
+        media.clipsToBounds = true
+        // Framed by the bubble colour so a white photo keeps an edge on a white canvas.
+        media.layer.cornerRadius = 17
+        media.layer.cornerCurve = .continuous
+        media.backgroundColor = .quaternarySystemFill
+        media.accessibilityIgnoresInvertColors = true
+        attachmentArea.addSubview(media)
+        mediaSpinner.translatesAutoresizingMaskIntoConstraints = false
+        mediaSpinner.hidesWhenStopped = true
+        attachmentArea.addSubview(mediaSpinner)
+        fileIcon.translatesAutoresizingMaskIntoConstraints = false
+        fileIcon.contentMode = .scaleAspectFit
+        fileIcon.preferredSymbolConfiguration = .init(pointSize: 26, weight: .regular)
+        attachmentArea.addSubview(fileIcon)
+        fileName.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(for: .systemFont(ofSize: 15, weight: .semibold))
+        fileName.adjustsFontForContentSizeCategory = true
+        fileName.lineBreakMode = .byTruncatingMiddle
+        fileDetail.font = .preferredFont(forTextStyle: .caption1)
+        fileDetail.adjustsFontForContentSizeCategory = true
+        let fileLabels = UIStackView(arrangedSubviews: [fileName, fileDetail])
+        fileLabels.translatesAutoresizingMaskIntoConstraints = false
+        fileLabels.axis = .vertical
+        fileLabels.spacing = 1
+        attachmentArea.addSubview(fileLabels)
+        NSLayoutConstraint.activate([
+            media.leadingAnchor.constraint(equalTo: attachmentArea.leadingAnchor, constant: 3), media.trailingAnchor.constraint(equalTo: attachmentArea.trailingAnchor, constant: -3),
+            media.topAnchor.constraint(equalTo: attachmentArea.topAnchor, constant: 3), media.bottomAnchor.constraint(equalTo: attachmentArea.bottomAnchor),
+            mediaSpinner.centerXAnchor.constraint(equalTo: attachmentArea.centerXAnchor), mediaSpinner.centerYAnchor.constraint(equalTo: attachmentArea.centerYAnchor),
+            fileIcon.leadingAnchor.constraint(equalTo: attachmentArea.leadingAnchor, constant: 12),
+            fileIcon.centerYAnchor.constraint(equalTo: attachmentArea.centerYAnchor),
+            fileIcon.widthAnchor.constraint(equalToConstant: 32),
+            fileLabels.leadingAnchor.constraint(equalTo: fileIcon.trailingAnchor, constant: 10),
+            fileLabels.trailingAnchor.constraint(equalTo: attachmentArea.trailingAnchor, constant: -12),
+            fileLabels.centerYAnchor.constraint(equalTo: attachmentArea.centerYAnchor)
+        ])
         textView.translatesAutoresizingMaskIntoConstraints = false
         textView.isEditable = false
         textView.isAccessibilityElement = true
@@ -469,11 +567,19 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         leading = bubble.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16)
         trailing = bubble.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16)
         bubbleWidth = bubble.widthAnchor.constraint(equalToConstant: 200)
-        plainTextTop = textView.topAnchor.constraint(equalTo: bubble.topAnchor)
-        replyTextTop = textView.topAnchor.constraint(equalTo: quote.bottomAnchor, constant: -4)
+        plainAttachmentTop = attachmentArea.topAnchor.constraint(equalTo: bubble.topAnchor)
+        replyAttachmentTop = attachmentArea.topAnchor.constraint(equalTo: quote.bottomAnchor, constant: 8)
+        plainAttachmentTop.isActive = true
+        attachmentHeight = attachmentArea.heightAnchor.constraint(equalToConstant: 0)
+        // With no attachment the area is zero-height and the text keeps its original top.
+        plainTextTop = textView.topAnchor.constraint(equalTo: attachmentArea.bottomAnchor)
+        replyTextTop = textView.topAnchor.constraint(equalTo: attachmentArea.bottomAnchor, constant: -12)
         plainTextTop.isActive = true
+        textHeight = textView.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
-            bubbleWidth,
+            bubbleWidth, attachmentHeight,
+            attachmentArea.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
+            attachmentArea.trailingAnchor.constraint(equalTo: bubble.trailingAnchor),
             bubble.leadingAnchor.constraint(greaterThanOrEqualTo: contentView.leadingAnchor, constant: 16),
             bubble.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -16),
             textView.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
@@ -541,8 +647,56 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             let authorWidth = (reply.author as NSString).size(withAttributes: [.font: quoteAuthor.font!]).width
             quoteWidth = min(limit, max(bodyWidth, authorWidth)) + 45
         }
-        bubbleWidth.constant = min(maximumTextWidth + 24, max(quoteWidth, max(metadataWidth, max(44, ceil(measured.width) + 25))))
+        var width = min(maximumTextWidth + 24, max(quoteWidth, max(metadataWidth, max(44, ceil(measured.width) + 25))))
+        if let attachment = message?.attachment {
+            if attachment.showsPreview {
+                // A fixed preview width per chat; height follows the photo, bounded so one tall shot never fills the screen.
+                width = min(maximumTextWidth + 24, 280)
+                attachmentHeight.constant = min(340, max(120, (width / attachment.aspectRatio).rounded()))
+            } else {
+                width = max(width, min(maximumTextWidth + 24, 240))
+                attachmentHeight.constant = 62
+            }
+        } else { attachmentHeight.constant = 0 }
+        bubbleWidth.constant = width
         return super.preferredLayoutAttributesFitting(layoutAttributes)
+    }
+
+    @objc private func handleAttachmentTap() {
+        guard let url = message?.attachment?.localURL else { return }
+        openAttachment(url)
+    }
+
+    private func configureAttachment(_ attachment: TimelineAttachment?, isOutgoing: Bool, textColor: UIColor) {
+        attachmentArea.isHidden = attachment == nil
+        media.isHidden = attachment?.showsPreview != true
+        let showsCard = attachment != nil && attachment?.showsPreview != true
+        fileIcon.isHidden = !showsCard
+        fileName.isHidden = !showsCard
+        fileDetail.isHidden = !showsCard
+        media.image = nil
+        mediaSpinner.stopAnimating()
+        guard let attachment else { return }
+        if showsCard {
+            fileIcon.tintColor = textColor
+            fileName.textColor = textColor
+            fileDetail.textColor = textColor.withAlphaComponent(0.75)
+            fileName.text = attachment.name
+            let size = attachment.size > 0 ? ByteCountFormatter.string(fromByteCount: Int64(attachment.size), countStyle: .file) : nil
+            fileDetail.text = [size, attachment.localURL == nil ? "Downloading…" : nil].compactMap { $0 }.joined(separator: " · ")
+            if fileDetail.text?.isEmpty ?? true { fileDetail.text = attachment.mediaType }
+            return
+        }
+        guard let url = attachment.localURL else { mediaSpinner.startAnimating(); return }
+        mediaSpinner.startAnimating()
+        let id = messageID
+        Task { [weak self] in
+            let image = await AttachmentThumbnails.image(for: url, mediaType: attachment.mediaType)
+            guard let self, messageID == id else { return }
+            mediaSpinner.stopAnimating()
+            media.image = image ?? UIImage(systemName: attachment.isVideo ? "video" : "photo")
+            media.contentMode = image == nil ? .center : .scaleAspectFill
+        }
     }
 
     /// The one action list; the overlay menu and VoiceOver custom actions both read it.
@@ -646,7 +800,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     }
 
     func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,
-                   presentActions: @escaping (MessageActionsContext) -> Void) {
+                   presentActions: @escaping (MessageActionsContext) -> Void, openAttachment: @escaping (URL) -> Void = { _ in }) {
         let message = row.message
         self.row = row
         self.toggleStar = toggleStar
@@ -654,6 +808,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         self.replyAction = reply
         self.reactionAction = reaction
         self.presentActions = presentActions
+        self.openAttachment = openAttachment
         bubble.cornerConfiguration = .corners(topLeftRadius: .fixed(20), topRightRadius: .fixed(20),
                                               bottomLeftRadius: .fixed(corners.bottomLeft), bottomRightRadius: .fixed(corners.bottomRight))
         if messageID != message.id {
@@ -680,8 +835,12 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         quote.isHidden = message.reply == nil
         quoteAuthor.text = message.reply?.author
         quoteBody.text = message.reply?.body
-        NSLayoutConstraint.deactivate([plainTextTop, replyTextTop])
-        (message.reply == nil ? plainTextTop : replyTextTop)?.isActive = true
+        NSLayoutConstraint.deactivate([plainTextTop, replyTextTop, plainAttachmentTop, replyAttachmentTop])
+        (message.reply == nil ? plainAttachmentTop : replyAttachmentTop)?.isActive = true
+        // Under a preview the caption keeps its own inset; under a quote alone the text tucks up as before.
+        (message.reply == nil || message.attachment != nil ? plainTextTop : replyTextTop)?.isActive = true
+        textHeight.isActive = message.body.isEmpty && message.attachment != nil
+        textView.isHidden = textHeight.isActive
         let canRetry = message.isOutgoing && message.status?.canRetry == true
         leading.isActive = !message.isOutgoing
         trailing.isActive = message.isOutgoing
@@ -699,7 +858,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         star.tintColor = meta
         replyIndicator.tintColor = theme.tint
         if textView.text != message.body { textView.text = message.body }
+        configureAttachment(message.attachment, isOutgoing: message.isOutgoing, textColor: text)
         var descriptions = ["\(message.isOutgoing ? "You" : (message.author ?? "Contact")): \(message.body)"]
+        if let attachment = message.attachment { descriptions.append("\(attachment.kindLabel) \(attachment.name)" + (attachment.localURL == nil ? ", downloading" : "")) }
         if let quote = message.reply { descriptions.append("Replying to \(quote.author): \(quote.body)") }
         if message.isStarred { descriptions.append("starred") }
         if let date = message.sentAt { descriptions.append(date.formatted(date: .abbreviated, time: .shortened)) }
@@ -712,6 +873,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         }
         textView.accessibilityLabel = descriptions.joined(separator: ", ")
         textView.accessibilityCustomActions = actions().map { action in UIAccessibilityCustomAction(name: action.title) { _ in action.perform(); return true } }
+        if let url = message.attachment?.localURL {
+            textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: "Open \(message.attachment?.kindLabel.lowercased() ?? "file")") { [weak self] _ in self?.openAttachment(url); return true })
+        }
         if message.canReact {
             let selected = Set(message.reactions.filter(\.isSelected).map(\.emoji))
             for emoji in TimelineReaction.choices {

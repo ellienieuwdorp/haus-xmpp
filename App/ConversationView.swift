@@ -1,9 +1,27 @@
+import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
+
+/// A picked video comes across as a file so a large clip never sits in memory twice.
+private struct PickedMovie: Transferable {
+    let url: URL
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { SentTransferredFile($0.url) } importing: { received in
+            let copy = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + "." + (received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension))
+            try FileManager.default.copyItem(at: received.file, to: copy)
+            return PickedMovie(url: copy)
+        }
+    }
+}
 
 struct ConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
     @State private var draft = ""
+    @State private var showingPhotoPicker = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var importingFile = false
+    @State private var attaching = false
     @State private var query = ""
     @State private var showingSearch = false
     @State private var starredOnly = false
@@ -42,6 +60,8 @@ struct ConversationView: View {
             return left == right ? $0 < $1 : left < right
         }
         return TimelineMessage(id: message.id, body: message.body, isOutgoing: message.isOutgoing, isStarred: message.isStarred,
+                               attachment: message.attachment.map { TimelineAttachment(name: $0.name, mediaType: $0.mediaType, size: $0.size, width: $0.width, height: $0.height,
+                                                                                       localURL: model.attachmentFiles[message.id]) },
                                sentAt: message.sentAt, status: status(message),
                                reply: message.reply.map { TimelineReply(author: authorName($0.senderID), body: $0.body) },
                                securityNotice: !model.isDemo && message.encryptionProfile == nil ? "Not encrypted" : nil,
@@ -92,6 +112,41 @@ struct ConversationView: View {
                 if replyingTo?.id == reply?.id { replyingTo = nil }
             }
         }
+    }
+
+    /// The composer text becomes the caption; the file is reduced and sealed before it is queued.
+    private func attach(_ prepare: @escaping () async throws -> PreparedAttachment) {
+        guard !attaching else { return }
+        attaching = true
+        let caption = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            defer { attaching = false }
+            do {
+                let prepared = try await prepare()
+                if await model.sendAttachment(prepared, caption: caption, to: chatID), draft.trimmingCharacters(in: .whitespacesAndNewlines) == caption { draft = "" }
+            } catch {
+                model.error = (error as? LocalizedError)?.errorDescription ?? "This file could not be attached."
+            }
+        }
+    }
+
+    private func attach(photo item: PhotosPickerItem) {
+        let limit = model.attachmentLimit
+        attach {
+            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
+                guard let movie = try await item.loadTransferable(type: PickedMovie.self) else { throw AttachmentPreparer.Failure.unreadable }
+                defer { try? FileManager.default.removeItem(at: movie.url) }
+                return try await AttachmentPreparer.prepareVideo(movie.url, name: "video", limit: limit)
+            }
+            guard let data = try await item.loadTransferable(type: Data.self) else { throw AttachmentPreparer.Failure.unreadable }
+            return try AttachmentPreparer.prepareImage(data, name: "photo", limit: limit)
+        }
+    }
+
+    private func attach(file result: Result<URL, any Error>) {
+        guard case .success(let url) = result else { return }
+        let limit = model.attachmentLimit
+        attach { try await AttachmentPreparer.prepare(fileURL: url, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension), limit: limit) }
     }
 
     var body: some View {
@@ -195,6 +250,13 @@ struct ConversationView: View {
         }
         .onChange(of: model.encryptionNeedsReview) { reviewDismissed = false }
         .onChange(of: model.encryptionStatus) { reviewDismissed = false }
+        .photosPicker(isPresented: $showingPhotoPicker, selection: $photoItem, matching: .any(of: [.images, .videos]))
+        .fileImporter(isPresented: $importingFile, allowedContentTypes: [.item]) { attach(file: $0) }
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            photoItem = nil
+            attach(photo: item)
+        }
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
         .onDisappear { model.closeChat(chatID) }
     }
@@ -244,9 +306,20 @@ struct ConversationView: View {
                     .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
                 HStack(alignment: .bottom, spacing: 4) {
+                    if model.canSendAttachments, !isGroup {
+                        Menu {
+                            Button("Photo or Video", systemImage: "photo.on.rectangle") { showingPhotoPicker = true }
+                            Button("File", systemImage: "doc") { importingFile = true }
+                        } label: {
+                            if attaching { ProgressView().frame(width: 44, height: 44) }
+                            else { Image(systemName: "plus").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44).contentShape(Rectangle()) }
+                        }
+                        .disabled(attaching || model.isSending)
+                        .accessibilityLabel("Attach a file").accessibilityIdentifier("attachFile")
+                    }
                     TextField(placeholder, text: $draft, axis: .vertical)
                         .lineLimit(1...5)
-                        .padding(.leading, 16).padding(.vertical, 11)
+                        .padding(.leading, model.canSendAttachments && !isGroup ? 0 : 16).padding(.vertical, 11)
                         .focused($composing)
                         .accessibilityIdentifier("messageComposer")
                     Button(action: send) {
