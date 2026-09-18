@@ -207,7 +207,7 @@ final class AppModel {
                     context.cgContext.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
                 }
                 let attachment = StoredAttachment(name: "waterfront.jpg", mediaType: "image/jpeg", size: photo.count, width: 1200, height: 900,
-                                                  hash: Data.sha256(photo).hexString, secret: Data())
+                                                  hash: Data.sha256(photo).hexString, secret: Data([0])) // never opened: the file is already cached
                 try files.write(photo, to: files.cacheURL(attachment, messageID: "sample-photo"))
                 try await store.insertMessage(StoredMessage(id: "sample-photo", accountID: account, chatID: "alex@preview.local", senderID: "alex@preview.local", body: "",
                                                             sentAt: Date(timeIntervalSince1970: 1_789_380_000.5), isOutgoing: false, attachment: attachment))

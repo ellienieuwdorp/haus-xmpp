@@ -308,7 +308,8 @@ final class ImageViewer: UIViewController, UIScrollViewDelegate, UIGestureRecogn
             var saved = false
             if await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized {
                 // The cache file's exact bytes, so a saved photo keeps its format and metadata.
-                saved = (try? await PHPhotoLibrary.shared().performChanges {
+                // PhotoKit runs the block on its own queue, so it must not inherit the main actor.
+                saved = (try? await PHPhotoLibrary.shared().performChanges { @Sendable in
                     PHAssetCreationRequest.forAsset().addResource(with: .photo, fileURL: url, options: nil)
                 }) != nil
             }
