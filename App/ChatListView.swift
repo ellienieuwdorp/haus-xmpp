@@ -54,7 +54,9 @@ struct ChatListView: View {
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 4, trailing: 16))
                     }
-                    ForEach(visibleChats) { chat in
+                    // Pin state is part of the row identity: List then removes and inserts the row. Moving the very cell
+                    // whose swipe action is still closing slides it the wrong way and snaps it into place.
+                    ForEach(visibleChats, id: \.listIdentity) { chat in
                         Button { path.append(.chat(chat.id)) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatars[chat.id]) }
                             .buttonStyle(.plain)
                             .task(id: "\(chat.id)|\(model.session.isReady)") { await model.loadAvatar(for: chat.id) }
@@ -245,19 +247,26 @@ private struct ChatRow: View {
         return Self.dayMonth.string(from: date)
     }
 
-    private var stateGlyph: String? {
+    /// Same ladder as the bubble footer: clock, failed, one check (server), two (delivered), two blue (read).
+    /// Not `AccentTheme.readReceipt`: that blue is picked to sit on the accent bubble fill, not the list background.
+    private var stateGlyph: Text? {
         guard chat.lastMessageIsOutgoing else { return nil }
+        let check = Text(Image(systemName: "checkmark"))
         switch chat.lastMessageState {
-        case .queued, .submitting, .unconfirmed: return "clock"
-        case .failed: return "exclamationmark.circle"
-        case .serverAccepted, nil: return "checkmark"
+        case .queued, .submitting, .unconfirmed: return Text(Image(systemName: "clock"))
+        case .failed: return Text(Image(systemName: "exclamationmark.circle"))
+        case .serverAccepted, nil:
+            guard let receipt = chat.lastMessageReceipt else { return check }
+            guard let image = UIImage.doubleCheck(.init(textStyle: .subheadline)) else { return check }
+            let double = Text(Image(uiImage: image))
+            return receipt == .displayed ? double.foregroundStyle(.blue) : double
         }
     }
 
     private var preview: Text {
         let body = Text(chat.preview.isEmpty ? "Start a conversation" : chat.preview)
         guard let stateGlyph else { return body }
-        return Text(Image(systemName: stateGlyph)) + Text(" ") + body
+        return stateGlyph + Text(" ") + body
     }
 
     var body: some View {

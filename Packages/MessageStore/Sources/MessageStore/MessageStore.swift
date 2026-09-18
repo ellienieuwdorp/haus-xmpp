@@ -431,9 +431,11 @@ public actor MessageStore {
             (SELECT MAX(sent_at) FROM messages m WHERE m.account_id=c.account_id AND m.chat_id=c.id) DESC, c.id
             """, [.text(accountID)])
         return try rows.map { row in
-            let latest = try messages(accountID: accountID, chatID: row[0].string, limit: 1).first.map { try $0.applying(events(accountID: accountID, chatID: $0.chatID, messageID: $0.id)) }
+            let last = try messages(accountID: accountID, chatID: row[0].string, limit: 1).first
+            let lastEvents = try last.map { try events(accountID: accountID, chatID: $0.chatID, messageID: $0.id) } ?? []
+            let receipt = last?.isOutgoing != true ? nil : [MessageEventKind.displayed, .delivered].first { kind in lastEvents.contains { $0.kind == kind } }
             return StoredChat(id: row[0].string, accountID: accountID, title: row[1].string,
-                              isPinned: row[2].integer != 0, lastMessage: latest, avatarHash: row[3].optionalString)
+                              isPinned: row[2].integer != 0, lastMessage: last?.applying(lastEvents), avatarHash: row[3].optionalString, lastMessageReceipt: receipt)
         }
     }
 

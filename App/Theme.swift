@@ -98,3 +98,16 @@ enum AvatarPalette {
         return colors[Int(hash % UInt32(colors.count))]
     }
 }
+
+extension UIImage {
+    /// SF Symbols has no double check; two checkmarks overlapped by about half a glyph read as one.
+    static func doubleCheck(_ configuration: UIImage.SymbolConfiguration?) -> UIImage? {
+        guard let check = UIImage(systemName: "checkmark", withConfiguration: configuration) else { return nil }
+        let offset = (check.size.width * 0.45).rounded()
+        let size = CGSize(width: check.size.width + offset, height: check.size.height)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            check.draw(at: .zero)
+            check.draw(at: CGPoint(x: offset, y: 0))
+        }.withBaselineOffset(fromBottom: check.baselineOffsetFromBottom ?? 0).withRenderingMode(.alwaysTemplate)
+    }
+}
