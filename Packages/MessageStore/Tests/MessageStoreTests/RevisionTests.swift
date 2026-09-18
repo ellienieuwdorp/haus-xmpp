@@ -80,6 +80,15 @@ private func shown(_ store: MessageStore, _ id: String) async throws -> StoredMe
     #expect(unsent.isRetracted && unsent.body.isEmpty)
 }
 
+@Test func editingACaptionKeepsTheAttachmentAndUnsendingHidesIt() throws {
+    var photo = StoredMessage(id: "p", accountID: "self", chatID: "peer", senderID: "self", body: "Old caption", isOutgoing: true, encryptionProfile: "modern", wireID: "w-p", wireIDAuthenticated: true)
+    photo.attachment = StoredAttachment(name: "a.jpg", mediaType: "image/jpeg", size: 10, hash: "h", secret: Data([1]))
+    let edited = photo.applying([try event("c", actor: "self", target: "w-p", kind: .correction, body: "New caption")])
+    #expect(edited.body == "New caption" && edited.isEdited && edited.attachment == photo.attachment)
+    let unsent = edited.applying([try event("r", actor: "self", target: "w-p", kind: .retraction)])
+    #expect(unsent.isRetracted && unsent.body.isEmpty && unsent.attachment == nil)
+}
+
 @Test func retractionDropsThePendingAlertAndACorrectionAlertsWithItsNewText() async throws {
     let url = try revisionURL(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = try MessageStore(url: url)

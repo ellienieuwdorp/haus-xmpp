@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 13 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 14 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -197,7 +197,20 @@ public actor MessageStore {
             if version < 13, try connection.query("SELECT 1 FROM pragma_table_info('chats') WHERE name='avatar_hash'").isEmpty {
                 try connection.execute("ALTER TABLE chats ADD COLUMN avatar_hash TEXT")
             }
-            try connection.execute("PRAGMA user_version = 13")
+            // v14 (v12 on the media-only tree; IF NOT EXISTS keeps it idempotent): one file per message,
+            // with metadata, sealed key material and transfer state. Bytes are files.
+            if version < 14 {
+                try connection.execute("""
+                    CREATE TABLE IF NOT EXISTS attachments (
+                        account_id TEXT NOT NULL, message_id TEXT NOT NULL, name TEXT NOT NULL, media_type TEXT NOT NULL,
+                        size INTEGER NOT NULL, width INTEGER, height INTEGER, hash TEXT NOT NULL, cipher_hash TEXT,
+                        secret BLOB NOT NULL, url TEXT, upload_state TEXT CHECK(upload_state IN ('pending','uploaded')), task_id INTEGER,
+                        PRIMARY KEY(account_id, message_id),
+                        FOREIGN KEY(account_id, message_id) REFERENCES messages(account_id, id)
+                    )
+                    """)
+            }
+            try connection.execute("PRAGMA user_version = 14")
         }
     }
 
@@ -227,12 +240,16 @@ public actor MessageStore {
             replyJSON = .null
         }
         if let existing = try connection.query("SELECT \(Self.columns) FROM messages WHERE account_id=? AND id=?",
-                                               [.text(message.accountID), .text(message.id)]).first.map(Self.decode) {
+                                               [.text(message.accountID), .text(message.id)]).first.map(decodeRow) {
             var comparison = message
             comparison.isStarred = existing.isStarred
             comparison.transportState = existing.transportState
+            comparison.attachment = existing.attachment
             guard existing == comparison else { throw MessageStoreError.conflictingIdentity }
             return false
+        }
+        if let attachment = message.attachment {
+            try Self.validateAttachment(attachment)
         }
         try connection.execute("""
             INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing,starred,reply_json,encryption_profile,wire_id,wire_id_authenticated)
@@ -241,14 +258,31 @@ public actor MessageStore {
                   .text(message.body), .real(message.sentAt.timeIntervalSince1970),
                   .integer(message.isOutgoing ? 1 : 0), .integer(message.isStarred ? 1 : 0), replyJSON, message.encryptionProfile.map(Value.text) ?? .null,
                   message.wireID.map(Value.text) ?? .null, .integer(message.wireIDAuthenticated ? 1 : 0)])
+        if let attachment = message.attachment {
+            try connection.execute("""
+                INSERT INTO attachments(account_id,message_id,name,media_type,size,width,height,hash,cipher_hash,secret,url,upload_state,task_id)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, [.text(message.accountID), .text(message.id), .text(attachment.name), .text(attachment.mediaType), .integer(attachment.size),
+                      attachment.width.map(Value.integer) ?? .null, attachment.height.map(Value.integer) ?? .null, .text(attachment.hash),
+                      attachment.cipherHash.map(Value.text) ?? .null, .blob(attachment.secret), attachment.url.map(Value.text) ?? .null,
+                      attachment.uploadState.map { .text($0.rawValue) } ?? .null, attachment.uploadTaskID.map(Value.integer) ?? .null])
+        }
         return true
+    }
+
+    private static func validateAttachment(_ attachment: StoredAttachment) throws {
+        guard !attachment.name.isEmpty, attachment.name.utf8.count <= 255, !attachment.mediaType.isEmpty, attachment.mediaType.utf8.count <= 128,
+              attachment.size >= 0, attachment.hash.utf8.count <= 64, attachment.cipherHash.map({ $0.utf8.count <= 64 }) ?? true,
+              !attachment.secret.isEmpty, attachment.secret.count <= 4_096, attachment.url.map({ $0.utf8.count <= 2_048 }) ?? true,
+              attachment.width.map({ $0 > 0 }) ?? true, attachment.height.map({ $0 > 0 }) ?? true else { throw MessageStoreError.invalidValue }
     }
 
     /// Atomically saves the message and queued work before any socket operation.
     /// The supplied message ID must also be the stable outgoing stanza/origin ID.
     /// Repeating an enqueue never resets an existing transport attempt.
     @discardableResult public func enqueueOutgoing(_ message: StoredMessage) throws -> Bool {
-        guard message.isOutgoing, !message.body.isEmpty, message.body.utf8.count <= 65_536 else { throw MessageStoreError.invalidValue }
+        guard message.isOutgoing, !message.body.isEmpty || message.attachment != nil, message.body.utf8.count <= 65_536,
+              message.attachment.map({ $0.uploadState != nil }) ?? true else { throw MessageStoreError.invalidValue }
         return try connection.transaction {
             let inserted = try insertMessageInTransaction(message)
             let existing = try connection.query("SELECT state FROM outbox WHERE account_id=? AND message_id=?",
@@ -320,12 +354,12 @@ public actor MessageStore {
                 selection = " AND message_id IN (" + messageIDs.map { _ in "?" }.joined(separator: ",") + ")"
                 parameters += messageIDs.map(Value.text)
             } else { selection = "" }
-            guard let row = try connection.query("SELECT message_id FROM outbox WHERE account_id=? AND state='queued'" + selection + " ORDER BY sequence LIMIT 1", parameters).first else { return nil }
+            guard let row = try connection.query("SELECT message_id FROM outbox WHERE account_id=? AND state='queued'" + selection + Self.uploadedOnly + " ORDER BY sequence LIMIT 1", parameters).first else { return nil }
             let attemptID = UUID().uuidString
             try connection.execute("UPDATE outbox SET state='submitting',attempt_id=? WHERE account_id=? AND message_id=? AND state='queued'",
                                    [.text(attemptID), .text(accountID), .text(row[0].string)])
             let message = try connection.query("SELECT \(Self.columns) FROM messages WHERE account_id=? AND id=?",
-                                               [.text(accountID), .text(row[0].string)]).first.map(Self.decode)!
+                                               [.text(accountID), .text(row[0].string)]).first.map(decodeRow)!
             return OutboxSubmission(message: message, attemptID: attemptID)
         }
     }
@@ -421,7 +455,7 @@ public actor MessageStore {
         }
         sql += " ORDER BY sent_at DESC, id DESC LIMIT ?"
         values.append(.integer(max(0, min(limit, 1000))))
-        return try connection.query(sql, values).map(Self.decode).reversed()
+        return try connection.query(sql, values).map(decodeRow).reversed()
     }
 
     /// Literal substring search, not yet FTS/ranked multilingual search. Wildcards are literal.
@@ -432,7 +466,7 @@ public actor MessageStore {
         if let chatID { sql += " AND chat_id=?"; values.append(.text(chatID)) }
         sql += " ORDER BY sent_at DESC, id DESC LIMIT ?"
         values.append(.integer(max(0, min(limit, 1000))))
-        return try connection.query(sql, values).map(Self.decode)
+        return try connection.query(sql, values).map(decodeRow)
     }
 
     public func setStarred(accountID: String, messageID: String, starred: Bool) throws {
@@ -527,12 +561,39 @@ public actor MessageStore {
             """, [.text(accountID), .integer((current ?? 0) + 1), .blob(data)])
     }
 
+    /// A message whose file has not finished uploading is durable but not yet sendable.
+    private static let uploadedOnly = " AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.account_id=outbox.account_id AND a.message_id=outbox.message_id AND a.upload_state='pending')"
+
     public func queuedOutgoing(accountID: String) throws -> [StoredMessage] {
         try connection.query("""
             SELECT \(Self.columns) FROM messages WHERE account_id=? AND id IN
-            (SELECT message_id FROM outbox WHERE account_id=? AND state='queued')
+            (SELECT message_id FROM outbox WHERE account_id=? AND state='queued'\(Self.uploadedOnly))
             ORDER BY (SELECT sequence FROM outbox WHERE outbox.account_id=messages.account_id AND outbox.message_id=messages.id) LIMIT 1000
-            """, [.text(accountID), .text(accountID)]).map(Self.decode)
+            """, [.text(accountID), .text(accountID)]).map(decodeRow)
+    }
+
+    /// Queued messages whose file still needs a PUT, oldest first.
+    public func attachmentsAwaitingUpload(accountID: String) throws -> [StoredMessage] {
+        try connection.query("""
+            SELECT \(Self.columns) FROM messages WHERE account_id=? AND id IN
+            (SELECT message_id FROM outbox WHERE account_id=? AND state='queued')
+            AND EXISTS (SELECT 1 FROM attachments a WHERE a.account_id=messages.account_id AND a.message_id=messages.id AND a.upload_state='pending')
+            ORDER BY (SELECT sequence FROM outbox WHERE outbox.account_id=messages.account_id AND outbox.message_id=messages.id) LIMIT 100
+            """, [.text(accountID), .text(accountID)]).map(decodeRow)
+    }
+
+    /// Records the background task carrying this file and the slot's GET URL, so a relaunch can
+    /// reattach and a finished task knows where the bytes landed. Nil clears both for a new slot.
+    public func setAttachmentUploadTask(accountID: String, messageID: String, taskID: Int?, url: String?) throws {
+        guard (taskID == nil) == (url == nil), url.map({ $0.utf8.count <= 2_048 }) ?? true else { throw MessageStoreError.invalidValue }
+        try connection.execute("UPDATE attachments SET task_id=?,url=? WHERE account_id=? AND message_id=? AND upload_state='pending'",
+                               [taskID.map(Value.integer) ?? .null, url.map(Value.text) ?? .null, .text(accountID), .text(messageID)])
+    }
+
+    /// The PUT returned success: the ciphertext at the recorded URL is what every attempt shares.
+    public func markAttachmentUploaded(accountID: String, messageID: String) throws {
+        try connection.execute("UPDATE attachments SET upload_state='uploaded',task_id=NULL WHERE account_id=? AND message_id=? AND upload_state='pending' AND url IS NOT NULL",
+                               [.text(accountID), .text(messageID)])
     }
 
     public func encryptedOutgoing(accountID: String, messageID: String) throws -> Data? {
@@ -650,7 +711,7 @@ public actor MessageStore {
 
     public func message(accountID: String, messageID: String) throws -> StoredMessage? {
         try connection.query("SELECT \(Self.columns) FROM messages WHERE account_id=? AND id=?",
-                             [.text(accountID), .text(messageID)]).first.map(Self.decode)
+                             [.text(accountID), .text(messageID)]).first.map(decodeRow)
     }
 
     /// Caller first verifies authenticated self-archive/carbon provenance, recipient and complete
@@ -778,7 +839,7 @@ public actor MessageStore {
     /// requires `reactionReference`.
     public func reactionTarget(accountID: String, chatID: String, wireID: String) throws -> StoredMessage? {
         let rows = try connection.query("SELECT \(Self.columns) FROM messages WHERE account_id=? AND chat_id=? AND (wire_id=? OR id IN (SELECT message_id FROM group_message_references WHERE account_id=? AND room=? AND stanza_id=?)) ORDER BY wire_id_authenticated DESC LIMIT 2", [.text(accountID), .text(chatID), .text(wireID), .text(accountID), .text(chatID), .text(wireID)])
-        let matches = try rows.map(Self.decode)
+        let matches = try rows.map(decodeRow)
         guard let first = matches.first, matches.count == 1 || (first.wireIDAuthenticated && !matches[1].wireIDAuthenticated) else { return nil }
         return first
     }
@@ -1120,6 +1181,21 @@ public actor MessageStore {
               !reply.senderID.isEmpty, reply.senderID.utf8.count <= 3_071,
               reply.body.utf8.count <= 16_384,
               reply.wireID.map({ !$0.isEmpty && $0.utf8.count <= 1_024 }) ?? true else { throw MessageStoreError.invalidValue }
+    }
+
+    // ponytail: one extra lookup per message row (bounded by the 1000-row page); join when it shows in traces.
+    private func decodeRow(_ row: [Value]) throws -> StoredMessage {
+        var message = try Self.decode(row)
+        if let attachment = try connection.query("SELECT name,media_type,size,width,height,hash,cipher_hash,secret,url,upload_state,task_id FROM attachments WHERE account_id=? AND message_id=?",
+                                                 [.text(message.accountID), .text(message.id)]).first {
+            func integer(_ value: Value) -> Int? { if case .integer(let number) = value { return number }; return nil }
+            func text(_ value: Value) -> String? { if case .text(let string) = value { return string }; return nil }
+            message.attachment = StoredAttachment(name: attachment[0].string, mediaType: attachment[1].string, size: attachment[2].integer,
+                                                  width: integer(attachment[3]), height: integer(attachment[4]), hash: attachment[5].string,
+                                                  cipherHash: text(attachment[6]), secret: attachment[7].data ?? Data(), url: text(attachment[8]),
+                                                  uploadState: text(attachment[9]).flatMap(StoredAttachment.UploadState.init(rawValue:)), uploadTaskID: integer(attachment[10]))
+        }
+        return message
     }
 
     private static func decode(_ row: [Value]) throws -> StoredMessage {

@@ -94,6 +94,17 @@ final class AppModel {
     @ObservationIgnored private var notificationTapTask: Task<Void, Never>?
     /// Owns the durable-disposition rule for the current stream; replaced with the client.
     @ObservationIgnored private var inbound: InboundProcessor?
+    /// Local plaintext files of the open chat's attachments, by message ID, once downloaded or sent.
+    private(set) var attachmentFiles: [String: URL] = [:]
+    @ObservationIgnored private var uploadService: XMPPUploadService?
+    private var files: AttachmentFiles? { storageDirectory.map { AttachmentFiles(directory: $0, account: accountID) } }
+    @ObservationIgnored private var uploader: AttachmentUploader?
+    @ObservationIgnored private var storageDirectory: URL?
+    @ObservationIgnored private var uploadTask: Task<Void, Never>?
+    @ObservationIgnored private var downloading: Set<String> = []
+    /// Bytes a chosen file may have before it is refused; the server's limit when it publishes one.
+    var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
+    var canSendAttachments: Bool { !isDemo && uploadService != nil && session.isReady }
     @ObservationIgnored private let testSessionID: String? = {
         #if DEBUG
         guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"],
@@ -129,6 +140,10 @@ final class AppModel {
             let directory = try await SharedStorage.directory(testSessionID: testSessionID, migrate: true)
             storageRoot = directory
             store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
+            storageDirectory = directory
+            let uploader = AttachmentUploader(scope: testSessionID ?? "primary")
+            uploader.onFinish = { [weak self] taskID, succeeded in Task { @MainActor in await self?.uploadFinished(taskID: taskID, succeeded: succeeded) } }
+            self.uploader = uploader
             if let store {
                 outboxSender = OutboxSender(store: store)
                 let allowCreation = try await !store.hasAnyEncryptionState()
@@ -604,8 +619,124 @@ final class AppModel {
         chats = []
         messages = []
         messageReactions = [:]; messageReceipts = [:]
+        attachmentFiles = [:]
         openChatID = nil
         preferences.set(account, forKey: "lastAccount")
+    }
+
+    // MARK: Attachments
+
+    /// Seals the file once, stores everything the send will ever need, then queues the message.
+    /// The message stays unsendable until the background PUT succeeds; nothing is regenerated.
+    func sendAttachment(_ prepared: PreparedAttachment, caption: String, to chatID: String) async -> Bool {
+        guard !isSending, let store, let encryption, let files, !accountID.isEmpty, !isDemo else { return false }
+        guard !isGroup(chatID) else { error = "Files can't be sent to groups yet."; return false }
+        guard prepared.data.count <= attachmentLimit else {
+            error = AttachmentPreparer.Failure.tooLarge(limit: attachmentLimit).localizedDescription; return false
+        }
+        isSending = true
+        defer { isSending = false }
+        let account = accountID
+        let id = UUID().uuidString
+        do {
+            if !caption.isEmpty { try XMPPClient.validateMessage(to: chatID, body: caption, id: id) }
+            let sealed = try AttachmentTransfer.seal(prepared.data)
+            let attachment = StoredAttachment(name: prepared.name, mediaType: prepared.mediaType, size: prepared.data.count,
+                                              width: prepared.width, height: prepared.height, hash: Data.sha256(prepared.data).hexString,
+                                              cipherHash: Data.sha256(sealed.ciphertext).hexString,
+                                              secret: try encryption.sealAttachmentSecret(account: account, key: sealed.key, iv: sealed.iv), uploadState: .pending)
+            try files.write(sealed.ciphertext, to: files.stagingURL(messageID: id))
+            try files.write(prepared.data, to: files.cacheURL(attachment, messageID: id))
+            let message = StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: caption, isOutgoing: true,
+                                        encryptionProfile: "pending", attachment: attachment)
+            try await store.enqueueOutgoing(message)
+            await refresh()
+            startUploads()
+            return true
+        } catch {
+            if accountID == account { self.error = (error as? LocalizedError)?.errorDescription ?? "Could not save the file." }
+            return false
+        }
+    }
+
+    /// One slot request and one PUT per pending file that has no task in flight.
+    private func startUploads() {
+        guard uploadTask == nil, session.isReady, hasTransportOwnership, foreground, !quiescing,
+              let client, let store, let uploader, let service = uploadService, let files else { return }
+        let account = accountID, token = generation
+        uploadTask = Task { [weak self] in
+            defer { self?.uploadTask = nil }
+            guard let pending = try? await store.attachmentsAwaitingUpload(accountID: account) else { return }
+            for message in pending where message.attachment?.uploadTaskID == nil {
+                guard let attachment = message.attachment, self?.generation == token else { return }
+                let staged = files.stagingURL(messageID: message.id)
+                guard let size = try? FileManager.default.attributesOfItem(atPath: staged.path)[.size] as? Int else {
+                    // The staged ciphertext is gone (a cleared cache); the message can never be sent as is.
+                    try? await store.failQueuedOutgoing(accountID: account, messageID: message.id)
+                    continue
+                }
+                do {
+                    let slot = try await client.requestUploadSlot(service: service, filename: attachment.name, size: size, contentType: "application/octet-stream")
+                    let taskID = uploader.start(file: staged, slot: slot, size: size, contentType: "application/octet-stream")
+                    try await store.setAttachmentUploadTask(accountID: account, messageID: message.id, taskID: taskID, url: slot.get.absoluteString)
+                } catch {
+                    if let self, self.generation == token { self.error = "Could not start uploading \(attachment.name). It will be retried." }
+                }
+            }
+        }
+    }
+
+    /// Tasks the system dropped while we were gone get a fresh slot; running ones are left alone.
+    private func reconcileUploads() async {
+        guard let store, let uploader, !accountID.isEmpty else { return }
+        let running = await uploader.runningTaskIDs()
+        for message in (try? await store.attachmentsAwaitingUpload(accountID: accountID)) ?? [] {
+            if let taskID = message.attachment?.uploadTaskID, !running.contains(taskID) {
+                try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)
+            }
+        }
+        startUploads()
+    }
+
+    private func uploadFinished(taskID: Int, succeeded: Bool) async {
+        guard let store, let files, !accountID.isEmpty,
+              let message = ((try? await store.attachmentsAwaitingUpload(accountID: accountID)) ?? []).first(where: { $0.attachment?.uploadTaskID == taskID }) else { return }
+        if succeeded {
+            try? await store.markAttachmentUploaded(accountID: accountID, messageID: message.id)
+            try? FileManager.default.removeItem(at: files.stagingURL(messageID: message.id))
+            await refresh()
+            startOutbox()
+        } else {
+            try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)
+            // A slot expired or the network dropped: try again shortly, with a new slot.
+            try? await Task.sleep(for: .seconds(5))
+            startUploads()
+        }
+    }
+
+    /// Received files of the open chat are fetched on sight and verified before they exist locally.
+    private func loadAttachments(_ storedMessages: [StoredMessage], chat: String) {
+        guard let files, let encryption else { return }
+        for message in storedMessages {
+            guard let attachment = message.attachment, attachmentFiles[message.id] == nil else { continue }
+            if let cached = files.cached(attachment, messageID: message.id) { attachmentFiles[message.id] = cached; continue }
+            guard attachment.url != nil, attachment.uploadState == nil, !downloading.contains(message.id) else { continue }
+            downloading.insert(message.id)
+            let account = accountID
+            Task { [weak self] in
+                defer { self?.downloading.remove(message.id) }
+                do {
+                    let secret = try encryption.openAttachmentSecret(account: account, secret: attachment.secret)
+                    let bytes = try await AttachmentDownloader.fetch(attachment, secret: secret)
+                    let destination = files.cacheURL(attachment, messageID: message.id)
+                    try files.write(bytes, to: destination)
+                    guard let self, self.accountID == account, self.openChatID == chat else { return }
+                    attachmentFiles[message.id] = destination
+                } catch {
+                    Logger(subsystem: "dev.xmpplab.ios", category: "attachments").error("Download of \(attachment.name, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                }
+            }
+        }
     }
 
     private func resetSession() -> XMPPClient? {
@@ -637,6 +768,9 @@ final class AppModel {
                     do {
                         let features = try await client.discoveryFeatures()
                         if features.contains("urn:xmpp:carbons:2") { step = "carbons"; try await client.setCarbonsEnabled() }
+                        step = "file upload"
+                        // Optional: a server without XEP-0363 just has no attach button.
+                        uploadService = (try? await client.uploadService()) ?? nil
                         step = "publishing this phone’s keys"
                         try await encryption.initialize(account: account, transport: client)
                         step = "rejoining groups"
@@ -655,6 +789,7 @@ final class AppModel {
                         await refresh()
                         guard generation == token else { return }
                         startOutbox()
+                        await reconcileUploads()
                         if let openChatID { await loadEncryptionDetails(for: openChatID) }
                         avatarChecked = []
                         await loadAvatar(for: account)
@@ -1177,7 +1312,7 @@ final class AppModel {
     }
 
     func openChat(_ chatID: String) async {
-        openChatID = chatID; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; encryptionOverview = nil
+        openChatID = chatID; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]; encryptionOverview = nil
         encryptionStatus = "Setting up encryption…"; encryptionNeedsReview = false
         await refresh()
         if !isDemo { await loadEncryptionDetails(for: chatID) }
@@ -1297,7 +1432,7 @@ final class AppModel {
         startOutbox()
     }
 
-    func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:] } }
+    func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:] } }
 
     var notificationPreviewsEnabled = true
 
@@ -1407,7 +1542,7 @@ final class AppModel {
             loadStoredAvatars(storedChats)
             let reviewPreview = "Encrypted message needs attention"
             chats = storedChats.map { ChatSummary(id: $0.id, title: $0.title,
-                preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage.map { $0.isRetracted ? "Message unsent" : $0.body } ?? ""), isPinned: $0.isPinned, avatarHash: $0.avatarHash,
+                preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage.map { $0.isRetracted ? "Message unsent" : ($0.body.isEmpty ? ($0.attachment?.kindLabel ?? "") : $0.body) } ?? ""), isPinned: $0.isPinned, avatarHash: $0.avatarHash,
                 lastMessageAt: $0.lastMessage?.sentAt, lastMessageIsOutgoing: $0.lastMessage?.isOutgoing ?? false,
                 lastMessageState: $0.lastMessage?.transportState) }
             chats += pending.keys.filter { !known.contains($0) }.sorted().map {
@@ -1418,6 +1553,7 @@ final class AppModel {
             messageReactions = reactions
             messageReceipts = receipts
             reactableGroupMessages = groupReactionTargets
+            if let selected { loadAttachments(storedMessages, chat: selected) }
         } catch { self.error = "Could not read local conversations." }
     }
 }

@@ -21,6 +21,18 @@ import Testing
     #expect(!empty.hasNewMessage && !empty.includesMessageText)
 }
 
+@Test func notificationPreviewNamesTheFileKindWithoutDownloading() {
+    let photo = StoredMessage(id: "p", accountID: "a", chatID: "peer", senderID: "peer", body: "", encryptionProfile: "modern",
+                              attachment: StoredAttachment(name: "beach.jpg", mediaType: "image/jpeg", size: 10, hash: "ab", secret: Data([1]), url: "https://u/x"))
+    let preview = NotificationPreview(MessageNotification(latest: photo, chatTitle: "Peer", messageCount: 1, conversationCount: 1, previewsEnabled: true))
+    #expect(preview.body == "Photo")
+    var captioned = photo; captioned.attachment?.mediaType = "application/pdf"
+    let file = NotificationPreview(MessageNotification(latest: captioned, chatTitle: "Peer", messageCount: 1, conversationCount: 1, previewsEnabled: true))
+    #expect(file.body == "File")
+    let hidden = NotificationPreview(MessageNotification(latest: photo, chatTitle: "Peer", messageCount: 1, conversationCount: 1, previewsEnabled: false))
+    #expect(hidden.body == "New message")
+}
+
 @Test func notificationPreviewBoundsAnOversizedSingleGrapheme() {
     let oversized = "a" + String(repeating: "\u{0301}", count: 3000)
     #expect(oversized.count == 1)

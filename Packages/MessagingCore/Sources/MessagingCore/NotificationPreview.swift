@@ -36,7 +36,8 @@ public struct NotificationPreview: Sendable, Equatable {
         } else {
             title = Self.clean(batch.chatTitle ?? latest.chatID, limit: 80, maximumBytes: 320)
             let text = Self.clean(latest.body, limit: 240)
-            body = text.isEmpty ? "New message" : text
+            // Metadata only: the extension never downloads a shared file.
+            body = text.isEmpty ? (latest.attachment?.kindLabel ?? "New message") : text
         }
     }
 

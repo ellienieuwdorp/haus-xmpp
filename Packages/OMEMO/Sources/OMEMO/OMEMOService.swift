@@ -369,7 +369,7 @@ public actor OMEMOService {
         guard state.incompatiblePeers[message.chatID] != true else { throw OMEMOError.unsupportedProfile }
         let plaintext = try EncryptedContent.encode(body: message.body, reply: message.reply,
                                                     sender: account, recipient: message.chatID, modern: profile == .modern,
-                                                    originID: message.id)
+                                                    originID: message.id, fileSharing: message.attachment.map { try fileSharing(for: $0, account: account) })
         let saved = try sealContent(plaintext, account: account, peer: message.chatID, profile: profile, state: &state)
         try await store.sealQueuedOutgoing(accountID: account, messageID: message.id, profile: profile.rawValue,
                                            expectedRevision: revision, state: encode(state, account: account), wire: JSONEncoder().encode(saved))
@@ -508,11 +508,15 @@ public actor OMEMOService {
                            plain: { try XMPPClient.retractionXML(to: update.chatID, targetID: target, id: update.id) },
                            plaintext: { _ in try EncryptedContent.encodeRetraction(targetWireID: target, sender: account, recipient: update.chatID, originID: update.id, modern: true) })
         }
-        queued += try await store.queuedUpdates(accountID: account, kind: .correction).compactMap { update in
-            guard let target = update.targetWireID, let body = update.payload.flatMap(MessageEvent.correctionBody) else { return nil }
-            return Pending(id: update.id, chatID: update.chatID, kind: .correction, plain: nil,
-                           plaintext: { modern in try EncryptedContent.encode(body: body, reply: nil, sender: account, recipient: update.chatID,
-                                                                              modern: modern, originID: update.id, correction: target) })
+        for update in try await store.queuedUpdates(accountID: account, kind: .correction) {
+            guard let target = update.targetWireID, let body = update.payload.flatMap(MessageEvent.correctionBody) else { continue }
+            // Editing a caption re-sends the same file reference: a peer that replaces the whole message keeps the attachment.
+            var attachment: StoredAttachment?
+            if let id = update.targetMessageID { attachment = try await store.message(accountID: account, messageID: id)?.attachment }
+            let file = try attachment.map { try fileSharing(for: $0, account: account) }
+            queued.append(Pending(id: update.id, chatID: update.chatID, kind: .correction, plain: nil,
+                                  plaintext: { modern in try EncryptedContent.encode(body: body, reply: nil, sender: account, recipient: update.chatID,
+                                                                                     modern: modern, originID: update.id, fileSharing: file, correction: target) }))
         }
         var ready = Set(try await store.queuedUpdates(accountID: account, kind: .keyTransport).map(\.id)), blocked: [String: String] = [:]
         var failure: OMEMOError?
@@ -882,11 +886,12 @@ public actor OMEMOService {
                 guard sender == account || sender == peer else { throw OMEMOError.invalidContent }
                 event = MessageEvent(id: content.originID ?? message.originID ?? message.id, chatID: peer, actorID: sender, targetWireID: target,
                                      kind: .correction, payload: try MessageEvent.correctionPayload(content.body), updatedAt: date)
-            } else if !content.body.isEmpty {
+            } else if !content.body.isEmpty || content.fileSharing != nil {
                 stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: peer, senderID: sender,
                                        body: content.body, sentAt: retained.sentAt ?? Date(), isOutgoing: sender == account,
                                        reply: content.reply, encryptionProfile: profile.rawValue,
-                                       wireID: content.originID ?? message.originID, wireIDAuthenticated: content.originID != nil)
+                                       wireID: content.originID ?? message.originID, wireIDAuthenticated: content.originID != nil,
+                                       attachment: try content.fileSharing.map { try storedAttachment($0, account: account) })
             }
             if let update = content.reaction, event == nil {
                 guard profile == .modern, sender == account || sender == peer else { throw OMEMOError.invalidContent }
