@@ -72,6 +72,39 @@ final class ConversationUITests: XCTestCase {
         XCTAssertTrue(bubble(250, in: app).isHittable)
     }
 
+    /// Reading history, the keyboard opening must not slide messages under the composer: the bubble resting just
+    /// above it keeps its distance.
+    @MainActor func testKeyboardKeepsTheHistoryAnchor() throws {
+        let app = openLongChat()
+        XCTAssertTrue(bubble(250, in: app).waitForExistence(timeout: 5))
+        let timeline = app.collectionViews["conversation.timeline"]
+        // Slow drags that end at rest: no deceleration follows, so nothing re-records the position after cells self-size.
+        for _ in 0..<4 {
+            timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+                .press(forDuration: 0.05, thenDragTo: timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)), withVelocity: .slow, thenHoldForDuration: 0.3)
+        }
+        let input = composer(in: app)
+        let bubbles = app.textViews.matching(NSPredicate(format: "value BEGINSWITH %@", "History message"))
+        // Twice: the second opening follows an interactive dismissal, which leaves the list wherever the finger put it.
+        for round in 1...2 {
+            // Let the drag and any cell self-sizing settle before measuring.
+            sleep(2)
+            let anchor = try XCTUnwrap(bubbles.allElementsBoundByIndex.filter { $0.frame.maxY < input.frame.minY - 11 }.max { $0.frame.maxY < $1.frame.maxY })
+            let text = try XCTUnwrap(anchor.value as? String)
+            let before = input.frame.minY - anchor.frame.maxY
+            input.tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+            sleep(1)
+            let moved = app.textViews.containing(NSPredicate(format: "value == %@", text)).firstMatch
+            XCTAssertTrue(moved.exists, "round \(round)")
+            XCTAssertEqual(input.frame.minY - moved.frame.maxY, before, accuracy: 4, "round \(round)")
+            guard round == 1 else { break }
+            timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97)), withVelocity: .slow, thenHoldForDuration: 0.3)
+            XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        }
+    }
+
     /// Sending always returns to the newest message, even from far up in history.
     @MainActor func testSendingFromHistoryReturnsToTheNewestMessage() throws {
         let app = openLongChat()

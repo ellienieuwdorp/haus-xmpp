@@ -194,6 +194,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var composerHeight: NSLayoutConstraint!
     /// Content position at the visible bottom edge, so an inset change can put the same messages back above the composer.
     private var bottomEdgeY: CGFloat = 0
+    private var knownSafeBottom: CGFloat = 0
 
     override func loadView() {
         let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(64)))
@@ -426,6 +427,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             collectionView.contentInset.bottom = content
             collectionView.verticalScrollIndicatorInsets.bottom = content
         }
+        knownSafeBottom = collectionView.safeAreaInsets.bottom
         guard safeAreaMoved || abs(inset - bottomInset) > 0.5 else { return }
         bottomInset = inset
         // A finger on the list owns the offset, as during an interactive keyboard dismissal.
@@ -453,9 +455,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         // Layout changes during a keyboard transition are not a user's scroll intent.
+        // Every move counts, including the nudges self-sizing cells cause, except the shift UIKit makes for a safe-area
+        // change this controller has not laid out for yet: that one is undone from the recorded edge.
+        if abs(collectionView.safeAreaInsets.bottom - knownSafeBottom) < 0.5 { recordBottomEdge() }
         guard scrollView.isDragging || scrollView.isDecelerating else { return }
         followsBottom = isNearBottom
-        recordBottomEdge()
         // A few screens early, so older messages are usually in place before the reader arrives.
         if scrollView.contentOffset.y + scrollView.adjustedContentInset.top < 1200 { onReachTop() }
     }
