@@ -241,7 +241,7 @@ private struct ChatRow: View {
     private var timeLabel: String? {
         guard let date = chat.lastMessageAt else { return nil }
         let cal = Calendar.current
-        if cal.isDateInToday(date) { return date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute()) }
+        if cal.isDateInToday(date) { return date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)) }
         if cal.isDateInYesterday(date) { return "Yesterday" }
         if let weekAgo = cal.date(byAdding: .day, value: -6, to: cal.startOfDay(for: .now)), date >= weekAgo {
             return date.formatted(.dateTime.weekday(.abbreviated))
