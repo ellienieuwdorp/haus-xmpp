@@ -370,9 +370,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         guard presentedViewController == nil else { return }
         restoresKeyboard = view.keyboardLayoutGuide.layoutFrame.height > view.safeAreaInsets.bottom + 100
         guard restoresKeyboard else { return }
-        UIView.performWithoutAnimation {
-            view.endEditing(true)
-            view.layoutIfNeeded()
+        MessageActionsOverlay.signposter.withIntervalSignpost("keyboard") {
+            UIView.performWithoutAnimation {
+                view.endEditing(true)
+                view.layoutIfNeeded()
+            }
         }
     }
 

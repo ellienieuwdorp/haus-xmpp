@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import UIKit
 import XMPPProtocol
@@ -31,16 +32,21 @@ struct MessageActionsContext {
 /// bubble starts and ends exactly where the live one is and pops the way the system menu does.
 @MainActor
 enum MessageActionsOverlay {
+    /// The press path is synchronous on the main thread; these intervals show in Instruments (os_signpost, category MessageMenu).
+    static let signposter = OSSignposter(subsystem: "dev.xmpplab.ios", category: "MessageMenu")
+
     /// `onDismiss` runs once the overlay is gone, before the chosen action; its argument says whether one was chosen.
     static func present(from presenter: UIViewController, context: MessageActionsContext, onDismiss: @escaping (Bool) -> Void = { _ in }) {
+        let presenting = signposter.beginInterval("present")
+        defer { signposter.endInterval("present", presenting) }
         let window = presenter.view.window
         let safeArea = window?.safeAreaInsets ?? .zero
         // A real screenshot blurred by us: system materials tint as much as they blur, and the design
         // wants the timeline recognisable behind an 18 pt Gaussian blur and a light scrim.
         // The live bubble is hidden first so the blur holds no ghost of it where the snapshot used to be,
-        // and the blur is baked once at 1x: a live blur filter re-renders the whole screen every frame.
+        // and the blur is baked once: a live blur filter re-renders the whole screen every frame.
         context.setSourceHidden(true)
-        let backdrop = window.flatMap(blurred)
+        let backdrop = window.flatMap { blurred(presenter.view, in: $0) }
         let controller = UIHostingController(rootView: MessageActionsOverlayView(context: context, backdrop: backdrop, safeArea: safeArea, finish: { _ in }))
         controller.rootView.finish = { [weak controller] completion in
             controller?.dismiss(animated: false) { onDismiss(completion != nil); completion?() }
@@ -51,14 +57,33 @@ enum MessageActionsOverlay {
     }
 
     private static let ciContext = CIContext()
-    private static func blurred(_ window: UIWindow) -> UIImage? {
+    /// The backdrop is only ever seen through an 18 pt blur, so it is captured and blurred at a quarter of point size
+    /// and stretched back: the press path is synchronous, and at 1x the snapshot plus blur cost well over a frame.
+    private static let backdropScale: CGFloat = 0.25
+    /// A layer render of the timeline alone: it sees the hidden bubble without waiting for a screen update, which is
+    /// what made `drawHierarchy(afterScreenUpdates: true)` cost several frames, and it leaves out the navigation
+    /// bar's glass, which a layer render cannot draw.
+    private static func blurred(_ view: UIView, in window: UIWindow) -> UIImage? {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = true
-        let shot = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
-        guard let input = CIImage(image: shot) else { return nil }
-        let output = input.clampedToExtent().applyingGaussianBlur(sigma: 18).cropped(to: input.extent)
-        return ciContext.createCGImage(output, from: input.extent).map { UIImage(cgImage: $0) }
+        // Whole pixels: a fractional edge column renders half empty and the blur smears it into a grey border.
+        let size = CGSize(width: ceil(window.bounds.width * backdropScale), height: ceil(window.bounds.height * backdropScale))
+        let shot = signposter.withIntervalSignpost("snapshot") {
+            UIGraphicsImageRenderer(size: size, format: format).image { context in
+                UIColor.systemBackground.resolvedColor(with: window.traitCollection).setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+                context.cgContext.scaleBy(x: size.width / window.bounds.width, y: size.height / window.bounds.height)
+                let origin = view.convert(CGPoint.zero, to: window)
+                context.cgContext.translateBy(x: origin.x, y: origin.y)
+                view.layer.render(in: context.cgContext)
+            }
+        }
+        return signposter.withIntervalSignpost("blur") {
+            guard let input = CIImage(image: shot) else { return nil }
+            let output = input.clampedToExtent().applyingGaussianBlur(sigma: 18 * backdropScale).cropped(to: input.extent)
+            return ciContext.createCGImage(output, from: input.extent).map { UIImage(cgImage: $0) }
+        }
     }
 }
 
