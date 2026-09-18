@@ -1511,7 +1511,11 @@ final class AppModel {
     private func refresh(_ scope: CoalescedReload.Scope = .all) async { await reload.request(scope) }
 
     /// The event loop handles one event at a time, so awaiting there would serialise a burst into one load each.
-    private func refreshSoon(_ scope: CoalescedReload.Scope = .all) { Task { await refresh(scope) } }
+    /// Counted as an operation so a background transition still joins it before releasing the lease.
+    private func refreshSoon(_ scope: CoalescedReload.Scope = .all) {
+        activeEncryptionOperations += 1
+        Task { await refresh(scope); activeEncryptionOperations -= 1 }
+    }
 
     /// Reads one chat's newest messages with their projected events; the caller checks its fences, then publishes.
     private func loadTimeline(store: MessageStore, account: String, chat: String, isGroup: Bool, limit: Int) async throws -> @MainActor () -> Void {

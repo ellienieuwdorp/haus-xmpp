@@ -10,25 +10,32 @@ import Foundation
     }
 
     private var dirty: Scope = []
-    private var running: Task<Void, Never>?
+    private var started = 0
+    private var isRunning = false
+    private var waiters: [(load: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private let load: @MainActor (Scope) async -> Void
 
     init(load: @escaping @MainActor (Scope) async -> Void) { self.load = load }
 
-    /// Returns only after a load that started after this request has finished.
+    /// Returns once the first load that started after this request has finished, not when the whole burst has drained.
     func request(_ scope: Scope = .all) async {
         dirty.formUnion(scope)
-        if let running { await running.value; return }
-        let task = Task { [weak self] in
-            // No suspension between the last emptiness check and clearing `running`, so a late request is never stranded.
-            while let self, !self.dirty.isEmpty {
-                let scope = self.dirty
-                self.dirty = []
-                await self.load(scope)
-            }
-            self?.running = nil
+        let next = started + 1
+        if !isRunning { isRunning = true; Task { await drain() } }
+        await withCheckedContinuation { waiters.append((next, $0)) }
+    }
+
+    private func drain() async {
+        // No suspension between the last emptiness check and clearing `isRunning`, so a late request is never stranded.
+        while !dirty.isEmpty {
+            let scope = dirty
+            dirty = []
+            started += 1
+            await load(scope)
+            let done = waiters.filter { $0.load <= started }
+            waiters.removeAll { $0.load <= started }
+            for waiter in done { waiter.continuation.resume() }
         }
-        running = task
-        await task.value
+        isRunning = false
     }
 }

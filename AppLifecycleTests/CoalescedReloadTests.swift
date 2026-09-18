@@ -37,11 +37,12 @@ final class CoalescedReloadTests: XCTestCase {
         }
         for _ in 0..<50 { await Task.yield() }
         gate.release()
+        // The first caller is done after its own load, not after the follow-up the burst caused.
+        await first.value
         await gate.started(2)
         // The load these callers joined predates their request, so none may have returned yet.
         XCTAssertEqual(finished, 0)
         gate.release()
-        await first.value
         for task in burst { await task.value }
         XCTAssertEqual(finished, 200)
         XCTAssertEqual(gate.scopes, [.chats, .all])
