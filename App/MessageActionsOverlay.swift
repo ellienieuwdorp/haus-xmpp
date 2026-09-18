@@ -36,12 +36,26 @@ enum MessageActionsOverlay {
         let safeArea = window?.safeAreaInsets ?? .zero
         // A real screenshot blurred by us: system materials tint as much as they blur, and the design
         // wants the timeline recognisable behind an 18 pt Gaussian blur and a light scrim.
-        let backdrop = window.map { w in UIGraphicsImageRenderer(bounds: w.bounds).image { _ in w.drawHierarchy(in: w.bounds, afterScreenUpdates: false) } }
+        // The live bubble is hidden first so the blur holds no ghost of it where the snapshot used to be,
+        // and the blur is baked once at 1x: a live blur filter re-renders the whole screen every frame.
+        context.setSourceHidden(true)
+        let backdrop = window.flatMap(blurred)
         let controller = UIHostingController(rootView: MessageActionsOverlayView(context: context, backdrop: backdrop, safeArea: safeArea, finish: { _ in }))
         controller.rootView.finish = { [weak controller] completion in controller?.dismiss(animated: false, completion: completion) }
         controller.view.backgroundColor = .clear
         controller.modalPresentationStyle = .overFullScreen
         presenter.present(controller, animated: false)
+    }
+
+    private static let ciContext = CIContext()
+    private static func blurred(_ window: UIWindow) -> UIImage? {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let shot = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+        guard let input = CIImage(image: shot) else { return nil }
+        let output = input.clampedToExtent().applyingGaussianBlur(sigma: 18).cropped(to: input.extent)
+        return ciContext.createCGImage(output, from: input.extent).map { UIImage(cgImage: $0) }
     }
 }
 
@@ -132,10 +146,8 @@ struct MessageActionsOverlayView: View {
         }
     }
 
-    /// The snapshot already covers the live bubble exactly, so hiding the live one is invisible.
-    /// Then: lift the bubble, and let the blur, pill and menu spring in around it.
+    /// Lift the bubble, and let the blur, pill and menu spring in around it.
     private func enter() {
-        context.setSourceHidden(true)
         if reduceMotion { entered = true; return }
         withAnimation(.spring(duration: 0.18, bounce: 0.35)) { lifted = true }
         withAnimation(Self.enter) { entered = true }
@@ -156,12 +168,7 @@ struct MessageActionsOverlayView: View {
     @ViewBuilder private func backdropView(size: CGSize) -> some View {
         ZStack {
             if let backdrop {
-                // Oversize, blur, then clip, so the blur's soft edge falls outside the screen.
                 Image(uiImage: backdrop).resizable()
-                    .frame(width: size.width + 80, height: size.height + 80)
-                    .blur(radius: 18)
-                    .frame(width: size.width, height: size.height)
-                    .clipped()
             } else {
                 Color(uiColor: .systemBackground)
             }
