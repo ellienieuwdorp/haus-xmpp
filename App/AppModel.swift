@@ -1331,6 +1331,10 @@ final class AppModel {
     func openChat(_ chatID: String) async {
         openChatID = chatID; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]; encryptionOverview = nil
         encryptionStatus = "Setting up encryption…"; encryptionNeedsReview = false
+        // First paint: the newest screenful now, before the chat list and the rest of the history.
+        let account = accountID
+        if let store, let publish = try? await loadTimeline(store: store, account: account, chat: chatID, isGroup: isGroup(chatID), limit: 50),
+           accountID == account, openChatID == chatID, messagesLoadedFor != chatID { publish() }
         await refresh()
         if !isDemo { await loadEncryptionDetails(for: chatID) }
     }
