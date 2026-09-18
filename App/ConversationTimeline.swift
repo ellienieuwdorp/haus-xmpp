@@ -476,6 +476,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         media.translatesAutoresizingMaskIntoConstraints = false
         media.contentMode = .scaleAspectFill
         media.clipsToBounds = true
+        // Framed by the bubble colour so a white photo keeps an edge on a white canvas.
+        media.layer.cornerRadius = 17
+        media.layer.cornerCurve = .continuous
         media.backgroundColor = .quaternarySystemFill
         media.accessibilityIgnoresInvertColors = true
         attachmentArea.addSubview(media)
@@ -497,8 +500,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         fileLabels.spacing = 1
         attachmentArea.addSubview(fileLabels)
         NSLayoutConstraint.activate([
-            media.leadingAnchor.constraint(equalTo: attachmentArea.leadingAnchor), media.trailingAnchor.constraint(equalTo: attachmentArea.trailingAnchor),
-            media.topAnchor.constraint(equalTo: attachmentArea.topAnchor), media.bottomAnchor.constraint(equalTo: attachmentArea.bottomAnchor),
+            media.leadingAnchor.constraint(equalTo: attachmentArea.leadingAnchor, constant: 3), media.trailingAnchor.constraint(equalTo: attachmentArea.trailingAnchor, constant: -3),
+            media.topAnchor.constraint(equalTo: attachmentArea.topAnchor, constant: 3), media.bottomAnchor.constraint(equalTo: attachmentArea.bottomAnchor),
             mediaSpinner.centerXAnchor.constraint(equalTo: attachmentArea.centerXAnchor), mediaSpinner.centerYAnchor.constraint(equalTo: attachmentArea.centerYAnchor),
             fileIcon.leadingAnchor.constraint(equalTo: attachmentArea.leadingAnchor, constant: 12),
             fileIcon.centerYAnchor.constraint(equalTo: attachmentArea.centerYAnchor),
