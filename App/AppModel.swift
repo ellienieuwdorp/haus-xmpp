@@ -198,6 +198,20 @@ final class AppModel {
                     }
                 }
             }
+            // One sample photo, drawn here so no asset ships: exercises the bubble thumbnail and the viewer.
+            if let files {
+                let size = CGSize(width: 1200, height: 900)
+                let photo = UIGraphicsImageRenderer(size: size).jpegData(withCompressionQuality: 0.8) { context in
+                    let colors = [UIColor.systemTeal.cgColor, UIColor.systemIndigo.cgColor] as CFArray
+                    guard let gradient = CGGradient(colorsSpace: nil, colors: colors, locations: nil) else { return }
+                    context.cgContext.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
+                }
+                let attachment = StoredAttachment(name: "waterfront.jpg", mediaType: "image/jpeg", size: photo.count, width: 1200, height: 900,
+                                                  hash: Data.sha256(photo).hexString, secret: Data([0])) // never opened: the file is already cached
+                try files.write(photo, to: files.cacheURL(attachment, messageID: "sample-photo"))
+                try await store.insertMessage(StoredMessage(id: "sample-photo", accountID: account, chatID: "alex@preview.local", senderID: "alex@preview.local", body: "",
+                                                            sentAt: Date(timeIntervalSince1970: 1_789_380_000.5), isOutgoing: false, attachment: attachment))
+            }
             guard generation == token else { return }
             await refresh()
         } catch { if generation == token { self.error = "Could not load sample conversations." } }

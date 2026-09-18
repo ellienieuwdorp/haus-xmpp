@@ -4,6 +4,7 @@ import Foundation
 import ImageIO
 import MessageStore
 import OMEMO
+import Photos
 import UIKit
 import UniformTypeIdentifiers
 import XMPPProtocol
@@ -171,6 +172,9 @@ enum AttachmentThumbnails {
     // NSCache is thread-safe; the annotation only tells the compiler so.
     nonisolated(unsafe) private static let cache = NSCache<NSString, UIImage>()
 
+    /// Synchronous hit, so a reconfigured cell never blanks an image it already showed.
+    static func cached(for url: URL) -> UIImage? { cache.object(forKey: url.path as NSString) }
+
     static func image(for url: URL, mediaType: String, maxPixels: Int = 1024) async -> UIImage? {
         let key = url.path as NSString
         if let hit = cache.object(forKey: key) { return hit }
@@ -193,5 +197,130 @@ enum AttachmentThumbnails {
         }.value
         if let image { cache.setObject(image, forKey: key) }
         return image
+    }
+}
+
+/// A sent or received photo, full screen: pinch to zoom, drag down to dismiss, share, save.
+final class ImageViewer: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
+    private let url: URL
+    private let scroll = UIScrollView()
+    private let imageView: UIImageView
+    private let saveButton = UIButton(configuration: .glass())
+
+    init(image: UIImage, url: URL) {
+        self.url = url
+        imageView = UIImageView(image: image)
+        super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .overFullScreen
+        modalTransitionStyle = .crossDissolve
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        scroll.frame = view.bounds
+        scroll.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        scroll.delegate = self
+        scroll.maximumZoomScale = 4
+        scroll.showsVerticalScrollIndicator = false
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.contentInsetAdjustmentBehavior = .never
+        imageView.frame = scroll.bounds
+        imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        imageView.contentMode = .scaleAspectFit
+        imageView.isAccessibilityElement = true
+        imageView.accessibilityLabel = "Photo"
+        scroll.addSubview(imageView)
+        view.addSubview(scroll)
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan))
+        pan.delegate = self
+        scroll.addGestureRecognizer(pan)
+
+        let close = button("xmark", label: "Close", action: #selector(close))
+        let share = button("square.and.arrow.up", label: "Share", action: #selector(share))
+        configure(saveButton, "square.and.arrow.down", label: "Save to Photos", action: #selector(save))
+        let trailing = UIStackView(arrangedSubviews: [saveButton, share])
+        trailing.spacing = 12
+        for item in [close, trailing] as [UIView] {
+            item.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(item)
+            item.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8).isActive = true
+        }
+        NSLayoutConstraint.activate([
+            close.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            trailing.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16)
+        ])
+    }
+
+    private func button(_ symbol: String, label: String, action: Selector) -> UIButton {
+        let button = UIButton(configuration: .glass())
+        configure(button, symbol, label: label, action: action)
+        return button
+    }
+
+    private func configure(_ button: UIButton, _ symbol: String, label: String, action: Selector) {
+        button.configuration?.image = UIImage(systemName: symbol)
+        button.configuration?.cornerStyle = .capsule
+        button.tintColor = .white
+        button.accessibilityLabel = label
+        button.addTarget(self, action: action, for: .touchUpInside)
+        button.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+    }
+
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+    /// Only a mostly-downward drag on an unzoomed photo dismisses; zoomed panning stays with the scroll view.
+    func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+        guard let pan = gesture as? UIPanGestureRecognizer, scroll.zoomScale == scroll.minimumZoomScale else { return false }
+        let velocity = pan.velocity(in: view)
+        return velocity.y > abs(velocity.x)
+    }
+
+    @objc private func handlePan(_ pan: UIPanGestureRecognizer) {
+        let offset = max(0, pan.translation(in: view).y)
+        let progress = min(1, offset / 300)
+        switch pan.state {
+        case .changed:
+            imageView.transform = CGAffineTransform(translationX: pan.translation(in: view).x, y: offset).scaledBy(x: 1 - progress * 0.3, y: 1 - progress * 0.3)
+            view.backgroundColor = UIColor.black.withAlphaComponent(1 - progress)
+        case .ended, .cancelled:
+            if pan.state == .ended, offset > 100 || pan.velocity(in: view).y > 800 { dismiss(animated: true); return }
+            UIView.animate(springDuration: 0.3) { self.imageView.transform = .identity; self.view.backgroundColor = .black }
+        default: break
+        }
+    }
+
+    override func accessibilityPerformEscape() -> Bool { close(); return true }
+    @objc private func close() { dismiss(animated: true) }
+
+    @objc private func share(_ sender: UIButton) {
+        let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        sheet.popoverPresentationController?.sourceView = sender
+        present(sheet, animated: true)
+    }
+
+    @objc private func save() {
+        saveButton.isEnabled = false
+        let url = url
+        Task {
+            var saved = false
+            if await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized {
+                // The cache file's exact bytes, so a saved photo keeps its format and metadata.
+                // PhotoKit runs the block on its own queue, so it must not inherit the main actor.
+                saved = (try? await PHPhotoLibrary.shared().performChanges { @Sendable in
+                    PHAssetCreationRequest.forAsset().addResource(with: .photo, fileURL: url, options: nil)
+                }) != nil
+            }
+            UINotificationFeedbackGenerator().notificationOccurred(saved ? .success : .error)
+            saveButton.configuration?.image = UIImage(systemName: saved ? "checkmark" : "exclamationmark.triangle")
+            saveButton.accessibilityLabel = saved ? "Saved to Photos" : "Could not save. Allow adding photos in Settings."
+            UIAccessibility.post(notification: .announcement, argument: saveButton.accessibilityLabel)
+            try? await Task.sleep(for: .seconds(2))
+            saveButton.configuration?.image = UIImage(systemName: "square.and.arrow.down")
+            saveButton.accessibilityLabel = "Save to Photos"
+            saveButton.isEnabled = true
+        }
     }
 }
