@@ -566,8 +566,8 @@ public actor MessageStore {
     /// A message whose file has not finished uploading is durable but not yet sendable.
     /// A message waits while it, or anything queued before it in the same chat, is a file still uploading, so the
     /// peer sees files and the caption sent after them in the order they were written.
-    // ponytail: a file whose upload never succeeds holds back later messages in its chat; give up on it after
-    // repeated failures if that shows up.
+    /// The hold is bounded by the app: a file the server keeps refusing is failed (`UploadFailureBudget`), which
+    /// takes it out of 'queued' and releases the chat.
     private static let uploadedOnly = """
          AND NOT EXISTS (SELECT 1 FROM outbox o JOIN attachments a ON a.account_id=o.account_id AND a.message_id=o.message_id AND a.upload_state='pending'
          JOIN messages m ON m.account_id=o.account_id AND m.id=o.message_id

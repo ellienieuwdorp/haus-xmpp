@@ -29,4 +29,14 @@ import XCTest
         XCTAssertEqual(result.files, 1)
         XCTAssertFalse(result.caption)
     }
+
+    func testAnUploadGivesUpAfterItsBudgetAndARetryStartsOver() {
+        var budget = UploadFailureBudget()
+        for _ in 1..<UploadFailureBudget.limit { XCTAssertFalse(budget.recordFailure("photo")) }
+        XCTAssertFalse(budget.recordFailure("other"), "Each file has its own budget")
+        XCTAssertTrue(budget.recordFailure("photo"))
+        XCTAssertFalse(budget.recordFailure("photo"), "A retried file gets fresh tries")
+        budget.reset("other")
+        for _ in 1..<UploadFailureBudget.limit { XCTAssertFalse(budget.recordFailure("other")) }
+    }
 }

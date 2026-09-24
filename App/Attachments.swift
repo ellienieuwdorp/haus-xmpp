@@ -134,6 +134,23 @@ private struct PickedMovie: Transferable {
     }
 }
 
+/// Refused slot requests and PUTs per queued file. A file that uses up its tries is failed, so a server that keeps
+/// refusing it (quota, size, an expired service) cannot hold back the messages queued after it in its chat.
+// ponytail: counts live in memory, so each launch gives a stuck file `limit` fresh tries; persist them if that matters.
+struct UploadFailureBudget {
+    static let limit = 3
+    private var failures: [String: Int] = [:]
+
+    /// True when this failure used the file's last try.
+    mutating func recordFailure(_ messageID: String) -> Bool {
+        let count = failures[messageID, default: 0] + 1
+        failures[messageID] = count < Self.limit ? count : nil
+        return count >= Self.limit
+    }
+
+    mutating func reset(_ messageID: String) { failures[messageID] = nil }
+}
+
 /// Background PUTs: the ciphertext file is handed to the system so a suspended app still finishes.
 /// Task identifiers are persisted on the attachment row; a relaunch asks which are still running.
 final class AttachmentUploader: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
