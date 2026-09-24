@@ -2,23 +2,31 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// A picked video comes across as a file so a large clip never sits in memory twice.
-private struct PickedMovie: Transferable {
-    let url: URL
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(contentType: .movie) { SentTransferredFile($0.url) } importing: { received in
-            let copy = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + "." + (received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension))
-            try FileManager.default.copyItem(at: received.file, to: copy)
-            return PickedMovie(url: copy)
-        }
-    }
-}
-
 /// The draft lives outside `ConversationView`'s state so typing only invalidates the composer, never the timeline.
 @MainActor @Observable final class ComposerState {
     var draft = ""
     /// Focus requested by the conversation; the composer lives in its own hosting controller, where a parent `@FocusState` cannot reach.
     var focused = false
+    /// Picked files waiting for Send. Owned by the open conversation, so leaving the chat drops them.
+    var tray: [PendingAttachment] = []
+    static let trayLimit = 10
+
+    /// Each file as its own message with no body, then the caption last: Conversations shows a file only when the
+    /// body is exactly its link. Stops at the first refusal and reports how many files went and whether the caption did.
+    static func dispatch<File>(_ files: [File], caption: String, sendFile: @MainActor (File) async -> Bool,
+                               sendCaption: @MainActor (String) async -> Bool) async -> (files: Int, caption: Bool) {
+        for (index, file) in files.enumerated() {
+            guard await sendFile(file) else { return (index, false) }
+        }
+        guard !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return (files.count, false) }
+        return (files.count, await sendCaption(caption))
+    }
+}
+
+struct PendingAttachment: Identifiable {
+    let id = UUID()
+    let prepared: PreparedAttachment
+    let preview: UIImage?
 }
 
 struct ConversationView: View {
@@ -26,7 +34,7 @@ struct ConversationView: View {
     let chatID: String
     @State private var composerState = ComposerState()
     @State private var showingPhotoPicker = false
-    @State private var photoItem: PhotosPickerItem?
+    @State private var photoItems: [PhotosPickerItem] = []
     @State private var importingFile = false
     @State private var attaching = false
     @State private var query = ""
@@ -143,48 +151,50 @@ struct ConversationView: View {
             }
             return
         }
+        let chatID = chatID
+        let files = state.tray
         Task {
-            if await model.send(text, to: chatID, replyingTo: reply), state.draft == text, model.accountID == account {
+            // A quote on a file would put fallback text before its link, so the reply rides on the caption only;
+            // with no caption it stays in the composer.
+            let sent = await ComposerState.dispatch(files, caption: text, sendFile: { item in
+                guard model.accountID == account, await model.sendAttachment(item.prepared, to: chatID) else { return false }
+                state.tray.removeAll { $0.id == item.id }
+                return true
+            }, sendCaption: { text in
+                model.accountID == account ? await model.send(text, to: chatID, replyingTo: reply) : false
+            })
+            if sent.caption, state.draft == text, model.accountID == account {
                 state.draft = ""
                 if replyingTo?.id == reply?.id { replyingTo = nil }
             }
         }
     }
 
-    /// The composer text becomes the caption; the file is reduced and sealed before it is queued.
-    private func attach(_ prepare: @escaping () async throws -> PreparedAttachment) {
-        guard !attaching else { return }
-        attaching = true
+    /// Picking never sends: each file is reduced into the tray, in pick order. One that is too large or unreadable
+    /// shows why and is left out; the rest still land.
+    private func addToTray(_ jobs: [() async throws -> PreparedAttachment]) {
+        guard !jobs.isEmpty, !attaching else { return }
         let state = composerState
-        let caption = state.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let room = ComposerState.trayLimit - state.tray.count
+        if jobs.count > room { model.error = "You can attach up to \(ComposerState.trayLimit) files at a time." }
+        attaching = true
         Task {
             defer { attaching = false }
-            do {
-                let prepared = try await prepare()
-                if await model.sendAttachment(prepared, caption: caption, to: chatID), state.draft.trimmingCharacters(in: .whitespacesAndNewlines) == caption { state.draft = "" }
-            } catch {
-                model.error = (error as? LocalizedError)?.errorDescription ?? "This file could not be attached."
+            for job in jobs.prefix(max(0, room)) {
+                do {
+                    let prepared = try await job()
+                    state.tray.append(PendingAttachment(prepared: prepared, preview: await AttachmentThumbnails.preview(of: prepared)))
+                } catch {
+                    model.error = (error as? LocalizedError)?.errorDescription ?? "This file could not be attached."
+                }
             }
         }
     }
 
-    private func attach(photo item: PhotosPickerItem) {
+    private func attach(files result: Result<[URL], any Error>) {
+        guard case .success(let urls) = result else { return }
         let limit = model.attachmentLimit
-        attach {
-            if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
-                guard let movie = try await item.loadTransferable(type: PickedMovie.self) else { throw AttachmentPreparer.Failure.unreadable }
-                defer { try? FileManager.default.removeItem(at: movie.url) }
-                return try await AttachmentPreparer.prepareVideo(movie.url, name: "video", limit: limit)
-            }
-            guard let data = try await item.loadTransferable(type: Data.self) else { throw AttachmentPreparer.Failure.unreadable }
-            return try AttachmentPreparer.prepareImage(data, name: "photo", limit: limit)
-        }
-    }
-
-    private func attach(file result: Result<URL, any Error>) {
-        guard case .success(let url) = result else { return }
-        let limit = model.attachmentLimit
-        attach { try await AttachmentPreparer.prepare(fileURL: url, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension), limit: limit) }
+        addToTray(urls.map { url in { try await AttachmentPreparer.prepare(fileURL: url, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension), limit: limit) } })
     }
 
     var body: some View {
@@ -306,13 +316,17 @@ struct ConversationView: View {
         .onChange(of: showingSearch || starredOnly) { _, filtering in if filtering { Task { await model.loadOlderMessages(all: true) } } }
         .onChange(of: model.encryptionNeedsReview) { reviewDismissed = false }
         .onChange(of: model.encryptionStatus) { reviewDismissed = false }
-        .photosPicker(isPresented: $showingPhotoPicker, selection: $photoItem, matching: .any(of: [.images, .videos]))
-        .fileImporter(isPresented: $importingFile, allowedContentTypes: [.item]) { attach(file: $0) }
-        .onChange(of: photoItem) { _, item in
-            guard let item else { return }
-            photoItem = nil
-            attach(photo: item)
+        .photosPicker(isPresented: $showingPhotoPicker, selection: $photoItems, maxSelectionCount: ComposerState.trayLimit,
+                      selectionBehavior: .ordered, matching: .any(of: [.images, .videos]))
+        .fileImporter(isPresented: $importingFile, allowedContentTypes: [.item], allowsMultipleSelection: true) { attach(files: $0) }
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            photoItems = []
+            let limit = model.attachmentLimit
+            addToTray(items.map { item in { try await AttachmentPreparer.prepare(photo: item, limit: limit) } })
         }
+        // Files picked for one chat never follow the view to another.
+        .onChange(of: [chatID, model.accountID]) { composerState.tray = [] }
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
         .onDisappear { model.closeChat(chatID) }
     }
@@ -368,10 +382,18 @@ struct ConversationComposer: View {
 
     private var isGroup: Bool { model.isGroup(chatID) }
 
+    /// The tray is set aside while an edit rewrites text; attaching then is off.
+    private var showsTray: Bool { editing == nil && !state.tray.isEmpty }
+
     private var placeholder: String {
-        if model.isDemo { return "Message" }
-        if model.encryptionNeedsReview { return "Sending paused until you review" }
-        return "Message"
+        if !model.isDemo, model.encryptionNeedsReview { return "Sending paused until you review" }
+        return showsTray ? "Add a caption…" : "Message"
+    }
+
+    private var canSend: Bool {
+        guard !model.isSending, model.canSend(to: chatID) else { return false }
+        if let editing { return !state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state.draft != editing.body }
+        return showsTray || !state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -395,37 +417,103 @@ struct ConversationComposer: View {
                     .padding(.leading, 14).padding(.vertical, 4)
                     .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
-                HStack(alignment: .bottom, spacing: 4) {
-                    if model.canSendAttachments, !isGroup {
-                        Menu {
-                            Button("Photo or Video", systemImage: "photo.on.rectangle", action: onPickPhoto)
-                            Button("File", systemImage: "doc", action: onPickFile)
-                        } label: {
-                            if attaching { ProgressView().frame(width: 44, height: 44) }
-                            else { Image(systemName: "plus").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44).contentShape(Rectangle()) }
+                VStack(alignment: .leading, spacing: 0) {
+                    if showsTray { AttachmentTray(items: state.tray) { id in state.tray.removeAll { $0.id == id } } }
+                    HStack(alignment: .bottom, spacing: 4) {
+                        if model.canSendAttachments, !isGroup {
+                            Menu {
+                                Button("Photo or Video", systemImage: "photo.on.rectangle", action: onPickPhoto)
+                                Button("File", systemImage: "doc", action: onPickFile)
+                            } label: {
+                                if attaching { ProgressView().frame(width: 44, height: 44) }
+                                else { Image(systemName: "plus").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44).contentShape(Rectangle()) }
+                            }
+                            .disabled(attaching || model.isSending || editing != nil || state.tray.count >= ComposerState.trayLimit)
+                            .accessibilityLabel("Attach a file").accessibilityIdentifier("attachFile")
                         }
-                        .disabled(attaching || model.isSending)
-                        .accessibilityLabel("Attach a file").accessibilityIdentifier("attachFile")
+                        TextField(placeholder, text: $state.draft, axis: .vertical)
+                            .lineLimit(1...5)
+                            .padding(.leading, model.canSendAttachments && !isGroup ? 0 : 16).padding(.vertical, 11)
+                            .focused($focused)
+                            .accessibilityIdentifier("messageComposer")
+                        Button(action: onSend) {
+                            Image(systemName: editing == nil ? "arrow.up" : "checkmark").font(.system(size: 17, weight: .bold))
+                        }
+                        .buttonStyle(CircularGlassButtonStyle(diameter: 34))
+                        .disabled(!canSend)
+                        .accessibilityLabel(editing == nil ? "Send message" : "Save edit").accessibilityIdentifier("sendMessage")
                     }
-                    TextField(placeholder, text: $state.draft, axis: .vertical)
-                        .lineLimit(1...5)
-                        .padding(.leading, model.canSendAttachments && !isGroup ? 0 : 16).padding(.vertical, 11)
-                        .focused($focused)
-                        .accessibilityIdentifier("messageComposer")
-                    Button(action: onSend) {
-                        Image(systemName: editing == nil ? "arrow.up" : "checkmark").font(.system(size: 17, weight: .bold))
-                    }
-                    .buttonStyle(CircularGlassButtonStyle(diameter: 34))
-                    .disabled(state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending || !model.canSend(to: chatID) || (editing != nil && state.draft == editing?.body))
-                    .accessibilityLabel(editing == nil ? "Send message" : "Save edit").accessibilityIdentifier("sendMessage")
+                    .frame(minHeight: 44)
                 }
-                .frame(minHeight: 44)
-                // A capsule at one line; the same radius keeps five lines readable.
+                // A capsule at one line; the same radius keeps five lines and the tray readable.
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
         .onChange(of: state.focused) { _, wanted in focused = wanted }
         .onChange(of: focused) { _, isFocused in state.focused = isFocused }
+    }
+}
+
+/// Picked files above the caption field, scrolling sideways, each with its own remove button.
+struct AttachmentTray: View {
+    let items: [PendingAttachment]
+    let onRemove: (UUID) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if items.count > 1 {
+                Text("\(items.count) attachments").font(.caption).foregroundStyle(.secondary).padding(.leading, 14)
+            }
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    ForEach(items) { item in tile(item) }
+                }
+                .padding(.horizontal, 10)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .padding(.top, 10)
+        .accessibilityIdentifier("attachmentTray")
+    }
+
+    private func tile(_ item: PendingAttachment) -> some View {
+        let attachment = item.prepared
+        return Group {
+            if let preview = item.preview {
+                // Fill a fixed square rather than framing the image, so its accessibility frame is the tile's.
+                Color.clear.frame(width: 64, height: 64)
+                    .overlay { Image(uiImage: preview).resizable().scaledToFill() }
+                    .clipped()
+                    .overlay(alignment: .bottomLeading) {
+                        if attachment.mediaType.hasPrefix("video/") {
+                            Image(systemName: "video.fill").font(.caption2).foregroundStyle(.white).shadow(radius: 2).padding(6)
+                        }
+                    }
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.fill").font(.title3).foregroundStyle(.tint)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(attachment.name).font(.footnote.weight(.semibold)).lineLimit(1).truncationMode(.middle)
+                        Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.data.count), countStyle: .file)).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.leading, 10).padding(.trailing, 30)
+                .frame(width: 168, height: 64, alignment: .leading)
+                .background(Color(uiColor: .tertiarySystemFill))
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(attachment.mediaType.hasPrefix("image/") ? "Photo" : attachment.mediaType.hasPrefix("video/") ? "Video" : attachment.name)
+        .overlay(alignment: .topTrailing) {
+            Button { onRemove(item.id) } label: {
+                Image(systemName: "xmark.circle.fill").font(.system(size: 20))
+                    .symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.55))
+                    .padding(4)
+                    .frame(width: 44, height: 44, alignment: .topTrailing).contentShape(Rectangle())
+            }
+            .accessibilityLabel("Remove \(attachment.name)").accessibilityIdentifier("removeAttachment")
+        }
     }
 }

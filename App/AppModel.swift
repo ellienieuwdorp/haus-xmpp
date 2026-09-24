@@ -111,7 +111,7 @@ final class AppModel {
     @ObservationIgnored private var downloading: Set<String> = []
     /// Bytes a chosen file may have before it is refused; the server's limit when it publishes one.
     var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
-    var canSendAttachments: Bool { !isDemo && uploadService != nil && session.isReady }
+    var canSendAttachments: Bool { isDemo || (uploadService != nil && session.isReady) }
     @ObservationIgnored private let testSessionID: String? = {
         #if DEBUG
         guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"],
@@ -659,8 +659,10 @@ final class AppModel {
 
     /// Seals the file once, stores everything the send will ever need, then queues the message.
     /// The message stays unsendable until the background PUT succeeds; nothing is regenerated.
-    func sendAttachment(_ prepared: PreparedAttachment, caption: String, to chatID: String) async -> Bool {
-        guard !isSending, let store, let encryption, let files, !accountID.isEmpty, !isDemo else { return false }
+    /// Never with a caption: Conversations shows a file only when the body is exactly its link, so a caption
+    /// goes as its own message after the files.
+    func sendAttachment(_ prepared: PreparedAttachment, to chatID: String) async -> Bool {
+        guard !isSending, let store, let files, !accountID.isEmpty else { return false }
         guard !isGroup(chatID) else { error = "Files can't be sent to groups yet."; return false }
         guard prepared.data.count <= attachmentLimit else {
             error = AttachmentPreparer.Failure.tooLarge(limit: attachmentLimit).localizedDescription; return false
@@ -669,8 +671,19 @@ final class AppModel {
         defer { isSending = false }
         let account = accountID
         let id = UUID().uuidString
+        if isDemo {
+            // Sample chats project only, like sample text: the file is cached and nothing is uploaded.
+            let attachment = StoredAttachment(name: prepared.name, mediaType: prepared.mediaType, size: prepared.data.count, width: prepared.width,
+                                              height: prepared.height, hash: Data.sha256(prepared.data).hexString, secret: Data([0]))
+            do {
+                try files.write(prepared.data, to: files.cacheURL(attachment, messageID: id))
+                try await store.insertMessage(StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: "", isOutgoing: true, attachment: attachment))
+                await refresh()
+                return true
+            } catch { self.error = "Could not save the file."; return false }
+        }
+        guard let encryption else { return false }
         do {
-            if !caption.isEmpty { try XMPPClient.validateMessage(to: chatID, body: caption, id: id) }
             let sealed = try AttachmentTransfer.seal(prepared.data)
             let attachment = StoredAttachment(name: prepared.name, mediaType: prepared.mediaType, size: prepared.data.count,
                                               width: prepared.width, height: prepared.height, hash: Data.sha256(prepared.data).hexString,
@@ -678,7 +691,7 @@ final class AppModel {
                                               secret: try encryption.sealAttachmentSecret(account: account, key: sealed.key, iv: sealed.iv), uploadState: .pending)
             try files.write(sealed.ciphertext, to: files.stagingURL(messageID: id))
             try files.write(prepared.data, to: files.cacheURL(attachment, messageID: id))
-            let message = StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: caption, isOutgoing: true,
+            let message = StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: "", isOutgoing: true,
                                         encryptionProfile: "pending", attachment: attachment)
             try await store.enqueueOutgoing(message)
             await refresh()
