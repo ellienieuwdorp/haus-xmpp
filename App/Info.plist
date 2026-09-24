@@ -20,5 +20,13 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Take a photo or video to send.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record sound with videos you take to send.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Pick recent photos and videos to send.</string>
+	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>
+	<true/>
 </dict>
 </plist>

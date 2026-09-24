@@ -150,6 +150,8 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     var onRestoreComposerFocus: () -> Void = {}
     /// The user scrolled to the oldest loaded message.
     var onReachTop: () -> Void = {}
+    /// Its hidden responder is installed in the controller's view, so the attachment panel is the keyboard here.
+    var attachmentKeyboard: AttachmentKeyboard? = nil
     // Observed so a stored accent change re-renders visible bubbles.
     @AppStorage(AccentTheme.storageKey) private var accent = ""
 
@@ -162,6 +164,7 @@ struct ConversationTimeline: UIViewControllerRepresentable {
         controller.update(messages: messages, typing: typing, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onDisplayed: onDisplayed)
         controller.onRestoreComposerFocus = onRestoreComposerFocus
         controller.onReachTop = onReachTop
+        controller.attachmentKeyboard = attachmentKeyboard
     }
 }
 
@@ -386,6 +389,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     /// the bubble out from under its snapshot, so it goes at once and the layout settles first.
     private func putKeyboardAwayForActions() {
         guard presentedViewController == nil else { return }
+        attachmentKeyboard?.menuWillPresent() // attachment panel: remember it was up; endEditing below resigns it too
         restoresKeyboard = view.keyboardLayoutGuide.layoutFrame.height > view.safeAreaInsets.bottom + 100
         guard restoresKeyboard else { return }
         MessageActionsOverlay.signposter.withIntervalSignpost("keyboard") {
@@ -401,6 +405,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         heldUpdate?()
         heldUpdate = nil
         // Reply and edit focus the composer themselves; text selection and the unsend dialog must keep it away.
+        if attachmentKeyboard?.menuDismissed(choseAction: choseAction) == true { restoresKeyboard = false } // attachment panel: reopen it instead
         if restoresKeyboard, !choseAction { onRestoreComposerFocus() }
         restoresKeyboard = false
     }
@@ -426,10 +431,24 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         releaseSwipe()
+        attachmentKeyboard?.close()
+    }
+
+    /// The attachment panel's responder lives in this view: its input view is the keyboard to UIKit, so the composer
+    /// on the keyboard guide, the insets, interactive dismissal and the message menu all follow the panel unchanged.
+    var attachmentKeyboard: AttachmentKeyboard? {
+        didSet {
+            guard oldValue !== attachmentKeyboard else { return }
+            oldValue?.uninstall()
+            loadViewIfNeeded()
+            attachmentKeyboard?.install(in: self)
+        }
     }
 
     func setComposer(_ composer: AnyView?) {
         loadViewIfNeeded()
+        // Search hides the composer; the panel belongs to it and goes too.
+        if composer == nil { attachmentKeyboard?.close() }
         composerHost.view.isHidden = composer == nil
         // The composer reports the height it wants at this width; the host's intrinsic size is measured without a
         // width, where a long draft never wraps.

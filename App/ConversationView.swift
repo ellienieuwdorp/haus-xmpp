@@ -6,7 +6,12 @@ import UniformTypeIdentifiers
 @MainActor @Observable final class ComposerState {
     var draft = ""
     /// Focus requested by the conversation; the composer lives in its own hosting controller, where a parent `@FocusState` cannot reach.
-    var focused = false
+    /// The text keyboard and the attachment panel take turns: asking for one puts the other away.
+    var focused = false { didSet { if focused { attachmentsOpen = false } } }
+    /// The attachment panel stands in for the keyboard while this is true.
+    var attachmentsOpen = false { didSet { if attachmentsOpen { focused = false } } }
+    /// Presents the panel through a responder the timeline controller hosts; never observed.
+    @ObservationIgnored let attachmentKeyboard = AttachmentKeyboard()
     /// Picked files waiting for Send. Owned by the open conversation, so leaving the chat drops them.
     var tray: [PendingAttachment] = []
     /// True from Send until the last file and the caption are queued; the tray is frozen meanwhile.
@@ -31,6 +36,8 @@ struct PendingAttachment: Identifiable {
     let id = UUID()
     let prepared: PreparedAttachment
     let preview: UIImage?
+    /// The library photo it came from when picked on the panel's rail, so the rail can show and undo the pick.
+    var assetIdentifier: String? = nil
 }
 
 struct ConversationView: View {
@@ -41,6 +48,8 @@ struct ConversationView: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var importingFile = false
     @State private var attaching = false
+    /// Rail picks prepare one after another so the tray keeps tap order.
+    @State private var assetPicks: Task<Void, Never>?
     @State private var query = ""
     @State private var showingSearch = false
     @State private var starredOnly = false
@@ -164,6 +173,7 @@ struct ConversationView: View {
         }
         let chatID = chatID
         let files = state.tray
+        state.attachmentsOpen = false
         state.dispatching = true
         Task {
             defer { state.dispatching = false }
@@ -202,6 +212,33 @@ struct ConversationView: View {
                 }
             }
         }
+    }
+
+    /// A tap on the panel's rail. Picks queue behind each other, so a quick second tap lands second.
+    private func attach(asset: PHAsset) async {
+        let state = composerState
+        let limit = model.attachmentLimit
+        let previous = assetPicks
+        let pick = Task { @MainActor in
+            await previous?.value
+            guard state.tray.count < ComposerState.trayLimit else {
+                model.error = "You can attach up to \(ComposerState.trayLimit) files at a time."
+                return
+            }
+            do {
+                let prepared = try await AttachmentPreparer.prepare(asset: asset, limit: limit)
+                state.tray.append(PendingAttachment(prepared: prepared, preview: await AttachmentThumbnails.preview(of: prepared), assetIdentifier: asset.localIdentifier))
+            } catch {
+                model.error = (error as? LocalizedError)?.errorDescription ?? "This photo could not be attached."
+            }
+        }
+        assetPicks = pick
+        await pick.value
+    }
+
+    private func attach(capture: CameraCapture) {
+        let limit = model.attachmentLimit
+        addToTray([{ try await AttachmentPreparer.prepare(capture: capture, limit: limit) }])
     }
 
     private func attach(files result: Result<[URL], any Error>) {
@@ -252,7 +289,8 @@ struct ConversationView: View {
                 // Only the newest received message is marked; XEP-0333 makes a marker cover everything before it.
                 guard id == model.messages.last(where: { !$0.isOutgoing })?.id else { return }
                 Task { await model.markDisplayed(id) }
-            }, onRestoreComposerFocus: { composerState.focused = true }, onReachTop: { Task { await model.loadOlderMessages() } })
+            }, onRestoreComposerFocus: { composerState.focused = true }, onReachTop: { Task { await model.loadOlderMessages() } },
+            attachmentKeyboard: composerState.attachmentKeyboard)
             // The controller pins the composer to the keyboard itself and insets the messages to match.
             .ignoresSafeArea(.keyboard)
             .ignoresSafeArea(.container, edges: .bottom)
@@ -339,7 +377,10 @@ struct ConversationView: View {
             addToTray(items.map { item in { try await AttachmentPreparer.prepare(photo: item, limit: limit) } })
         }
         // Files picked for one chat never follow the view to another.
-        .onChange(of: [chatID, model.accountID]) { composerState.tray = [] }
+        .onChange(of: [chatID, model.accountID]) {
+            composerState.attachmentsOpen = false
+            composerState.tray = []
+        }
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
         .onDisappear { model.closeChat(chatID) }
     }
@@ -348,7 +389,8 @@ struct ConversationView: View {
     private var composer: some View {
         ConversationComposer(model: model, chatID: chatID, state: composerState, replyingTo: $replyingTo, editing: editing, attaching: attaching,
                              authorName: authorName, onSend: send, onCancelEditing: cancelEditing,
-                             onPickPhoto: { showingPhotoPicker = true }, onPickFile: { importingFile = true })
+                             onPickPhoto: { showingPhotoPicker = true }, onPickFile: { importingFile = true },
+                             onAttachAsset: { await attach(asset: $0) }, onAttachCapture: { attach(capture: $0) })
             .tint(Color(uiColor: AccentTheme.current.tint))
     }
 
@@ -393,6 +435,10 @@ struct ConversationComposer: View {
     let onCancelEditing: () -> Void
     let onPickPhoto: () -> Void
     let onPickFile: () -> Void
+    let onAttachAsset: (PHAsset) async -> Void
+    let onAttachCapture: (CameraCapture) -> Void
+    /// Counts presses of "+", so the haptic answers the finger and not a programmatic close.
+    @State private var attachPresses = 0
 
     private var isGroup: Bool { model.isGroup(chatID) }
 
@@ -410,7 +456,45 @@ struct ConversationComposer: View {
         return showsTray || !state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Rail picks in tray order: the order the panel numbers them in.
+    private var selectedAssetIDs: [String] { state.tray.compactMap(\.assetIdentifier) }
+
+    private var panelActions: AttachmentPanelActions {
+        let state = state
+        let model = model
+        return AttachmentPanelActions(select: onAttachAsset, deselect: { id in
+            guard !state.dispatching else { return }
+            state.tray.removeAll { $0.assetIdentifier == id }
+        }, capture: onAttachCapture, photos: onPickPhoto, files: onPickFile, refuse: { model.error = $0 },
+        dismissed: { state.attachmentsOpen = false }, restore: { state.attachmentsOpen = true })
+    }
+
+    /// A separate 44pt glass circle left of the field. The glyph turns into an ×; its circle never changes size.
+    private var attachButton: some View {
+        Button {
+            attachPresses += 1
+            state.attachmentsOpen.toggle()
+        } label: {
+            ZStack {
+                if attaching, !state.attachmentsOpen { ProgressView() }
+                else {
+                    Image(systemName: "plus").font(.system(size: 20, weight: .semibold))
+                        .rotationEffect(.degrees(state.attachmentsOpen ? 135 : 0))
+                        .animation(.spring(duration: 0.3, bounce: 0.3), value: state.attachmentsOpen)
+                }
+            }
+        }
+        .buttonStyle(CircularGlassButtonStyle(diameter: 44, tinted: false))
+        // Closing always works; opening waits for anything that is still changing the tray or the text.
+        .disabled(!state.attachmentsOpen && (editing != nil || state.dispatching || attaching || model.isSending))
+        .sensoryFeedback(.impact(weight: .light), trigger: attachPresses)
+        .accessibilityLabel(state.attachmentsOpen ? "Close attachments" : "Add attachment")
+        .accessibilityHint(state.attachmentsOpen ? "" : "Shows recent photos, the camera and files")
+        .accessibilityIdentifier("attachFile")
+    }
+
     var body: some View {
+        let showsAttach = !isGroup && model.canSendAttachments
         GlassEffectContainer(spacing: 8) {
             VStack(spacing: 8) {
                 // The same strip carries a reply target or, in edit mode, the message being rewritten.
@@ -431,36 +515,28 @@ struct ConversationComposer: View {
                     .padding(.leading, 14).padding(.vertical, 4)
                     .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
-                VStack(alignment: .leading, spacing: 0) {
-                    if showsTray { AttachmentTray(items: state.tray, frozen: state.dispatching) { id in state.tray.removeAll { $0.id == id } } }
-                    HStack(alignment: .bottom, spacing: 4) {
-                        if model.canSendAttachments, !isGroup {
-                            Menu {
-                                Button("Photo or Video", systemImage: "photo.on.rectangle", action: onPickPhoto)
-                                Button("File", systemImage: "doc", action: onPickFile)
-                            } label: {
-                                if attaching { ProgressView().frame(width: 44, height: 44) }
-                                else { Image(systemName: "plus").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44).contentShape(Rectangle()) }
+                HStack(alignment: .bottom, spacing: 8) {
+                    if showsAttach { attachButton }
+                    VStack(alignment: .leading, spacing: 0) {
+                        if showsTray { AttachmentTray(items: state.tray, frozen: state.dispatching) { id in state.tray.removeAll { $0.id == id } } }
+                        HStack(alignment: .bottom, spacing: 4) {
+                            TextField(placeholder, text: $state.draft, axis: .vertical)
+                                .lineLimit(1...5)
+                                .padding(.leading, 16).padding(.vertical, 11)
+                                .focused($focused)
+                                .accessibilityIdentifier("messageComposer")
+                            Button(action: onSend) {
+                                Image(systemName: editing == nil ? "arrow.up" : "checkmark").font(.system(size: 17, weight: .bold))
                             }
-                            .disabled(attaching || model.isSending || state.dispatching || editing != nil || state.tray.count >= ComposerState.trayLimit)
-                            .accessibilityLabel("Attach a file").accessibilityIdentifier("attachFile")
+                            .buttonStyle(CircularGlassButtonStyle(diameter: 34))
+                            .disabled(!canSend)
+                            .accessibilityLabel(editing == nil ? "Send message" : "Save edit").accessibilityIdentifier("sendMessage")
                         }
-                        TextField(placeholder, text: $state.draft, axis: .vertical)
-                            .lineLimit(1...5)
-                            .padding(.leading, model.canSendAttachments && !isGroup ? 0 : 16).padding(.vertical, 11)
-                            .focused($focused)
-                            .accessibilityIdentifier("messageComposer")
-                        Button(action: onSend) {
-                            Image(systemName: editing == nil ? "arrow.up" : "checkmark").font(.system(size: 17, weight: .bold))
-                        }
-                        .buttonStyle(CircularGlassButtonStyle(diameter: 34))
-                        .disabled(!canSend)
-                        .accessibilityLabel(editing == nil ? "Send message" : "Save edit").accessibilityIdentifier("sendMessage")
+                        .frame(minHeight: 44)
                     }
-                    .frame(minHeight: 44)
+                    // A capsule at one line; the same radius keeps five lines and the tray readable.
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 }
-                // A capsule at one line; the same radius keeps five lines and the tray readable.
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             }
         }
         // Glass that grew past control size (a tray, a long draft) keeps the light or dark look it had when it grew,
@@ -469,7 +545,17 @@ struct ConversationComposer: View {
         .id(colorScheme)
         .padding(.horizontal, 16).padding(.vertical, 8)
         .onChange(of: colorScheme) { if focused { Task { focused = true } } }
-        .onChange(of: state.focused) { _, wanted in focused = wanted }
+        // Opening the panel leaves the field alone: the panel's responder takes over from it in one keyboard animation.
+        .onChange(of: state.focused) { _, wanted in if wanted || !state.attachmentsOpen { focused = wanted } }
+        .onChange(of: state.attachmentsOpen) { _, open in
+            if open { state.attachmentKeyboard.open(actions: panelActions, selection: selectedAssetIDs, trayCount: state.tray.count) }
+            // A close on the way to the text field is left to the field, which swaps the keyboards in one animation.
+            else if !state.focused { state.attachmentKeyboard.close() }
+        }
+        .onChange(of: selectedAssetIDs + [String(state.tray.count)]) {
+            state.attachmentKeyboard.update(selection: selectedAssetIDs, trayCount: state.tray.count)
+        }
+        .onChange(of: showsAttach) { _, shown in if !shown { state.attachmentsOpen = false } }
         .onChange(of: state.draft) { _, draft in model.draftChanged(draft, in: chatID) }
         .onChange(of: focused) { _, isFocused in state.focused = isFocused }
     }
