@@ -151,6 +151,8 @@ final class AttachmentPanelUITests: XCTestCase {
         // The picker runs out of process: its elements are visible but report not hittable, so tap their centres.
         let grid = app.images.matching(identifier: "PXGGridLayout-Info")
         XCTAssertTrue(grid.firstMatch.waitForExistence(timeout: 10), "The limited-library picker")
+        // A tap while the sheet is still rising selects nothing.
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 1.5))
         grid.element(boundBy: 0).coordinate(withNormalizedOffset: centre).tap()
         app.buttons["Done"].coordinate(withNormalizedOffset: centre).tap()
         XCTAssertTrue(app.buttons["managePhotoAccess"].waitForExistence(timeout: 10), "The panel is back, limited")
