@@ -237,6 +237,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     /// Content position at the visible bottom edge, so an inset change can put the same messages back above the composer.
     private var bottomEdgeY: CGFloat = 0
     private var knownSafeBottom: CGFloat = 0
+    private var knownAdjustedTop: CGFloat = 0
 
     override func loadView() {
         let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(64)))
@@ -249,8 +250,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         section.interGroupSpacing = 2
         section.contentInsets = .init(top: 8, leading: 0, bottom: 12, trailing: 0)
         collectionView = ConversationCollectionView(frame: .zero, collectionViewLayout: UICollectionViewCompositionalLayout(section: section))
-        // Clear over the container, which paints the chat background once; the collection view runs under the bars and
-        // its automatic top edge effect blurs the messages there.
+        // Clear over the container, which paints the chat background once; the collection view runs under the bars,
+        // whose material (ConversationView) blurs the messages there once they scroll beneath.
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .interactive
@@ -557,6 +558,19 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         super.viewSafeAreaInsetsDidChange()
         if followsBottom { followBottom() }
         view.setNeedsLayout()
+    }
+
+    /// A banner appearing, growing or closing changes the top inset. The collection view only takes it in the next
+    /// layout pass (after `viewSafeAreaInsetsDidChange`), and UIKit then keeps the message at the top edge in place,
+    /// which pushes the newest message behind the composer. While following the bottom, re-clamp to it here, where the
+    /// new inset is already in place. Bottom changes stay with `updateBottomInset`.
+    func scrollViewDidChangeAdjustedContentInset(_ scrollView: UIScrollView) {
+        let top = scrollView.adjustedContentInset.top
+        guard abs(top - knownAdjustedTop) > 0.5 else { return }
+        knownAdjustedTop = top
+        guard followsBottom, !sliding, !scrollView.isTracking else { return }
+        scrollView.contentOffset.y = clampedOffset(.greatestFiniteMagnitude)
+        recordBottomEdge()
     }
 
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
@@ -1273,8 +1287,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         time.text = [message.isEdited ? "Edited" : nil, message.securityNotice, message.sentAt?.formatted(date: .omitted, time: .shortened)].compactMap { $0 }.joined(separator: " · ")
         time.isHidden = message.sentAt == nil && message.securityNotice == nil && !message.isEdited
         status.isHidden = !message.isOutgoing || message.status == nil
-        // Neutral like the time: read is told by the filled rings, never by colour.
-        status.tintColor = message.status == .failed ? .systemRed : meta
+        // Neutral like the time: read is told by the filled rings and failure by the filled exclamation, never by colour.
+        status.tintColor = meta
         status.show(message.isOutgoing ? message.status.map(MessageStatusGlyph.glyph(for:)) : nil)
         setNeedsLayout()
     }
