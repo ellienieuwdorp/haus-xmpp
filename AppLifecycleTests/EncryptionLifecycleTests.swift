@@ -4,7 +4,7 @@ import Security
 import MessageStore
 import XMPPProtocol
 import OMEMO
-@testable import XMPPiOS
+@testable import HausXMPP
 
 /// Synthetic accounts/keys only. No network, real-account state or private lock API.
 @MainActor final class EncryptionLifecycleTests: XCTestCase {
@@ -290,7 +290,7 @@ private enum FixtureError: Error { case existingFixture, missingCommit, identity
 }
 
 private func keyQuery(_ id: String) -> [String: Any] {
-    [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "dev.xmpplab.encryption-state",
+    [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "haus.xmpp.encryption-state",
      kSecAttrAccount as String: id, kSecAttrSynchronizable as String: false]
 }
 private func deleteKey(_ id: String) { _ = SecItemDelete(keyQuery(id) as CFDictionary) }

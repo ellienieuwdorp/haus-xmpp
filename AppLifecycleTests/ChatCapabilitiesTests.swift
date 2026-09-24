@@ -1,7 +1,7 @@
 import XCTest
 import OMEMO
 import XMPPProtocol
-@testable import XMPPiOS
+@testable import HausXMPP
 
 /// Chat-level state derives from stored facts only, so launch, disconnect and reconnect cannot flip it.
 final class ChatCapabilitiesTests: XCTestCase {
@@ -79,7 +79,7 @@ final class ChatCapabilitiesTests: XCTestCase {
     }
 
     func testThrownDiscoveryKeepsTheServiceAndACompletedNilClearsIt() throws {
-        let suite = "dev.xmpplab.tests.uploads.\(UUID().uuidString)"
+        let suite = "haus.xmpp.tests.uploads.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
         let memory = UploadServiceMemory(defaults: defaults)

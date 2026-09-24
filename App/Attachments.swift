@@ -198,7 +198,7 @@ struct UploadFailureBudget {
 /// Task identifiers are persisted on the attachment row; a relaunch asks which are still running.
 final class AttachmentUploader: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private lazy var session: URLSession = {
-        let configuration = URLSessionConfiguration.background(withIdentifier: "dev.xmpplab.ios.uploads." + scope)
+        let configuration = URLSessionConfiguration.background(withIdentifier: "haus.xmpp.ios.uploads." + scope)
         configuration.isDiscretionary = false
         configuration.sessionSendsLaunchEvents = true
         return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)

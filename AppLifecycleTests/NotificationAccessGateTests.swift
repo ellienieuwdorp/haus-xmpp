@@ -1,5 +1,5 @@
 import XCTest
-@testable import XMPPiOS
+@testable import HausXMPP
 
 final class NotificationAccessGateTests: XCTestCase {
     func testLogoutTombstoneSurvivesReopenAndRequiresExplicitEnable() throws {

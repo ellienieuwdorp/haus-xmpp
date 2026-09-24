@@ -1,7 +1,7 @@
 import Observation
 import SwiftUI
 import XCTest
-@testable import XMPPiOS
+@testable import HausXMPP
 
 @MainActor
 final class AppearanceStoreTests: XCTestCase {

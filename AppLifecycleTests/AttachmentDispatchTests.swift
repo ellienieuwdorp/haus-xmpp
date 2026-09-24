@@ -1,5 +1,5 @@
 import XCTest
-@testable import XMPPiOS
+@testable import HausXMPP
 
 @MainActor final class AttachmentDispatchTests: XCTestCase {
     func testFilesGoOneByOneThenTheCaptionLast() async {

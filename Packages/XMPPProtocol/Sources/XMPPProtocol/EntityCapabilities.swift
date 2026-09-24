@@ -5,8 +5,8 @@ import Foundation
 /// advertises, hashed into the `<c/>` element on presence so PEP services know which
 /// `+notify` nodes to push (servers ignore a client that sends presence without caps).
 public enum EntityCapabilities {
-    public static let node = "https://xmpplab.dev/ios"
-    public static let identity = "client/phone//XMPP Lab"
+    public static let node = "https://xmpp.haus/ios"
+    public static let identity = "client/phone//Haus XMPP"
     public static var features: [String] {
         ["http://jabber.org/protocol/disco#info", "http://jabber.org/protocol/caps", "urn:xmpp:ping", "urn:xmpp:receipts", "urn:xmpp:chat-markers:0", "urn:xmpp:message-retract:1", "urn:xmpp:message-correct:0", XMPPChatState.namespace, AvatarWire.metadataNode + "+notify"]
             + XMPPOMEMOProfile.allCases.flatMap { [$0.namespace, $0.devicesNode + "+notify"] }
@@ -28,7 +28,7 @@ public enum EntityCapabilities {
     /// The disco#info result body; echoes the requested `node` so caps lookups match their query.
     static func discoInfoQuery(node requested: String?) -> String {
         let nodeAttribute = requested.map { " node='\(xmlEscaped($0))'" } ?? ""
-        return "<query xmlns='http://jabber.org/protocol/disco#info'\(nodeAttribute)><identity category='client' type='phone' name='XMPP Lab'/>"
+        return "<query xmlns='http://jabber.org/protocol/disco#info'\(nodeAttribute)><identity category='client' type='phone' name='Haus XMPP'/>"
             + features.map { "<feature var='\($0)'/>" }.joined() + "</query>"
     }
 }

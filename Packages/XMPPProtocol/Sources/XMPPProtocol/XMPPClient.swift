@@ -724,7 +724,7 @@ public actor XMPPClient {
         do { return try decode() }
         catch XMPPIQError.malformedResponse {
             #if canImport(os)
-            Logger(subsystem: "dev.xmpplab.ios", category: "xmpp").error("Malformed \(what, privacy: .public): \(outline(response), privacy: .public)")
+            Logger(subsystem: "haus.xmpp.ios", category: "xmpp").error("Malformed \(what, privacy: .public): \(outline(response), privacy: .public)")
             #endif
             throw XMPPIQError.malformedResponse
         }

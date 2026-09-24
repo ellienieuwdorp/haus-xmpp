@@ -1,6 +1,6 @@
 import XCTest
 import XMPPProtocol
-@testable import XMPPiOS
+@testable import HausXMPP
 
 @MainActor final class NotificationAccountTests: XCTestCase {
     func testReconnectPreservesSubscriptionAndNewCredentials() throws {

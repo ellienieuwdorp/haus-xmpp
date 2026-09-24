@@ -4,12 +4,12 @@ final class LabConnectionUITests: XCTestCase {
     @MainActor func testLiveTLSLoginDoesNotSendWithoutApprovedDevices() throws {
         continueAfterFailure = false
         let env = ProcessInfo.processInfo.environment
-        guard let user = env["XMPP_LAB_USERNAME"], let password = env["XMPP_LAB_PASSWORD"] else {
-            throw XCTSkip("Opt-in live lab test: provide disposable XMPP_LAB_USERNAME/PASSWORD and trust the lab CA in the simulator.")
+        guard let user = env["HAUS_LAB_USERNAME"], let password = env["HAUS_LAB_PASSWORD"] else {
+            throw XCTSkip("Opt-in live lab test: provide disposable HAUS_LAB_USERNAME/PASSWORD and trust the lab CA in the simulator.")
         }
         let app = XCUIApplication()
         app.launchArguments = ["-lab-ui-test"]
-        app.launchEnvironment = ["XMPP_LAB_USERNAME": user, "XMPP_LAB_PASSWORD": password]
+        app.launchEnvironment = ["HAUS_LAB_USERNAME": user, "HAUS_LAB_PASSWORD": password]
         app.isolateMessageStorage()
         app.launch()
         app.buttons["Settings"].tap()

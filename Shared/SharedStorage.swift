@@ -2,7 +2,7 @@ import Foundation
 import MessageStore
 
 enum SharedStorage {
-    static let group = "group.dev.xmpplab.ios"
+    static let group = "group.haus.xmpp.ios"
     enum Failure: Error, Equatable { case unavailable, conflictingStores }
 
     /// Only the containing app migrates its original store. Move the whole directory while

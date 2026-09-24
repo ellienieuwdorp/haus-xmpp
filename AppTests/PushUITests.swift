@@ -39,7 +39,7 @@ final class PushUITests: XCTestCase {
         guard environment["XMPP_PUSH_DEVICE_TEST"] == "1" else {
             throw XCTSkip("Set XMPP_PUSH_DEVICE_TEST=1 only for a disposable physical staging push run")
         }
-        let required = ["XMPP_LAB_USERNAME", "XMPP_LAB_PASSWORD", "XMPP_PUSH_NODE", "XMPP_PUSH_SECRET", "XMPP_OMEMO_PEER"]
+        let required = ["HAUS_LAB_USERNAME", "HAUS_LAB_PASSWORD", "XMPP_PUSH_NODE", "XMPP_PUSH_SECRET", "XMPP_OMEMO_PEER"]
         guard required.allSatisfy({ !(environment[$0] ?? "").isEmpty }) else {
             throw XCTSkip("Requires generated staging account and push subscription environment")
         }

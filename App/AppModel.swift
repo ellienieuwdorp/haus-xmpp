@@ -158,7 +158,7 @@ final class AppModel {
     }()
     @ObservationIgnored private lazy var preferences: UserDefaults = {
         guard let testSessionID else { return .standard }
-        return UserDefaults(suiteName: "dev.xmpplab.uitest." + testSessionID) ?? .standard
+        return UserDefaults(suiteName: "haus.xmpp.uitest." + testSessionID) ?? .standard
     }()
 
     func prepare() async {
@@ -852,7 +852,7 @@ final class AppModel {
                     guard let self, self.accountID == account, self.openChatID == chat else { return }
                     attachmentFiles[message.id] = destination
                 } catch {
-                    Logger(subsystem: "dev.xmpplab.ios", category: "attachments").error("Download of \(attachment.name, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                    Logger(subsystem: "haus.xmpp.ios", category: "attachments").error("Download of \(attachment.name, privacy: .public) failed: \(String(describing: error), privacy: .public)")
                 }
             }
         }
@@ -922,7 +922,7 @@ final class AppModel {
                         let detail: String
                         if case .stanza(let condition)? = error as? XMPPIQError { detail = condition }
                         else { detail = (error as? OMEMOError)?.errorDescription ?? String(describing: error).prefix(120).description }
-                        Logger(subsystem: "dev.xmpplab.ios", category: "encryption").error("Encryption setup failed at \(step, privacy: .public): \(detail, privacy: .public)")
+                        Logger(subsystem: "haus.xmpp.ios", category: "encryption").error("Encryption setup failed at \(step, privacy: .public): \(detail, privacy: .public)")
                         session = .needsAttention(step: step, detail: detail)
                         encryptionAttention.note("Setup failed at \(step): \(detail)")
                         if reportedSetupFailure != detail {
@@ -1544,12 +1544,12 @@ final class AppModel {
             let note = "Last refresh (\(overview.profile == .legacy ? "OMEMO · compatible" : "OMEMO 2")): \(summary)"
             refreshFence[chatID] = (token, note)
             encryptionAttention.note(note)
-            Logger(subsystem: "dev.xmpplab.ios", category: "encryption").info("Device refresh: \(summary, privacy: .public)")
+            Logger(subsystem: "haus.xmpp.ios", category: "encryption").info("Device refresh: \(summary, privacy: .public)")
         } catch {
             guard isCurrent else { return }
             let detail: String
             if case .stanza(let condition)? = error as? XMPPIQError { detail = condition } else { detail = String(describing: error).prefix(80).description }
-            Logger(subsystem: "dev.xmpplab.ios", category: "encryption").error("Device refresh for \(chatID, privacy: .private) failed: \(detail, privacy: .public)")
+            Logger(subsystem: "haus.xmpp.ios", category: "encryption").error("Device refresh for \(chatID, privacy: .private) failed: \(detail, privacy: .public)")
             let friendly: String
             switch detail {
             case "remote-server-not-found", "remote-server-timeout": friendly = "Their server could not be reached. Try again in a moment."

@@ -1,6 +1,6 @@
-# XMPP iOS
+# Haus XMPP
 
-A new native iOS XMPP client, currently an early **local development prototype**. `XMPP Lab` is a temporary build name, not a chosen product name.
+Haus XMPP is a new native iOS XMPP client, currently an early **local development prototype**. The product identity is `Haus XMPP` under the `xmpp.haus` domain: bundle identifiers are `haus.xmpp.ios` and `haus.xmpp.ios.notifications`, and the app's own protocol namespaces live under `https://xmpp.haus/`.
 
 The app builds and runs in the iOS simulator. It has a SwiftUI shell, UIKit conversation timeline, selectable messages, local stars/pins, swipe-to-reply with persisted quotes, native search controls and SQLite persistence. Our own Swift protocol stack connects through validated direct TLS and now exchanges legacy and modern OMEMO encrypted direct messages. Device trust and encryption live in an isolated business package; exact ciphertext and ratchet changes commit together before transport. Focused, pinned crypto dependencies are reused without maintaining a protocol/client fork.
 
@@ -8,7 +8,7 @@ The app builds and runs in the iOS simulator. It has a SwiftUI shell, UIKit conv
 
 ## Build and run
 
-Open `XMPPiOS.xcodeproj`, select the `XMPPiOS` scheme and an iOS 26+ simulator, then Run. No developer team is needed for the simulator. Use “Explore sample conversations” for the interface, or follow the [local lab runbook](infra/local/README.md) for a live connection.
+Open `HausXMPP.xcodeproj`, select the `HausXMPP` scheme and an iOS 26+ simulator, then Run. No developer team is needed for the simulator. Use “Explore sample conversations” for the interface, or follow the [local lab runbook](infra/local/README.md) for a live connection.
 
 `project.yml` is the source of project configuration; regenerate with the installed `xcodegen generate` after adding files or changing targets. The generated Xcode project and shared scheme are committed so XcodeGen is not required just to build.
 
@@ -20,7 +20,7 @@ swift test --package-path Packages/OMEMOCrypto
 swift test --package-path Packages/OMEMO
 ```
 
-Run the `XMPPiOS` test action in Xcode for simulator UI checks. The optional live lab UI test skips unless provided disposable credentials. See [production-readiness evidence](docs/development/production-readiness.md), [notification previews](docs/development/notification-previews.md), [encrypted groups](docs/development/group-conversations.md) and the [independent interoperability matrix](docs/development/interop-matrix.md).
+Run the `HausXMPP` test action in Xcode for simulator UI checks. The optional live lab UI test skips unless provided disposable credentials. See [production-readiness evidence](docs/development/production-readiness.md), [notification previews](docs/development/notification-previews.md), [encrypted groups](docs/development/group-conversations.md) and the [independent interoperability matrix](docs/development/interop-matrix.md).
 
 ## Direction
 

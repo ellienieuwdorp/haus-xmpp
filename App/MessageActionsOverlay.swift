@@ -41,7 +41,7 @@ struct MessageActionsContext {
 @MainActor
 enum MessageActionsOverlay {
     /// Instruments intervals for the press path (os_signpost, category MessageMenu). Nothing on it renders offscreen.
-    static let signposter = OSSignposter(subsystem: "dev.xmpplab.ios", category: "MessageMenu")
+    static let signposter = OSSignposter(subsystem: "haus.xmpp.ios", category: "MessageMenu")
     /// The open overlay; a window keeps only its view.
     private static var current: UIViewController?
 

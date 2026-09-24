@@ -55,7 +55,7 @@ struct NotificationAccount: Codable, Sendable, Equatable {
 
     private static var keychainQuery: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: "dev.xmpplab.notification-account",
+         kSecAttrService as String: "haus.xmpp.notification-account",
          kSecAttrAccount as String: "primary",
          kSecAttrSynchronizable as String: false]
     }

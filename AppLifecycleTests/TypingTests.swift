@@ -1,6 +1,6 @@
 import XCTest
 import XMPPProtocol
-@testable import XMPPiOS
+@testable import HausXMPP
 
 final class TypingTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 1_000)

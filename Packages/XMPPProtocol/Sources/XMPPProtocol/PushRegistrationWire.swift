@@ -49,7 +49,7 @@ public struct XMPPPushRegistrationResult: Codable, Sendable, Equatable {
 }
 
 enum PushRegistrationWire {
-    static let namespace = "urn:xmpplab:push:registration:0"
+    static let namespace = "https://xmpp.haus/push/registration/0"
 
     static func credentials(_ configuration: XMPPPushConfiguration) throws -> String {
         guard configuration.publishOptions.count == 1, let secret = configuration.publishOptions["secret"],

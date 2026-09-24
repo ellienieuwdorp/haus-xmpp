@@ -13,7 +13,7 @@ private func registrationNode(_ xml: String) throws -> XMPPProtocol.XMLNode {
     let config = try XMPPPushConfiguration(serviceJID: "push.example.org", node: String(repeating: "n", count: 43), publishOptions: ["secret": String(repeating: "s", count: 43)])
     let operation = try XMPPPushRegistrationOperation(action: .register, revision: 8, deviceToken: "AABBCCDD")
     let xml = try registrationNode(PushRegistrationWire.operationXML(operation, configuration: config))
-    #expect(xml.namespace == "urn:xmpplab:push:registration:0" && xml.name == "register")
+    #expect(xml.namespace == "https://xmpp.haus/push/registration/0" && xml.name == "register")
     #expect(xml.attributes["token"] == "aabbccdd" && xml.attributes["revision"] == "8")
     #expect(!String(describing: operation).contains("aabbccdd"))
     let revoke = try registrationNode(PushRegistrationWire.operationXML(XMPPPushRegistrationOperation(action: .revoke, revision: 9), configuration: config))

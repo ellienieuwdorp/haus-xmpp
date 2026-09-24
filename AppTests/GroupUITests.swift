@@ -4,11 +4,11 @@ final class GroupUITests: XCTestCase {
     @MainActor func testJoinReviewEncryptedGroupAndReaction() throws {
         continueAfterFailure = false
         let environment = ProcessInfo.processInfo.environment
-        guard let user = environment["XMPP_LAB_USERNAME"], let password = environment["XMPP_LAB_PASSWORD"],
+        guard let user = environment["HAUS_LAB_USERNAME"], let password = environment["HAUS_LAB_PASSWORD"],
               let room = environment["XMPP_GROUP_ROOM"] else { throw XCTSkip("Requires disposable local encrypted group fixture") }
         let app = XCUIApplication()
         app.launchArguments = ["-lab-ui-test"]
-        app.launchEnvironment = ["XMPP_LAB_USERNAME": user, "XMPP_LAB_PASSWORD": password]
+        app.launchEnvironment = ["HAUS_LAB_USERNAME": user, "HAUS_LAB_PASSWORD": password]
         app.isolateMessageStorage()
         app.launch()
         connect(app)

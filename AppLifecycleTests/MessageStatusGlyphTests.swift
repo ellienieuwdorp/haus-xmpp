@@ -1,6 +1,6 @@
 import UIKit
 import XCTest
-@testable import XMPPiOS
+@testable import HausXMPP
 
 final class MessageStatusGlyphTests: XCTestCase {
     private typealias Status = TimelineMessage.Status
