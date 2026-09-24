@@ -345,22 +345,46 @@ private struct SlideIn: ViewModifier {
 }
 
 /// A live blur: its effect animates (never its alpha, which UIKit forbids for effect views), so the timeline and the
-/// navigation bar stay live and recognisable under it and nothing is rasterised on the press path. The scrim rides the same curve.
+/// navigation bar stay live and recognisable under it and nothing is rasterised on the press path. The 20 % scrim is a
+/// sibling view whose alpha rides the same curve: a background colour on the effect view's content view is not animated
+/// when the effect changes in the same block, so it appeared at full strength in the overlay's first frame.
 private struct LiveBlur: UIViewRepresentable {
     let active: Bool
-    private static let scrim = UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.2) : UIColor(white: 0, alpha: 0.2) }
 
-    func makeUIView(context: Context) -> UIVisualEffectView {
-        let view = UIVisualEffectView(effect: nil)
-        view.isUserInteractionEnabled = false
-        return view
+    func makeUIView(context: Context) -> BlurScrimView { BlurScrimView() }
+
+    func updateUIView(_ view: BlurScrimView, context: Context) { view.setActive(active) }
+}
+
+private final class BlurScrimView: UIView {
+    private static let scrimColor = UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.2) : UIColor(white: 0, alpha: 0.2) }
+    private let blur = UIVisualEffectView(effect: nil)
+    private let scrim = UIView()
+    private var active = false
+
+    init() {
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        for view in [blur, scrim] as [UIView] {
+            view.frame = bounds
+            view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.isUserInteractionEnabled = false
+            addSubview(view)
+        }
+        scrim.backgroundColor = Self.scrimColor
+        scrim.alpha = 0
     }
 
-    func updateUIView(_ view: UIVisualEffectView, context: Context) {
-        guard (view.effect != nil) != active else { return }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    /// Blur and scrim fade in together over 0.2 s and out over 0.4 s, each from wherever it is now.
+    func setActive(_ active: Bool) {
+        guard active != self.active else { return }
+        self.active = active
         UIView.animate(withDuration: active ? 0.2 : 0.4, delay: 0, options: [.curveEaseOut, .beginFromCurrentState]) {
-            view.effect = active ? UIBlurEffect(style: .regular) : nil
-            view.contentView.backgroundColor = active ? Self.scrim : .clear
+            self.blur.effect = active ? UIBlurEffect(style: .regular) : nil
+            self.scrim.alpha = active ? 1 : 0
         }
     }
 }
