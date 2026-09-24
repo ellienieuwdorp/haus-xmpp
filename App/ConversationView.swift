@@ -136,9 +136,10 @@ struct ConversationView: View {
         editing = nil
     }
 
-    /// Clock while the outbox works, one check once the server holds it, two once the peer confirmed
-    /// delivery, tinted once read. Own messages from the archive or a carbon have no outbox row: the
-    /// server already holds them, so they start at the single check.
+    /// A dashed ring while the outbox works, one ringed check once the server holds it, two rings once the
+    /// peer confirmed delivery, filled once read (the glyphs stay the footer's neutral colour). Own messages
+    /// from the archive or a carbon have no outbox row: the server already holds them, so they start at the
+    /// single check.
     private func status(_ message: ChatMessage) -> TimelineMessage.Status? {
         guard message.isOutgoing else { return nil }
         let transport = message.transportState ?? .serverAccepted
