@@ -329,7 +329,7 @@ public actor XMPPClient {
     }
 
     /// Our own resources and our own room nickname are dropped; a group state needs a room we are in. A delayed copy
-    /// (offline storage, room history) is stale.
+    /// (offline storage, room history) is stale, and a room's private messages are not the room typing.
     static func parsedChatState(_ node: XMLNode, account: String, rooms: [String: GroupRoomState]) -> XMPPChatState? {
         guard let state = XMPPChatState.state(of: node), let from = node.attributes["from"],
               let bare = OMEMOWire.bareJID(from), bare != account,
@@ -343,6 +343,7 @@ public actor XMPPClient {
             guard real != account else { return nil }
             return XMPPChatState(chat: bare, participant: real ?? nickname, state: state, ridesOnMessage: ridesOnMessage)
         case nil, "chat":
+            guard rooms[bare] == nil else { return nil }
             return XMPPChatState(chat: bare, state: state, ridesOnMessage: ridesOnMessage)
         default: return nil
         }

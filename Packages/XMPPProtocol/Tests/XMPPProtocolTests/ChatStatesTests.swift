@@ -69,6 +69,19 @@ private let account = "me@example.test"
     }
 }
 
+@Test func aRoomsPrivateMessagesAreNotTheRoomTyping() throws {
+    var room = GroupRoomState()
+    room.nickname = "me"
+    let rooms = ["team@rooms.example.test": room]
+    for from in ["team@rooms.example.test/maya", "team@rooms.example.test"] {
+        let node = try stanza("<message from='\(from)' type='chat'><composing xmlns='\(ns)'/><x xmlns='http://jabber.org/protocol/muc#user'/></message>")
+        #expect(XMPPClient.parsedChatState(node, account: account, rooms: rooms) == nil)
+    }
+    // An ordinary contact is unaffected.
+    let direct = try stanza("<message from='alex@example.test/phone' type='chat'><composing xmlns='\(ns)'/></message>")
+    #expect(XMPPClient.parsedChatState(direct, account: account, rooms: rooms)?.chat == "alex@example.test")
+}
+
 @Test func outgoingStateIsABareHintedStanza() throws {
     let xml = try XMPPChatState.xml(.composing, to: "alex@example.test", id: "c1")
     #expect(xml == "<message to='alex@example.test' type='chat' id='c1'><composing xmlns='\(ns)'/><no-store xmlns='urn:xmpp:hints'/></message>")
