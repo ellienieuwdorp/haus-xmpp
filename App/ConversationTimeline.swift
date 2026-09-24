@@ -250,9 +250,12 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         composerHost.didMove(toParent: self)
         view = container
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] collection, indexPath, id in
-            if id == Self.typingID, let typing = self?.typing,
-               let cell = collection.dequeueReusableCell(withReuseIdentifier: "typing", for: indexPath) as? TypingIndicatorCell {
-                cell.configure(typing)
+            if id == Self.typingID {
+                // A snapshot can outlive the typing it was built for; the cell then stays empty until the next apply.
+                let cell = collection.dequeueReusableCell(withReuseIdentifier: "typing", for: indexPath)
+                let typing = self?.typing
+                cell.contentView.isHidden = typing == nil
+                if let typing { (cell as? TypingIndicatorCell)?.configure(typing) }
                 return cell
             }
             guard let self, let row = rowsByID[id],
