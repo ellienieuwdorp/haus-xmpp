@@ -1511,7 +1511,7 @@ final class AppModel {
             return
         }
         guard hasTransportOwnership, encryptionReady, isConnected, let client else {
-            if !encryptionDiagnostics.hasPrefix("Setup failed") {
+            if !encryptionDiagnostics.hasPrefix("Setup failed"), encryptionOverview(for: chatID) != nil {
                 encryptionDiagnostics = isConnected ? "Not refreshed: encryption setup has not completed on this connection." : "Not refreshed: offline."
             }
             return
@@ -1547,7 +1547,8 @@ final class AppModel {
         }
     }
 
-    static let storedDevicesUnreadable = "Stored devices could not be read. Nothing was changed."
+    /// The store has no readable devices for this account (it has not set up encryption yet, or the keys are unavailable).
+    static let storedDevicesUnreadable = "No stored devices yet. They appear after this account connects."
 
     /// What is known about a chat's devices: pending until the store answered, then stored, then refreshed on this connection.
     func encryptionKnowledge(for chatID: String) -> EncryptionKnowledge {
