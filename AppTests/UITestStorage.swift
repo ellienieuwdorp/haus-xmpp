@@ -37,7 +37,7 @@ extension XCUIApplication {
 }
 
 /// A sent bubble the server holds: the label climbs from accepted to delivered to read as receipts arrive.
-nonisolated(unsafe) let serverHeldLabel = NSPredicate(format: "label CONTAINS 'Accepted by server' OR label CONTAINS 'Delivered' OR label CONTAINS 'Read'")
+nonisolated(unsafe) let serverHeldLabel = NSPredicate(format: "label CONTAINS 'Sent' OR label CONTAINS 'Delivered' OR label CONTAINS 'Read'")
 
 extension XCUIApplication {
     /// The root is always Chats; close the Settings sheet or pop a conversation to get back to it.

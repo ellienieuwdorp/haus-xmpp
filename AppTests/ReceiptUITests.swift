@@ -49,7 +49,7 @@ final class ReceiptUITests: XCTestCase {
         app.closeEncryptionDetails()
         let outgoing = app.textViews.containing(NSPredicate(format: "value == %@", marker)).matching(NSPredicate(format: "label BEGINSWITH %@", "You:")).firstMatch
         XCTAssertTrue(outgoing.waitForExistence(timeout: 10))
-        // The echo peer answers within a second, so "Accepted by server" may never be observable; the width is fixed from the first frame.
+        // The echo peer answers within a second, so "Sent" may never be observable; the width is fixed from the first frame.
         let acceptedWidth = outgoing.frame.width
         // The peer sends its receipt and marker back to back, so "Delivered" may already have become "Read".
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS 'Delivered' OR label CONTAINS 'Read'"), object: outgoing)], timeout: 25)
