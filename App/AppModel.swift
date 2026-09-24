@@ -42,6 +42,14 @@ final class AppModel {
     private(set) var messageReceipts: [String: MessageEventKind] = [:]
     private(set) var accountPreferences = AccountPreferences()
     private(set) var groupChats: [String: GroupChatState] = [:]
+    /// Chat → who is typing there (XEP-0085). In memory only; it expires on its own.
+    private(set) var typing: [String: [String]] = [:]
+    @ObservationIgnored private var typingTracker = TypingTracker()
+    @ObservationIgnored private var typingExpiry: Task<Void, Never>?
+    /// What we last told the open chat's peer about our own typing.
+    @ObservationIgnored private var ownTyping: (chat: String, sender: TypingSender)?
+    @ObservationIgnored private var ownTypingPause: Task<Void, Never>?
+    @ObservationIgnored private var ownTypingSend: Task<Void, Never>?
     private(set) var reactableGroupMessages: Set<String> = []
     /// Verified avatar thumbnails by chat address, plus the account's own under its address.
     private(set) var avatars: [String: UIImage] = [:]
@@ -215,6 +223,8 @@ final class AppModel {
                                                                 sentAt: Date(timeIntervalSince1970: 1_789_300_000 + Double(index) * 60), isOutgoing: index.isMultiple(of: 3)))
                 }
             }
+            // A peer who is typing, for tests and screenshots; nothing expires it.
+            if ProcessInfo.processInfo.arguments.contains("-demo-typing") { typing = ["alex@preview.local": ["alex@preview.local"]] }
             // One sample photo, drawn here so no asset ships: exercises the bubble thumbnail and the viewer.
             if let files {
                 let size = CGSize(width: 1200, height: 900)
@@ -652,6 +662,7 @@ final class AppModel {
         messageReactions = [:]; messageReceipts = [:]
         attachmentFiles = [:]
         openChatID = nil
+        resetTyping()
         preferences.set(account, forKey: "lastAccount")
     }
 
@@ -781,6 +792,7 @@ final class AppModel {
         session = .offline(reason: nil)
         inbound = nil
         for room in groupChats.keys { groupChats[room]?.joined = false }
+        resetTyping()
         return previous
     }
 
@@ -844,13 +856,27 @@ final class AppModel {
                 }
             case .disconnected(let reason):
                 for room in groupChats.keys { groupChats[room]?.joined = false }
+                // Chat states belong to the stream that carried them.
+                resetTyping()
                 drainTask?.cancel()
                 if case .needsAttention = session {} else { session = .offline(reason: reason) }
                 reconcile()
             }
+        case .chatState(let update):
+            // A state never creates a chat: only listed chats (joined groups among them) show one.
+            guard chats.contains(where: { $0.id == update.chat }) else { return }
+            typingTracker.apply(update.state, chat: update.chat, participant: update.participant ?? update.chat, settles: update.ridesOnMessage, now: .now)
+            publishTyping()
         case .reaction, .retraction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier:
             guard let encryption, let client else { return }
             if case .encryptedMessage = event { receivedCount += 1 }
+            // A real message ends its sender's typing, even from a client that sends no `active` with it.
+            if case .encryptedMessage(let message) = event, message.provenance == .direct, let sender = message.from.split(separator: "/").first.map(String.init) {
+                typingTracker.messageArrived(chat: sender, participant: sender, now: .now); publishTyping()
+            }
+            if case .encryptedGroupMessage(let message) = event {
+                typingTracker.messageArrived(chat: message.room, participant: message.sender, now: .now); publishTyping()
+            }
             // One processor per connection: it owns the "may acknowledge" rule for this stream.
             if inbound?.client !== client { inbound = InboundProcessor(encryption: encryption, client: client, account: account) }
             guard let inbound else { return }
@@ -1476,7 +1502,63 @@ final class AppModel {
         await refresh(.openChat)
     }
 
-    func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:] } }
+    func closeChat(_ chatID: String) {
+        if ownTyping?.chat == chatID { sendOwnTyping(ownTyping?.sender.left(), to: chatID); ownTyping = nil; ownTypingPause?.cancel() }
+        if openChatID == chatID { openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:] }
+    }
+
+    // MARK: Typing
+
+    /// The composer's draft in `chatID` changed: the peer hears composing, then paused after a quiet spell, or active once it empties.
+    func draftChanged(_ draft: String, in chatID: String) {
+        guard canSendChatState(to: chatID) else { return }
+        if ownTyping?.chat != chatID { ownTyping = (chatID, TypingSender()) }
+        let isEmpty = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        sendOwnTyping(ownTyping?.sender.draftChanged(isEmpty: isEmpty, now: .now), to: chatID)
+        ownTypingPause?.cancel()
+        guard !isEmpty else { return }
+        ownTypingPause = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(TypingSender.pauseAfter))
+            guard let self, !Task.isCancelled, ownTyping?.chat == chatID else { return }
+            sendOwnTyping(ownTyping?.sender.idle(), to: chatID)
+        }
+    }
+
+    /// Only a listed chat we could send a message to right now; never the sample data, and not while sending is paused for review.
+    private func canSendChatState(to chatID: String) -> Bool {
+        !isDemo && session.isReady && hasTransportOwnership && foreground && !quiescing && !encryptionNeedsReview
+            && chatID != accountID && chats.contains(where: { $0.id == chatID }) && canSend(to: chatID)
+            && (isGroup(chatID) || !isLabAccount || chatID.hasSuffix("@" + accountDomain))
+    }
+
+    /// Chained, so states reach the wire in the order they were decided.
+    private func sendOwnTyping(_ state: XMPPChatState.State?, to chatID: String) {
+        guard let state, let client, canSendChatState(to: chatID) else { return }
+        let group = isGroup(chatID), previous = ownTypingSend
+        ownTypingSend = Task { await previous?.value; try? await client.sendChatState(state, to: chatID, groupchat: group) }
+    }
+
+    private func publishTyping() {
+        guard !isDemo else { return } // the sample typing stays put
+        typingTracker.expire(now: .now)
+        let current = typingTracker.typing
+        if current != typing { typing = current }
+        typingExpiry?.cancel()
+        guard let next = typingTracker.nextExpiry else { return }
+        typingExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(0.05, next.timeIntervalSinceNow)))
+            guard !Task.isCancelled else { return }
+            self?.publishTyping()
+        }
+    }
+
+    private func resetTyping() {
+        typingTracker = TypingTracker()
+        typingExpiry?.cancel()
+        if !typing.isEmpty { typing = [:] }
+        ownTyping = nil
+        ownTypingPause?.cancel()
+    }
 
     var notificationPreviewsEnabled = true
 
@@ -1574,6 +1656,10 @@ final class AppModel {
     private func load(_ scope: CoalescedReload.Scope) async {
         guard let store else { return }
         let account = accountID
+        // Typing that a message ended goes in the same update that shows the message, so the bubble takes its place.
+        // ponytail: a load already running when the message was stored flushes early (the indicator then goes a moment
+        // before the message shows); track stored message IDs if that is ever visible.
+        defer { typingTracker.flushSettled(); publishTyping() }
         do {
             if scope.contains(.chats) { try await loadChats(store: store, account: account) }
             guard scope.contains(.openChat), accountID == account, let selected = openChatID else { return }
