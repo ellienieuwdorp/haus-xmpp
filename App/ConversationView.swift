@@ -387,6 +387,7 @@ struct ConversationComposer: View {
     let editing: ChatMessage?
     let attaching: Bool
     @FocusState private var focused: Bool
+    @Environment(\.colorScheme) private var colorScheme
     let authorName: (String) -> String
     let onSend: () -> Void
     let onCancelEditing: () -> Void
@@ -462,7 +463,12 @@ struct ConversationComposer: View {
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             }
         }
+        // Glass that grew past control size (a tray, a long draft) keeps the light or dark look it had when it grew,
+        // and an appearance change does not re-resolve it; only new glass does. The draft lives in `state`, and focus
+        // is handed to the new field below.
+        .id(colorScheme)
         .padding(.horizontal, 16).padding(.vertical, 8)
+        .onChange(of: colorScheme) { if focused { Task { focused = true } } }
         .onChange(of: state.focused) { _, wanted in focused = wanted }
         .onChange(of: state.draft) { _, draft in model.draftChanged(draft, in: chatID) }
         .onChange(of: focused) { _, isFocused in state.focused = isFocused }
