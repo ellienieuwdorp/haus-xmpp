@@ -290,11 +290,13 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                   let cell = collection.dequeueReusableCell(withReuseIdentifier: "message", for: indexPath) as? MessageBubbleCell else { return nil }
             cell.configure(row: row, toggleStar: { [weak self] in self?.onToggleStar(id) }, retry: { [weak self] in self?.onRetryMessage(id) }, reply: { [weak self] in self?.onReply(id) }, reaction: { [weak self] emoji in self?.onReaction(id, emoji) },
                            edit: { [weak self] in self?.onEdit(id) }, unsend: { [weak self] in self?.onUnsend(id) },
-                           willPresentActions: { [weak self] in self?.putKeyboardAwayForActions() },
                            presentActions: { [weak self] context in
-                               guard let self, presentedViewController == nil else { return }
+                               guard let self, presentedViewController == nil else { return false }
+                               guard MessageActionsOverlay.present(from: self, context: context, onDismiss: { [weak self] chosen in self?.actionsDismissed(chosen: chosen) }) else { return false }
                                actionsVisible = true
-                               MessageActionsOverlay.present(from: self, context: context) { [weak self] choseAction in self?.actionsDismissed(choseAction: choseAction) }
+                               // The bubble was measured with the keyboard up and the overlay now covers the timeline.
+                               putKeyboardAwayForActions()
+                               return true
                            }, openAttachment: { [weak self] url in self?.preview(url, title: row.message.attachment?.name, isImage: row.message.attachment?.isImage == true) })
             return cell
         }
@@ -421,27 +423,33 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseOut]) { ghost.alpha = 0 } completion: { _ in ghost.removeFromSuperview() }
     }
 
-    /// Before the cell captures its frame: the keyboard would cover the menu, and an animated dismissal would move
-    /// the bubble out from under its snapshot, so it goes at once and the layout settles first.
+    /// Right after the overlay is presented over the captured bubble: the keyboard would cover the menu, so it slides
+    /// away with UIKit's own animation and the composer and insets follow it under the blur. Nothing is laid out
+    /// synchronously here; the overlay's snapshot never depended on where the timeline settles.
     private func putKeyboardAwayForActions() {
-        guard presentedViewController == nil else { return }
         restoresKeyboard = view.keyboardLayoutGuide.layoutFrame.height > view.safeAreaInsets.bottom + 100
         guard restoresKeyboard else { return }
-        MessageActionsOverlay.signposter.withIntervalSignpost("keyboard") {
-            UIView.performWithoutAnimation {
-                view.endEditing(true)
-                view.layoutIfNeeded()
-            }
-        }
+        view.endEditing(true)
     }
 
-    private func actionsDismissed(choseAction: Bool) {
+    private func actionsDismissed(chosen: MessageAction.Kind?) {
         actionsVisible = false
         heldUpdate?()
         heldUpdate = nil
-        // Reply and edit focus the composer themselves; text selection and the unsend dialog must keep it away.
-        if restoresKeyboard, !choseAction { onRestoreComposerFocus() }
+        // The keyboard comes back only when nothing took its place: reply and edit focus the composer themselves,
+        // text selection and the unsend dialog must keep it away. A reaction, copy, star or retry presents nothing.
+        // It comes back on the next turn, after the chosen action's own work, so that work cannot swallow the slide.
+        if restoresKeyboard, chosen.map(Self.leavesKeyboardFree) ?? true {
+            DispatchQueue.main.async { [weak self] in self?.onRestoreComposerFocus() }
+        }
         restoresKeyboard = false
+    }
+
+    private static func leavesKeyboardFree(_ kind: MessageAction.Kind) -> Bool {
+        switch kind {
+        case .copy, .star, .retry: true
+        case .reply, .edit, .selectText, .unsend: false
+        }
     }
 
     /// A rightward swipe that starts on a bubble is a reply; anywhere else it is the system's swipe back. The system
@@ -629,9 +637,15 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private var reactionAction: (String) -> Void = { _ in }
     private var editAction: () -> Void = {}
     private var unsendAction: () -> Void = {}
-    private var presentActions: (MessageActionsContext) -> Void = { _ in }
-    private var willPresentActions: () -> Void = {}
+    /// Returns whether the menu opened; when it did not, the cell puts its squeezed bubble back.
+    private var presentActions: (MessageActionsContext) -> Bool = { _ in false }
     private let pressFeedback = UIImpactFeedbackGenerator(style: .medium)
+    /// Bumped by every press start and end, so a squeeze that completes after the finger lifted presents nothing.
+    private var pressGeneration = 0
+    /// Recognition after 0.25 s, then a 0.2 s squeeze to 0.95; the menu opens when the squeeze completes under a held finger.
+    private static let pressDelay: TimeInterval = 0.25
+    private static let squeezeDuration: TimeInterval = 0.2
+    private static let squeezedScale: CGFloat = 0.95
     private var swipeReplyAction: (() -> Void)?
     private var crossedReplyThreshold = false
     private let replyFeedback = UIImpactFeedbackGenerator(style: .light)
@@ -687,7 +701,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             replyIndicator.heightAnchor.constraint(equalToConstant: 24)
         ])
         let press = UILongPressGestureRecognizer(target: self, action: #selector(handlePress(_:)))
-        press.minimumPressDuration = 0.35
+        press.minimumPressDuration = Self.pressDelay
         press.delegate = self
         bubble.addGestureRecognizer(press)
         let replyPan = UIPanGestureRecognizer(target: self, action: #selector(handleReplyPan(_:)))
@@ -989,18 +1003,75 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     }
 
     @objc private func handlePress(_ press: UILongPressGestureRecognizer) {
-        guard press.state == .began, let message else { return }
-        willPresentActions()
-        guard let bubbleSnapshot = bubble.snapshotView(afterScreenUpdates: false) else { return }
-        pressFeedback.impactOccurred()
+        switch press.state {
+        case .began:
+            guard message != nil else { return }
+            MessageActionsOverlay.signposter.emitEvent("press began")
+            pressFeedback.prepare()
+            // A reply swipe still settling would put its offset into the snapshot.
+            if bubble.transform.tx != 0 { resetReplySwipe(animated: false) }
+            pressGeneration += 1
+            let generation = pressGeneration
+            if UIAccessibility.isReduceMotionEnabled { presentMenu(); return }
+            UIView.animate(withDuration: Self.squeezeDuration, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction]) {
+                self.squeeze(Self.squeezedScale)
+            } completion: { [weak self] _ in
+                guard let self, generation == pressGeneration, press.state == .began || press.state == .changed else { return }
+                presentMenu()
+            }
+        case .ended, .cancelled, .failed:
+            pressGeneration += 1
+            // Released before the menu opened: the bubble springs back. After it opened the live bubble is hidden and already unsqueezed.
+            releaseSqueeze()
+        default:
+            break
+        }
+    }
+
+    /// Scales the bubble about its centre and keeps the reaction pills hanging off it by scaling them about the same point.
+    private func squeeze(_ scale: CGFloat) {
+        bubble.transform = CGAffineTransform(scaleX: scale, y: scale)
+        let offset = CGPoint(x: (1 - scale) * (bubble.center.x - reactionRow.center.x), y: (1 - scale) * (bubble.center.y - reactionRow.center.y))
+        reactionRow.transform = CGAffineTransform(a: scale, b: 0, c: 0, d: scale, tx: offset.x, ty: offset.y)
+    }
+
+    private func releaseSqueeze() {
+        guard bubble.transform.a != 1 else { return }
+        UIView.animate(springDuration: 0.25, bounce: 0.2, options: [.beginFromCurrentState, .allowUserInteraction]) { self.squeeze(1) }
+    }
+
+    /// The window frame a view has without its squeeze transform.
+    private func unsqueezedFrame(_ view: UIView) -> CGRect {
+        let centre = contentView.convert(view.center, to: nil)
+        return CGRect(x: centre.x - view.bounds.width / 2, y: centre.y - view.bounds.height / 2, width: view.bounds.width, height: view.bounds.height)
+    }
+
+    /// Haptic first, then the snapshot and frames exactly as the screen shows them (keyboard still up, bubble squeezed),
+    /// then the overlay. The timeline moves the keyboard only after the overlay covers it.
+    private func presentMenu() {
+        guard let message, window != nil, let bubbleSnapshot = bubble.snapshotView(afterScreenUpdates: false) else {
+            releaseSqueeze()
+            return
+        }
+        pressFeedback.impactOccurred(intensity: 0.8)
         let reactions = message.reactions.isEmpty ? nil : reactionRow.snapshotView(afterScreenUpdates: false)
-        presentActions(MessageActionsContext(message: message, bubble: bubbleSnapshot, bubbleFrame: bubble.convert(bubble.bounds, to: nil),
-                                             reactions: reactions, reactionsFrame: reactionRow.convert(reactionRow.bounds, to: nil),
+        let id = message.id
+        let opened = presentActions(MessageActionsContext(message: message, bubble: bubbleSnapshot, bubbleFrame: unsqueezedFrame(bubble),
+                                             bubbleShape: bubblePath(in: bubble.bounds).cgPath, sourceScale: bubble.transform.a,
+                                             reactions: reactions, reactionsFrame: unsqueezedFrame(reactionRow),
                                              actions: actions(), react: reactionAction,
                                              setSourceHidden: { [weak self] hidden in
-                                                 self?.bubble.alpha = hidden ? 0 : 1
-                                                 self?.reactionRow.alpha = hidden ? 0 : 1
+                                                 guard let self else { return }
+                                                 // Hidden, it drops the squeeze so the menu closes onto its resting size.
+                                                 if hidden { squeeze(1) }
+                                                 bubble.alpha = hidden ? 0 : 1
+                                                 reactionRow.alpha = hidden ? 0 : 1
+                                             },
+                                             currentBubbleFrame: { [weak self] in
+                                                 guard let self, messageID == id, window != nil else { return nil }
+                                                 return unsqueezedFrame(bubble)
                                              }))
+        if !opened { releaseSqueeze() }
     }
 
     /// `point` is in the cell's coordinates.
@@ -1070,6 +1141,11 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     override func prepareForReuse() {
         super.prepareForReuse()
         resetReplySwipe(animated: false)
+        // A cell recycled while its bubble hid under the menu, or mid-squeeze, must come back whole.
+        pressGeneration += 1
+        squeeze(1)
+        bubble.alpha = 1
+        reactionRow.alpha = 1
         _ = textView.resignFirstResponder()
         textView.isSelectable = false
         textView.isUserInteractionEnabled = false
@@ -1081,7 +1157,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
 
     func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,
                    edit: @escaping () -> Void = {}, unsend: @escaping () -> Void = {},
-                   willPresentActions: @escaping () -> Void = {}, presentActions: @escaping (MessageActionsContext) -> Void, openAttachment: @escaping (URL) -> Void = { _ in }) {
+                   presentActions: @escaping (MessageActionsContext) -> Bool, openAttachment: @escaping (URL) -> Void = { _ in }) {
         let message = row.message
         self.row = row
         self.toggleStar = toggleStar
@@ -1091,7 +1167,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         self.editAction = edit
         self.unsendAction = unsend
         self.presentActions = presentActions
-        self.willPresentActions = willPresentActions
         self.openAttachment = openAttachment
         bubble.cornerConfiguration = .corners(topLeftRadius: .fixed(20), topRightRadius: .fixed(20),
                                               bottomLeftRadius: .fixed(corners.bottomLeft), bottomRightRadius: .fixed(corners.bottomRight))
