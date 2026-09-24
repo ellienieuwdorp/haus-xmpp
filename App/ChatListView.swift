@@ -54,7 +54,10 @@ struct ChatListView: View {
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 4, trailing: 16))
                     }
-                    ForEach(visibleChats) { chat in
+                    // The row identity includes the pin state, so a pin change is a delete + insert (Signal's
+                    // same-section rule): List animates that as a fade in place, whereas a real move to the top
+                    // starts the row from below the last cell and slides it under its siblings (iOS 26.5 and 27).
+                    ForEach(visibleChats, id: \.listIdentity) { chat in
                         Button { path.append(.chat(chat.id)) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatars[chat.id], typing: model.typing[chat.id]) }
                             .buttonStyle(.plain)
                             .task(id: "\(chat.id)|\(model.session.isReady)") { await model.loadAvatar(for: chat.id) }
@@ -63,16 +66,17 @@ struct ChatListView: View {
                             .accessibilityIdentifier("chat.\(chat.id)")
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button(chat.isPinned ? "Unpin" : "Pin", systemImage: chat.isPinned ? "pin.slash" : "pin") {
-                                    Task { await model.togglePin(chat) }
+                                    Task {
+                                        // Let the swipe action close first (~0.30 s on 26.5 plus the highlight
+                                        // fade); changing the list in the same turn animates the still-open cell.
+                                        try? await Task.sleep(for: pinCommitDelay)
+                                        await model.togglePin(chat)
+                                    }
                                 }.tint(Color(uiColor: AccentTheme.current.tint))
                             }
                     }
                 }
                 .listStyle(.plain)
-                // A pin change crossfades the whole list: List moves the row whose swipe action is still closing the
-                // wrong way, and a remove/insert overlaps the rows. ponytail: resets scroll to the top on pin/unpin.
-                .id(visibleChats.filter(\.isPinned).map(\.id))
-                .transition(.opacity)
                 .overlay {
                     if visibleChats.isEmpty {
                         ContentUnavailableView.search(text: searchTerm)
@@ -304,4 +308,13 @@ private struct ChatRow: View {
         }
         .contentShape(Rectangle())
     }
+}
+
+/// Delay between the Pin/Unpin tap and the model change, so the swipe action finishes closing before the row moves.
+/// Measured close: ~0.30 s on iOS 26.5, ~0.23 s on 27.0, plus the highlight fade; do not go below 300 ms.
+private let pinCommitDelay: Duration = .milliseconds(350)
+
+private extension ChatSummary {
+    /// Changes with the pin state so that List animates a pin as a delete + insert rather than a move.
+    var listIdentity: String { "\(id)|\(isPinned ? 1 : 0)" }
 }
