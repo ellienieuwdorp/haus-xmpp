@@ -1806,6 +1806,12 @@ final class AppModel {
                 guard let page = try? await loadTimeline(store: store, account: account, chat: chat.id, isGroup: isGroup(chat.id), limit: AppModel.timelinePage),
                       accountID == account else { continue }
                 timelinePages.store(page, for: chat, account: account)
+                // The newest photos and videos too, so their bubbles are not placeholders in the first frame.
+                for message in page.messages.suffix(12) {
+                    guard let attachment = message.attachment, attachment.mediaType.hasPrefix("image/") || attachment.mediaType.hasPrefix("video/"),
+                          let url = files?.cached(attachment, messageID: message.id) else { continue }
+                    _ = await AttachmentThumbnails.image(for: url, mediaType: attachment.mediaType)
+                }
             }
         }
     }
