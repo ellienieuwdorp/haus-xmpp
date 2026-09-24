@@ -43,7 +43,9 @@ final class AppModel {
     private(set) var accountPreferences = AccountPreferences()
     private(set) var groupChats: [String: GroupChatState] = [:]
     /// Chat → who is typing there (XEP-0085). In memory only; it expires on its own.
-    private(set) var typing: [String: [String]] = [:]
+    private(set) var typing: [String: [String]] = [:] { didSet { syncOpenChatTyping() } }
+    /// The open chat's entry in `typing`, observed on its own so typing in another chat never re-renders the conversation.
+    private(set) var openChatTyping: [String]?
     @ObservationIgnored private var typingTracker = TypingTracker()
     @ObservationIgnored private var typingExpiry: Task<Void, Never>?
     /// What we last told the open chat's peer about our own typing.
@@ -101,7 +103,7 @@ final class AppModel {
     @ObservationIgnored private var drainTask: Task<Void, Never>?
     @ObservationIgnored private var client: XMPPClient?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
-    @ObservationIgnored private var openChatID: String?
+    @ObservationIgnored private var openChatID: String? { didSet { syncOpenChatTyping() } }
     @ObservationIgnored private var encryptionDetailsChatID: String?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var prepared = false
@@ -1598,6 +1600,11 @@ final class AppModel {
             guard !Task.isCancelled else { return }
             self?.publishTyping()
         }
+    }
+
+    private func syncOpenChatTyping() {
+        let open = openChatID.flatMap { typing[$0] }
+        if open != openChatTyping { openChatTyping = open }
     }
 
     private func resetTyping() {

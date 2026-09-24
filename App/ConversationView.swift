@@ -104,7 +104,7 @@ struct ConversationView: View {
 
     /// Search and the starred filter show a slice of history, so nobody is shown typing at its end.
     private var timelineTyping: TimelineTyping? {
-        guard !showingSearch, !starredOnly, let names = model.typing[chatID], let first = names.first else { return nil }
+        guard !showingSearch, !starredOnly, let names = model.openChatTyping, let first = names.first else { return nil }
         return TimelineTyping(author: isGroup ? names.joined(separator: ", ") : nil, colorKey: first,
                               accessibilityLabel: TypingTracker.description(isGroup ? names : [title]))
     }
