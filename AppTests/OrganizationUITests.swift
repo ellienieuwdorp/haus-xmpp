@@ -17,11 +17,13 @@ final class OrganizationUITests: XCTestCase {
         row.swipeLeft()
         if app.buttons["Unpin"].waitForExistence(timeout: 1) {
             app.buttons["Unpin"].tap()
+            // The pin change lands after the swipe action has closed, so wait for it rather than asserting at once.
+            XCTAssertTrue(waitForPinned(false, row), "Unpin must clear the pinned value")
             row.swipeLeft()
         }
         XCTAssertTrue(app.buttons["Pin"].waitForExistence(timeout: 3))
         app.buttons["Pin"].tap()
-        XCTAssertEqual(row.value as? String, "Pinned")
+        XCTAssertTrue(waitForPinned(true, row), "Pin must mark the row pinned")
         let capture = XCTAttachment(screenshot: app.screenshot())
         capture.name = "Centered pin and larger compose"
         capture.lifetime = .keepAlways
@@ -68,5 +70,12 @@ final class OrganizationUITests: XCTestCase {
         app.buttons["Starred messages"].tap()
         XCTAssertTrue(message.waitForExistence(timeout: 5), "Star must survive process restart")
         XCTAssertTrue(message.label.contains("starred"))
+    }
+
+    /// Waits for the row's "Pinned" value; the list applies a pin change a moment after the swipe action closes.
+    @MainActor private func waitForPinned(_ pinned: Bool, _ row: XCUIElement, timeout: TimeInterval = 3) -> Bool {
+        let format = pinned ? "value == 'Pinned'" : "NOT (value == 'Pinned')"
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: format), object: row)
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
 }
