@@ -72,6 +72,7 @@ struct SettingsView: View {
                         Label { Text("Appearance") } icon: { SettingsIconTile(systemName: "paintpalette.fill", color: .indigo) }
                     }
                 }
+                .accessibilityIdentifier("appearanceRow")
             }
             Section("Development") {
                 HStack(spacing: 12) {
