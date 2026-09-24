@@ -1,16 +1,17 @@
 import SwiftUI
 import OMEMO
 
-/// One-line trust state for the conversation header and details pill.
+/// One-line trust state for the details pill, presented from `ChatCapabilities.encryption`.
 struct ConversationTrust {
-    enum Level { case verified, encrypted, review, other }
+    /// `pending`: nothing stored yet. No pill is drawn (its height is kept), so "not known yet" never reads as "off".
+    enum Level { case verified, encrypted, review, pending, other }
     let level: Level
     let subtitle: String
 
     var needsReview: Bool { level == .review }
     var icon: String {
         switch level {
-        case .verified, .encrypted: "lock"
+        case .verified, .encrypted, .pending: "lock"
         case .review: "exclamationmark.shield"
         case .other: "lock.open"
         }
@@ -20,7 +21,7 @@ struct ConversationTrust {
         case .verified: .green
         case .encrypted: .secondary
         case .review: .orange
-        case .other: .secondary
+        case .pending, .other: .secondary
         }
     }
     var pill: String {
@@ -28,7 +29,7 @@ struct ConversationTrust {
         case .verified: "Encrypted · Verified"
         case .encrypted: "Encrypted"
         case .review: "Needs review"
-        case .other: subtitle
+        case .pending, .other: subtitle
         }
     }
 }
@@ -40,23 +41,22 @@ extension AppModel {
         return chatID.split(separator: "@", maxSplits: 1).first.map(String.init) ?? chatID
     }
 
+    /// Stored device trust decides, whatever the socket is doing: a chat with usable trusted devices is encrypted
+    /// while offline too, because queued messages are sealed for them. A failed refresh never changes it.
     func trustSummary(for chatID: String) -> ConversationTrust {
         if isDemo { return ConversationTrust(level: .encrypted, subtitle: "Sample conversation") }
-        if encryptionNeedsReview {
-            return ConversationTrust(level: .review, subtitle: isGroup(chatID) ? "Devices need review" : "New device needs review")
+        let group = isGroup(chatID)
+        switch chatCapabilities(chatID).encryption {
+        case .pending:
+            return ConversationTrust(level: .pending, subtitle: "")
+        case .needsReview:
+            return ConversationTrust(level: .review, subtitle: group ? "Devices need review" : "New device needs review")
+        case .unavailable(let reason):
+            return ConversationTrust(level: .other, subtitle: reason)
+        case .encrypted(let verified):
+            if group { return ConversationTrust(level: verified ? .verified : .encrypted, subtitle: "\(groupChats[chatID]?.members.count ?? 0) members · Encrypted") }
+            return ConversationTrust(level: verified ? .verified : .encrypted, subtitle: verified ? "Encrypted · Verified" : "Encrypted")
         }
-        if isGroup(chatID) {
-            guard let group = groupChats[chatID], group.joined, group.issue == nil else { return ConversationTrust(level: .other, subtitle: encryptionStatus) }
-            return ConversationTrust(level: .encrypted, subtitle: "\(group.members.count) members · Encrypted")
-        }
-        // Stored device trust decides, whatever the socket is doing; a chat with usable trusted
-        // devices is encrypted while offline too, because queued messages are sealed for them.
-        let theirs = encryptionOverview?.devices.filter { $0.jid == chatID && $0.active } ?? []
-        guard theirs.contains(where: \.trust.permitsEncryption) else {
-            return ConversationTrust(level: .other, subtitle: encryptionStatus)
-        }
-        let verified = !theirs.isEmpty && theirs.allSatisfy { $0.trust == .verified }
-        return ConversationTrust(level: verified ? .verified : .encrypted, subtitle: verified ? "Encrypted · Verified" : "Encrypted")
     }
 }
 
@@ -102,7 +102,11 @@ struct ChatDetailsView: View {
                     Text(chatID).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
                     if !model.isDemo {
                         let trust = model.trustSummary(for: chatID)
-                        TrustPill(text: trust.pill, systemImage: trust.level == .verified ? "checkmark.shield" : trust.icon, color: trust.color)
+                        // Pending keeps the pill's height, so the hero never shifts when the stored answer arrives.
+                        TrustPill(text: trust.level == .pending ? "Encrypted" : trust.pill,
+                                  systemImage: trust.level == .verified ? "checkmark.shield" : trust.icon, color: trust.color)
+                            .opacity(trust.level == .pending ? 0 : 1)
+                            .accessibilityHidden(trust.level == .pending)
                             .padding(.top, 4)
                     }
                 }
@@ -144,7 +148,7 @@ struct ChatDetailsView: View {
 
     private var deviceCount: String? {
         if isGroup, let members = model.groupChats[chatID]?.members.count { return "\(members) members" }
-        guard let devices = model.encryptionOverview?.devices.filter({ $0.jid == chatID && $0.active }).count else { return nil }
+        guard let devices = model.chatCapabilities(chatID).deviceCount else { return nil }
         return "\(devices) \(devices == 1 ? "device" : "devices")"
     }
 

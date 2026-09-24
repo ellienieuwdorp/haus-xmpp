@@ -88,12 +88,31 @@ final class AppModel {
     @ObservationIgnored private var authenticationRejected = false
     @ObservationIgnored private var reportedSetupFailure: String?
     @ObservationIgnored private let pathMonitor = NWPathMonitor()
-    /// Status of the open chat's encryption (devices, trust, fetch problems). Never session state.
-    private(set) var encryptionStatus = "Setting up encryption…"
+    /// The chat the encryption projection describes. Set as a chat opens, before its store read returns, and kept
+    /// across pop-back, disconnect and reconnect; only another chat or account replaces it.
+    private(set) var encryptionOverviewChatID: String?
+    /// That chat's stored (then refreshed) devices; nil until the store answered. Views read `encryptionOverview(for:)`.
     private(set) var encryptionOverview: EncryptionOverview?
-    private(set) var encryptionNeedsReview = false
-    /// What the last device refresh saw on the server, for the Devices screen footer.
+    /// Chats with retained incoming ciphertext awaiting review, from the chat-list load.
+    private(set) var pendingReviewChats: Set<String> = []
+    /// What the last device refresh saw on the server, and any refresh or decryption problem, for the Devices screen footer.
     private(set) var encryptionDiagnostics = ""
+    /// The chat whose devices were re-fetched on which connection generation, with that refresh's footer line.
+    /// Opening a chat or popping back reuses it; a reconnect (new generation) fetches once more.
+    @ObservationIgnored private var refreshFence: [String: (generation: UUID, note: String)] = [:]
+    /// The open chat's encryption in words, derived from stored devices. Inbound, outbox and decryption paths still
+    /// assign it to report a problem; the text lands in the diagnostics footer only, so a transient problem never
+    /// rewrites the pill or re-shows a dismissed review card.
+    var encryptionStatus: String {
+        get { encryptionOverviewChatID.map { trustSummary(for: $0).subtitle } ?? "" }
+        set { encryptionDiagnostics = newValue }
+    }
+    /// Stored undecided devices or retained ciphertext for the open chat. The outbox still assigns it when a send is
+    /// blocked; the assignment is ignored because the store already holds whatever blocked the send.
+    var encryptionNeedsReview: Bool {
+        get { encryptionOverviewChatID.map { chatCapabilities($0).encryption == .needsReview } ?? false }
+        set { _ = newValue }
+    }
     @ObservationIgnored private var encryption: OMEMOService?
     var isDemo: Bool { accountID == "preview.local" }
 
@@ -113,7 +132,10 @@ final class AppModel {
     @ObservationIgnored private var inbound: InboundProcessor?
     /// Local plaintext files of the open chat's attachments, by message ID, once downloaded or sent.
     private(set) var attachmentFiles: [String: URL] = [:]
-    @ObservationIgnored private var uploadService: XMPPUploadService?
+    /// The account's upload service as last discovered; persisted per account so the attach button survives launch
+    /// and reconnect. Observed: the composer's attach button follows it.
+    private var uploadService: XMPPUploadService?
+    private var uploads: UploadServiceMemory { UploadServiceMemory(defaults: preferences) }
     private var files: AttachmentFiles? { storageDirectory.map { AttachmentFiles(directory: $0, account: accountID) } }
     @ObservationIgnored private var uploader: AttachmentUploader?
     @ObservationIgnored private var storageDirectory: URL?
@@ -122,7 +144,9 @@ final class AppModel {
     @ObservationIgnored private var downloading: Set<String> = []
     /// Bytes a chosen file may have before it is refused; the server's limit when it publishes one.
     var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
-    var canSendAttachments: Bool { isDemo || (uploadService != nil && session.isReady) }
+    /// The server offered uploads on its last completed discovery. Never gated on the socket: a file is sealed and
+    /// queued offline, and its upload starts once the session is ready.
+    var canSendAttachments: Bool { isDemo || uploadService != nil }
     @ObservationIgnored private let testSessionID: String? = {
         #if DEBUG
         guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"],
@@ -169,6 +193,7 @@ final class AppModel {
                 encryption = OMEMOService(store: store, protection: try StateProtection(key: wrappingKey))
             }
             accountID = preferences.string(forKey: "lastAccount") ?? ""
+            uploadService = uploads.load(account: accountID)
             if ProcessInfo.processInfo.arguments.contains("-demo") { await loadDemo() }
             else {
                 if let store, try await NotificationDiagnostics.exportIfRequested(store: store, directory: directory) {
@@ -389,7 +414,9 @@ final class AppModel {
 
     /// Disconnect and forget the selected account so the app returns to its signed-out state.
     func signOut() async {
+        let account = accountID
         await forgetAccount()
+        uploads.forget(account: account)
         selectAccount("")
         preferences.removeObject(forKey: "lastAccount")
     }
@@ -665,6 +692,9 @@ final class AppModel {
         messageReactions = [:]; messageReceipts = [:]
         attachmentFiles = [:]
         openChatID = nil
+        encryptionOverviewChatID = nil; encryptionOverview = nil; encryptionDetailsChatID = nil
+        pendingReviewChats = []; refreshFence = [:]
+        uploadService = uploads.load(account: account)
         resetTyping()
         preferences.set(account, forKey: "lastAccount")
     }
@@ -859,8 +889,12 @@ final class AppModel {
                         let features = try await client.discoveryFeatures()
                         if features.contains("urn:xmpp:carbons:2") { step = "carbons"; try await client.setCarbonsEnabled() }
                         step = "file upload"
-                        // Optional: a server without XEP-0363 just has no attach button.
-                        uploadService = (try? await client.uploadService()) ?? nil
+                        // Optional: a server without XEP-0363 just has no attach button. Only a completed answer changes
+                        // what the button remembers; a discovery that throws keeps the last one.
+                        let discovery: Result<XMPPUploadService?, any Error>
+                        do { discovery = .success(try await client.uploadService()) } catch { discovery = .failure(error) }
+                        guard generation == token else { return }
+                        uploadService = uploads.settle(account: account, previous: uploadService, discovery: discovery)
                         step = "publishing this phone’s keys"
                         try await encryption.initialize(account: account, transport: client)
                         step = "rejoining groups"
@@ -958,7 +992,7 @@ final class AppModel {
                 try? await encryption.maintainLocalAdvertisement(account: account, profile: profile, transport: client)
             }
             if let openChatID, owner == openChatID || owner == accountID || groupChats[openChatID]?.members.contains(owner) == true {
-                await loadEncryptionDetails(for: openChatID)
+                await loadEncryptionDetails(for: openChatID, force: true)
             }
         case .avatarMetadata(let owner, _):
             // The server pushed a change; re-fetch through the one lazy path so the hash check applies.
@@ -1108,38 +1142,50 @@ final class AppModel {
         }
     }
 
-    func loadGroupDetails(room: String, refreshFromServer: Bool = true) async {
+    /// Group devices from the store first, then from the server. The pill follows the cached devices; joining only
+    /// gates sending. `force` defaults to true for the group page and its Refresh button; opening the chat passes
+    /// false, so pop-back reuses this connection's refresh and a reconnect fetches once more. A failed refresh
+    /// writes the diagnostics footer only.
+    func loadGroupDetails(room: String, refreshFromServer: Bool = true, force: Bool = true) async {
         guard foreground, !quiescing, let encryption, isGroup(room) else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         let account = accountID, token = generation
         do {
-            let identity = try await encryption.localIdentity(account: account, profile: .modern)
-            guard generation == token else { return }
+            let cached = try await encryption.cachedGroupDevices(account: account, room: room)
+            guard generation == token, accountID == account else { return }
+            groupChats[room]?.devices = cached
+            groupChats[room]?.devicesLoaded = true
+        } catch {
+            guard generation == token, accountID == account, !(error is CancellationError) else { return }
+            encryptionDiagnostics = "Stored group devices could not be read: \(groupFailure(error))"
+        }
+        // Only for the group page's own fingerprint row; a missing identity is created on the next connect.
+        if let identity = try? await encryption.localIdentity(account: account, profile: .modern), generation == token, accountID == account {
             groupChats[room]?.localDeviceID = identity.deviceID
             groupChats[room]?.localFingerprint = identity.fingerprint
-            let devices: [EncryptionDevice]
-            if refreshFromServer, hasTransportOwnership, isConnected, encryptionReady, let client {
-                let overview = try await encryption.refreshGroupDevices(account: account, room: room, transport: client)
-                // Device refresh persists policy after its room snapshot. Own presence may
-                // change during those awaits; display the transport's current join state.
-                let current = try await client.groupRoomSnapshot(room)
-                guard generation == token else { return }
-                groupChats[room]?.members = current?.members ?? overview.room.members
-                groupChats[room]?.joined = current?.joined == true
-                groupChats[room]?.issue = nil
-                devices = try await encryption.cachedGroupDevices(account: account, room: room)
-            } else { devices = try await encryption.cachedGroupDevices(account: account, room: room) }
+        }
+        guard refreshFromServer, force || refreshFence[room]?.generation != token,
+              hasTransportOwnership, isConnected, encryptionReady, let client else { return }
+        do {
+            let overview = try await encryption.refreshGroupDevices(account: account, room: room, transport: client)
+            // Device refresh persists policy after its room snapshot. Own presence may
+            // change during those awaits; display the transport's current join state.
+            let current = try await client.groupRoomSnapshot(room)
+            guard generation == token else { return }
+            groupChats[room]?.members = current?.members ?? overview.room.members
+            groupChats[room]?.joined = current?.joined == true
+            groupChats[room]?.issue = nil
+            let devices = try await encryption.cachedGroupDevices(account: account, room: room)
             guard generation == token, accountID == account else { return }
             groupChats[room]?.devices = devices
-            if openChatID == room {
-                encryptionNeedsReview = groupChats[room]?.needsReview == true
-                encryptionStatus = groupChats[room]?.status ?? "Group encryption needs attention"
-            }
+            groupChats[room]?.devicesLoaded = true
+            let note = "Last group refresh: \(devices.filter(\.active).count) active devices"
+            refreshFence[room] = (token, note)
+            encryptionDiagnostics = note
         } catch {
-            guard generation == token, !(error is CancellationError) else { return }
-            groupChats[room]?.issue = groupFailure(error)
-            if openChatID == room { encryptionStatus = groupFailure(error); encryptionNeedsReview = true }
+            guard generation == token, accountID == account, !(error is CancellationError) else { return }
+            encryptionDiagnostics = "Last group refresh failed: \(groupFailure(error))"
         }
     }
 
@@ -1419,8 +1465,10 @@ final class AppModel {
     }
 
     func openChat(_ chatID: String) async {
-        openChatID = chatID; timelineWindow = AppModel.timelinePage; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]; encryptionOverview = nil
-        encryptionStatus = "Setting up encryption…"; encryptionNeedsReview = false
+        openChatID = chatID; timelineWindow = AppModel.timelinePage; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]
+        // Keep the same chat's devices across pop-back and reconnect; another chat starts pending until its store read.
+        if encryptionOverviewChatID != chatID { encryptionOverviewChatID = chatID; encryptionOverview = nil }
+        encryptionDetailsChatID = chatID
         // First paint: the newest screenful now, before the chat list and the rest of the history.
         let account = accountID
         if let store, let publish = try? await loadTimeline(store: store, account: account, chat: chatID, isGroup: isGroup(chatID), limit: 50),
@@ -1429,25 +1477,49 @@ final class AppModel {
         if !isDemo { await loadEncryptionDetails(for: chatID) }
     }
 
-    func loadEncryptionDetails(for chatID: String, refreshFromServer: Bool = true, profile: XMPPOMEMOProfile? = nil) async {
+    /// Publishes the chat's stored devices at once (no network, offline too), then re-fetches them from the server
+    /// at most once per connection: opening the chat again or popping back reuses the result, a reconnect fetches
+    /// once more. `force` (the Refresh button, a server device-list push) and a version switch always fetch.
+    /// A failed fetch writes the diagnostics footer only; the stored trust keeps deciding the pill.
+    func loadEncryptionDetails(for chatID: String, refreshFromServer: Bool = true, profile: XMPPOMEMOProfile? = nil, force: Bool = false) async {
         guard foreground, !quiescing else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         guard let encryption, !isDemo else { return }
-        if isGroup(chatID) { await loadGroupDetails(room: chatID, refreshFromServer: refreshFromServer); return }
+        if isGroup(chatID) { await loadGroupDetails(room: chatID, refreshFromServer: refreshFromServer, force: force); return }
         let account = accountID
         let token = generation
         // The pushed details pages cover the conversation, which clears openChatID; the latest request is the fence.
         encryptionDetailsChatID = chatID
+        var isCurrent: Bool { accountID == account && generation == token && encryptionDetailsChatID == chatID }
+        // A version switch shows the requested version's devices only once they are fetched.
+        if profile == nil {
+            do {
+                let stored = try await encryption.overview(account: account, peer: chatID)
+                guard isCurrent else { return }
+                encryptionOverviewChatID = chatID
+                encryptionOverview = stored
+            } catch {
+                guard isCurrent else { return }
+                encryptionDiagnostics = Self.storedDevicesUnreadable
+            }
+        }
+        guard refreshFromServer else { return }
+        if !force, profile == nil, let fence = refreshFence[chatID], fence.generation == token {
+            encryptionDiagnostics = fence.note
+            return
+        }
+        guard hasTransportOwnership, encryptionReady, isConnected, let client else {
+            if !encryptionDiagnostics.hasPrefix("Setup failed") {
+                encryptionDiagnostics = isConnected ? "Not refreshed: encryption setup has not completed on this connection." : "Not refreshed: offline."
+            }
+            return
+        }
         do {
-            let overview: EncryptionOverview
-            let refreshed = refreshFromServer && hasTransportOwnership && encryptionReady && isConnected && client != nil
-            if refreshed, let client {
-                overview = try await encryption.refreshDevices(account: account, peer: chatID, profile: profile, transport: client)
-            } else { overview = try await encryption.overview(account: account, peer: chatID) }
-            guard accountID == account, generation == token, encryptionDetailsChatID == chatID else { return }
+            let overview = try await encryption.refreshDevices(account: account, peer: chatID, profile: profile, transport: client)
+            guard isCurrent else { return }
+            encryptionOverviewChatID = chatID
             encryptionOverview = overview
-            encryptionNeedsReview = overview.needsTrust
             let summary = [chatID, account].map { owner -> String in
                 let name = owner == account ? "you" : AppModel.displayName(for: owner, title: nil)
                 let advertised = overview.advertisedDevices[owner] ?? 0
@@ -1455,20 +1527,12 @@ final class AppModel {
                 let active = overview.devices.filter { $0.jid == owner && $0.active && !(owner == account && $0.deviceID == overview.localDeviceID) }.count
                 return "\(name): \(advertised) advertised, \(active) usable" + (missing > 0 ? ", \(missing) without keys" : "")
             }.joined(separator: " · ")
-            if refreshed {
-                encryptionDiagnostics = "Last refresh (\(overview.profile == .legacy ? "OMEMO · compatible" : "OMEMO 2")): \(summary)"
-            } else if !encryptionDiagnostics.hasPrefix("Setup failed") {
-                encryptionDiagnostics = isConnected ? "Not refreshed: encryption setup has not completed on this connection." : "Not refreshed: offline."
-            }
+            let note = "Last refresh (\(overview.profile == .legacy ? "OMEMO · compatible" : "OMEMO 2")): \(summary)"
+            refreshFence[chatID] = (token, note)
+            encryptionDiagnostics = note
             Logger(subsystem: "dev.xmpplab.ios", category: "encryption").info("Device refresh: \(summary, privacy: .public)")
-            if overview.hasIncompatibleDevices { encryptionStatus = "Devices use incompatible encryption versions" }
-            else if overview.needsTrust { encryptionStatus = "Review encryption devices" }
-            else if !overview.devices.contains(where: { $0.jid == chatID && $0.active && $0.trust.permitsEncryption }) {
-                // Until this connection has fetched their devices, an empty cache is unknown, not absent.
-                encryptionStatus = refreshed ? "No compatible encryption devices" : "Setting up encryption…"
-            } else { encryptionStatus = "New messages are end-to-end encrypted" }
         } catch {
-            guard accountID == account, generation == token, encryptionDetailsChatID == chatID else { return }
+            guard isCurrent else { return }
             let detail: String
             if case .stanza(let condition)? = error as? XMPPIQError { detail = condition } else { detail = String(describing: error).prefix(80).description }
             Logger(subsystem: "dev.xmpplab.ios", category: "encryption").error("Device refresh for \(chatID, privacy: .private) failed: \(detail, privacy: .public)")
@@ -1476,11 +1540,30 @@ final class AppModel {
             switch detail {
             case "remote-server-not-found", "remote-server-timeout": friendly = "Their server could not be reached. Try again in a moment."
             case "forbidden", "not-authorized", "not-allowed": friendly = "Their server refused to share their devices."
-            default: friendly = "Could not fetch encryption devices · \(detail)"
+            default: friendly = "Could not fetch encryption devices."
             }
-            encryptionStatus = (error as? OMEMOError)?.errorDescription ?? friendly
-            encryptionDiagnostics = "Last refresh failed: \(detail)"
+            encryptionDiagnostics = "Last refresh failed (\(detail)). \((error as? OMEMOError)?.errorDescription ?? friendly)"
         }
+    }
+
+    static let storedDevicesUnreadable = "Stored devices could not be read. Nothing was changed."
+
+    /// What is known about a chat's devices: pending until the store answered, then stored, then refreshed on this connection.
+    func encryptionKnowledge(for chatID: String) -> EncryptionKnowledge {
+        let refreshed = refreshFence[chatID]?.generation == generation
+        if let group = groupChats[chatID] {
+            guard group.devicesLoaded else { return .pending }
+            let facts = DeviceTrustFacts(group, account: accountID)
+            return refreshed ? .refreshed(facts) : .stored(facts)
+        }
+        guard let overview = encryptionOverview(for: chatID) else { return .pending }
+        let facts = DeviceTrustFacts(overview, peer: chatID)
+        return refreshed ? .refreshed(facts) : .stored(facts)
+    }
+
+    /// The stored overview when it belongs to `chatID`; nil while another chat's is loaded or the store has not answered.
+    func encryptionOverview(for chatID: String) -> EncryptionOverview? {
+        encryptionOverviewChatID == chatID ? encryptionOverview : nil
     }
 
     func setDeviceTrust(_ device: EncryptionDevice, trust: DeviceTrust, chatID: String) async {
@@ -1741,6 +1824,7 @@ final class AppModel {
             try await store.upsertChat(accountID: account, chatID: peer, title: peer)
         }
         guard accountID == account else { return }
+        pendingReviewChats = Set(pending.keys)
         accountPreferences = try await store.accountPreferences(accountID: account)
         notificationPreviewsEnabled = accountPreferences.notificationPreviews
         if foreground, hasTransportOwnership, !quiescing {

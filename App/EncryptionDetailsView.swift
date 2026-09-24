@@ -10,7 +10,7 @@ struct EncryptionDetailsView: View {
 
     var body: some View {
         List {
-            if let overview = model.encryptionOverview {
+            if let overview = model.encryptionOverview(for: chatID) {
                 if overview.hasIncompatibleDevices {
                     Section { Label("Some devices only support the other encryption version. Sending is paused so they are not silently left out.", systemImage: "exclamationmark.shield").font(.subheadline) }
                 }
@@ -35,16 +35,19 @@ struct EncryptionDetailsView: View {
                         .textSelection(.enabled)
                 }
             } else {
-                Section { Text(model.encryptionStatus).foregroundStyle(.secondary) }
+                // The store read takes milliseconds; a refresh problem shows in the footer once the list is there.
+                let unreadable = model.encryptionDiagnostics == AppModel.storedDevicesUnreadable
+                Section { Text(unreadable ? AppModel.storedDevicesUnreadable : "Loading stored devices…").foregroundStyle(.secondary) }
             }
         }
+        // Stored devices at once; the server is asked at most once per connection unless Refresh is tapped.
         .task { await model.loadEncryptionDetails(for: chatID) }
         .navigationTitle("Devices & Encryption")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Refresh devices", systemImage: "arrow.clockwise") {
-                    Task { await model.loadEncryptionDetails(for: chatID) }
+                    Task { await model.loadEncryptionDetails(for: chatID, force: true) }
                 }.labelStyle(.iconOnly).disabled(!model.session.isReady)
             }
         }
@@ -59,7 +62,7 @@ struct EncryptionDetailsView: View {
 
     /// Why a contact has nothing to review: keys missing on the server, or a list their server does not show us.
     private func emptyExplanation(for owner: String) -> String {
-        let missing = model.encryptionOverview?.unavailableDevices[owner] ?? 0
+        let missing = model.encryptionOverview(for: chatID)?.unavailableDevices[owner] ?? 0
         if missing > 0 {
             return "\(missing) advertised \(missing == 1 ? "device has" : "devices have") no published keys. Ask them to open their chat app so it republishes them."
         }
