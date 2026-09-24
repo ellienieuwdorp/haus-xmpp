@@ -206,3 +206,17 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(direct(.stored(incompatible), ready: true).encryption, .unavailable("Devices use incompatible encryption versions"))
     }
 }
+
+extension ChatCapabilitiesTests {
+    /// Retained ciphertext alone never asks for a review: only an undecided stored device or a trust hold does.
+    func testRetainedCiphertextWithoutUndecidedDevicesIsNotAReview() {
+        var attention = EncryptionAttention()
+        attention.hold(["alex@example.com": "An encrypted message could not be opened."], shownChat: nil)
+        XCTAssertFalse(attention.heldForTrust.contains("alex@example.com"))
+        let stored = DeviceTrustFacts(peerTrust: [.accepted], needsReview: false, peerKnown: true)
+        let capabilities = ChatCapabilities.derive(isDemo: false, isGroup: false, knowledge: .stored(stored),
+                                                   reviewPending: attention.heldForTrust.contains("alex@example.com"),
+                                                   uploadAvailable: true, sessionReady: false)
+        XCTAssertEqual(capabilities.encryption, .encrypted(verified: false))
+    }
+}

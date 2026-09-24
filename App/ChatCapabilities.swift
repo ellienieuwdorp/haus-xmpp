@@ -182,8 +182,11 @@ extension AppModel {
     /// The one derived value per chat that views read for trust, sending and attaching.
     func chatCapabilities(_ chatID: String) -> ChatCapabilities {
         let group = groupChats[chatID]
+        // Review means a stored device is undecided or a send is held for a fingerprint decision. Retained ciphertext
+        // is not a review by itself: a carbon from another own client or a message from a removed device stays
+        // retained with nothing to approve, and blaming a new device for it was wrong (2026-09-25).
         return ChatCapabilities.derive(isDemo: isDemo, isGroup: group != nil, knowledge: encryptionKnowledge(for: chatID),
-                                       reviewPending: pendingReviewChats.contains(chatID) || encryptionAttention.heldForTrust.contains(chatID),
+                                       reviewPending: encryptionAttention.heldForTrust.contains(chatID),
                                        groupJoined: group?.joined == true,
                                        groupIssue: group?.issue, uploadAvailable: canSendAttachments, sessionReady: session.isReady)
     }

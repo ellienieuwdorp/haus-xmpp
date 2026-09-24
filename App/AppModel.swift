@@ -96,8 +96,6 @@ final class AppModel {
     private(set) var encryptionOverviewChatID: String?
     /// That chat's stored (then refreshed) devices; nil until the store answered. Views read `encryptionOverview(for:)`.
     private(set) var encryptionOverview: EncryptionOverview?
-    /// Chats with retained incoming ciphertext awaiting review, from the chat-list load.
-    private(set) var pendingReviewChats: Set<String> = []
     /// Encryption problems: the Devices footer, sends held for a fingerprint decision, and group refresh failures.
     private(set) var encryptionAttention = EncryptionAttention()
     /// What the last device refresh saw on the server, and any refresh or decryption problem, for the Devices screen footer.
@@ -693,7 +691,7 @@ final class AppModel {
         attachmentFiles = [:]
         openChatID = nil
         encryptionOverviewChatID = nil; encryptionOverview = nil; encryptionDetailsChatID = nil
-        pendingReviewChats = []; refreshFence = [:]; encryptionAttention = EncryptionAttention()
+        refreshFence = [:]; encryptionAttention = EncryptionAttention()
         uploadService = uploads.load(account: account)
         resetTyping()
         preferences.set(account, forKey: "lastAccount")
@@ -1940,7 +1938,6 @@ final class AppModel {
             try await store.upsertChat(accountID: account, chatID: peer, title: peer)
         }
         guard accountID == account else { return }
-        pendingReviewChats = Set(pending.keys)
         accountPreferences = try await store.accountPreferences(accountID: account)
         notificationPreviewsEnabled = accountPreferences.notificationPreviews
         if foreground, hasTransportOwnership, !quiescing {
