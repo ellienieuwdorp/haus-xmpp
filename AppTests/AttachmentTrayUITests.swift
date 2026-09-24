@@ -50,6 +50,23 @@ final class AttachmentTrayUITests: XCTestCase {
         XCTAssertTrue(app.buttons["sendMessage"].isEnabled, "Files alone can be sent")
         sleep(1)
         XCTAssertEqual(photoBubbles(in: app).count, before, "Picking never sends")
+
+        // The tray outlives the keyboard and a rotation, and is dropped when the chat is left.
+        let removes = app.buttons.matching(identifier: "removeAttachment")
+        composer(in: app).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        app.collectionViews["conversation.timeline"].swipeDown()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        XCUIDevice.shared.orientation = .landscapeLeft
+        sleep(1)
+        XCTAssertEqual(removes.count, 2)
+        XCUIDevice.shared.orientation = .portrait
+        sleep(1)
+        XCTAssertEqual(removes.count, 2)
+        app.buttons["BackButton"].tap()
+        app.staticTexts["Alex"].tap()
+        XCTAssertTrue(app.buttons["attachFile"].waitForExistence(timeout: 5))
+        XCTAssertEqual(removes.count, 0)
     }
 
     @MainActor func testRemovingFromTheTray() throws {
