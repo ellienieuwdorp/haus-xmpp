@@ -467,7 +467,7 @@ struct ConversationComposer: View {
             guard !state.dispatching else { return }
             state.tray.removeAll { $0.assetIdentifier == id }
         }, capture: onAttachCapture, photos: onPickPhoto, files: onPickFile, refuse: { model.error = $0 },
-        dismissed: { state.attachmentsOpen = false }, restore: { state.attachmentsOpen = true })
+        dismissed: { state.attachmentsOpen = false }, restore: { if !state.attachmentsOpen { state.attachmentsOpen = true } })
     }
 
     /// A separate 44pt glass circle left of the field. The glyph turns into an ×; its circle never changes size.

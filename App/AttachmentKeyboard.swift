@@ -62,6 +62,7 @@ enum KeyboardHeightCache {
 final class AttachmentKeyboardResponder: UIView {
     var panel: UIView?
     var onResign: () -> Void = {}
+    var onBecome: () -> Void = {}
     var onStyleChange: () -> Void = {}
 
     override init(frame: CGRect) {
@@ -82,6 +83,15 @@ final class AttachmentKeyboardResponder: UIView {
 
     override var canBecomeFirstResponder: Bool { true }
     override var inputView: UIView? { panel }
+
+    /// UIKit also makes the responder first again on its own, when a sheet presented over it goes away (the
+    /// limited-library picker); the composer has to hear about that as much as about a resign.
+    override func becomeFirstResponder() -> Bool {
+        let wasFirst = isFirstResponder
+        let became = super.becomeFirstResponder()
+        if !wasFirst, became { onBecome() }
+        return became
+    }
 
     override func resignFirstResponder() -> Bool {
         let wasFirst = isFirstResponder
@@ -108,6 +118,12 @@ final class AttachmentKeyboardResponder: UIView {
         responder.onResign = { [weak self] in
             guard let self, !replacing else { return }
             actions?.dismissed()
+        }
+        // The "+" and the send/search/chat-change closes all read the composer's state, so it must follow the
+        // responder both ways; a resign for a presented picker is otherwise never undone when UIKit restores it.
+        responder.onBecome = { [weak self] in
+            guard let self, !replacing else { return }
+            actions?.restore()
         }
         responder.onStyleChange = { [weak self] in self?.representPanel() }
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidChangeFrame(_:)), name: UIResponder.keyboardDidChangeFrameNotification, object: nil)
