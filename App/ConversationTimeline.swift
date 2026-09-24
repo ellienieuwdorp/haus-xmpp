@@ -91,6 +91,15 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     }
 }
 
+/// Someone is typing: a received-style bubble of dots after the newest message.
+struct TimelineTyping: Sendable, Equatable {
+    /// Group only: who, above the bubble like a message author.
+    let author: String?
+    /// The author colour's key, so the line matches that sender's messages.
+    let colorKey: String
+    let accessibilityLabel: String
+}
+
 /// A message plus what its neighbours decide: day header, run start (spacing, sender name) and run end (tail corner).
 struct TimelineRow: Equatable {
     let message: TimelineMessage
@@ -126,6 +135,7 @@ struct TimelineRow: Equatable {
 /// Native baseline for the first transport milestone. Composer and message state belong to the parent.
 struct ConversationTimeline: UIViewControllerRepresentable {
     let messages: [TimelineMessage]
+    var typing: TimelineTyping? = nil
     /// Hosted above the keyboard by the controller; nil hides it (search).
     var composer: AnyView? = nil
     var onToggleStar: (String) -> Void
@@ -149,7 +159,7 @@ struct ConversationTimeline: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: ConversationTimelineController, context: Context) {
         controller.setComposer(composer)
-        controller.update(messages: messages, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onDisplayed: onDisplayed)
+        controller.update(messages: messages, typing: typing, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onDisplayed: onDisplayed)
         controller.onRestoreComposerFocus = onRestoreComposerFocus
         controller.onReachTop = onReachTop
     }
@@ -166,6 +176,10 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
     private var rows: [TimelineRow] = []
     private var rowsByID: [String: TimelineRow] = [:]
+    /// The typing bubble is the last item when someone types; no stored message ID contains a NUL.
+    private static let typingID = "typing\u{0}"
+    private var typing: TimelineTyping?
+    private var typingArrived = false
     private var accent = ""
     private var onToggleStar: (String) -> Void = { _ in }
     private var onRetryMessage: (String) -> Void = { _ in }
@@ -212,6 +226,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         collectionView.delegate = self
         collectionView.accessibilityIdentifier = "conversation.timeline"
         collectionView.register(MessageBubbleCell.self, forCellWithReuseIdentifier: "message")
+        collectionView.register(TypingIndicatorCell.self, forCellWithReuseIdentifier: "typing")
         collectionView.addGestureRecognizer(TouchGate(down: { [weak self] point in self?.reserveSwipe(forBubbleAt: point) }, up: { [weak self] in self?.releaseSwipe() }))
         let container = UIView()
         container.backgroundColor = .systemBackground
@@ -235,6 +250,14 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         composerHost.didMove(toParent: self)
         view = container
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] collection, indexPath, id in
+            if id == Self.typingID {
+                // A snapshot can outlive the typing it was built for; the cell then stays empty until the next apply.
+                let cell = collection.dequeueReusableCell(withReuseIdentifier: "typing", for: indexPath)
+                let typing = self?.typing
+                cell.contentView.isHidden = typing == nil
+                if let typing { (cell as? TypingIndicatorCell)?.configure(typing) }
+                return cell
+            }
             guard let self, let row = rowsByID[id],
                   let cell = collection.dequeueReusableCell(withReuseIdentifier: "message", for: indexPath) as? MessageBubbleCell else { return nil }
             cell.configure(row: row, toggleStar: { [weak self] in self?.onToggleStar(id) }, retry: { [weak self] in self?.onRetryMessage(id) }, reply: { [weak self] in self?.onReply(id) }, reaction: { [weak self] emoji in self?.onReaction(id, emoji) },
@@ -264,11 +287,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         present(viewer, animated: true)
     }
 
-    func update(messages incoming: [TimelineMessage], accent: String = "", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in },
+    func update(messages incoming: [TimelineMessage], typing: TimelineTyping? = nil, accent: String = "", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in },
                 onEdit: @escaping (String) -> Void = { _ in }, onUnsend: @escaping (String) -> Void = { _ in }, onDisplayed: @escaping (String) -> Void = { _ in }) {
         loadViewIfNeeded()
         if actionsVisible {
-            heldUpdate = { [weak self] in self?.update(messages: incoming, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onDisplayed: onDisplayed) }
+            heldUpdate = { [weak self] in self?.update(messages: incoming, typing: typing, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onDisplayed: onDisplayed) }
             return
         }
         self.onToggleStar = onToggleStar
@@ -282,8 +305,12 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         var seen = Set<String>()
         let uniqueRows = TimelineRow.rows(for: incoming.filter { seen.insert($0.id).inserted })
         let accentChanged = accent != self.accent
-        guard uniqueRows != rows || accentChanged else { return }
+        let typingChanged = typing != self.typing
+        guard uniqueRows != rows || accentChanged || typingChanged else { return }
         self.accent = accent
+        let typingLeft = self.typing != nil && typing == nil
+        typingArrived = self.typing == nil && typing != nil
+        self.typing = typing
         // Only a message arriving at the tail moves, and only when the reader is at the tail; nothing else animates.
         // Judged from the tail alone: the loaded window is the newest N, so its head moves as messages arrive.
         let newIDs = uniqueRows.map(\.message.id)
@@ -294,7 +321,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         let wasNearBottom = isNearBottom
         let shouldFollow = rows.isEmpty || wasNearBottom || sentOwn || owesFollow
         // From far up in history a send jumps; a slide would cross cells that were never drawn.
-        let slidesIn = (appended && wasNearBottom || owesSlide) && view.window != nil && !UIAccessibility.isReduceMotionEnabled
+        // The typing bubble coming or going at the tail moves the same way as a message arriving.
+        let slidesIn = ((appended || typingChanged) && wasNearBottom || owesSlide) && view.window != nil && !UIAccessibility.isReduceMotionEnabled
         owesFollow = shouldFollow
         owesSlide = slidesIn
         let anchor = visibleAnchor()
@@ -306,10 +334,16 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
         snapshot.appendItems(uniqueRows.map(\.message.id))
-        snapshot.reconfigureItems(uniqueRows.compactMap { row in
+        if typing != nil { snapshot.appendItems([Self.typingID]) }
+        var changed = uniqueRows.compactMap { row -> String? in
             guard let old = previous[row.message.id], old != row || accentChanged else { return nil }
             return row.message.id
-        })
+        }
+        if typing != nil, !typingArrived, typingChanged { changed.append(Self.typingID) }
+        snapshot.reconfigureItems(changed)
+        // A shrinking content size clamps the offset during the apply, so a slide back down starts from here.
+        let offsetBefore = collectionView.contentOffset.y
+        if typingLeft { fadeOutTypingCell() }
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self, revision == currentRevision else { return }
             collectionView.layoutIfNeeded()
@@ -317,7 +351,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             owesSlide = false
             if slidesIn {
                 // Settle the final offset first so the new cells exist, then play the distance back.
-                let start = collectionView.contentOffset.y
+                let start = typingLeft && !appended ? offsetBefore : collectionView.contentOffset.y
                 scrollToBottom()
                 let end = collectionView.contentOffset.y
                 collectionView.contentOffset.y = start
@@ -336,6 +370,16 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             followsBottom = shouldFollow || isNearBottom
             recordBottomEdge()
         }
+    }
+
+    /// The typing bubble leaves as a fading copy; the cell itself goes with the apply.
+    private func fadeOutTypingCell() {
+        guard let path = dataSource.indexPath(for: Self.typingID), let cell = collectionView.cellForItem(at: path),
+              let ghost = cell.snapshotView(afterScreenUpdates: false) else { return }
+        ghost.frame = cell.frame
+        ghost.isUserInteractionEnabled = false
+        collectionView.addSubview(ghost)
+        UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseOut]) { ghost.alpha = 0 } completion: { _ in ghost.removeFromSuperview() }
     }
 
     /// Before the cell captures its frame: the keyboard would cover the menu, and an animated dismissal would move
@@ -448,6 +492,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     }
 
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        if let cell = cell as? TypingIndicatorCell {
+            cell.startDots()
+            if typingArrived { typingArrived = false; cell.animateIn() }
+            return
+        }
         guard let id = dataSource.itemIdentifier(for: indexPath), let row = rowsByID[id], !row.message.isOutgoing else { return }
         onDisplayed(id)
     }
@@ -487,7 +536,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 
     private func scrollToBottom() {
         // scrollToItem sizes the final cells first; the clamp then lands on the real content height.
-        if let last = rows.last, let path = dataSource.indexPath(for: last.message.id) {
+        if let last = typing != nil ? Self.typingID : rows.last?.message.id, let path = dataSource.indexPath(for: last) {
             collectionView.scrollToItem(at: path, at: .bottom, animated: false)
             collectionView.layoutIfNeeded()
         }
@@ -571,7 +620,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private var trailing: NSLayoutConstraint!
     private var bubbleWidth: NSLayoutConstraint!
 
-    private static var incomingBubble: UIColor {
+    static var incomingBubble: UIColor {
         UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.149, green: 0.149, blue: 0.165, alpha: 1) : .secondarySystemBackground }
     }
 
@@ -1093,6 +1142,121 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         case nil: status.image = nil
         }
         setNeedsLayout()
+    }
+}
+
+/// Three dots in a received bubble, bouncing in turn; with Reduce Motion they only fade.
+@MainActor
+private final class TypingIndicatorCell: UICollectionViewCell {
+    private let author = UILabel()
+    private let bubble = UIView()
+    private let dots = (0..<3).map { _ in UIView() }
+    private var authorHeight: NSLayoutConstraint!
+    private var bubbleTop: NSLayoutConstraint!
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        author.translatesAutoresizingMaskIntoConstraints = false
+        author.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(for: .systemFont(ofSize: 13, weight: .semibold))
+        author.adjustsFontForContentSizeCategory = true
+        author.lineBreakMode = .byTruncatingTail
+        author.isAccessibilityElement = false
+        contentView.addSubview(author)
+        bubble.translatesAutoresizingMaskIntoConstraints = false
+        bubble.backgroundColor = MessageBubbleCell.incomingBubble
+        // Shaped like the last bubble of a received run: 20pt corners and the 6pt tail.
+        bubble.cornerConfiguration = .corners(topLeftRadius: .fixed(20), topRightRadius: .fixed(20), bottomLeftRadius: .fixed(6), bottomRightRadius: .fixed(20))
+        bubble.isAccessibilityElement = true
+        bubble.accessibilityIdentifier = "typingIndicator"
+        contentView.addSubview(bubble)
+        let row = UIStackView(arrangedSubviews: dots)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.spacing = 5
+        for dot in dots {
+            dot.backgroundColor = .secondaryLabel
+            dot.layer.cornerRadius = 4
+            dot.widthAnchor.constraint(equalToConstant: 8).isActive = true
+            dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
+        }
+        bubble.addSubview(row)
+        authorHeight = author.heightAnchor.constraint(equalToConstant: 0)
+        bubbleTop = bubble.topAnchor.constraint(equalTo: author.bottomAnchor)
+        NSLayoutConstraint.activate([
+            // A run of its own: the same 6pt a run's first message adds.
+            author.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 6),
+            author.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 13),
+            author.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -16),
+            bubbleTop,
+            bubble.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
+            bubble.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            bubble.heightAnchor.constraint(equalToConstant: 40),
+            row.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 16),
+            row.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -16),
+            row.centerYAnchor.constraint(equalTo: bubble.centerYAnchor)
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func configure(_ typing: TimelineTyping) {
+        author.text = typing.author
+        author.textColor = AvatarPalette.color(for: typing.colorKey)
+        author.isHidden = typing.author == nil
+        authorHeight.isActive = typing.author == nil
+        bubbleTop.constant = typing.author == nil ? 0 : 3
+        bubble.accessibilityLabel = typing.accessibilityLabel
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { startDots() }
+    }
+
+    /// A 1.2 s wave: each dot brightens (and lifts 3pt) a beat after the one before it.
+    func startDots() {
+        let now = CACurrentMediaTime()
+        for (index, dot) in dots.enumerated() {
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = [0.35, 1, 0.35, 0.35]
+            let group = CAAnimationGroup()
+            group.animations = [fade]
+            if !UIAccessibility.isReduceMotionEnabled {
+                let lift = CAKeyframeAnimation(keyPath: "transform.translation.y")
+                lift.values = [0, -3, 0, 0]
+                group.animations?.append(lift)
+            }
+            for case let animation as CAKeyframeAnimation in group.animations ?? [] {
+                animation.keyTimes = [0, 0.22, 0.44, 1]
+                animation.timingFunctions = Array(repeating: CAMediaTimingFunction(name: .easeInEaseOut), count: 3)
+            }
+            group.duration = 1.2
+            group.repeatCount = .infinity
+            group.beginTime = now + Double(index) * 0.16
+            group.fillMode = .backwards
+            // Kept across a trip to the background, which otherwise strips running animations.
+            group.isRemovedOnCompletion = false
+            dot.layer.add(group, forKey: "typing")
+        }
+    }
+
+    /// Grows out of its tail corner; with Reduce Motion it only fades in.
+    func animateIn() {
+        let views = [bubble, author]
+        views.forEach { $0.alpha = 0 }
+        let grows = !UIAccessibility.isReduceMotionEnabled
+        if grows { bubble.transform = CGAffineTransform(translationX: -8, y: 5).scaledBy(x: 0.7, y: 0.7) }
+        UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.75, initialSpringVelocity: 0, options: [.allowUserInteraction]) {
+            views.forEach { $0.alpha = 1 }
+            self.bubble.transform = .identity
+        }
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        bubble.layer.removeAllAnimations()
+        bubble.transform = .identity
+        bubble.alpha = 1
+        author.alpha = 1
     }
 }
 

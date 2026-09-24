@@ -159,7 +159,7 @@ import XMPPProtocol
                 if String(incoming.from.prefix { $0 != "/" }) == peer { throw Failure.plaintextReceived }
             case .encryptionFailure: throw Failure.mismatch
             case .state(.disconnected): throw Failure.timeout
-            case .state, .omemoDevices, .avatarMetadata, .streamAcknowledged, .streamManagementBarrier, .encryptedGroupMessage, .groupPresence, .reaction, .retraction, .receipt: break
+            case .state, .omemoDevices, .avatarMetadata, .streamAcknowledged, .streamManagementBarrier, .encryptedGroupMessage, .groupPresence, .reaction, .retraction, .receipt, .chatState: break
             }
         }
         throw Failure.timeout

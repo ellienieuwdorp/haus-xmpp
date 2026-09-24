@@ -55,7 +55,7 @@ struct ChatListView: View {
                             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 4, trailing: 16))
                     }
                     ForEach(visibleChats) { chat in
-                        Button { path.append(.chat(chat.id)) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatars[chat.id]) }
+                        Button { path.append(.chat(chat.id)) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatars[chat.id], typing: model.typing[chat.id]) }
                             .buttonStyle(.plain)
                             .task(id: "\(chat.id)|\(model.session.isReady)") { await model.loadAvatar(for: chat.id) }
                             .listRowInsets(EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16))
@@ -235,6 +235,8 @@ private struct ChatRow: View {
     let chat: ChatSummary
     let isGroup: Bool
     var avatar: UIImage? = nil
+    /// Who is typing in this chat; the preview gives way to it while it lasts.
+    var typing: [String]? = nil
 
     private static let dayMonth: DateFormatter = { let f = DateFormatter(); f.dateFormat = "dd/MM"; return f }()
 
@@ -250,7 +252,7 @@ private struct ChatRow: View {
     }
 
     /// Same ladder as the bubble footer: clock, failed, one check (server), two (delivered), two blue (read).
-    /// Not `AccentTheme.readReceipt`: that blue is picked to sit on the accent bubble fill, not the list background.
+    /// `listReadReceipt`, not `readReceipt`: that blue is picked to sit on the accent bubble fill, not the list background.
     private var stateGlyph: Text? {
         guard chat.lastMessageIsOutgoing else { return nil }
         let check = Text(Image(systemName: "checkmark"))
@@ -261,7 +263,7 @@ private struct ChatRow: View {
             guard let receipt = chat.lastMessageReceipt else { return check }
             guard let image = UIImage.doubleCheck(.init(textStyle: .subheadline)) else { return check }
             let double = Text(Image(uiImage: image))
-            return receipt == .displayed ? double.foregroundStyle(.blue) : double
+            return receipt == .displayed ? double.foregroundStyle(Color(uiColor: AccentTheme.listReadReceipt)) : double
         }
     }
 
@@ -285,8 +287,19 @@ private struct ChatRow: View {
                         Text(timeLabel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).layoutPriority(1)
                     }
                 }
+                // The preview keeps its lines while hidden, so the row never changes height.
                 preview.font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(typing == nil ? 1 : 0)
+                    .accessibilityHidden(typing != nil)
+                    .overlay(alignment: .topLeading) {
+                        if let typing {
+                            Text(TypingTracker.description(typing, isGroup: isGroup))
+                                .font(.subheadline).foregroundStyle(Color(uiColor: AccentTheme.current.tint)).lineLimit(1)
+                                .transition(.opacity)
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.2), value: typing)
             }
         }
         .contentShape(Rectangle())

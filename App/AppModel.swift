@@ -42,6 +42,16 @@ final class AppModel {
     private(set) var messageReceipts: [String: MessageEventKind] = [:]
     private(set) var accountPreferences = AccountPreferences()
     private(set) var groupChats: [String: GroupChatState] = [:]
+    /// Chat → who is typing there (XEP-0085). In memory only; it expires on its own.
+    private(set) var typing: [String: [String]] = [:] { didSet { syncOpenChatTyping() } }
+    /// The open chat's entry in `typing`, observed on its own so typing in another chat never re-renders the conversation.
+    private(set) var openChatTyping: [String]?
+    @ObservationIgnored private var typingTracker = TypingTracker()
+    @ObservationIgnored private var typingExpiry: Task<Void, Never>?
+    /// What we last told the open chat's peer about our own typing.
+    @ObservationIgnored private var ownTyping: (chat: String, sender: TypingSender)?
+    @ObservationIgnored private var ownTypingPause: Task<Void, Never>?
+    @ObservationIgnored private var ownTypingSend: Task<Void, Never>?
     private(set) var reactableGroupMessages: Set<String> = []
     /// Verified avatar thumbnails by chat address, plus the account's own under its address.
     private(set) var avatars: [String: UIImage] = [:]
@@ -93,7 +103,7 @@ final class AppModel {
     @ObservationIgnored private var drainTask: Task<Void, Never>?
     @ObservationIgnored private var client: XMPPClient?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
-    @ObservationIgnored private var openChatID: String?
+    @ObservationIgnored private var openChatID: String? { didSet { syncOpenChatTyping() } }
     @ObservationIgnored private var encryptionDetailsChatID: String?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var prepared = false
@@ -108,10 +118,11 @@ final class AppModel {
     @ObservationIgnored private var uploader: AttachmentUploader?
     @ObservationIgnored private var storageDirectory: URL?
     @ObservationIgnored private var uploadTask: Task<Void, Never>?
+    @ObservationIgnored private var uploadFailures = UploadFailureBudget()
     @ObservationIgnored private var downloading: Set<String> = []
     /// Bytes a chosen file may have before it is refused; the server's limit when it publishes one.
     var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
-    var canSendAttachments: Bool { !isDemo && uploadService != nil && session.isReady }
+    var canSendAttachments: Bool { isDemo || (uploadService != nil && session.isReady) }
     @ObservationIgnored private let testSessionID: String? = {
         #if DEBUG
         guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"],
@@ -182,16 +193,16 @@ final class AppModel {
         selectAccount(account)
         guard generation == token, let store else { return }
         do {
-            // Each chat's sent message shows one receipt state: read (Alex), delivered (Maya), accepted (Notes).
+            // Each chat's sent messages show one receipt state: read (Alex, whose last message is sent so the list shows it too), delivered (Maya), accepted (Notes).
             let samples: [(String, String, [String], MessageEventKind?)] = [
-                ("alex@preview.local", "Alex", ["Found a quiet spot by the water. Coffee tomorrow?", "That sounds perfect. Around ten?", "Ten it is ☕️"], .displayed),
+                ("alex@preview.local", "Alex", ["Found a quiet spot by the water. Coffee tomorrow?", "That sounds perfect. Around ten?", "Ten it is ☕️", "See you there!"], .displayed),
                 ("maya@preview.local", "Maya", ["A little reminder to take the scenic route.", "Always. See you this weekend!"], .delivered),
                 ("notes@preview.local", "Notes to self", ["A place for the things worth keeping. Try starring this message.", "Starred things stay at the top of the list."], nil)
             ]
             for (chatID, title, bodies, receipt) in samples {
                 try await store.upsertChat(accountID: account, chatID: chatID, title: title)
                 for (index, body) in bodies.enumerated() {
-                    let outgoing = index == 1
+                    let outgoing = !index.isMultiple(of: 2)
                     // An own wire ID lets sample messages show receipts and be unsent or edited (projection only, nothing is sent).
                     let id = "sample-\(chatID)-\(index)"
                     try await store.insertMessage(StoredMessage(
@@ -215,6 +226,8 @@ final class AppModel {
                                                                 sentAt: Date(timeIntervalSince1970: 1_789_300_000 + Double(index) * 60), isOutgoing: index.isMultiple(of: 3)))
                 }
             }
+            // A peer who is typing, for tests and screenshots; nothing expires it.
+            if ProcessInfo.processInfo.arguments.contains("-demo-typing") { typing = ["alex@preview.local": ["alex@preview.local"]] }
             // One sample photo, drawn here so no asset ships: exercises the bubble thumbnail and the viewer.
             if let files {
                 let size = CGSize(width: 1200, height: 900)
@@ -652,6 +665,7 @@ final class AppModel {
         messageReactions = [:]; messageReceipts = [:]
         attachmentFiles = [:]
         openChatID = nil
+        resetTyping()
         preferences.set(account, forKey: "lastAccount")
     }
 
@@ -659,8 +673,10 @@ final class AppModel {
 
     /// Seals the file once, stores everything the send will ever need, then queues the message.
     /// The message stays unsendable until the background PUT succeeds; nothing is regenerated.
-    func sendAttachment(_ prepared: PreparedAttachment, caption: String, to chatID: String) async -> Bool {
-        guard !isSending, let store, let encryption, let files, !accountID.isEmpty, !isDemo else { return false }
+    /// Never with a caption: Conversations shows a file only when the body is exactly its link, so a caption
+    /// goes as its own message after the files.
+    func sendAttachment(_ prepared: PreparedAttachment, to chatID: String) async -> Bool {
+        guard !isSending, let store, let files, !accountID.isEmpty else { return false }
         guard !isGroup(chatID) else { error = "Files can't be sent to groups yet."; return false }
         guard prepared.data.count <= attachmentLimit else {
             error = AttachmentPreparer.Failure.tooLarge(limit: attachmentLimit).localizedDescription; return false
@@ -669,8 +685,19 @@ final class AppModel {
         defer { isSending = false }
         let account = accountID
         let id = UUID().uuidString
+        if isDemo {
+            // Sample chats project only, like sample text: the file is cached and nothing is uploaded.
+            let attachment = StoredAttachment(name: prepared.name, mediaType: prepared.mediaType, size: prepared.data.count, width: prepared.width,
+                                              height: prepared.height, hash: Data.sha256(prepared.data).hexString, secret: Data([0]))
+            do {
+                try files.write(prepared.data, to: files.cacheURL(attachment, messageID: id))
+                try await store.insertMessage(StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: "", isOutgoing: true, attachment: attachment))
+                await refresh()
+                return true
+            } catch { self.error = "Could not save the file."; return false }
+        }
+        guard let encryption else { return false }
         do {
-            if !caption.isEmpty { try XMPPClient.validateMessage(to: chatID, body: caption, id: id) }
             let sealed = try AttachmentTransfer.seal(prepared.data)
             let attachment = StoredAttachment(name: prepared.name, mediaType: prepared.mediaType, size: prepared.data.count,
                                               width: prepared.width, height: prepared.height, hash: Data.sha256(prepared.data).hexString,
@@ -678,7 +705,7 @@ final class AppModel {
                                               secret: try encryption.sealAttachmentSecret(account: account, key: sealed.key, iv: sealed.iv), uploadState: .pending)
             try files.write(sealed.ciphertext, to: files.stagingURL(messageID: id))
             try files.write(prepared.data, to: files.cacheURL(attachment, messageID: id))
-            let message = StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: caption, isOutgoing: true,
+            let message = StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: "", isOutgoing: true,
                                         encryptionProfile: "pending", attachment: attachment)
             try await store.enqueueOutgoing(message)
             await refresh()
@@ -711,17 +738,48 @@ final class AppModel {
                     let taskID = uploader.start(file: staged, slot: slot, size: size, contentType: "application/octet-stream")
                     try await store.setAttachmentUploadTask(accountID: account, messageID: message.id, taskID: taskID, url: slot.get.absoluteString)
                 } catch {
-                    if let self, self.generation == token { self.error = "Could not start uploading \(attachment.name). It will be retried." }
+                    // A dropped connection is not the server refusing; the reconnect starts uploads again.
+                    let dropped = error is CancellationError || [XMPPClientError.notConnected, .connectionClosed].contains { $0 == error as? XMPPClientError }
+                    guard let self, self.generation == token, !dropped else { continue }
+                    await self.uploadFailed(message, account: account)
                 }
             }
         }
+    }
+
+    /// Counts a refused slot or PUT. Below the budget the file is tried again shortly with a fresh slot; at the
+    /// budget it is failed, so it shows Not sent with Retry and stops holding back what was queued after it.
+    private func uploadFailed(_ message: StoredMessage, account: String) async {
+        guard let store, accountID == account, let name = message.attachment?.name else { return }
+        guard uploadFailures.recordFailure(message.id) else {
+            error = "Could not upload \(name). It will be retried."
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                self?.startUploads()
+            }
+            return
+        }
+        guard (try? await store.failQueuedOutgoing(accountID: account, messageID: message.id)) != nil else { return }
+        error = "Could not upload \(name), so it was not sent. Retry it from the message."
+        await refresh()
+        startOutbox()
     }
 
     /// Tasks the system dropped while we were gone get a fresh slot; running ones are left alone.
     private func reconcileUploads() async {
         guard let store, let uploader, !accountID.isEmpty else { return }
         let running = await uploader.runningTaskIDs()
-        for message in (try? await store.attachmentsAwaitingUpload(accountID: accountID)) ?? [] {
+        let pending = (try? await store.attachmentsAwaitingUpload(accountID: accountID)) ?? []
+        let stranded = pending.filter { message in message.attachment?.uploadTaskID.map { !running.contains($0) } ?? true }
+        if uploadService == nil, !stranded.isEmpty {
+            // The server no longer offers uploads, so these files would hold their chats forever.
+            for message in stranded { try? await store.failQueuedOutgoing(accountID: accountID, messageID: message.id) }
+            error = "This server no longer accepts files, so \(stranded.count == 1 ? "a file was" : "\(stranded.count) files were") not sent."
+            await refresh()
+            startOutbox()
+            return
+        }
+        for message in pending {
             if let taskID = message.attachment?.uploadTaskID, !running.contains(taskID) {
                 try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)
             }
@@ -733,15 +791,15 @@ final class AppModel {
         guard let store, let files, !accountID.isEmpty,
               let message = ((try? await store.attachmentsAwaitingUpload(accountID: accountID)) ?? []).first(where: { $0.attachment?.uploadTaskID == taskID }) else { return }
         if succeeded {
+            uploadFailures.reset(message.id)
             try? await store.markAttachmentUploaded(accountID: accountID, messageID: message.id)
             try? FileManager.default.removeItem(at: files.stagingURL(messageID: message.id))
             await refresh()
             startOutbox()
         } else {
             try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)
-            // A slot expired or the network dropped: try again shortly, with a new slot.
-            try? await Task.sleep(for: .seconds(5))
-            startUploads()
+            // A slot expired, the network dropped or the server refused the PUT: a new slot, within the budget.
+            await uploadFailed(message, account: accountID)
         }
     }
 
@@ -781,6 +839,7 @@ final class AppModel {
         session = .offline(reason: nil)
         inbound = nil
         for room in groupChats.keys { groupChats[room]?.joined = false }
+        resetTyping()
         return previous
     }
 
@@ -844,13 +903,27 @@ final class AppModel {
                 }
             case .disconnected(let reason):
                 for room in groupChats.keys { groupChats[room]?.joined = false }
+                // Chat states belong to the stream that carried them.
+                resetTyping()
                 drainTask?.cancel()
                 if case .needsAttention = session {} else { session = .offline(reason: reason) }
                 reconcile()
             }
+        case .chatState(let update):
+            // A state never creates a chat: only listed chats (joined groups among them) show one.
+            guard chats.contains(where: { $0.id == update.chat }) else { return }
+            typingTracker.apply(update.state, chat: update.chat, participant: update.participant ?? update.chat, settles: update.ridesOnMessage, now: .now)
+            publishTyping()
         case .reaction, .retraction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier:
             guard let encryption, let client else { return }
             if case .encryptedMessage = event { receivedCount += 1 }
+            // A real message ends its sender's typing, even from a client that sends no `active` with it.
+            if case .encryptedMessage(let message) = event, message.provenance == .direct, let sender = message.from.split(separator: "/").first.map(String.init) {
+                typingTracker.messageArrived(chat: sender, participant: sender, now: .now); publishTyping()
+            }
+            if case .encryptedGroupMessage(let message) = event {
+                typingTracker.messageArrived(chat: message.room, participant: message.sender, now: .now); publishTyping()
+            }
             // One processor per connection: it owns the "may acknowledge" rule for this stream.
             if inbound?.client !== client { inbound = InboundProcessor(encryption: encryption, client: client, account: account) }
             guard let inbound else { return }
@@ -1134,7 +1207,10 @@ final class AppModel {
         guard let store else { return }
         do {
             try await store.retryOutgoing(accountID: accountID, messageID: id)
+            uploadFailures.reset(id)
             await refresh()
+            // A file that gave up uploading goes back to the uploader; everything else to the outbox.
+            startUploads()
             startOutbox()
         } catch { self.error = "This message could not be queued again." }
     }
@@ -1476,7 +1552,68 @@ final class AppModel {
         await refresh(.openChat)
     }
 
-    func closeChat(_ chatID: String) { if openChatID == chatID { openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:] } }
+    func closeChat(_ chatID: String) {
+        if ownTyping?.chat == chatID { sendOwnTyping(ownTyping?.sender.left(), to: chatID); ownTyping = nil; ownTypingPause?.cancel() }
+        if openChatID == chatID { openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:] }
+    }
+
+    // MARK: Typing
+
+    /// The composer's draft in `chatID` changed: the peer hears composing, then paused after a quiet spell, or active once it empties.
+    func draftChanged(_ draft: String, in chatID: String) {
+        guard canSendChatState(to: chatID) else { return }
+        if ownTyping?.chat != chatID { ownTyping = (chatID, TypingSender()) }
+        let isEmpty = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        sendOwnTyping(ownTyping?.sender.draftChanged(isEmpty: isEmpty, now: .now), to: chatID)
+        ownTypingPause?.cancel()
+        guard !isEmpty else { return }
+        ownTypingPause = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(TypingSender.pauseAfter))
+            guard let self, !Task.isCancelled, ownTyping?.chat == chatID else { return }
+            sendOwnTyping(ownTyping?.sender.idle(), to: chatID)
+        }
+    }
+
+    /// Only a listed chat we could send a message to right now; never the sample data, and not while sending is paused for review.
+    private func canSendChatState(to chatID: String) -> Bool {
+        !isDemo && session.isReady && hasTransportOwnership && foreground && !quiescing && !encryptionNeedsReview
+            && chatID != accountID && chats.contains(where: { $0.id == chatID }) && canSend(to: chatID)
+            && (isGroup(chatID) || !isLabAccount || chatID.hasSuffix("@" + accountDomain))
+    }
+
+    /// Chained, so states reach the wire in the order they were decided.
+    private func sendOwnTyping(_ state: XMPPChatState.State?, to chatID: String) {
+        guard let state, let client, canSendChatState(to: chatID) else { return }
+        let group = isGroup(chatID), previous = ownTypingSend
+        ownTypingSend = Task { await previous?.value; try? await client.sendChatState(state, to: chatID, groupchat: group) }
+    }
+
+    private func publishTyping() {
+        guard !isDemo else { return } // the sample typing stays put
+        typingTracker.expire(now: .now)
+        let current = typingTracker.typing
+        if current != typing { typing = current }
+        typingExpiry?.cancel()
+        guard let next = typingTracker.nextExpiry else { return }
+        typingExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(0.05, next.timeIntervalSinceNow)))
+            guard !Task.isCancelled else { return }
+            self?.publishTyping()
+        }
+    }
+
+    private func syncOpenChatTyping() {
+        let open = openChatID.flatMap { typing[$0] }
+        if open != openChatTyping { openChatTyping = open }
+    }
+
+    private func resetTyping() {
+        typingTracker = TypingTracker()
+        typingExpiry?.cancel()
+        if !typing.isEmpty { typing = [:] }
+        ownTyping = nil
+        ownTypingPause?.cancel()
+    }
 
     var notificationPreviewsEnabled = true
 
@@ -1574,6 +1711,10 @@ final class AppModel {
     private func load(_ scope: CoalescedReload.Scope) async {
         guard let store else { return }
         let account = accountID
+        // Typing that a message ended goes in the same update that shows the message, so the bubble takes its place.
+        // ponytail: a load already running when the message was stored flushes early (the indicator then goes a moment
+        // before the message shows); track stored message IDs if that is ever visible.
+        defer { typingTracker.flushSettled(); publishTyping() }
         do {
             if scope.contains(.chats) { try await loadChats(store: store, account: account) }
             guard scope.contains(.openChat), accountID == account, let selected = openChatID else { return }

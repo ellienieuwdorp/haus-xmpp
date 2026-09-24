@@ -167,6 +167,8 @@ struct MessageActionsOverlayView: View {
         }
         .ignoresSafeArea()
         .onAppear(perform: enter)
+        // The backdrop and bubble are pictures taken at the press; in a new appearance they would stay in the old one.
+        .onChange(of: colorScheme) { dismiss(nil) }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
             guard let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
                   let screen = (note.object as? UIScreen) ?? UIScreen.main as UIScreen? else { return }

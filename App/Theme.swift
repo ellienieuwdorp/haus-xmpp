@@ -1,7 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// User-selectable accent. Light accents use dark text on the sent bubble.
+/// User-selectable accent. Light accents use dark text on the sent bubble; every pair below is measured
+/// against WCAG 2 in both appearances: 4.5:1 for glyphs and links on the background, 4.5:1 for text on
+/// the bubble, 3:1 for the read-receipt glyph.
 enum AccentTheme: String, CaseIterable, Identifiable {
     case indigo, lime, crab, sky, rose, graphite
 
@@ -13,26 +15,26 @@ enum AccentTheme: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
 
-    /// Glyphs, links, buttons. Kept dark enough to read on white.
+    /// Glyphs, links, buttons: at least 4.5:1 on both system backgrounds in each appearance.
     var tint: UIColor {
         switch self {
         case .indigo: return .systemIndigo
-        case .lime: return UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.65, green: 0.88, blue: 0.39, alpha: 1) : UIColor(red: 0.31, green: 0.60, blue: 0.11, alpha: 1) }
-        case .crab: return UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.96, green: 0.51, blue: 0.36, alpha: 1) : UIColor(red: 0.85, green: 0.33, blue: 0.18, alpha: 1) }
-        case .sky: return .systemTeal
-        case .rose: return .systemPink
-        case .graphite: return .systemGray
+        case .lime: return UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.65, green: 0.88, blue: 0.39, alpha: 1) : UIColor(red: 0.22, green: 0.47, blue: 0.05, alpha: 1) }
+        case .crab: return UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.96, green: 0.51, blue: 0.36, alpha: 1) : UIColor(red: 0.74, green: 0.26, blue: 0.11, alpha: 1) }
+        case .sky: return UIColor { $0.userInterfaceStyle == .dark ? .systemTeal : UIColor(red: 0, green: 0.42, blue: 0.52, alpha: 1) }
+        case .rose: return UIColor { $0.userInterfaceStyle == .dark ? .systemPink : UIColor(red: 0.78, green: 0.12, blue: 0.36, alpha: 1) }
+        case .graphite: return UIColor { $0.userInterfaceStyle == .dark ? .systemGray : UIColor(red: 0.36, green: 0.36, blue: 0.38, alpha: 1) }
         }
     }
-    /// Sent-bubble fill.
+    /// Sent-bubble fill: dark fills carry white text, light fills dark text, both at 4.5:1 in either appearance.
     var bubble: UIColor {
         switch self {
-        case .indigo: return .systemIndigo
+        case .indigo: return UIColor(red: 0.345, green: 0.337, blue: 0.839, alpha: 1)
         case .lime: return UIColor(red: 0.65, green: 0.88, blue: 0.39, alpha: 1)
         case .crab: return UIColor(red: 0.96, green: 0.51, blue: 0.36, alpha: 1)
         case .sky: return .systemTeal
-        case .rose: return .systemPink
-        case .graphite: return .systemGray
+        case .rose: return UIColor(red: 0.84, green: 0.15, blue: 0.40, alpha: 1)
+        case .graphite: return UIColor(red: 0.42, green: 0.42, blue: 0.44, alpha: 1)
         }
     }
     /// Text on the sent bubble.
@@ -40,16 +42,17 @@ enum AccentTheme: String, CaseIterable, Identifiable {
         switch self {
         case .lime: return UIColor(red: 0.06, green: 0.13, blue: 0, alpha: 1)
         case .crab: return UIColor(red: 0.16, green: 0.04, blue: 0, alpha: 1)
+        case .sky: return UIColor(red: 0, green: 0.10, blue: 0.16, alpha: 1)
         default: return .white
         }
     }
-    /// The read-receipt glyph: blue, chosen per bubble so it stays visible on the accent fill.
-    var readReceipt: UIColor {
-        switch self {
-        case .lime, .crab, .sky: return UIColor(red: 0.05, green: 0.28, blue: 0.75, alpha: 1)
-        default: return UIColor(red: 0.6, green: 0.9, blue: 1, alpha: 1)
-        }
-    }
+    /// The two "read" blues: one sits on dark fills and dark backgrounds, the other on light ones, each above 3:1.
+    private static let readBlueOnDark = UIColor(red: 0.50, green: 0.88, blue: 1, alpha: 1)
+    private static let readBlueOnLight = UIColor(red: 0, green: 0.24, blue: 0.66, alpha: 1)
+    /// The read-receipt glyph on the sent bubble: the blue that contrasts with this accent's fill.
+    var readReceipt: UIColor { bubbleText == .white ? Self.readBlueOnDark : Self.readBlueOnLight }
+    /// The read-receipt glyph on the chat list, where it sits on the system background rather than the fill.
+    static let listReadReceipt = UIColor { $0.userInterfaceStyle == .dark ? readBlueOnDark : readBlueOnLight }
     var swatch: Color { Color(uiColor: bubble) }
 }
 
