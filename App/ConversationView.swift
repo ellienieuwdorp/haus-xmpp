@@ -90,6 +90,13 @@ struct ConversationView: View {
                                isRetracted: message.isRetracted, isEdited: message.isEdited, canEdit: canRevise && !message.body.isEmpty, canUnsend: canRevise)
     }
 
+    /// Search and the starred filter show a slice of history, so nobody is shown typing at its end.
+    private var timelineTyping: TimelineTyping? {
+        guard !showingSearch, !starredOnly, let names = model.typing[chatID], let first = names.first else { return nil }
+        return TimelineTyping(author: isGroup ? names.joined(separator: ", ") : nil, colorKey: first,
+                              accessibilityLabel: TypingTracker.description(isGroup ? names : [title]))
+    }
+
     private func beginEditing(_ message: ChatMessage) {
         editing = message
         replyingTo = nil
@@ -213,7 +220,7 @@ struct ConversationView: View {
             if !model.isDemo, model.encryptionNeedsReview, !reviewDismissed {
                 trustReviewCard
             }
-            ConversationTimeline(messages: timelineMessages, composer: showingSearch ? nil : AnyView(composer), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
+            ConversationTimeline(messages: timelineMessages, typing: timelineTyping, composer: showingSearch ? nil : AnyView(composer), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
                 cancelEditing()
                 replyingTo = message
@@ -426,6 +433,7 @@ struct ConversationComposer: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
         .onChange(of: state.focused) { _, wanted in focused = wanted }
+        .onChange(of: state.draft) { _, draft in model.draftChanged(draft, in: chatID) }
         .onChange(of: focused) { _, isFocused in state.focused = isFocused }
     }
 }
