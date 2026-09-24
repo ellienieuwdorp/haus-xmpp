@@ -3,7 +3,7 @@ import Foundation
 import MessageStore
 import OMEMO
 import XMPPProtocol
-@testable import XMPPiOS
+@testable import HausXMPP
 
 @MainActor final class SharedStorageTests: XCTestCase {
     func testMigrationPreservesProtectedIdentityAndMessages() async throws {

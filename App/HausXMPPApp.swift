@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct XMPPiOSApp: App {
+struct HausXMPPApp: App {
     @UIApplicationDelegateAdaptor(PushRegistration.self) private var pushDelegate
     @Environment(\.scenePhase) private var scenePhase
     @State private var model = AppModel()

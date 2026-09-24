@@ -13,8 +13,8 @@ struct SignInView: View {
         self.model = model
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-lab-ui-test") {
-            _address = State(initialValue: ProcessInfo.processInfo.environment["XMPP_LAB_USERNAME"] ?? "")
-            _password = State(initialValue: ProcessInfo.processInfo.environment["XMPP_LAB_PASSWORD"] ?? "")
+            _address = State(initialValue: ProcessInfo.processInfo.environment["HAUS_LAB_USERNAME"] ?? "")
+            _password = State(initialValue: ProcessInfo.processInfo.environment["HAUS_LAB_PASSWORD"] ?? "")
         }
         #endif
     }

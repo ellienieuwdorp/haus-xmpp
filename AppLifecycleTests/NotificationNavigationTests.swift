@@ -1,7 +1,7 @@
 import XCTest
 import UserNotifications
 import MessagingCore
-@testable import XMPPiOS
+@testable import HausXMPP
 
 @MainActor final class NotificationNavigationTests: XCTestCase {
     func testColdLaunchKeepsLatestValidTapAndIgnoresDismissOrMalformedMetadata() async throws {

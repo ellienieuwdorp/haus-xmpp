@@ -36,7 +36,7 @@ struct PushRegistrationState: Codable, Sendable {
 
     private static func query(_ account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: "dev.xmpplab.push-registration",
+         kSecAttrService as String: "haus.xmpp.push-registration",
          kSecAttrAccount as String: account, kSecAttrSynchronizable as String: false]
     }
 }

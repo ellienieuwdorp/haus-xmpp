@@ -1,6 +1,6 @@
 import XCTest
 import UIKit
-@testable import XMPPiOS
+@testable import HausXMPP
 
 @MainActor final class PushTokenCallbackTests: XCTestCase {
     func testUnsolicitedCallbacksKeepNewestIntentAndFenceOlderToken() async throws {

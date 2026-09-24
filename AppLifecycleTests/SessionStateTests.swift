@@ -1,7 +1,7 @@
 import XCTest
 import XMPPProtocol
 import MessageStore
-@testable import XMPPiOS
+@testable import HausXMPP
 
 final class SessionStateTests: XCTestCase {
     func testReconnectDelayIsImmediateThenDoublesAndCapsAtAMinute() {

@@ -4,12 +4,12 @@ final class EncryptionUITests: XCTestCase {
     @MainActor func testReviewDevicesEncryptedRoundTripAndPersistentIdentity() throws {
         continueAfterFailure = false
         let env = ProcessInfo.processInfo.environment
-        guard let user = env["XMPP_LAB_USERNAME"], let password = env["XMPP_LAB_PASSWORD"], let peer = env["XMPP_OMEMO_PEER"] else {
+        guard let user = env["HAUS_LAB_USERNAME"], let password = env["HAUS_LAB_PASSWORD"], let peer = env["XMPP_OMEMO_PEER"] else {
             throw XCTSkip("Requires disposable local OMEMO echo peer")
         }
         let app = XCUIApplication()
         app.launchArguments = ["-lab-ui-test"]
-        app.launchEnvironment = ["XMPP_LAB_USERNAME": user, "XMPP_LAB_PASSWORD": password]
+        app.launchEnvironment = ["HAUS_LAB_USERNAME": user, "HAUS_LAB_PASSWORD": password]
         app.isolateMessageStorage()
         app.launch()
         connect(app)

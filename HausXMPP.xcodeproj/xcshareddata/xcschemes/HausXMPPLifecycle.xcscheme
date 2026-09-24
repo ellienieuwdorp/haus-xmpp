@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "457D0AFAB9A4904EA1A67DFE"
-               BuildableName = "XMPPiOS.app"
-               BlueprintName = "XMPPiOS"
-               ReferencedContainer = "container:XMPPiOS.xcodeproj">
+               BlueprintIdentifier = "DBD356337FC2BB66123E6D2D"
+               BuildableName = "HausXMPP.app"
+               BlueprintName = "HausXMPP"
+               ReferencedContainer = "container:HausXMPP.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,10 +32,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "457D0AFAB9A4904EA1A67DFE"
-            BuildableName = "XMPPiOS.app"
-            BlueprintName = "XMPPiOS"
-            ReferencedContainer = "container:XMPPiOS.xcodeproj">
+            BlueprintIdentifier = "DBD356337FC2BB66123E6D2D"
+            BuildableName = "HausXMPP.app"
+            BlueprintName = "HausXMPP"
+            ReferencedContainer = "container:HausXMPP.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -44,10 +44,10 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "9D8ADC03777E422C10C8F366"
-               BuildableName = "XMPPiOSLifecycleTests.xctest"
-               BlueprintName = "XMPPiOSLifecycleTests"
-               ReferencedContainer = "container:XMPPiOS.xcodeproj">
+               BlueprintIdentifier = "4A77021075A58939E1A7D758"
+               BuildableName = "HausXMPPLifecycleTests.xctest"
+               BlueprintName = "HausXMPPLifecycleTests"
+               ReferencedContainer = "container:HausXMPP.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -75,10 +75,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "457D0AFAB9A4904EA1A67DFE"
-            BuildableName = "XMPPiOS.app"
-            BlueprintName = "XMPPiOS"
-            ReferencedContainer = "container:XMPPiOS.xcodeproj">
+            BlueprintIdentifier = "DBD356337FC2BB66123E6D2D"
+            BuildableName = "HausXMPP.app"
+            BlueprintName = "HausXMPP"
+            ReferencedContainer = "container:HausXMPP.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -92,10 +92,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "457D0AFAB9A4904EA1A67DFE"
-            BuildableName = "XMPPiOS.app"
-            BlueprintName = "XMPPiOS"
-            ReferencedContainer = "container:XMPPiOS.xcodeproj">
+            BlueprintIdentifier = "DBD356337FC2BB66123E6D2D"
+            BuildableName = "HausXMPP.app"
+            BlueprintName = "HausXMPP"
+            ReferencedContainer = "container:HausXMPP.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

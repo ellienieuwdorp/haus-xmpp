@@ -33,7 +33,7 @@ struct MessageActionsContext {
 @MainActor
 enum MessageActionsOverlay {
     /// The press path is synchronous on the main thread; these intervals show in Instruments (os_signpost, category MessageMenu).
-    static let signposter = OSSignposter(subsystem: "dev.xmpplab.ios", category: "MessageMenu")
+    static let signposter = OSSignposter(subsystem: "haus.xmpp.ios", category: "MessageMenu")
 
     /// `onDismiss` runs once the overlay is gone, before the chosen action; its argument says whether one was chosen.
     static func present(from presenter: UIViewController, context: MessageActionsContext, onDismiss: @escaping (Bool) -> Void = { _ in }) {

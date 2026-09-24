@@ -9,7 +9,7 @@ enum EncryptionKeychain {
     static func load(storageID: String, allowCreation: Bool) throws -> Data {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "dev.xmpplab.encryption-state",
+            kSecAttrService as String: "haus.xmpp.encryption-state",
             kSecAttrAccount as String: storageID,
             kSecAttrSynchronizable as String: false
         ]

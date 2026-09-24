@@ -7,58 +7,58 @@ import XMPPProtocol
     }
     static func run() async throws {
         let env = ProcessInfo.processInfo.environment
-        guard let domain = env["XMPP_LAB_DOMAIN"], let user = env["XMPP_LAB_USERNAME"], let password = env["XMPP_LAB_PASSWORD"] else {
-            print("Required environment: XMPP_LAB_DOMAIN, XMPP_LAB_USERNAME, XMPP_LAB_PASSWORD; optional XMPP_LAB_HOST, XMPP_LAB_PORT, XMPP_LAB_CA_DER, XMPP_LAB_TO, XMPP_LAB_BODY. Lab plaintext only.")
+        guard let domain = env["HAUS_LAB_DOMAIN"], let user = env["HAUS_LAB_USERNAME"], let password = env["HAUS_LAB_PASSWORD"] else {
+            print("Required environment: HAUS_LAB_DOMAIN, HAUS_LAB_USERNAME, HAUS_LAB_PASSWORD; optional HAUS_LAB_HOST, HAUS_LAB_PORT, HAUS_LAB_CA_DER, HAUS_LAB_TO, HAUS_LAB_BODY. Lab plaintext only.")
             return
         }
-        let ca = try env["XMPP_LAB_CA_DER"].map { try Data(contentsOf: URL(fileURLWithPath: $0)) }
+        let ca = try env["HAUS_LAB_CA_DER"].map { try Data(contentsOf: URL(fileURLWithPath: $0)) }
         let client = XMPPClient(labCertificateAuthority: ca)
         let recovery = LabRecoveryPersistence()
-        if env["XMPP_LAB_RECOVERY_SMOKE"] == "1" || env["XMPP_LAB_PUSH_SMOKE"] == "1" { try await client.configureStreamManagement(persistence: recovery) }
+        if env["HAUS_LAB_RECOVERY_SMOKE"] == "1" || env["HAUS_LAB_PUSH_SMOKE"] == "1" { try await client.configureStreamManagement(persistence: recovery) }
         let timeout = Task { try await Task.sleep(for: .seconds(30)); await client.disconnectAndWait() }
-        try await client.connect(host: env["XMPP_LAB_HOST"] ?? domain, port: UInt16(env["XMPP_LAB_PORT"] ?? "5223") ?? 5223, domain: domain, username: user, password: password)
-        if env["XMPP_LAB_PUSH_SMOKE"] == "1" {
+        try await client.connect(host: env["HAUS_LAB_HOST"] ?? domain, port: UInt16(env["HAUS_LAB_PORT"] ?? "5223") ?? 5223, domain: domain, username: user, password: password)
+        if env["HAUS_LAB_PUSH_SMOKE"] == "1" {
             try await verifyPush(client: client, persistence: recovery)
             timeout.cancel(); await client.disconnectAndWait(); return
         }
-        if env["XMPP_LAB_RECOVERY_SMOKE"] == "1" {
+        if env["HAUS_LAB_RECOVERY_SMOKE"] == "1" {
             try await verifyRecovery(client: client, persistence: recovery, env: env)
             timeout.cancel(); await client.disconnectAndWait(); return
         }
-        if env["XMPP_LAB_CARBONS_SMOKE"] == "1" {
+        if env["HAUS_LAB_CARBONS_SMOKE"] == "1" {
             try await verifyCarbons(client: client, env: env, ca: ca)
             timeout.cancel()
             await client.disconnectAndWait()
             return
         }
-        if env["XMPP_LAB_OMEMO_WIRE_SMOKE"] == "1" {
+        if env["HAUS_LAB_OMEMO_WIRE_SMOKE"] == "1" {
             try await verifyOMEMOWire(client: client, ownJID: user + "@" + domain)
             timeout.cancel()
             await client.disconnectAndWait()
             return
         }
-        if env["XMPP_LAB_REPLY_SMOKE"] == "1" {
-            guard let to = env["XMPP_LAB_TO"], let sourceID = env["XMPP_LAB_ID"] else { throw XMPPClientError.invalidConfiguration }
+        if env["HAUS_LAB_REPLY_SMOKE"] == "1" {
+            guard let to = env["HAUS_LAB_TO"], let sourceID = env["HAUS_LAB_ID"] else { throw XMPPClientError.invalidConfiguration }
             try await verifyReply(client: client, to: to, sourceID: sourceID)
             timeout.cancel()
             await client.disconnectAndWait()
             return
         }
         var receivedCount = 0
-        let cycles = max(1, Int(env["XMPP_LAB_CYCLES"] ?? "1") ?? 1)
+        let cycles = max(1, Int(env["HAUS_LAB_CYCLES"] ?? "1") ?? 1)
         for await event in client.events {
             switch event {
             case .streamManagementBarrier(let token): try await client.acknowledgeInbound(token)
             case .state(.online):
                 print("ONLINE")
-                if let to = env["XMPP_LAB_TO"] {
-                    let id = try await client.sendMessage(to: to, body: env["XMPP_LAB_BODY"] ?? "Local protocol smoke test", id: env["XMPP_LAB_ID"] ?? UUID().uuidString)
+                if let to = env["HAUS_LAB_TO"] {
+                    let id = try await client.sendMessage(to: to, body: env["HAUS_LAB_BODY"] ?? "Local protocol smoke test", id: env["HAUS_LAB_ID"] ?? UUID().uuidString)
                     print("SENT \(id)")
                 }
             case .state(.disconnected(let reason)):
                 print("DISCONNECTED \(reason ?? "requested")")
                 if receivedCount > 0 && receivedCount < cycles {
-                    try await client.connect(host: env["XMPP_LAB_HOST"] ?? domain, port: UInt16(env["XMPP_LAB_PORT"] ?? "5223") ?? 5223, domain: domain, username: user, password: password)
+                    try await client.connect(host: env["HAUS_LAB_HOST"] ?? domain, port: UInt16(env["HAUS_LAB_PORT"] ?? "5223") ?? 5223, domain: domain, username: user, password: password)
                 } else {
                     timeout.cancel()
                     return
@@ -67,8 +67,8 @@ import XMPPProtocol
             case .encryptedMessage, .omemoDevices, .encryptionFailure, .streamAcknowledged: break
             case .state, .encryptedGroupMessage, .groupPresence, .reaction, .retraction, .receipt: break
             case .message(let message):
-                if let expected = env["XMPP_LAB_EXPECT_BODY"], message.body != expected { throw XMPPClientError.unexpectedProtocol }
-                if let expectedID = env["XMPP_LAB_ID"], message.id != expectedID || message.originID != expectedID { throw XMPPClientError.unexpectedProtocol }
+                if let expected = env["HAUS_LAB_EXPECT_BODY"], message.body != expected { throw XMPPClientError.unexpectedProtocol }
+                if let expectedID = env["HAUS_LAB_ID"], message.id != expectedID || message.originID != expectedID { throw XMPPClientError.unexpectedProtocol }
                 receivedCount += 1
                 print("RECEIVED \(message.id) bytes=\(message.body.utf8.count)")
                 await client.disconnectAndWait()
@@ -89,7 +89,7 @@ import XMPPProtocol
     }
 
     private static func verifyRecovery(client: XMPPClient, persistence: LabRecoveryPersistence, env: [String: String]) async throws {
-        let domain = env["XMPP_LAB_DOMAIN"]!, user = env["XMPP_LAB_USERNAME"]!
+        let domain = env["HAUS_LAB_DOMAIN"]!, user = env["HAUS_LAB_USERNAME"]!
         let ids = (0..<3).map { _ in UUID().uuidString }
         for id in ids { try await client.sendMessage(to: user + "@" + domain, body: "Recovery fixture", id: id) }
         try await client.requestAcknowledgement()
@@ -106,7 +106,7 @@ import XMPPProtocol
         }
         let oldJID = await persistence.snapshot?.fullJID
         await client.disconnectAndWait()
-        try await client.connect(host: env["XMPP_LAB_HOST"] ?? domain, domain: domain, username: user, password: env["XMPP_LAB_PASSWORD"]!)
+        try await client.connect(host: env["HAUS_LAB_HOST"] ?? domain, domain: domain, username: user, password: env["HAUS_LAB_PASSWORD"]!)
         guard await persistence.snapshot?.fullJID == oldJID else { throw XMPPClientError.unexpectedProtocol }
         print("SM_DURABLE_ACK_AND_RESUME_VERIFIED")
         var cursor: String?, found = Set<String>(), pages = 0
@@ -188,13 +188,13 @@ import XMPPProtocol
     }
 
     static func verifyCarbons(client: XMPPClient, env: [String: String], ca: Data?) async throws {
-        guard let username = env["XMPP_LAB_USERNAME"], let password = env["XMPP_LAB_PASSWORD"],
-              let peerUser = env["XMPP_LAB_PEER_USERNAME"], let peerPassword = env["XMPP_LAB_PEER_PASSWORD"],
-              let domain = env["XMPP_LAB_DOMAIN"] else { throw XMPPClientError.invalidConfiguration }
+        guard let username = env["HAUS_LAB_USERNAME"], let password = env["HAUS_LAB_PASSWORD"],
+              let peerUser = env["HAUS_LAB_PEER_USERNAME"], let peerPassword = env["HAUS_LAB_PEER_PASSWORD"],
+              let domain = env["HAUS_LAB_DOMAIN"] else { throw XMPPClientError.invalidConfiguration }
         let sibling = XMPPClient(labCertificateAuthority: ca)
         let peer = XMPPClient(labCertificateAuthority: ca)
-        try await sibling.connect(host: env["XMPP_LAB_HOST"] ?? domain, domain: domain, username: username, password: password)
-        try await peer.connect(host: env["XMPP_LAB_HOST"] ?? domain, domain: domain, username: peerUser, password: peerPassword)
+        try await sibling.connect(host: env["HAUS_LAB_HOST"] ?? domain, domain: domain, username: username, password: password)
+        try await peer.connect(host: env["HAUS_LAB_HOST"] ?? domain, domain: domain, username: peerUser, password: peerPassword)
         var siblingJID: String?
         for await event in sibling.events {
             if case .state(.online(let jid)) = event { siblingJID = jid; break }
