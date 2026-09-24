@@ -36,8 +36,10 @@ struct EncryptionDetailsView: View {
                 }
             } else {
                 // The store read takes milliseconds; a refresh problem shows in the footer once the list is there.
+                // Sample data has no store to read, so it would otherwise say "Loading" forever.
                 let unreadable = model.encryptionDiagnostics == AppModel.storedDevicesUnreadable
-                Section { Text(unreadable ? AppModel.storedDevicesUnreadable : "Loading stored devices…").foregroundStyle(.secondary) }
+                let text = model.isDemo ? "Sample conversations have no encryption devices." : unreadable ? AppModel.storedDevicesUnreadable : "Loading stored devices…"
+                Section { Text(text).foregroundStyle(.secondary) }
             }
         }
         // Stored devices at once; the server is asked at most once per connection unless Refresh is tapped.
