@@ -349,7 +349,6 @@ struct ConversationView: View {
                                 showingSearch = false
                                 query = ""
                             }
-                            .frame(height: 52)
                             .padding(.horizontal, 4)
                             if !searchTerm.isEmpty {
                                 Text(messages.isEmpty ? "No results in this conversation" : "\(messages.count) \(messages.count == 1 ? "message" : "messages") found")
