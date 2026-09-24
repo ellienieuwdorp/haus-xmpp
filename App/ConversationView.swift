@@ -50,6 +50,8 @@ struct ConversationView: View {
     /// The own message whose text is in the composer; sending queues a correction instead of a message.
     @State private var editing: ChatMessage?
     @State private var reviewDismissed = false
+    /// The floating banners' height, handed to the timeline as top safe area so its first message clears them.
+    @State private var bannerHeight: CGFloat = 0
 
     private var searchTerm: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first(where: { $0.id == chatID })?.title) }
@@ -211,32 +213,10 @@ struct ConversationView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if showingSearch {
-                ConversationSearchBar(query: $query) {
-                    showingSearch = false
-                    query = ""
-                }
-                .frame(height: 56)
-                .padding(.horizontal, 4)
-                if !searchTerm.isEmpty {
-                    Text(messages.isEmpty ? "No results in this conversation" : "\(messages.count) \(messages.count == 1 ? "message" : "messages") found")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16).padding(.bottom, 8)
-                }
-            }
-            if starredOnly {
-                HStack {
-                    Label("Starred messages", systemImage: "star.fill").font(.caption)
-                    Spacer()
-                    Button("Show all") { starredOnly = false }
-                }.padding(.horizontal).padding(.vertical, 8)
-            }
-            if !model.isDemo, model.encryptionNeedsReview, !reviewDismissed {
-                trustReviewCard
-            }
-            ConversationTimeline(messages: timelineMessages, typing: timelineTyping, composer: showingSearch ? nil : AnyView(composer), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
+        // One layer: the timeline runs under the navigation bar and the banners; UIKit insets it by that safe area and
+        // blurs what scrolls beneath with its scroll edge effect.
+        ZStack {
+            ConversationTimeline(messages: timelineMessages, typing: timelineTyping, topBannerHeight: bannerHeight, composer: showingSearch ? nil : AnyView(composer), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
                 cancelEditing()
                 replyingTo = message
@@ -255,13 +235,18 @@ struct ConversationView: View {
             }, onRestoreComposerFocus: { composerState.focused = true }, onReachTop: { Task { await model.loadOlderMessages() } })
             // The controller pins the composer to the keyboard itself and insets the messages to match.
             .ignoresSafeArea(.keyboard)
-            .ignoresSafeArea(.container, edges: .bottom)
+            .ignoresSafeArea(.container, edges: [.top, .bottom])
             .overlay {
                 // Only an actual empty chat says so; while a load is pending the timeline stays blank.
                 if messages.isEmpty, model.messagesLoadedFor == chatID {
                     ContentUnavailableView(!searchTerm.isEmpty ? "No matching messages" : (starredOnly ? "No starred messages" : "No messages yet"),
                                            systemImage: !searchTerm.isEmpty ? "magnifyingglass" : (starredOnly ? "star" : "bubble.left"))
                 }
+            }
+            // Banners float over the timeline as a bar, so messages scroll under them and blur like under the navigation
+            // bar. SwiftUI keeps that inset to itself (the timeline ignores the top safe area), so its height is passed on.
+            .safeAreaBar(edge: .top, spacing: 0) {
+                banners.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bannerHeight = $0 }
             }
         }
         .background(Color(uiColor: .systemBackground))
@@ -352,6 +337,46 @@ struct ConversationView: View {
             .tint(Color(uiColor: AccentTheme.current.tint))
     }
 
+    /// Search, the starred filter and the trust review float on glass over the timeline, below the navigation bar.
+    @ViewBuilder private var banners: some View {
+        let showsReview = !model.isDemo && model.encryptionNeedsReview && !reviewDismissed
+        if showingSearch || starredOnly || showsReview {
+            GlassEffectContainer(spacing: 8) {
+                VStack(spacing: 8) {
+                    if showingSearch {
+                        VStack(spacing: 0) {
+                            ConversationSearchBar(query: $query) {
+                                showingSearch = false
+                                query = ""
+                            }
+                            .frame(height: 52)
+                            .padding(.horizontal, 4)
+                            if !searchTerm.isEmpty {
+                                Text(messages.isEmpty ? "No results in this conversation" : "\(messages.count) \(messages.count == 1 ? "message" : "messages") found")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 16).padding(.bottom, 10)
+                            }
+                        }
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                    }
+                    if starredOnly {
+                        HStack {
+                            Label("Starred messages", systemImage: "star.fill").font(.caption)
+                            Spacer()
+                            Button("Show all") { starredOnly = false }
+                                .font(.subheadline).frame(minHeight: 44).contentShape(Rectangle())
+                        }
+                        .padding(.leading, 16).padding(.trailing, 14)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    }
+                    if showsReview { trustReviewCard }
+                }
+            }
+            .padding(.horizontal, 8).padding(.top, 4).padding(.bottom, 8)
+        }
+    }
+
     private var trustReviewCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
@@ -373,8 +398,7 @@ struct ConversationView: View {
             .buttonBorderShape(.capsule)
         }
         .padding(14)
-        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .padding(.horizontal, 8).padding(.top, 4)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 }
 
