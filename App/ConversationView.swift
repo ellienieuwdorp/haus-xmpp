@@ -325,6 +325,10 @@ struct ConversationView: View {
         }
         // Files picked for one chat never follow the view to another.
         .onChange(of: [chatID, model.accountID]) { composerState.tray = [] }
+        // The list's search and compose bar goes with the push instead of lingering over the composer after it.
+        .toolbarVisibility(.hidden, for: .bottomBar)
+        // Before the first frame: a cached page puts the newest messages on screen as the push starts.
+        .onAppear { model.prepareChat(chatID) }
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
         .onDisappear { model.closeChat(chatID) }
     }

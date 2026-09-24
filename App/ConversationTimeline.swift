@@ -226,11 +226,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var actionsVisible = false
     private var heldUpdate: (() -> Void)?
     private var restoresKeyboard = false
-    /// A send is two updates a few milliseconds apart (queued, then accepted). The second supersedes the first apply's
-    /// completion, so what the first decided is owed until a completion runs.
-    private var owesFollow = false
-    private var owesSlide = false
     private var sliding = false
+    /// The update whose slide is playing; a later slide replaces it and settles the offset itself.
+    private var slideRevision = 0
     private var bottomInset: CGFloat = 0
     private var composerHeight: NSLayoutConstraint!
     /// Content position at the visible bottom edge, so an inset change can put the same messages back above the composer.
@@ -349,12 +347,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         // Sending always returns to the newest message, wherever the reader was.
         let sentOwn = uniqueRows[tailStart...].contains { $0.message.isOutgoing }
         let wasNearBottom = isNearBottom
-        let shouldFollow = rows.isEmpty || wasNearBottom || sentOwn || owesFollow
+        let firstContent = rows.isEmpty
+        let shouldFollow = firstContent || wasNearBottom || sentOwn
         // From far up in history a send jumps; a slide would cross cells that were never drawn.
         // The typing bubble coming or going at the tail moves the same way as a message arriving.
-        let slidesIn = ((appended || typingChanged) && wasNearBottom || owesSlide) && view.window != nil && !UIAccessibility.isReduceMotionEnabled
-        owesFollow = shouldFollow
-        owesSlide = slidesIn
+        let slidesIn = !firstContent && (appended || typingChanged) && wasNearBottom && view.window != nil && !UIAccessibility.isReduceMotionEnabled
         let anchor = visibleAnchor()
         let previous = rowsByID
         rows = uniqueRows
@@ -374,32 +371,44 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         // A shrinking content size clamps the offset during the apply, so a slide back down starts from here.
         let offsetBefore = collectionView.contentOffset.y
         if typingLeft { fadeOutTypingCell() }
-        dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
-            guard let self, revision == currentRevision else { return }
+        // Every offset decision happens in this call, before the next frame: waiting for an apply's completion let a
+        // frame show a first load at the top of its window, or a prepend at the old offset.
+        if firstContent {
+            // Nothing on screen to diff against: load the cells in place and land on the newest message at once.
+            dataSource.applySnapshotUsingReloadData(snapshot)
             collectionView.layoutIfNeeded()
-            owesFollow = false
-            owesSlide = false
-            if slidesIn {
-                // Settle the final offset first so the new cells exist, then play the distance back.
-                let start = typingLeft && !appended ? offsetBefore : collectionView.contentOffset.y
-                scrollToBottom()
-                let end = collectionView.contentOffset.y
-                collectionView.contentOffset.y = start
-                sliding = true
-                UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) { self.collectionView.contentOffset.y = end } completion: { [weak self] _ in
-                    guard let self else { return }
-                    sliding = false
-                    if followsBottom { scrollToBottom() }
-                }
-            } else if shouldFollow {
-                followBottom()
-            } else if let anchor, let indexPath = dataSource.indexPath(for: anchor.id),
-                      let attributes = collectionView.layoutAttributesForItem(at: indexPath) {
-                collectionView.contentOffset.y = clampedOffset(attributes.frame.minY - anchor.distanceFromTop)
-            }
-            followsBottom = shouldFollow || isNearBottom
-            recordBottomEdge()
+            scrollToBottom()
+            followsBottom = true
+            return
         }
+        dataSource.apply(snapshot, animatingDifferences: false)
+        if dataSource.snapshot().itemIdentifiers != snapshot.itemIdentifiers {
+            // A non-animated apply on the main queue is synchronous; if that ever changes, keep the offset logic synchronous.
+            assertionFailure("A non-animated diffable apply did not land synchronously")
+            dataSource.applySnapshotUsingReloadData(snapshot)
+        }
+        collectionView.layoutIfNeeded()
+        if slidesIn {
+            // Settle the final offset first so the new cells exist, then play the distance back.
+            let start = typingLeft && !appended ? offsetBefore : collectionView.contentOffset.y
+            scrollToBottom()
+            let end = collectionView.contentOffset.y
+            collectionView.contentOffset.y = start
+            sliding = true
+            slideRevision = currentRevision
+            UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) { self.collectionView.contentOffset.y = end } completion: { [weak self] _ in
+                guard let self, slideRevision == currentRevision else { return }
+                sliding = false
+                if followsBottom { scrollToBottom() }
+            }
+        } else if shouldFollow {
+            followBottom()
+        } else if let anchor, let indexPath = dataSource.indexPath(for: anchor.id),
+                  let attributes = collectionView.layoutAttributesForItem(at: indexPath) {
+            collectionView.contentOffset.y = clampedOffset(attributes.frame.minY - anchor.distanceFromTop)
+        }
+        followsBottom = shouldFollow || isNearBottom
+        recordBottomEdge()
     }
 
     /// The typing bubble leaves as a fading copy; the cell itself goes with the apply.
@@ -565,12 +574,18 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private func followBottom() { if !sliding { scrollToBottom() } }
 
     private func scrollToBottom() {
-        // scrollToItem sizes the final cells first; the clamp then lands on the real content height.
+        // scrollToItem sizes the final cells first; the clamp then lands on the real content height. A cell that
+        // self-sizes as it comes on screen changes that height again, so settle until it holds (usually at once).
         if let last = typing != nil ? Self.typingID : rows.last?.message.id, let path = dataSource.indexPath(for: last) {
             collectionView.scrollToItem(at: path, at: .bottom, animated: false)
             collectionView.layoutIfNeeded()
         }
-        collectionView.contentOffset.y = clampedOffset(.greatestFiniteMagnitude)
+        for _ in 0..<3 {
+            let bottom = clampedOffset(.greatestFiniteMagnitude)
+            guard abs(collectionView.contentOffset.y - bottom) > 0.5 else { break }
+            collectionView.contentOffset.y = bottom
+            collectionView.layoutIfNeeded()
+        }
         recordBottomEdge()
     }
 
