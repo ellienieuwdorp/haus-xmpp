@@ -84,6 +84,8 @@ public enum XMPPEvent: Sendable, Equatable {
     case reaction(XMPPReaction)
     case retraction(XMPPRetraction)
     case receipt(XMPPReceipt)
+    /// Emitted before the stanza's other event, so a state riding on a message is seen first.
+    case chatState(XMPPChatState)
     case encryptedMessage(XMPPEncryptedMessage)
     case encryptedGroupMessage(XMPPEncryptedGroupMessage)
     case groupPresence(room: String)
@@ -326,6 +328,31 @@ public actor XMPPClient {
                             to: node.attributes["to"], targetID: reaction.targetID, reactions: reaction.reactions, provenance: provenance)
     }
 
+    /// Our own resources and our own room nickname are dropped; a group state needs a room we are in.
+    static func parsedChatState(_ node: XMLNode, account: String, rooms: [String: GroupRoomState]) -> XMPPChatState? {
+        guard let state = XMPPChatState.state(of: node), let from = node.attributes["from"],
+              let bare = OMEMOWire.bareJID(from), bare != account else { return nil }
+        let ridesOnMessage = !node.children("body", namespace: "jabber:client").isEmpty || OMEMOWire.hasEncryptedContent(node)
+        switch node.attributes["type"] {
+        case "groupchat":
+            let nickname = String(from.dropFirst(bare.count + 1))
+            guard let room = rooms[bare], from.hasPrefix(bare + "/"), !nickname.isEmpty, nickname != room.nickname else { return nil }
+            let real = room.occupants[from]
+            guard real != account else { return nil }
+            return XMPPChatState(chat: bare, participant: real ?? nickname, state: state, ridesOnMessage: ridesOnMessage)
+        case nil, "chat":
+            return XMPPChatState(chat: bare, state: state, ridesOnMessage: ridesOnMessage)
+        default: return nil
+        }
+    }
+
+    /// A hint, not a message: nothing is stored or retried. Groups need a joined room.
+    public func sendChatState(_ state: XMPPChatState.State, to: String, groupchat: Bool = false) async throws {
+        guard phase == .online else { throw XMPPClientError.notConnected }
+        if groupchat, groupRooms[to]?.joined != true { throw XMPPGroupError.notJoined }
+        try await write(XMPPChatState.xml(state, to: to, id: UUID().uuidString, groupchat: groupchat))
+    }
+
     private func readLoop(_ conn: NWConnection, token: UUID) async {
         do {
             while generation == token && !Task.isCancelled {
@@ -564,6 +591,8 @@ public actor XMPPClient {
     }
 
     private func emitMessage(_ node: XMLNode, provenance: XMPPMessageProvenance) throws {
+        if provenance == .direct, let account = OMEMOWire.bareJID(boundJID),
+           let state = Self.parsedChatState(node, account: account, rooms: groupRooms) { try emit(.chatState(state)) }
         if node.attributes["type"] == "groupchat" {
             if provenance == .direct, let room = node.attributes["from"].flatMap(OMEMOWire.bareJID),
                let state = groupRooms[room], let account = OMEMOWire.bareJID(boundJID), OMEMOWire.hasEncryptedContent(node) {
