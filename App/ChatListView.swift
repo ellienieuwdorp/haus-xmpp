@@ -250,7 +250,7 @@ private struct ChatRow: View {
     }
 
     /// Same ladder as the bubble footer: clock, failed, one check (server), two (delivered), two blue (read).
-    /// Not `AccentTheme.readReceipt`: that blue is picked to sit on the accent bubble fill, not the list background.
+    /// `listReadReceipt`, not `readReceipt`: that blue is picked to sit on the accent bubble fill, not the list background.
     private var stateGlyph: Text? {
         guard chat.lastMessageIsOutgoing else { return nil }
         let check = Text(Image(systemName: "checkmark"))
@@ -261,7 +261,7 @@ private struct ChatRow: View {
             guard let receipt = chat.lastMessageReceipt else { return check }
             guard let image = UIImage.doubleCheck(.init(textStyle: .subheadline)) else { return check }
             let double = Text(Image(uiImage: image))
-            return receipt == .displayed ? double.foregroundStyle(.blue) : double
+            return receipt == .displayed ? double.foregroundStyle(Color(uiColor: AccentTheme.current.listReadReceipt)) : double
         }
     }
 
