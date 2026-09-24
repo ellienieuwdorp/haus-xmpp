@@ -159,10 +159,14 @@ public actor OMEMOService {
     private func overview(_ state: AccountEncryptionState, account: String, peer: String, profileOverride: XMPPOMEMOProfile? = nil, incompatibleOverride: Bool? = nil) throws -> EncryptionOverview {
         let profile = profileOverride ?? state.profiles[peer] ?? .legacy
         let local = try engine(state, profile)
-        return EncryptionOverview(profile: profile, localDeviceID: local.deviceID,
-                                  localFingerprint: try OMEMOEngine.fingerprintBytes(for: local.identityKey, profile: profile.crypto).map { String(format: "%02x", $0) }.joined(),
-                                  devices: state.devices.filter { $0.profile == profile && ($0.jid == peer || $0.jid == account) },
-                                  hasIncompatibleDevices: incompatibleOverride ?? state.incompatiblePeers[peer] ?? false)
+        var result = EncryptionOverview(profile: profile, localDeviceID: local.deviceID,
+                                        localFingerprint: try OMEMOEngine.fingerprintBytes(for: local.identityKey, profile: profile.crypto).map { String(format: "%02x", $0) }.joined(),
+                                        devices: state.devices.filter { $0.profile == profile && ($0.jid == peer || $0.jid == account) },
+                                        hasIncompatibleDevices: incompatibleOverride ?? state.incompatiblePeers[peer] ?? false)
+        // Every completed selecting refresh records the incompatibility answer, even an empty one; devices and a
+        // pinned version are also only ever stored by a completed refresh.
+        result.isPeerKnown = state.incompatiblePeers[peer] != nil || state.profiles[peer] != nil || state.devices.contains { $0.jid == peer }
+        return result
     }
 
     /// The UI supplies the full fingerprint-scoped identifier it displayed, preventing a stale

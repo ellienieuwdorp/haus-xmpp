@@ -32,6 +32,9 @@ public struct EncryptionOverview: Sendable {
     public var unavailableDevices: [String: Int] = [:]
     /// Device IDs each owner advertised in this version, before bundle checks.
     public var advertisedDevices: [String: Int] = [:]
+    /// A device refresh for this peer has completed on this account at some point, so an empty or unusable device
+    /// list is a stored answer rather than "not fetched yet". Derived from stored state; no schema change.
+    public var isPeerKnown = false
     public var needsTrust: Bool { devices.contains { $0.active && $0.trust == .undecided } }
 }
 

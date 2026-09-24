@@ -254,6 +254,22 @@ final class ServiceTests: XCTestCase {
         expectFalse(recovered.devices.filter { $0.jid == f.bob && $0.active }.isEmpty)
     }
 
+    func testPeerIsKnownOnlyAfterACompletedRefresh() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        let carol = "carol@localhost"
+        try await f.aStore.acquireTransportOwnership()
+        try await f.a.initialize(account: f.alice, transport: f.aTransport)
+        expectFalse(try await f.a.overview(account: f.alice, peer: carol).isPeerKnown)
+        do { _ = try await f.a.refreshDevices(account: f.alice, peer: carol, transport: OfflineTransport()); XCTFail("Offline refresh completed") } catch {}
+        expectFalse(try await f.a.overview(account: f.alice, peer: carol).isPeerKnown)
+        // Carol publishes nothing: a completed answer, so "no devices" is now a stored fact.
+        let empty = try await f.a.refreshDevices(account: f.alice, peer: carol, transport: f.aTransport)
+        expectTrue(empty.isPeerKnown)
+        expectTrue(empty.devices.filter { $0.jid == carol }.isEmpty)
+        let reopened = OMEMOService(store: f.aStore, protection: f.protection)
+        expectTrue(try await reopened.overview(account: f.alice, peer: carol).isPeerKnown)
+    }
+
     func testOwnSecondDeviceReceivesSameCiphertextAsPeer() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
