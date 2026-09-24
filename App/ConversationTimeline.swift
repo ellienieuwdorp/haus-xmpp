@@ -151,7 +151,7 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     /// The user scrolled to the oldest loaded message.
     var onReachTop: () -> Void = {}
     // Observed so a stored accent change re-renders visible bubbles.
-    @AppStorage(AccentTheme.storageKey) private var accent = ""
+    private var accent: String { AccentTheme.current.rawValue }
 
     func makeUIViewController(context: Context) -> ConversationTimelineController {
         ConversationTimelineController()

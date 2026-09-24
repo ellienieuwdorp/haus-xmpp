@@ -31,7 +31,7 @@ struct RootView: View {
             model.signInRequested = false
             showingConnection = true
         }
-        .sheet(isPresented: $showingConnection) { SignInView(model: model) }
+        .sheet(isPresented: $showingConnection) { SignInView(model: model).themedRoot() }
         .sheet(isPresented: $showingSettings) {
             NavigationStack {
                 SettingsView(model: model, showingConnection: $showingConnection)
@@ -39,6 +39,7 @@ struct RootView: View {
                         ToolbarItem(placement: .confirmationAction) { Button("Done") { showingSettings = false } }
                     }
             }
+            .themedRoot()
         }
         .alert("Something needs attention", isPresented: Binding(
             get: { model.error != nil }, set: { if !$0 { model.error = nil } }
