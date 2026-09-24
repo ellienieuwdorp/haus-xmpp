@@ -57,6 +57,18 @@ private let account = "me@example.test"
     #expect(try state("other@rooms.example.test/maya") == nil)
 }
 
+@Test func delayedStatesAreStale() throws {
+    let delay = "<delay xmlns='urn:xmpp:delay' from='example.test' stamp='2026-09-24T10:00:00Z'/>"
+    var room = GroupRoomState()
+    room.nickname = "me"
+    let rooms = ["team@rooms.example.test": room]
+    // Offline storage and room history both mark their copies with a delay.
+    for xml in ["<message from='alex@example.test/phone' type='chat'><composing xmlns='\(ns)'/>\(delay)</message>",
+                "<message from='team@rooms.example.test/maya' type='groupchat'><body>hi</body><composing xmlns='\(ns)'/>\(delay)</message>"] {
+        #expect(XMPPClient.parsedChatState(try stanza(xml), account: account, rooms: rooms) == nil)
+    }
+}
+
 @Test func outgoingStateIsABareHintedStanza() throws {
     let xml = try XMPPChatState.xml(.composing, to: "alex@example.test", id: "c1")
     #expect(xml == "<message to='alex@example.test' type='chat' id='c1'><composing xmlns='\(ns)'/><no-store xmlns='urn:xmpp:hints'/></message>")

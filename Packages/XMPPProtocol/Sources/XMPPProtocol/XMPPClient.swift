@@ -328,10 +328,12 @@ public actor XMPPClient {
                             to: node.attributes["to"], targetID: reaction.targetID, reactions: reaction.reactions, provenance: provenance)
     }
 
-    /// Our own resources and our own room nickname are dropped; a group state needs a room we are in.
+    /// Our own resources and our own room nickname are dropped; a group state needs a room we are in. A delayed copy
+    /// (offline storage, room history) is stale.
     static func parsedChatState(_ node: XMLNode, account: String, rooms: [String: GroupRoomState]) -> XMPPChatState? {
         guard let state = XMPPChatState.state(of: node), let from = node.attributes["from"],
-              let bare = OMEMOWire.bareJID(from), bare != account else { return nil }
+              let bare = OMEMOWire.bareJID(from), bare != account,
+              node.children("delay", namespace: "urn:xmpp:delay").isEmpty else { return nil }
         let ridesOnMessage = !node.children("body", namespace: "jabber:client").isEmpty || OMEMOWire.hasEncryptedContent(node)
         switch node.attributes["type"] {
         case "groupchat":
