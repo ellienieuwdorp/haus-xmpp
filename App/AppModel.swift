@@ -37,6 +37,9 @@ final class AppModel {
     @ObservationIgnored private var timelineWindow = AppModel.timelinePage
     @ObservationIgnored private var loadingOlder = false
     private static let timelinePage = 100, timelineCeiling = 1000
+    /// Newest pages of recently seen chats, so pushing one shows its tail in the first frame. In memory, one account.
+    @ObservationIgnored private var timelinePages = TimelinePageCache()
+    @ObservationIgnored private var prefetchingPages = false
     private(set) var messageReactions: [String: [AuthenticatedReaction]] = [:]
     /// The peer's strongest receipt per own message in the open chat: delivered or displayed.
     private(set) var messageReceipts: [String: MessageEventKind] = [:]
@@ -58,7 +61,7 @@ final class AppModel {
     /// Addresses whose avatar was checked on this session; a PEP notify clears its entry.
     @ObservationIgnored private var avatarChecked: Set<String> = []
     @ObservationIgnored private var storageRoot: URL?
-    private(set) var accountID = ""
+    private(set) var accountID = "" { didSet { if accountID != oldValue { timelinePages.removeAll() } } }
     /// The only connection state views read. Chat trust is derived from stored devices, not from this.
     private(set) var session: SessionState = .offline(reason: nil)
     var isConnected: Bool { session.isConnected }
@@ -1418,13 +1421,23 @@ final class AppModel {
         }
     }
 
+    /// The synchronous half of opening, run before the pushed screen's first frame: resets the open chat's projection
+    /// and shows its cached page while the chat list still shows the same newest message. A chat already shown stays.
+    func prepareChat(_ chatID: String) {
+        guard openChatID != chatID || messagesLoadedFor != chatID else { return }
+        openChatID = chatID; timelineWindow = AppModel.timelinePage; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]
+        if let page = timelinePages.page(for: chats.first { $0.id == chatID }, account: accountID) { publishTimeline(page, chat: chatID) }
+    }
+
     func openChat(_ chatID: String) async {
-        openChatID = chatID; timelineWindow = AppModel.timelinePage; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]; encryptionOverview = nil
+        prepareChat(chatID)
+        encryptionOverview = nil
         encryptionStatus = "Setting up encryption…"; encryptionNeedsReview = false
-        // First paint: the newest screenful now, before the chat list and the rest of the history.
+        // First paint without a cached page: the whole window now, before the chat list, so the refresh below
+        // publishes the same rows and the timeline has nothing to change.
         let account = accountID
-        if let store, let publish = try? await loadTimeline(store: store, account: account, chat: chatID, isGroup: isGroup(chatID), limit: 50),
-           accountID == account, openChatID == chatID, messagesLoadedFor != chatID { publish() }
+        if messagesLoadedFor != chatID, let store, let page = try? await loadTimeline(store: store, account: account, chat: chatID, isGroup: isGroup(chatID), limit: timelineWindow),
+           accountID == account, openChatID == chatID, messagesLoadedFor != chatID { publishTimeline(page, chat: chatID) }
         await refresh()
         if !isDemo { await loadEncryptionDetails(for: chatID) }
     }
@@ -1554,7 +1567,13 @@ final class AppModel {
 
     func closeChat(_ chatID: String) {
         if ownTyping?.chat == chatID { sendOwnTyping(ownTyping?.sender.left(), to: chatID); ownTyping = nil; ownTypingPause?.cancel() }
-        if openChatID == chatID { openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:] }
+        guard openChatID == chatID else { return }
+        // Kept so coming back, or popping back from Chat Details, shows the same tail in the first frame.
+        if messagesLoadedFor == chatID {
+            timelinePages.store(TimelinePage(messages: Array(messages.suffix(AppModel.timelinePage)), reactions: messageReactions, receipts: messageReceipts,
+                                             reactableGroupMessages: reactableGroupMessages), for: chats.first { $0.id == chatID }, account: accountID)
+        }
+        openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]
     }
 
     // MARK: Typing
@@ -1677,8 +1696,68 @@ final class AppModel {
         Task { await refresh(scope); activeEncryptionOperations -= 1 }
     }
 
+    /// One chat's newest messages with their projected events: what a timeline load publishes, and a cache entry.
+    struct TimelinePage {
+        var messages: [ChatMessage]
+        var reactions: [String: [AuthenticatedReaction]] = [:]
+        var receipts: [String: MessageEventKind] = [:]
+        var reactableGroupMessages: Set<String> = []
+    }
+
+    /// The newest pages of recently opened and top-listed chats. A page is shown only while the chat list still
+    /// describes the same newest message; the real load then replaces it in place.
+    struct TimelinePageCache {
+        /// What the chat list shows about a chat's newest message.
+        struct Tail: Equatable {
+            let lastMessageAt: Date?, preview: String, isOutgoing: Bool, state: OutgoingTransportState?, receipt: MessageEventKind?
+            init(_ chat: ChatSummary) {
+                lastMessageAt = chat.lastMessageAt; preview = chat.preview; isOutgoing = chat.lastMessageIsOutgoing
+                state = chat.lastMessageState; receipt = chat.lastMessageReceipt
+            }
+        }
+        static let prefetchCount = 8, capacity = 12
+        private var account = ""
+        private var entries: [String: (tail: Tail, page: TimelinePage)] = [:]
+        /// Least recently stored or shown first.
+        private var order: [String] = []
+
+        mutating func page(for chat: ChatSummary?, account: String) -> TimelinePage? {
+            guard let chat, account == self.account, let entry = entries[chat.id] else { return nil }
+            guard entry.tail == Tail(chat) else { remove(chat.id); return nil }
+            touch(chat.id)
+            return entry.page
+        }
+
+        /// Keeps a page only when its newest message is the one the chat list shows, so a kept page never lags the list.
+        mutating func store(_ page: TimelinePage, for chat: ChatSummary?, account: String) {
+            switchAccount(account)
+            guard let chat else { return }
+            guard page.messages.last?.sentAt == chat.lastMessageAt, (page.messages.last?.isOutgoing ?? false) == chat.lastMessageIsOutgoing else { remove(chat.id); return }
+            entries[chat.id] = (Tail(chat), page)
+            touch(chat.id)
+            while order.count > Self.capacity { entries[order.removeFirst()] = nil }
+        }
+
+        /// Drops pages the chat list has moved past; returns the top chats that still need one.
+        mutating func missing(from chats: [ChatSummary], account: String, excluding open: String?) -> [ChatSummary] {
+            switchAccount(account)
+            for chat in chats where entries[chat.id].map({ $0.tail != Tail(chat) }) ?? false { remove(chat.id) }
+            return chats.prefix(Self.prefetchCount).filter { $0.id != open && entries[$0.id] == nil }
+        }
+
+        mutating func removeAll() { account = ""; entries = [:]; order = [] }
+
+        private mutating func switchAccount(_ account: String) {
+            guard account != self.account else { return }
+            removeAll()
+            self.account = account
+        }
+        private mutating func remove(_ id: String) { entries[id] = nil; order.removeAll { $0 == id } }
+        private mutating func touch(_ id: String) { order.removeAll { $0 == id }; order.append(id) }
+    }
+
     /// Reads one chat's newest messages with their projected events; the caller checks its fences, then publishes.
-    private func loadTimeline(store: MessageStore, account: String, chat: String, isGroup: Bool, limit: Int) async throws -> @MainActor () -> Void {
+    private func loadTimeline(store: MessageStore, account: String, chat: String, isGroup: Bool, limit: Int) async throws -> TimelinePage {
         let storedMessages = try await store.messages(accountID: account, chatID: chat, limit: limit)
         var reactions: [String: [AuthenticatedReaction]] = [:], receipts: [String: MessageEventKind] = [:]
         // One bounded query for the timeline: reactions, delivery and read receipts, retractions and corrections together.
@@ -1698,13 +1777,36 @@ final class AppModel {
                 }
             }
         }
-        return { [self] in
-            messages = storedMessages.map { $0.applying(events[$0.id] ?? []) }
-            messagesLoadedFor = chat
-            messageReactions = reactions
-            messageReceipts = receipts
-            reactableGroupMessages = groupReactionTargets
-            loadAttachments(storedMessages, chat: chat)
+        return TimelinePage(messages: storedMessages.map { $0.applying(events[$0.id] ?? []) }, reactions: reactions, receipts: receipts,
+                            reactableGroupMessages: groupReactionTargets)
+    }
+
+    private func publishTimeline(_ page: TimelinePage, chat: String) {
+        messages = page.messages
+        messagesLoadedFor = chat
+        messageReactions = page.reactions
+        messageReceipts = page.receipts
+        reactableGroupMessages = page.reactableGroupMessages
+        // Unsent messages carry no attachment any more, so their files are not fetched.
+        loadAttachments(page.messages, chat: chat)
+    }
+
+    /// After a chat-list load, the top chats' newest pages, one chat at a time so an open waits on at most one read.
+    /// Counted as an operation so a background transition joins it; it stops at the next chat once quiescing.
+    private func prefetchTimelinePages(store: MessageStore, account: String) {
+        guard !prefetchingPages, foreground, !quiescing, accountID == account else { return }
+        let wanted = timelinePages.missing(from: chats, account: account, excluding: openChatID)
+        guard !wanted.isEmpty else { return }
+        prefetchingPages = true
+        activeEncryptionOperations += 1
+        Task {
+            defer { prefetchingPages = false; activeEncryptionOperations -= 1 }
+            for chat in wanted {
+                guard foreground, !quiescing, accountID == account, openChatID != chat.id else { continue }
+                guard let page = try? await loadTimeline(store: store, account: account, chat: chat.id, isGroup: isGroup(chat.id), limit: AppModel.timelinePage),
+                      accountID == account else { continue }
+                timelinePages.store(page, for: chat, account: account)
+            }
         }
     }
 
@@ -1716,13 +1818,16 @@ final class AppModel {
         // before the message shows); track stored message IDs if that is ever visible.
         defer { typingTracker.flushSettled(); publishTyping() }
         do {
-            if scope.contains(.chats) { try await loadChats(store: store, account: account) }
+            if scope.contains(.chats) {
+                try await loadChats(store: store, account: account)
+                prefetchTimelinePages(store: store, account: account)
+            }
             guard scope.contains(.openChat), accountID == account, let selected = openChatID else { return }
             // Every chat-list load, join and rejoin mirrors the known rooms into groupChats.
-            let publish = try await loadTimeline(store: store, account: account, chat: selected, isGroup: isGroup(selected), limit: timelineWindow)
+            let page = try await loadTimeline(store: store, account: account, chat: selected, isGroup: isGroup(selected), limit: timelineWindow)
             // A chat opened meanwhile requests its own load.
             guard accountID == account, openChatID == selected else { return }
-            publish()
+            publishTimeline(page, chat: selected)
         } catch { self.error = "Could not read local conversations." }
     }
 
