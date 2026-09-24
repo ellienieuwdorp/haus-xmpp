@@ -6,15 +6,15 @@ struct AppearanceView: View {
         switch mode { case "light": .light; case "dark": .dark; default: nil }
     }
 
-    @AppStorage(AppearanceView.modeKey) private var mode = "automatic"
-    @AppStorage(AccentTheme.storageKey) private var accentRaw = AccentTheme.indigo.rawValue
+    @Environment(\.appearance) private var appearance
 
-    private var accent: AccentTheme { AccentTheme(rawValue: accentRaw) ?? .indigo }
+    private var accent: AccentTheme { appearance.accent }
 
     var body: some View {
+        @Bindable var appearance = appearance
         List {
             Section("Theme") {
-                Picker("Theme", selection: $mode) {
+                Picker("Theme", selection: $appearance.mode) {
                     Text("Automatic").tag("automatic")
                     Text("Light").tag("light")
                     Text("Dark").tag("dark")
@@ -25,7 +25,7 @@ struct AppearanceView: View {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 14) {
                     ForEach(AccentTheme.allCases) { theme in
                         let selected = theme == accent
-                        Button { accentRaw = theme.rawValue } label: {
+                        Button { appearance.accent = theme } label: {
                             VStack(spacing: 6) {
                                 Circle()
                                     .fill(theme.swatch)
@@ -61,6 +61,7 @@ struct AppearanceView: View {
         }
         .navigationTitle("Appearance")
         .navigationBarTitleDisplayMode(.inline)
+        .themedRoot()
     }
 
     private func bubble(_ text: String, time: String, incoming: Bool) -> some View {
@@ -76,7 +77,7 @@ struct AppearanceView: View {
             }
             .padding(.horizontal, 14).padding(.vertical, 8)
             .foregroundStyle(incoming ? Color.primary : Color(uiColor: accent.bubbleText))
-            .background(incoming ? Color(uiColor: .systemGray5) : accent.swatch, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(incoming ? Color(uiColor: .tertiarySystemFill) : accent.swatch, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             if incoming { Spacer(minLength: 60) }
         }
     }

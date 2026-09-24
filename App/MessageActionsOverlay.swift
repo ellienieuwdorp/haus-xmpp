@@ -102,7 +102,7 @@ struct MessageActionsOverlayView: View {
     @State private var choosingEmoji = false
     @State private var keyboardHeight: CGFloat = 0
     @AppStorage("recentReactions") private var recentReactions = ""
-    @AppStorage(AccentTheme.storageKey) private var accent = ""
+    private var accent: String { AccentTheme.current.rawValue }
     @Environment(\.colorScheme) private var colorScheme
 
     private static let gap: CGFloat = 14

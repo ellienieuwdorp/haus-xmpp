@@ -7,10 +7,10 @@ struct CircularGlassButtonStyle: ButtonStyle {
     /// Accent-filled circle with bubble text; `false` gives a clear glass circle with an accent glyph.
     var tinted = true
     @Environment(\.isEnabled) private var isEnabled
-    @AppStorage(AccentTheme.storageKey) private var accent = ""
+    @Environment(\.appearance) private var appearance
 
     func makeBody(configuration: Configuration) -> some View {
-        let theme = AccentTheme(rawValue: accent) ?? .indigo
+        let theme = appearance.accent
         configuration.label
             .foregroundStyle(tinted ? Color(uiColor: theme.bubbleText) : Color(uiColor: theme.tint))
             .frame(width: diameter, height: diameter, alignment: .center)

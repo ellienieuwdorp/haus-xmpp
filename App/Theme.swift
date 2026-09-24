@@ -1,6 +1,89 @@
 import SwiftUI
 import UIKit
 
+/// The single source of the user's accent and light/dark choice. Every screen, sheet and hosted
+/// controller reads this one object, so a change made in Settings repaints the sheet that made it too.
+/// Persists under the same keys the app always used, so stored preferences survive.
+@Observable @MainActor final class AppearanceStore {
+    static let shared = AppearanceStore()
+
+    static let modes = ["automatic", "light", "dark"]
+
+    var accent: AccentTheme { didSet { defaults.set(accent.rawValue, forKey: AccentTheme.storageKey) } }
+    /// One of `modes`; "automatic" follows the system.
+    var mode: String { didSet { defaults.set(mode, forKey: AppearanceView.modeKey) } }
+    var colorScheme: ColorScheme? { AppearanceView.colorScheme(for: mode) }
+    var interfaceStyle: UIUserInterfaceStyle {
+        switch mode { case "light": .light; case "dark": .dark; default: .unspecified }
+    }
+
+    @ObservationIgnored private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        accent = AccentTheme(rawValue: defaults.string(forKey: AccentTheme.storageKey) ?? "") ?? .indigo
+        mode = defaults.string(forKey: AppearanceView.modeKey).flatMap { Self.modes.contains($0) ? $0 : nil } ?? "automatic"
+    }
+}
+
+private struct AppearanceStoreKey: EnvironmentKey {
+    // Views hosted in their own UIHostingController (composer, message menu) have no inherited
+    // environment; they fall back to the same shared store instead of a copy.
+    static var defaultValue: AppearanceStore { MainActor.assumeIsolated { .shared } }
+}
+
+extension EnvironmentValues {
+    var appearance: AppearanceStore {
+        get { self[AppearanceStoreKey.self] }
+        set { self[AppearanceStoreKey.self] = newValue }
+    }
+}
+
+/// Applies the store's tint and light/dark choice. Used on the window root and again on each sheet
+/// root, so a presentation's own bars, glass buttons and rows re-render with the choice made inside it.
+private struct ThemedRoot: ViewModifier {
+    @Environment(\.appearance) private var appearance
+
+    func body(content: Content) -> some View {
+        content
+            .tint(Color(uiColor: appearance.accent.tint))
+            .background { WindowInterfaceStyle(style: appearance.interfaceStyle) }
+    }
+}
+
+/// Light/dark is the window's trait override rather than `preferredColorScheme`: going from Dark back
+/// to Automatic through the SwiftUI preference leaves an open sheet dark until it is dismissed
+/// (iOS 26.5), while every presentation in the window follows the window's override. Set as the view
+/// joins the window, so a stored Dark choice is in place before the first frame.
+private struct WindowInterfaceStyle: UIViewRepresentable {
+    let style: UIUserInterfaceStyle
+
+    final class Anchor: UIView {
+        var style = UIUserInterfaceStyle.unspecified { didSet { apply() } }
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            apply()
+        }
+        private func apply() {
+            guard let window, window.overrideUserInterfaceStyle != style else { return }
+            window.overrideUserInterfaceStyle = style
+        }
+    }
+
+    func makeUIView(context: Context) -> Anchor {
+        let anchor = Anchor()
+        anchor.isUserInteractionEnabled = false
+        anchor.style = style
+        return anchor
+    }
+
+    func updateUIView(_ anchor: Anchor, context: Context) { anchor.style = style }
+}
+
+extension View {
+    func themedRoot() -> some View { modifier(ThemedRoot()) }
+}
+
 /// User-selectable accent. Light accents use dark text on the sent bubble; every pair below is measured
 /// against WCAG 2 in both appearances: 4.5:1 for glyphs and links on the background and 4.5:1 for text on
 /// the bubble. Message status glyphs carry no accent colour: they take the bubble's metadata colour.
@@ -8,9 +91,8 @@ enum AccentTheme: String, CaseIterable, Identifiable {
     case indigo, lime, crab, sky, rose, graphite
 
     static let storageKey = "accentTheme"
-    static var current: AccentTheme {
-        AccentTheme(rawValue: UserDefaults.standard.string(forKey: storageKey) ?? "") ?? .indigo
-    }
+    /// The live selection. Reads go through the observable store, so a SwiftUI body that reads this repaints on change.
+    @MainActor static var current: AccentTheme { AppearanceStore.shared.accent }
 
     var id: String { rawValue }
     var title: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }

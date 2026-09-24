@@ -3,10 +3,10 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var model: AppModel
     @Binding var showingConnection: Bool
-    @AppStorage(AccentTheme.storageKey) private var accentRaw = AccentTheme.indigo.rawValue
+    @Environment(\.appearance) private var appearance
     @State private var confirmingSignOut = false
 
-    private var accent: AccentTheme { AccentTheme(rawValue: accentRaw) ?? .indigo }
+    private var accent: AccentTheme { appearance.accent }
     private var localPart: String { model.accountID.split(separator: "@").first.map(String.init) ?? "" }
     private var domain: String { model.accountID.split(separator: "@").dropFirst().first.map(String.init) ?? "" }
 
@@ -69,9 +69,10 @@ struct SettingsView: View {
                     LabeledContent {
                         Text(accent.title)
                     } label: {
-                        Label { Text("Appearance") } icon: { SettingsIconTile(systemName: "paintpalette.fill", color: Color(uiColor: .label)) }
+                        Label { Text("Appearance") } icon: { SettingsIconTile(systemName: "paintpalette.fill", color: .indigo) }
                     }
                 }
+                .accessibilityIdentifier("appearanceRow")
             }
             Section("Development") {
                 HStack(spacing: 12) {

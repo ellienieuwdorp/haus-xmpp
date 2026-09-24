@@ -180,7 +180,7 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     /// Its hidden responder is installed in the controller's view, so the attachment panel is the keyboard here.
     var attachmentKeyboard: AttachmentKeyboard? = nil
     // Observed so a stored accent change re-renders visible bubbles.
-    @AppStorage(AccentTheme.storageKey) private var accent = ""
+    private var accent: String { AccentTheme.current.rawValue }
 
     func makeUIViewController(context: Context) -> ConversationTimelineController {
         ConversationTimelineController()
