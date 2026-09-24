@@ -2,7 +2,8 @@ import SwiftUI
 import UIKit
 
 /// User-selectable accent. Light accents use dark text on the sent bubble; every pair below is measured
-/// against WCAG 2 in both appearances.
+/// against WCAG 2 in both appearances: 4.5:1 for glyphs and links on the background, 4.5:1 for text on
+/// the bubble, 3:1 for the read-receipt glyph.
 enum AccentTheme: String, CaseIterable, Identifiable {
     case indigo, lime, crab, sky, rose, graphite
 
@@ -51,7 +52,7 @@ enum AccentTheme: String, CaseIterable, Identifiable {
     /// The read-receipt glyph on the sent bubble: the blue that contrasts with this accent's fill.
     var readReceipt: UIColor { bubbleText == .white ? Self.readBlueOnDark : Self.readBlueOnLight }
     /// The read-receipt glyph on the chat list, where it sits on the system background rather than the fill.
-    var listReadReceipt: UIColor { UIColor { $0.userInterfaceStyle == .dark ? Self.readBlueOnDark : Self.readBlueOnLight } }
+    static let listReadReceipt = UIColor { $0.userInterfaceStyle == .dark ? readBlueOnDark : readBlueOnLight }
     var swatch: Color { Color(uiColor: bubble) }
 }
 

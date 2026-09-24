@@ -263,7 +263,7 @@ private struct ChatRow: View {
             guard let receipt = chat.lastMessageReceipt else { return check }
             guard let image = UIImage.doubleCheck(.init(textStyle: .subheadline)) else { return check }
             let double = Text(Image(uiImage: image))
-            return receipt == .displayed ? double.foregroundStyle(Color(uiColor: AccentTheme.current.listReadReceipt)) : double
+            return receipt == .displayed ? double.foregroundStyle(Color(uiColor: AccentTheme.listReadReceipt)) : double
         }
     }
 
