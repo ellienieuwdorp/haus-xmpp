@@ -18,8 +18,11 @@ struct GroupDetailsView: View {
                               systemImage: state.needsReview ? "exclamationmark.shield" : "lock.fill",
                               color: state.needsReview ? .orange : .green)
                         .padding(.top, 4)
-                    if state.issue != nil || !state.joined {
-                        Text(state.status).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    // Read-only: the join state and the last failed device refresh. Neither changes the pill.
+                    let notes = [state.issue != nil || !state.joined ? state.status : nil, model.encryptionAttention.groupProblems[room]].compactMap { $0 }
+                    if !notes.isEmpty {
+                        Text(notes.joined(separator: "\n")).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            .accessibilityIdentifier("groupDetails.status")
                     }
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 8)

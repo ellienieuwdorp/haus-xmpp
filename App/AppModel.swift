@@ -98,24 +98,18 @@ final class AppModel {
     private(set) var encryptionOverview: EncryptionOverview?
     /// Chats with retained incoming ciphertext awaiting review, from the chat-list load.
     private(set) var pendingReviewChats: Set<String> = []
+    /// Encryption problems: the Devices footer, sends held for a fingerprint decision, and group refresh failures.
+    private(set) var encryptionAttention = EncryptionAttention()
     /// What the last device refresh saw on the server, and any refresh or decryption problem, for the Devices screen footer.
-    private(set) var encryptionDiagnostics = ""
+    var encryptionDiagnostics: String { encryptionAttention.diagnostics }
     /// The chat whose devices were re-fetched on which connection generation, with that refresh's footer line.
     /// Opening a chat or popping back reuses it; a reconnect (new generation) fetches once more.
     @ObservationIgnored private var refreshFence: [String: (generation: UUID, note: String)] = [:]
-    /// The open chat's encryption in words, derived from stored devices. Inbound, outbox and decryption paths still
-    /// assign it to report a problem; the text lands in the diagnostics footer only, so a transient problem never
-    /// rewrites the pill or re-shows a dismissed review card.
-    private(set) var encryptionStatus: String {
-        get { encryptionOverviewChatID.map { trustSummary(for: $0).subtitle } ?? "" }
-        set { encryptionDiagnostics = newValue }
-    }
-    /// Stored undecided devices or retained ciphertext for the open chat. The outbox still assigns it when a send is
-    /// blocked; the assignment is ignored because the store already holds whatever blocked the send.
-    private(set) var encryptionNeedsReview: Bool {
-        get { encryptionOverviewChatID.map { chatCapabilities($0).encryption == .needsReview } ?? false }
-        set { _ = newValue }
-    }
+    /// The open chat's encryption in words, derived from stored devices. Read-only: problems are written to
+    /// `encryptionAttention`, so a transient problem never rewrites the pill or re-shows a dismissed review card.
+    var encryptionStatus: String { encryptionOverviewChatID.map { trustSummary(for: $0).subtitle } ?? "" }
+    /// The open chat needs a fingerprint decision: stored undecided devices, retained ciphertext, or a send held for trust.
+    var encryptionNeedsReview: Bool { encryptionOverviewChatID.map { chatCapabilities($0).encryption == .needsReview } ?? false }
     @ObservationIgnored private var encryption: OMEMOService?
     var isDemo: Bool { accountID == "preview.local" }
 
@@ -127,6 +121,9 @@ final class AppModel {
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var openChatID: String? { didSet { syncOpenChatTyping() } }
     @ObservationIgnored private var encryptionDetailsChatID: String?
+    /// The chat whose Devices footer a held send's reason belongs to: the open conversation, or the chat whose
+    /// details pages cover it.
+    private var encryptionShownChatID: String? { openChatID ?? encryptionOverviewChatID }
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var prepared = false
     @ObservationIgnored private var pushTokenTask: Task<Void, Never>?
@@ -696,7 +693,7 @@ final class AppModel {
         attachmentFiles = [:]
         openChatID = nil
         encryptionOverviewChatID = nil; encryptionOverview = nil; encryptionDetailsChatID = nil
-        pendingReviewChats = []; refreshFence = [:]
+        pendingReviewChats = []; refreshFence = [:]; encryptionAttention = EncryptionAttention()
         uploadService = uploads.load(account: account)
         resetTyping()
         preferences.set(account, forKey: "lastAccount")
@@ -927,7 +924,7 @@ final class AppModel {
                         else { detail = (error as? OMEMOError)?.errorDescription ?? String(describing: error).prefix(120).description }
                         Logger(subsystem: "dev.xmpplab.ios", category: "encryption").error("Encryption setup failed at \(step, privacy: .public): \(detail, privacy: .public)")
                         session = .needsAttention(step: step, detail: detail)
-                        encryptionDiagnostics = "Setup failed at \(step): \(detail)"
+                        encryptionAttention.note("Setup failed at \(step): \(detail)")
                         if reportedSetupFailure != detail {
                             reportedSetupFailure = detail
                             self.error = "Could not prepare encryption (\(step): \(detail)). Your queued messages have not been sent."
@@ -973,8 +970,8 @@ final class AppModel {
                     guard generation == token else { return }
                     refreshSoon()
                 case .retained(let problem):
-                    encryptionNeedsReview = true
-                    encryptionStatus = problem
+                    // The ciphertext is kept; the chat-list load marks its chat for review. The reason is a footnote.
+                    encryptionAttention.note(problem)
                     await refresh()
                     guard generation == token else { return }
                     if let openChatID { await loadEncryptionDetails(for: openChatID, refreshFromServer: false) }
@@ -1002,13 +999,13 @@ final class AppModel {
             avatarChecked.remove(owner)
             if owner == account || chats.contains(where: { $0.id == owner }) { await loadAvatar(for: owner) }
         case .encryptionFailure:
-            encryptionStatus = "An encrypted message could not be opened"
+            encryptionAttention.note("An encrypted message could not be opened")
         case .streamAcknowledged:
             refreshSoon()
         case .message:
             // Encrypted conversations do not render unauthenticated plaintext injected by a peer
             // or server as though it had passed OMEMO authentication.
-            encryptionStatus = "An unencrypted message was blocked"
+            encryptionAttention.note("An unencrypted message was blocked")
 
         }
     }
@@ -1162,7 +1159,7 @@ final class AppModel {
             groupChats[room]?.devicesLoaded = true
         } catch {
             guard generation == token, accountID == account, !(error is CancellationError) else { return }
-            encryptionDiagnostics = "Stored group devices could not be read: \(groupFailure(error))"
+            encryptionAttention.groupDevices(room, problem: "Stored group devices could not be read: \(groupFailure(error))")
         }
         // Only for the group page's own fingerprint row; a missing identity is created on the next connect.
         if let identity = try? await encryption.localIdentity(account: account, profile: .modern), generation == token, accountID == account {
@@ -1186,10 +1183,12 @@ final class AppModel {
             groupChats[room]?.devicesLoaded = true
             let note = "Last group refresh: \(devices.filter(\.active).count) active devices"
             refreshFence[room] = (token, note)
-            encryptionDiagnostics = note
+            encryptionAttention.groupDevices(room, problem: nil)
+            encryptionAttention.note(note)
         } catch {
             guard generation == token, accountID == account, !(error is CancellationError) else { return }
-            encryptionDiagnostics = "Last group refresh failed: \(groupFailure(error))"
+            // Read-only text under the Group Details pill and in the footer; the cached trust keeps deciding the pill.
+            encryptionAttention.groupDevices(room, problem: "Last group refresh failed: \(groupFailure(error))")
         }
     }
 
@@ -1349,9 +1348,10 @@ final class AppModel {
                 // Whether we ask for receipts and read markers is decided per send from the stored switches.
                 let switches = try await store.accountPreferences(accountID: account)
                 let preparation = try await encryption.prepareAvailableMessages(account: account, transport: client)
-                if let self, self.generation == token, let issue = preparation.blockedChats[self.openChatID ?? ""] {
-                    self.encryptionStatus = issue
-                    self.encryptionNeedsReview = true
+                // Sends held for a fingerprint decision mark their chat for review; any other reason is a footnote.
+                var heldForTrust = Set<String>()
+                if let self, self.generation == token {
+                    heldForTrust.formUnion(self.encryptionAttention.hold(preparation.blockedChats, shownChat: self.encryptionShownChatID))
                 }
                 var preparedIDs = preparation.messageIDs
                 for message in try await store.queuedOutgoing(accountID: account) where joinedGroups.contains(message.chatID) {
@@ -1363,7 +1363,7 @@ final class AppModel {
                         if error is CancellationError { throw error }
                         if let self, self.generation == token {
                             self.groupChats[message.chatID]?.issue = self.groupFailure(error)
-                            if self.openChatID == message.chatID { self.encryptionStatus = self.groupFailure(error); self.encryptionNeedsReview = true }
+                            heldForTrust.formUnion(self.encryptionAttention.hold([message.chatID: self.groupFailure(error)], shownChat: self.encryptionShownChatID))
                         }
                     }
                 }
@@ -1387,9 +1387,8 @@ final class AppModel {
                 // Everything that is not a chat message rides one queue: reactions (plain, encrypted,
                 // group) and key transports. Preparation seals; the flush re-validates and sends.
                 let updates = try await encryption.prepareAvailableUpdates(account: account, transport: client)
-                if let self, self.generation == token, let issue = updates.blockedChats[self.openChatID ?? ""] {
-                    self.encryptionStatus = issue
-                    self.encryptionNeedsReview = true
+                if let self, self.generation == token {
+                    heldForTrust.formUnion(self.encryptionAttention.hold(updates.blockedChats, shownChat: self.encryptionShownChatID))
                 }
                 var updateIDs = updates.messageIDs
                 for update in try await store.queuedReactions(accountID: account) where joinedGroups.contains(update.chatID) {
@@ -1400,7 +1399,7 @@ final class AppModel {
                         if error is CancellationError { throw error }
                         if let self, self.generation == token {
                             self.groupChats[update.chatID]?.issue = self.groupFailure(error)
-                            if self.openChatID == update.chatID { self.encryptionStatus = self.groupFailure(error); self.encryptionNeedsReview = true }
+                            heldForTrust.formUnion(self.encryptionAttention.hold([update.chatID: self.groupFailure(error)], shownChat: self.encryptionShownChatID))
                         }
                     }
                 }
@@ -1421,11 +1420,13 @@ final class AppModel {
                     }
                     try? await client.requestAcknowledgement()
                 }
+                if let self, self.generation == token { self.encryptionAttention.settlePass(heldForTrust: heldForTrust) }
                 await self?.refresh()
             } catch {
                 if let self, self.generation == token {
-                    self.encryptionNeedsReview = true
-                    self.encryptionStatus = (error as? OMEMOError)?.errorDescription ?? "Encryption could not be prepared. Messages remain saved."
+                    // Not tied to one chat, so it cannot mark one for review; the held chats keep their marks, and a
+                    // trust problem shows through the stored devices re-read below.
+                    self.encryptionAttention.note((error as? OMEMOError)?.errorDescription ?? "Encryption could not be prepared. Messages remain saved.")
                     if let chat = self.openChatID { await self.loadEncryptionDetails(for: chat, refreshFromServer: false) }
                 }
             }
@@ -1514,17 +1515,17 @@ final class AppModel {
                 encryptionOverview = stored
             } catch {
                 guard isCurrent else { return }
-                encryptionDiagnostics = Self.storedDevicesUnreadable
+                encryptionAttention.note(Self.storedDevicesUnreadable)
             }
         }
         guard refreshFromServer else { return }
         if !force, profile == nil, let fence = refreshFence[chatID], fence.generation == token {
-            encryptionDiagnostics = fence.note
+            encryptionAttention.note(fence.note)
             return
         }
         guard hasTransportOwnership, encryptionReady, isConnected, let client else {
             if !encryptionDiagnostics.hasPrefix("Setup failed"), encryptionOverview(for: chatID) != nil {
-                encryptionDiagnostics = isConnected ? "Not refreshed: encryption setup has not completed on this connection." : "Not refreshed: offline."
+                encryptionAttention.note(isConnected ? "Not refreshed: encryption setup has not completed on this connection." : "Not refreshed: offline.")
             }
             return
         }
@@ -1542,7 +1543,7 @@ final class AppModel {
             }.joined(separator: " · ")
             let note = "Last refresh (\(overview.profile == .legacy ? "OMEMO · compatible" : "OMEMO 2")): \(summary)"
             refreshFence[chatID] = (token, note)
-            encryptionDiagnostics = note
+            encryptionAttention.note(note)
             Logger(subsystem: "dev.xmpplab.ios", category: "encryption").info("Device refresh: \(summary, privacy: .public)")
         } catch {
             guard isCurrent else { return }
@@ -1555,7 +1556,7 @@ final class AppModel {
             case "forbidden", "not-authorized", "not-allowed": friendly = "Their server refused to share their devices."
             default: friendly = "Could not fetch encryption devices."
             }
-            encryptionDiagnostics = "Last refresh failed (\(detail)). \((error as? OMEMOError)?.errorDescription ?? friendly)"
+            encryptionAttention.note("Last refresh failed (\(detail)). \((error as? OMEMOError)?.errorDescription ?? friendly)")
         }
     }
 
@@ -1590,7 +1591,9 @@ final class AppModel {
         do {
             try await encryption.setTrust(account: account, deviceID: device.id, trust: trust)
             guard generation == token else { return }
-            await loadEncryptionDetails(for: chatID, refreshFromServer: isGroup(chatID))
+            encryptionAttention.trustDecided(in: chatID)
+            // A group re-fetches on this connection too: its recipients are re-validated against the room.
+            await loadEncryptionDetails(for: chatID, refreshFromServer: isGroup(chatID), force: isGroup(chatID))
             guard generation == token else { return }
             if let client, isConnected {
                 try? await encryption.retryPendingIncoming(account: account, transport: client)
@@ -1628,7 +1631,8 @@ final class AppModel {
         do {
             try await encryption.retireOwnDevice(account: account, deviceID: device.id, transport: client)
             guard generation == token else { return }
-            await loadEncryptionDetails(for: chatID)
+            // The server's device list just changed, so the per-connection fence must not skip the re-fetch.
+            await loadEncryptionDetails(for: chatID, force: true)
         } catch {
             if generation == token { self.error = (error as? OMEMOError)?.errorDescription ?? "Could not remove this device. Refresh its fingerprint and try again." }
         }
@@ -1679,7 +1683,7 @@ final class AppModel {
 
     /// Only a listed chat we could send a message to right now; never the sample data, and not while sending is paused for review.
     private func canSendChatState(to chatID: String) -> Bool {
-        !isDemo && session.isReady && hasTransportOwnership && foreground && !quiescing && !encryptionNeedsReview
+        !isDemo && session.isReady && hasTransportOwnership && foreground && !quiescing && chatCapabilities(chatID).encryption != .needsReview
             && chatID != accountID && chats.contains(where: { $0.id == chatID }) && canSend(to: chatID)
             && (isGroup(chatID) || !isLabAccount || chatID.hasSuffix("@" + accountDomain))
     }

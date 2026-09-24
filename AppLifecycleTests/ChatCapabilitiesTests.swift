@@ -114,6 +114,93 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(direct(.stored(undecided), ready: false).encryption, .needsReview)
     }
 
+    /// A stored group device, decoded because `EncryptionDevice` has no public initializer.
+    private func device(_ jid: String, _ id: UInt32, _ trust: DeviceTrust, active: Bool = true) throws -> EncryptionDevice {
+        let json: [String: Any] = ["jid": jid, "profile": "modern", "deviceID": id, "identityKey": Data(repeating: UInt8(id), count: 32).base64EncodedString(),
+                                   "trust": trust.rawValue, "active": active, "identityChanged": false]
+        return try JSONDecoder().decode(EncryptionDevice.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    /// A member with no active device keeps the group from reading as verified, even when every listed device is.
+    func testGroupMemberWithoutDevicesIsNotVerified() throws {
+        let me = "me@example.org", bob = "bob@example.org", carol = "carol@example.org"
+        let bobVerified = try device(bob, 11, .verified)
+        let carolVerified = try device(carol, 12, .verified)
+        var room = GroupChatState(members: [me, bob, carol], devices: [try device(me, 1, .accepted), bobVerified])
+        room.joined = true
+        let noCarol = DeviceTrustFacts(room, account: me)
+        XCTAssertFalse(noCarol.everyPeerHasDevice)
+        XCTAssertEqual(group(.stored(noCarol), joined: true, ready: true).encryption, .encrypted(verified: false))
+
+        room.devices.append(try device(carol, 12, .verified, active: false))
+        XCTAssertEqual(group(.stored(DeviceTrustFacts(room, account: me)), joined: true, ready: true).encryption, .encrypted(verified: false),
+                       "an inactive device does not count")
+
+        room.devices = [try device(me, 1, .accepted), bobVerified, carolVerified]
+        let everyone = DeviceTrustFacts(room, account: me)
+        XCTAssertTrue(everyone.everyPeerHasDevice, "our own devices never count for or against the group")
+        XCTAssertEqual(group(.stored(everyone), joined: true, ready: true).encryption, .encrypted(verified: true))
+
+        room.devices = [bobVerified, try device(carol, 12, .accepted)]
+        XCTAssertEqual(group(.stored(DeviceTrustFacts(room, account: me)), joined: true, ready: true).encryption, .encrypted(verified: false),
+                       "accepted is not verified")
+    }
+
+    /// A decryption failure, blocked plaintext or failed refresh is a footnote: it never moves the pill or opens review.
+    func testDecryptFailureLandsInDiagnosticsAndKeepsTheTrustLevel() {
+        var attention = EncryptionAttention()
+        let before = direct(.stored(verified), review: attention.heldForTrust.contains("bob@example.org"), ready: true)
+        attention.note("An encrypted message could not be opened")
+        XCTAssertEqual(attention.diagnostics, "An encrypted message could not be opened")
+        XCTAssertTrue(attention.heldForTrust.isEmpty)
+        let after = direct(.stored(verified), review: attention.heldForTrust.contains("bob@example.org"), ready: true)
+        XCTAssertEqual(after, before)
+        XCTAssertEqual(after.encryption, .encrypted(verified: true))
+        // Unknown stays pending, never "off", whatever the footer says.
+        XCTAssertEqual(direct(.pending, review: attention.heldForTrust.contains("bob@example.org"), ready: false).encryption, .pending)
+        XCTAssertFalse(EncryptionAttention.needsTrustDecision(OMEMOError.invalidContent))
+        XCTAssertFalse(EncryptionAttention.needsTrustDecision(OMEMOError.notForThisDevice))
+    }
+
+    /// A send held for a fingerprint decision shows the review card for that chat only; other holds are footnotes.
+    func testTrustHeldSendShowsReviewForThatChatOnly() throws {
+        var attention = EncryptionAttention()
+        let bob = "bob@example.org", carol = "carol@example.org", dave = "dave@example.org"
+        let trust = try XCTUnwrap(OMEMOError.trustRequired.errorDescription)
+        let noDevices = try XCTUnwrap(OMEMOError.noDevices.errorDescription)
+        let changed = try XCTUnwrap(OMEMOError.recipientSetChanged.errorDescription)
+        let held = attention.hold([bob: trust, carol: noDevices, dave: changed], shownChat: carol)
+        XCTAssertEqual(held, [bob])
+        XCTAssertEqual(attention.heldForTrust, [bob])
+        XCTAssertEqual(attention.diagnostics, noDevices, "the shown chat's reason is the footnote")
+        XCTAssertEqual(direct(.stored(verified), review: attention.heldForTrust.contains(bob), ready: true).encryption, .needsReview)
+        XCTAssertEqual(direct(.stored(verified), review: attention.heldForTrust.contains(carol), ready: true).encryption, .encrypted(verified: true))
+        XCTAssertEqual(direct(.stored(verified), review: attention.heldForTrust.contains(dave), ready: true).encryption, .encrypted(verified: true))
+
+        // A changed identity is a trust decision too; a group hold is keyed by its room.
+        attention.hold(["room@muc.example.org": try XCTUnwrap(OMEMOError.identityChanged.errorDescription)], shownChat: nil)
+        XCTAssertEqual(attention.heldForTrust, [bob, "room@muc.example.org"])
+        XCTAssertEqual(attention.diagnostics, noDevices, "a hold for another chat leaves the footer alone")
+
+        attention.trustDecided(in: bob)
+        XCTAssertEqual(attention.heldForTrust, ["room@muc.example.org"])
+        attention.settlePass(heldForTrust: [])
+        XCTAssertTrue(attention.heldForTrust.isEmpty, "a completed pass that held nothing clears the marks")
+        XCTAssertTrue(EncryptionAttention.needsTrustDecision(OMEMOError.trustRequired))
+    }
+
+    /// A failed group refresh is read-only text for Group Details until a refresh succeeds.
+    func testGroupRefreshFailureIsAFootnoteUntilARefreshSucceeds() {
+        var attention = EncryptionAttention()
+        let room = "room@muc.example.org"
+        attention.groupDevices(room, problem: "Last group refresh failed: timeout")
+        XCTAssertEqual(attention.groupProblems[room], "Last group refresh failed: timeout")
+        XCTAssertEqual(attention.diagnostics, "Last group refresh failed: timeout")
+        XCTAssertTrue(attention.heldForTrust.isEmpty)
+        attention.groupDevices(room, problem: nil)
+        XCTAssertNil(attention.groupProblems[room])
+    }
+
     func testIncompatibleVersionsAreUnavailableNotReview() {
         let incompatible = DeviceTrustFacts(peerTrust: [.accepted], needsReview: false, incompatible: true, peerKnown: true)
         XCTAssertEqual(direct(.stored(incompatible), ready: true).encryption, .unavailable("Devices use incompatible encryption versions"))
