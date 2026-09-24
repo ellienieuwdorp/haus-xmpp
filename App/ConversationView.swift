@@ -63,6 +63,7 @@ struct ConversationView: View {
     @State private var reviewDismissed = false
     /// The floating banners' height, handed to the timeline as top safe area so its first message clears them.
     @State private var bannerHeight: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var searchTerm: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first(where: { $0.id == chatID })?.title) }
@@ -259,8 +260,7 @@ struct ConversationView: View {
     }
 
     var body: some View {
-        // One layer: the timeline runs under the navigation bar and the banners; UIKit insets it by that safe area and
-        // blurs what scrolls beneath with its scroll edge effect.
+        // One layer: the timeline runs under the navigation bar and the banners; UIKit insets it by that safe area.
         ZStack {
             ConversationTimeline(messages: timelineMessages, typing: timelineTyping, topBannerHeight: bannerHeight, composer: showingSearch ? nil : AnyView(composer), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
@@ -293,11 +293,17 @@ struct ConversationView: View {
             // Banners float over the timeline as a bar, so messages scroll under them and blur like under the navigation
             // bar. SwiftUI keeps that inset to itself (the timeline ignores the top safe area), so its height is passed on.
             .safeAreaBar(edge: .top, spacing: 0) {
-                banners.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bannerHeight = $0 }
+                banners
+                    .animation(reduceMotion ? .easeOut(duration: 0.2) : .easeOut(duration: 0.25), value: bannerState)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bannerHeight = $0 }
             }
         }
         .background(Color(uiColor: .systemBackground))
         .navigationBarTitleDisplayMode(.inline)
+        // Signal's bar: once messages scroll beneath it a translucent material blurs them under the whole bar, so the
+        // title never sits on readable text; at the top of the chat the bar stays transparent (automatic visibility).
+        // The soft scroll edge effect alone left bubbles legible in dark mode. Reduce Transparency makes it opaque.
+        .toolbarBackground(.thinMaterial, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 NavigationLink(value: ChatRoute.details(chatID)) {
@@ -392,9 +398,16 @@ struct ConversationView: View {
             .tint(Color(uiColor: AccentTheme.current.tint))
     }
 
+    private var showsReview: Bool { !model.isDemo && model.encryptionNeedsReview && !reviewDismissed }
+    /// Which banners are up; a change animates them in or out.
+    private var bannerState: [Bool] { [showingSearch, starredOnly, showsReview] }
+    /// Banners slide down from under the bar as they fade in; Reduce Motion keeps only the fade.
+    private var bannerTransition: AnyTransition {
+        reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity)
+    }
+
     /// Search, the starred filter and the trust review float on glass over the timeline, below the navigation bar.
     @ViewBuilder private var banners: some View {
-        let showsReview = !model.isDemo && model.encryptionNeedsReview && !reviewDismissed
         if showingSearch || starredOnly || showsReview {
             GlassEffectContainer(spacing: 8) {
                 VStack(spacing: 8) {
@@ -413,6 +426,7 @@ struct ConversationView: View {
                             }
                         }
                         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                        .transition(bannerTransition)
                     }
                     if starredOnly {
                         HStack {
@@ -423,11 +437,13 @@ struct ConversationView: View {
                         }
                         .padding(.leading, 16).padding(.trailing, 14)
                         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .transition(bannerTransition)
                     }
-                    if showsReview { trustReviewCard }
+                    if showsReview { trustReviewCard.transition(bannerTransition) }
                 }
             }
             .padding(.horizontal, 8).padding(.top, 4).padding(.bottom, 8)
+            .transition(bannerTransition)
         }
     }
 
