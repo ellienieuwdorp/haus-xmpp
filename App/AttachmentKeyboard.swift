@@ -364,7 +364,22 @@ private final class LimitedAccessRow: UIView {
     var onSelectMore: () -> Void = {}
     var onSettings: () -> Void = {}
     private var collapse: NSLayoutConstraint!
+    private weak var manage: UIButton?
     var collapsed = false { didSet { collapse.isActive = collapsed } }
+
+    /// Manage stays a small capsule beside one line of footnote text, but takes touches 44pt tall: the row, and
+    /// the button through it, answer 8pt above and below their drawn bounds (the rail starts 16pt below).
+    private static let reach: CGFloat = 8
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        !collapsed && bounds.insetBy(dx: 0, dy: -Self.reach).contains(point)
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard !isHidden, self.point(inside: point, with: event) else { return nil }
+        if let manage, manage.convert(manage.bounds, to: self).insetBy(dx: 0, dy: -Self.reach).contains(point) { return manage }
+        return super.hitTest(point, with: event)
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -379,6 +394,7 @@ private final class LimitedAccessRow: UIView {
         configuration.buttonSize = .small
         configuration.cornerStyle = .capsule
         let manage = UIButton(configuration: configuration)
+        self.manage = manage
         manage.tintColor = .label
         manage.showsMenuAsPrimaryAction = true
         manage.accessibilityIdentifier = "managePhotoAccess"
@@ -527,7 +543,7 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
 
     private func showAccessPrompt() {
         let denied = PHPhotoLibrary.authorizationStatus(for: .readWrite) != .notDetermined
-        collection.backgroundView = message("Allow photo access to pick from your recent photos.", button: "Allow Access") { [weak self] in
+        collection.backgroundView = message("Allow photo access to pick from your recent photos.", button: denied ? "Open Settings" : "Allow Access") { [weak self] in
             if denied { self?.keyboard.openSettings() } else {
                 PHPhotoLibrary.requestAuthorization(for: .readWrite) { _ in Task { @MainActor [weak self] in self?.reload() } }
             }
@@ -551,6 +567,7 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
             configuration.title = title
             configuration.cornerStyle = .capsule
             let button = UIButton(configuration: configuration, primaryAction: UIAction { _ in action() })
+            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
             button.tintColor = .label
             button.accessibilityIdentifier = "allowPhotoAccess"
             stack.addArrangedSubview(button)
@@ -761,7 +778,7 @@ private final class FormatChipRow: UIView {
     private func item(title: String, symbol: String, identifier: String, action: @escaping () -> Void) -> UIView {
         var configuration = UIButton.Configuration.glass()
         configuration.cornerStyle = .capsule
-        configuration.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 22, weight: .medium))
+        configuration.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 28, weight: .medium))
         let button = UIButton(configuration: configuration, primaryAction: UIAction { _ in
             // One run loop later, so the pressed glass shows before the panel goes.
             DispatchQueue.main.async { action() }

@@ -16,6 +16,8 @@ import UniformTypeIdentifiers
     var tray: [PendingAttachment] = []
     /// True from Send until the last file and the caption are queued; the tray is frozen meanwhile.
     var dispatching = false
+    /// Counts Sends, so a rail pick that was still preparing when Send took the tray stays out of the next message.
+    @ObservationIgnored var sends = 0
     static let trayLimit = 10
 
     /// Each file as its own message with no body, then the caption last: Conversations shows a file only when the
@@ -174,6 +176,7 @@ struct ConversationView: View {
         let chatID = chatID
         let files = state.tray
         state.attachmentsOpen = false
+        state.sends += 1
         state.dispatching = true
         Task {
             defer { state.dispatching = false }
@@ -219,15 +222,20 @@ struct ConversationView: View {
         let state = composerState
         let limit = model.attachmentLimit
         let previous = assetPicks
+        let sends = state.sends
         let pick = Task { @MainActor in
             await previous?.value
+            // Send took the tray while this pick waited; it must not land in the next message unasked.
+            guard state.sends == sends else { return }
             guard state.tray.count < ComposerState.trayLimit else {
                 model.error = "You can attach up to \(ComposerState.trayLimit) files at a time."
                 return
             }
             do {
                 let prepared = try await AttachmentPreparer.prepare(asset: asset, limit: limit)
-                state.tray.append(PendingAttachment(prepared: prepared, preview: await AttachmentThumbnails.preview(of: prepared), assetIdentifier: asset.localIdentifier))
+                let preview = await AttachmentThumbnails.preview(of: prepared)
+                guard state.sends == sends else { return }
+                state.tray.append(PendingAttachment(prepared: prepared, preview: preview, assetIdentifier: asset.localIdentifier))
             } catch {
                 model.error = (error as? LocalizedError)?.errorDescription ?? "This photo could not be attached."
             }
