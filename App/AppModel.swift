@@ -182,16 +182,16 @@ final class AppModel {
         selectAccount(account)
         guard generation == token, let store else { return }
         do {
-            // Each chat's sent message shows one receipt state: read (Alex), delivered (Maya), accepted (Notes).
+            // Each chat's sent messages show one receipt state: read (Alex, whose last message is sent so the list shows it too), delivered (Maya), accepted (Notes).
             let samples: [(String, String, [String], MessageEventKind?)] = [
-                ("alex@preview.local", "Alex", ["Found a quiet spot by the water. Coffee tomorrow?", "That sounds perfect. Around ten?", "Ten it is ☕️"], .displayed),
+                ("alex@preview.local", "Alex", ["Found a quiet spot by the water. Coffee tomorrow?", "That sounds perfect. Around ten?", "Ten it is ☕️", "See you there!"], .displayed),
                 ("maya@preview.local", "Maya", ["A little reminder to take the scenic route.", "Always. See you this weekend!"], .delivered),
                 ("notes@preview.local", "Notes to self", ["A place for the things worth keeping. Try starring this message.", "Starred things stay at the top of the list."], nil)
             ]
             for (chatID, title, bodies, receipt) in samples {
                 try await store.upsertChat(accountID: account, chatID: chatID, title: title)
                 for (index, body) in bodies.enumerated() {
-                    let outgoing = index == 1
+                    let outgoing = !index.isMultiple(of: 2)
                     // An own wire ID lets sample messages show receipts and be unsent or edited (projection only, nothing is sent).
                     let id = "sample-\(chatID)-\(index)"
                     try await store.insertMessage(StoredMessage(
