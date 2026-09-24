@@ -9,6 +9,8 @@ import UniformTypeIdentifiers
     var focused = false
     /// Picked files waiting for Send. Owned by the open conversation, so leaving the chat drops them.
     var tray: [PendingAttachment] = []
+    /// True from Send until the last file and the caption are queued; the tray is frozen meanwhile.
+    var dispatching = false
     static let trayLimit = 10
 
     /// Each file as its own message with no body, then the caption last: Conversations shows a file only when the
@@ -23,6 +25,8 @@ import UniformTypeIdentifiers
     }
 }
 
+// ponytail: tray items keep the prepared bytes in memory, up to trayLimit × AttachmentTransfer.maximumBytes;
+// stage them to disk if large video picks show memory pressure.
 struct PendingAttachment: Identifiable {
     let id = UUID()
     let prepared: PreparedAttachment
@@ -153,7 +157,9 @@ struct ConversationView: View {
         }
         let chatID = chatID
         let files = state.tray
+        state.dispatching = true
         Task {
+            defer { state.dispatching = false }
             // A quote on a file would put fallback text before its link, so the reply rides on the caption only;
             // with no caption it stays in the composer.
             let sent = await ComposerState.dispatch(files, caption: text, sendFile: { item in
@@ -316,7 +322,7 @@ struct ConversationView: View {
         .onChange(of: showingSearch || starredOnly) { _, filtering in if filtering { Task { await model.loadOlderMessages(all: true) } } }
         .onChange(of: model.encryptionNeedsReview) { reviewDismissed = false }
         .onChange(of: model.encryptionStatus) { reviewDismissed = false }
-        .photosPicker(isPresented: $showingPhotoPicker, selection: $photoItems, maxSelectionCount: ComposerState.trayLimit,
+        .photosPicker(isPresented: $showingPhotoPicker, selection: $photoItems, maxSelectionCount: max(1, ComposerState.trayLimit - composerState.tray.count),
                       selectionBehavior: .ordered, matching: .any(of: [.images, .videos]))
         .fileImporter(isPresented: $importingFile, allowedContentTypes: [.item], allowsMultipleSelection: true) { attach(files: $0) }
         .onChange(of: photoItems) { _, items in
@@ -391,7 +397,7 @@ struct ConversationComposer: View {
     }
 
     private var canSend: Bool {
-        guard !model.isSending, model.canSend(to: chatID) else { return false }
+        guard !model.isSending, !state.dispatching, model.canSend(to: chatID) else { return false }
         if let editing { return !state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state.draft != editing.body }
         return showsTray || !state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -418,7 +424,7 @@ struct ConversationComposer: View {
                     .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
                 VStack(alignment: .leading, spacing: 0) {
-                    if showsTray { AttachmentTray(items: state.tray) { id in state.tray.removeAll { $0.id == id } } }
+                    if showsTray { AttachmentTray(items: state.tray, frozen: state.dispatching) { id in state.tray.removeAll { $0.id == id } } }
                     HStack(alignment: .bottom, spacing: 4) {
                         if model.canSendAttachments, !isGroup {
                             Menu {
@@ -428,7 +434,7 @@ struct ConversationComposer: View {
                                 if attaching { ProgressView().frame(width: 44, height: 44) }
                                 else { Image(systemName: "plus").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44).contentShape(Rectangle()) }
                             }
-                            .disabled(attaching || model.isSending || editing != nil || state.tray.count >= ComposerState.trayLimit)
+                            .disabled(attaching || model.isSending || state.dispatching || editing != nil || state.tray.count >= ComposerState.trayLimit)
                             .accessibilityLabel("Attach a file").accessibilityIdentifier("attachFile")
                         }
                         TextField(placeholder, text: $state.draft, axis: .vertical)
@@ -458,6 +464,8 @@ struct ConversationComposer: View {
 /// Picked files above the caption field, scrolling sideways, each with its own remove button.
 struct AttachmentTray: View {
     let items: [PendingAttachment]
+    /// While Send works through the tray, removing an item could no longer stop it going out.
+    let frozen: Bool
     let onRemove: (UUID) -> Void
 
     var body: some View {
@@ -467,7 +475,7 @@ struct AttachmentTray: View {
             }
             ScrollView(.horizontal) {
                 HStack(spacing: 8) {
-                    ForEach(items) { item in tile(item) }
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in tile(item, index: index) }
                 }
                 .padding(.horizontal, 10)
             }
@@ -477,8 +485,11 @@ struct AttachmentTray: View {
         .accessibilityIdentifier("attachmentTray")
     }
 
-    private func tile(_ item: PendingAttachment) -> some View {
+    private func tile(_ item: PendingAttachment, index: Int) -> some View {
         let attachment = item.prepared
+        let kind = attachment.mediaType.hasPrefix("image/") ? "Photo" : attachment.mediaType.hasPrefix("video/") ? "Video" : attachment.name
+        // Photos all share one name, so the position tells VoiceOver users which one a control means.
+        let label = items.count > 1 ? "\(kind), \(index + 1) of \(items.count)" : kind
         return Group {
             if let preview = item.preview {
                 // Fill a fixed square rather than framing the image, so its accessibility frame is the tile's.
@@ -505,7 +516,7 @@ struct AttachmentTray: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(attachment.mediaType.hasPrefix("image/") ? "Photo" : attachment.mediaType.hasPrefix("video/") ? "Video" : attachment.name)
+        .accessibilityLabel(label)
         .overlay(alignment: .topTrailing) {
             Button { onRemove(item.id) } label: {
                 Image(systemName: "xmark.circle.fill").font(.system(size: 20))
@@ -513,7 +524,8 @@ struct AttachmentTray: View {
                     .padding(4)
                     .frame(width: 44, height: 44, alignment: .topTrailing).contentShape(Rectangle())
             }
-            .accessibilityLabel("Remove \(attachment.name)").accessibilityIdentifier("removeAttachment")
+            .disabled(frozen)
+            .accessibilityLabel("Remove \(label)").accessibilityIdentifier("removeAttachment")
         }
     }
 }

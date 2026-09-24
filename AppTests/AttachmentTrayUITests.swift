@@ -48,8 +48,9 @@ final class AttachmentTrayUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["2 attachments"].exists)
         XCTAssertEqual(composer(in: app).placeholderValue, "Add a caption…")
         XCTAssertTrue(app.buttons["sendMessage"].isEnabled, "Files alone can be sent")
-        sleep(1)
-        XCTAssertEqual(photoBubbles(in: app).count, before, "Picking never sends")
+        let sentAnyway = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.photoBubbles(in: app).count != before }, object: nil)
+        sentAnyway.isInverted = true
+        wait(for: [sentAnyway], timeout: 2)
 
         // The tray outlives the keyboard and a rotation, and is dropped when the chat is left.
         let removes = app.buttons.matching(identifier: "removeAttachment")
@@ -57,12 +58,13 @@ final class AttachmentTrayUITests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         app.collectionViews["conversation.timeline"].swipeDown()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
-        XCUIDevice.shared.orientation = .landscapeLeft
-        sleep(1)
-        XCTAssertEqual(removes.count, 2)
-        XCUIDevice.shared.orientation = .portrait
-        sleep(1)
-        XCTAssertEqual(removes.count, 2)
+        for (orientation, landscape) in [(UIDeviceOrientation.landscapeLeft, true), (.portrait, false)] {
+            XCUIDevice.shared.orientation = orientation
+            let window = app.windows.firstMatch
+            let turned = NSPredicate { _, _ in (window.frame.width > window.frame.height) == landscape }
+            wait(for: [XCTNSPredicateExpectation(predicate: turned, object: nil)], timeout: 5)
+            XCTAssertEqual(removes.count, 2)
+        }
         app.buttons["BackButton"].tap()
         app.staticTexts["Alex"].tap()
         XCTAssertTrue(app.buttons["attachFile"].waitForExistence(timeout: 5))
@@ -75,6 +77,7 @@ final class AttachmentTrayUITests: XCTestCase {
         let removes = app.buttons.matching(identifier: "removeAttachment")
         XCTAssertGreaterThanOrEqual(removes.firstMatch.frame.width, 44)
         XCTAssertGreaterThanOrEqual(removes.firstMatch.frame.height, 44)
+        XCTAssertEqual(removes.element(boundBy: 1).label, "Remove Photo, 2 of 2", "VoiceOver can tell the removes apart")
         removes.firstMatch.tap()
         XCTAssertEqual(removes.count, 1)
         XCTAssertFalse(app.staticTexts["2 attachments"].exists)
