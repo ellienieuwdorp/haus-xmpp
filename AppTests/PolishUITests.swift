@@ -18,6 +18,8 @@ final class PolishUITests: XCTestCase {
         composeCapture.lifetime = .keepAlways
         add(composeCapture)
         app.staticTexts["Alex"].tap()
+        // The attach button is part of the first composer frame; it never waits for a connection.
+        XCTAssertTrue(app.buttons["attachFile"].waitForExistence(timeout: 1))
         let input = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
         input.tap()
         let marker = "A small detail \(UUID().uuidString.prefix(4))"

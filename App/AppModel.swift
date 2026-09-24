@@ -103,13 +103,13 @@ final class AppModel {
     /// The open chat's encryption in words, derived from stored devices. Inbound, outbox and decryption paths still
     /// assign it to report a problem; the text lands in the diagnostics footer only, so a transient problem never
     /// rewrites the pill or re-shows a dismissed review card.
-    var encryptionStatus: String {
+    private(set) var encryptionStatus: String {
         get { encryptionOverviewChatID.map { trustSummary(for: $0).subtitle } ?? "" }
         set { encryptionDiagnostics = newValue }
     }
     /// Stored undecided devices or retained ciphertext for the open chat. The outbox still assigns it when a send is
     /// blocked; the assignment is ignored because the store already holds whatever blocked the send.
-    var encryptionNeedsReview: Bool {
+    private(set) var encryptionNeedsReview: Bool {
         get { encryptionOverviewChatID.map { chatCapabilities($0).encryption == .needsReview } ?? false }
         set { _ = newValue }
     }
@@ -1109,7 +1109,8 @@ final class AppModel {
         let rooms = try await encryption.knownGroupRooms(account: account)
         for (room, members) in rooms.sorted(by: { $0.key < $1.key }) {
             guard generation == token, foreground, !quiescing else { throw CancellationError() }
-            groupChats[room] = GroupChatState(members: members)
+            // Keep the cached devices (and a past join failure) across the rejoin; only the transport state restarts.
+            groupChats[room, default: GroupChatState()].members = members
             let nickname = preferences.string(forKey: "groupNickname.\(account).\(room)") ?? String(account.prefix { $0 != "@" })
             do {
                 let snapshot = try await client.joinGroupRoom(room, nickname: nickname)
