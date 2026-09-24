@@ -181,6 +181,9 @@ enum AvatarPalette {
 /// knock-out gap. Geometry is in points at the 12 pt design size: one ring is 12 across with a 1.1 pt
 /// stroke; the double marks are 18 wide, the right ring at x 6 hiding the left one behind a 0.6 pt gap.
 /// Read is told by fill, not colour. Every mark is a template image tinted by its surroundings.
+/// Failed is a filled disc with the exclamation knocked out, tinted the same meta colour as the others
+/// (Signal's rule: failure is told by shape and the retry action, not red). System red measured 1.3–2.3:1
+/// on the sent-bubble fills; the meta colour is at least 3.2:1 on all of them.
 enum MessageStatusArt {
     static let designHeight: CGFloat = 12
     static let slotWidth: CGFloat = 18
@@ -216,13 +219,9 @@ enum MessageStatusArt {
                 cg.setBlendMode(.clear)
                 check(cg, offsetX: 6)
             case .failed:
-                let symbol = UIImage(systemName: "exclamationmark.circle", withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .medium))
-                let bounds = CGRect(x: 0, y: 0, width: designHeight, height: designHeight)
-                if let symbol {
-                    let fit = min(bounds.width / symbol.size.width, bounds.height / symbol.size.height)
-                    let drawn = CGSize(width: symbol.size.width * fit, height: symbol.size.height * fit)
-                    symbol.withTintColor(.black).draw(in: CGRect(x: (bounds.width - drawn.width) / 2, y: (bounds.height - drawn.height) / 2, width: drawn.width, height: drawn.height))
-                }
+                disc(cg, centreX: 6)
+                cg.setBlendMode(.clear)
+                exclamation(cg)
             }
         }
         return image.withRenderingMode(.alwaysTemplate)
@@ -247,6 +246,15 @@ enum MessageStatusArt {
         cg.setLineCap(.butt)
         cg.setLineDash(phase: segment / 2, lengths: [segment, segment])
         cg.strokeEllipse(in: circle(centreX: 6, radius: radius))
+    }
+
+    /// A 1.4 pt round-capped bar over a dot, centred in the 12 pt disc.
+    private static func exclamation(_ cg: CGContext) {
+        cg.setLineWidth(1.4)
+        cg.move(to: CGPoint(x: 6, y: 3.0))
+        cg.addLine(to: CGPoint(x: 6, y: 6.6))
+        cg.strokePath()
+        cg.fillEllipse(in: CGRect(x: 6 - 0.8, y: 8.9 - 0.8, width: 1.6, height: 1.6))
     }
 
     private static func check(_ cg: CGContext, offsetX: CGFloat) {

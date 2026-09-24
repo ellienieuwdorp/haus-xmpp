@@ -1287,8 +1287,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         time.text = [message.isEdited ? "Edited" : nil, message.securityNotice, message.sentAt?.formatted(date: .omitted, time: .shortened)].compactMap { $0 }.joined(separator: " · ")
         time.isHidden = message.sentAt == nil && message.securityNotice == nil && !message.isEdited
         status.isHidden = !message.isOutgoing || message.status == nil
-        // Neutral like the time: read is told by the filled rings, never by colour.
-        status.tintColor = message.status == .failed ? .systemRed : meta
+        // Neutral like the time: read is told by the filled rings and failure by the filled exclamation, never by colour.
+        status.tintColor = meta
         status.show(message.isOutgoing ? message.status.map(MessageStatusGlyph.glyph(for:)) : nil)
         setNeedsLayout()
     }
