@@ -439,6 +439,7 @@ struct ConversationComposer: View {
     let onAttachCapture: (CameraCapture) -> Void
     /// Counts presses of "+", so the haptic answers the finger and not a programmatic close.
     @State private var attachPresses = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isGroup: Bool { model.isGroup(chatID) }
 
@@ -480,7 +481,7 @@ struct ConversationComposer: View {
                 else {
                     Image(systemName: "plus").font(.system(size: 20, weight: .semibold))
                         .rotationEffect(.degrees(state.attachmentsOpen ? 135 : 0))
-                        .animation(.spring(duration: 0.3, bounce: 0.3), value: state.attachmentsOpen)
+                        .animation(reduceMotion ? nil : .spring(duration: 0.3, bounce: 0.3), value: state.attachmentsOpen)
                 }
             }
         }

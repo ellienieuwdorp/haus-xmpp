@@ -1,7 +1,15 @@
 import XCTest
 
+extension XCUIApplication {
+    /// The attachment panel asks for the photo library on its first open; the rail needs full access.
+    @MainActor func allowPhotoAccessIfAsked() {
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow Full Access"]
+        if allow.waitForExistence(timeout: 2) { allow.tap() }
+    }
+}
+
 /// Sample chats accept files locally (nothing is uploaded), so the tray runs without the lab. Photos come from the
-/// simulator's stock library through the system picker.
+/// simulator's stock library through the system picker, opened from the attachment panel's Photos chip.
 final class AttachmentTrayUITests: XCTestCase {
     private func openAlex() -> XCUIApplication {
         let app = XCUIApplication()
@@ -23,11 +31,14 @@ final class AttachmentTrayUITests: XCTestCase {
         app.collectionViews["conversation.timeline"].images.allElementsBoundByIndex.filter { $0.frame.height > 60 }
     }
 
-    private func pickPhotos(_ count: Int, in app: XCUIApplication) {
+    @MainActor private func pickPhotos(_ count: Int, in app: XCUIApplication) {
         let attach = app.buttons["attachFile"]
         XCTAssertTrue(attach.waitForExistence(timeout: 5))
         attach.tap()
-        app.buttons["Photo or Video"].tap()
+        app.allowPhotoAccessIfAsked()
+        let photos = app.buttons["attachPhotos"]
+        XCTAssertTrue(photos.waitForExistence(timeout: 5), "The attachment panel's Photos chip")
+        photos.tap()
         let grid = app.images.matching(identifier: "PXGGridLayout-Info")
         XCTAssertTrue(grid.firstMatch.waitForExistence(timeout: 10), "The simulator's stock photos")
         // The picker runs out of process: its elements are visible but report not hittable, so tap their centres.
