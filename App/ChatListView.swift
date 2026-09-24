@@ -255,20 +255,23 @@ private struct ChatRow: View {
         return Self.dayMonth.string(from: date)
     }
 
-    /// Same ladder as the bubble footer: clock, failed, one check (server), two (delivered), two blue (read).
-    /// `listReadReceipt`, not `readReceipt`: that blue is picked to sit on the accent bubble fill, not the list background.
+    /// Same marks as the bubble footer, drawn static and neutral: read is the filled rings, not a colour.
     private var stateGlyph: Text? {
         guard chat.lastMessageIsOutgoing else { return nil }
-        let check = Text(Image(systemName: "checkmark"))
+        let status: TimelineMessage.Status
         switch chat.lastMessageState {
-        case .queued, .submitting, .unconfirmed: return Text(Image(systemName: "clock"))
-        case .failed: return Text(Image(systemName: "exclamationmark.circle"))
-        case .serverAccepted, nil:
-            guard let receipt = chat.lastMessageReceipt else { return check }
-            guard let image = UIImage.doubleCheck(.init(textStyle: .subheadline)) else { return check }
-            let double = Text(Image(uiImage: image))
-            return receipt == .displayed ? double.foregroundStyle(Color(uiColor: AccentTheme.listReadReceipt)) : double
+        case .queued?: status = .queued
+        case .submitting?: status = .submitting
+        case .unconfirmed?: status = .unconfirmed
+        case .failed?: status = .failed
+        // Archive and carbon copies have no outbox row: the server already holds them.
+        case .serverAccepted?, nil:
+            status = chat.lastMessageReceipt == .displayed ? .displayed : chat.lastMessageReceipt == .delivered ? .delivered : .serverAccepted
         }
+        let scale = UIFontMetrics(forTextStyle: .subheadline).scaledValue(for: MessageStatusArt.designHeight) / MessageStatusArt.designHeight
+        // Sits the ring on the text's x-height rather than its baseline.
+        let image = MessageStatusArt.image(MessageStatusGlyph.glyph(for: status), scale: scale).withBaselineOffset(fromBottom: scale)
+        return Text(Image(uiImage: image)).accessibilityLabel(status.accessibilityDescription)
     }
 
     private var preview: Text {

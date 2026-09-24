@@ -79,15 +79,40 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
             switch self {
             case .queued: "Waiting to send"
             case .submitting: "Sending"
-            case .unconfirmed: "Delivery unconfirmed"
+            case .unconfirmed: "Sending, not yet confirmed"
             case .failed: "Not sent"
-            case .serverAccepted: "Accepted by server"
+            case .serverAccepted: "Sent"
             case .delivered: "Delivered"
             case .displayed: "Read"
             }
         }
 
         var canRetry: Bool { self == .unconfirmed || self == .failed }
+    }
+}
+
+/// Which status mark a sent message shows. A socket write is not delivery: until the server accepts the
+/// message it keeps the dashed sending ring, spinning only while the outbox is actively working on it.
+enum MessageStatusGlyph: Equatable, Sendable {
+    case sending(spinning: Bool), sent, delivered, read, failed
+
+    static func glyph(for status: TimelineMessage.Status) -> MessageStatusGlyph {
+        switch status {
+        case .queued, .submitting: .sending(spinning: true)
+        case .unconfirmed: .sending(spinning: false)
+        case .failed: .failed
+        case .serverAccepted: .sent
+        case .delivered: .delivered
+        case .displayed: .read
+        }
+    }
+
+    /// Only a server-held message carries a check.
+    var showsCheck: Bool {
+        switch self {
+        case .sent, .delivered, .read: true
+        case .sending, .failed: false
+        }
     }
 }
 
@@ -614,7 +639,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private var reactionLeading: NSLayoutConstraint!
     private var reactionTrailing: NSLayoutConstraint!
     private let time = UILabel()
-    private let status = UIImageView()
+    private let status = MessageStatusView()
     private let star = UIImageView(image: UIImage(systemName: "star.fill"))
     private var leading: NSLayoutConstraint!
     private var trailing: NSLayoutConstraint!
@@ -773,14 +798,12 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         footer.spacing = 5
         footer.isAccessibilityElement = false
         bubble.addSubview(footer)
-        for symbol in [star, status] {
-            symbol.preferredSymbolConfiguration = .init(textStyle: .caption2, scale: .small)
-            symbol.contentMode = .scaleAspectFit
-            symbol.isAccessibilityElement = false
-            symbol.setContentCompressionResistancePriority(.required, for: .horizontal)
-        }
-        // One width for every state, so a bubble never resizes as its message is accepted, delivered and read.
-        status.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        star.preferredSymbolConfiguration = .init(textStyle: .caption2, scale: .small)
+        star.contentMode = .scaleAspectFit
+        star.isAccessibilityElement = false
+        star.setContentCompressionResistancePriority(.required, for: .horizontal)
+        // One slot width for every state (MessageStatusView), so a bubble never resizes as its message
+        // is accepted, delivered and read.
         time.font = .preferredFont(forTextStyle: .caption2)
         time.adjustsFontForContentSizeCategory = true
         time.isAccessibilityElement = false
@@ -1031,6 +1054,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         textView.isSelectable = false
         textView.isUserInteractionEnabled = false
         textView.selectedRange = NSRange(location: 0, length: 0)
+        status.stopSpinning()
         messageID = nil
         row = nil
     }
@@ -1133,14 +1157,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         time.text = [message.isEdited ? "Edited" : nil, message.securityNotice, message.sentAt?.formatted(date: .omitted, time: .shortened)].compactMap { $0 }.joined(separator: " · ")
         time.isHidden = message.sentAt == nil && message.securityNotice == nil && !message.isEdited
         status.isHidden = !message.isOutgoing || message.status == nil
-        status.tintColor = message.status == .failed ? .systemRed : message.status == .displayed ? theme.readReceipt : meta
-        switch message.status {
-        case .queued, .submitting, .unconfirmed: status.image = UIImage(systemName: "clock")
-        case .failed: status.image = UIImage(systemName: "exclamationmark.circle")
-        case .serverAccepted: status.image = UIImage(systemName: "checkmark")
-        case .delivered, .displayed: status.image = UIImage.doubleCheck(status.preferredSymbolConfiguration)
-        case nil: status.image = nil
-        }
+        // Neutral like the time: read is told by the filled rings, never by colour.
+        status.tintColor = message.status == .failed ? .systemRed : meta
+        status.show(message.isOutgoing ? message.status.map(MessageStatusGlyph.glyph(for:)) : nil)
         setNeedsLayout()
     }
 }

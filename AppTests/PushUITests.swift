@@ -123,7 +123,7 @@ final class PushUITests: XCTestCase {
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: bubbles)], timeout: 40)
         let outgoing = bubbles.matching(NSPredicate(format: "label BEGINSWITH %@", "You:")).firstMatch
         XCTAssertTrue(outgoing.exists)
-        XCTAssertTrue(serverHeldLabel.evaluate(with: outgoing) || outgoing.label.contains("Delivery unconfirmed"))
+        XCTAssertTrue(serverHeldLabel.evaluate(with: outgoing) || outgoing.label.contains("Sending, not yet confirmed"))
         XCTAssertTrue(bubbles.allElementsBoundByIndex.contains { !$0.label.hasPrefix("You:") },
                       "The independent peer must return an authenticated incoming echo")
         let attachment = XCTAttachment(screenshot: app.screenshot())

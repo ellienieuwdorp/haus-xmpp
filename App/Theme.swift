@@ -2,8 +2,8 @@ import SwiftUI
 import UIKit
 
 /// User-selectable accent. Light accents use dark text on the sent bubble; every pair below is measured
-/// against WCAG 2 in both appearances: 4.5:1 for glyphs and links on the background, 4.5:1 for text on
-/// the bubble, 3:1 for the read-receipt glyph.
+/// against WCAG 2 in both appearances: 4.5:1 for glyphs and links on the background and 4.5:1 for text on
+/// the bubble. Message status glyphs carry no accent colour: they take the bubble's metadata colour.
 enum AccentTheme: String, CaseIterable, Identifiable {
     case indigo, lime, crab, sky, rose, graphite
 
@@ -46,13 +46,6 @@ enum AccentTheme: String, CaseIterable, Identifiable {
         default: return .white
         }
     }
-    /// The two "read" blues: one sits on dark fills and dark backgrounds, the other on light ones, each above 3:1.
-    private static let readBlueOnDark = UIColor(red: 0.50, green: 0.88, blue: 1, alpha: 1)
-    private static let readBlueOnLight = UIColor(red: 0, green: 0.24, blue: 0.66, alpha: 1)
-    /// The read-receipt glyph on the sent bubble: the blue that contrasts with this accent's fill.
-    var readReceipt: UIColor { bubbleText == .white ? Self.readBlueOnDark : Self.readBlueOnLight }
-    /// The read-receipt glyph on the chat list, where it sits on the system background rather than the fill.
-    static let listReadReceipt = UIColor { $0.userInterfaceStyle == .dark ? readBlueOnDark : readBlueOnLight }
     var swatch: Color { Color(uiColor: bubble) }
 }
 
@@ -102,15 +95,174 @@ enum AvatarPalette {
     }
 }
 
-extension UIImage {
-    /// SF Symbols has no double check; two checkmarks overlapped by about half a glyph read as one.
-    static func doubleCheck(_ configuration: UIImage.SymbolConfiguration?) -> UIImage? {
-        guard let check = UIImage(systemName: "checkmark", withConfiguration: configuration) else { return nil }
-        let offset = (check.size.width * 0.45).rounded()
-        let size = CGSize(width: check.size.width + offset, height: check.size.height)
-        return UIGraphicsImageRenderer(size: size).image { _ in
-            check.draw(at: .zero)
-            check.draw(at: CGPoint(x: offset, y: 0))
-        }.withBaselineOffset(fromBottom: check.baselineOffsetFromBottom ?? 0).withRenderingMode(.alwaysTemplate)
+/// Message status marks, drawn rather than composed from SF Symbols so the double rings keep their
+/// knock-out gap. Geometry is in points at the 12 pt design size: one ring is 12 across with a 1.1 pt
+/// stroke; the double marks are 18 wide, the right ring at x 6 hiding the left one behind a 0.6 pt gap.
+/// Read is told by fill, not colour. Every mark is a template image tinted by its surroundings.
+enum MessageStatusArt {
+    static let designHeight: CGFloat = 12
+    static let slotWidth: CGFloat = 18
+    private static let line: CGFloat = 1.1
+    private static let gap: CGFloat = 0.6
+
+    /// The mark's width at the design size; the double rings fill the whole slot.
+    static func designWidth(_ glyph: MessageStatusGlyph) -> CGFloat {
+        switch glyph {
+        case .delivered, .read: slotWidth
+        case .sending, .sent, .failed: designHeight
+        }
+    }
+
+    static func image(_ glyph: MessageStatusGlyph, scale: CGFloat) -> UIImage {
+        let size = CGSize(width: designWidth(glyph) * scale, height: designHeight * scale)
+        let image = UIGraphicsImageRenderer(size: size).image { context in
+            let cg = context.cgContext
+            cg.scaleBy(x: scale, y: scale)
+            cg.setLineCap(.round)
+            cg.setLineJoin(.round)
+            cg.setLineWidth(line)
+            UIColor.black.set()
+            switch glyph {
+            case .sending: dashedRing(cg)
+            case .sent: ring(cg, centreX: 6); check(cg, offsetX: 0)
+            case .delivered:
+                hidingRightDisc(cg) { ring(cg, centreX: 6) }
+                ring(cg, centreX: 12); check(cg, offsetX: 6)
+            case .read:
+                hidingRightDisc(cg) { disc(cg, centreX: 6) }
+                disc(cg, centreX: 12)
+                cg.setBlendMode(.clear)
+                check(cg, offsetX: 6)
+            case .failed:
+                let symbol = UIImage(systemName: "exclamationmark.circle", withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .medium))
+                let bounds = CGRect(x: 0, y: 0, width: designHeight, height: designHeight)
+                if let symbol {
+                    let fit = min(bounds.width / symbol.size.width, bounds.height / symbol.size.height)
+                    let drawn = CGSize(width: symbol.size.width * fit, height: symbol.size.height * fit)
+                    symbol.withTintColor(.black).draw(in: CGRect(x: (bounds.width - drawn.width) / 2, y: (bounds.height - drawn.height) / 2, width: drawn.width, height: drawn.height))
+                }
+            }
+        }
+        return image.withRenderingMode(.alwaysTemplate)
+    }
+
+    private static func circle(centreX: CGFloat, radius: CGFloat) -> CGRect {
+        CGRect(x: centreX - radius, y: 6 - radius, width: radius * 2, height: radius * 2)
+    }
+
+    private static func ring(_ cg: CGContext, centreX: CGFloat) {
+        cg.strokeEllipse(in: circle(centreX: centreX, radius: 6 - line / 2))
+    }
+
+    private static func disc(_ cg: CGContext, centreX: CGFloat) {
+        cg.fillEllipse(in: circle(centreX: centreX, radius: 6))
+    }
+
+    /// Twelve dashes and twelve equal gaps around the ring.
+    private static func dashedRing(_ cg: CGContext) {
+        let radius = 6 - line / 2
+        let segment = 2 * .pi * radius / 24
+        cg.setLineCap(.butt)
+        cg.setLineDash(phase: segment / 2, lengths: [segment, segment])
+        cg.strokeEllipse(in: circle(centreX: 6, radius: radius))
+    }
+
+    private static func check(_ cg: CGContext, offsetX: CGFloat) {
+        cg.move(to: CGPoint(x: 3.3 + offsetX, y: 6.0))
+        cg.addLine(to: CGPoint(x: 5.2 + offsetX, y: 8.2))
+        cg.addLine(to: CGPoint(x: 8.5 + offsetX, y: 3.7))
+        cg.strokePath()
+    }
+
+    /// Draws the left mark only outside the right disc grown by the gap, so the two never touch.
+    private static func hidingRightDisc(_ cg: CGContext, _ draw: () -> Void) {
+        cg.saveGState()
+        let path = CGMutablePath()
+        path.addRect(CGRect(x: 0, y: 0, width: slotWidth, height: designHeight))
+        path.addEllipse(in: circle(centreX: 12, radius: 6 + gap))
+        cg.addPath(path)
+        cg.clip(using: .evenOdd)
+        draw()
+        cg.restoreGState()
+    }
+}
+
+/// The bubble footer's status slot: a fixed 18 pt wide box (scaled with Dynamic Type like caption2)
+/// that right-aligns the mark, so the footer never reflows between states. Sending marks spin unless
+/// Reduce Motion is on or the send is only unconfirmed.
+@MainActor
+final class MessageStatusView: UIView {
+    private let mark = UIImageView()
+    private var glyph: MessageStatusGlyph?
+    private static let spinKey = "messageStatusSpin"
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isAccessibilityElement = false
+        mark.contentMode = .scaleToFill
+        addSubview(mark)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+        setContentHuggingPriority(.required, for: .horizontal)
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (view: MessageStatusView, _: UITraitCollection) in
+            view.redraw()
+        }
+        NotificationCenter.default.addObserver(self, selector: #selector(reduceMotionChanged), name: UIAccessibility.reduceMotionStatusDidChangeNotification, object: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private var scale: CGFloat {
+        UIFontMetrics(forTextStyle: .caption2).scaledValue(for: MessageStatusArt.designHeight, compatibleWith: traitCollection) / MessageStatusArt.designHeight
+    }
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: MessageStatusArt.slotWidth * scale, height: MessageStatusArt.designHeight * scale)
+    }
+
+    func show(_ glyph: MessageStatusGlyph?) {
+        guard glyph != self.glyph else { updateSpin(); return }
+        self.glyph = glyph
+        redraw()
+    }
+
+    /// Called from cell reuse: no animation survives into another message.
+    func stopSpinning() { mark.layer.removeAnimation(forKey: Self.spinKey) }
+
+    private func redraw() {
+        invalidateIntrinsicContentSize()
+        mark.image = glyph.map { MessageStatusArt.image($0, scale: scale) }
+        setNeedsLayout()
+        updateSpin()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard let glyph else { mark.frame = .zero; return }
+        let size = CGSize(width: MessageStatusArt.designWidth(glyph) * scale, height: MessageStatusArt.designHeight * scale)
+        // Rotation turns about the mark's own centre, so the view is sized to the mark, not the slot.
+        mark.bounds = CGRect(origin: .zero, size: size)
+        mark.center = CGPoint(x: bounds.maxX - size.width / 2, y: bounds.midY)
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        updateSpin()
+    }
+
+    @objc private func reduceMotionChanged() { updateSpin() }
+
+    private func updateSpin() {
+        let spins = glyph == .sending(spinning: true) && window != nil && !UIAccessibility.isReduceMotionEnabled
+        guard spins else { stopSpinning(); return }
+        guard mark.layer.animation(forKey: Self.spinKey) == nil else { return }
+        let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+        spin.fromValue = 0
+        spin.toValue = 2 * Double.pi
+        spin.duration = 1
+        spin.isCumulative = true
+        spin.repeatCount = .infinity
+        // Kept across backgrounding, which otherwise strips running animations.
+        spin.isRemovedOnCompletion = false
+        mark.layer.add(spin, forKey: Self.spinKey)
     }
 }

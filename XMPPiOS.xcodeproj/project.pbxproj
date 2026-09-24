@@ -54,6 +54,7 @@
 		80C4272C64B18765C87CEAC4 /* CoalescedReload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64881C29F7536BBBCC65470E /* CoalescedReload.swift */; };
 		817111520A55373B387F2F40 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = AFC1C801720A06EEB5CC2DFD /* MessageStore */; };
 		821A596E851CCBD9728A4C87 /* SharedStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97F738E51D0098B3D95850BB /* SharedStorage.swift */; };
+		86FDA9F06DD4BC248A939C1A /* MessageStatusGlyphTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF00E4547F55FFA6F22EBF75 /* MessageStatusGlyphTests.swift */; };
 		8A211ED028F5061BAE138553 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = F283B99C4452326F2C17009D /* MessageStore */; };
 		8D51C2128F80DDF36183FF66 /* NotificationNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F29F51D890D21FD55BB2D510 /* NotificationNavigationTests.swift */; };
 		8EAA0FEA4C802F4E5C6AE385 /* OMEMO in Frameworks */ = {isa = PBXBuildFile; productRef = BBB3036FB6B2351360EF2939 /* OMEMO */; };
@@ -198,6 +199,7 @@
 		F011167791FD6608B0B26510 /* XMPPiOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = XMPPiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F2338E6EC558F142033D0682 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F29F51D890D21FD55BB2D510 /* NotificationNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNavigationTests.swift; sourceTree = "<group>"; };
+		FF00E4547F55FFA6F22EBF75 /* MessageStatusGlyphTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageStatusGlyphTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -268,6 +270,7 @@
 				8E806ADD71253B6EBCE63B1F /* AttachmentDispatchTests.swift */,
 				EE61654F2F711464512D6703 /* CoalescedReloadTests.swift */,
 				388BA54424B17190DC3CBD6C /* EncryptionLifecycleTests.swift */,
+				FF00E4547F55FFA6F22EBF75 /* MessageStatusGlyphTests.swift */,
 				BD5764F5CEC7644EC23110AC /* NotificationAccessGateTests.swift */,
 				C4B4C1530960F6129C8EC8AD /* NotificationAccountTests.swift */,
 				F29F51D890D21FD55BB2D510 /* NotificationNavigationTests.swift */,
@@ -607,6 +610,7 @@
 				9DA75D461F51F876E1046E4D /* AttachmentDispatchTests.swift in Sources */,
 				588AE08166DD3AFEC5C2ACA6 /* CoalescedReloadTests.swift in Sources */,
 				FCB99E51AD55AA54A964431F /* EncryptionLifecycleTests.swift in Sources */,
+				86FDA9F06DD4BC248A939C1A /* MessageStatusGlyphTests.swift in Sources */,
 				3FBEB8AA01BC5062AF02BD11 /* NotificationAccessGateTests.swift in Sources */,
 				791F4FE97D241AC6A44A0B4F /* NotificationAccountTests.swift in Sources */,
 				8D51C2128F80DDF36183FF66 /* NotificationNavigationTests.swift in Sources */,
