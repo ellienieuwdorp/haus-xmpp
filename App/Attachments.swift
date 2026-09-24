@@ -104,8 +104,48 @@ enum AttachmentPreparer {
         return PreparedAttachment(data: jpeg, name: (base.isEmpty ? "photo" : base) + ".jpg", mediaType: "image/jpeg", width: image.width, height: image.height)
     }
 
+    /// A recent-photos pick from the attachment panel. Originals kept only in iCloud download on demand.
+    static func prepare(asset: PHAsset, limit: Int) async throws -> PreparedAttachment {
+        if asset.mediaType == .video {
+            let options = PHVideoRequestOptions()
+            options.isNetworkAccessAllowed = true
+            options.deliveryMode = .highQualityFormat
+            options.version = .current
+            let video: LibraryVideo = try await withCheckedThrowingContinuation { continuation in
+                PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { video, _, _ in
+                    if let video { continuation.resume(returning: LibraryVideo(asset: video)) } else { continuation.resume(throwing: Failure.unreadable) }
+                }
+            }
+            return try await prepareVideo(video.asset, name: "video", limit: limit)
+        }
+        let options = PHImageRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .highQualityFormat
+        options.version = .current
+        let data: Data = try await withCheckedThrowingContinuation { continuation in
+            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
+                if let data { continuation.resume(returning: data) } else { continuation.resume(throwing: Failure.unreadable) }
+            }
+        }
+        return try prepareImage(data, name: "photo", limit: limit)
+    }
+
+    /// A camera capture from the attachment panel.
+    static func prepare(capture: CameraCapture, limit: Int) async throws -> PreparedAttachment {
+        switch capture {
+        case .image(let data): return try prepareImage(data, name: "photo", limit: limit)
+        case .movie(let url):
+            defer { try? FileManager.default.removeItem(at: url) }
+            return try await prepareVideo(url, name: "video", limit: limit)
+        }
+    }
+
     static func prepareVideo(_ url: URL, name: String, limit: Int) async throws -> PreparedAttachment {
-        let asset = AVURLAsset(url: url)
+        try await prepareVideo(AVURLAsset(url: url), name: name, limit: limit)
+    }
+
+    /// Slow-motion library videos arrive as compositions rather than files, so the export takes any asset.
+    static func prepareVideo(_ asset: AVAsset, name: String, limit: Int) async throws -> PreparedAttachment {
         guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1280x720) else { throw Failure.unreadable }
         let output = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".mp4")
         defer { try? FileManager.default.removeItem(at: output) }
@@ -121,6 +161,9 @@ enum AttachmentPreparer {
         return PreparedAttachment(data: data, name: (name as NSString).deletingPathExtension + ".mp4", mediaType: "video/mp4", width: width, height: height)
     }
 }
+
+/// Photos hands the asset over on its own queue; nothing mutates it, and the export only reads it.
+private struct LibraryVideo: @unchecked Sendable { let asset: AVAsset }
 
 /// A picked video comes across as a file so a large clip never sits in memory twice.
 private struct PickedMovie: Transferable {

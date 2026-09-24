@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		05098572C16E80BD71AA219F /* AttachmentPanelUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0DDB714F5D6CB4703F5C0AF /* AttachmentPanelUITests.swift */; };
 		067C9FCB7127E3720B9EED04 /* SessionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 898614ED82A08708E37CF601 /* SessionState.swift */; };
 		06EBBE691608536D4BCD2A50 /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 9D3BA1F6BA1BAE2CD370EA2E /* XMPPProtocol */; };
 		0C171644964BC53C1FDB6A56 /* Typing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A7089A6A1ACA20436EABCDC /* Typing.swift */; };
@@ -64,6 +65,7 @@
 		91E5E2C6F61406E3B3C48C8A /* SharedStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 131E8E6FF67B20A245542D39 /* SharedStorageTests.swift */; };
 		9DA75D461F51F876E1046E4D /* AttachmentDispatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E806ADD71253B6EBCE63B1F /* AttachmentDispatchTests.swift */; };
 		A17FCF4AB8A36052212A2FF9 /* TypingLabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 973B715CAB162C8F736CAC4C /* TypingLabUITests.swift */; };
+		A7A6A940B25F0E1DB0E411BD /* AttachmentKeyboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 640A37925F84AAFADBBF17DB /* AttachmentKeyboard.swift */; };
 		B273AAD1EDB231D66D44C0A1 /* AvatarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B384057910D0B7F09E667C4 /* AvatarStore.swift */; };
 		B37B871F7D7642ED3049C072 /* NotificationAccessGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D64D2C443130E517FB4227F /* NotificationAccessGate.swift */; };
 		B9295B0FF8C5639FCD26A317 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = 97379906848496F5DE6ECB98 /* MessageStore */; };
@@ -156,6 +158,7 @@
 		4B384057910D0B7F09E667C4 /* AvatarStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarStore.swift; sourceTree = "<group>"; };
 		578560B94266582D0C57F940 /* ChatCapabilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCapabilities.swift; sourceTree = "<group>"; };
 		60CDCE362B275821D181D99A /* CircularGlassButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircularGlassButtonStyle.swift; sourceTree = "<group>"; };
+		640A37925F84AAFADBBF17DB /* AttachmentKeyboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentKeyboard.swift; sourceTree = "<group>"; };
 		64881C29F7536BBBCC65470E /* CoalescedReload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoalescedReload.swift; sourceTree = "<group>"; };
 		672F8EB6B8BC64098369E462 /* LabConnectionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabConnectionUITests.swift; sourceTree = "<group>"; };
 		6A7EFE21E5ABA53391725448 /* NotificationAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationAccount.swift; sourceTree = "<group>"; };
@@ -193,6 +196,7 @@
 		CAF76316D7F572ECA650DC23 /* GroupChatState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupChatState.swift; sourceTree = "<group>"; };
 		CC7CDB26BA137152F2503309 /* ReplyUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyUITests.swift; sourceTree = "<group>"; };
 		CD707B3D294792E9F43B2286 /* SessionStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStateTests.swift; sourceTree = "<group>"; };
+		D0DDB714F5D6CB4703F5C0AF /* AttachmentPanelUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentPanelUITests.swift; sourceTree = "<group>"; };
 		D43B8DBE5FDD1B9185B2DAB7 /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
 		D999DD559C833CD87788CAD5 /* XMPPiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XMPPiOSApp.swift; sourceTree = "<group>"; };
 		E21866AA2D5D03C11041986F /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
@@ -302,6 +306,7 @@
 		763D5AE0C98E6D4747186770 /* AppTests */ = {
 			isa = PBXGroup;
 			children = (
+				D0DDB714F5D6CB4703F5C0AF /* AttachmentPanelUITests.swift */,
 				C48609B348AA960980E0048A /* AttachmentTrayUITests.swift */,
 				24B51206177B769B64F7212B /* ConversationUITests.swift */,
 				A9CB3F0019D6F6D8C373107D /* EncryptionUITests.swift */,
@@ -338,6 +343,7 @@
 				C1C395F08ECF2C05B5AAF89B /* App.entitlements */,
 				7F0BD595A789CC0D74B679AC /* AppearanceView.swift */,
 				2820963E2FB064DD0BAD839F /* AppModel.swift */,
+				640A37925F84AAFADBBF17DB /* AttachmentKeyboard.swift */,
 				A043B6261E59AEEF94B0E0A9 /* Attachments.swift */,
 				578560B94266582D0C57F940 /* ChatCapabilities.swift */,
 				02E578F753BEA364EB18BB4D /* ChatDetailsView.swift */,
@@ -553,6 +559,7 @@
 			files = (
 				FC4281063E554402B9A2C568 /* AppModel.swift in Sources */,
 				2FFE952C53400F76AED4A8D2 /* AppearanceView.swift in Sources */,
+				A7A6A940B25F0E1DB0E411BD /* AttachmentKeyboard.swift in Sources */,
 				0EE1E497A05EED44CA1D2465 /* Attachments.swift in Sources */,
 				16CFD5F0889F8CBB5F4EAD7B /* AvatarStore.swift in Sources */,
 				38B49806183582FF3DB7DE77 /* ChatCapabilities.swift in Sources */,
@@ -591,6 +598,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				05098572C16E80BD71AA219F /* AttachmentPanelUITests.swift in Sources */,
 				7CB596E76B1BBDB770A7E7C8 /* AttachmentTrayUITests.swift in Sources */,
 				7E6C4263F5BA1BCBF4FC6C9C /* ConversationUITests.swift in Sources */,
 				68E84935703E72818760EDD8 /* EncryptionUITests.swift in Sources */,

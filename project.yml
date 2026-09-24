@@ -29,6 +29,11 @@ targets:
         CADisableMinimumFrameDurationOnPhone: true
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSCameraUsageDescription: Take a photo or video to send.
+        NSMicrophoneUsageDescription: Record sound with videos you take to send.
+        NSPhotoLibraryUsageDescription: Pick recent photos and videos to send.
+        # The attachment panel shows its own limited-access row with a Manage menu instead of the system prompt.
+        PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
     dependencies:
       - package: XMPPProtocol
       - package: MessageStore
