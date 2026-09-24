@@ -116,10 +116,11 @@ final class AppModel {
     @ObservationIgnored private var uploader: AttachmentUploader?
     @ObservationIgnored private var storageDirectory: URL?
     @ObservationIgnored private var uploadTask: Task<Void, Never>?
+    @ObservationIgnored private var uploadFailures = UploadFailureBudget()
     @ObservationIgnored private var downloading: Set<String> = []
     /// Bytes a chosen file may have before it is refused; the server's limit when it publishes one.
     var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
-    var canSendAttachments: Bool { !isDemo && uploadService != nil && session.isReady }
+    var canSendAttachments: Bool { isDemo || (uploadService != nil && session.isReady) }
     @ObservationIgnored private let testSessionID: String? = {
         #if DEBUG
         guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"],
@@ -670,8 +671,10 @@ final class AppModel {
 
     /// Seals the file once, stores everything the send will ever need, then queues the message.
     /// The message stays unsendable until the background PUT succeeds; nothing is regenerated.
-    func sendAttachment(_ prepared: PreparedAttachment, caption: String, to chatID: String) async -> Bool {
-        guard !isSending, let store, let encryption, let files, !accountID.isEmpty, !isDemo else { return false }
+    /// Never with a caption: Conversations shows a file only when the body is exactly its link, so a caption
+    /// goes as its own message after the files.
+    func sendAttachment(_ prepared: PreparedAttachment, to chatID: String) async -> Bool {
+        guard !isSending, let store, let files, !accountID.isEmpty else { return false }
         guard !isGroup(chatID) else { error = "Files can't be sent to groups yet."; return false }
         guard prepared.data.count <= attachmentLimit else {
             error = AttachmentPreparer.Failure.tooLarge(limit: attachmentLimit).localizedDescription; return false
@@ -680,8 +683,19 @@ final class AppModel {
         defer { isSending = false }
         let account = accountID
         let id = UUID().uuidString
+        if isDemo {
+            // Sample chats project only, like sample text: the file is cached and nothing is uploaded.
+            let attachment = StoredAttachment(name: prepared.name, mediaType: prepared.mediaType, size: prepared.data.count, width: prepared.width,
+                                              height: prepared.height, hash: Data.sha256(prepared.data).hexString, secret: Data([0]))
+            do {
+                try files.write(prepared.data, to: files.cacheURL(attachment, messageID: id))
+                try await store.insertMessage(StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: "", isOutgoing: true, attachment: attachment))
+                await refresh()
+                return true
+            } catch { self.error = "Could not save the file."; return false }
+        }
+        guard let encryption else { return false }
         do {
-            if !caption.isEmpty { try XMPPClient.validateMessage(to: chatID, body: caption, id: id) }
             let sealed = try AttachmentTransfer.seal(prepared.data)
             let attachment = StoredAttachment(name: prepared.name, mediaType: prepared.mediaType, size: prepared.data.count,
                                               width: prepared.width, height: prepared.height, hash: Data.sha256(prepared.data).hexString,
@@ -689,7 +703,7 @@ final class AppModel {
                                               secret: try encryption.sealAttachmentSecret(account: account, key: sealed.key, iv: sealed.iv), uploadState: .pending)
             try files.write(sealed.ciphertext, to: files.stagingURL(messageID: id))
             try files.write(prepared.data, to: files.cacheURL(attachment, messageID: id))
-            let message = StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: caption, isOutgoing: true,
+            let message = StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: "", isOutgoing: true,
                                         encryptionProfile: "pending", attachment: attachment)
             try await store.enqueueOutgoing(message)
             await refresh()
@@ -722,17 +736,48 @@ final class AppModel {
                     let taskID = uploader.start(file: staged, slot: slot, size: size, contentType: "application/octet-stream")
                     try await store.setAttachmentUploadTask(accountID: account, messageID: message.id, taskID: taskID, url: slot.get.absoluteString)
                 } catch {
-                    if let self, self.generation == token { self.error = "Could not start uploading \(attachment.name). It will be retried." }
+                    // A dropped connection is not the server refusing; the reconnect starts uploads again.
+                    let dropped = error is CancellationError || [XMPPClientError.notConnected, .connectionClosed].contains { $0 == error as? XMPPClientError }
+                    guard let self, self.generation == token, !dropped else { continue }
+                    await self.uploadFailed(message, account: account)
                 }
             }
         }
+    }
+
+    /// Counts a refused slot or PUT. Below the budget the file is tried again shortly with a fresh slot; at the
+    /// budget it is failed, so it shows Not sent with Retry and stops holding back what was queued after it.
+    private func uploadFailed(_ message: StoredMessage, account: String) async {
+        guard let store, accountID == account, let name = message.attachment?.name else { return }
+        guard uploadFailures.recordFailure(message.id) else {
+            error = "Could not upload \(name). It will be retried."
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                self?.startUploads()
+            }
+            return
+        }
+        guard (try? await store.failQueuedOutgoing(accountID: account, messageID: message.id)) != nil else { return }
+        error = "Could not upload \(name), so it was not sent. Retry it from the message."
+        await refresh()
+        startOutbox()
     }
 
     /// Tasks the system dropped while we were gone get a fresh slot; running ones are left alone.
     private func reconcileUploads() async {
         guard let store, let uploader, !accountID.isEmpty else { return }
         let running = await uploader.runningTaskIDs()
-        for message in (try? await store.attachmentsAwaitingUpload(accountID: accountID)) ?? [] {
+        let pending = (try? await store.attachmentsAwaitingUpload(accountID: accountID)) ?? []
+        let stranded = pending.filter { message in message.attachment?.uploadTaskID.map { !running.contains($0) } ?? true }
+        if uploadService == nil, !stranded.isEmpty {
+            // The server no longer offers uploads, so these files would hold their chats forever.
+            for message in stranded { try? await store.failQueuedOutgoing(accountID: accountID, messageID: message.id) }
+            error = "This server no longer accepts files, so \(stranded.count == 1 ? "a file was" : "\(stranded.count) files were") not sent."
+            await refresh()
+            startOutbox()
+            return
+        }
+        for message in pending {
             if let taskID = message.attachment?.uploadTaskID, !running.contains(taskID) {
                 try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)
             }
@@ -744,15 +789,15 @@ final class AppModel {
         guard let store, let files, !accountID.isEmpty,
               let message = ((try? await store.attachmentsAwaitingUpload(accountID: accountID)) ?? []).first(where: { $0.attachment?.uploadTaskID == taskID }) else { return }
         if succeeded {
+            uploadFailures.reset(message.id)
             try? await store.markAttachmentUploaded(accountID: accountID, messageID: message.id)
             try? FileManager.default.removeItem(at: files.stagingURL(messageID: message.id))
             await refresh()
             startOutbox()
         } else {
             try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)
-            // A slot expired or the network dropped: try again shortly, with a new slot.
-            try? await Task.sleep(for: .seconds(5))
-            startUploads()
+            // A slot expired, the network dropped or the server refused the PUT: a new slot, within the budget.
+            await uploadFailed(message, account: accountID)
         }
     }
 
@@ -1160,7 +1205,10 @@ final class AppModel {
         guard let store else { return }
         do {
             try await store.retryOutgoing(accountID: accountID, messageID: id)
+            uploadFailures.reset(id)
             await refresh()
+            // A file that gave up uploading goes back to the uploader; everything else to the outbox.
+            startUploads()
             startOutbox()
         } catch { self.error = "This message could not be queued again." }
     }

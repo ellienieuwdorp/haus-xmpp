@@ -5,6 +5,8 @@ import ImageIO
 import MessageStore
 import OMEMO
 import Photos
+import PhotosUI
+import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 import XMPPProtocol
@@ -64,6 +66,17 @@ enum AttachmentPreparer {
     }
     static let maximumPixels = 2048
 
+    /// A library pick: photos go through `prepareImage`, video is copied out as a file first.
+    static func prepare(photo item: PhotosPickerItem, limit: Int) async throws -> PreparedAttachment {
+        if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
+            guard let movie = try await item.loadTransferable(type: PickedMovie.self) else { throw Failure.unreadable }
+            defer { try? FileManager.default.removeItem(at: movie.url) }
+            return try await prepareVideo(movie.url, name: "video", limit: limit)
+        }
+        guard let data = try await item.loadTransferable(type: Data.self) else { throw Failure.unreadable }
+        return try prepareImage(data, name: "photo", limit: limit)
+    }
+
     /// Images are re-encoded at ≤ 2048 px, video is exported at 720p, everything else goes as is.
     static func prepare(fileURL: URL, name: String, type: UTType?, limit: Int) async throws -> PreparedAttachment {
         let scoped = fileURL.startAccessingSecurityScopedResource()
@@ -107,6 +120,35 @@ enum AttachmentPreparer {
         }
         return PreparedAttachment(data: data, name: (name as NSString).deletingPathExtension + ".mp4", mediaType: "video/mp4", width: width, height: height)
     }
+}
+
+/// A picked video comes across as a file so a large clip never sits in memory twice.
+private struct PickedMovie: Transferable {
+    let url: URL
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { SentTransferredFile($0.url) } importing: { received in
+            let copy = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + "." + (received.file.pathExtension.isEmpty ? "mov" : received.file.pathExtension))
+            try FileManager.default.copyItem(at: received.file, to: copy)
+            return PickedMovie(url: copy)
+        }
+    }
+}
+
+/// Refused slot requests and PUTs per queued file. A file that uses up its tries is failed, so a server that keeps
+/// refusing it (quota, size, an expired service) cannot hold back the messages queued after it in its chat.
+// ponytail: counts live in memory, so each launch gives a stuck file `limit` fresh tries; persist them if that matters.
+struct UploadFailureBudget {
+    static let limit = 3
+    private var failures: [String: Int] = [:]
+
+    /// True when this failure used the file's last try.
+    mutating func recordFailure(_ messageID: String) -> Bool {
+        let count = failures[messageID, default: 0] + 1
+        failures[messageID] = count < Self.limit ? count : nil
+        return count >= Self.limit
+    }
+
+    mutating func reset(_ messageID: String) { failures[messageID] = nil }
 }
 
 /// Background PUTs: the ciphertext file is handed to the system so a suspended app still finishes.
@@ -196,6 +238,17 @@ enum AttachmentThumbnails {
             return nil
         }.value
         if let image { cache.setObject(image, forKey: key) }
+        return image
+    }
+
+    /// A small still for the composer tray. The decoder reads files, so the bytes pass through a temporary one.
+    static func preview(of prepared: PreparedAttachment) async -> UIImage? {
+        guard prepared.mediaType.hasPrefix("image/") || prepared.mediaType.hasPrefix("video/") else { return nil }
+        let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + "." + (prepared.name as NSString).pathExtension)
+        guard (try? prepared.data.write(to: url, options: .completeFileProtection)) != nil else { return nil }
+        defer { try? FileManager.default.removeItem(at: url) }
+        let image = await image(for: url, mediaType: prepared.mediaType, maxPixels: 240)
+        cache.removeObject(forKey: url.path as NSString)
         return image
     }
 }

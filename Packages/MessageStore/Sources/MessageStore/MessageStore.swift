@@ -564,7 +564,16 @@ public actor MessageStore {
     }
 
     /// A message whose file has not finished uploading is durable but not yet sendable.
-    private static let uploadedOnly = " AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.account_id=outbox.account_id AND a.message_id=outbox.message_id AND a.upload_state='pending')"
+    /// A message waits while it, or anything queued before it in the same chat, is a file still uploading, so the
+    /// peer sees files and the caption sent after them in the order they were written.
+    /// The hold is bounded by the app: a file the server keeps refusing is failed (`UploadFailureBudget`), which
+    /// takes it out of 'queued' and releases the chat.
+    private static let uploadedOnly = """
+         AND NOT EXISTS (SELECT 1 FROM outbox o JOIN attachments a ON a.account_id=o.account_id AND a.message_id=o.message_id AND a.upload_state='pending'
+         JOIN messages m ON m.account_id=o.account_id AND m.id=o.message_id
+         WHERE o.account_id=outbox.account_id AND o.state='queued' AND o.sequence<=outbox.sequence
+         AND m.chat_id=(SELECT chat_id FROM messages WHERE account_id=outbox.account_id AND id=outbox.message_id))
+        """
 
     public func queuedOutgoing(accountID: String) throws -> [StoredMessage] {
         try connection.query("""

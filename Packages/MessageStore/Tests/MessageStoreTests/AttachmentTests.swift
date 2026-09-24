@@ -23,12 +23,14 @@ private func media(_ id: String, body: String = "", attachment: StoredAttachment
     try await store!.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
     await #expect(throws: MessageStoreError.self) { try await store!.enqueueOutgoing(media("no-body-no-file", attachment: nil)) }
     await #expect(throws: MessageStoreError.self) { try await store!.enqueueOutgoing(media("inbound-state", attachment: photo(state: nil))) }
+    try await store!.upsertChat(accountID: "a", chatID: "other", title: "Other")
     #expect(try await store!.enqueueOutgoing(media("photo")))
-    #expect(try await store!.enqueueOutgoing(media("text", body: "hello", attachment: nil)))
-    // The text message behind it is not starved; the file waits.
-    #expect(try await store!.queuedOutgoing(accountID: "a").map(\.id) == ["text"])
+    #expect(try await store!.enqueueOutgoing(media("caption", body: "hello", attachment: nil)))
+    #expect(try await store!.enqueueOutgoing(StoredMessage(id: "elsewhere", accountID: "a", chatID: "other", senderID: "a", body: "hi", isOutgoing: true)))
+    // The caption stays behind the file it follows; another chat is not starved.
+    #expect(try await store!.queuedOutgoing(accountID: "a").map(\.id) == ["elsewhere"])
     #expect(try await store!.attachmentsAwaitingUpload(accountID: "a").map(\.id) == ["photo"])
-    #expect(try await store!.claimNextOutgoing(accountID: "a")?.message.id == "text")
+    #expect(try await store!.claimNextOutgoing(accountID: "a")?.message.id == "elsewhere")
     #expect(try await store!.claimNextOutgoing(accountID: "a") == nil)
     // Without a slot there is nothing to mark: the file stays pending.
     try await store!.markAttachmentUploaded(accountID: "a", messageID: "photo")
@@ -43,6 +45,7 @@ private func media(_ id: String, body: String = "", attachment: StoredAttachment
     #expect(try await reopened.claimNextOutgoing(accountID: "a") == nil)
     try await reopened.markAttachmentUploaded(accountID: "a", messageID: "photo")
     #expect(try await reopened.attachmentsAwaitingUpload(accountID: "a").isEmpty)
+    #expect(try await reopened.queuedOutgoing(accountID: "a").map(\.id) == ["photo", "caption"])
     let claimed = try #require(await reopened.claimNextOutgoing(accountID: "a"))
     #expect(claimed.message.id == "photo")
     #expect(claimed.message.attachment == StoredAttachment(name: "beach.jpg", mediaType: "image/jpeg", size: 1234, width: 800, height: 600,
@@ -51,6 +54,26 @@ private func media(_ id: String, body: String = "", attachment: StoredAttachment
     // A new slot can no longer replace the URL a peer may already hold.
     try await reopened.setAttachmentUploadTask(accountID: "a", messageID: "photo", taskID: 9, url: "https://u/other")
     #expect(try await reopened.message(accountID: "a", messageID: "photo")?.attachment?.url == "https://u/x")
+}
+
+/// The app fails a file whose upload keeps being refused; that must release what was queued behind it, and a retry
+/// puts the file back on the upload queue, still unsendable until its PUT succeeds.
+@Test func aFailedUploadStopsHoldingItsChatAndCanBeRetried() async throws {
+    let url = try fixture()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
+    try await store.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
+    #expect(try await store.enqueueOutgoing(media("photo")))
+    #expect(try await store.enqueueOutgoing(media("later", body: "typed later", attachment: nil)))
+    #expect(try await store.queuedOutgoing(accountID: "a").isEmpty)
+    try await store.failQueuedOutgoing(accountID: "a", messageID: "photo")
+    #expect(try await store.attachmentsAwaitingUpload(accountID: "a").isEmpty)
+    #expect(try await store.queuedOutgoing(accountID: "a").map(\.id) == ["later"])
+    #expect(try await store.claimNextOutgoing(accountID: "a")?.message.id == "later")
+    try await store.retryOutgoing(accountID: "a", messageID: "photo")
+    #expect(try await store.attachmentsAwaitingUpload(accountID: "a").map(\.id) == ["photo"])
+    #expect(try await store.claimNextOutgoing(accountID: "a") == nil)
 }
 
 @Test func receivedFileRoundTripsAndReplayIgnoresAttachmentIdentity() async throws {
