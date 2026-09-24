@@ -161,6 +161,8 @@ struct TimelineRow: Equatable {
 struct ConversationTimeline: UIViewControllerRepresentable {
     let messages: [TimelineMessage]
     var typing: TimelineTyping? = nil
+    /// SwiftUI banners floating over the top edge. UIKit only sees the navigation bar as safe area, so this adds theirs.
+    var topBannerHeight: CGFloat = 0
     /// Hosted above the keyboard by the controller; nil hides it (search).
     var composer: AnyView? = nil
     var onToggleStar: (String) -> Void
@@ -183,6 +185,7 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: ConversationTimelineController, context: Context) {
+        if controller.additionalSafeAreaInsets.top != topBannerHeight { controller.additionalSafeAreaInsets.top = topBannerHeight }
         controller.setComposer(composer)
         controller.update(messages: messages, typing: typing, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onDisplayed: onDisplayed)
         controller.onRestoreComposerFocus = onRestoreComposerFocus
@@ -245,7 +248,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         section.interGroupSpacing = 2
         section.contentInsets = .init(top: 8, leading: 0, bottom: 12, trailing: 0)
         collectionView = ConversationCollectionView(frame: .zero, collectionViewLayout: UICollectionViewCompositionalLayout(section: section))
-        collectionView.backgroundColor = .systemBackground
+        // Clear over the container, which paints the chat background once; the collection view runs under the bars and
+        // its automatic top edge effect blurs the messages there.
+        collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .interactive
         collectionView.delegate = self
