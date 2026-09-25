@@ -144,8 +144,8 @@ public actor XMPPClient {
     private var iqRequests: [String: IQRequest] = [:]
     private var archiveQuery: ArchiveQuery?
     var groupRooms: [String: GroupRoomState] = [:]
-    /// In-flight membership validations by room, so concurrent refreshes of one room share one read.
-    var roomRefreshes: [String: GroupRoomRefresh] = [:]
+    /// In-flight membership validations by room and cache use, so concurrent refreshes of one room share one read.
+    var roomRefreshes: [GroupRoomRefreshKey: GroupRoomRefresh] = [:]
     private var streamManagement: StreamManagement?
     private var resumeSnapshot: XMPPStreamManagementSnapshot?
     private var smOffered = false
@@ -531,7 +531,8 @@ public actor XMPPClient {
     public func fetchArchivePage(after: String? = nil, limit: Int = 100, room: String? = nil) async throws -> XMPPArchivePage {
         guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
         guard archiveQuery == nil, (1...200).contains(limit), after.map(validArchiveID) ?? true else { throw XMPPClientError.invalidConfiguration }
-        if let room { _ = try await refreshGroupRoom(room) }
+        // Later pages of a room reuse the validation its walk just did; sends never do (`refreshGroupRoom(_:)`).
+        if let room { _ = try await refreshGroupRoom(room, reusingValidation: true) }
         guard phase == .online, OMEMOWire.bareJID(boundJID) == ownBare, archiveQuery == nil else { throw XMPPClientError.connectionClosed }
         let queryID = UUID().uuidString
         archiveQuery = ArchiveQuery(queryID: queryID, accountBareJID: ownBare, accountFullJID: boundJID, limit: limit)

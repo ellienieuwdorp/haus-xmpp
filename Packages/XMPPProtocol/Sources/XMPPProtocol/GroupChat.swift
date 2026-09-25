@@ -78,10 +78,20 @@ struct GroupRoomState {
     var validatedRevision: UInt64? = nil
 
     /// How much reading a membership refresh needs. Occupant presence and nickname changes bump `revision`,
-    /// so an unchanged revision means nothing this connection can observe has changed since validation.
+    /// so an unchanged revision means no presence this connection can observe has changed since validation.
     var refreshDecision: GroupRoomRefreshDecision {
         guard !members.isEmpty, let validatedRevision else { return .readTwice }
         return validatedRevision == revision ? .cached : .readOnceExpecting(members)
+    }
+
+    /// An unchanged revision does not mean unchanged membership: granting or revoking membership for a user
+    /// who is not in the room sends no presence (XEP-0045 §9.3, §9.4). Only the archive paging path may reuse
+    /// the validation; sends and key distribution read at least once so an added member gets the key and a
+    /// removed one stops getting it.
+    func refreshDecision(reusingValidation: Bool) -> GroupRoomRefreshDecision {
+        let decision = refreshDecision
+        guard !reusingValidation, decision == .cached else { return decision }
+        return .readOnceExpecting(members)
     }
 
     mutating func markValidated(_ members: [String]) {
@@ -112,6 +122,19 @@ struct GroupRoomRefresh: Sendable {
     let id: UUID
     let task: Task<XMPPGroupRoomSnapshot, Error>
     var waiters: Int
+}
+
+/// In-flight refreshes are kept apart by whether they may answer from the cache: a caller that must read
+/// never joins one that may not read.
+struct GroupRoomRefreshKey: Hashable, Sendable {
+    let room: String
+    let reusesValidation: Bool
+
+    /// The in-flight refreshes a caller may join, most thorough first.
+    static func joinable(room: String, reusingValidation: Bool) -> [GroupRoomRefreshKey] {
+        let reading = GroupRoomRefreshKey(room: room, reusesValidation: false)
+        return reusingValidation ? [reading, GroupRoomRefreshKey(room: room, reusesValidation: true)] : [reading]
+    }
 }
 
 enum GroupChatWire {
@@ -236,45 +259,56 @@ extension XMPPClient {
     }
 
     /// The server offers no transactional membership revision. The first validation on a connection
-    /// requires two matching full reads with no intervening presence change. Later refreshes reuse it while
-    /// no occupant presence or nickname change arrived, and otherwise accept one read that equals it: a
-    /// change and its reversal between reads is invisible to two reads as well. Callers must still
-    /// revalidate before send (`validateGroupWrite` compares the revision at write time).
+    /// requires two matching full reads with no intervening presence change. Every later refresh reads at
+    /// least once and accepts one read that equals the last validated list: a change and its reversal between
+    /// reads is invisible to two reads as well. Used by sends, joins and OMEMO's group key distribution.
+    /// Callers must still revalidate before send (`validateGroupWrite` compares the revision at write time).
     public func refreshGroupRoom(_ room: String) async throws -> XMPPGroupRoomSnapshot {
+        try await refreshGroupRoom(room, reusingValidation: false)
+    }
+
+    /// `reusingValidation: true` also returns this connection's last validated list without any read while no
+    /// occupant presence or nickname change arrived. Only for archive paging after the walk validated the room:
+    /// affiliation changes for absent users send no presence, so this may be stale for the rest of the walk.
+    public func refreshGroupRoom(_ room: String, reusingValidation: Bool) async throws -> XMPPGroupRoomSnapshot {
         let account = try groupAccount()
         guard OMEMOWire.bareJID(room) == room else { throw XMPPGroupError.unsupportedRoom }
         if groupRooms[room] == nil { groupRooms[room] = GroupRoomState() }
+        let key: GroupRoomRefreshKey
         let refresh: GroupRoomRefresh
-        if var shared = roomRefreshes[room] {
+        if let joined = GroupRoomRefreshKey.joinable(room: room, reusingValidation: reusingValidation).first(where: { roomRefreshes[$0] != nil }),
+           var shared = roomRefreshes[joined] {
             shared.waiters += 1
-            roomRefreshes[room] = shared
+            roomRefreshes[joined] = shared
+            key = joined
             refresh = shared
         } else {
             let id = UUID()
-            refresh = GroupRoomRefresh(id: id, task: Task { try await self.validateGroupRoom(room, account: account, refresh: id) }, waiters: 1)
-            roomRefreshes[room] = refresh
+            key = GroupRoomRefreshKey(room: room, reusesValidation: reusingValidation)
+            refresh = GroupRoomRefresh(id: id, task: Task { try await self.validateGroupRoom(room, account: account, key: key, refresh: id) }, waiters: 1)
+            roomRefreshes[key] = refresh
         }
         return try await withTaskCancellationHandler {
             try await refresh.task.value
         } onCancel: {
-            Task { await self.leaveGroupRoomRefresh(room, id: refresh.id) }
+            Task { await self.leaveGroupRoomRefresh(key, id: refresh.id) }
         }
     }
-    private func leaveGroupRoomRefresh(_ room: String, id: UUID) {
-        guard var refresh = roomRefreshes[room], refresh.id == id else { return }
+    private func leaveGroupRoomRefresh(_ key: GroupRoomRefreshKey, id: UUID) {
+        guard var refresh = roomRefreshes[key], refresh.id == id else { return }
         refresh.waiters -= 1
-        if refresh.waiters > 0 { roomRefreshes[room] = refresh; return }
-        roomRefreshes[room] = nil
+        if refresh.waiters > 0 { roomRefreshes[key] = refresh; return }
+        roomRefreshes[key] = nil
         refresh.task.cancel()
     }
-    private func validateGroupRoom(_ room: String, account: String, refresh id: UUID) async throws -> XMPPGroupRoomSnapshot {
-        defer { if roomRefreshes[room]?.id == id { roomRefreshes[room] = nil } }
+    private func validateGroupRoom(_ room: String, account: String, key: GroupRoomRefreshKey, refresh id: UUID) async throws -> XMPPGroupRoomSnapshot {
+        defer { if roomRefreshes[key]?.id == id { roomRefreshes[key] = nil } }
         for _ in 0..<3 {
             try Task.checkCancellation()
             guard let current = groupRooms[room] else { throw XMPPGroupError.notJoined }
             let revision = current.revision
             let members: [String]
-            switch current.refreshDecision {
+            switch current.refreshDecision(reusingValidation: key.reusesValidation) {
             case .cached:
                 return try XMPPGroupRoomSnapshot(room: room, members: current.members, revision: revision, joined: current.joined)
             case .readOnceExpecting(let previous):

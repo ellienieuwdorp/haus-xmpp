@@ -155,3 +155,25 @@ private func groupEnvelope() -> XMPPOMEMOEnvelope {
     let empty = GroupRoomState(members: [], revision: 4, validatedRevision: 4)
     #expect(empty.refreshDecision == .readTwice)
 }
+
+@Test func sendsAndKeyDistributionReadMembershipEvenWithoutPresenceChanges() throws {
+    // Adding or removing a member who is not in the room sends no presence (XEP-0045 §9.3, §9.4), so an
+    // unchanged revision must still cost one read on every path except archive paging.
+    let members = [groupAlice, groupBob]
+    var state = GroupRoomState()
+    #expect(state.refreshDecision(reusingValidation: false) == .readTwice)
+    #expect(state.refreshDecision(reusingValidation: true) == .readTwice)
+    state.markValidated(members)
+    #expect(state.refreshDecision(reusingValidation: false) == .readOnceExpecting(members))
+    #expect(state.refreshDecision(reusingValidation: true) == .cached)
+    state.requestNickname("n")
+    #expect(state.refreshDecision(reusingValidation: false) == .readOnceExpecting(members))
+    #expect(state.refreshDecision(reusingValidation: true) == .readOnceExpecting(members))
+}
+
+@Test func aRefreshThatMustReadNeverJoinsOneThatMayAnswerFromTheCache() {
+    let reading = GroupRoomRefreshKey(room: groupRoom, reusesValidation: false)
+    let caching = GroupRoomRefreshKey(room: groupRoom, reusesValidation: true)
+    #expect(GroupRoomRefreshKey.joinable(room: groupRoom, reusingValidation: false) == [reading])
+    #expect(GroupRoomRefreshKey.joinable(room: groupRoom, reusingValidation: true) == [reading, caching])
+}

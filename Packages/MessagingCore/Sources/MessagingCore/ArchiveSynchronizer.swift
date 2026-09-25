@@ -3,9 +3,6 @@ import MessageStore
 import OMEMO
 import XMPPProtocol
 
-/// Fetches one bounded page at a time. Ratchet/message or pending-ciphertext commits precede
-/// the archive cursor, which precedes the SM handled acknowledgement. Repeating a partial page
-/// is safe because OMEMO replay identity is independent of the archive/outer stanza identifier.
 /// How far one archive's walk has come on this connection.
 public struct ArchiveSyncProgress: Sendable, Equatable {
     /// nil for the account's own archive, the room otherwise.
@@ -17,6 +14,9 @@ public struct ArchiveSyncProgress: Sendable, Equatable {
     public init(archive: String?, pages: Int, messages: Int) { self.archive = archive; self.pages = pages; self.messages = messages }
 }
 
+/// Fetches one bounded page at a time. Ratchet/message or pending-ciphertext commits precede
+/// the archive cursor, which precedes the SM handled acknowledgement. Repeating a partial page
+/// is safe because OMEMO replay identity is independent of the archive/outer stanza identifier.
 public struct ArchiveSynchronizer: Sendable {
     private let store: MessageStore
     public init(store: MessageStore) { self.store = store }
@@ -25,6 +25,7 @@ public struct ArchiveSynchronizer: Sendable {
                             progress: (@Sendable (ArchiveSyncProgress) async -> Void)? = nil) async throws {
         try await synchronize(account: account, operations: ArchiveSyncOperations(
             knownRooms: { Array(try await encryption.knownGroupRooms(account: account).keys).sorted() },
+            // Reads at least once per room walk; the room's later pages reuse this validation.
             refreshRoom: { room in _ = try await client.refreshGroupRoom(room) },
             fetchPage: { cursor, room in try await client.fetchArchivePage(after: cursor, limit: 100, room: room) },
             process: { archived in
