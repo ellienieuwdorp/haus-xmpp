@@ -217,12 +217,13 @@ public actor XMPPClient {
     /// releasing a shared database lease. Never call this from the reader/event parser itself.
     /// Application event consumers and senders must also be cancelled and joined by their owner.
     public func disconnectAndWait() async {
-        // Best effort: the next connection (app or extension) resumes with the highest durable h.
-        // A lagging counter only causes redelivery of stanzas whose dispositions are already saved.
-        _ = try? await streamManagement?.flushHandled()
         let previousReader = reader
         finish(nil)
         await previousReader?.value
+        // Best effort, after the socket is gone so a held journal gate never delays the cancel: the
+        // next connection (app or extension) resumes with the highest durable h. A lagging counter
+        // only causes redelivery of stanzas whose dispositions are already saved.
+        _ = try? await streamManagement?.flushHandled()
     }
 
     /// Completion means only that the local socket accepted the write, not server or peer delivery.

@@ -100,6 +100,9 @@ private actor SnapshotStore: XMPPStreamManagementPersistence {
     #expect(try await sm.restore(accountID: "a@example.org") != nil)
     let remaining = try await sm.acknowledge(0, resumed: true)
     #expect(remaining.map(\.xml) == ["<message id='a'/>"])
+    // The legacy iq slot is dropped from the journal and the counter, never written again.
+    #expect(await store.value?.journal == remaining)
+    #expect(await store.value?.outboundSent == 1)
     // A kind-less presence row derives .presence and stays replayable.
     let presence = try JSONDecoder().decode(XMPPStreamJournalEntry.self, from: Data(#"{"sequence":1,"xml":"<presence/>"}"#.utf8))
     #expect(presence.kind == .presence)
@@ -233,14 +236,52 @@ private func enabledManager(_ store: SnapshotStore) async throws -> StreamManage
     #expect(try await sm.restore(accountID: "a@example.org")?.inboundHandled == 99)
     #expect(await sm.persistedHandledCount() == 99)
     let remaining = try await sm.acknowledge(0, resumed: true)
-    #expect(remaining.map(\.xml) == ["<message id='b'/>"])
+    // The server never received the iq slot, so resume drops it and renumbers 'b' into its place:
+    // the server's next count covers exactly the stanza we retransmit.
+    #expect(remaining == [.init(sequence: start + 2, kind: .message, xml: "<message id='b'/>", messageID: "b")])
     #expect(await store.acknowledged == ["a"])
-    #expect(await store.value?.journal.count == 2)
-    // The iq slot is trimmed by the server's count but never returned for replay or acknowledged as a message.
-    #expect(try await sm.acknowledge(1).map(\.messageID) == ["b"])
-    #expect(await store.acknowledged == ["a"])
-    #expect(await store.value?.journal.count == 1)
+    #expect(await store.value?.journal == remaining)
+    #expect(await store.value?.outboundSent == start + 2)
+    #expect(await store.value?.outboundAcknowledged == start + 1)
+    // After replaying only 'b', the server's h (wrapped to 1) acknowledges 'b'.
+    #expect(try await sm.acknowledge(1).isEmpty)
+    #expect(await store.acknowledged == ["a", "b"])
+    #expect(await store.value?.journal.isEmpty == true)
     await #expect(throws: XMPPStreamManagementError.self) { try await sm.acknowledge(UInt32.max) }
+}
+
+/// A journaled iq whose socket write never happened (the connection dropped between journal and
+/// write) must not leave our outbound counter ahead of the server's across later resumes.
+@Test func resumeDropsUnreceivedIQSlotsSoLaterAcknowledgementsStayAligned() async throws {
+    let store = SnapshotStore()
+    let first = try await enabledManager(store)
+    try await first.record("<message id='m1'/>")
+    #expect(try await first.acknowledge(1).isEmpty)
+    // Journaled but never received by the server: an iq, then a message behind it.
+    try await first.record("<iq type='get' id='lost'/>")
+    try await first.record("<message id='m2'/>")
+    #expect(await store.value?.journal.map(\.sequence) == [2, 3])
+
+    // First resume: the server's h is still 1.
+    let second = StreamManagement(store)
+    #expect(try await second.restore(accountID: "a@example.org") != nil)
+    let replay = try await second.acknowledge(1, resumed: true)
+    #expect(replay == [.init(sequence: 2, kind: .message, xml: "<message id='m2'/>", messageID: "m2")])
+    #expect(await store.value?.outboundSent == 2)
+    #expect(await store.value?.journal == replay)
+    // The client retransmits m2 and sends m3; the server counts both, so h == 3 confirms both.
+    try await second.record("<message id='m3'/>")
+    #expect(await store.value?.journal.last?.sequence == 3)
+    #expect(try await second.acknowledge(3).isEmpty)
+    #expect(await store.acknowledged == ["m1", "m2", "m3"])
+
+    // Second resume: nothing is left to retransmit, so no recipient sees a duplicate.
+    let third = StreamManagement(store)
+    #expect(try await third.restore(accountID: "a@example.org") != nil)
+    #expect(try await third.acknowledge(3, resumed: true).isEmpty)
+    #expect(await store.value?.outboundSent == 3)
+    #expect(await store.value?.outboundAcknowledged == 3)
+    #expect(await store.acknowledged == ["m1", "m2", "m3"])
 }
 
 private func recoveryNode(_ xml: String) throws -> XMPPProtocol.XMLNode {

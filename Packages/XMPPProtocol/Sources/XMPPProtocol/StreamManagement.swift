@@ -187,6 +187,12 @@ actor StreamManagement {
 
     /// Trims by the server's count across all entries and returns the replayable (message and
     /// presence) remainder in sequence order. IQ entries are trimmed but never returned.
+    ///
+    /// On resume the unacknowledged IQ slots are dropped, because the client never retransmits them
+    /// and the server never received them (its `h` is below them). The replayable remainder is
+    /// renumbered contiguously from the server's count, and `outboundSent` is reset to match, in
+    /// the same commit and before any replayed byte is written. The server then counts exactly the
+    /// stanzas we retransmit, so later `<a h>` values keep trimming the right entries.
     func acknowledge(_ h: UInt32, resumed: Bool = false) async throws -> [XMPPStreamJournalEntry] {
         await gate.enter()
         do {
@@ -195,6 +201,13 @@ actor StreamManagement {
             guard delta <= UInt64(next.journal.count) else { throw XMPPStreamManagementError.invalidAcknowledgement }
             let ids = next.journal.prefix(Int(delta)).compactMap(\.messageID)
             next.journal.removeFirst(Int(delta)); next.outboundAcknowledged += delta
+            if resumed {
+                let base = next.outboundAcknowledged
+                next.journal = next.journal.filter { $0.kind != .iq }.enumerated().map { offset, entry in
+                    XMPPStreamJournalEntry(sequence: base + UInt64(offset) + 1, kind: entry.kind, xml: entry.xml, messageID: entry.messageID)
+                }
+                next.outboundSent = base + UInt64(next.journal.count)
+            }
             if let timeout = next.resumeTimeoutSeconds {
                 next.expiresAt = Date().addingTimeInterval(Double(timeout))
             }
