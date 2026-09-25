@@ -1346,8 +1346,6 @@ final class AppModel {
         let token = generation
         drainTask = Task { [weak self] in
             do {
-                // Whether we ask for receipts and read markers is decided per send from the stored switches.
-                let switches = try await store.accountPreferences(accountID: account)
                 let preparation = try await encryption.prepareAvailableMessages(account: account, transport: client)
                 // Sends held for a fingerprint decision mark their chat for review; any other reason is a footnote.
                 var heldForTrust = Set<String>()
@@ -1378,8 +1376,9 @@ final class AppModel {
                         let envelope: XMPPOMEMOEnvelope
                         do { envelope = try await encryption.outgoingEnvelope(account: account, messageID: message.id) }
                         catch { throw OutboxSendFailure.notAttempted }
+                        // Requesting is unconditional; the receipt switches only gate what we send back.
                         _ = try await client.sendEncryptedMessage(to: message.chatID, envelope: envelope, id: message.id,
-                                                                  requestReceipt: switches.deliveryReceipts, markable: switches.readReceipts)
+                                                                  requestReceipt: true, markable: true)
                     }
                     try? await client.requestAcknowledgement()
                 }, didChange: { [weak self] in

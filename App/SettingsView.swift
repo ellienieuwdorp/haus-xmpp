@@ -60,7 +60,7 @@ struct SettingsView: View {
             } header: {
                 Text("Privacy")
             } footer: {
-                Text("Tell contacts when their messages reach this iPhone and when you read them. Turning one off also stops asking contacts for it. You still see what contacts send you.")
+                Text("Tell contacts when their messages reach this iPhone and when you read them. You still see what contacts send you, and their messages are still asked for receipts.")
             }
             Section {
                 NavigationLink {
