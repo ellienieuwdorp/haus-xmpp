@@ -238,6 +238,18 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var bottomEdgeY: CGFloat = 0
     private var knownSafeBottom: CGFloat = 0
     private var knownAdjustedTop: CGFloat = 0
+    /// The day under the top edge while the reader scrolls history (Signal's sticky date). It stands in for that day's
+    /// inline header, whose text is covered while the chip shows, so the same date never appears twice.
+    private let dateChip = DateChipView()
+    /// The previous day's chip dissolving in place while the next one takes over.
+    private let leavingDateChip = DateChipView()
+    /// Between the reader's first drag and a second after the list comes to rest; programmatic scrolls never start it.
+    private var dateChipActive = false
+    private var dateChipIdle: DispatchWorkItem?
+    /// The offset of the last deceleration step large enough to see.
+    private var dateChipMovingY: CGFloat = 0
+    /// The message whose inline day header the chip currently covers.
+    private var coveredHeaderID: String?
 
     override func loadView() {
         let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(64)))
@@ -265,6 +277,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         collectionView.frame = container.bounds
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         container.addSubview(collectionView)
+        container.addSubview(leavingDateChip)
+        container.addSubview(dateChip)
         // The composer rides the keyboard guide, so it follows an interactive dismiss; SwiftUI's own avoidance is off.
         composerHost.safeAreaRegions = []
         composerHeight = composerHost.view.heightAnchor.constraint(equalToConstant: 60)
@@ -588,10 +602,146 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         // Every move counts, including the nudges self-sizing cells cause, except the shift UIKit makes for a safe-area
         // change this controller has not laid out for yet: that one is undone from the recorded edge.
         if abs(collectionView.safeAreaInsets.bottom - knownSafeBottom) < 0.5 { recordBottomEdge() }
+        // Before the guard: page loads and inset changes move a chip that is already up, without ever raising it.
+        updateDateChip()
+        // Deceleration crawls for a second or more below a point a frame; the chip's second starts when the eye sees rest.
+        if scrollView.isDecelerating, abs(scrollView.contentOffset.y - dateChipMovingY) >= 0.5 {
+            dateChipMovingY = scrollView.contentOffset.y
+            scheduleDateChipIdle()
+        }
         guard scrollView.isDragging || scrollView.isDecelerating else { return }
         followsBottom = isNearBottom
         // A few screens early, so older messages are usually in place before the reader arrives.
         if scrollView.contentOffset.y + scrollView.adjustedContentInset.top < 1200 { onReachTop() }
+    }
+
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        dateChipIdle?.cancel()
+        dateChipActive = true
+        updateDateChip()
+    }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        dateChipMovingY = scrollView.contentOffset.y
+        scheduleDateChipIdle()
+    }
+
+    /// The chip leaves a second after the list visibly comes to rest; a new drag cancels that, a held finger keeps it.
+    private func scheduleDateChipIdle() {
+        dateChipIdle?.cancel()
+        let idle = DispatchWorkItem { [weak self] in
+            guard let self, !collectionView.isTracking else { return }
+            dateChipActive = false
+            updateDateChip(fade: 0.3)
+        }
+        dateChipIdle = idle
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: idle)
+    }
+
+    /// Where the chip's text sits below the bars and banners; the inline header text it replaces sticks at this line.
+    private static let dateChipLine: CGFloat = 12
+    /// Gap kept between the chip and the next day's header as that header pushes it up.
+    private static let dateChipPushGap: CGFloat = 6
+
+    /// Signal's rule: the last day header whose text has passed the line under the bars sticks, the next one pushes it
+    /// up and away, and a header coming back down to the line takes its date back from the chip. The chip's text sits
+    /// exactly where the inline text would, so the two swap in place.
+    private func updateDateChip(fade: TimeInterval = 0.15) {
+        let line = collectionView.contentOffset.y + collectionView.adjustedContentInset.top + Self.dateChipLine
+        let stuck = dateChipActive ? stuckDayHeader(line: line) : nil
+        let wasShown = dateChip.alpha > 0
+        let previous = coveredHeaderID
+        // One day's chip handing over to another: the old capsule dissolves where it was, over the header taking its
+        // text back, while the new one fades in over the header it covers.
+        let handover = wasShown && stuck != nil && previous != nil && previous != stuck?.id
+        if handover, dateChip.pushFade > 0.01 {
+            UIView.performWithoutAnimation {
+                leavingDateChip.text = dateChip.text
+                leavingDateChip.pushFade = dateChip.pushFade
+                leavingDateChip.frame = dateChip.frame
+                leavingDateChip.alpha = 1
+                leavingDateChip.layoutIfNeeded()
+            }
+            UIView.animate(withDuration: 0.15, delay: 0, options: [.allowUserInteraction, .curveEaseOut]) { self.leavingDateChip.alpha = 0 }
+        }
+        let alpha: CGFloat = stuck == nil ? 0 : 1
+        // Text and capsule change together: the fade of whichever chip is arriving or leaving.
+        let crossfade = handover ? 0.15 : (alpha != dateChip.alpha ? (alpha > 0 ? 0.2 : fade) : 0)
+        if stuck?.id != previous {
+            if let previous { dateHeaderCell(for: previous)?.coverDateHeader(false, fade: crossfade) }
+            coveredHeaderID = stuck?.id
+            if let id = stuck?.id { dateHeaderCell(for: id)?.coverDateHeader(true, fade: crossfade) }
+        } else if let id = stuck?.id {
+            // A recycled cell comes back with its text showing.
+            dateHeaderCell(for: id)?.coverDateHeader(true, fade: 0)
+        }
+        if let stuck {
+            UIView.performWithoutAnimation {
+                dateChip.text = stuck.text
+                let bounds = view.bounds
+                let size = dateChip.sizeThatFits(CGSize(width: bounds.width - 32, height: .greatestFiniteMagnitude))
+                let restTop = line - DateChipView.verticalPadding
+                var top = restTop
+                if let next = stuck.nextTextTop { top = min(restTop, next - Self.dateChipPushGap - size.height) }
+                let push = restTop - top
+                // Gone by the time it reaches the bars. Reduce Motion: it fades where it is instead of sliding.
+                dateChip.pushFade = max(0, min(1, 1 - push / max(1, Self.dateChipLine + size.height / 2)))
+                if UIAccessibility.isReduceMotionEnabled { top = restTop }
+                let scale = max(1, view.traitCollection.displayScale)
+                let y = ((top - collectionView.contentOffset.y) * scale).rounded() / scale
+                let x = ((bounds.width - size.width) / 2 * scale).rounded() / scale
+                dateChip.frame = CGRect(x: x, y: y, width: size.width, height: size.height)
+                dateChip.layoutIfNeeded()
+                if handover { dateChip.alpha = 0 }
+            }
+        }
+        guard dateChip.alpha != alpha else { return }
+        UIView.animate(withDuration: crossfade, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction, .curveEaseOut]) {
+            self.dateChip.alpha = alpha
+        }
+    }
+
+    /// The stuck header's message ID and text, and where the next day's header text is when it is on screen.
+    private func stuckDayHeader(line: CGFloat) -> (id: String, text: String, nextTextTop: CGFloat?)? {
+        let visible = collectionView.indexPathsForVisibleItems.sorted()
+        guard let last = visible.last else { return nil }
+        // The first item reaching below the line: its day, or the day of the header before it, is under the chip.
+        let current = visible.first { (collectionView.layoutAttributesForItem(at: $0)?.frame.maxY ?? 0) > line } ?? last
+        func header(_ item: Int) -> (id: String, text: String)? {
+            guard item >= 0, let id = dataSource.itemIdentifier(for: IndexPath(item: item, section: 0)),
+                  let text = rowsByID[id]?.dateHeader else { return nil }
+            return (id, text)
+        }
+        func textTop(_ item: Int) -> CGFloat? {
+            collectionView.layoutAttributesForItem(at: IndexPath(item: item, section: 0)).map { $0.frame.minY + MessageBubbleCell.dateHeaderTop }
+        }
+        var stuckItem: Int?
+        var nextSearch = current.item
+        if header(current.item) != nil, let top = textTop(current.item), top < line {
+            stuckItem = current.item
+            nextSearch = current.item + 1
+        } else {
+            // The loaded window always opens on a header, so this walk is bounded by one day of messages.
+            var item = current.item - 1
+            while item >= 0, stuckItem == nil {
+                if header(item) != nil { stuckItem = item }
+                item -= 1
+            }
+        }
+        // Nothing has passed the line: the top of history, where the first header is still in place.
+        guard let stuckItem, let stuck = header(stuckItem) else { return nil }
+        var nextTextTop: CGFloat?
+        if nextSearch <= last.item {
+            for item in nextSearch...last.item where header(item) != nil {
+                nextTextTop = textTop(item)
+                break
+            }
+        }
+        return (stuck.id, stuck.text, nextTextTop)
+    }
+
+    private func dateHeaderCell(for id: String) -> MessageBubbleCell? {
+        dataSource.indexPath(for: id).flatMap { collectionView.cellForItem(at: $0) as? MessageBubbleCell }
     }
 
     private var isNearBottom: Bool {
@@ -685,6 +835,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private var crossedReplyThreshold = false
     private let replyFeedback = UIImpactFeedbackGenerator(style: .light)
     private let dateLabel = UILabel()
+    /// Space above a day header's text; the floating date chip sticks that text at the same distance under the bars.
+    static let dateHeaderTop: CGFloat = 12
     private var dateTop: NSLayoutConstraint!
     private var dateHeight: NSLayoutConstraint!
     private let author = UILabel()
@@ -1186,8 +1338,18 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         textView.isUserInteractionEnabled = false
         textView.selectedRange = NSRange(location: 0, length: 0)
         status.stopSpinning()
+        coverDateHeader(false, fade: 0)
         messageID = nil
         row = nil
+    }
+
+    /// The floating date chip draws this day header's text while it stands in for it. The text is only made clear,
+    /// never hidden, so VoiceOver keeps the inline header.
+    func coverDateHeader(_ covered: Bool, fade: TimeInterval) {
+        let color: UIColor = covered ? .clear : .secondaryLabel
+        guard dateLabel.textColor != color else { return }
+        guard fade > 0 else { dateLabel.textColor = color; return }
+        UIView.transition(with: dateLabel, duration: fade, options: [.transitionCrossDissolve, .allowUserInteraction]) { self.dateLabel.textColor = color }
     }
 
     func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,
@@ -1218,7 +1380,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         dateLabel.text = row.dateHeader
         dateLabel.isHidden = !hasHeader
         dateHeight.isActive = !hasHeader
-        dateTop.constant = hasHeader ? 12 : (row.startsRun ? 6 : 0)
+        dateTop.constant = hasHeader ? Self.dateHeaderTop : (row.startsRun ? 6 : 0)
         authorTop.constant = hasHeader ? 8 : 0
         author.text = showsAuthor ? message.author : nil
         author.isHidden = !showsAuthor

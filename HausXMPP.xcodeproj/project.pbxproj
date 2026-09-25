@@ -86,6 +86,7 @@
 		E5FF332C7F7C8994826D084E /* TypingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F6C87896726C22E2B4737A2 /* TypingUITests.swift */; };
 		E621B760BCE40831EF4E02F9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B4689E0E3D14BB55262444FA /* Assets.xcassets */; };
 		E823AB41D8CEB14E11F534AB /* MessageStatusGlyphTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58E60B640C2EF71B3370C56C /* MessageStatusGlyphTests.swift */; };
+		ED94BAFFA320B20AE20F3888 /* DateChipView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99302D954A8AB89926F82FF5 /* DateChipView.swift */; };
 		EDBA7EAFF388CC7F100D65D1 /* NotificationAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 174D8D2CD8272853B0A9593D /* NotificationAccount.swift */; };
 		F40B2D7649A8D5F218621045 /* OutboxUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95271CA1D981A3BB07F06A3C /* OutboxUITests.swift */; };
 		F412496B7E47C33C79167A90 /* SharedStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63BD52830F320F4C99E25EBF /* SharedStorage.swift */; };
@@ -187,6 +188,7 @@
 		926773F781198BFF2F0E2AEC /* AppearanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceView.swift; sourceTree = "<group>"; };
 		95271CA1D981A3BB07F06A3C /* OutboxUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutboxUITests.swift; sourceTree = "<group>"; };
 		97458A0AF66A781FDEE95E70 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		99302D954A8AB89926F82FF5 /* DateChipView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DateChipView.swift; sourceTree = "<group>"; };
 		9BF9C3A91E2A2B0A58EBE071 /* AttachmentTrayUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentTrayUITests.swift; sourceTree = "<group>"; };
 		9C8D5B118A7A8265703C0701 /* OrganizationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrganizationUITests.swift; sourceTree = "<group>"; };
 		A6BF0339B117304DCA097DFF /* AppearanceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceStoreTests.swift; sourceTree = "<group>"; };
@@ -348,6 +350,7 @@
 				7867D06A08D4C485E2B463D5 /* ConversationSearchBar.swift */,
 				FCEBA3C742AE37C79EB4D6E0 /* ConversationTimeline.swift */,
 				326445DDD8708439602DE414 /* ConversationView.swift */,
+				99302D954A8AB89926F82FF5 /* DateChipView.swift */,
 				DF786E9F6E5DBCFDF1AD1942 /* DevelopmentEndpoint.swift */,
 				66A34CF83E8EACE4B4EA613A /* EncryptionDetailsView.swift */,
 				5C74FB6C8927F2DA8C8CA9AD /* GroupChatState.swift */,
@@ -574,6 +577,7 @@
 				38007AB9C7A5BDF2716F7FAD /* ConversationSearchBar.swift in Sources */,
 				0621D8301023361A3D2C86F4 /* ConversationTimeline.swift in Sources */,
 				FDEBB1AB1EACB0E1029DC6DD /* ConversationView.swift in Sources */,
+				ED94BAFFA320B20AE20F3888 /* DateChipView.swift in Sources */,
 				168D51EB76C9739379CE3E18 /* DevelopmentEndpoint.swift in Sources */,
 				CE2672AA8DA27383A470033D /* EncryptionDetailsView.swift in Sources */,
 				61C0E7505FC9C539AE274A1B /* EncryptionKeychain.swift in Sources */,
