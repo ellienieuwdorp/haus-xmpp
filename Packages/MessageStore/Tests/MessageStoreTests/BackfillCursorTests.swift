@@ -99,3 +99,33 @@ private func execute(_ url: URL, _ sql: String) -> Bool {
     #expect(execute(url, "PRAGMA user_version=17;"))
     #expect(throws: MessageStoreError.unsupportedSchema(17)) { _ = try MessageStore(url: url) }
 }
+
+@Test func newestArchivePageSavesBothCursorsTogetherAndReplacesAnOrphanedBackfillRow() async throws {
+    let url = try backfillStoreURL()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    await #expect(throws: MessageStoreError.transportOwnershipRequired) {
+        try await store.saveNewestArchivePage(accountID: "a@x", archiveID: "a@x", cursor: "n2", oldestID: "n1", complete: false)
+    }
+    try await store.acquireTransportOwnership()
+    #expect(try await store.saveNewestArchivePage(accountID: "a@x", archiveID: "a@x", cursor: "n2", oldestID: "n1", complete: false) == 1)
+    #expect(try await store.archiveCheckpoint(accountID: "a@x", archiveID: "a@x") == ArchiveCheckpoint(revision: 1, cursor: "n2"))
+    #expect(try await store.archiveBackfillCursor(accountID: "a@x", archiveID: "a@x") == ArchiveBackfillCursor(revision: 1, oldestID: "n1", complete: false))
+    // Only the first page of an archive: with a checkpoint in place nothing changes.
+    await #expect(throws: MessageStoreError.invalidTransition) {
+        try await store.saveNewestArchivePage(accountID: "a@x", archiveID: "a@x", cursor: "n9", oldestID: "n8", complete: true)
+    }
+    #expect(try await store.archiveCheckpoint(accountID: "a@x", archiveID: "a@x")?.cursor == "n2")
+    #expect(try await store.archiveBackfillCursor(accountID: "a@x", archiveID: "a@x")?.oldestID == "n1")
+
+    // A backfill row with no checkpoint (an earlier build's interrupted first sync) is replaced, not kept behind a gap.
+    _ = try await store.saveArchiveBackfillCursor(accountID: "a@x", archiveID: "room@rooms.x", expectedRevision: nil, oldestID: "old", complete: true)
+    #expect(try await store.saveNewestArchivePage(accountID: "a@x", archiveID: "room@rooms.x", cursor: "r9", oldestID: "r5", complete: false) == 1)
+    #expect(try await store.archiveBackfillCursor(accountID: "a@x", archiveID: "room@rooms.x") == ArchiveBackfillCursor(revision: 2, oldestID: "r5", complete: false))
+    #expect(try await store.archiveCheckpoint(accountID: "a@x", archiveID: "room@rooms.x")?.cursor == "r9")
+    await #expect(throws: MessageStoreError.invalidValue) {
+        try await store.saveNewestArchivePage(accountID: "a@x", archiveID: "b@x", cursor: "", oldestID: "n1", complete: false)
+    }
+    #expect(try await store.archiveCheckpoint(accountID: "a@x", archiveID: "b@x") == nil)
+    try await store.close()
+}

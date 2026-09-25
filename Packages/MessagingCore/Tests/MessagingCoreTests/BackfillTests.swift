@@ -34,12 +34,16 @@ struct BackfillTests {
 
     private func operations(trace: BackfillTrace,
                             fetch: @escaping @Sendable (XMPPArchiveBound, String?) async throws -> XMPPArchivePage,
+                            refresh: (@Sendable (String) async throws -> Void)? = nil,
                             process: (@Sendable (XMPPArchiveMessage) async throws -> Void)? = nil,
                             acknowledge: (@Sendable ([XMPPInboundToken]) async throws -> Void)? = nil,
                             progress: (@Sendable (ArchiveSyncProgress) async -> Void)? = nil) -> ArchiveSyncOperations {
         ArchiveSyncOperations(
             knownRooms: { Issue.record("backfill never lists rooms"); return [] },
-            refreshRoom: { _ in Issue.record("backfill never refreshes rooms itself") },
+            refreshRoom: { room in
+                await trace.record("refresh:\(room)")
+                try await refresh?(room)
+            },
             fetchPage: { bound, archive in
                 await trace.record("fetch:\(describe(bound))")
                 return try await fetch(bound, archive)
@@ -192,13 +196,65 @@ struct BackfillTests {
                     throw error
                 })
                 #expect(try await ArchiveSynchronizer(store: store).backfill(account: account, archive: room, pageBudget: 5, operations: ops) == .stopped)
-                #expect(await trace.events == ["fetch:before(n1)"])
+                #expect(await trace.events == ["refresh:\(room)", "fetch:before(n1)"])
             }
             #expect(try await cursor(store, room)?.oldestID == "n1")
             // The direct archive has its own (absent) rows: nothing to do there.
             let trace = BackfillTrace()
             let direct = operations(trace: trace, fetch: { _, _ in Issue.record("direct archive has no cursor"); throw Failure.storage })
             #expect(try await ArchiveSynchronizer(store: store).backfill(account: account, archive: nil, pageBudget: 5, operations: direct) == .nothingToDo)
+        }
+    }
+
+    @Test func roomBackfillRevalidatesMembershipBeforeItsFirstPage() async throws {
+        try await fixture(archive: room) { store async throws in
+            let trace = BackfillTrace()
+            let ops = operations(trace: trace, fetch: { bound, _ in
+                bound == .before("n1") ? page(["x1", "x2"], sequence: 1, complete: false) : page(["w1"], sequence: 2, complete: true)
+            })
+            #expect(try await ArchiveSynchronizer(store: store).backfill(account: account, archive: room, pageBudget: 5, operations: ops) == .complete)
+            // Once per run, before anything is fetched; later pages reuse that validation.
+            #expect(await trace.events == ["refresh:\(room)", "fetch:before(n1)", "durable:x1", "durable:x2", "ack:1",
+                                           "fetch:before(x1)", "durable:w1", "ack:2"])
+
+            // A room whose membership can no longer be read is skipped without a fetch or a disconnect.
+            _ = try await store.saveArchiveBackfillCursor(accountID: account, archiveID: room, expectedRevision: 3, oldestID: "w1", complete: false)
+            for error: any Error in [XMPPGroupError.incompleteMembership, XMPPIQError.stanza(condition: "forbidden")] {
+                let refused = BackfillTrace()
+                let skip = operations(trace: refused, fetch: { _, _ in Issue.record("no fetch after a refused refresh"); throw Failure.storage },
+                                      refresh: { _ in throw error })
+                #expect(try await ArchiveSynchronizer(store: store).backfill(account: account, archive: room, pageBudget: 5, operations: skip) == .stopped)
+                #expect(await refused.events == ["refresh:\(room)"])
+            }
+            #expect(try await cursor(store, room) == ArchiveBackfillCursor(revision: 4, oldestID: "w1", complete: false))
+        }
+    }
+
+    @Test func anExpiredCursorEndsTheHistoryWithoutDisconnecting() async throws {
+        // Prosody answers an RSM id it no longer holds with item-not-found (archive expiry removed it and all older).
+        for archive in [nil, room] as [String?] {
+            try await fixture(archive: archive) { store async throws in
+                let trace = BackfillTrace()
+                let ops = operations(trace: trace, fetch: { _, _ in throw XMPPIQError.stanza(condition: "item-not-found") })
+                #expect(try await ArchiveSynchronizer(store: store).backfill(account: account, archive: archive, pageBudget: 5, operations: ops) == .complete)
+                #expect(await !trace.events.contains("disconnect"))
+                #expect(await trace.events.filter { $0.hasPrefix("fetch") } == ["fetch:before(n1)"])
+                #expect(try await cursor(store, archive) == ArchiveBackfillCursor(revision: 2, oldestID: "n1", complete: true))
+                // The next reach-top has nothing to ask for.
+                #expect(try await !ArchiveSynchronizer(store: store).hasPendingBackfill(account: account, archive: archive))
+                #expect(try await ArchiveSynchronizer(store: store).backfill(account: account, archive: archive, pageBudget: 5, operations: ops) == .nothingToDo)
+            }
+        }
+    }
+
+    @Test func otherQueryRefusalsOnTheDirectArchiveStopWithoutDisconnecting() async throws {
+        try await fixture { store async throws in
+            let trace = BackfillTrace()
+            let ops = operations(trace: trace, fetch: { _, _ in throw XMPPIQError.stanza(condition: "resource-constraint") })
+            #expect(try await ArchiveSynchronizer(store: store).backfill(account: account, archive: nil, pageBudget: 5, operations: ops) == .stopped)
+            #expect(await trace.events == ["fetch:before(n1)"])
+            #expect(try await cursor(store) == ArchiveBackfillCursor(revision: 1, oldestID: "n1", complete: false))
+            #expect(try await ArchiveSynchronizer(store: store).hasPendingBackfill(account: account, archive: nil))
         }
     }
 

@@ -365,16 +365,39 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    @Test func firstSyncKeepsAnExistingBackfillCursor() async throws {
+    @Test func firstSyncReplacesAnOrphanedBackfillCursorSoNoGapRemains() async throws {
         try await fixture { store async throws in
-            // A backfill row without a checkpoint (an interrupted first sync saves the backfill row first).
+            // A backfill row without a checkpoint: an earlier build's first sync saved [old..x] and died before its
+            // checkpoint. Entries between x and the new newest page would be reached by neither walk if "old" stayed.
             _ = try await store.saveArchiveBackfillCursor(accountID: account, archiveID: account, expectedRevision: nil, oldestID: "old", complete: false)
             let operations = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in },
                 fetchPage: { bound, _ in bound == .before(nil) ? page(["n1", "n2"], sequence: 1, complete: false) : emptyPage },
                 process: { _ in }, acknowledge: { _ in }, disconnect: {}, progress: { _ in })
             try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
             #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "n2")
-            #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: account) == ArchiveBackfillCursor(revision: 1, oldestID: "old", complete: false))
+            // Backfill pages back from the new page's oldest entry, through the gap and the earlier page (idempotent).
+            #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: account) == ArchiveBackfillCursor(revision: 2, oldestID: "n1", complete: false))
+        }
+    }
+
+    @Test func aFailedFirstPageCommitLeavesNeitherCursor() async throws {
+        try await fixture { store async throws in
+            // The checkpoint already exists for this archive (a concurrent first sync won): the newest-page write is refused
+            // as a whole, so no backfill row is written behind it.
+            let operations = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in },
+                fetchPage: { bound, _ in
+                    if bound == .before(nil) {
+                        _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: account, expectedRevision: nil, cursor: "c1")
+                        return page(["n1", "n2"], sequence: 1, complete: false)
+                    }
+                    return emptyPage
+                },
+                process: { _ in }, acknowledge: { _ in Issue.record("no acknowledgement after a refused commit") }, disconnect: {}, progress: { _ in })
+            await #expect(throws: MessageStoreError.invalidTransition) {
+                try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
+            }
+            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "c1")
+            #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: account) == nil)
         }
     }
 }

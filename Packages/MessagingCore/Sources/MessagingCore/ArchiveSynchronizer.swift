@@ -19,7 +19,7 @@ public struct ArchiveSyncProgress: Sendable, Equatable {
 public enum BackfillOutcome: Sendable, Equatable {
     /// No forward checkpoint for this archive yet, or the cursor is already complete.
     case nothingToDo
-    /// The cursor reached the start of the archive.
+    /// The cursor reached the start of the archive, or the server no longer holds the cursor (expired history).
     case complete
     /// `pageBudget` pages committed; more remain.
     case budgetExhausted
@@ -192,15 +192,15 @@ public struct ArchiveSynchronizer: Sendable {
                 guard cursor != checkpoint?.cursor else { throw XMPPIQError.malformedResponse }
                 if newestFirst {
                     guard let oldest = page.firstID else { throw XMPPIQError.malformedResponse }
-                    // Saved before the checkpoint: an archive with a checkpoint and no backfill row counts as
-                    // walked from its start (pre-v16), so the reverse order would lose older history on a crash.
-                    if try await store.archiveBackfillCursor(accountID: account, archiveID: archive) == nil {
-                        _ = try await store.saveArchiveBackfillCursor(accountID: account, archiveID: archive, expectedRevision: nil,
-                                                                      oldestID: oldest, complete: page.complete)
-                    }
+                    // One transaction: an archive with a checkpoint and no backfill row counts as walked from its start
+                    // (pre-v16), and a backfill row left without its checkpoint would sit behind a gap after a newer first
+                    // page, so neither may exist on its own after a crash.
+                    _ = try await store.saveNewestArchivePage(accountID: account, archiveID: archive, cursor: cursor,
+                                                              oldestID: oldest, complete: page.complete)
+                } else {
+                    _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: archive,
+                                                             expectedRevision: checkpoint?.revision, cursor: cursor)
                 }
-                _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: archive,
-                                                         expectedRevision: checkpoint?.revision, cursor: cursor)
                 checkpoint = try await store.archiveCheckpoint(accountID: account, archiveID: archive)
                 bound = .after(cursor)
             } else if !page.complete {
@@ -215,23 +215,53 @@ public struct ArchiveSynchronizer: Sendable {
         }
     }
 
+    /// Whether `backfill` has anything to fetch for this archive: a forward checkpoint and an incomplete backfill cursor.
+    /// A checkpoint without a backfill row was walked forward from the start of the archive before newest-first sync
+    /// existed, so it has nothing older to fetch.
+    public func hasPendingBackfill(account: String, archive: String?) async throws -> Bool {
+        try await pendingBackfillCursor(account: account, archiveID: archive ?? account) != nil
+    }
+
+    private func pendingBackfillCursor(account: String, archiveID: String) async throws -> ArchiveBackfillCursor? {
+        // Forward sync first, always.
+        guard try await store.archiveCheckpoint(accountID: account, archiveID: archiveID) != nil,
+              let cursor = try await store.archiveBackfillCursor(accountID: account, archiveID: archiveID),
+              !cursor.complete else { return nil }
+        return cursor
+    }
+
     func backfill(account: String, archive: String?, pageBudget: Int, operations: ArchiveSyncOperations) async throws -> BackfillOutcome {
         let archiveID = archive ?? account
-        // Forward sync first, always. A checkpoint without a backfill row was walked forward from the start
-        // of the archive before newest-first sync existed, so it has nothing older to fetch.
-        guard try await store.archiveCheckpoint(accountID: account, archiveID: archiveID) != nil,
-              var cursor = try await store.archiveBackfillCursor(accountID: account, archiveID: archiveID),
-              !cursor.complete else { return .nothingToDo }
+        guard var cursor = try await pendingBackfillCursor(account: account, archiveID: archiveID) else { return .nothingToDo }
+        if let archive {
+            // A backfill can start long after this connection's walk validated the room: read its membership again
+            // before the first page (later pages reuse this validation), and skip the room as the walk does.
+            do { try await operations.refreshRoom(archive) }
+            catch is XMPPGroupError { return .stopped }
+            catch XMPPIQError.stanza { return .stopped }
+        }
         var pages = 0, messages = 0
         while pages < pageBudget {
             // Between pages nothing is outstanding: stop without touching the connection.
             if Task.isCancelled { return .stopped }
             let page: XMPPArchivePage
             do { page = try await operations.fetchPage(.before(cursor.oldestID), archive) }
-            // Same skip rule as the forward walk; the client turns a room error after a partial page into connectionClosed.
             catch is XMPPGroupError where archive != nil { return .stopped }
-            catch XMPPIQError.stanza where archive != nil { return .stopped }
-            catch XMPPClientError.invalidConfiguration {
+            catch XMPPIQError.stanza(let condition) {
+                // An IQ error carries no page: the client closes the stream itself when one follows a partial page, so
+                // no tokens are outstanding here and the connection stays.
+                guard condition == "item-not-found" else {
+                    Self.log.error("backfill refused: \(condition, privacy: .public)")
+                    return .stopped
+                }
+                // The server no longer knows the cursor. Archive expiry (Prosody `archive_expires_after`, one week by
+                // default) removes the oldest entries first, so the cursor and everything older are gone: history
+                // reachable from this device ends here.
+                Self.log.notice("backfill cursor expired on the server; history ends here")
+                _ = try await store.saveArchiveBackfillCursor(accountID: account, archiveID: archiveID, expectedRevision: cursor.revision,
+                                                              oldestID: cursor.oldestID, complete: true)
+                return .complete
+            } catch XMPPClientError.invalidConfiguration {
                 // Another archive query is active on this connection (a caller bug). Nothing was sent, so no tokens are outstanding.
                 Self.log.error("backfill refused: archive query already active")
                 return .stopped

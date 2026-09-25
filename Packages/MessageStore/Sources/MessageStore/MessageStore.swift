@@ -1042,6 +1042,34 @@ public actor MessageStore {
         }
     }
 
+    /// The first page of a newest-first sync: the archive's first forward checkpoint and its backfill cursor commit in
+    /// one transaction, so an interruption can never leave one without the other. Requires that the archive has no
+    /// checkpoint yet. A backfill row that is already there (an interrupted first sync of an earlier build) is replaced:
+    /// paging back from this newer page walks through whatever lies between, and reprocessing an entry is idempotent,
+    /// whereas keeping the older cursor would leave the entries between the two pages unfetched by either walk.
+    /// Returns the new checkpoint revision.
+    @discardableResult public func saveNewestArchivePage(accountID: String, archiveID: String, cursor: String,
+                                                         oldestID: String, complete: Bool) throws -> Int {
+        try requireTransportOwnership()
+        guard !accountID.isEmpty, !archiveID.isEmpty, !cursor.isEmpty, cursor.utf8.count <= 4096,
+              !oldestID.isEmpty, oldestID.utf8.count <= 4096 else { throw MessageStoreError.invalidValue }
+        return try connection.transaction {
+            let key: [Value] = [.text(accountID), .text(archiveID)]
+            guard try connection.query("SELECT 1 FROM archive_checkpoints WHERE account_id=? AND archive_id=?", key).isEmpty else {
+                throw MessageStoreError.invalidTransition
+            }
+            let backfill = try connection.query("SELECT revision FROM archive_backfill WHERE account_id=? AND archive_id=?", key).first?[0].integer
+            guard (backfill ?? 0) < Int.max else { throw MessageStoreError.invalidTransition }
+            try connection.execute("""
+                INSERT INTO archive_backfill(account_id,archive_id,revision,oldest_id,complete) VALUES(?,?,?,?,?)
+                ON CONFLICT(account_id,archive_id) DO UPDATE SET revision=excluded.revision,oldest_id=excluded.oldest_id,complete=excluded.complete
+                """, key + [.integer((backfill ?? 0) + 1), .text(oldestID), .integer(complete ? 1 : 0)])
+            try connection.execute("INSERT INTO archive_checkpoints(account_id,archive_id,revision,cursor) VALUES(?,?,?,?)",
+                                   key + [.integer(1), .text(cursor)])
+            return 1
+        }
+    }
+
     /// Reference source stays separate: a room assigns stanza IDs after encryption.
     public func reactionReference(accountID: String, messageID: String) throws -> String? {
         guard let message = try message(accountID: accountID, messageID: messageID), message.encryptionProfile == "modern" else { return nil }
