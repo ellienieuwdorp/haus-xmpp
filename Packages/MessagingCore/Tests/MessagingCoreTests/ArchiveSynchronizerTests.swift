@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import MessageStore
+import OMEMO
 @testable import XMPPProtocol
 @testable import MessagingCore
 
@@ -104,6 +105,69 @@ struct ArchiveSynchronizerTests {
             #expect(try await store.hasArchiveRejection(accountID: account, archiveID: account, messageID: "rejected"))
             #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account) == nil)
             #expect(try await store.messages(accountID: account, chatID: room).isEmpty)
+        }
+    }
+
+    @Test func rejectedDirectContentWritesRejectionAndPlaceholderBeforeCursor() async throws {
+        try await fixture { store async throws in
+            let sync = ArchiveSynchronizer(store: store)
+            let bob = "bob@localhost", stamp = Date(timeIntervalSince1970: 1_788_256_800)
+            var malformed = XMPPArchiveMessage(archiveID: "m4", timestamp: stamp, message: nil, encryptedMessage: nil)
+            malformed.rejectedContent = .malformedEncryptedContent
+            malformed.rejectedPeer = bob
+            await #expect(throws: XMPPIQError.self) { _ = try await sync.persistRejectedContent(account: account, archived: malformed) }
+            #expect(try await store.messages(accountID: account, chatID: bob).isEmpty)
+            malformed.rejectionArchive = account
+            #expect(try await sync.persistRejectedContent(account: account, archived: malformed))
+            let rows = try await store.messages(accountID: account, chatID: bob)
+            #expect(rows.count == 1)
+            let row = try #require(rows.first)
+            #expect(row.sentAt == stamp && row.unreadableReason == .malformedContent && row.senderID == bob && !row.isOutgoing)
+            #expect(row.body.isEmpty && row.encryptionProfile == "unreadable" && row.wireID == nil)
+            #expect(try await store.hasArchiveRejection(accountID: account, archiveID: account, messageID: "m4"))
+            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account) == nil)
+            // A repeated page is idempotent.
+            #expect(try await sync.persistRejectedContent(account: account, archived: malformed))
+            #expect(try await store.messages(accountID: account, chatID: bob).count == 1)
+
+            var notice = XMPPArchiveMessage(archiveID: "n1", timestamp: stamp, message: nil, encryptedMessage: nil)
+            notice.rejectedContent = .foreignSender
+            notice.rejectionArchive = account
+            #expect(try await sync.persistRejectedContent(account: account, archived: notice))
+            #expect(try await store.hasArchiveRejection(accountID: account, archiveID: account, messageID: "n1"))
+            #expect(try await store.chats(accountID: account).map(\.id) == [bob])
+
+            var own = XMPPArchiveMessage(archiveID: "o1", timestamp: stamp.addingTimeInterval(1), message: nil, encryptedMessage: nil)
+            own.rejectedContent = .unsupportedDirectContent
+            own.rejectionArchive = account
+            own.rejectedPeer = bob
+            own.rejectedOutgoing = true
+            #expect(try await sync.persistRejectedContent(account: account, archived: own))
+            let outgoing = try #require(try await store.messages(accountID: account, chatID: bob).last)
+            #expect(outgoing.isOutgoing && outgoing.senderID == account && outgoing.unreadableReason == .unsupportedEncryption)
+            #expect(ArchiveSynchronizer.unreadableReason(for: .foreignSender) == nil)
+            #expect(ArchiveSynchronizer.unreadableReason(for: .unverifiableEncryptedGroup) == nil)
+        }
+    }
+
+    @Test func excludedArchiveEntryIsDurableWithoutADispositionQuery() async throws {
+        try await fixture { store async throws in
+            let encryption = OMEMOService(store: store, protection: try StateProtection(key: Data(repeating: 7, count: 32)))
+            try await encryption.initialize(account: account, transport: NullTransport(account: account))
+            let stamp = Date(timeIntervalSince1970: 1_788_256_800)
+            let envelope = XMPPOMEMOEnvelope(profile: .legacy, senderDeviceID: 4242, keys: [], iv: Data(repeating: 1, count: 12), payload: Data([1, 2, 3]))
+            let encrypted = XMPPEncryptedMessage(id: "x1", from: "bob@localhost/x", to: account, originID: nil, envelope: envelope, provenance: .receivedCarbon)
+            let archived = XMPPArchiveMessage(archiveID: "a1", timestamp: stamp, message: nil, encryptedMessage: encrypted)
+            let sync = ArchiveSynchronizer(store: store)
+            let client = XMPPClient(labCertificateAuthority: nil)
+            try await sync.process(account: account, archived: archived, encryption: encryption, transport: client)
+            let rows = try await store.messages(accountID: account, chatID: "bob@localhost")
+            #expect(rows.count == 1)
+            #expect(rows.first?.sentAt == stamp && rows.first?.unreadableReason == .notForThisDevice && rows.first?.isOutgoing == false)
+            try await sync.process(account: account, archived: archived, encryption: encryption, transport: client)
+            #expect(try await store.messages(accountID: account, chatID: "bob@localhost").count == 1)
+            #expect(try await store.pendingEncryptedIncoming(accountID: account).isEmpty)
+            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account) == nil)
         }
     }
 

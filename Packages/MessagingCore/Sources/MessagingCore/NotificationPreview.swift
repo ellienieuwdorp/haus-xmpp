@@ -36,8 +36,9 @@ public struct NotificationPreview: Sendable, Equatable {
         } else {
             title = Self.clean(batch.chatTitle ?? latest.chatID, limit: 80, maximumBytes: 320)
             let text = Self.clean(latest.body, limit: 240)
-            // Metadata only: the extension never downloads a shared file.
-            body = text.isEmpty ? (latest.attachment?.kindLabel ?? "New message") : text
+            // Metadata only: the extension never downloads a shared file. A placeholder is never a candidate;
+            // should one ever arrive here it reads as a plain new message, never as content.
+            body = latest.unreadableReason != nil ? "New message" : (text.isEmpty ? (latest.attachment?.kindLabel ?? "New message") : text)
         }
     }
 
