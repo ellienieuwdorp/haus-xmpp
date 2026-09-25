@@ -542,9 +542,9 @@ public actor XMPPClient {
 
     /// Caller must persist every result and its archive position before acknowledging handledTokens.
     /// Only one bounded own-account query can be active; no arbitrary archive sender is trusted.
-    public func fetchArchivePage(after: String? = nil, limit: Int = 100, room: String? = nil) async throws -> XMPPArchivePage {
+    public func fetchArchivePage(_ bound: XMPPArchiveBound, limit: Int = 100, room: String? = nil) async throws -> XMPPArchivePage {
         guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
-        guard archiveQuery == nil, (1...200).contains(limit), after.map(validArchiveID) ?? true else { throw XMPPClientError.invalidConfiguration }
+        guard archiveQuery == nil, (1...200).contains(limit), bound.cursor.map(validArchiveID) ?? true else { throw XMPPClientError.invalidConfiguration }
         // Later pages of a room reuse the validation its walk just did; sends never do (`refreshGroupRoom(_:)`).
         if let room { _ = try await refreshGroupRoom(room, reusingValidation: true) }
         guard phase == .online, OMEMOWire.bareJID(boundJID) == ownBare, archiveQuery == nil else { throw XMPPClientError.connectionClosed }
@@ -552,9 +552,9 @@ public actor XMPPClient {
         archiveQuery = ArchiveQuery(queryID: queryID, accountBareJID: ownBare, accountFullJID: boundJID, limit: limit)
         archiveQuery?.room = room
         archiveQuery?.knownRooms = Set(groupRooms.filter { !$0.value.members.isEmpty }.keys)
+        archiveQuery?.bound = bound
         defer { archiveQuery = nil }
-        let afterXML = after.map { "<after>\(xmlEscaped($0))</after>" } ?? ""
-        let payload = "<query xmlns='urn:xmpp:mam:2' queryid='\(queryID)'><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE' type='hidden'><value>urn:xmpp:mam:2</value></field></x><set xmlns='http://jabber.org/protocol/rsm'><max>\(limit)</max>\(afterXML)</set></query>"
+        let payload = ArchiveQuery.payload(queryID: queryID, limit: limit, bound: bound)
         do {
             let response = try await requestIQ(type: "set", to: room ?? ownBare, payload: payload, timeout: Self.archiveQueryTimeout)
             guard let query = archiveQuery else { throw XMPPClientError.connectionClosed }

@@ -34,7 +34,7 @@ private let plain = "<message xmlns='jabber:client' from='bob@localhost/x' to='a
     // Nothing from a rejected entry reaches the application: no plaintext, no envelope, no event.
     #expect(query.messages.allSatisfy { $0.message == nil && $0.encryptedMessage == nil && $0.reaction == nil && $0.receipt == nil && $0.retraction == nil })
     #expect(query.messages.map(\.archiveID) == ["1", "2", "3", "4"])
-    let fin = try recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2' complete='true'><set xmlns='http://jabber.org/protocol/rsm'><last>4</last></set></fin></iq>")
+    let fin = try recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2' complete='true'><set xmlns='http://jabber.org/protocol/rsm'><first>1</first><last>4</last></set></fin></iq>")
     #expect(try query.finish(fin).lastID == "4")
 }
 

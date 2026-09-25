@@ -316,9 +316,9 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
 @Test func archiveCursorMustMatchDurablyReturnedLastResultAndCannotMakeNoProgress() throws {
     var query = ArchiveQuery(queryID: "query", accountBareJID: "a@example.org", accountFullJID: "a@example.org/r", limit: 1)
     try query.receive(recoveryNode(archived()))
-    let valid = try recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2' complete='true'><set xmlns='http://jabber.org/protocol/rsm'><last>archive-1</last></set></fin></iq>")
+    let valid = try recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2' complete='true'><set xmlns='http://jabber.org/protocol/rsm'><first>archive-1</first><last>archive-1</last></set></fin></iq>")
     #expect(try query.finish(valid).lastID == "archive-1")
-    let forged = try recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2'><set xmlns='http://jabber.org/protocol/rsm'><last>unseen</last></set></fin></iq>")
+    let forged = try recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2'><set xmlns='http://jabber.org/protocol/rsm'><first>archive-1</first><last>unseen</last></set></fin></iq>")
     #expect(throws: XMPPIQError.self) { try query.finish(forged) }
 }
 
@@ -367,4 +367,49 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     #expect(XMPPClient.eventBufferLimit == 4096)
     // Content plus barrier per message: the buffer outlasts stream management's 2,000-stanza ceiling.
     #expect(XMPPClient.eventBufferLimit >= 2 * 2_000)
+}
+
+@Test func archivePayloadEmitsTheRequestedBound() {
+    let newest = ArchiveQuery.payload(queryID: "q", limit: 100, bound: .before(nil))
+    #expect(newest.contains("<max>100</max><before/></set>"))
+    #expect(!newest.contains("<after"))
+    #expect(ArchiveQuery.payload(queryID: "q", limit: 100, bound: .before("x")).contains("<max>100</max><before>x</before></set>"))
+    let forward = ArchiveQuery.payload(queryID: "q", limit: 100, bound: .after("x"))
+    #expect(forward.contains("<max>100</max><after>x</after></set>"))
+    #expect(!forward.contains("<before"))
+    let start = ArchiveQuery.payload(queryID: "q", limit: 100, bound: .after(nil))
+    #expect(start.contains("<max>100</max></set>"))
+    #expect(!start.contains("<after") && !start.contains("<before"))
+    #expect(start.hasPrefix("<query xmlns='urn:xmpp:mam:2' queryid='q'>"))
+    #expect(start.contains("<set xmlns='http://jabber.org/protocol/rsm'>"))
+    // Cursor text is XML-escaped, never spliced into the stanza.
+    let escaped = ArchiveQuery.payload(queryID: "q", limit: 100, bound: .before("a<b&'c"))
+    #expect(escaped.contains("<before>a&lt;b&amp;&apos;c</before>"))
+    #expect(!escaped.contains("a<b"))
+}
+
+@Test func archiveFinishValidatesFirstAgainstReturnedResults() throws {
+    func fin(_ attributes: String, _ set: String) throws -> XMPPProtocol.XMLNode {
+        try recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2'\(attributes)><set xmlns='http://jabber.org/protocol/rsm'>\(set)</set></fin></iq>")
+    }
+    var query = ArchiveQuery(queryID: "query", accountBareJID: "a@example.org", accountFullJID: "a@example.org/r", limit: 100)
+    query.bound = .before(nil)
+    try query.receive(recoveryNode(archived()))
+    #expect(throws: XMPPIQError.self) { try query.finish(fin("", "<first>unseen</first><last>archive-1</last>")) }
+    #expect(throws: XMPPIQError.self) { try query.finish(fin("", "<last>archive-1</last>")) }
+    #expect(throws: XMPPIQError.self) { try query.finish(fin("", "<first>archive-1</first><first>archive-1</first><last>archive-1</last>")) }
+    let page = try query.finish(fin("", "<first index='0'>archive-1</first><last>archive-1</last>"))
+    #expect(page.firstID == "archive-1" && page.lastID == "archive-1" && !page.complete)
+
+    // Two results, oldest first in either direction: first names the oldest, last the newest.
+    try query.receive(recoveryNode(archived(id: "archive-2")))
+    #expect(throws: XMPPIQError.self) { try query.finish(fin("", "<first>archive-2</first><last>archive-1</last>")) }
+    let two = try query.finish(fin(" complete='true'", "<first>archive-1</first><last>archive-2</last>"))
+    #expect(two.firstID == "archive-1" && two.lastID == "archive-2" && two.complete)
+
+    let empty = ArchiveQuery(queryID: "query", accountBareJID: "a@example.org", accountFullJID: "a@example.org/r", limit: 100)
+    let emptyPage = try empty.finish(fin(" complete='true'", ""))
+    #expect(emptyPage.firstID == nil && emptyPage.lastID == nil && emptyPage.messages.isEmpty && emptyPage.complete)
+    #expect(throws: XMPPIQError.self) { try empty.finish(fin("", "")) }
+    #expect(throws: XMPPIQError.self) { try empty.finish(fin(" complete='true'", "<first>archive-1</first>")) }
 }
