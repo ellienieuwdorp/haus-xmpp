@@ -1182,7 +1182,10 @@ public actor OMEMOService {
                         if unresolvedRooms.contains(group.message.room) { continue }
                     } else if let device = state.devices.last(where: { $0.jid == group.message.sender && $0.profile == .modern
                                                                        && $0.deviceID == group.message.envelope.senderDeviceID }),
-                              !device.trust.permitsEncryption { continue }
+                              !device.trust.permitsEncryption {
+                        try await awaitTrustDecision(item, account: account)
+                        continue
+                    }
                     do { _ = try await receiveGroup(account: account, message: group.message, transport: groupTransport, sentAt: group.sentAt) }
                     catch {
                         if (try? await load(account))?.1.groupRooms[group.message.room] == nil { unresolvedRooms.insert(group.message.room) }
@@ -1194,7 +1197,10 @@ public actor OMEMOService {
                 let (_, state) = try await load(account)
                 if let device = state.devices.last(where: { $0.jid == item.sender && $0.profile == value.envelope.profile
                                                             && $0.deviceID == value.envelope.senderDeviceID }),
-                   !device.trust.permitsEncryption { continue }
+                   !device.trust.permitsEncryption {
+                    try await awaitTrustDecision(item, account: account)
+                    continue
+                }
                 _ = try await receive(account: account, message: XMPPEncryptedMessage(id: item.digest, from: value.from, to: value.to, originID: nil, envelope: value.envelope, provenance: value.provenance, replaces: value.replaces), transport: transport, sentAt: value.sentAt)
             } catch {
                 if error is CancellationError { throw error }
@@ -1202,6 +1208,14 @@ public actor OMEMOService {
             }
         }
         if let firstFailure { throw firstFailure }
+    }
+
+    /// A skipped row now waits only for a trust decision on a device that became known elsewhere (for example a
+    /// `keysPending` row whose device a full refresh added). Relabel it as `receive` would have, so the retry that
+    /// follows that decision (`reasons: [.trustPending]`) selects it.
+    private func awaitTrustDecision(_ item: PendingEncryptedMessage, account: String) async throws {
+        guard item.reason != .trustPending else { return }
+        try await store.classifyPendingEncryptedIncoming(accountID: account, sender: item.sender, digest: item.digest, reason: .trustPending)
     }
 
     /// The current state and its CAS revision. Reads the revision first and decodes the sealed blob only when it
@@ -1238,6 +1252,8 @@ public actor OMEMOService {
     }
     /// A failed write may have left anything behind in memory; the next `load` reads the row again.
     func forgetState(_ account: String) { stateCache[account] = nil }
+    /// The revision of the cached decoded state, if any (for tests that pin cache invalidation).
+    func cachedStateRevision(_ account: String) -> Int? { stateCache[account]?.revision }
     private func remember(_ state: AccountEncryptionState, revision: Int, account: String) {
         // An interleaved load may already hold a newer revision; keep whichever was read later in revision order.
         if let cached = stateCache[account], cached.revision > revision { return }

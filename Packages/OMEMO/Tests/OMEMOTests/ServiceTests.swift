@@ -1345,10 +1345,13 @@ final class ServiceTests: XCTestCase {
         let interleaving = InterleavingTransport(base: f.bTransport, first: OnFirstFetch {
             try await other.setTrust(account: bob, deviceID: device.id, trust: .rejected)
         })
+        expectNotNil(await f.b.cachedStateRevision(f.bob))
         do { _ = try await f.b.refreshDevices(account: f.bob, peer: f.alice, profile: .modern, transport: interleaving); XCTFail("Stale CAS write succeeded") }
         catch { expectEqual(error as? MessageStoreError, .invalidTransition) }
+        // The failed save dropped the cache outright; the next load decodes the row the other service wrote.
+        expectNil(await f.b.cachedStateRevision(f.bob))
         expectEqual(try await f.b.overview(account: f.bob, peer: f.alice).devices.first { $0.id == device.id }?.trust, .rejected)
-        // A write that fails because the store is gone leaves the durable state as it was.
+        // A write attempted on a closed store (it fails before any save) leaves the durable state as it was.
         try await f.bStore.close()
         do { try await f.b.setTrust(account: f.bob, deviceID: device.id, trust: .accepted); XCTFail("Closed store accepted a write") } catch {}
         let fresh = OMEMOService(store: try f.openStore("bob.sqlite"), protection: f.protection)
@@ -1384,6 +1387,38 @@ final class ServiceTests: XCTestCase {
         expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).map(\.body), bodies)
         expectTrue(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).isEmpty)
         expectEqual(await log.fetches, [])
+    }
+
+    func testKeysPendingRowIsRetriedAfterTrustOnceItsDeviceBecameKnownElsewhere() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.aStore.acquireTransportOwnership()
+        try await f.bStore.acquireTransportOwnership()
+        try await f.a.initialize(account: f.alice, transport: f.aTransport)
+        try await f.b.initialize(account: f.bob, transport: f.bTransport)
+        for device in try await f.a.refreshDevices(account: f.alice, peer: f.bob, profile: .modern, transport: f.aTransport).devices where device.active {
+            try await f.a.setTrust(account: f.alice, deviceID: device.id, trust: .accepted)
+        }
+        let outgoing = try await f.queue()
+        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
+        let message = f.message(try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id))
+        // The key lookup fails (offline): the ciphertext waits for keys.
+        do { _ = try await f.b.receive(account: f.bob, message: message, transport: OfflineTransport()); XCTFail("Keys were unavailable") } catch {}
+        expectEqual(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).map(\.reason), [.keysPending])
+        // The sending path's full refresh (or encryption details) adds Alice's device, undecided.
+        _ = try await f.b.refreshDevices(account: f.bob, peer: f.alice, profile: .modern, transport: f.bTransport)
+        // The connection retry skips the row without decrypting, but it now waits for a trust decision.
+        let log = TransportLog()
+        try await f.b.retryPendingIncoming(account: f.bob, transport: CountingTransport(base: f.bTransport, log: log))
+        expectEqual(await log.calls, [])
+        expectEqual(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).map(\.reason), [.trustPending])
+        expectTrue(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).isEmpty)
+        // Accepting the device retries trust-pending rows only (as the app does), and that finds this one.
+        for device in try await f.b.overview(account: f.bob, peer: f.alice).devices where device.jid == f.alice && device.active {
+            try await f.b.setTrust(account: f.bob, deviceID: device.id, trust: .accepted)
+        }
+        try await f.b.retryPendingIncoming(account: f.bob, transport: f.bTransport, reasons: [.trustPending])
+        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).map(\.body), [outgoing.body])
+        expectTrue(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).isEmpty)
     }
 
     func testPendingConversationsCountsWithoutDecodingWires() async throws {

@@ -18,16 +18,23 @@ private struct GroupTransport: OMEMOGroupTransport {
     let room: RoomFixture
     /// When set, every room read and key lookup is recorded.
     var log: TransportLog? = nil
+    /// When set, room reads fail (recorded first), as for a room that cannot be read right now.
+    var roomUnavailable = false
+    /// When set, key lookups fail (recorded first), as when offline.
+    var keysUnavailable = false
     func refreshGroupRoom(_ requested: String) async throws -> XMPPGroupRoomSnapshot {
         await log?.record(.refreshRoom(requested))
+        if roomUnavailable { throw OMEMOError.unavailable }
         return try await room.snapshot(requested)
     }
     func fetchOMEMODevices(for jid: String, profile: XMPPOMEMOProfile) async throws -> [UInt32] {
         await log?.record(.devices(jid, profile))
+        if keysUnavailable { throw OMEMOError.unavailable }
         return try await base.fetchOMEMODevices(for: jid, profile: profile)
     }
     func fetchOMEMOBundle(for jid: String, deviceID: UInt32, profile: XMPPOMEMOProfile) async throws -> XMPPOMEMOBundle {
         await log?.record(.bundle(jid, deviceID, profile))
+        if keysUnavailable { throw OMEMOError.unavailable }
         return try await base.fetchOMEMOBundle(for: jid, deviceID: deviceID, profile: profile)
     }
     func publishOMEMODevices(_ devices: [UInt32], profile: XMPPOMEMOProfile) async throws { try await base.publishOMEMODevices(devices, profile: profile) }
@@ -287,6 +294,85 @@ private struct GroupTransport: OMEMOGroupTransport {
         XCTAssertEqual(stored.map(\.body), [body])
         let after = await log.calls
         XCTAssertFalse(after.contains(.refreshRoom(roomID)))
+    }
+
+    func testKeysPendingGroupRowIsRetriedAfterTrustOnceItsDeviceBecameKnownElsewhere() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let carol = "carol@localhost", roomID = "private@conference.localhost", room = RoomFixture()
+        await room.setMembers([f.alice, f.bob, carol])
+        let cStore = try f.openStore("carol.sqlite")
+        try await cStore.acquireTransportOwnership()
+        let c = OMEMOService(store: cStore, protection: f.protection)
+        try await c.initialize(account: carol, transport: GroupTransport(base: TestTransport(account: carol, server: f.server), room: room))
+        let bt = GroupTransport(base: f.bTransport, room: room)
+        for device in try await f.b.refreshGroupDevices(account: f.bob, room: roomID, transport: bt).devices where device.active {
+            try await f.b.setTrust(account: f.bob, deviceID: device.id, trust: .accepted)
+        }
+        let (message, body) = try await carolSecondDeviceMessage(f, room: room, roomID: roomID, carol: carol, provenance: .roomArchive)
+        // The sender device's keys cannot be fetched (offline): the ciphertext waits for keys.
+        do { _ = try await f.b.receiveGroup(account: f.bob, message: message, transport: GroupTransport(base: f.bTransport, room: room, keysUnavailable: true)); XCTFail("Keys were unavailable") }
+        catch {}
+        var reasons = try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).map(\.reason)
+        XCTAssertEqual(reasons, [.keysPending])
+        // A full room refresh adds Carol's second device, undecided.
+        _ = try await f.b.refreshGroupDevices(account: f.bob, room: roomID, transport: bt)
+        // The connection retry skips the row without work, but it now waits for a trust decision.
+        let log = TransportLog()
+        try await f.b.retryPendingIncoming(account: f.bob, transport: GroupTransport(base: f.bTransport, room: room, log: log))
+        let calls = await log.calls
+        XCTAssertEqual(calls, [])
+        reasons = try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).map(\.reason)
+        XCTAssertEqual(reasons, [.trustPending])
+        let (_, state) = try await f.b.load(f.bob)
+        let added = try XCTUnwrap(state.devices.last { $0.jid == carol && $0.deviceID == message.envelope.senderDeviceID })
+        XCTAssertEqual(added.trust, .undecided)
+        // Accepting the device retries trust-pending rows only (as the app does), and that finds this one.
+        try await f.b.setTrust(account: f.bob, deviceID: added.id, trust: .accepted)
+        try await f.b.retryPendingIncoming(account: f.bob, transport: bt, reasons: [.trustPending])
+        let stored = try await f.bStore.messages(accountID: f.bob, chatID: roomID)
+        XCTAssertEqual(stored.map(\.body), [body])
+        let remaining = try await f.bStore.pendingEncryptedIncoming(accountID: f.bob)
+        XCTAssertTrue(remaining.isEmpty)
+    }
+
+    func testRetryReadsAnUnknownRoomOncePerPass() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let roomID = "private@conference.localhost", room = RoomFixture()
+        let at = GroupTransport(base: f.aTransport, room: room)
+        for device in try await f.a.refreshGroupDevices(account: f.alice, room: roomID, transport: at).devices where device.active {
+            try await f.a.setTrust(account: f.alice, deviceID: device.id, trust: .accepted)
+        }
+        try await f.aStore.upsertChat(accountID: f.alice, chatID: roomID, title: "Room")
+        var messages: [XMPPEncryptedGroupMessage] = []
+        for (index, text) in ["First to an unread room", "Second to an unread room"].enumerated() {
+            let outgoing = StoredMessage(id: "unknown-room-\(index)", accountID: f.alice, chatID: roomID, senderID: f.alice, body: text, isOutgoing: true)
+            _ = try await f.aStore.enqueueOutgoing(outgoing)
+            try await f.a.prepareGroupMessage(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
+            let prepared = try await f.a.outgoingGroupEnvelope(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
+            messages.append(try XMPPEncryptedGroupMessage(id: outgoing.id, room: roomID, occupant: roomID + "/alice", sender: f.alice,
+                                                          envelope: prepared.envelope, provenance: .roomArchive))
+        }
+        // Bob has never read this room and cannot read it now: both messages are retained.
+        let unreadable = GroupTransport(base: f.bTransport, room: room, roomUnavailable: true)
+        for message in messages {
+            do { _ = try await f.b.receiveGroup(account: f.bob, message: message, transport: unreadable); XCTFail("Room was unreadable") } catch {}
+        }
+        var pending = try await f.bStore.pendingEncryptedIncoming(accountID: f.bob)
+        XCTAssertEqual(pending.count, 2)
+        // One retry pass reads the still-unreadable room once, not once per row, and reports the failure.
+        let log = TransportLog()
+        do { try await f.b.retryPendingIncoming(account: f.bob, transport: GroupTransport(base: f.bTransport, room: room, log: log, roomUnavailable: true)); XCTFail("Room was unreadable") }
+        catch {}
+        let calls = await log.calls
+        XCTAssertEqual(calls.filter { $0 == .refreshRoom(roomID) }.count, 1)
+        pending = try await f.bStore.pendingEncryptedIncoming(accountID: f.bob)
+        XCTAssertEqual(pending.count, 2)
+        // Once the room can be read, the next pass decrypts both.
+        try await f.b.retryPendingIncoming(account: f.bob, transport: GroupTransport(base: f.bTransport, room: room))
+        let stored = try await f.bStore.messages(accountID: f.bob, chatID: roomID)
+        XCTAssertEqual(stored.map(\.body), ["First to an unread room", "Second to an unread room"])
     }
 
     func testLiveOccupantOutsideStoredMembershipStillRefreshesTheRoom() async throws {
