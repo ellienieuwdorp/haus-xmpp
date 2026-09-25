@@ -666,6 +666,14 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private var plainAttachmentTop: NSLayoutConstraint!
     private var replyAttachmentTop: NSLayoutConstraint!
     private var textHeight: NSLayoutConstraint!
+    /// The time row sits under the caption, or directly under a photo that has none.
+    private var footerAfterText: NSLayoutConstraint!
+    private var footerAfterMedia: NSLayoutConstraint!
+    /// The bubble-coloured frame around a photo or video preview, equal on all four sides.
+    private static let mediaInset: CGFloat = 3
+    /// Space between a caption-less preview's frame and its time row; with the frame it puts the time ink
+    /// as far below the photo as it sits above the bubble's bottom edge.
+    private static let mediaFooterGap: CGFloat = 5
     private var toggleStar: () -> Void = {}
     private var retry: () -> Void = {}
     private var replyAction: () -> Void = {}
@@ -813,9 +821,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         media.translatesAutoresizingMaskIntoConstraints = false
         media.contentMode = .scaleAspectFill
         media.clipsToBounds = true
-        // Framed by the bubble colour so a white photo keeps an edge on a white canvas.
-        media.layer.cornerRadius = 17
-        media.layer.cornerCurve = .continuous
+        // Framed by the bubble colour so a white photo keeps an edge on a white canvas; the radius is the
+        // bubble's 20pt corner less the frame, so the two curves stay concentric.
+        media.cornerConfiguration = .uniformCorners(radius: .fixed(20 - Self.mediaInset))
         media.backgroundColor = .quaternarySystemFill
         media.accessibilityIgnoresInvertColors = true
         attachmentArea.addSubview(media)
@@ -837,8 +845,10 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         fileLabels.spacing = 1
         attachmentArea.addSubview(fileLabels)
         NSLayoutConstraint.activate([
-            media.leadingAnchor.constraint(equalTo: attachmentArea.leadingAnchor, constant: 3), media.trailingAnchor.constraint(equalTo: attachmentArea.trailingAnchor, constant: -3),
-            media.topAnchor.constraint(equalTo: attachmentArea.topAnchor, constant: 3), media.bottomAnchor.constraint(equalTo: attachmentArea.bottomAnchor),
+            media.leadingAnchor.constraint(equalTo: attachmentArea.leadingAnchor, constant: Self.mediaInset),
+            media.trailingAnchor.constraint(equalTo: attachmentArea.trailingAnchor, constant: -Self.mediaInset),
+            media.topAnchor.constraint(equalTo: attachmentArea.topAnchor, constant: Self.mediaInset),
+            media.bottomAnchor.constraint(equalTo: attachmentArea.bottomAnchor, constant: -Self.mediaInset),
             mediaSpinner.centerXAnchor.constraint(equalTo: attachmentArea.centerXAnchor), mediaSpinner.centerYAnchor.constraint(equalTo: attachmentArea.centerYAnchor),
             fileIcon.leadingAnchor.constraint(equalTo: attachmentArea.leadingAnchor, constant: 12),
             fileIcon.centerYAnchor.constraint(equalTo: attachmentArea.centerYAnchor),
@@ -900,6 +910,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         replyTextTop = textView.topAnchor.constraint(equalTo: attachmentArea.bottomAnchor, constant: -12)
         plainTextTop.isActive = true
         textHeight = textView.heightAnchor.constraint(equalToConstant: 0)
+        footerAfterText = footer.topAnchor.constraint(equalTo: textView.bottomAnchor)
+        footerAfterMedia = footer.topAnchor.constraint(equalTo: attachmentArea.bottomAnchor, constant: Self.mediaFooterGap)
+        footerAfterText.isActive = true
         NSLayoutConstraint.activate([
             bubbleWidth, attachmentHeight,
             attachmentArea.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
@@ -908,7 +921,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             bubble.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -16),
             textView.leadingAnchor.constraint(equalTo: bubble.leadingAnchor),
             textView.trailingAnchor.constraint(equalTo: bubble.trailingAnchor),
-            footer.topAnchor.constraint(equalTo: textView.bottomAnchor),
             footer.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -12),
             footer.leadingAnchor.constraint(greaterThanOrEqualTo: bubble.leadingAnchor, constant: 12),
             footer.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -8),
@@ -965,7 +977,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             if attachment.showsPreview {
                 // A fixed preview width per chat; height follows the photo, bounded so one tall shot never fills the screen.
                 width = min(maximumTextWidth + 24, 280)
-                attachmentHeight.constant = min(340, max(120, (width / attachment.aspectRatio).rounded()))
+                // The photo keeps its own aspect inside the frame; the frame is added around it, not cropped from it.
+                let frame = 2 * Self.mediaInset
+                attachmentHeight.constant = frame + min(340 - frame, max(120 - frame, ((width - frame) / attachment.aspectRatio).rounded()))
             } else {
                 width = max(width, min(maximumTextWidth + 24, 240))
                 attachmentHeight.constant = 62
@@ -1235,6 +1249,11 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         (message.reply == nil || message.attachment != nil ? plainTextTop : replyTextTop)?.isActive = true
         textHeight.isActive = message.body.isEmpty && message.attachment != nil
         textView.isHidden = textHeight.isActive
+        // A caption keeps its usual 10pt inset from the photo itself, not from the frame below it.
+        let showsPreview = !message.isRetracted && message.attachment?.showsPreview == true
+        plainTextTop.constant = showsPreview ? -Self.mediaInset : 0
+        NSLayoutConstraint.deactivate([footerAfterText, footerAfterMedia])
+        (showsPreview && textHeight.isActive ? footerAfterMedia : footerAfterText)?.isActive = true
         let canRetry = message.isOutgoing && message.status?.canRetry == true
         leading.isActive = !message.isOutgoing
         trailing.isActive = message.isOutgoing
