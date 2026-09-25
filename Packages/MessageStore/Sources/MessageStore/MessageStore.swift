@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 14 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 15 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -210,7 +210,15 @@ public actor MessageStore {
                     )
                     """)
             }
-            try connection.execute("PRAGMA user_version = 14")
+            // v15: placeholders for messages this device deliberately cannot show, and why a retained ciphertext is still pending.
+            // Values are enforced in Swift (`UnreadableReason`, `PendingEncryptedReason`); ALTER cannot add a CHECK.
+            if version < 15, try connection.query("SELECT 1 FROM pragma_table_info('messages') WHERE name='unreadable_reason'").isEmpty {
+                try connection.execute("ALTER TABLE messages ADD COLUMN unreadable_reason TEXT")
+            }
+            if version < 15, try connection.query("SELECT 1 FROM pragma_table_info('pending_encrypted_inbox') WHERE name='reason'").isEmpty {
+                try connection.execute("ALTER TABLE pending_encrypted_inbox ADD COLUMN reason TEXT NOT NULL DEFAULT 'trustPending'")
+            }
+            try connection.execute("PRAGMA user_version = 15")
         }
     }
 
@@ -231,7 +239,10 @@ public actor MessageStore {
         guard !message.id.isEmpty, !message.accountID.isEmpty, !message.chatID.isEmpty,
               message.sentAt.timeIntervalSince1970.isFinite,
               message.wireID.map({ !$0.isEmpty && $0.utf8.count <= 1024 }) ?? true,
-              !message.wireIDAuthenticated || (message.wireID != nil && message.encryptionProfile == "modern") else { throw MessageStoreError.invalidValue }
+              !message.wireIDAuthenticated || (message.wireID != nil && message.encryptionProfile == "modern"),
+              // Placeholders are written only by `recordUnreadableMessage`; nothing else may claim their profile or ID space.
+              message.encryptionProfile != Self.unreadableProfile, message.unreadableReason == nil,
+              !message.id.hasPrefix(Self.unreadableIDPrefix) else { throw MessageStoreError.invalidValue }
         let replyJSON: Value
         if let reply = message.reply {
             try Self.validateReply(reply)
@@ -485,21 +496,96 @@ public actor MessageStore {
         try !connection.query("SELECT 1 FROM encryption_state LIMIT 1").isEmpty
     }
 
-    public func pendingEncryptedIncoming(accountID: String) throws -> [PendingEncryptedMessage] {
-        try connection.query("SELECT sender,digest,wire FROM pending_encrypted_inbox WHERE account_id=? ORDER BY rowid", [.text(accountID)]).map {
+    /// Retained ciphertext in arrival order. Nil filters keep every row; `reasons` filters by classification, `sender` by bare JID.
+    public func pendingEncryptedIncoming(accountID: String, reasons: Set<PendingEncryptedReason>? = nil,
+                                         sender: String? = nil) throws -> [PendingEncryptedMessage] {
+        var sql = "SELECT sender,digest,wire,reason FROM pending_encrypted_inbox WHERE account_id=?"
+        var values: [Value] = [.text(accountID)]
+        if let reasons {
+            guard !reasons.isEmpty else { return [] }
+            let ordered = reasons.map(\.rawValue).sorted()
+            sql += " AND reason IN (" + ordered.map { _ in "?" }.joined(separator: ",") + ")"
+            values += ordered.map(Value.text)
+        }
+        if let sender { sql += " AND sender=?"; values.append(.text(sender)) }
+        return try connection.query(sql + " ORDER BY rowid", values).map {
             guard let wire = $0[2].data else { throw MessageStoreError.invalidValue }
-            return PendingEncryptedMessage(sender: $0[0].string, digest: $0[1].string, wire: wire)
+            return PendingEncryptedMessage(sender: $0[0].string, digest: $0[1].string, wire: wire,
+                                           reason: PendingEncryptedReason(rawValue: $0[3].string) ?? .trustPending)
         }
     }
 
-    public func retainEncryptedIncoming(accountID: String, sender: String, digest: String, wire: Data) throws {
+    /// Keeps ciphertext that may still decrypt later. An existing row keeps its reason: classification is explicit.
+    public func retainEncryptedIncoming(accountID: String, sender: String, digest: String, wire: Data,
+                                        reason: PendingEncryptedReason = .trustPending) throws {
         guard !accountID.isEmpty, !sender.isEmpty, !digest.isEmpty, !wire.isEmpty, wire.count <= 1_048_576 else { throw MessageStoreError.invalidValue }
         try connection.transaction {
             if try hasEncryptedIncoming(accountID: accountID, sender: sender, digest: digest) { return }
             if try !connection.query("SELECT 1 FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?", [.text(accountID), .text(sender), .text(digest)]).isEmpty { return }
             guard try connection.query("SELECT COUNT(*) FROM pending_encrypted_inbox WHERE account_id=?", [.text(accountID)]).first![0].integer < 1000 else { throw MessageStoreError.invalidValue }
-            try connection.execute("INSERT INTO pending_encrypted_inbox(account_id,sender,digest,wire) VALUES(?,?,?,?)", [.text(accountID), .text(sender), .text(digest), .blob(wire)])
+            try connection.execute("INSERT INTO pending_encrypted_inbox(account_id,sender,digest,wire,reason) VALUES(?,?,?,?,?)", [.text(accountID), .text(sender), .text(digest), .blob(wire), .text(reason.rawValue)])
         }
+    }
+
+    /// Re-labels a retained row; a no-op when the row no longer exists (it may have been committed or converted meanwhile).
+    public func classifyPendingEncryptedIncoming(accountID: String, sender: String, digest: String, reason: PendingEncryptedReason) throws {
+        try connection.execute("UPDATE pending_encrypted_inbox SET reason=? WHERE account_id=? AND sender=? AND digest=?",
+                               [.text(reason.rawValue), .text(accountID), .text(sender), .text(digest)])
+    }
+
+    /// Records a placeholder for a message this device will never show as content. Idempotent by `placeholder.id`
+    /// (first observation wins, `sentAt` is never rewritten). A `.ciphertext` key also consumes the replay identity
+    /// and removes the pending row. Returns true when the row was inserted now. Does not require transport ownership
+    /// (the extension's archive walk and the app's live path both call it, exactly like `commitEncryptedIncoming`).
+    /// The row is never plaintext, never authenticated, never a notification candidate and never an event target.
+    @discardableResult public func recordUnreadableMessage(_ placeholder: UnreadableMessage) throws -> Bool {
+        try Self.validate(placeholder)
+        return try connection.transaction { try insertUnreadableInTransaction(placeholder) }
+    }
+
+    /// True when the placeholder row exists. `message(accountID:messageID:)` also works; this skips the attachment lookup.
+    public func hasUnreadableMessage(accountID: String, id: String) throws -> Bool {
+        try !connection.query("SELECT 1 FROM messages WHERE account_id=? AND id=? AND encryption_profile=?",
+                              [.text(accountID), .text(id), .text(Self.unreadableProfile)]).isEmpty
+    }
+
+    static let unreadableProfile = "unreadable"
+    static let unreadableIDPrefix = "unreadable-"
+
+    private static func validate(_ placeholder: UnreadableMessage) throws {
+        func jid(_ value: String) -> Bool { !value.isEmpty && value.utf8.count <= 3071 && !value.contains(where: { $0.isWhitespace }) }
+        guard jid(placeholder.accountID), jid(placeholder.chatID), jid(placeholder.senderID),
+              placeholder.sentAt.timeIntervalSince1970.isFinite else { throw MessageStoreError.invalidValue }
+        switch placeholder.key {
+        case let .ciphertext(sender, digest):
+            guard !sender.isEmpty, sender.utf8.count <= 3071, !digest.isEmpty, digest.utf8.count <= 128 else { throw MessageStoreError.invalidValue }
+        case let .archive(archive, id):
+            guard !archive.isEmpty, archive.utf8.count <= 3071, !id.isEmpty, id.utf8.count <= 1024 else { throw MessageStoreError.invalidValue }
+        }
+    }
+
+    private func insertUnreadableInTransaction(_ placeholder: UnreadableMessage) throws -> Bool {
+        let account = Value.text(placeholder.accountID)
+        if case let .ciphertext(sender, digest) = placeholder.key,
+           try hasEncryptedIncoming(accountID: placeholder.accountID, sender: sender, digest: digest) {
+            // Already decided: an authenticated message, or an earlier placeholder. Never overwrite or repeat it.
+            return false
+        }
+        try connection.execute("INSERT INTO chats(account_id,id,title) VALUES(?,?,?) ON CONFLICT(account_id,id) DO NOTHING",
+                               [account, .text(placeholder.chatID), .text(placeholder.chatID)])
+        try connection.execute("""
+            INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing,starred,reply_json,encryption_profile,wire_id,wire_id_authenticated,unreadable_reason)
+            VALUES(?,?,?,?,'',?,?,0,NULL,?,NULL,0,?) ON CONFLICT(account_id,id) DO NOTHING
+            """, [account, .text(placeholder.id), .text(placeholder.chatID), .text(placeholder.senderID),
+                  .real(placeholder.sentAt.timeIntervalSince1970), .integer(placeholder.isOutgoing ? 1 : 0),
+                  .text(Self.unreadableProfile), .text(placeholder.reason.rawValue)])
+        let inserted = try connection.query("SELECT changes()").first?[0].integer == 1
+        if case let .ciphertext(sender, digest) = placeholder.key {
+            // The ciphertext identity is now consumed: re-seeing it costs one lookup and never yields a second bubble.
+            try connection.execute("INSERT OR IGNORE INTO encrypted_inbox(account_id,sender,digest) VALUES(?,?,?)", [account, .text(sender), .text(digest)])
+            try connection.execute("DELETE FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?", [account, .text(sender), .text(digest)])
+        }
+        return inserted
     }
 
     /// Correct retained context only after authenticating a matching archive envelope. Exact-byte
@@ -784,15 +870,24 @@ public actor MessageStore {
 
     /// Bounded deliberate-rejection receipt for authenticated archive wrappers with
     /// unsupported inner content. No plaintext, author claim or secret material is stored.
-    public func recordArchiveRejection(accountID: String, archiveID: String, messageID: String, reason: String) throws {
+    /// An optional placeholder commits in the same transaction; its validation failure rolls back both.
+    public func recordArchiveRejection(accountID: String, archiveID: String, messageID: String, reason: String,
+                                       placeholder: UnreadableMessage? = nil) throws {
         try requireTransportOwnership()
         guard !accountID.isEmpty, accountID.utf8.count <= 3071, !archiveID.isEmpty, archiveID.utf8.count <= 3071, !messageID.isEmpty, messageID.utf8.count <= 1024,
-              reason == "unverifiableEncryptedGroup" else { throw MessageStoreError.invalidValue }
+              Self.archiveRejectionReasons.contains(reason) else { throw MessageStoreError.invalidValue }
         try connection.transaction {
             try connection.execute("INSERT INTO archive_rejections(account_id,archive_id,message_id,reason) VALUES(?,?,?,?) ON CONFLICT(account_id,archive_id,message_id) DO NOTHING", [.text(accountID), .text(archiveID), .text(messageID), .text(reason)])
+            if let placeholder {
+                guard placeholder.accountID == accountID else { throw MessageStoreError.invalidValue }
+                try Self.validate(placeholder)
+                _ = try insertUnreadableInTransaction(placeholder)
+            }
             try connection.execute("DELETE FROM archive_rejections WHERE account_id=? AND sequence NOT IN (SELECT sequence FROM archive_rejections WHERE account_id=? ORDER BY sequence DESC LIMIT 1000)", [.text(accountID), .text(accountID)])
         }
     }
+    /// Raw values of every protocol `XMPPArchiveRejection` case.
+    private static let archiveRejectionReasons: Set<String> = ["unverifiableEncryptedGroup", "foreignSender", "unsupportedDirectContent", "malformedEncryptedContent"]
     public func hasArchiveRejection(accountID: String, archiveID: String, messageID: String) throws -> Bool {
         try !connection.query("SELECT 1 FROM archive_rejections WHERE account_id=? AND archive_id=? AND message_id=?", [.text(accountID), .text(archiveID), .text(messageID)]).isEmpty
     }
@@ -1185,7 +1280,8 @@ public actor MessageStore {
 
     private static let columns = """
         account_id,id,chat_id,sender_id,body,sent_at,outgoing,starred,
-        (SELECT state FROM outbox WHERE outbox.account_id=messages.account_id AND outbox.message_id=messages.id),reply_json,encryption_profile,wire_id,wire_id_authenticated
+        (SELECT state FROM outbox WHERE outbox.account_id=messages.account_id AND outbox.message_id=messages.id),reply_json,encryption_profile,wire_id,wire_id_authenticated,
+        unreadable_reason
         """
     private static func validateReply(_ reply: MessageReply) throws {
         guard !reply.messageID.isEmpty, reply.messageID.utf8.count <= 1_024,
@@ -1224,7 +1320,8 @@ public actor MessageStore {
                       isOutgoing: row[6].integer != 0, isStarred: row[7].integer != 0,
                       transportState: OutgoingTransportState(rawValue: row[8].string), reply: reply,
                       encryptionProfile: row[10].string.isEmpty ? nil : row[10].string,
-                      wireID: row[11].string.isEmpty ? nil : row[11].string, wireIDAuthenticated: row[12].integer != 0)
+                      wireID: row[11].string.isEmpty ? nil : row[11].string, wireIDAuthenticated: row[12].integer != 0,
+                      unreadableReason: row[13].optionalString.flatMap(UnreadableReason.init(rawValue:)))
     }
 }
 
