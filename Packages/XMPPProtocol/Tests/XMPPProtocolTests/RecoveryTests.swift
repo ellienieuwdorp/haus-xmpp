@@ -7,11 +7,12 @@ private actor SnapshotStore: XMPPStreamManagementPersistence {
     var acknowledged: [String] = []
     var reject = false
     var resumeAllowed = true
+    var saves = 0
     func load() -> XMPPStreamManagementSnapshot? { value }
     func save(_ snapshot: XMPPStreamManagementSnapshot, expectedRevision: Int?, acknowledgedMessageIDs: [String]) throws {
         if reject { throw XMPPStreamManagementError.invalidState }
         guard value?.revision == expectedRevision else { throw XMPPStreamManagementError.invalidState }
-        value = snapshot; acknowledged += acknowledgedMessageIDs
+        value = snapshot; acknowledged += acknowledgedMessageIDs; saves += 1
     }
     func permitsResumption(_ snapshot: XMPPStreamManagementSnapshot) -> Bool { resumeAllowed }
     func setResumeAllowed(_ allowed: Bool) { resumeAllowed = allowed }
@@ -39,37 +40,248 @@ private actor SnapshotStore: XMPPStreamManagementPersistence {
     try await sm.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", expiresAt: nil)
     let message = try #require(await sm.receive()), iq = try #require(await sm.receive())
     try await sm.handled(iq)
-    #expect(await sm.handledCount() == 0)
+    #expect(try await sm.flushHandled() == 0)
     try await sm.handled(message)
-    #expect(await sm.handledCount() == 2)
+    #expect(try await sm.flushHandled() == 2)
 }
 
-@Test func failedCheckpointDoesNotAdvanceAdvertisedHandledCounter() async throws {
+@Test func failedFlushKeepsAdvertisedCounterAtPersistedValue() async throws {
     let store = SnapshotStore()
     let manager = StreamManagement(store)
     _ = try await manager.restore(accountID: "a@example.org")
     try await manager.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", expiresAt: nil)
     let token = try #require(await manager.receive())
     await store.rejectSaves(true)
-    await #expect(throws: XMPPStreamManagementError.self) { try await manager.handled(token) }
-    #expect(await manager.handledCount() == 0)
-    await store.rejectSaves(false)
     try await manager.handled(token)
-    #expect(await manager.handledCount() == 1)
+    await #expect(throws: XMPPStreamManagementError.self) { try await manager.flushHandled() }
+    #expect(await manager.persistedHandledCount() == 0)
+    #expect(await store.value?.inboundHandled == 0)
+    await store.rejectSaves(false)
+    #expect(try await manager.flushHandled() == 1)
+    #expect(await store.value?.inboundHandled == 1)
+}
+
+@Test func iqStanzasOccupyOutboundSlotsWithoutBytes() async throws {
+    let store = SnapshotStore()
+    let sm = StreamManagement(store)
+    _ = try await sm.restore(accountID: "a@example.org")
+    try await sm.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", expiresAt: nil)
+    try await sm.record("<message id='m'/>")
+    try await sm.record("<iq type='get' id='q'><ping xmlns='urn:xmpp:ping'/></iq>")
+    try await sm.record("<presence/>")
+    let journal = try #require(await store.value?.journal)
+    #expect(journal.map(\.kind) == [.message, .iq, .presence])
+    #expect(journal[1].xml == nil)
+    #expect(journal[0].xml == "<message id='m'/>" && journal[2].xml == "<presence/>")
+    #expect(await store.value?.outboundSent == 3)
+    #expect(journal.count == 3)
+    let remaining = try await sm.acknowledge(1)
+    #expect(remaining == [journal[2]])
+    #expect(await store.value?.journal.count == 2)
+    #expect(await store.acknowledged == ["m"])
+    #expect(try await sm.acknowledge(3).isEmpty)
+    #expect(await store.value?.journal.isEmpty == true)
+    await #expect(throws: XMPPStreamManagementError.invalidAcknowledgement) { try await sm.acknowledge(4) }
+}
+
+@Test func legacySnapshotDecodesAndNeverReplaysItsIQBytes() async throws {
+    let json = """
+    {"revision":3,"accountID":"a@example.org","fullJID":"a@example.org/r","streamID":"resume","inboundHandled":0,
+     "outboundSent":2,"outboundAcknowledged":0,"journal":[
+      {"sequence":1,"xml":"<message id='a'/>","messageID":"a"},
+      {"sequence":2,"xml":"<iq type='set' id='old'/>"}]}
+    """
+    let legacy = try JSONDecoder().decode(XMPPStreamManagementSnapshot.self, from: Data(json.utf8))
+    #expect(legacy.journal.map(\.kind) == [.message, .iq])
+    #expect(legacy.journal[1].xml == "<iq type='set' id='old'/>")
+    let store = SnapshotStore()
+    await store.seed(legacy)
+    let sm = StreamManagement(store)
+    #expect(try await sm.restore(accountID: "a@example.org") != nil)
+    let remaining = try await sm.acknowledge(0, resumed: true)
+    #expect(remaining.map(\.xml) == ["<message id='a'/>"])
+    // The legacy iq slot is dropped from the journal and the counter, never written again.
+    #expect(await store.value?.journal == remaining)
+    #expect(await store.value?.outboundSent == 1)
+    // A kind-less presence row derives .presence and stays replayable.
+    let presence = try JSONDecoder().decode(XMPPStreamJournalEntry.self, from: Data(#"{"sequence":1,"xml":"<presence/>"}"#.utf8))
+    #expect(presence.kind == .presence)
+}
+
+@Test func journalEntriesRoundTripWithoutIQBytes() throws {
+    let entries: [XMPPStreamJournalEntry] = [.init(sequence: 1, kind: .message, xml: "<message id='m'/>", messageID: "m"),
+                                             .init(sequence: 2, kind: .iq, xml: nil, messageID: nil),
+                                             .init(sequence: 3, kind: .presence, xml: "<presence/>", messageID: nil)]
+    let data = try JSONEncoder().encode(entries)
+    #expect(try JSONDecoder().decode([XMPPStreamJournalEntry].self, from: data) == entries)
+    let iqJSON = try #require(String(data: JSONEncoder().encode(entries[1]), encoding: .utf8))
+    #expect(!iqJSON.contains("xml"))
+}
+
+private func enabledManager(_ store: SnapshotStore) async throws -> StreamManagement {
+    let sm = StreamManagement(store)
+    _ = try await sm.restore(accountID: "a@example.org")
+    try await sm.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", expiresAt: nil)
+    return sm
+}
+
+@Test func handledStaysInMemoryUntilAFlushPointAndIsNeverAdvertisedAhead() async throws {
+    let store = SnapshotStore()
+    let sm = try await enabledManager(store)
+    #expect(await store.saves == 1)
+    let t1 = try #require(await sm.receive()), t2 = try #require(await sm.receive()), t3 = try #require(await sm.receive())
+    try await sm.handled(t1)
+    try await sm.handled(t2)
+    #expect(await store.saves == 1)
+    #expect(await sm.persistedHandledCount() == 0)
+    #expect(try await sm.flushHandled() == 2)
+    #expect(await store.saves == 2)
+    #expect(await store.value?.inboundHandled == 2)
+    try await sm.handled(t3)
+    #expect(await sm.persistedHandledCount() == 2)
+    #expect(await store.value?.inboundHandled == 2)
+    try await sm.record("<message id='x'/>")
+    #expect(await store.value?.inboundHandled == 3)
+    let saves = await store.saves
+    #expect(try await sm.flushHandled() == 3)
+    #expect(await store.saves == saves)
+}
+
+@Test func singleHandledFlushesAtTheBound() async throws {
+    let store = SnapshotStore()
+    let sm = try await enabledManager(store)
+    var tokens: [XMPPInboundToken] = []
+    for _ in 0..<64 { tokens.append(try #require(await sm.receive())) }
+    for token in tokens.prefix(63) { try await sm.handled(token) }
+    #expect(await store.saves == 1)
+    #expect(await sm.persistedHandledCount() == 0)
+    try await sm.handled(tokens[63])
+    #expect(await store.saves == 2)
+    #expect(await sm.persistedHandledCount() == 64)
+}
+
+@Test func batchedHandledCommitsOnceAndRejectsStaleOrForeignTokens() async throws {
+    let store = SnapshotStore()
+    let sm = try await enabledManager(store)
+    var tokens: [XMPPInboundToken] = []
+    for _ in 0..<100 { tokens.append(try #require(await sm.receive())) }
+    try await sm.handled(tokens)
+    #expect(await store.saves == 2)
+    #expect(await sm.persistedHandledCount() == 100)
+    let next = try #require(await sm.receive())
+    await #expect(throws: XMPPStreamManagementError.staleToken) { try await sm.handled([next, XMPPInboundToken(session: UUID(), sequence: 1)]) }
+    await #expect(throws: XMPPStreamManagementError.staleToken) { try await sm.handled([next, XMPPInboundToken(session: next.session, sequence: 999)]) }
+    #expect(await store.saves == 2)
+    // Nothing from a rejected batch was inserted.
+    #expect(try await sm.flushHandled() == 100)
+    #expect(await store.saves == 2)
+
+    let fresh = SnapshotStore()
+    let manager = try await enabledManager(fresh)
+    let t1 = try #require(await manager.receive()), t2 = try #require(await manager.receive()), t3 = try #require(await manager.receive())
+    try await manager.handled([t3, t1])
+    #expect(await manager.persistedHandledCount() == 1)
+    try await manager.handled([t2])
+    #expect(await manager.persistedHandledCount() == 3)
+}
+
+@Test func restoreRejectsJournalsOverTheReplayableOrTotalCaps() async throws {
+    func seeded(_ journal: [XMPPStreamJournalEntry]) async throws -> XMPPStreamManagementSnapshot? {
+        let store = SnapshotStore()
+        await store.seed(.init(revision: 1, accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", expiresAt: nil,
+                               inboundHandled: 0, outboundSent: UInt64(journal.count), outboundAcknowledged: 0, journal: journal))
+        return try await StreamManagement(store).restore(accountID: "a@example.org")
+    }
+    let messages = (1...2_001).map { XMPPStreamJournalEntry(sequence: UInt64($0), kind: .message, xml: "<message id='\($0)'/>", messageID: "\($0)") }
+    await #expect(throws: XMPPStreamManagementError.invalidState) { _ = try await seeded(messages) }
+    let iqs = (1...5_001).map { XMPPStreamJournalEntry(sequence: UInt64($0), kind: .iq, xml: nil, messageID: nil) }
+    await #expect(throws: XMPPStreamManagementError.invalidState) { _ = try await seeded(iqs) }
+    var mixed = Array(iqs.prefix(4_999))
+    mixed.append(.init(sequence: 5_000, kind: .message, xml: "<message id='last'/>", messageID: "last"))
+    #expect(try await seeded(mixed) != nil)
+    let bytesless = [XMPPStreamJournalEntry(sequence: 1, kind: .message, xml: nil, messageID: "m")]
+    await #expect(throws: XMPPStreamManagementError.invalidState) { _ = try await seeded(bytesless) }
+}
+
+@Test func receiveWindowCountsAgainstInMemoryHandled() async throws {
+    let store = SnapshotStore()
+    let sm = try await enabledManager(store)
+    var tokens: [XMPPInboundToken] = []
+    for _ in 0..<2_000 { tokens.append(try #require(await sm.receive())) }
+    await #expect(throws: XMPPStreamManagementError.journalFull) { _ = try await sm.receive() }
+    for token in tokens.prefix(10) { try await sm.handled(token) }
+    #expect(await store.value?.inboundHandled == 0)
+    #expect(try await sm.receive() != nil)
+}
+
+@Test func recordStillCapsReplayableEntriesButAdmitsIQsBeyondThem() async throws {
+    let store = SnapshotStore()
+    let sm = try await enabledManager(store)
+    for index in 0..<2_000 { try await sm.record("<message id='\(index)'/>") }
+    await #expect(throws: XMPPStreamManagementError.journalFull) { try await sm.record("<presence/>") }
+    try await sm.record("<iq type='get' id='q'/>")
+    #expect(await store.value?.journal.count == 2_001)
+    #expect(await store.value?.journal.last?.kind == .iq)
 }
 
 @Test func resumeRestoresExactJournalAndHandlesUInt32Rollover() async throws {
     let store = SnapshotStore()
     let start = UInt64(UInt32.max)
     await store.seed(.init(revision: 7, accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", expiresAt: nil,
-                           inboundHandled: 99, outboundSent: start + 2, outboundAcknowledged: start,
-                           journal: [.init(sequence: start + 1, xml: "<message id='a'/>", messageID: "a"), .init(sequence: start + 2, xml: "<message id='b'/>", messageID: "b")]))
+                           inboundHandled: 99, outboundSent: start + 3, outboundAcknowledged: start,
+                           journal: [.init(sequence: start + 1, xml: "<message id='a'/>", messageID: "a"),
+                                     .init(sequence: start + 2, kind: .iq, xml: nil, messageID: nil),
+                                     .init(sequence: start + 3, xml: "<message id='b'/>", messageID: "b")]))
     let sm = StreamManagement(store)
     #expect(try await sm.restore(accountID: "a@example.org")?.inboundHandled == 99)
+    #expect(await sm.persistedHandledCount() == 99)
     let remaining = try await sm.acknowledge(0, resumed: true)
-    #expect(remaining.map(\.xml) == ["<message id='b'/>"])
+    // The server never received the iq slot, so resume drops it and renumbers 'b' into its place:
+    // the server's next count covers exactly the stanza we retransmit.
+    #expect(remaining == [.init(sequence: start + 2, kind: .message, xml: "<message id='b'/>", messageID: "b")])
     #expect(await store.acknowledged == ["a"])
+    #expect(await store.value?.journal == remaining)
+    #expect(await store.value?.outboundSent == start + 2)
+    #expect(await store.value?.outboundAcknowledged == start + 1)
+    // After replaying only 'b', the server's h (wrapped to 1) acknowledges 'b'.
+    #expect(try await sm.acknowledge(1).isEmpty)
+    #expect(await store.acknowledged == ["a", "b"])
+    #expect(await store.value?.journal.isEmpty == true)
     await #expect(throws: XMPPStreamManagementError.self) { try await sm.acknowledge(UInt32.max) }
+}
+
+/// A journaled iq whose socket write never happened (the connection dropped between journal and
+/// write) must not leave our outbound counter ahead of the server's across later resumes.
+@Test func resumeDropsUnreceivedIQSlotsSoLaterAcknowledgementsStayAligned() async throws {
+    let store = SnapshotStore()
+    let first = try await enabledManager(store)
+    try await first.record("<message id='m1'/>")
+    #expect(try await first.acknowledge(1).isEmpty)
+    // Journaled but never received by the server: an iq, then a message behind it.
+    try await first.record("<iq type='get' id='lost'/>")
+    try await first.record("<message id='m2'/>")
+    #expect(await store.value?.journal.map(\.sequence) == [2, 3])
+
+    // First resume: the server's h is still 1.
+    let second = StreamManagement(store)
+    #expect(try await second.restore(accountID: "a@example.org") != nil)
+    let replay = try await second.acknowledge(1, resumed: true)
+    #expect(replay == [.init(sequence: 2, kind: .message, xml: "<message id='m2'/>", messageID: "m2")])
+    #expect(await store.value?.outboundSent == 2)
+    #expect(await store.value?.journal == replay)
+    // The client retransmits m2 and sends m3; the server counts both, so h == 3 confirms both.
+    try await second.record("<message id='m3'/>")
+    #expect(await store.value?.journal.last?.sequence == 3)
+    #expect(try await second.acknowledge(3).isEmpty)
+    #expect(await store.acknowledged == ["m1", "m2", "m3"])
+
+    // Second resume: nothing is left to retransmit, so no recipient sees a duplicate.
+    let third = StreamManagement(store)
+    #expect(try await third.restore(accountID: "a@example.org") != nil)
+    #expect(try await third.acknowledge(3, resumed: true).isEmpty)
+    #expect(await store.value?.outboundSent == 3)
+    #expect(await store.value?.outboundAcknowledged == 3)
+    #expect(await store.acknowledged == ["m1", "m2", "m3"])
 }
 
 func recoveryNode(_ xml: String) throws -> XMPPProtocol.XMLNode {

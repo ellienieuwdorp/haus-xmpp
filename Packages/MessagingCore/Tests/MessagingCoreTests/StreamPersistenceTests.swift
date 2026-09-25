@@ -67,9 +67,18 @@ struct StreamPersistenceTests {
         // One drifted entry anywhere in the journal refuses the whole resumption.
         let drifted = XMPPStreamJournalEntry(sequence: 2, xml: xml.replacingOccurrences(of: "👍", with: "❤️"), messageID: "r1")
         #expect(try await !adapter.permitsResumption(snapshot(journal: [entry, drifted])))
-        // Non-message stanzas in the journal are replayed as raw bytes and never consulted.
-        let iq = XMPPStreamJournalEntry(sequence: 2, xml: "<iq type='get' id='ping'/>", messageID: nil)
+        // IQ entries keep no bytes, are never replayed and never consulted.
+        let iq = XMPPStreamJournalEntry(sequence: 2, kind: .iq, xml: nil, messageID: nil)
         #expect(try await adapter.permitsResumption(snapshot(journal: [entry, iq])))
+    }
+
+    @Test func iqEntriesWithoutBytesRoundTripThroughTheStore() async throws {
+        let (_, adapter) = try await fixture()
+        let journaled = snapshot(journal: [.init(sequence: 1, kind: .message, xml: "<message id='m'/>", messageID: "m"),
+                                           .init(sequence: 2, kind: .iq, xml: nil, messageID: nil),
+                                           .init(sequence: 3, kind: .presence, xml: "<presence/>", messageID: nil)])
+        try await adapter.save(journaled, expectedRevision: nil, acknowledgedMessageIDs: [])
+        #expect(try await adapter.load() == journaled)
     }
 
     @Test func unacknowledgedReceiptAndMarkerInTheJournalStillPermitResumption() async throws {

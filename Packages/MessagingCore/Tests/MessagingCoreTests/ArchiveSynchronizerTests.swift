@@ -42,11 +42,12 @@ struct ArchiveSynchronizerTests {
                     return page("room-last", sequence: 3)
                 },
                 process: { await trace.record("durable:\($0.archiveID)") },
-                acknowledge: { token async throws in
-                    let expected = token.sequence == 1 ? "own" : token.sequence == 2 ? "room-first" : "room-last"
-                    let archive = token.sequence == 1 ? account : room
+                acknowledge: { tokens async throws in
+                    let sequence = try #require(tokens.first).sequence
+                    let expected = sequence == 1 ? "own" : sequence == 2 ? "room-first" : "room-last"
+                    let archive = sequence == 1 ? account : room
                     #expect(try await store.archiveCheckpoint(accountID: account, archiveID: archive)?.cursor == expected)
-                    await trace.record("ack:\(token.sequence)")
+                    await trace.record("ack:" + tokens.map { String($0.sequence) }.joined(separator: ","))
                 }, disconnect: { await trace.record("disconnect") })
             try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
             #expect(await trace.events == ["refresh:\(room)", "fetch:\(account):nil", "durable:own", "ack:1",
@@ -180,6 +181,42 @@ struct ArchiveSynchronizerTests {
             await #expect(throws: Failure.self) { try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations) }
             #expect(await trace.events == ["durable", "disconnect"])
             #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "durable")
+        }
+    }
+
+    @Test func pageTokensAreAcknowledgedInOneBatchAfterTheCursor() async throws {
+        try await fixture { store async throws in
+            let trace = Trace()
+            let session = UUID()
+            let operations = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in },
+                fetchPage: { _, _ in
+                    .init(messages: ["a", "b", "c"].map { .init(archiveID: $0, timestamp: Date(timeIntervalSince1970: 100), message: nil, encryptedMessage: nil) },
+                          complete: true, lastID: "c", handledTokens: (1...3).map { XMPPInboundToken(session: session, sequence: $0) })
+                },
+                process: { await trace.record("durable:\($0.archiveID)") },
+                acknowledge: { tokens async throws in
+                    #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "c")
+                    await trace.record("ack:" + tokens.map { String($0.sequence) }.joined(separator: ","))
+                }, disconnect: { await trace.record("disconnect") })
+            try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
+            #expect(await trace.events == ["durable:a", "durable:b", "durable:c", "ack:1,2,3"])
+        }
+    }
+
+    @Test func pageWithoutTokensDoesNotCallAcknowledge() async throws {
+        try await fixture { store async throws in
+            let trace = Trace()
+            let operations = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in },
+                fetchPage: { _, _ in
+                    .init(messages: [.init(archiveID: "only", timestamp: Date(timeIntervalSince1970: 100), message: nil, encryptedMessage: nil)],
+                          complete: true, lastID: "only", handledTokens: [])
+                },
+                process: { await trace.record("durable:\($0.archiveID)") },
+                acknowledge: { tokens in await trace.record("ack:" + tokens.map { String($0.sequence) }.joined(separator: ",")) },
+                disconnect: { await trace.record("disconnect") })
+            try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
+            #expect(await trace.events == ["durable:only"])
+            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "only")
         }
     }
 

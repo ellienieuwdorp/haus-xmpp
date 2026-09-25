@@ -109,18 +109,132 @@ import XMPPProtocol
         try await client.connect(host: env["HAUS_LAB_HOST"] ?? domain, domain: domain, username: user, password: env["HAUS_LAB_PASSWORD"]!)
         guard await persistence.snapshot?.fullJID == oldJID else { throw XMPPClientError.unexpectedProtocol }
         print("SM_DURABLE_ACK_AND_RESUME_VERIFIED")
-        var cursor: String?, found = Set<String>(), pages = 0
+        var cursor: String?, found = Set<String>(), pages = 0, sawIQSlot = false
         while true {
             let page = try await client.fetchArchivePage(after: cursor, limit: 2)
             pages += 1
+            // The page IQ was journaled before its write; it must occupy a slot without bytes.
+            let journal = await persistence.snapshot?.journal ?? []
+            guard journal.allSatisfy({ $0.kind != .iq || $0.xml == nil }) else { throw XMPPClientError.unexpectedProtocol }
+            sawIQSlot = sawIQSlot || journal.contains { $0.kind == .iq }
             for item in page.messages { if let id = item.message?.id { found.insert(id) } }
-            for token in page.handledTokens { try await client.acknowledgeInbound(token) }
+            // Same shape as the app's archive adapter: one batch per page, then <r/> so the server trims our journal.
+            if !page.handledTokens.isEmpty {
+                try await client.acknowledgeInbound(page.handledTokens)
+                try await client.requestAcknowledgement()
+            }
             if page.complete { break }
             guard page.lastID != cursor, pages < 100 else { throw XMPPClientError.unexpectedProtocol }
             cursor = page.lastID
         }
         guard found.isSuperset(of: ids), pages >= 2 else { throw XMPPClientError.unexpectedProtocol }
         print("MAM_PAGED_CATCHUP_VERIFIED")
+        guard sawIQSlot, await persistence.snapshot?.journal.allSatisfy({ $0.kind != .iq || $0.xml == nil }) == true else {
+            throw XMPPClientError.unexpectedProtocol
+        }
+        print("SM_IQ_JOURNAL_BYTES_ABSENT")
+        try await verifyStreamCounters(client: client, persistence: persistence, env: env)
+    }
+
+    /// Stream-management counters seen from the server: the `h` we advertise must be durable, a
+    /// graceful disconnect must persist handled advances, and an iq journaled but never written
+    /// must not shift our outbound count after resume.
+    private static func verifyStreamCounters(client: XMPPClient, persistence: LabRecoveryPersistence, env: [String: String]) async throws {
+        let domain = env["HAUS_LAB_DOMAIN"]!, user = env["HAUS_LAB_USERNAME"]!, password = env["HAUS_LAB_PASSWORD"]!
+        let host = env["HAUS_LAB_HOST"] ?? domain, own = user + "@" + domain
+        let inbox = LabInbox()
+        let consumer = Task {
+            for await event in client.events {
+                switch event {
+                case .message(let message): await inbox.add(message.id)
+                case .streamManagementBarrier(let token): if await !inbox.hold(token) { try? await client.acknowledgeInbound(token) }
+                default: break
+                }
+            }
+        }
+        defer { consumer.cancel() }
+        func resume() async throws {
+            let jid = await persistence.snapshot?.fullJID
+            try await client.connect(host: host, domain: domain, username: user, password: password)
+            // A failed resume binds a fresh resource; only an accepted <resume/> keeps the old one.
+            try require(await persistence.snapshot?.fullJID == jid, "server refused <resume/>")
+        }
+
+        // 1. The server's <r/> is answered only with a persisted count. The disco result is handled
+        // in memory; nothing but the <r/> reply can persist it. An abrupt disconnect skips every
+        // other flush, and Prosody refuses a <resume h> below any h we already sent on the wire.
+        let before = await persistence.snapshot?.inboundHandled ?? 0
+        _ = try await client.discoveryFeatures()
+        try require(await waitUntil({ await (persistence.snapshot?.inboundHandled ?? 0) > before }), "server <r/> reply did not persist the handled disco result")
+        await client.disconnect()
+        try await resume()
+        print("SM_ADVERTISED_H_DURABLE_VERIFIED")
+
+        // 2. disconnectAndWait persists handled advances that no <r/> has seen. Barriers are held
+        // until the server's ack requests for these messages were answered with a lower count.
+        await inbox.setHolding(true)
+        let flushIDs = (0..<2).map { _ in "flush-" + UUID().uuidString }
+        for id in flushIDs { try await client.sendMessage(to: own, body: "Recovery fixture", id: id) }
+        try require(await waitUntil({ let held = await inbox.held.count, seen = await inbox.count(flushIDs); return held == 2 && seen == 2 }), "flush fixtures did not arrive")
+        try await Task.sleep(for: .milliseconds(500))
+        let held = await inbox.release()
+        let persistedBefore = await persistence.snapshot?.inboundHandled ?? 0
+        for token in held { try await client.acknowledgeInbound(token) }
+        let target = held.map(\.sequence).max() ?? 0
+        // Precondition: the advance is in memory only, so the flush below is what persists it.
+        try require(persistedBefore < target, "handled advance already persisted before the flush (\(persistedBefore) >= \(target))")
+        try require(await persistence.snapshot?.inboundHandled == persistedBefore, "single handled tokens were persisted before disconnectAndWait")
+        await client.disconnectAndWait()
+        try require(await persistence.snapshot?.inboundHandled ?? 0 >= target, "disconnectAndWait did not persist handled advances")
+        try await resume()
+        try await Task.sleep(for: .seconds(1))
+        // The resumed server count covers both messages, so neither is redelivered.
+        try require(await inbox.count(flushIDs) == 2, "server redelivered flushed messages after resume")
+        print("SM_DISCONNECT_FLUSH_VERIFIED")
+
+        // 3. An iq journaled but never written (the connection dropped between journal and write).
+        try await client.requestAcknowledgement()
+        try require(await waitUntil({ await persistence.snapshot?.journal.isEmpty == true }), "journal not trimmed before the drop fixture")
+        await persistence.setSaveDelay(.milliseconds(400))
+        let lost = Task { try await client.discoveryFeatures() }
+        try await Task.sleep(for: .milliseconds(100))
+        await client.disconnect()
+        _ = try? await lost.value
+        // The failed iq returns as soon as the stream ends; its journal commit lands after the delay.
+        _ = try await waitUntil({ await persistence.snapshot?.journal.isEmpty == false })
+        await persistence.setSaveDelay(nil)
+        let dropped = await persistence.snapshot
+        try require(dropped?.journal.map(\.kind) == [.iq] && dropped.map { $0.outboundSent == $0.outboundAcknowledged + 1 } == true,
+                    "drop fixture did not leave exactly one unwritten iq slot: \(String(describing: dropped?.journal.map(\.kind)))")
+        try await resume()
+        let resumed = await persistence.snapshot
+        try require(resumed?.journal.isEmpty == true && resumed.map { $0.outboundSent == $0.outboundAcknowledged } == true,
+                    "resume kept the unwritten iq slot in the outbound count")
+        let probe = "drift-" + UUID().uuidString
+        try await client.sendMessage(to: own, body: "Recovery fixture", id: probe)
+        try await client.requestAcknowledgement()
+        // The server's count for the probe must confirm the probe itself, not the dead iq slot.
+        try require(await waitUntil({ let accepted = await persistence.acknowledged.contains(probe), empty = await persistence.snapshot?.journal.isEmpty; return accepted && empty == true }),
+                    "server acknowledgement did not confirm the probe")
+        await client.disconnectAndWait()
+        try await resume()
+        try await Task.sleep(for: .seconds(1))
+        // A second resume retransmits nothing, so the probe arrives exactly once.
+        try require(await inbox.count([probe]) == 1, "probe delivered \(await inbox.count([probe])) times")
+        print("SM_RESUME_DROPS_UNSENT_IQ_SLOTS_VERIFIED")
+    }
+
+    private static func require(_ condition: Bool, _ failure: String) throws {
+        if !condition { throw LabCheckFailed(description: failure) }
+    }
+
+    private static func waitUntil(_ condition: () async -> Bool, timeout: Duration = .seconds(5)) async throws -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if await condition() { return true }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        return await condition()
     }
 
     /// Verifies delivered fallback body, not incoming structured-reply reconciliation.
@@ -236,9 +350,28 @@ import XMPPProtocol
 private actor LabRecoveryPersistence: XMPPStreamManagementPersistence {
     var snapshot: XMPPStreamManagementSnapshot?
     var acknowledged: Set<String> = []
+    /// Widens the window between journaling a stanza and writing it, to model a drop inside it.
+    var saveDelay: Duration?
     func load() -> XMPPStreamManagementSnapshot? { snapshot }
-    func save(_ value: XMPPStreamManagementSnapshot, expectedRevision: Int?, acknowledgedMessageIDs: [String]) throws {
+    func setSaveDelay(_ delay: Duration?) { saveDelay = delay }
+    func save(_ value: XMPPStreamManagementSnapshot, expectedRevision: Int?, acknowledgedMessageIDs: [String]) async throws {
+        guard snapshot?.revision == expectedRevision else { throw XMPPStreamManagementError.invalidState }
+        if let saveDelay { try? await Task.sleep(for: saveDelay) }
         guard snapshot?.revision == expectedRevision else { throw XMPPStreamManagementError.invalidState }
         snapshot = value; acknowledged.formUnion(acknowledgedMessageIDs)
     }
+}
+
+private struct LabCheckFailed: Error, CustomStringConvertible { let description: String }
+
+/// Counts deliveries per message ID and can hold stream barriers back from acknowledgement.
+private actor LabInbox {
+    private var ids: [String] = []
+    private(set) var held: [XMPPInboundToken] = []
+    private var holding = false
+    func add(_ id: String) { ids.append(id) }
+    func count(_ wanted: [String]) -> Int { ids.filter(wanted.contains).count }
+    func setHolding(_ value: Bool) { holding = value }
+    func hold(_ token: XMPPInboundToken) -> Bool { if holding { held.append(token) }; return holding }
+    func release() -> [XMPPInboundToken] { holding = false; defer { held = [] }; return held }
 }

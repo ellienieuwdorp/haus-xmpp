@@ -220,6 +220,10 @@ public actor XMPPClient {
         let previousReader = reader
         finish(nil)
         await previousReader?.value
+        // Best effort, after the socket is gone so a held journal gate never delays the cancel: the
+        // next connection (app or extension) resumes with the highest durable h. A lagging counter
+        // only causes redelivery of stanzas whose dispositions are already saved.
+        _ = try? await streamManagement?.flushHandled()
     }
 
     /// Completion means only that the local socket accepted the write, not server or peer delivery.
@@ -435,14 +439,19 @@ public actor XMPPClient {
                 let replay = try await streamManagement.acknowledge(h, resumed: true)
                 try emit(.streamAcknowledged)
                 guard try await streamManagement.permitsReplay() else { throw XMPPStreamManagementError.invalidState }
-                for entry in replay { try await rawWrite(entry.xml, expectedGeneration: token) }
+                // IQs are never replayed: their continuations failed on disconnect and setup re-runs.
+                for entry in replay {
+                    guard entry.kind != .iq, let xml = entry.xml else { continue }
+                    try await rawWrite(xml, expectedGeneration: token)
+                }
                 try await becomeOnline(token: token, presence: false)
             }
         case .online:
             if node.namespace == "urn:xmpp:sm:3" {
                 guard let streamManagement else { throw XMPPClientError.unexpectedProtocol }
                 if node.name == "r" {
-                    let h = await streamManagement.handledCount()
+                    // Advertise only what the flush made durable; a failed commit ends the stream.
+                    let h = try await streamManagement.flushHandled()
                     try await write("<a xmlns='urn:xmpp:sm:3' h='\(h)'/>")
                 } else if node.name == "a", let h = Self.smCount(node.attributes["h"]) {
                     _ = try await streamManagement.acknowledge(h)
@@ -508,6 +517,11 @@ public actor XMPPClient {
 
     public func acknowledgeInbound(_ token: XMPPInboundToken) async throws {
         try await streamManagement?.handled(token)
+    }
+
+    /// Acknowledges a page's tokens together after every result and its cursor are durable.
+    public func acknowledgeInbound(_ tokens: [XMPPInboundToken]) async throws {
+        try await streamManagement?.handled(tokens)
     }
 
     public func requestAcknowledgement() async throws {
