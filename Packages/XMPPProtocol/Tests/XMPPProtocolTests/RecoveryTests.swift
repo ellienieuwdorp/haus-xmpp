@@ -72,25 +72,33 @@ private actor SnapshotStore: XMPPStreamManagementPersistence {
     await #expect(throws: XMPPStreamManagementError.self) { try await sm.acknowledge(UInt32.max) }
 }
 
-private func recoveryNode(_ xml: String) throws -> XMPPProtocol.XMLNode {
+func recoveryNode(_ xml: String) throws -> XMPPProtocol.XMLNode {
     var parser = XMLStreamFramer()
     let frames = try parser.feed(Data(("<stream:stream xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams'>" + xml).utf8))
     guard case .element(let node) = frames.last else { throw XMPPIQError.malformedResponse }
     return node
 }
-private func archived(from: String = "a@example.org", query: String = "query", inner: String = "<message xmlns='jabber:client' from='b@example.org/r' to='a@example.org/r'><body>hello</body></message>") -> String {
-    "<message from='\(from)' to='a@example.org/r'><result xmlns='urn:xmpp:mam:2' queryid='\(query)' id='archive-1'><forwarded xmlns='urn:xmpp:forward:0'><delay xmlns='urn:xmpp:delay' stamp='2026-09-14T12:00:00Z'/>\(inner)</forwarded></result></message>"
+func archived(from: String = "a@example.org", query: String = "query", id: String = "archive-1", inner: String = "<message xmlns='jabber:client' from='b@example.org/r' to='a@example.org/r'><body>hello</body></message>") -> String {
+    "<message from='\(from)' to='a@example.org/r'><result xmlns='urn:xmpp:mam:2' queryid='\(query)' id='\(id)'><forwarded xmlns='urn:xmpp:forward:0'><delay xmlns='urn:xmpp:delay' stamp='2026-09-14T12:00:00Z'/>\(inner)</forwarded></result></message>"
 }
 
 @Test func archiveRejectsForeignSendersWrongQueriesNestedWrappersAndUnrelatedInnerActors() throws {
     var query = ArchiveQuery(queryID: "query", accountBareJID: "a@example.org", accountFullJID: "a@example.org/r", limit: 100)
-    for xml in [archived(from: "evil@example.org"), archived(query: "other"), archived(inner: "<message xmlns='jabber:client' from='evil@example.org' to='victim@example.org'><body>forged</body></message>"), archived(inner: "<message xmlns='jabber:client' from='b@example.org/r' to='a@example.org/r'><received xmlns='urn:xmpp:carbons:2'/><body>forged</body></message>")] {
+    // Outer provenance (wrapper sender, query ID) still fails the page.
+    for xml in [archived(from: "evil@example.org"), archived(query: "other")] {
         #expect(throws: XMPPIQError.self) { try query.receive(recoveryNode(xml)) }
     }
     #expect(query.messages.isEmpty)
-    try query.receive(recoveryNode(archived()))
-    #expect(query.messages.first?.message?.body == "hello")
+    // Inner actors and nested wrappers are content: recorded as rejections, never unwrapped or shown.
+    try query.receive(recoveryNode(archived(inner: "<message xmlns='jabber:client' from='evil@example.org' to='victim@example.org'><body>forged</body></message>")))
+    try query.receive(recoveryNode(archived(id: "archive-2", inner: "<message xmlns='jabber:client' from='b@example.org/r' to='a@example.org/r'><received xmlns='urn:xmpp:carbons:2'/><body>forged</body></message>")))
+    #expect(query.messages.map(\.rejectedContent) == [.foreignSender, .unsupportedDirectContent])
+    #expect(query.messages.map(\.rejectedPeer) == [nil, "b@example.org"])
+    #expect(query.messages.allSatisfy { $0.message == nil && $0.encryptedMessage == nil && $0.rejectionArchive == "a@example.org" })
+    try query.receive(recoveryNode(archived(id: "archive-3")))
+    #expect(query.messages.last?.message?.body == "hello")
     #expect(throws: XMPPIQError.self) { try query.receive(recoveryNode(archived())) }
+    #expect(query.messages.count == 3)
 }
 
 @Test func archiveCursorMustMatchDurablyReturnedLastResultAndCannotMakeNoProgress() throws {

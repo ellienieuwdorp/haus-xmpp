@@ -138,3 +138,26 @@ private func groupEnvelope() -> XMPPOMEMOEnvelope {
     #expect(query.messages.first?.encryptedGroupMessage?.room == groupRoom)
     #expect(query.messages.first?.encryptedGroupMessage?.sender == groupAlice)
 }
+
+@Test func groupMessagesRecordFallbackBodyPresence() throws {
+    let xml = try GroupChatWire.outgoing(room: groupRoom, envelope: groupEnvelope(), id: "g1")
+        .replacingOccurrences(of: "to='\(groupRoom)'", with: "from='\(groupRoom)/nick' to='\(groupBob)'")
+    let withBody = xml.replacingOccurrences(of: "</message>", with: "<body>fallback</body></message>")
+    let state = GroupRoomState(members: [groupAlice, groupBob], occupants: [groupRoom + "/nick": groupAlice], joined: true)
+    #expect(try !GroupChatWire.message(groupNode(xml), account: groupBob, room: groupRoom, state: state).hasFallbackBody)
+    #expect(try GroupChatWire.message(groupNode(withBody), account: groupBob, room: groupRoom, state: state).hasFallbackBody)
+
+    let own = try GroupChatWire.outgoing(room: groupRoom, envelope: groupEnvelope(), id: "g2")
+        .replacingOccurrences(of: "<message ", with: "<message from='\(groupAlice)/phone' ")
+    let ownWithBody = own.replacingOccurrences(of: "</message>", with: "<body>fallback</body></message>")
+    let archived = try GroupChatWire.archivedMessage(groupNode(own), account: groupAlice, archiveRoom: nil, knownRooms: [])
+    let archivedWithBody = try GroupChatWire.archivedMessage(groupNode(ownWithBody), account: groupAlice, archiveRoom: nil, knownRooms: [])
+    #expect(archived.provenance == .ownArchive && !archived.hasFallbackBody)
+    #expect(archivedWithBody.hasFallbackBody)
+    // Retained envelopes encoded before the field existed still decode, as "no hint".
+    var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(archivedWithBody)) as? [String: Any])
+    #expect(json["hasFallbackBody"] as? Bool == true)
+    json.removeValue(forKey: "hasFallbackBody")
+    let legacy = try JSONDecoder().decode(XMPPEncryptedGroupMessage.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(!legacy.hasFallbackBody && legacy.envelope == archivedWithBody.envelope)
+}

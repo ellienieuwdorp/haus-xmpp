@@ -50,20 +50,26 @@ public struct XMPPEncryptedGroupMessage: Sendable, Equatable, Codable {
     public let envelope: XMPPOMEMOEnvelope
     public let provenance: XMPPGroupProvenance
     public let roomStanzaID: String?
-    public init(id: String, room: String, occupant: String, sender: String, envelope: XMPPOMEMOEnvelope, provenance: XMPPGroupProvenance = .liveOccupant, roomStanzaID: String? = nil) throws {
+    /// Unencrypted outer `<body/>` fallback: a content hint only (see `XMPPEncryptedMessage.hasFallbackBody`).
+    public let hasFallbackBody: Bool
+    public init(id: String, room: String, occupant: String, sender: String, envelope: XMPPOMEMOEnvelope, provenance: XMPPGroupProvenance = .liveOccupant, roomStanzaID: String? = nil,
+                hasFallbackBody: Bool = false) throws {
         guard OMEMOWire.validStanzaID(id), roomStanzaID.map(OMEMOWire.validStanzaID) ?? true, OMEMOWire.bareJID(room) == room,
               occupant.hasPrefix(room + "/"), occupant.utf8.count <= 3071, occupant.count > room.count + 1,
               OMEMOWire.bareJID(sender) == sender, envelope.profile == .modern else { throw XMPPGroupError.invalidMessage }
         self.id = id; self.room = room; self.occupant = occupant; self.sender = sender; self.envelope = envelope; self.provenance = provenance; self.roomStanzaID = roomStanzaID
+        self.hasFallbackBody = hasFallbackBody
     }
-    private enum CodingKeys: String, CodingKey { case id, room, occupant, sender, envelope, provenance, roomStanzaID }
+    private enum CodingKeys: String, CodingKey { case id, room, occupant, sender, envelope, provenance, roomStanzaID, hasFallbackBody }
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(id: values.decode(String.self, forKey: .id), room: values.decode(String.self, forKey: .room),
                       occupant: values.decode(String.self, forKey: .occupant), sender: values.decode(String.self, forKey: .sender),
                       envelope: values.decode(XMPPOMEMOEnvelope.self, forKey: .envelope),
                       provenance: values.decodeIfPresent(XMPPGroupProvenance.self, forKey: .provenance) ?? .liveOccupant,
-                      roomStanzaID: values.decodeIfPresent(String.self, forKey: .roomStanzaID))
+                      roomStanzaID: values.decodeIfPresent(String.self, forKey: .roomStanzaID),
+                      // Retained envelopes written before this field existed still decode.
+                      hasFallbackBody: values.decodeIfPresent(Bool.self, forKey: .hasFallbackBody) ?? false)
     }
 
 }
@@ -122,7 +128,8 @@ enum GroupChatWire {
             }
         }
         return try XMPPEncryptedGroupMessage(id: node.attributes["id"] ?? UUID().uuidString, room: room, occupant: occupant,
-                                             sender: sender, envelope: OMEMOWire.parseEnvelope(encrypted), roomStanzaID: stanzaID(node, room: room))
+                                             sender: sender, envelope: OMEMOWire.parseEnvelope(encrypted), roomStanzaID: stanzaID(node, room: room),
+                                             hasFallbackBody: !node.children("body", namespace: "jabber:client").isEmpty)
     }
     /// Only called inside an authenticated MAM query. Historical nicknames cannot use
     /// today's occupant map: the service must include the archived author's real JID.
@@ -145,7 +152,8 @@ enum GroupChatWire {
         }
         return try .init(id: node.attributes["id"] ?? UUID().uuidString, room: room, occupant: occupant, sender: sender,
                          envelope: OMEMOWire.parseEnvelope(encrypted), provenance: archiveRoom == nil ? .ownArchive : .roomArchive,
-                         roomStanzaID: stanzaID(node, room: room, archiveID: archiveRoom == nil ? nil : archiveID))
+                         roomStanzaID: stanzaID(node, room: room, archiveID: archiveRoom == nil ? nil : archiveID),
+                         hasFallbackBody: !node.children("body", namespace: "jabber:client").isEmpty)
     }
     static func stanzaID(_ node: XMLNode, room: String, archiveID: String? = nil) throws -> String? {
         let identifiers = node.children.filter { $0.name == "stanza-id" && $0.namespace == "urn:xmpp:sid:0" && $0.attributes["by"] == room }

@@ -1,6 +1,18 @@
 import Foundation
 
-public enum XMPPArchiveRejection: String, Sendable, Equatable { case unverifiableEncryptedGroup }
+/// Why an archive entry with valid outer provenance carries no content this client accepts. Recorded durably
+/// (before the cursor) instead of failing the page, so one odd message cannot wedge catch-up.
+public enum XMPPArchiveRejection: String, Sendable, Equatable {
+    case unverifiableEncryptedGroup
+    /// Inner from/to is not user@domain, or neither side is the account (server notice, component, forged actors).
+    case foreignSender
+    /// Content the client does not implement: EME without an OMEMO envelope, an unknown `urn:xmpp:omemo:*` namespace,
+    /// more than one `<encrypted/>`, or a nested MAM/carbon/forwarded wrapper.
+    case unsupportedDirectContent
+    /// One OMEMO envelope in a known namespace that `OMEMOWire.parseMessage` refused (bad base64, oversize key or
+    /// payload, wrong legacy IV length, invalid stanza id, duplicate/invalid header ids).
+    case malformedEncryptedContent
+}
 
 public struct XMPPArchiveMessage: Sendable, Equatable {
     public let archiveID: String
@@ -13,6 +25,10 @@ public struct XMPPArchiveMessage: Sendable, Equatable {
     public var encryptedGroupMessage: XMPPEncryptedGroupMessage? = nil
     public var rejectedContent: XMPPArchiveRejection? = nil
     public var rejectionArchive: String? = nil
+    /// Bare JID of the conversation a rejected direct entry belongs to; nil for `foreignSender` and group rejections.
+    public var rejectedPeer: String? = nil
+    /// True when the rejected entry was sent by the account (own archive, `from` is the account).
+    public var rejectedOutgoing: Bool = false
 }
 
 public struct XMPPArchivePage: Sendable, Equatable {
@@ -48,15 +64,16 @@ struct ArchiveQuery {
         guard result.attributes["queryid"] == queryID, let id = result.attributes["id"], validArchiveID(id),
               !identifiers.contains(id), result.children.count == 1, messages.count < limit else { throw XMPPIQError.malformedResponse }
         let forwarded = try OMEMOWire.singleton(result, "forwarded", Carbons.forwarding)
-        guard (1...2).contains(forwarded.children.count) else { throw XMPPIQError.malformedResponse }
+        // Exactly one <delay/> and at most one <message/>; other children (a server's <stanza-id/>) are ignored.
         let delay = try OMEMOWire.singleton(forwarded, "delay", "urn:xmpp:delay")
         guard let stamp = delay.attributes["stamp"], let timestamp = Self.timestamp(stamp) else { throw XMPPIQError.malformedResponse }
-        if forwarded.children.count == 1 {
+        let innerMessages = forwarded.children("message", namespace: "jabber:client")
+        guard innerMessages.count <= 1 else { throw XMPPIQError.malformedResponse }
+        guard var inner = innerMessages.first else {
             // XEP-0313 allows a redacted archive entry to retain only its timestamp and UID.
             messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil))
             identifiers.insert(id); return
         }
-        var inner = try OMEMOWire.singleton(forwarded, "message", "jabber:client")
         if inner.attributes["type"] == "groupchat", OMEMOWire.hasEncryptedContent(inner) {
             do {
                 guard !Self.containsWrapper(inner), !Carbons.containsWrapper(inner), inner.child("forwarded", namespace: Carbons.forwarding) == nil else { throw XMPPGroupError.invalidMessage }
@@ -69,25 +86,41 @@ struct ArchiveQuery {
             }
             identifiers.insert(id); return
         }
-        guard !Self.containsWrapper(inner), !Carbons.containsWrapper(inner), inner.child("forwarded", namespace: Carbons.forwarding) == nil else { throw XMPPIQError.malformedResponse }
         if room != nil {
+            guard !Self.nestsWrapper(inner) else { throw XMPPIQError.malformedResponse }
             // Non-encrypted room events carry no authenticated application content.
             messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil))
             identifiers.insert(id); return
         }
+        // Everything above is the own archive's outer provenance and still throws. From here on the inner message is
+        // content: whatever this client cannot accept becomes a rejected entry, recorded before the cursor advances.
         if inner.attributes["to"] == nil {
-            // Prosody stores incoming/self messages without their redundant local recipient.
-            // This normalization is permitted only after the own-archive wrapper is authenticated.
+            // Prosody stores incoming/self messages without their redundant local recipient; ejabberd includes it.
+            // This normalization is permitted only after the own-archive wrapper is authenticated. Both shapes are
+            // covered by `archiveNormalizesOnlyTrustedMissingRecipientAndAcceptsRedactedPositions` and `ArchiveContentTests`.
             var attributes = inner.attributes; attributes["to"] = accountBareJID
             inner = XMLNode(name: inner.name, namespace: inner.namespace, attributes: attributes, text: inner.text, children: inner.children)
         }
-        guard !Self.containsWrapper(inner), !Carbons.containsWrapper(inner), inner.child("forwarded", namespace: Carbons.forwarding) == nil,
-              let from = inner.attributes["from"], let sender = OMEMOWire.bareJID(from),
+        func reject(_ reason: XMPPArchiveRejection, peer: String? = nil, outgoing: Bool = false) {
+            messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil, rejectedContent: reason,
+                                  rejectionArchive: archiveOwner, rejectedPeer: peer, rejectedOutgoing: outgoing))
+            identifiers.insert(id)
+        }
+        guard let from = inner.attributes["from"], let sender = OMEMOWire.bareJID(from),
               let to = inner.attributes["to"], let recipient = OMEMOWire.bareJID(to),
-              sender == accountBareJID || recipient == accountBareJID else { throw XMPPIQError.malformedResponse }
+              sender == accountBareJID || recipient == accountBareJID else { return reject(.foreignSender) }
+        let outgoing = sender == accountBareJID
+        let peer = outgoing ? recipient : sender
+        guard !Self.nestsWrapper(inner) else { return reject(.unsupportedDirectContent, peer: peer, outgoing: outgoing) }
         // Reuse already authenticated own-account forwarding provenance; archive ID and time are separate.
-        let provenance: XMPPMessageProvenance = sender == accountBareJID ? .sentCarbon : .receivedCarbon
-        let encrypted = OMEMOWire.hasEncryptedContent(inner) ? try OMEMOWire.parseMessage(inner, provenance: provenance) : nil
+        let provenance: XMPPMessageProvenance = outgoing ? .sentCarbon : .receivedCarbon
+        var encrypted: XMPPEncryptedMessage?
+        if OMEMOWire.hasEncryptedContent(inner) {
+            let known = inner.children.filter { child in child.name == "encrypted" && XMPPOMEMOProfile.allCases.contains { $0.namespace == child.namespace } }
+            guard known.count == 1 else { return reject(.unsupportedDirectContent, peer: peer, outgoing: outgoing) }
+            do { encrypted = try OMEMOWire.parseMessage(inner, provenance: provenance) }
+            catch { return reject(.malformedEncryptedContent, peer: peer, outgoing: outgoing) }
+        }
         let retraction = encrypted == nil ? XMPPClient.parsedRetraction(inner, provenance: provenance) : nil
         let reaction = encrypted == nil && retraction == nil ? XMPPClient.parsedReaction(inner, provenance: provenance) : nil
         let receipt = encrypted == nil && reaction == nil && retraction == nil ? XMPPClient.parsedReceipt(inner, provenance: provenance) : nil
@@ -109,6 +142,11 @@ struct ArchiveQuery {
         let last = lastNodes.first?.text
         guard last == messages.last?.archiveID, complete || last != nil else { throw XMPPIQError.malformedResponse }
         return .init(messages: messages, complete: complete, lastID: last, handledTokens: handledTokens)
+    }
+
+    /// A MAM result, carbon or `<forwarded/>` inside archived content: never unwrapped a second time.
+    static func nestsWrapper(_ inner: XMLNode) -> Bool {
+        containsWrapper(inner) || Carbons.containsWrapper(inner) || inner.child("forwarded", namespace: Carbons.forwarding) != nil
     }
 
     static func timestamp(_ value: String) -> Date? {
