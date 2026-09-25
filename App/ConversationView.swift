@@ -269,7 +269,8 @@ struct ConversationView: View {
     var body: some View {
         // One layer: the timeline runs under the navigation bar and the banners; UIKit insets it by that safe area.
         ZStack {
-            ConversationTimeline(messages: timelineMessages, typing: timelineTyping, topBannerHeight: bannerHeight, composer: showingSearch ? nil : AnyView(composer), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
+            ConversationTimeline(messages: timelineMessages, typing: timelineTyping,
+                                 loadingEarlier: !showingSearch && !starredOnly && model.isBackfilling(chat: chatID), topBannerHeight: bannerHeight, composer: showingSearch ? nil : AnyView(composer), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
                 cancelEditing()
                 replyingTo = message

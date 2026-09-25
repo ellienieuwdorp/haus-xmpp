@@ -1,0 +1,105 @@
+import UIKit
+import XCTest
+@testable import HausXMPP
+
+/// The loading-earlier cell above the oldest message: it appears and leaves without moving the reader.
+@MainActor
+final class LoadingEarlierHeaderTests: XCTestCase {
+    private var window: UIWindow!
+    private var controller: ConversationTimelineController!
+
+    override func setUp() async throws {
+        controller = ConversationTimelineController()
+        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.rootViewController = controller
+        window.isHidden = false
+        controller.view.layoutIfNeeded()
+    }
+
+    override func tearDown() async throws {
+        window.isHidden = true
+        window = nil
+        controller = nil
+    }
+
+    private var collectionView: UICollectionView { controller.view.subviews.compactMap { $0 as? UICollectionView }.first! }
+    private var dataSource: UICollectionViewDiffableDataSource<Int, String>? { collectionView.dataSource as? UICollectionViewDiffableDataSource<Int, String> }
+
+    private func messages(_ range: ClosedRange<Int>) -> [TimelineMessage] {
+        range.map { TimelineMessage(id: "m\($0)", body: "Message \($0)" + ($0.isMultiple(of: 7) ? ", long enough to wrap onto a second line of the bubble." : ""),
+                                    isOutgoing: $0.isMultiple(of: 3), isStarred: false) }
+    }
+
+    /// The first visible message and its distance from the top edge.
+    private func readerPosition() throws -> (id: String, distance: CGFloat) {
+        let path = try XCTUnwrap(collectionView.indexPathsForVisibleItems.sorted().first { dataSource?.itemIdentifier(for: $0) != ConversationTimelineController.loadingEarlierID })
+        let id = try XCTUnwrap(dataSource?.itemIdentifier(for: path))
+        return (id, try XCTUnwrap(collectionView.layoutAttributesForItem(at: path)).frame.minY - collectionView.contentOffset.y)
+    }
+
+    private func distance(of id: String) throws -> CGFloat {
+        let path = try XCTUnwrap(dataSource?.indexPath(for: id))
+        return try XCTUnwrap(collectionView.layoutAttributesForItem(at: path)).frame.minY - collectionView.contentOffset.y
+    }
+
+    func testHeaderComesAndGoesAboveTheOldestMessageWithoutMovingTheReader() throws {
+        controller.update(messages: messages(1...100), onToggleStar: { _ in })
+        // Near the top of the loaded window, where reaching the top starts a backfill.
+        collectionView.contentOffset.y = 300
+        collectionView.layoutIfNeeded()
+        let before = try readerPosition()
+
+        controller.update(messages: messages(1...100), loadingEarlier: true, onToggleStar: { _ in })
+        XCTAssertEqual(dataSource?.snapshot().itemIdentifiers.first, ConversationTimelineController.loadingEarlierID)
+        XCTAssertEqual(collectionView.numberOfItems(inSection: 0), 101)
+        XCTAssertEqual(try distance(of: before.id), before.distance, accuracy: 0.5)
+
+        // The committed page arrives while the cell still shows, then the backfill ends.
+        controller.update(messages: messages(-99...100), loadingEarlier: true, onToggleStar: { _ in })
+        XCTAssertEqual(dataSource?.snapshot().itemIdentifiers.prefix(2), [ConversationTimelineController.loadingEarlierID, "m-99"])
+        XCTAssertEqual(try distance(of: before.id), before.distance, accuracy: 0.5)
+        controller.update(messages: messages(-99...100), onToggleStar: { _ in })
+        XCTAssertNil(dataSource?.indexPath(for: ConversationTimelineController.loadingEarlierID))
+        XCTAssertEqual(try distance(of: before.id), before.distance, accuracy: 0.5)
+    }
+
+    func testHeaderAtTheVeryTopLeavesTheReaderAtTheTopOrOnTheSameMessage() throws {
+        controller.update(messages: messages(1...100), loadingEarlier: true, onToggleStar: { _ in })
+        // Scrolled all the way up: the loading cell itself is the first visible item.
+        let top = -collectionView.adjustedContentInset.top
+        collectionView.contentOffset.y = top
+        collectionView.layoutIfNeeded()
+        let first = try XCTUnwrap(collectionView.indexPathsForVisibleItems.sorted().first)
+        XCTAssertEqual(dataSource?.itemIdentifier(for: first), ConversationTimelineController.loadingEarlierID)
+        XCTAssertEqual(try readerPosition().id, "m1")
+
+        // A committed page lands under the cell: the reader stays on m1 and the new history is above, off screen.
+        let before = try distance(of: "m1")
+        controller.update(messages: messages(-99...100), loadingEarlier: true, onToggleStar: { _ in })
+        XCTAssertEqual(try distance(of: "m1"), before, accuracy: 0.5)
+
+        // A backfill that brought nothing for this chat ends while the cell is on screen: nothing is above the oldest
+        // message any more, so the list rests at its top instead of leaving a blank gap.
+        controller.update(messages: messages(1...100), loadingEarlier: true, onToggleStar: { _ in })
+        collectionView.contentOffset.y = top
+        collectionView.layoutIfNeeded()
+        controller.update(messages: messages(1...100), onToggleStar: { _ in })
+        XCTAssertEqual(collectionView.contentOffset.y, top, accuracy: 0.5)
+        XCTAssertEqual(dataSource?.snapshot().itemIdentifiers.first, "m1")
+    }
+
+    func testHeaderIsOneQuietAccessibleRowOfAtLeastFortyFourPoints() throws {
+        controller.update(messages: messages(1...100), loadingEarlier: true, onToggleStar: { _ in })
+        collectionView.contentOffset.y = -collectionView.adjustedContentInset.top
+        collectionView.layoutIfNeeded()
+        let path = try XCTUnwrap(dataSource?.indexPath(for: ConversationTimelineController.loadingEarlierID))
+        let cell = try XCTUnwrap(collectionView.cellForItem(at: path) as? LoadingEarlierCell)
+        XCTAssertGreaterThanOrEqual(cell.frame.height, 44)
+        XCTAssertTrue(cell.isAccessibilityElement)
+        XCTAssertEqual(cell.accessibilityLabel, "Loading earlier messages")
+        XCTAssertEqual(cell.accessibilityTraits, .updatesFrequently)
+        // Nothing to tap: no buttons or controls inside.
+        func controls(_ view: UIView) -> [UIControl] { view.subviews.flatMap { ($0 as? UIControl).map { [$0] } ?? [] + controls($0) } }
+        XCTAssertTrue(controls(cell.contentView).isEmpty)
+    }
+}

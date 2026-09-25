@@ -37,6 +37,8 @@ final class AppModel {
     @ObservationIgnored private var timelineWindow = AppModel.timelinePage
     @ObservationIgnored private var loadingOlder = false
     private static let timelinePage = 100, timelineCeiling = 1000
+    /// Archive pages (100 messages each) one reach-top asks the server for, and the one idle backfill after catch-up.
+    private static let backfillPagesPerScroll = 5, opportunisticBackfillPages = 3
     /// Newest pages of recently seen chats, so pushing one shows its tail in the first frame. In memory, one account.
     @ObservationIgnored private var timelinePages = TimelinePageCache()
     @ObservationIgnored private var prefetchingPages = false
@@ -129,6 +131,14 @@ final class AppModel {
     @ObservationIgnored private var firstMessageLogged = false
     @ObservationIgnored private var liveStoredLogged = false
     @ObservationIgnored private var catchUpByArchive: [String: CatchUpProgress] = [:]
+    /// Older archive history for one archive (`ArchiveSynchronizer.backfill`); joined like `setupTask`.
+    @ObservationIgnored private var backfillTask: Task<Void, Never>?
+    /// The archive (account or room JID) a backfill is fetching right now; the open chat shows its header.
+    private(set) var backfillingArchive: String?
+    /// Per connection: the idle backfill after catch-up runs at most once.
+    @ObservationIgnored private var opportunisticBackfillDone = false
+    /// Per connection: this connection's forward walk has finished, so the single archive query is free.
+    @ObservationIgnored private var archiveWalkFinished = false
     @ObservationIgnored private var client: XMPPClient?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var openChatID: String? { didSet { syncOpenChatTyping() } }
@@ -323,6 +333,7 @@ final class AppModel {
         }
         let priorEvents = eventTask
         let priorSetup = setupTask
+        let priorBackfill = backfillTask
         let previous = resetSession()
         let token = generation
         session = .connecting(step: "Connecting…")
@@ -338,6 +349,8 @@ final class AppModel {
         await previous?.disconnectAndWait()
         await priorEvents?.value
         await priorSetup?.value
+        await priorBackfill?.value
+        if backfillTask == priorBackfill { backfillTask = nil }
         await drainTask?.value
         guard generation == token else { return false }
         await refresh()
@@ -543,12 +556,15 @@ final class AppModel {
         defer { quiescing = false }
         let events = eventTask
         let setup = setupTask
+        let backfill = backfillTask
         let drain = drainTask
         let previous = resetSession()
         await previous?.disconnectAndWait()
         await events?.value
         // Setup's archive walk, initialize, rejoin and pending retry are all structured children of it.
         await setup?.value
+        await backfill?.value
+        if backfillTask == backfill { backfillTask = nil }
         await drain?.value
         // Includes already-started UI trust/repair/discovery work and an acquisition that
         // was suspended in the store actor when the scene changed.
@@ -896,6 +912,11 @@ final class AppModel {
         // Cancelled, not cleared: connect() and quiesceTransport() join the handle.
         setupTask?.cancel()
         catchUp = nil
+        // Cancelled, not cleared, like the setup task: a new connection's walk must never meet an old backfill.
+        backfillTask?.cancel()
+        backfillingArchive = nil
+        opportunisticBackfillDone = false
+        archiveWalkFinished = false
         eventTask?.cancel()
         eventTask = nil
         let previous = client
@@ -953,6 +974,8 @@ final class AppModel {
                 // Its client calls fail with the connection anyway; cancelling makes the exit prompt.
                 setupTask?.cancel()
                 catchUp = nil
+                backfillTask?.cancel()
+                archiveWalkFinished = false
                 for room in groupChats.keys { groupChats[room]?.joined = false }
                 // Chat states belong to the stream that carried them.
                 resetTyping()
@@ -1210,6 +1233,11 @@ final class AppModel {
                 let pages = catchUpByArchive.values.reduce(0) { $0 + $1.pages }
                 let messages = catchUpByArchive.values.reduce(0) { $0 + $1.messages }
                 Self.syncLog.notice("catch-up finished +\(self.syncElapsed(), privacy: .public) ms pages=\(pages, privacy: .public) messages=\(messages, privacy: .public)")
+                archiveWalkFinished = true
+                if !opportunisticBackfillDone, foreground, !quiescing, drainTask == nil {
+                    opportunisticBackfillDone = true
+                    requestBackfill(archive: nil, pages: AppModel.opportunisticBackfillPages)
+                }
             }
         case .failed(let step, let detail):
             catchUp = nil
@@ -1796,13 +1824,62 @@ final class AppModel {
         startOutbox()
     }
 
-    /// The reader reached the oldest loaded message. A full window means the store may hold more.
+    /// The reader reached the oldest loaded message. A full window means the store may hold more; otherwise the
+    /// store is exhausted for this chat and the server's older archive pages are the next source.
     func loadOlderMessages(all: Bool = false) async {
-        guard !loadingOlder, openChatID != nil, timelineWindow < AppModel.timelineCeiling, all || messages.count >= timelineWindow else { return }
-        loadingOlder = true
-        defer { loadingOlder = false }
-        timelineWindow = all ? AppModel.timelineCeiling : min(AppModel.timelineCeiling, timelineWindow + AppModel.timelinePage)
-        await refresh(.openChat)
+        guard !loadingOlder, let chat = openChatID else { return }
+        if all || messages.count >= timelineWindow {
+            guard timelineWindow < AppModel.timelineCeiling else { return }
+            loadingOlder = true
+            defer { loadingOlder = false }
+            timelineWindow = all ? AppModel.timelineCeiling : min(AppModel.timelineCeiling, timelineWindow + AppModel.timelinePage)
+            await refresh(.openChat)
+            return
+        }
+        // The window is not raised here: each committed page reloads the same window, which fills further, and the
+        // next reach-top raises it as above.
+        requestBackfill(archive: isGroup(chat) ? chat : nil, pages: AppModel.backfillPagesPerScroll)
+    }
+
+    /// True while the archive holding `chat` (the account's own for a direct chat, the room's for a group) backfills.
+    func isBackfilling(chat: String) -> Bool { backfillingArchive != nil && backfillingArchive == (isGroup(chat) ? chat : accountID) }
+
+    /// Starts one bounded backfill of older archive pages. This connection's forward walk must have finished and no
+    /// other backfill may run: `XMPPClient` allows one archive query at a time. `resetSession` cancels it, and
+    /// `connect` and `quiesceTransport` join it before the next connection or the lease release.
+    private func requestBackfill(archive: String?, pages: Int) {
+        guard foreground, !quiescing, hasTransportOwnership, session.isReady, archiveWalkFinished, catchUp == nil, backfillTask == nil, !isDemo,
+              let client, let encryption, let store else { return }
+        let account = accountID
+        let token = generation
+        backfillingArchive = archive ?? account
+        let started = ContinuousClock.now
+        backfillTask = Task { [weak self] in
+            let kind = archive == nil ? "direct" : "room"
+            do {
+                let outcome = try await ArchiveSynchronizer(store: store).backfill(account: account, archive: archive, pageBudget: pages,
+                                                                                    client: client, encryption: encryption) { [weak self] progress in
+                    await self?.backfillPageCommitted(progress, token: token)
+                }
+                let elapsed = Int((ContinuousClock.now - started) / .milliseconds(1))
+                Self.syncLog.notice("backfill \(kind, privacy: .public) \(String(describing: outcome), privacy: .public) +\(elapsed, privacy: .public) ms")
+            } catch {
+                // The synchronizer disconnected if a page was abandoned; the reconciler reconnects.
+                Self.syncLog.error("backfill \(kind, privacy: .public) failed: \(String(String(describing: error).prefix(120)), privacy: .public)")
+            }
+            guard let self, self.generation == token else { return }
+            self.backfillingArchive = nil
+            self.backfillTask = nil
+            // Older pages can add chats (and placeholders) the list has not shown yet.
+            self.refreshSoon()
+        }
+    }
+
+    /// The store holds a new page of older messages: reload the open chat's window, which now reaches further back.
+    private func backfillPageCommitted(_ progress: ArchiveSyncProgress, token: UUID) {
+        guard generation == token else { return }
+        Self.syncLog.notice("backfill page pages=\(progress.pages, privacy: .public) messages=\(progress.messages, privacy: .public)")
+        refreshSoon(.openChat)
     }
 
     func closeChat(_ chatID: String) {
