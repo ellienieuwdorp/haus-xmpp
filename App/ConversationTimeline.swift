@@ -246,6 +246,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     /// Between the reader's first drag and a second after the list comes to rest; programmatic scrolls never start it.
     private var dateChipActive = false
     private var dateChipIdle: DispatchWorkItem?
+    /// The idle second came due under a resting finger; it starts over when the finger lifts.
+    private var dateChipWaitsForLift = false
     /// The offset of the last deceleration step large enough to see.
     private var dateChipMovingY: CGFloat = 0
     /// The message whose inline day header the chip currently covers.
@@ -617,6 +619,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         dateChipIdle?.cancel()
+        dateChipWaitsForLift = false
         dateChipActive = true
         updateDateChip()
     }
@@ -627,15 +630,25 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     }
 
     /// The chip leaves a second after the list visibly comes to rest; a new drag cancels that, a held finger keeps it.
-    private func scheduleDateChipIdle() {
+    /// A touch that never becomes a drag (a hold, a long press on a bubble) sends no end-of-drag callback, so while a
+    /// finger is down the timer checks again shortly and restarts its full second once the finger lifts.
+    private func scheduleDateChipIdle(after delay: TimeInterval = 1.0) {
         dateChipIdle?.cancel()
         let idle = DispatchWorkItem { [weak self] in
-            guard let self, !collectionView.isTracking else { return }
-            dateChipActive = false
-            updateDateChip(fade: 0.3)
+            guard let self, dateChipActive else { return }
+            if collectionView.isTracking {
+                dateChipWaitsForLift = true
+                scheduleDateChipIdle(after: 0.2)
+            } else if dateChipWaitsForLift {
+                dateChipWaitsForLift = false
+                scheduleDateChipIdle()
+            } else {
+                dateChipActive = false
+                updateDateChip(fade: 0.3)
+            }
         }
         dateChipIdle = idle
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: idle)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: idle)
     }
 
     /// Where the chip's text sits below the bars and banners; the inline header text it replaces sticks at this line.
@@ -665,12 +678,18 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             UIView.animate(withDuration: 0.15, delay: 0, options: [.allowUserInteraction, .curveEaseOut]) { self.leavingDateChip.alpha = 0 }
         }
         let alpha: CGFloat = stuck == nil ? 0 : 1
-        // Text and capsule change together: the fade of whichever chip is arriving or leaving.
-        let crossfade = handover ? 0.15 : (alpha != dateChip.alpha ? (alpha > 0 ? 0.2 : fade) : 0)
+        // A header crossing the line trades places with the chip in one frame: both texts sit on the line, and the list
+        // keeps moving under the fixed chip, so any fade shows the date twice, a few points apart.
+        let swap = !handover && (stuck.map { !wasShown && headerTextNearLine($0.id, line: line) }
+            ?? (wasShown && dateChipActive && previous.map { headerTextNearLine($0, line: line) } == true))
+        // Otherwise text and capsule change together: the fade of whichever chip is arriving or leaving.
+        let crossfade = handover ? 0.15 : swap ? 0 : (alpha != dateChip.alpha ? (alpha > 0 ? 0.2 : fade) : 0)
         if stuck?.id != previous {
             if let previous { dateHeaderCell(for: previous)?.coverDateHeader(false, fade: crossfade) }
             coveredHeaderID = stuck?.id
-            if let id = stuck?.id { dateHeaderCell(for: id)?.coverDateHeader(true, fade: crossfade) }
+            // The inline text clears at once and only the capsule fades: the list keeps moving under a fixed chip, so
+            // a dissolving inline date would show beside the chip's for a few frames.
+            if let id = stuck?.id { dateHeaderCell(for: id)?.coverDateHeader(true, fade: 0) }
         } else if let id = stuck?.id {
             // A recycled cell comes back with its text showing.
             dateHeaderCell(for: id)?.coverDateHeader(true, fade: 0)
@@ -738,6 +757,12 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             }
         }
         return (stuck.id, stuck.text, nextTextTop)
+    }
+
+    /// Whether this header's text is within a chip's reach of the line, where the chip's text would sit over it.
+    private func headerTextNearLine(_ id: String, line: CGFloat) -> Bool {
+        guard let path = dataSource.indexPath(for: id), let frame = collectionView.layoutAttributesForItem(at: path)?.frame else { return false }
+        return abs(frame.minY + MessageBubbleCell.dateHeaderTop - line) < 40
     }
 
     private func dateHeaderCell(for id: String) -> MessageBubbleCell? {
