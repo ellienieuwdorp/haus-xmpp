@@ -149,12 +149,22 @@ struct ArchiveQuery {
         containsWrapper(inner) || Carbons.containsWrapper(inner) || inner.child("forwarded", namespace: Carbons.forwarding) != nil
     }
 
-    static func timestamp(_ value: String) -> Date? {
+    // Configured once and then only read: `ISO8601DateFormatter`, like `DateFormatter` since iOS 7, is thread-safe for
+    // parsing, so one shared pair replaces two allocations per archived message. `nonisolated(unsafe)` is needed only
+    // because the class is not `Sendable` under Swift 6; nothing mutates these after initialization.
+    nonisolated(unsafe) private static let fractionalTimestamp: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: value) { return date }
+        return formatter
+    }()
+    nonisolated(unsafe) private static let wholeTimestamp: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: value)
+        return formatter
+    }()
+
+    static func timestamp(_ value: String) -> Date? {
+        fractionalTimestamp.date(from: value) ?? wholeTimestamp.date(from: value)
     }
 }
 
