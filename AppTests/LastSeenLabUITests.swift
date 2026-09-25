@@ -34,9 +34,24 @@ final class LastSeenLabUITests: XCTestCase {
         app.buttons["startChat"].tap()
 
         let header = app.buttons["chatDetails"]
+        // With the address field focused, the first tap on iOS 27 can only end editing.
+        if !header.waitForExistence(timeout: 4), app.buttons["startChat"].exists { app.buttons["startChat"].tap() }
         XCTAssertTrue(header.waitForExistence(timeout: 10))
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Online"), object: header)], timeout: 25)
         let online = XCTAttachment(screenshot: app.screenshot()); online.name = "Peer online"; online.lifetime = .keepAlways; add(online)
+
+        // Leaving the foreground drops the socket without closing the stream, so coming back resumes the session
+        // (XEP-0198). The server sends no probe answers on a resumed stream: the contact must still read "Online".
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 4)
+        app.activate()
+        XCTAssertTrue(header.waitForExistence(timeout: 10))
+        let settled = Date().addingTimeInterval(15)
+        while Date() < settled {
+            XCTAssertFalse(header.label.contains("Last seen"), "an online contact must not read as gone after a resume: \(header.label)")
+            Thread.sleep(forTimeInterval: 1)
+        }
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Online"), object: header)], timeout: 10)
 
         guard let exitsAfter = env["XMPP_PEER_EXITS_AFTER"].flatMap(TimeInterval.init) else { return }
         let remaining = max(0, exitsAfter - Date().timeIntervalSince(started))

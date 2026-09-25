@@ -146,6 +146,9 @@ public actor XMPPClient {
     private var rosterRequested = false
     /// Whether an XEP-0012 query to our full JID is answered. Survives reconnects; the owner sets it.
     private var sharesLastActivity = false
+    /// The current session continued an earlier one (XEP-0198 resume): no initial presence was sent, so the server
+    /// sent no probe answers and presence seen on the earlier stream still holds.
+    public private(set) var sessionResumed = false
     var groupRooms: [String: GroupRoomState] = [:]
     private var streamManagement: StreamManagement?
     private var resumeSnapshot: XMPPStreamManagementSnapshot?
@@ -579,6 +582,7 @@ public actor XMPPClient {
     private func becomeOnline(token: UUID, presence: Bool = true) async throws {
         if presence { try await write("<presence>\(EntityCapabilities.presenceElement)</presence>") }
         guard generation == token else { throw XMPPClientError.connectionClosed }
+        sessionResumed = !presence
         phase = .online; deadline?.cancel(); deadline = nil
         liveness = Task { [weak self] in await self?.livenessLoop(token: token) }
         try emit(.state(.online(jid: boundJID)))

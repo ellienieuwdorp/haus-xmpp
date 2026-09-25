@@ -90,6 +90,26 @@ final class LastSeenTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.lastSeen(for: alex), .lastSeen(start + 5))
     }
 
+    func testANewSessionDropsWhoWasAvailableButAResumedOneKeepsIt() {
+        var tracker = loaded([XMPPRosterItem(jid: alex, subscription: .both)])
+        tracker.apply(presence("phone", available: true), account: me, isContact: true, now: start)
+        tracker.resetConnection()
+        tracker.resetConnection() // a disconnect followed by a session reset must not lose what was held
+        tracker.beginConnection(resumed: true)
+        XCTAssertEqual(tracker.lastSeen(for: alex), .online, "a resumed session gets no probe answer for an unchanged contact")
+        tracker.applyRoster([XMPPRosterItem(jid: alex, subscription: .both)], replacesAll: true)
+        XCTAssertEqual(tracker.askStep(for: alex, now: start + 1), .nothing, "no XEP-0012 query for a contact still online")
+        tracker.apply(presence("phone", available: false), account: me, isContact: true, now: start + 30)
+        XCTAssertEqual(tracker.lastSeen(for: alex), .lastSeen(start + 30), "a departure queued while detached still dates the contact")
+
+        tracker.apply(presence("phone", available: true), account: me, isContact: true, now: start + 40)
+        tracker.resetConnection()
+        tracker.beginConnection(resumed: false)
+        XCTAssertEqual(tracker.lastSeen(for: alex), .lastSeen(start + 30), "a new session waits for the probe answers")
+        tracker.beginConnection(resumed: true)
+        XCTAssertEqual(tracker.lastSeen(for: alex), .lastSeen(start + 30), "what a new session dropped is not restored later")
+    }
+
     // MARK: Filtering
 
     func testOwnAccountAndGroupsAreIgnored() {

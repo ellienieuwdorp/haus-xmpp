@@ -37,6 +37,9 @@ struct ContactPresenceState: Equatable {
     var lastActivityAt: Date?
     /// When we last sent a XEP-0012 query on this connection.
     var lastQueriedAt: Date?
+    /// `available` as the previous stream left it: restored when the next stream resumes that session (the server
+    /// sends no probe answers then), dropped when a new session starts.
+    var heldAvailable: [String: Date?] = [:]
 }
 
 /// Presence, roster and the last-seen policy for 1:1 chats, kept pure so AppModel only does the I/O.
@@ -60,10 +63,27 @@ struct LastSeenTracker {
         case leavePending
     }
 
-    /// A new connection: the server re-sends presence (probes) and the roster is fetched again.
+    /// The stream ended: the roster is fetched again on the next one. Who is available is held aside until
+    /// `beginConnection` knows whether the next stream resumes this session.
     mutating func resetConnection() {
         roster = [:]; rosterLoaded = false; asked = []
-        for key in contacts.keys { contacts[key]?.available = [:]; contacts[key]?.lastQueriedAt = nil }
+        for key in contacts.keys {
+            guard var state = contacts[key] else { continue }
+            if !state.available.isEmpty { state.heldAvailable = state.available }
+            state.available = [:]; state.lastQueriedAt = nil
+            contacts[key] = state
+        }
+    }
+
+    /// A stream is online. A new session gets the server's probe answers, so what was held is dropped; a resumed
+    /// session gets none (only changes queued while it was detached), so what was held is still true.
+    mutating func beginConnection(resumed: Bool) {
+        for key in contacts.keys {
+            guard var state = contacts[key] else { continue }
+            if resumed, state.available.isEmpty { state.available = state.heldAvailable }
+            state.heldAvailable = [:]
+            contacts[key] = state
+        }
     }
 
     /// Records a contact's presence; our own other resources and groups (`isContact == false`) are ignored.

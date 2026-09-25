@@ -891,6 +891,9 @@ final class AppModel {
                 session = .connected(settingUp: step)
                 // The client answers XEP-0012 queries to our full address only while the account shares last seen.
                 await client?.setSharesLastActivity(accountPreferences.lastSeen)
+                // A resumed session gets no probe answers: keep who was available on the previous stream.
+                lastSeenTracker.beginConnection(resumed: await client?.sessionResumed ?? false)
+                syncOpenChatLastSeen()
                 if let encryption, let client {
                     do {
                         let features = try await client.discoveryFeatures()
@@ -1020,7 +1023,7 @@ final class AppModel {
             // A probe answer says offline without a time: ask the server when the contact was last active.
             if !presence.available { requestLastSeen(for: presence.contact) }
         case .subscription(let event):
-            guard event.kind == .subscribe, !isDemo, let client else { return }
+            guard event.kind == .subscribe, !isDemo, event.from != account, let client else { return }
             // Unsubscribe/unsubscribed need no answer; the roster push that follows records the change.
             switch lastSeenTracker.answerSubscribe(from: event.from, sharesLastSeen: accountPreferences.lastSeen, isDirectChat: isDirectChat(event.from)) {
             case .approve(let alsoSubscribe):
@@ -1804,7 +1807,7 @@ final class AppModel {
     /// roster load retries while the switch stays off.
     private func revokePresenceSharing(_ contacts: [String], token: UUID) async {
         guard let client, !contacts.isEmpty else { return }
-        for contact in contacts {
+        for contact in contacts where contact != accountID {
             guard generation == token, !accountPreferences.lastSeen else { return }
             do { try await client.sendSubscription(.unsubscribed, to: contact) } catch { return }
         }
