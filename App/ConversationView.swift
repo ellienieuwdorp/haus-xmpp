@@ -64,6 +64,7 @@ struct ConversationView: View {
     /// The floating banners' height, handed to the timeline as top safe area so its first message clears them.
     @State private var bannerHeight: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     private var searchTerm: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first(where: { $0.id == chatID })?.title) }
@@ -300,10 +301,11 @@ struct ConversationView: View {
         }
         .background(Color(uiColor: .systemBackground))
         .navigationBarTitleDisplayMode(.inline)
-        // Signal's bar: once messages scroll beneath it a translucent material blurs them under the whole bar, so the
-        // title never sits on readable text; at the top of the chat the bar stays transparent (automatic visibility).
-        // The soft scroll edge effect alone left bubbles legible in dark mode. Reduce Transparency makes it opaque.
-        .toolbarBackground(.thinMaterial, for: .navigationBar)
+        // No toolbar background: a material strip cut messages off flat at its bottom edge. The bar stays transparent
+        // and the timeline's soft scroll-edge effect dissolves messages beneath it and the banners, as Signal does on
+        // iOS 26; Reduce Transparency turns that effect into the system's opaque bar. The bar keeps the app's scheme:
+        // otherwise a wide sent bubble under the title flips the title, avatar and status bar to dark in light mode.
+        .toolbarColorScheme(colorScheme, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 NavigationLink(value: ChatRoute.details(chatID)) {

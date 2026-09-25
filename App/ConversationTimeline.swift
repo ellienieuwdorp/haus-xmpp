@@ -251,7 +251,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         section.contentInsets = .init(top: 8, leading: 0, bottom: 12, trailing: 0)
         collectionView = ConversationCollectionView(frame: .zero, collectionViewLayout: UICollectionViewCompositionalLayout(section: section))
         // Clear over the container, which paints the chat background once; the collection view runs under the bars,
-        // whose material (ConversationView) blurs the messages there once they scroll beneath.
+        // where the scroll-edge effect (below) dissolves the messages that scroll beneath.
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .interactive
@@ -265,6 +265,23 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         collectionView.frame = container.bounds
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         container.addSubview(collectionView)
+        // The navigation bar's soft scroll-edge effect dissolves messages under the bar (Signal's iOS 26 look: no
+        // material strip, no hairline). SwiftUI's banner bar is invisible to UIKit, so this clear, touch-transparent
+        // container spans bar plus banners (the safe area includes the banner inset) and extends the effect below them.
+        let topEdge = UIView()
+        topEdge.isUserInteractionEnabled = false
+        topEdge.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(topEdge)
+        let topEdgeInteraction = UIScrollEdgeElementContainerInteraction()
+        topEdgeInteraction.scrollView = collectionView
+        topEdgeInteraction.edge = .top
+        topEdge.addInteraction(topEdgeInteraction)
+        NSLayoutConstraint.activate([
+            topEdge.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            topEdge.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            topEdge.topAnchor.constraint(equalTo: container.topAnchor),
+            topEdge.bottomAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
+        ])
         // The composer rides the keyboard guide, so it follows an interactive dismiss; SwiftUI's own avoidance is off.
         composerHost.safeAreaRegions = []
         composerHeight = composerHost.view.heightAnchor.constraint(equalToConstant: 60)
