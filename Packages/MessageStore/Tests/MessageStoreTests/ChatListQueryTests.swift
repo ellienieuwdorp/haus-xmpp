@@ -201,9 +201,12 @@ private func seedAccountA(_ store: MessageStore) async throws -> [String: ChatSe
     try await store.insertMessage(message("rep-1", "reply", body: "Quoting", sentAt: 1600, outgoing: true,
                                           reply: MessageReply(messageID: "plain-1", senderID: "plain", body: "One", wireID: "w-plain-1")))
 
-    // TODO(S1 merge): case 19, an unreadable placeholder as the last message (seeded through
-    // `recordUnreadableMessage`), round-trips with `unreadableReason == .notForThisDevice` and the chat
-    // sorts by the placeholder's `sent_at`. Add once S1's schema 15 and `unreadable_reason` are on main.
+    // 19. unreadable: a placeholder newer than the readable message is the preview, keeps its reason,
+    // and the chat sorts by the placeholder's `sent_at`.
+    try await chat("unreadable")
+    try await store.insertMessage(message("un-1", "unreadable", body: "Readable", sentAt: 1700))
+    try await store.recordUnreadableMessage(UnreadableMessage(accountID: "a", chatID: "unreadable", senderID: "a", isOutgoing: true, sentAt: at(1800),
+                                                              reason: .notForThisDevice, key: .ciphertext(sender: "a", digest: "abc")))
     return seeds
 }
 
@@ -243,7 +246,7 @@ private func seedDecoyAccountB(_ store: MessageStore) async throws -> [String: C
 
         // The loop's contract, stated directly so a shared mistake in the reference cannot hide.
         let byID = Dictionary(uniqueKeysWithValues: chats.map { ($0.id, $0) })
-        #expect(chats.map(\.id) == ["pinnedOld", "pinnedEmpty", "reply", "avatar", "queued", incomingRoom, room,
+        #expect(chats.map(\.id) == ["pinnedOld", "pinnedEmpty", "unreadable", "reply", "avatar", "queued", incomingRoom, room,
                                     "authenticatedElsewhere", "authenticatedWins", "ambiguous", "incomingReceiptIgnored",
                                     "delivered", "displayed", "attachmentRetracted", "attachment", "peerCorrectionIgnored",
                                     "corrected", "retracted", "tie", "plain", "empty"])
@@ -279,6 +282,8 @@ private func seedDecoyAccountB(_ store: MessageStore) async throws -> [String: C
         #expect(byID["avatar"]?.avatarHash == "abc123" && byID["plain"]?.avatarHash == nil)
         #expect(byID["reply"]?.lastMessage?.reply == MessageReply(messageID: "plain-1", senderID: "plain", body: "One", wireID: "w-plain-1"))
         #expect(byID["pinnedOld"]?.title == "Pinnedold" && byID[room]?.title == "Room")
+        let unreadable = try #require(byID["unreadable"]?.lastMessage)
+        #expect(unreadable.unreadableReason == .notForThisDevice && unreadable.sentAt == at(1800) && unreadable.isOutgoing)
         #expect(try await store.chats(accountID: "nobody").isEmpty)
     }
 }
