@@ -300,10 +300,10 @@ struct ConversationView: View {
         }
         .background(Color(uiColor: .systemBackground))
         .navigationBarTitleDisplayMode(.inline)
-        // Signal's bar: once messages scroll beneath it a translucent material blurs them under the whole bar, so the
-        // title never sits on readable text; at the top of the chat the bar stays transparent (automatic visibility).
-        // The soft scroll edge effect alone left bubbles legible in dark mode. Reduce Transparency makes it opaque.
-        .toolbarBackground(.thinMaterial, for: .navigationBar)
+        // No toolbar background: a material strip cut messages off flat at its bottom edge. The bar stays transparent
+        // and the timeline's soft scroll-edge effect dissolves messages beneath it and the banners, as Signal does on
+        // iOS 26; Reduce Transparency turns that effect into the system's opaque bar. The system's adaptive dark flip
+        // over a wide sent bubble is kept: pinning the bar's scheme left a black title on the dimmed accent.
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 NavigationLink(value: ChatRoute.details(chatID)) {
