@@ -9,6 +9,8 @@ struct AppearanceView: View {
     @Environment(\.appearance) private var appearance
 
     private var accent: AccentTheme { appearance.accent }
+    /// Dynamic Type factor for the status mark, as `MessageStatusView` scales it with caption2.
+    @ScaledMetric(relativeTo: .caption2) private var statusScale: CGFloat = 1
 
     var body: some View {
         @Bindable var appearance = appearance
@@ -64,20 +66,28 @@ struct AppearanceView: View {
         .themedRoot()
     }
 
+    /// The real bubble's footer at preview size: caption2 time and the shared read mark, both in the
+    /// meta colour, inside the 20 pt bubble with the timeline's 12/10/8 insets.
     private func bubble(_ text: String, time: String, incoming: Bool) -> some View {
-        HStack {
+        let textColor = incoming ? Color.primary : Color(uiColor: accent.bubbleText)
+        let meta = incoming ? Color(uiColor: .secondaryLabel) : Color(uiColor: accent.bubbleText.withAlphaComponent(0.75))
+        return HStack {
             if !incoming { Spacer(minLength: 60) }
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(text)
-                HStack(spacing: 3) {
-                    Text(time)
-                    if !incoming { Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)) }
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(text).foregroundStyle(textColor)
+                HStack(spacing: 5) {
+                    Text(time).font(.caption2)
+                    if !incoming {
+                        Image(uiImage: MessageStatusArt.image(.read, scale: statusScale))
+                            .renderingMode(.template)
+                            .frame(width: MessageStatusArt.slotWidth * statusScale,
+                                   height: MessageStatusArt.designHeight * statusScale, alignment: .trailing)
+                    }
                 }
-                .font(.caption2).opacity(0.7)
+                .foregroundStyle(meta)
             }
-            .padding(.horizontal, 14).padding(.vertical, 8)
-            .foregroundStyle(incoming ? Color.primary : Color(uiColor: accent.bubbleText))
-            .background(incoming ? Color(uiColor: .tertiarySystemFill) : accent.swatch, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
+            .background(incoming ? Color(uiColor: .tertiarySystemFill) : accent.swatch, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             if incoming { Spacer(minLength: 60) }
         }
     }
