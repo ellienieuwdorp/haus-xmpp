@@ -1244,10 +1244,7 @@ final class AppModel {
                 let messages = catchUpByArchive.values.reduce(0) { $0 + $1.messages }
                 Self.syncLog.notice("catch-up finished +\(self.syncElapsed(), privacy: .public) ms pages=\(pages, privacy: .public) messages=\(messages, privacy: .public)")
                 archiveWalkFinished = true
-                if !opportunisticBackfillDone, foreground, !quiescing, drainTask == nil {
-                    opportunisticBackfillDone = true
-                    requestBackfill(archive: nil, pages: AppModel.opportunisticBackfillPages)
-                }
+                requestOpportunisticBackfill()
             }
         case .failed(let step, let detail):
             catchUp = nil
@@ -1613,7 +1610,18 @@ final class AppModel {
             self.drainTask = nil
             // A different account/session may have become ready while this attempt settled.
             if self.outboxRequested || self.generation != token { self.startOutbox() }
+            // Catch-up often finishes while the first drain of a connection is still running; the
+            // deferred history fetch runs now instead of waiting for the next connection.
+            if self.generation == token { self.requestOpportunisticBackfill() }
         }
+    }
+
+    /// Once per connection, after the archive walk and while no outbox drain is running: fetch a few pages of
+    /// older history so a new install shows more than the newest page without a scroll.
+    private func requestOpportunisticBackfill() {
+        guard archiveWalkFinished, !opportunisticBackfillDone, foreground, !quiescing, drainTask == nil else { return }
+        opportunisticBackfillDone = true
+        requestBackfill(archive: nil, pages: AppModel.opportunisticBackfillPages)
     }
 
     private func startNotificationNavigation() {
