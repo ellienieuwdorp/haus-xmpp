@@ -430,7 +430,7 @@ public actor MessageStore {
     public func chats(accountID: String) throws -> [StoredChat] {
         try connection.query(Self.chatListSQL, [.text(accountID)]).map { row in
             var last: StoredMessage? = nil
-            let message = Array(row[Self.chatListPrefix...])           // Self.columns order, then `position`
+            let message = Array(row[Self.chatListPrefix...])           // Self.columns order
             if case .text = message[1] {                               // id present: the chat has a message
                 var decoded = try Self.decode(message)
                 if case .text = row[4] {                               // a.name present: attachment
@@ -454,17 +454,17 @@ public actor MessageStore {
         }
     }
 
-    /// 4 chat + 11 attachment + 4 summary columns precede `l.*` (Self.columns, then `position`).
+    /// 4 chat + 11 attachment + 4 summary columns precede `l.*` (Self.columns order).
     private static let chatListPrefix = 19
-    // `?1` is the account throughout. `ranked` must not alias `messages`: the outbox subquery in
-    // `Self.columns` names the table. Message columns come last so added columns never shift the prefix.
+    // `?1` is the account throughout. Every step is an index seek per chat: the newest message comes
+    // from the `timeline` index and is joined by primary key, so the cost follows the number of chats,
+    // not of messages. (A ROW_NUMBER() window over all messages measured 59 s for 100 chats of 1,000
+    // messages on an un-ANALYZEd database; see docs/development/sync-review.md, R8.)
+    // `last` must not alias `messages`: the outbox subquery in `Self.columns` names the table.
+    // Message columns come last so added columns never shift the prefix.
     private static let chatListSQL = """
-        WITH ranked AS (
-            SELECT \(columns),
-                   ROW_NUMBER() OVER (PARTITION BY chat_id ORDER BY sent_at DESC, id DESC) AS position
-            FROM messages WHERE account_id=?1
-        ), last AS (
-            SELECT * FROM ranked WHERE position=1
+        WITH last AS (
+            SELECT \(columns) FROM messages WHERE account_id=?1
         ), target AS (
             -- reactionReference: modern+authenticated uses wire_id; modern unauthenticated the room stanza-id, else wire_id; other profiles wire_id.
             SELECT l.chat_id,l.id,l.sender_id,
@@ -473,25 +473,30 @@ public actor MessageStore {
                             (SELECT g.stanza_id FROM group_message_references g
                              WHERE g.account_id=l.account_id AND g.message_id=l.id AND g.room=l.chat_id), l.wire_id)
                         ELSE l.wire_id END AS wire_id
-            FROM last l
-        ), resolved AS (
+            FROM chats c CROSS JOIN messages l
+            WHERE c.account_id=?1 AND l.account_id=?1
+              AND l.id=(SELECT m.id FROM messages m WHERE m.account_id=?1 AND m.chat_id=c.id ORDER BY m.sent_at DESC,m.id DESC LIMIT 1)
+        ), resolved AS MATERIALIZED (
             -- reactionTarget: exactly one authenticated match wins; else a single unauthenticated match; else nothing.
+            -- The two match paths are a rowid UNION so each stays an index seek (an OR scans the chat).
             SELECT t.chat_id,t.id,t.sender_id,t.wire_id FROM target t
             WHERE t.wire_id IS NOT NULL AND t.id=(
                 SELECT CASE WHEN SUM(c.wire_id_authenticated)=1 THEN MAX(CASE WHEN c.wire_id_authenticated=1 THEN c.id END)
                             WHEN SUM(c.wire_id_authenticated)=0 AND COUNT(*)=1 THEN MAX(c.id) END
                 FROM messages c
-                WHERE c.account_id=?1 AND c.chat_id=t.chat_id
-                  AND (c.wire_id=t.wire_id OR c.id IN (
-                        SELECT g.message_id FROM group_message_references g
-                        WHERE g.account_id=?1 AND g.room=t.chat_id AND g.stanza_id=t.wire_id))
+                WHERE c.rowid IN (
+                    SELECT m.rowid FROM messages m WHERE m.account_id=?1 AND m.chat_id=t.chat_id AND m.wire_id=t.wire_id
+                    UNION
+                    SELECT m.rowid FROM group_message_references g
+                    JOIN messages m ON m.account_id=g.account_id AND m.id=g.message_id AND m.chat_id=g.room
+                    WHERE g.account_id=?1 AND g.room=t.chat_id AND g.stanza_id=t.wire_id)
             )
         ), latest AS (
             -- events(): latest per (actor, kind); only the sender may unsend or rewrite a message.
             SELECT r.chat_id,e.actor_id,e.kind,e.payload_json,
                    ROW_NUMBER() OVER (PARTITION BY r.chat_id,e.actor_id,e.kind ORDER BY e.updated_at DESC,e.id DESC) AS position
             FROM resolved r
-            JOIN message_events e ON e.account_id=?1 AND e.chat_id=r.chat_id AND e.target_wire_id=r.wire_id
+            CROSS JOIN message_events e ON e.account_id=?1 AND e.chat_id=r.chat_id AND e.target_wire_id=r.wire_id
             WHERE e.kind NOT IN ('retraction','correction') OR e.actor_id=r.sender_id
         ), summary AS (
             -- At most one correction row per chat survives (sender-only, one per actor and kind).
@@ -507,7 +512,7 @@ public actor MessageStore {
                s.retracted,s.correction,s.delivered,s.displayed,
                l.*
         FROM chats c
-        LEFT JOIN last l ON l.chat_id=c.id
+        LEFT JOIN last l ON l.id=(SELECT m.id FROM messages m WHERE m.account_id=?1 AND m.chat_id=c.id ORDER BY m.sent_at DESC,m.id DESC LIMIT 1)
         LEFT JOIN attachments a ON a.account_id=?1 AND a.message_id=l.id
         LEFT JOIN summary s ON s.chat_id=c.id
         WHERE c.account_id=?1
