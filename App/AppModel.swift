@@ -998,6 +998,9 @@ final class AppModel {
             if owner == account || chats.contains(where: { $0.id == owner }) { await loadAvatar(for: owner) }
         case .encryptionFailure:
             encryptionAttention.note("An encrypted message could not be opened")
+        case .contactPresence, .subscription, .rosterItems:
+            // Presence and roster wiring lands with the last-seen integration.
+            break
         case .streamAcknowledged:
             refreshSoon()
         case .message:

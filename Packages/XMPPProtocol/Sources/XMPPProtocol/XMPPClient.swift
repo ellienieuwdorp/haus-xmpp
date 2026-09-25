@@ -93,6 +93,12 @@ public enum XMPPEvent: Sendable, Equatable {
     /// A contact's PEP avatar changed; nil means it was removed. The bytes are fetched lazily.
     case avatarMetadata(owner: String, metadata: XMPPAvatarMetadata?)
     case encryptionFailure(from: String, id: String?)
+    /// A contact resource became available, idle or unavailable. Never stored.
+    case contactPresence(XMPPContactPresence)
+    /// A contact asked for, granted, withdrew or refused a presence subscription.
+    case subscription(XMPPSubscriptionEvent)
+    /// A roster fetch result (`replacesAll`) or one server push, in stream order.
+    case rosterItems([XMPPRosterItem], replacesAll: Bool)
     /// Consume previous events durably before acknowledging this token.
     case streamManagementBarrier(XMPPInboundToken)
     case streamAcknowledged
@@ -134,6 +140,12 @@ public actor XMPPClient {
     }
     private var iqRequests: [String: IQRequest] = [:]
     private var archiveQuery: ArchiveQuery?
+    /// Pending roster fetch IQ ids; their results are emitted in stream order, before any later push.
+    private var rosterFetchIDs: Set<String> = []
+    /// RFC 6121 §2.1.6: pushes go only to resources that requested the roster in this session.
+    private var rosterRequested = false
+    /// Whether an XEP-0012 query to our full JID is answered. Survives reconnects; the owner sets it.
+    private var sharesLastActivity = false
     var groupRooms: [String: GroupRoomState] = [:]
     private var streamManagement: StreamManagement?
     private var resumeSnapshot: XMPPStreamManagementSnapshot?
@@ -157,7 +169,7 @@ public actor XMPPClient {
         guard !host.isEmpty, !domain.isEmpty, !username.isEmpty, !password.isEmpty,
               !username.contains("\0"), !password.contains("\0"), !domain.contains(where: { $0.isWhitespace }),
               let endpointPort = NWEndpoint.Port(rawValue: port) else { throw XMPPClientError.invalidConfiguration }
-        groupRooms.removeAll()
+        groupRooms.removeAll(); rosterFetchIDs.removeAll(); rosterRequested = false
         self.domain = domain; self.username = username; self.password = password
         phase = .features; generation = UUID()
         let token = generation
@@ -459,7 +471,11 @@ public actor XMPPClient {
                 } else if let inbound { try await streamManagement?.handled(inbound) }
                 return
             }
+            let rosterFetch = node.attributes["id"].map(rosterFetchIDs.contains) ?? false
             if routeIQ(node) {
+                if rosterFetch, node.attributes["type"] == "result", let items = try? PresenceWire.rosterResult(node) {
+                    try emit(.rosterItems(items, replacesAll: true))
+                }
                 if let inbound { try await streamManagement?.handled(inbound) }
                 return
             }
@@ -469,6 +485,9 @@ public actor XMPPClient {
                 GroupChatWire.applyPresence(node, room: room, account: account, state: &state)
                 groupRooms[room] = state
                 try emit(.groupPresence(room: room))
+            } else if node.name == "presence", node.namespace == "jabber:client", let account = OMEMOWire.bareJID(boundJID),
+                      let event = PresenceWire.event(node, accountBareJID: account, accountFullJID: boundJID, rooms: Set(groupRooms.keys)) {
+                try emit(event)
             }
             if node.name == "message", node.namespace == "jabber:client" {
                 if Carbons.containsWrapper(node) {
@@ -482,15 +501,14 @@ public actor XMPPClient {
                 } else { try emitMessage(node, provenance: .direct) }
             } else if node.name == "iq", node.namespace == "jabber:client",
                       ["get", "set"].contains(node.attributes["type"] ?? ""), let id = node.attributes["id"] {
-                let to = node.attributes["from"].map { " to='\(xmlEscaped($0))'" } ?? ""
-                // Respond to XEP-0199 pings; reject other unsupported requests explicitly.
-                if node.attributes["type"] == "get", node.children.count == 1,
-                   let query = node.child("query", namespace: "http://jabber.org/protocol/disco#info") {
-                    try await write("<iq type='result' id='\(xmlEscaped(id))'\(to)>\(EntityCapabilities.discoInfoQuery(node: query.attributes["node"]))</iq>")
-                } else if node.child("ping", namespace: "urn:xmpp:ping") != nil {
+                if rosterRequested, let account = OMEMOWire.bareJID(boundJID),
+                   let item = PresenceWire.rosterPush(node, accountBareJID: account) {
+                    let to = node.attributes["from"].map { " to='\(xmlEscaped($0))'" } ?? ""
                     try await write("<iq type='result' id='\(xmlEscaped(id))'\(to)/>")
-                } else {
-                    try await write("<iq type='error' id='\(xmlEscaped(id))'\(to)><error type='cancel'><service-unavailable xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></iq>")
+                    try emit(.rosterItems([item], replacesAll: false))
+                } else if let response = PresenceWire.inlineResponse(node, accountFullJID: boundJID, sharesLastActivity: sharesLastActivity) {
+                    // disco#info, XEP-0199 ping and XEP-0012; other requests are rejected explicitly.
+                    try await write(response)
                 }
             }
             if let inbound {
@@ -669,6 +687,40 @@ public actor XMPPClient {
         _ = try await requestIQ(type: "set", to: ownBare, payload: payload)
     }
 
+    /// RFC 6121 §2.1.3. The result is also emitted as `.rosterItems(_, replacesAll: true)` in stream order,
+    /// ahead of any push that follows it; consumers should track the roster from events, not this return value.
+    /// Later pushes from the server are answered and emitted until the session ends.
+    @discardableResult public func fetchRoster() async throws -> [XMPPRosterItem] {
+        guard phase == .online, OMEMOWire.bareJID(boundJID) != nil else { throw XMPPClientError.notConnected }
+        rosterRequested = true
+        let id = UUID().uuidString
+        rosterFetchIDs.insert(id)
+        defer { rosterFetchIDs.remove(id) }
+        let response = try await requestIQ(type: "get", to: nil, payload: "<query xmlns='\(PresenceWire.rosterNamespace)'/>", id: id)
+        return try PresenceWire.rosterResult(response)
+    }
+
+    /// `<presence to='bare' type='…'/>`: ask for, grant, withdraw or refuse a presence subscription.
+    public func sendSubscription(_ kind: XMPPSubscriptionRequest, to bare: String) async throws {
+        guard phase == .online else { throw XMPPClientError.notConnected }
+        try await write(PresenceWire.subscriptionXML(kind, to: bare))
+    }
+
+    /// XEP-0012 seconds since the contact's last session ended, as its server reports it.
+    /// Only the queried bare address may answer. `forbidden` means we hold no subscription.
+    public func lastActivity(of bare: String) async throws -> Int {
+        guard phase == .online else { throw XMPPClientError.notConnected }
+        guard OMEMOWire.bareJID(bare) == bare else { throw XMPPClientError.invalidConfiguration }
+        let response = try await requestIQ(type: "get", to: bare, payload: "<query xmlns='\(PresenceWire.lastActivityNamespace)'/>")
+        return try PresenceWire.lastActivitySeconds(response)
+    }
+
+    /// Decides the inline XEP-0012 answer to a query addressed to our full JID: `seconds='0'` when on,
+    /// `service-unavailable` when off (the default).
+    public func setSharesLastActivity(_ on: Bool) {
+        sharesLastActivity = on
+    }
+
     /// The raw disco#info query node: features plus any data forms (XEP-0128) the entity publishes.
     func discoveryInfo(for jid: String? = nil) async throws -> XMLNode {
         let response = try await requestIQ(type: "get", to: jid, payload: "<query xmlns='http://jabber.org/protocol/disco#info'/>")
@@ -835,14 +887,13 @@ public actor XMPPClient {
         do { return (owner, try AvatarWire.parseMetadata(item.children[0])) } catch { return nil }
     }
 
-    func requestIQ(type: String, to: String?, payload: String) async throws -> XMLNode {
+    func requestIQ(type: String, to: String?, payload: String, id: String = UUID().uuidString) async throws -> XMLNode {
         guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
         guard iqRequests.count < 64 else { throw XMPPIQError.requestLimit }
         if let to {
             guard !to.isEmpty, to.utf8.count <= 3_071, !to.contains(where: { $0.isWhitespace }),
                   MessageContent.validXMLText(to) else { throw XMPPClientError.invalidConfiguration }
         }
-        let id = UUID().uuidString
         let token = generation
         let scope = IQReplyScope(recipient: to, accountBareJID: ownBare, accountFullJID: boundJID, serverDomain: domain)
         return try await withTaskCancellationHandler {
@@ -870,7 +921,7 @@ public actor XMPPClient {
 
     private func routeIQ(_ node: XMLNode) -> Bool {
         guard let id = node.attributes["id"], let request = iqRequests[id], request.scope.accepts(node) else { return false }
-        iqRequests.removeValue(forKey: id)
+        iqRequests.removeValue(forKey: id); rosterFetchIDs.remove(id)
         request.timeout.cancel()
         do { request.continuation.resume(returning: try IQReplyScope.result(node)) }
         catch { request.continuation.resume(throwing: error) }
@@ -878,6 +929,7 @@ public actor XMPPClient {
     }
 
     private func failIQ(_ id: String, error: Error) {
+        rosterFetchIDs.remove(id)
         guard let request = iqRequests.removeValue(forKey: id) else { return }
         request.timeout.cancel()
         request.continuation.resume(throwing: error)
@@ -895,7 +947,7 @@ public actor XMPPClient {
     private func timeout(_ token: UUID) { if generation == token && phase != .online { finish("Connection timed out", error: XMPPClientError.timedOut) } }
     private func finish(_ reason: String?, error: Error = XMPPClientError.connectionClosed) {
         generation = UUID()
-        groupRooms.removeAll()
+        groupRooms.removeAll(); rosterFetchIDs.removeAll(); rosterRequested = false
         let pending = iqRequests; iqRequests.removeAll()
         for request in pending.values { request.timeout.cancel(); request.continuation.resume(throwing: error) }
         boundJID = ""
