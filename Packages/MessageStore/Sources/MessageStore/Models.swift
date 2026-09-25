@@ -258,13 +258,16 @@ public struct StoredUpdate: Sendable, Equatable {
     public var payload: String? = nil
 }
 
-/// Per-account switches. Receipt switches gate both what we ask for and what we send back.
+/// Per-account switches. Receipt switches gate what we send back; requesting is unconditional.
+/// `lastSeen` decides whether contacts may subscribe to our presence and learn when we were last active.
 public struct AccountPreferences: Sendable, Equatable {
     public var notificationPreviews = true
     public var deliveryReceipts = true
     public var readReceipts = true
-    public init(notificationPreviews: Bool = true, deliveryReceipts: Bool = true, readReceipts: Bool = true) {
+    public var lastSeen = true
+    public init(notificationPreviews: Bool = true, deliveryReceipts: Bool = true, readReceipts: Bool = true, lastSeen: Bool = true) {
         self.notificationPreviews = notificationPreviews; self.deliveryReceipts = deliveryReceipts; self.readReceipts = readReceipts
+        self.lastSeen = lastSeen
     }
 }
 

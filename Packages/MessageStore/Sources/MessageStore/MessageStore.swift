@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 14 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 15 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -166,7 +166,7 @@ public actor MessageStore {
                 try connection.execute("ALTER TABLE account_preferences ADD COLUMN delivery_receipts INTEGER NOT NULL DEFAULT 1")
                 try connection.execute("ALTER TABLE account_preferences ADD COLUMN read_receipts INTEGER NOT NULL DEFAULT 1")
             }
-            try connection.execute("CREATE TABLE IF NOT EXISTS account_preferences (account_id TEXT PRIMARY KEY, previews INTEGER NOT NULL DEFAULT 1, delivery_receipts INTEGER NOT NULL DEFAULT 1, read_receipts INTEGER NOT NULL DEFAULT 1)")
+            try connection.execute("CREATE TABLE IF NOT EXISTS account_preferences (account_id TEXT PRIMARY KEY, previews INTEGER NOT NULL DEFAULT 1, delivery_receipts INTEGER NOT NULL DEFAULT 1, read_receipts INTEGER NOT NULL DEFAULT 1, last_seen INTEGER NOT NULL DEFAULT 1)")
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS notification_candidates (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, message_id TEXT NOT NULL,
@@ -210,7 +210,11 @@ public actor MessageStore {
                     )
                     """)
             }
-            try connection.execute("PRAGMA user_version = 14")
+            // v15 (other branches may claim the same number; the column check keeps it idempotent): the last-seen switch.
+            if try connection.query("SELECT 1 FROM pragma_table_info('account_preferences') WHERE name='last_seen'").isEmpty {
+                try connection.execute("ALTER TABLE account_preferences ADD COLUMN last_seen INTEGER NOT NULL DEFAULT 1")
+            }
+            try connection.execute("PRAGMA user_version = 15")
         }
     }
 
@@ -681,15 +685,16 @@ public actor MessageStore {
     }
 
     public func accountPreferences(accountID: String) throws -> AccountPreferences {
-        guard let row = try connection.query("SELECT previews,delivery_receipts,read_receipts FROM account_preferences WHERE account_id=?", [.text(accountID)]).first else { return AccountPreferences() }
-        return AccountPreferences(notificationPreviews: row[0].integer != 0, deliveryReceipts: row[1].integer != 0, readReceipts: row[2].integer != 0)
+        guard let row = try connection.query("SELECT previews,delivery_receipts,read_receipts,last_seen FROM account_preferences WHERE account_id=?", [.text(accountID)]).first else { return AccountPreferences() }
+        return AccountPreferences(notificationPreviews: row[0].integer != 0, deliveryReceipts: row[1].integer != 0, readReceipts: row[2].integer != 0, lastSeen: row[3].integer != 0)
     }
 
     public func setAccountPreferences(accountID: String, _ preferences: AccountPreferences) throws {
         try requireTransportOwnership()
         guard !accountID.isEmpty else { throw MessageStoreError.invalidValue }
-        try connection.execute("INSERT INTO account_preferences(account_id,previews,delivery_receipts,read_receipts) VALUES(?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET previews=excluded.previews,delivery_receipts=excluded.delivery_receipts,read_receipts=excluded.read_receipts",
-                               [.text(accountID), .integer(preferences.notificationPreviews ? 1 : 0), .integer(preferences.deliveryReceipts ? 1 : 0), .integer(preferences.readReceipts ? 1 : 0)])
+        try connection.execute("INSERT INTO account_preferences(account_id,previews,delivery_receipts,read_receipts,last_seen) VALUES(?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET previews=excluded.previews,delivery_receipts=excluded.delivery_receipts,read_receipts=excluded.read_receipts,last_seen=excluded.last_seen",
+                               [.text(accountID), .integer(preferences.notificationPreviews ? 1 : 0), .integer(preferences.deliveryReceipts ? 1 : 0),
+                                .integer(preferences.readReceipts ? 1 : 0), .integer(preferences.lastSeen ? 1 : 0)])
     }
 
     /// The foreground owner has already presented these messages. This is notification

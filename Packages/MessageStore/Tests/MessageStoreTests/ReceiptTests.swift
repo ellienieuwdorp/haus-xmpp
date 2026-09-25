@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import MessageStore
 
@@ -63,7 +64,40 @@ private func receipt(_ id: String, kind: MessageEventKind, actor: String = "peer
     #expect(try await store.accountPreferences(accountID: "self") == AccountPreferences(notificationPreviews: true, deliveryReceipts: false, readReceipts: true))
     try await store.setAccountPreferences(accountID: "self", AccountPreferences(readReceipts: false))
     #expect(try await store.enqueueReceipt(accountID: "self", chatID: "peer", targetMessageID: "newer", kind: .marker) == nil)
+    // Last seen round-trips on its own and leaves the receipt switches alone.
+    #expect(try await store.accountPreferences(accountID: "self").lastSeen)
+    try await store.setAccountPreferences(accountID: "self", AccountPreferences(readReceipts: false, lastSeen: false))
+    #expect(try await store.accountPreferences(accountID: "self") == AccountPreferences(readReceipts: false, lastSeen: false))
+    try await store.setNotificationPreviews(accountID: "self", enabled: false)
+    #expect(try await store.accountPreferences(accountID: "self") == AccountPreferences(notificationPreviews: false, readReceipts: false, lastSeen: false))
     try await store.close()
+}
+
+@Test func migrationV14AddsLastSeenDefaultingOnAndKeepsReceiptSwitches() async throws {
+    let url = try receiptURL(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
+    try await store.setAccountPreferences(accountID: "self", AccountPreferences(deliveryReceipts: false))
+    try await store.close()
+    // A v14 store: today's schema minus the column, as an upgrade from main would see it.
+    var db: OpaquePointer?
+    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+    #expect(sqlite3_exec(db, "ALTER TABLE account_preferences DROP COLUMN last_seen; PRAGMA user_version=14;", nil, nil, nil) == SQLITE_OK)
+    sqlite3_close(db)
+
+    let migrated = try MessageStore(url: url)
+    try await migrated.acquireTransportOwnership()
+    #expect(try await migrated.accountPreferences(accountID: "self") == AccountPreferences(deliveryReceipts: false, lastSeen: true))
+    try await migrated.setAccountPreferences(accountID: "self", AccountPreferences(deliveryReceipts: false, lastSeen: false))
+    try await migrated.close()
+    // Reopening a v15 store must not re-add the column, and a newer schema is refused.
+    let reopened = try MessageStore(url: url)
+    #expect(try await reopened.accountPreferences(accountID: "self").lastSeen == false)
+    try await reopened.close()
+    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+    #expect(sqlite3_exec(db, "PRAGMA user_version=16;", nil, nil, nil) == SQLITE_OK)
+    sqlite3_close(db)
+    #expect(throws: MessageStoreError.self) { try MessageStore(url: url) }
 }
 
 @Test func peerReceiptsProjectOnlyOntoOwnMessagesAndKeepTheStrongestState() async throws {
