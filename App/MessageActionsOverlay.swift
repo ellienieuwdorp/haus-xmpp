@@ -79,14 +79,10 @@ enum MessageActionsOverlay {
         guard current == nil, let window = presenter.view.window else { discardPrepared(); return false }
         let presenting = signposter.beginInterval("present")
         defer { signposter.endInterval("present", presenting) }
-        let controller: UIHostingController<MessageActionsOverlayView>
-        if let prepared, prepared.messageID == context.message.id, prepared.controller.view.window === window {
-            controller = prepared.controller
-        } else {
-            discardPrepared()
-            controller = makeController(in: window, context: context)
-            window.addSubview(controller.view)
+        if prepared?.messageID != context.message.id || prepared?.controller.view.window !== window {
+            prepare(in: window, context: context)
         }
+        guard let controller = prepared?.controller else { return false }
         prepared = nil
         // The snapshot takes the live bubble's place in the same frame, so the blur never holds a twin of it.
         context.setSourceHidden(true)
@@ -100,13 +96,14 @@ enum MessageActionsOverlay {
             onDismiss(action?.kind)
             action?.perform()
         }
-        view.armed = true
         controller.rootView = view
         controller.view.isHidden = false
         current = controller
-        // Commit the armed pass (and with it the entrance spring) now, before the timeline puts the keyboard away:
-        // left to the next pass it would run inside the keyboard's animation block and every snapshot would fly in
-        // from its initial frame. (Not performWithoutAnimation: the blur's own fade starts in this pass.)
+        // The view already rendered the source stage while hidden, so the entrance starts in this pass and the first
+        // frame on screen is the spring's first step. Committed now, before the timeline puts the keyboard away: left
+        // to the next pass it would run inside the keyboard's animation block and every snapshot would fly in from its
+        // initial frame. (Not performWithoutAnimation: the blur's own fade starts in this pass.)
+        view.enter()
         controller.view.layoutIfNeeded()
         UIAccessibility.post(notification: .screenChanged, argument: controller.view)
         return true
@@ -127,32 +124,11 @@ struct MessageActionsOverlayView: View {
     var context: MessageActionsContext
     let safeArea: UIEdgeInsets
     let windowSize: CGSize
-    /// False while the overlay is built hidden during the press squeeze; turning true starts the entrance.
-    var armed = false
     var willDismiss: (MessageAction.Kind?) -> Bool = { _ in false }
     var finish: (MessageAction?) -> Void = { _ in }
-
-    private enum Stage: Equatable {
-        /// Over the live bubble as the press left it: squeezed, and wherever the keyboard had it.
-        case source
-        /// Clamped between the pill and the menu.
-        case open
-        /// Back over the live bubble, which has moved by this much since the press; nil fades out in place.
-        case closing(CGSize?)
-    }
-    @State private var stage = Stage.source
-    /// Blur, scrim and pill are in (each animates its own ramp).
-    @State private var shown = false
-    /// The bubble's pop on arrival: up a few percent on a quick spring, then back to rest on a softer one.
-    @State private var lifted = false
-    /// Set as the close begins, before the keyboard can come back, so the layout stops following it.
-    @State private var dismissing = false
-    /// The quick reactions have slid up; never reset, so they stay put while the pill fades out.
-    @State private var pillIn = false
-    /// 0.1 s when the bubble has to travel, so the pill arrives after it starts moving.
-    @State private var pillDelay: Double = 0
-    @State private var choosingEmoji = false
-    @State private var keyboardHeight: CGFloat = 0
+    /// Held by reference, so `present` can start the entrance in the same pass that shows the overlay (a change made
+    /// from onAppear or onChange lands a pass later, and its spring two frames after the overlay appears).
+    private let motion = OverlayMotion()
     @AppStorage("recentReactions") private var recentReactions = ""
     private var accent: String { AccentTheme.current.rawValue }
     @Environment(\.colorScheme) private var colorScheme
@@ -177,7 +153,7 @@ struct MessageActionsOverlayView: View {
     private var message: TimelineMessage { context.message }
     private var tint: Color { Color(uiColor: (AccentTheme(rawValue: accent) ?? .indigo).tint) }
     private var recents: [String] { recentReactions.split(separator: ",").map(String.init).filter { !$0.isEmpty } }
-    private var closing: Bool { if case .closing = stage { true } else { false } }
+    private var closing: Bool { if case .closing = motion.stage { true } else { false } }
 
     private struct Layout {
         /// The bubble and its reaction pills where the press found them.
@@ -193,12 +169,12 @@ struct MessageActionsOverlayView: View {
         let rowHeight = max(44, ceil(UIFont.preferredFont(forTextStyle: .body).lineHeight) + 22)
         let menuHeight = CGFloat(context.actions.count) * rowHeight
         let reasonHeight: CGFloat = message.reactionUnavailableReason == nil ? 0 : 22
-        let recentsHeight: CGFloat = choosingEmoji && !recents.isEmpty ? 44 : 0
+        let recentsHeight: CGFloat = motion.choosingEmoji && !recents.isEmpty ? 44 : 0
         let block = context.reactions == nil ? context.bubbleFrame : context.bubbleFrame.union(context.reactionsFrame)
         let top = safeArea.top + 8
-        let bottom = size.height - max(safeArea.bottom, keyboardHeight) - 8
+        let bottom = size.height - max(safeArea.bottom, motion.keyboardHeight) - 8
         let fitScale = min(1, max(0.3, (bottom - top - Self.pillHeight - reasonHeight - recentsHeight - menuHeight - 2 * Self.gap) / block.height))
-        let groupHeight = Self.pillHeight + reasonHeight + recentsHeight + Self.gap + block.height * fitScale + Self.gap + (choosingEmoji ? 0 : menuHeight)
+        let groupHeight = Self.pillHeight + reasonHeight + recentsHeight + Self.gap + block.height * fitScale + Self.gap + (motion.choosingEmoji ? 0 : menuHeight)
         let groupTop = min(max(top, block.minY - Self.pillHeight - reasonHeight - Self.gap), max(top, bottom - groupHeight))
         let bubbleTop = groupTop + Self.pillHeight + reasonHeight + recentsHeight + Self.gap
         return Layout(block: block, fitScale: fitScale, groupTop: groupTop, bubbleTop: bubbleTop, menuTop: bubbleTop + block.height * fitScale + Self.gap)
@@ -211,7 +187,7 @@ struct MessageActionsOverlayView: View {
             let menuAnchor: UnitPoint = message.isOutgoing ? .topTrailing : .topLeading
 
             ZStack(alignment: .topLeading) {
-                LiveBlur(active: shown)
+                LiveBlur(active: motion.shown)
                     .frame(width: geo.size.width, height: geo.size.height)
                     .allowsHitTesting(false)
                 Color.clear
@@ -227,47 +203,44 @@ struct MessageActionsOverlayView: View {
                         Text(reason).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             .padding(.horizontal, 12).accessibilityIdentifier("reactionUnavailableReason")
                     }
-                    if choosingEmoji, !recents.isEmpty { recentsRow }
+                    if motion.choosingEmoji, !recents.isEmpty { recentsRow }
                 }
-                .opacity(shown ? 1 : 0)
-                .animation(shown ? .easeOut(duration: 0.15).delay(pillDelay) : .easeOut(duration: 0.25), value: shown)
+                .opacity(motion.shown ? 1 : 0)
+                .animation(motion.shown ? .easeOut(duration: 0.15).delay(motion.pillDelay) : .easeOut(duration: 0.25), value: motion.shown)
                 .frame(width: geo.size.width - 32, alignment: alignment)
                 .offset(x: 16, y: layout.groupTop + ride(layout))
                 snapshot(context.bubble, frame: context.bubbleFrame, layout: layout, shadow: context.bubbleShape)
                 if let reactions = context.reactions {
                     snapshot(reactions, frame: context.reactionsFrame, layout: layout, shadow: nil)
                 }
-                if !choosingEmoji {
+                if !motion.choosingEmoji {
                     // `.animation(_:value:)` sits right after the opacity, so it times the opacity alone; the scale and the
                     // offset outside it take the entrance spring from the transaction that changes the stage.
                     menu
-                        .opacity(stage == .open ? 1 : closing ? 0 : Self.menuStartOpacity)
-                        .animation(Self.menuFade, value: stage)
-                        .scaleEffect(stage == .open ? 1 : Self.menuStartScale, anchor: menuAnchor)
+                        .opacity(motion.stage == .open ? 1 : closing ? 0 : Self.menuStartOpacity)
+                        .animation(Self.menuFade, value: motion.stage)
+                        .scaleEffect(motion.stage == .open ? 1 : Self.menuStartScale, anchor: menuAnchor)
                         .frame(width: geo.size.width - 32, alignment: alignment)
                         .offset(x: 16, y: menuTop(layout))
                         .transition(.scale(scale: 0.9, anchor: menuAnchor).combined(with: .opacity))
                 }
             }
-            .animation(reduceMotion ? nil : Self.enter, value: choosingEmoji)
+            .animation(reduceMotion ? nil : Self.enter, value: motion.choosingEmoji)
             .gesture(DragGesture(minimumDistance: 30).onEnded { _ in dismiss(nil) })
         }
         .ignoresSafeArea()
-        // Built hidden during the squeeze, the overlay starts only when the press is confirmed.
-        .onAppear { if armed { enter() } }
-        .onChange(of: armed) { if armed { enter() } }
         // The bubble is a picture taken at the press; in a new appearance it would stay in the old one.
         .onChange(of: colorScheme) { dismiss(nil) }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
             guard let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
-                  !dismissing, let screen = (note.object as? UIScreen) ?? UIScreen.main as UIScreen? else { return }
-            keyboardHeight = max(0, screen.bounds.height - frame.minY)
+                  !motion.dismissing, let screen = (note.object as? UIScreen) ?? UIScreen.main as UIScreen? else { return }
+            motion.keyboardHeight = max(0, screen.bounds.height - frame.minY)
         }
     }
 
     /// How far the pill and the menu sit from their open places in this stage: they travel with the bubble.
     private func ride(_ layout: Layout) -> CGFloat {
-        switch stage {
+        switch motion.stage {
         case .source: layout.block.minY - layout.bubbleTop
         case .open, .closing(.none): 0
         case .closing(.some(let moved)): layout.block.minY + moved.height - layout.bubbleTop
@@ -276,7 +249,7 @@ struct MessageActionsOverlayView: View {
 
     /// The menu hangs under the bubble's block: at the press, open, and back over the live bubble.
     private func menuTop(_ layout: Layout) -> CGFloat {
-        switch stage {
+        switch motion.stage {
         case .source: layout.block.maxY + Self.gap
         case .open, .closing(.none): layout.menuTop
         case .closing(.some(let moved)): layout.block.maxY + moved.height + Self.gap
@@ -286,43 +259,43 @@ struct MessageActionsOverlayView: View {
     /// The first frame shows the snapshot exactly over the squeezed live bubble with the menu at a fifth of its size
     /// under it; from there one spring carries the bubble to its clamped place and the pill and menu with it, while
     /// the blur fades in and the bubble pops once on arrival. No timers: each part runs its own curve.
-    private func enter() {
-        guard stage == .source, !shown else { return }
-        pillIn = true
-        if reduceMotion { stage = .open; shown = true; return }
-        pillDelay = layout(in: windowSize).shifts ? 0.1 : 0
-        withAnimation(Self.enter) { stage = .open }
-        shown = true
-        withAnimation(Self.liftUp) { lifted = true } completion: {
-            guard !dismissing else { return }
-            withAnimation(Self.liftDown) { lifted = false }
+    func enter() {
+        guard motion.stage == .source, !motion.shown else { return }
+        motion.pillIn = true
+        if reduceMotion { motion.stage = .open; motion.shown = true; return }
+        motion.pillDelay = layout(in: windowSize).shifts ? 0.1 : 0
+        withAnimation(Self.enter) { motion.stage = .open }
+        motion.shown = true
+        withAnimation(Self.liftUp) { motion.lifted = true } completion: {
+            guard !motion.dismissing else { return }
+            withAnimation(Self.liftDown) { motion.lifted = false }
         }
     }
 
     /// Springs the snapshot back onto the live bubble, wherever it is now (or where the returning keyboard is about to
     /// put it), then shows the live bubble and removes the overlay.
     private func dismiss(_ action: MessageAction?) {
-        // A prepared overlay that was never armed is still hidden: nothing to close.
-        guard armed, !dismissing else { return }
-        dismissing = true
+        // A prepared overlay that never entered is still hidden: nothing to close.
+        guard motion.pillIn, !motion.dismissing else { return }
+        motion.dismissing = true
         let bounds = CGRect(origin: .zero, size: windowSize)
         let returnsToPress = willDismiss(action?.kind)
         let moved = returnsToPress ? CGSize.zero : context.currentBubbleFrame().flatMap { live -> CGSize? in
             guard live.intersects(bounds) else { return nil }
             return CGSize(width: live.minX - context.bubbleFrame.minX, height: live.minY - context.bubbleFrame.minY)
         }
-        shown = false
-        if lifted { withAnimation(Self.leave) { lifted = false } }
+        motion.shown = false
+        if motion.lifted { withAnimation(Self.leave) { motion.lifted = false } }
         let done = {
             context.setSourceHidden(false)
             finish(action)
         }
         if reduceMotion {
-            stage = .closing(moved)
+            motion.stage = .closing(moved)
             done()
             return
         }
-        withAnimation(Self.leave, completionCriteria: .logicallyComplete) { stage = .closing(moved) } completion: { done() }
+        withAnimation(Self.leave, completionCriteria: .logicallyComplete) { motion.stage = .closing(moved) } completion: { done() }
     }
 
     /// The snapshot at the stage's place. The squeeze scales about the bubble's centre (the reaction pills with it);
@@ -331,10 +304,10 @@ struct MessageActionsOverlayView: View {
         let outerTop: UnitPoint = message.isOutgoing ? .topTrailing : .topLeading
         let centre = UnitPoint(x: (context.bubbleFrame.midX - frame.minX) / max(1, frame.width),
                                y: (context.bubbleFrame.midY - frame.minY) / max(1, frame.height))
-        let squeeze = stage == .source ? context.sourceScale : 1
+        let squeeze = motion.stage == .source ? context.sourceScale : 1
         let fit: CGFloat
         let origin: CGPoint
-        switch stage {
+        switch motion.stage {
         case .source:
             fit = 1
             origin = frame.origin
@@ -345,14 +318,14 @@ struct MessageActionsOverlayView: View {
             fit = 1
             origin = CGPoint(x: frame.minX + moved.width, y: frame.minY + moved.height)
         }
-        return SnapshotHost(view: view, shadowPath: shadow, lifted: stage == .open)
+        return SnapshotHost(view: view, shadowPath: shadow, lifted: motion.stage == .open)
             .frame(width: frame.width, height: frame.height)
             .scaleEffect(squeeze, anchor: centre)
             // Its own modifier: the pop runs on its own springs on top of the move, neither retargets the other.
-            .scaleEffect(lifted ? Self.liftScale : 1, anchor: centre)
+            .scaleEffect(motion.lifted ? Self.liftScale : 1, anchor: centre)
             .scaleEffect(fit, anchor: outerTop)
             .offset(x: origin.x, y: origin.y)
-            .opacity(stage == .closing(nil) ? 0 : 1)
+            .opacity(motion.stage == .closing(nil) ? 0 : 1)
     }
 
     private var reactionPill: some View {
@@ -360,16 +333,16 @@ struct MessageActionsOverlayView: View {
         return HStack(spacing: 2) {
             ForEach(Array(TimelineReaction.choices.enumerated()), id: \.element) { index, emoji in
                 reactionButton(emoji, selected: selected.contains(emoji))
-                    .modifier(SlideIn(index: index, delay: pillDelay, active: pillIn))
+                    .modifier(SlideIn(index: index, delay: motion.pillDelay, active: motion.pillIn))
             }
-            Button { choosingEmoji.toggle() } label: {
+            Button { motion.choosingEmoji.toggle() } label: {
                 Image(systemName: "plus").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
                     .frame(width: 36, height: 36).background(Color.primary.opacity(0.08), in: Circle())
             }
             .buttonStyle(.plain).frame(width: 44, height: 44)
             .disabled(!message.canReact)
             .accessibilityLabel("More reactions").accessibilityIdentifier("moreReactions")
-            .modifier(SlideIn(index: TimelineReaction.choices.count, delay: pillDelay, active: pillIn))
+            .modifier(SlideIn(index: TimelineReaction.choices.count, delay: motion.pillDelay, active: motion.pillIn))
         }
         .padding(.horizontal, 6)
         .frame(height: Self.pillHeight)
@@ -427,6 +400,32 @@ struct MessageActionsOverlayView: View {
         context.react(emoji)
         dismiss(nil)
     }
+}
+
+/// The overlay's animated state, in a reference so the presenter can change it inside its own animation transaction.
+@MainActor @Observable
+private final class OverlayMotion {
+    enum Stage: Equatable {
+        /// Over the live bubble as the press left it: squeezed, and wherever the keyboard had it.
+        case source
+        /// Clamped between the pill and the menu.
+        case open
+        /// Back over the live bubble, which has moved by this much since the press; nil fades out in place.
+        case closing(CGSize?)
+    }
+    var stage = Stage.source
+    /// Blur, scrim and pill are in (each animates its own ramp).
+    var shown = false
+    /// The bubble's pop on arrival: up a few percent on a quick spring, then back to rest on a softer one.
+    var lifted = false
+    /// Set as the close begins, before the keyboard can come back, so the layout stops following it.
+    var dismissing = false
+    /// The quick reactions have slid up; never reset, so they stay put while the pill fades out.
+    var pillIn = false
+    /// 0.1 s when the bubble has to travel, so the pill arrives after it starts moving.
+    var pillDelay: Double = 0
+    var choosingEmoji = false
+    var keyboardHeight: CGFloat = 0
 }
 
 /// Signal's reaction bar entrance: each emoji rises 24 pt into the pill, 10 ms after its neighbour, over 0.2 s ease-in.

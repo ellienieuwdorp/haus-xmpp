@@ -1056,8 +1056,10 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             pressGeneration += 1
             let generation = pressGeneration
             if UIAccessibility.isReduceMotionEnabled { presentMenu(actionsContext()); return }
-            // The snapshot and frames are taken before the squeeze (a snapshot ignores the transform anyway).
-            let context = actionsContext()
+            // The snapshot and frames are taken before the squeeze (a snapshot ignores the transform anyway); the
+            // prepared overlay draws its source at the squeeze's end scale, which it will have when it is shown.
+            var context = actionsContext()
+            context?.sourceScale = Self.squeezedScale
             UIView.animate(withDuration: Self.squeezeDuration, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction]) {
                 self.squeeze(Self.squeezedScale)
             } completion: { [weak self] _ in
