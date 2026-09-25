@@ -217,4 +217,53 @@ final class ConnectionSetupTests: XCTestCase {
         let marks = await recorder.marks
         XCTAssertLessThan(marks.firstIndex(of: "uploads") ?? .max, marks.firstIndex(of: "returned") ?? -1)
     }
+
+    /// A flag set off the main actor and read by a test that is holding the main actor.
+    private final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var raised = false
+        var value: Bool { lock.withLock { raised } }
+        func raise() { lock.withLock { raised = true } }
+    }
+
+    /// What reached the owner, and whether the owner had already cancelled the setup at that point.
+    @MainActor private final class Owner {
+        var cancelled = false
+        private(set) var events: [ConnectionSetup.Event] = []
+        private(set) var deliveredAfterCancel: [ConnectionSetup.Event] = []
+        func apply(_ event: ConnectionSetup.Event) {
+            events.append(event)
+            if cancelled { deliveredAfterCancel.append(event) }
+        }
+    }
+
+    /// `.disconnected` cancels the setup on the main actor without changing the generation. An event the setup
+    /// produced just before (here `.ready`, right after `initialize` returned) and that is still queued for the
+    /// main actor must then be dropped, or it would overwrite the offline state and stop the reconnect.
+    func testAnEventQueuedWhenTheOwnerCancelsIsNotDelivered() async {
+        let recorder = Recorder(), owner = Owner()
+        let mainHeld = Flag(), initialized = Flag()
+        var operations = operations(recorder)
+        operations.initializeEncryption = {
+            while !mainHeld.value { try await Task.sleep(for: .milliseconds(1)) }
+            initialized.raise()
+        }
+        operations.catchUp = { _ in try await Task.sleep(for: .seconds(60)) }
+        let task = Task { await ConnectionSetup(identityExists: true).run(operations: operations) { owner.apply($0) } }
+        while !owner.events.contains(Self.keys) { await Task.yield() }
+        // Hold the main actor until `initialize` returned and the identity child had time to queue `.ready`
+        // behind this job, then cancel from the main actor as the `.disconnected` handler does.
+        mainHeld.raise()
+        while !initialized.value {}
+        let held = ContinuousClock.now + .milliseconds(50)
+        while ContinuousClock.now < held {}
+        task.cancel()
+        owner.cancelled = true
+        await task.value
+
+        XCTAssertEqual(owner.deliveredAfterCancel, [])
+        XCTAssertFalse(owner.events.contains(.ready))
+        XCTAssertFalse(owner.events.contains(.catchingUp(nil)))
+        XCTAssertFalse(owner.events.contains { if case .failed = $0 { true } else { false } })
+    }
 }

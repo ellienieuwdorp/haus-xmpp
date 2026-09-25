@@ -57,7 +57,15 @@ struct ConnectionSetup: Sendable {
     /// Returns after every child has finished, including after cancellation or a failure.
     /// Emits at most one `.failed` and never `.ready` after it. A walk that started ends with exactly one of
     /// `.catchingUp(nil)` or `.failed`, unless `run` was cancelled: cancellation publishes nothing further.
-    func run(operations: Operations, sink: @escaping @MainActor @Sendable (Event) async -> Void) async {
+    ///
+    /// Nothing is delivered once the calling task is cancelled. The check runs on the main actor right before
+    /// the owner applies the event, so a teardown that cancels the setup on the main actor (a `.disconnected`
+    /// that arrived between an operation's return and its event) always wins over an event already in flight.
+    func run(operations: Operations, sink deliver: @escaping @MainActor @Sendable (Event) async -> Void) async {
+        let sink: @MainActor @Sendable (Event) async -> Void = { event in
+            guard !Task.isCancelled else { return }
+            await deliver(event)
+        }
         var step = Self.featuresStep
         await sink(.step(step))
         let features: Set<String>
@@ -66,6 +74,7 @@ struct ConnectionSetup: Sendable {
             do {
                 features = try await operations.features()
                 if features.contains(Self.carbonsFeature) {
+                    try Task.checkCancellation()
                     step = Self.carbonsStep
                     await sink(.step(step))
                     try await operations.enableCarbons()
@@ -89,6 +98,7 @@ struct ConnectionSetup: Sendable {
                     var step = Self.keysStep
                     do {
                         if identityExists {
+                            try Task.checkCancellation()
                             await sink(.step(step))
                             try await operations.initializeEncryption()
                         }
@@ -103,6 +113,7 @@ struct ConnectionSetup: Sendable {
                 if walks {
                     group.addTask {
                         do {
+                            try Task.checkCancellation()
                             await sink(.catchingUp(CatchUpProgress(archive: nil, pages: 0, messages: 0)))
                             try await operations.catchUp { await sink(.catchingUp($0)) }
                         } catch {

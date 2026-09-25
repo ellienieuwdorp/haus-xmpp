@@ -1147,8 +1147,15 @@ final class AppModel {
         uploadService = uploads.settle(account: account, previous: uploadService, discovery: discovery)
     }
 
+    /// True while this connection's setup may still change state. `.disconnected` cancels the setup task without
+    /// changing the generation, so the generation alone would let a late `.step` or `.ready` overwrite the
+    /// offline state and stop the reconciler from reconnecting (neither state is connectable).
+    private func setupIsCurrent(_ token: UUID) -> Bool { generation == token && !Task.isCancelled }
+
     private func applySetupEvent(_ event: ConnectionSetup.Event, account: String, client: XMPPClient, token: UUID) async {
-        guard generation == token else { return }
+        // Runs in the setup child's task on the main actor, so a `.disconnected` handled before this job ran has
+        // already cancelled it.
+        guard setupIsCurrent(token) else { return }
         switch event {
         case .step(let step):
             if !session.isReady { session = .connected(settingUp: step) }
@@ -1159,7 +1166,7 @@ final class AppModel {
             Self.syncLog.notice("ready +\(self.syncElapsed(), privacy: .public) ms")
             await flushEncryptionControls(account: account, client: client, logsLiveStore: false)
             await refresh()
-            guard generation == token else { return }
+            guard setupIsCurrent(token) else { return }
             startOutbox()
             await reconcileUploads()
             if let openChatID { await loadEncryptionDetails(for: openChatID) }
@@ -1213,16 +1220,16 @@ final class AppModel {
     private func rejoinKnownGroups(account: String, client: XMPPClient, encryption: OMEMOService, token: UUID) async throws {
         let rooms = try await encryption.knownGroupRooms(account: account)
         for (room, members) in rooms.sorted(by: { $0.key < $1.key }) {
-            guard generation == token, foreground, !quiescing else { throw CancellationError() }
+            guard setupIsCurrent(token), foreground, !quiescing else { throw CancellationError() }
             // Keep the cached devices (and a past join failure) across the rejoin; only the transport state restarts.
             groupChats[room, default: GroupChatState()].members = members
             let nickname = preferences.string(forKey: "groupNickname.\(account).\(room)") ?? String(account.prefix { $0 != "@" })
             do {
                 let snapshot = try await client.joinGroupRoom(room, nickname: nickname)
-                guard generation == token else { throw CancellationError() }
+                guard setupIsCurrent(token) else { throw CancellationError() }
                 groupChats[room]?.joined = snapshot.joined
             } catch {
-                guard generation == token else { throw CancellationError() }
+                guard setupIsCurrent(token) else { throw CancellationError() }
                 groupChats[room]?.issue = groupFailure(error)
                 // No send is allowed until this room's own authenticated presence is received.
                 // Archive synchronization separately fails closed if room provenance is unavailable.
