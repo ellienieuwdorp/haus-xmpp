@@ -1185,7 +1185,7 @@ public actor OMEMOService {
                               !device.trust.permitsEncryption { continue }
                     do { _ = try await receiveGroup(account: account, message: group.message, transport: groupTransport, sentAt: group.sentAt) }
                     catch {
-                        if try await load(account).1.groupRooms[group.message.room] == nil { unresolvedRooms.insert(group.message.room) }
+                        if (try? await load(account))?.1.groupRooms[group.message.room] == nil { unresolvedRooms.insert(group.message.room) }
                         throw error
                     }
                     continue
