@@ -6,11 +6,23 @@ import XMPPProtocol
 /// Fetches one bounded page at a time. Ratchet/message or pending-ciphertext commits precede
 /// the archive cursor, which precedes the SM handled acknowledgement. Repeating a partial page
 /// is safe because OMEMO replay identity is independent of the archive/outer stanza identifier.
+/// How far one archive's walk has come on this connection.
+public struct ArchiveSyncProgress: Sendable, Equatable {
+    /// nil for the account's own archive, the room otherwise.
+    public let archive: String?
+    /// Pages committed for this archive so far.
+    public let pages: Int
+    /// Messages processed for this archive so far.
+    public let messages: Int
+    public init(archive: String?, pages: Int, messages: Int) { self.archive = archive; self.pages = pages; self.messages = messages }
+}
+
 public struct ArchiveSynchronizer: Sendable {
     private let store: MessageStore
     public init(store: MessageStore) { self.store = store }
 
-    public func synchronize(account: String, client: XMPPClient, encryption: OMEMOService) async throws {
+    public func synchronize(account: String, client: XMPPClient, encryption: OMEMOService,
+                            progress: (@Sendable (ArchiveSyncProgress) async -> Void)? = nil) async throws {
         try await synchronize(account: account, operations: ArchiveSyncOperations(
             knownRooms: { Array(try await encryption.knownGroupRooms(account: account).keys).sorted() },
             refreshRoom: { room in _ = try await client.refreshGroupRoom(room) },
@@ -41,7 +53,8 @@ public struct ArchiveSynchronizer: Sendable {
                 // encrypted-only policy. They must never be rendered as authenticated messages.
             },
             acknowledge: { token in try await client.acknowledgeInbound(token) },
-            disconnect: { await client.disconnect() }
+            disconnect: { await client.disconnect() },
+            progress: { await progress?($0) }
         ))
     }
 
@@ -55,27 +68,25 @@ public struct ArchiveSynchronizer: Sendable {
 
     func synchronize(account: String, operations: ArchiveSyncOperations) async throws {
         do {
-            // Populate the fresh transport's trusted room set before its own-account MAM query.
-            // An archived occupant nickname alone is never enough to recover a real sender JID.
             let rooms = try await operations.knownRooms()
             guard Set(rooms).count == rooms.count, !rooms.contains(account) else { throw XMPPIQError.malformedResponse }
-            var accessibleRooms: [String] = []
+            // The own archive walks first and needs no room refresh: the transport's trusted room set
+            // (`ArchiveQuery.knownRooms`) is consulted only for room archives, and own-archive group
+            // entries are validated by OMEMO against the room membership persisted in its state,
+            // refreshing through the transport only for a room unknown there. An archived occupant
+            // nickname alone is never enough to recover a real sender JID.
+            try await synchronizePages(account: account, room: nil, operations: operations)
             for room in rooms {
                 try Task.checkCancellation()
                 do {
                     try await operations.refreshRoom(room)
-                    accessibleRooms.append(room)
                 } catch is XMPPGroupError {
                     // A removed or unsupported room must not disable unrelated direct messages.
-                    // Its room checkpoint stays untouched; own-archive ciphertext is still handled
-                    // under independently validated historical sender provenance.
+                    // Its room checkpoint stays untouched.
                     continue
                 } catch XMPPIQError.stanza {
                     continue
                 }
-            }
-            try await synchronizePages(account: account, room: nil, operations: operations)
-            for room in accessibleRooms {
                 try await synchronizePages(account: account, room: room, operations: operations)
             }
         } catch {
@@ -89,6 +100,7 @@ public struct ArchiveSynchronizer: Sendable {
     private func synchronizePages(account: String, room: String?, operations: ArchiveSyncOperations) async throws {
         let archive = room ?? account
         var checkpoint = try await store.archiveCheckpoint(accountID: account, archiveID: archive)
+        var pages = 0, messages = 0
         while true {
             try Task.checkCancellation()
             // Room fetches revalidate complete membership internally, without joining the room.
@@ -110,6 +122,8 @@ public struct ArchiveSynchronizer: Sendable {
                 throw XMPPIQError.malformedResponse
             }
             for token in page.handledTokens { try await operations.acknowledge(token) }
+            pages += 1; messages += page.messages.count
+            await operations.progress(ArchiveSyncProgress(archive: room, pages: pages, messages: messages))
             if page.complete { return }
         }
     }
@@ -124,4 +138,5 @@ struct ArchiveSyncOperations: Sendable {
     let process: @Sendable (XMPPArchiveMessage) async throws -> Void
     let acknowledge: @Sendable (XMPPInboundToken) async throws -> Void
     let disconnect: @Sendable () async -> Void
+    let progress: @Sendable (ArchiveSyncProgress) async -> Void
 }

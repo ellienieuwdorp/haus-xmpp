@@ -25,7 +25,7 @@ struct ArchiveSynchronizerTests {
               complete: complete, lastID: id, handledTokens: [.init(session: UUID(), sequence: sequence)])
     }
 
-    @Test func refreshesRoomProvenanceBeforeOwnArchiveAndSeparatesPagedCheckpoints() async throws {
+    @Test func walksOwnArchiveBeforeRoomsAndSeparatesPagedCheckpoints() async throws {
         try await fixture { store async throws in
             _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: room, expectedRevision: nil, cursor: "older-room")
             let trace = Trace()
@@ -46,9 +46,9 @@ struct ArchiveSynchronizerTests {
                     let archive = token.sequence == 1 ? account : room
                     #expect(try await store.archiveCheckpoint(accountID: account, archiveID: archive)?.cursor == expected)
                     await trace.record("ack:\(token.sequence)")
-                }, disconnect: { await trace.record("disconnect") })
+                }, disconnect: { await trace.record("disconnect") }, progress: { _ in })
             try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
-            #expect(await trace.events == ["refresh:\(room)", "fetch:\(account):nil", "durable:own", "ack:1",
+            #expect(await trace.events == ["fetch:\(account):nil", "durable:own", "ack:1", "refresh:\(room)",
                 "fetch:\(room):older-room", "durable:room-first", "ack:2", "fetch:\(room):room-first", "durable:room-last", "ack:3"])
             #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "own")
             #expect(try await store.archiveCheckpoint(accountID: "bob@localhost", archiveID: room) == nil)
@@ -61,7 +61,7 @@ struct ArchiveSynchronizerTests {
             let operations = ArchiveSyncOperations(knownRooms: { [room] }, refreshRoom: { _ in },
                 fetchPage: { _, selectedRoom in selectedRoom == nil ? .init(messages: [], complete: true, lastID: nil, handledTokens: []) : page("failed-room") },
                 process: { _ in throw Failure.undurable },
-                acknowledge: { _ in await trace.record("ack") }, disconnect: { await trace.record("disconnect") })
+                acknowledge: { _ in await trace.record("ack") }, disconnect: { await trace.record("disconnect") }, progress: { _ in })
             await #expect(throws: Failure.self) { try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations) }
             #expect(await trace.events == ["disconnect"])
             #expect(try await store.archiveCheckpoint(accountID: account, archiveID: room) == nil)
@@ -73,7 +73,7 @@ struct ArchiveSynchronizerTests {
             let trace = Trace()
             let operations = ArchiveSyncOperations(knownRooms: { [room] }, refreshRoom: { _ in throw XMPPGroupError.incompleteMembership },
                 fetchPage: { _, selected in #expect(selected == nil); await trace.record("fetch-direct"); return page("direct") },
-                process: { _ in }, acknowledge: { _ in await trace.record("ack") }, disconnect: { await trace.record("disconnect") })
+                process: { _ in }, acknowledge: { _ in await trace.record("ack") }, disconnect: { await trace.record("disconnect") }, progress: { _ in })
             try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
             #expect(await trace.events == ["fetch-direct", "ack"])
             #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "direct")
@@ -81,15 +81,31 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    @Test func malformedRoomResponseStillDisconnectsBeforeAnyCursor() async throws {
+    @Test func malformedRoomResponseDisconnectsAfterTheDirectArchiveAndBeforeItsOwnCursor() async throws {
         try await fixture { store async throws in
             let trace = Trace()
             let operations = ArchiveSyncOperations(knownRooms: { [room] }, refreshRoom: { _ in throw XMPPIQError.malformedResponse },
                 fetchPage: { _, _ in await trace.record("fetch"); return page("unexpected") },
-                process: { _ in }, acknowledge: { _ in await trace.record("ack") }, disconnect: { await trace.record("disconnect") })
+                process: { _ in }, acknowledge: { _ in await trace.record("ack") }, disconnect: { await trace.record("disconnect") }, progress: { _ in })
             await #expect(throws: XMPPIQError.self) { try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations) }
-            #expect(await trace.events == ["disconnect"])
-            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account) == nil)
+            #expect(await trace.events == ["fetch", "ack", "disconnect"])
+            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "unexpected")
+            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: room) == nil)
+        }
+    }
+
+    @Test func progressReportsEachCommittedPage() async throws {
+        try await fixture { store async throws in
+            let recorded = ProgressLog()
+            let operations = ArchiveSyncOperations(knownRooms: { [room] }, refreshRoom: { _ in },
+                fetchPage: { cursor, selectedRoom in
+                    if selectedRoom == nil { return cursor == nil ? page("direct-1", sequence: 1, complete: false) : page("direct-2", sequence: 2) }
+                    return page("room-1", sequence: 3)
+                },
+                process: { _ in }, acknowledge: { _ in }, disconnect: {}, progress: { await recorded.append($0) })
+            try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
+            #expect(await recorded.values == [.init(archive: nil, pages: 1, messages: 1), .init(archive: nil, pages: 2, messages: 2),
+                                              .init(archive: room, pages: 1, messages: 1)])
         }
     }
 
@@ -112,7 +128,7 @@ struct ArchiveSynchronizerTests {
             let trace = Trace()
             let operations = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in },
                 fetchPage: { _, _ in page("durable") }, process: { _ in await trace.record("durable") },
-                acknowledge: { _ in throw Failure.acknowledgement }, disconnect: { await trace.record("disconnect") })
+                acknowledge: { _ in throw Failure.acknowledgement }, disconnect: { await trace.record("disconnect") }, progress: { _ in })
             await #expect(throws: Failure.self) { try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations) }
             #expect(await trace.events == ["durable", "disconnect"])
             #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "durable")
@@ -124,13 +140,18 @@ struct ArchiveSynchronizerTests {
             let trace = Trace()
             let operations = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in }, fetchPage: { _, _ in page("cancelled") },
                 process: { _ in withUnsafeCurrentTask { $0?.cancel() }; await trace.record("durable") },
-                acknowledge: { _ in await trace.record("ack") }, disconnect: { await trace.record("disconnect") })
+                acknowledge: { _ in await trace.record("ack") }, disconnect: { await trace.record("disconnect") }, progress: { _ in })
             let task = Task { try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations) }
             await #expect(throws: CancellationError.self) { try await task.value }
             #expect(await trace.events == ["durable", "disconnect"])
             #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account) == nil)
         }
     }
+}
+
+private actor ProgressLog {
+    var values: [ArchiveSyncProgress] = []
+    func append(_ value: ArchiveSyncProgress) { values.append(value) }
 }
 
 private actor Trace {
