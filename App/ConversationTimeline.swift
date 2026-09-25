@@ -1604,8 +1604,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     }
 }
 
-/// Three dots in a received bubble, bouncing in turn; with Reduce Motion they only fade.
-@MainActor
 /// Shown above the oldest message while older history is fetched: a small spinner and one quiet line, nothing to tap.
 final class LoadingEarlierCell: UICollectionViewCell {
     static let label = "Loading earlier messages"
@@ -1653,6 +1651,8 @@ final class LoadingEarlierCell: UICollectionViewCell {
     }
 }
 
+/// Three dots in a received bubble, bouncing in turn; with Reduce Motion they only fade.
+@MainActor
 private final class TypingIndicatorCell: UICollectionViewCell {
     private let author = UILabel()
     private let bubble = UIView()

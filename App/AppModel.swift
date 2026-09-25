@@ -139,6 +139,11 @@ final class AppModel {
     @ObservationIgnored private var opportunisticBackfillDone = false
     /// Per connection: this connection's forward walk has finished, so the single archive query is free.
     @ObservationIgnored private var archiveWalkFinished = false
+    /// Per connection: archives (account or room JID) with nothing more to backfill, or whose server refused, so a
+    /// reach-top, which fires on every scroll frame near the top, does not ask again.
+    @ObservationIgnored private var backfillSettled: Set<String> = []
+    /// A reach-top does not start the next backfill run before this instant: one gesture is one request.
+    @ObservationIgnored private var backfillResumesAt: ContinuousClock.Instant?
     @ObservationIgnored private var client: XMPPClient?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var openChatID: String? { didSet { syncOpenChatTyping() } }
@@ -917,6 +922,8 @@ final class AppModel {
         backfillingArchive = nil
         opportunisticBackfillDone = false
         archiveWalkFinished = false
+        backfillSettled = []
+        backfillResumesAt = nil
         eventTask?.cancel()
         eventTask = nil
         let previous = client
@@ -1846,32 +1853,48 @@ final class AppModel {
 
     /// Starts one bounded backfill of older archive pages. This connection's forward walk must have finished and no
     /// other backfill may run: `XMPPClient` allows one archive query at a time. `resetSession` cancels it, and
-    /// `connect` and `quiesceTransport` join it before the next connection or the lease release.
+    /// `connect` and `quiesceTransport` join it before the next connection or the lease release. The loading cell shows
+    /// only once the store says there is something to fetch, so a chat with no older history never flashes it.
     private func requestBackfill(archive: String?, pages: Int) {
+        let archiveID = archive ?? accountID
         guard foreground, !quiescing, hasTransportOwnership, session.isReady, archiveWalkFinished, catchUp == nil, backfillTask == nil, !isDemo,
+              !backfillSettled.contains(archiveID), backfillResumesAt.map({ ContinuousClock.now >= $0 }) ?? true,
               let client, let encryption, let store else { return }
         let account = accountID
         let token = generation
-        backfillingArchive = archive ?? account
         let started = ContinuousClock.now
+        let synchronizer = ArchiveSynchronizer(store: store)
         backfillTask = Task { [weak self] in
             let kind = archive == nil ? "direct" : "room"
+            var settled = false
             do {
-                let outcome = try await ArchiveSynchronizer(store: store).backfill(account: account, archive: archive, pageBudget: pages,
-                                                                                    client: client, encryption: encryption) { [weak self] progress in
-                    await self?.backfillPageCommitted(progress, token: token)
+                let pending = try await synchronizer.hasPendingBackfill(account: account, archive: archive)
+                if pending, let model = self, model.generation == token, !Task.isCancelled {
+                    model.backfillingArchive = archiveID
+                    let outcome = try await synchronizer.backfill(account: account, archive: archive, pageBudget: pages,
+                                                                  client: client, encryption: encryption) { [weak self] progress in
+                        await self?.backfillPageCommitted(progress, token: token)
+                    }
+                    // Only a spent budget leaves more to ask for on this connection; a refusal is retried on the next one.
+                    settled = outcome != .budgetExhausted
+                    let elapsed = Int((ContinuousClock.now - started) / .milliseconds(1))
+                    Self.syncLog.notice("backfill \(kind, privacy: .public) \(String(describing: outcome), privacy: .public) +\(elapsed, privacy: .public) ms")
+                } else {
+                    settled = !pending
+                    if !pending { Self.syncLog.notice("backfill \(kind, privacy: .public) nothing pending") }
                 }
-                let elapsed = Int((ContinuousClock.now - started) / .milliseconds(1))
-                Self.syncLog.notice("backfill \(kind, privacy: .public) \(String(describing: outcome), privacy: .public) +\(elapsed, privacy: .public) ms")
             } catch {
                 // The synchronizer disconnected if a page was abandoned; the reconciler reconnects.
                 Self.syncLog.error("backfill \(kind, privacy: .public) failed: \(String(String(describing: error).prefix(120)), privacy: .public)")
             }
             guard let self, self.generation == token else { return }
+            if settled { self.backfillSettled.insert(archiveID) }
+            self.backfillResumesAt = ContinuousClock.now + .seconds(1)
+            let showed = self.backfillingArchive != nil
             self.backfillingArchive = nil
             self.backfillTask = nil
             // Older pages can add chats (and placeholders) the list has not shown yet.
-            self.refreshSoon()
+            if showed { self.refreshSoon() }
         }
     }
 
