@@ -88,38 +88,15 @@ struct ChatDetailsView: View {
     @Bindable var model: AppModel
     let chatID: String
     @Environment(\.dismiss) private var dismiss
+    @ScaledMetric(relativeTo: .title3) private var tileGlyphHeight: CGFloat = 24
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first(where: { $0.id == chatID })?.title) }
     private var isGroup: Bool { model.isGroup(chatID) }
 
     var body: some View {
         List {
-            Section {
-                VStack(spacing: 6) {
-                    ChatAvatar(key: chatID, name: title, image: model.avatars[chatID], isGroup: isGroup, size: 96)
-                        .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
-                    Text(title).font(.title.weight(.bold)).padding(.top, 6)
-                    Text(chatID).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
-                    if !model.isDemo {
-                        let trust = model.trustSummary(for: chatID)
-                        // Pending keeps the pill's height, so the hero never shifts when the stored answer arrives.
-                        TrustPill(text: trust.level == .pending ? "Encrypted" : trust.pill,
-                                  systemImage: trust.level == .verified ? "checkmark.shield" : trust.icon, color: trust.color)
-                            .opacity(trust.level == .pending ? 0 : 1)
-                            .accessibilityHidden(trust.level == .pending)
-                            .padding(.top, 4)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-                HStack(spacing: 8) {
-                    tile("Search", systemImage: "magnifyingglass") { leave(with: .search(chatID: chatID)) }
-                    tile("Starred", systemImage: "star") { leave(with: .starred(chatID: chatID)) }
-                }
-            }
-            .listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets())
-            .listRowSeparator(.hidden)
+            // Hero and tiles are the section's header, outside its rounded background: as the last row they
+            // lost their outer bottom corners to the section's larger corner mask.
             Section {
                 NavigationLink(value: isGroup ? ChatRoute.groupDetails(chatID) : .encryption(chatID)) {
                     HStack {
@@ -134,10 +111,44 @@ struct ChatDetailsView: View {
                     }
                 }
                 .accessibilityIdentifier("encryptionDetails")
+            } header: {
+                VStack(spacing: 0) {
+                    hero
+                    HStack(spacing: 8) {
+                        tile("Search", systemImage: "magnifyingglass") { leave(with: .search(chatID: chatID)) }
+                        tile("Starred", systemImage: "star") { leave(with: .starred(chatID: chatID)) }
+                    }
+                }
+                // Undo the header's secondary caption styling, and keep the old sections' spacing.
+                .foregroundStyle(.primary)
+                .textCase(nil)
+                .listRowInsets(EdgeInsets())
+                .padding(.top, 35)
+                .padding(.bottom, 36)
             }
         }
         .listStyle(.insetGrouped)
         .toolbarTitleDisplayMode(.inline)
+    }
+
+    private var hero: some View {
+        VStack(spacing: 6) {
+            ChatAvatar(key: chatID, name: title, image: model.avatars[chatID], isGroup: isGroup, size: 96)
+                .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
+            Text(title).font(.title.weight(.bold)).padding(.top, 6)
+            Text(chatID).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
+            if !model.isDemo {
+                let trust = model.trustSummary(for: chatID)
+                // Pending keeps the pill's height, so the hero never shifts when the stored answer arrives.
+                TrustPill(text: trust.level == .pending ? "Encrypted" : trust.pill,
+                          systemImage: trust.level == .verified ? "checkmark.shield" : trust.icon, color: trust.color)
+                    .opacity(trust.level == .pending ? 0 : 1)
+                    .accessibilityHidden(trust.level == .pending)
+                    .padding(.top, 4)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
     }
 
     /// Pop back to the conversation and let it open the requested mode.
@@ -154,12 +165,13 @@ struct ChatDetailsView: View {
 
     private func tile(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
+            // A fixed glyph box and tile height: the two symbols differ in height, which made the tiles 60 and 60.67.
             VStack(spacing: 4) {
-                Image(systemName: systemImage).font(.title3.weight(.medium))
+                Image(systemName: systemImage).font(.title3.weight(.medium)).frame(height: tileGlyphHeight)
                 Text(title).font(.footnote.weight(.semibold))
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, minHeight: 60)
             .foregroundStyle(.tint)
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
