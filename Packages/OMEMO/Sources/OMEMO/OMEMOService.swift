@@ -95,6 +95,7 @@ public actor OMEMOService {
         var peerAdvertises = false
         let local = try engine(state, profile)
         var incompatible = false
+        var otherVersionOnly: [String: Int] = [:]
         var unavailable: [String: Int] = [:]
         var advertised: [String: Int] = [:]
         for owner in Array(Set([account, peer])).sorted() {
@@ -105,9 +106,12 @@ public actor OMEMOService {
             let otherProfile: XMPPOMEMOProfile = profile == .legacy ? .modern : .legacy
             // The other version only feeds the incompatibility hint; an unreadable list there must not block this one.
             let otherIDs = (try? validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: otherProfile))) ?? []
-            // Device IDs are not proof of physical identity across profiles. Conservatively block
-            // an advertised device that exists only in the other profile rather than omit it.
-            if !Set(otherIDs).subtracting(ids).isEmpty { incompatible = true }
+            // Device IDs are not proof of physical identity across profiles, so a device that exists only in the
+            // other version is never encrypted to here. Omitting it leaks nothing; it just does not receive the copy.
+            // That is reported (Devices screen), not enforced: refusing every send because one client of either
+            // side speaks only the other version left messages queued indefinitely.
+            let onlyOther = Set(otherIDs).subtracting(ids).count
+            if onlyOther > 0 { incompatible = true; otherVersionOnly[owner] = onlyOther }
             for index in state.devices.indices where state.devices[index].jid == owner && state.devices[index].profile == profile {
                 state.devices[index].active = false
             }
@@ -135,6 +139,7 @@ public actor OMEMOService {
         var result = try overview(state, account: account, peer: peer, profileOverride: profile, incompatibleOverride: incompatible)
         result.unavailableDevices = unavailable
         result.advertisedDevices = advertised
+        result.otherVersionOnlyDevices = otherVersionOnly
         return result
     }
 
@@ -378,8 +383,7 @@ public actor OMEMOService {
                     try Task.checkCancellation()
                     let wire = try await self.store.encryptedOutgoing(accountID: account, messageID: message.id)
                     let saved = try wire.map { try JSONDecoder().decode(PreparedEnvelope.self, from: $0) }
-                    let overview = try await self.refreshLocked(account: account, peer: message.chatID, profile: saved?.envelope.profile, transport: transport, updateSelection: saved == nil)
-                    guard !overview.hasIncompatibleDevices else { throw OMEMOError.unsupportedProfile }
+                    _ = try await self.refreshLocked(account: account, peer: message.chatID, profile: saved?.envelope.profile, transport: transport, updateSelection: saved == nil)
                     if let saved {
                         let (_, state) = try await self.load(account)
                         let candidates = state.devices.filter { $0.profile == saved.envelope.profile && $0.active && ($0.jid == message.chatID || $0.jid == account) }
@@ -402,7 +406,6 @@ public actor OMEMOService {
         let (revision, old) = try await load(account)
         var state = old
         guard let profile = state.profiles[message.chatID] else { throw OMEMOError.unavailable }
-        guard state.incompatiblePeers[message.chatID] != true else { throw OMEMOError.unsupportedProfile }
         let plaintext = try EncryptedContent.encode(body: message.body, reply: message.reply,
                                                     sender: account, recipient: message.chatID, modern: profile == .modern,
                                                     originID: message.id, fileSharing: message.attachment.map { try fileSharing(for: $0, account: account) })
@@ -570,9 +573,8 @@ public actor OMEMOService {
                 }
                 let profile: XMPPOMEMOProfile = legacy ? .legacy : .modern
                 guard selected.profiles[update.chatID] == profile else { throw update.kind == .retraction || update.kind == .correction ? OMEMOError.unsupportedMessageUpdate : .unsupportedEncryptedReactions }
-                let overview = try await refreshLocked(account: account, peer: update.chatID, profile: profile,
-                                                       transport: transport, updateSelection: false)
-                guard !overview.hasIncompatibleDevices else { throw OMEMOError.unsupportedProfile }
+                _ = try await refreshLocked(account: account, peer: update.chatID, profile: profile,
+                                            transport: transport, updateSelection: false)
                 if let wire = try await store.updateWire(accountID: account, updateID: update.id) {
                     let saved = try JSONDecoder().decode(PreparedEnvelope.self, from: wire)
                     let (_, state) = try await load(account)

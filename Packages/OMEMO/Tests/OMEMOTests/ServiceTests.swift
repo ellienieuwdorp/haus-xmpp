@@ -202,6 +202,30 @@ final class ServiceFixture {
 
 @MainActor
 final class ServiceTests: XCTestCase {
+    /// A device that publishes keys only in the other OMEMO version is left out of the envelope and reported, never a
+    /// reason to hold the chat: with three own clients on one account that rule kept messages queued indefinitely.
+    func testDevicesPublishedOnlyInTheOtherVersionAreReportedNotBlocking() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.legacy)
+        // Bob's phone also runs a client that speaks only OMEMO 2, and Alice's other client only OMEMO 2.
+        await f.server.publish(f.bob, [4242], .modern)
+        await f.server.publish(f.alice, [777, 778], .modern)
+        let overview = try await f.a.refreshDevices(account: f.alice, peer: f.bob, transport: f.aTransport)
+        expectEqual(overview.profile, .legacy)
+        expectTrue(overview.hasIncompatibleDevices)
+        expectEqual(overview.otherVersionOnlyDevices[f.bob], 1)
+        expectEqual(overview.otherVersionOnlyDevices[f.alice], 2)
+        let outgoing = try await f.queue()
+        let preparation = try await f.a.prepareAvailableMessages(account: f.alice, transport: f.aTransport)
+        expectEqual(preparation.messageIDs, [outgoing.id])
+        expectTrue(preparation.blockedChats.isEmpty)
+        let envelope = try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id)
+        expectEqual(envelope.profile, .legacy)
+        expectFalse(envelope.keys.contains { $0.deviceID == 4242 || $0.deviceID == 777 || $0.deviceID == 778 })
+        expectTrue(try await f.b.receive(account: f.bob, message: f.message(envelope), transport: f.bTransport))
+        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).map(\.body), [outgoing.body])
+    }
+
     private func assertRoundTrip(_ profile: XMPPOMEMOProfile) async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(profile)

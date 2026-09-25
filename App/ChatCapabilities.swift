@@ -8,21 +8,20 @@ struct DeviceTrustFacts: Equatable {
     var peerTrust: [DeviceTrust]
     /// An active device (own devices included) waits for a fingerprint decision.
     var needsReview: Bool
-    var incompatible: Bool
     /// A refresh for this peer completed at some point, so an empty list is a stored answer, not "not fetched".
     var peerKnown: Bool
     /// Every other participant has at least one active device. Always true for a 1:1 chat, whose one peer is
     /// covered by `peerTrust`; a group member without devices keeps the group from reading as verified.
     var everyPeerHasDevice: Bool
 
-    init(peerTrust: [DeviceTrust], needsReview: Bool, incompatible: Bool = false, peerKnown: Bool, everyPeerHasDevice: Bool = true) {
-        self.peerTrust = peerTrust; self.needsReview = needsReview; self.incompatible = incompatible; self.peerKnown = peerKnown
+    init(peerTrust: [DeviceTrust], needsReview: Bool, peerKnown: Bool, everyPeerHasDevice: Bool = true) {
+        self.peerTrust = peerTrust; self.needsReview = needsReview; self.peerKnown = peerKnown
         self.everyPeerHasDevice = everyPeerHasDevice
     }
 
     init(_ overview: EncryptionOverview, peer: String) {
         self.init(peerTrust: overview.devices.filter { $0.jid == peer && $0.active }.map(\.trust), needsReview: overview.needsTrust,
-                  incompatible: overview.hasIncompatibleDevices, peerKnown: overview.isPeerKnown)
+                  peerKnown: overview.isPeerKnown)
     }
 
     /// A known room was refreshed when it was joined, so its cached device list is always a stored answer.
@@ -62,7 +61,8 @@ struct ChatCapabilities: Equatable {
         case encrypted(verified: Bool)
         /// An undecided device, a changed identity, or retained ciphertext for this chat.
         case needsReview
-        /// A definitive answer: no usable device after a completed refresh, incompatible versions, or a failed join.
+        /// A definitive answer: no usable device after a completed refresh, or a failed join. A device published only
+        /// in the other OMEMO version is a Devices-screen notice, never a reason to hold the chat.
         case unavailable(String)
     }
 
@@ -88,8 +88,7 @@ struct ChatCapabilities: Equatable {
         if reviewPending || facts?.needsReview == true { encryption = .needsReview }
         else if isGroup, let groupIssue, !groupJoined { encryption = .unavailable(groupIssue) }
         else if let facts {
-            if facts.incompatible { encryption = .unavailable("Devices use incompatible encryption versions") }
-            else if facts.peerTrust.contains(where: \.permitsEncryption) {
+            if facts.peerTrust.contains(where: \.permitsEncryption) {
                 encryption = .encrypted(verified: facts.everyPeerHasDevice && facts.peerTrust.allSatisfy { $0 == .verified })
             } else if case .refreshed = knowledge { encryption = .unavailable(Self.noDevices(isGroup)) }
             else if facts.peerKnown { encryption = .unavailable(Self.noDevices(isGroup)) }

@@ -27,7 +27,11 @@ public struct EncryptionOverview: Sendable {
     public let localDeviceID: UInt32
     public let localFingerprint: String
     public let devices: [EncryptionDevice]
+    /// Some device of either owner is published only in the other OMEMO version. Informational: those devices are
+    /// simply not recipients in this version; sending goes ahead to the devices that are.
     public let hasIncompatibleDevices: Bool
+    /// Per owner, how many advertised device IDs exist only in the other version (they will not receive these messages).
+    public var otherVersionOnlyDevices: [String: Int] = [:]
     /// Advertised device IDs per owner whose bundle could not be fetched; they cannot be reviewed or messaged.
     public var unavailableDevices: [String: Int] = [:]
     /// Device IDs each owner advertised in this version, before bundle checks.
