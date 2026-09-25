@@ -138,3 +138,20 @@ private func groupEnvelope() -> XMPPOMEMOEnvelope {
     #expect(query.messages.first?.encryptedGroupMessage?.room == groupRoom)
     #expect(query.messages.first?.encryptedGroupMessage?.sender == groupAlice)
 }
+
+@Test func groupRefreshDecisionUsesTheCacheUntilPresenceChanges() throws {
+    let members = [groupAlice, groupBob]
+    var state = GroupRoomState()
+    #expect(state.refreshDecision == .readTwice)
+    state.markValidated(members)
+    #expect(state.refreshDecision == .cached)
+    let occupant = try groupNode("<presence from='\(groupRoom)/bob'><x xmlns='\(GroupChatWire.user)'><item affiliation='member' jid='\(groupBob)'/></x></presence>")
+    GroupChatWire.applyPresence(occupant, room: groupRoom, account: groupAlice, state: &state)
+    #expect(state.refreshDecision == .readOnceExpecting(members))
+    state.markValidated(members)
+    #expect(state.refreshDecision == .cached)
+    state.requestNickname("n")
+    #expect(state.refreshDecision == .readOnceExpecting(members))
+    let empty = GroupRoomState(members: [], revision: 4, validatedRevision: 4)
+    #expect(empty.refreshDecision == .readTwice)
+}
