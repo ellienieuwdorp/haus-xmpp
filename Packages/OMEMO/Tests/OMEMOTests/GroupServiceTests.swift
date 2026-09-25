@@ -40,7 +40,10 @@ private struct GroupTransport: OMEMOGroupTransport {
         do {
             _ = try await f.b.receive(account: f.bob, message: f.message(prepared.envelope), transport: f.bTransport)
             XCTFail("A group ciphertext must not authenticate as a DM")
-        } catch { XCTAssertEqual(error as? OMEMOError, .invalidContent) }
+        } catch { XCTAssertEqual(error as? OMEMOError, .undecryptable) }
+        // The substituted copy is a quiet placeholder in the DM, never content; the room copy still decrypts below.
+        let substituted = try await f.bStore.messages(accountID: f.bob, chatID: f.alice)
+        XCTAssertEqual(substituted.map(\.unreadableReason), [.decryptFailed])
         let incoming = try XMPPEncryptedGroupMessage(id: outgoing.id, room: roomID, occupant: roomID + "/nickname", sender: f.alice, envelope: prepared.envelope)
         let inserted = try await f.b.receiveGroup(account: f.bob, message: incoming, transport: bt)
         XCTAssertTrue(inserted)
@@ -160,6 +163,32 @@ private struct GroupTransport: OMEMOGroupTransport {
         XCTAssertTrue(known.isEmpty)
         let pending = try await newStore.pendingEncryptedIncoming(accountID: f.bob)
         XCTAssertTrue(pending.isEmpty)
+        let silent = try await newStore.messages(accountID: f.bob, chatID: roomID)
+        XCTAssertTrue(silent.isEmpty)
+        // With a body fallback the envelope would have been a message: it leaves a placeholder in the room.
+        let hinted = try XMPPEncryptedGroupMessage(id: outgoing.id, room: roomID, occupant: roomID + "/historical", sender: f.alice,
+                                                   envelope: prepared.envelope, provenance: .ownArchive, hasFallbackBody: true)
+        let before = try await fresh.hasDurableGroupDisposition(account: f.bob, message: hinted)
+        XCTAssertFalse(before)
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        do { _ = try await fresh.receiveGroup(account: f.bob, message: hinted, transport: bt, sentAt: stamp); XCTFail("New device was not a recipient") }
+        catch { XCTAssertEqual(error as? OMEMOError, .notForThisDevice) }
+        let rows = try await newStore.messages(accountID: f.bob, chatID: roomID)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.unreadableReason, .notForThisDevice)
+        XCTAssertEqual(rows.first?.isOutgoing, false)
+        XCTAssertEqual(rows.first?.senderID, f.alice)
+        XCTAssertEqual(rows.first?.sentAt, stamp)
+        let after = try await fresh.hasDurableGroupDisposition(account: f.bob, message: hinted)
+        XCTAssertTrue(after)
+        do { _ = try await fresh.receiveGroup(account: f.bob, message: hinted, transport: bt); XCTFail("New device was not a recipient") }
+        catch { XCTAssertEqual(error as? OMEMOError, .notForThisDevice) }
+        let repeated = try await newStore.messages(accountID: f.bob, chatID: roomID)
+        XCTAssertEqual(repeated.count, 1)
+        let stillUnknown = try await fresh.knownGroupRooms(account: f.bob)
+        XCTAssertTrue(stillUnknown.isEmpty)
+        let reference = try await newStore.reactionReference(accountID: f.bob, messageID: try XCTUnwrap(rows.first).id)
+        XCTAssertNil(reference)
     }
 
     func testOfflineMemberWithoutDevicesAndRejectedDeviceBlockWholeGroup() async throws {

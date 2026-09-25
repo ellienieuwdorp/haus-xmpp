@@ -818,10 +818,20 @@ public actor OMEMOService {
         let initialEngine = try engine(initialState, message.envelope.profile)
         if sender == account && message.envelope.senderDeviceID == initialEngine.deviceID { return false }
         let addressedKeys = message.envelope.keys.filter { $0.deviceID == initialEngine.deviceID && (message.envelope.profile == .legacy || $0.recipientJID == account) }
-        guard addressedKeys.count == 1 else { throw OMEMOError.notForThisDevice }
+        if addressedKeys.count != 1 {
+            // Never decryptable here: no key for this device (another own device's send, history from before this
+            // installation) or ambiguous keys. A message that would have been a bubble leaves a durable placeholder
+            // first; the error is thrown only once that outcome exists. A store error propagates as itself.
+            let reason: UnreadableReason = addressedKeys.isEmpty ? .notForThisDevice : .malformedContent
+            if Self.expectsBubble(message) {
+                _ = try await store.recordUnreadableMessage(placeholder(for: message, account: account, reason: reason, sentAt: sentAt,
+                                                                        key: .ciphertext(sender: sender, digest: try unaddressedDigest(message))))
+            }
+            throw addressedKeys.isEmpty ? OMEMOError.notForThisDevice : OMEMOError.undecryptable
+        }
         let digest = try ciphertextDigest(message, key: addressedKeys[0])
         if try await store.hasEncryptedIncoming(accountID: account, sender: sender, digest: digest) { return false }
-        let previous = try await store.pendingEncryptedIncoming(accountID: account).first { $0.sender == sender && $0.digest == digest }
+        let previous = try await store.pendingEncryptedIncoming(accountID: account, sender: sender).first { $0.digest == digest }
         var retained = try previous.map { try JSONDecoder().decode(RetainedEnvelope.self, from: $0.wire) }
             ?? RetainedEnvelope(from: message.from, to: message.to, envelope: message.envelope, provenance: message.provenance, sentAt: sentAt ?? Date(), replaces: message.replaces)
         if let previous, let sentAt, retained.sentAt != sentAt {
@@ -847,8 +857,6 @@ public actor OMEMOService {
             guard try await store.replacePendingEncryptedIncomingContext(accountID: account, sender: sender, digest: digest,
                     expectedWire: previous.wire, wire: JSONEncoder().encode(retained)) else { throw OMEMOError.concurrentChange }
         }
-        try await store.retainEncryptedIncoming(accountID: account, sender: sender, digest: digest, wire: JSONEncoder().encode(retained))
-        let peer = sender == account ? bare(message.to ?? account) : sender
         // An authenticated session or an already approved sender identity does not need
         // PEP availability to decrypt. Inactive approved devices may have delayed traffic.
         // Unknown identities still require network discovery and explicit user approval.
@@ -856,6 +864,9 @@ public actor OMEMOService {
             $0.jid == sender && $0.profile == message.envelope.profile
                 && $0.deviceID == message.envelope.senderDeviceID
         }
+        try await store.retainEncryptedIncoming(accountID: account, sender: sender, digest: digest, wire: JSONEncoder().encode(retained),
+                                                reason: known == nil ? .keysPending : .trustPending)
+        let peer = sender == account ? bare(message.to ?? account) : sender
         if known == nil {
             _ = try await refreshLocked(account: account, peer: peer, profile: message.envelope.profile, transport: transport, updateSelection: false)
         }
@@ -864,54 +875,75 @@ public actor OMEMOService {
         let profile = message.envelope.profile
         let local = try engine(state, profile)
         let keys = message.envelope.keys.filter { $0.deviceID == local.deviceID && (profile == .legacy || $0.recipientJID == account) }
-        guard keys.count == 1 else { throw OMEMOError.notForThisDevice }
-        guard let device = state.devices.last(where: { $0.jid == sender && $0.profile == profile && $0.deviceID == message.envelope.senderDeviceID }) else { throw OMEMOError.trustRequired }
-        guard device.trust.permitsEncryption else { throw OMEMOError.trustRequired }
+        guard keys.count == 1 else { throw OMEMOError.undecryptable }
+        guard let device = state.devices.last(where: { $0.jid == sender && $0.profile == profile && $0.deviceID == message.envelope.senderDeviceID }) else {
+            // The refresh completed (or was not needed) and the sender device is still unknown: wait for its device list.
+            try await store.classifyPendingEncryptedIncoming(accountID: account, sender: sender, digest: digest, reason: .keysPending)
+            throw OMEMOError.trustRequired
+        }
+        guard device.trust.permitsEncryption else {
+            try await store.classifyPendingEncryptedIncoming(accountID: account, sender: sender, digest: digest, reason: .trustPending)
+            throw OMEMOError.trustRequired
+        }
         let address = DeviceAddress(jid: sender, deviceID: device.deviceID)
+        // Outside the failure handler: malformed stored key bytes are a state problem, not this message's.
         try local.trustIdentity(device.identityKey, for: address, resetSession: device.identityChanged)
         if let index = state.devices.firstIndex(where: { $0.id == device.id }) { state.devices[index].identityChanged = false }
         let key = keys[0]
-        let material = try local.decrypt(RatchetCiphertext(data: key.data, isPreKey: key.keyExchange), from: address)
         var stored: StoredMessage?
         var reaction: AuthenticatedReaction?
         var event: MessageEvent?
-        if let payload = message.envelope.payload {
-            let plaintext = try PayloadCrypto.open(SealedPayload(payload: payload, keyMaterial: material, iv: message.envelope.iv), profile: profile.crypto)
-            let content = try EncryptedContent.decode(plaintext, sender: sender, recipient: sender == account ? peer : account,
-                                                       modern: profile == .modern, sendingTime: retained.sentAt)
-            let date = min(content.timestamp ?? retained.sentAt ?? Date(), Date())
-            // A legacy correction reference sits outside the ciphertext, bound like a legacy reaction.
-            let correction = content.correction ?? (profile == .legacy ? retained.replaces : nil)
-            if let target = content.retraction {
-                guard profile == .modern, sender == account || sender == peer else { throw OMEMOError.invalidContent }
-                event = MessageEvent(id: content.originID ?? digest, chatID: peer, actorID: sender, targetWireID: target, kind: .retraction, payload: "{}", updatedAt: date)
-            } else if let target = correction, !content.body.isEmpty {
-                // An edit is a projection on the original bubble, never a second bubble.
-                guard sender == account || sender == peer else { throw OMEMOError.invalidContent }
-                event = MessageEvent(id: content.originID ?? message.originID ?? message.id, chatID: peer, actorID: sender, targetWireID: target,
-                                     kind: .correction, payload: try MessageEvent.correctionPayload(content.body), updatedAt: date)
-            } else if !content.body.isEmpty || content.fileSharing != nil {
-                stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: peer, senderID: sender,
-                                       body: content.body, sentAt: retained.sentAt ?? Date(), isOutgoing: sender == account,
-                                       reply: content.reply, encryptionProfile: profile.rawValue,
-                                       // XEP-0444 targets the stanza id in 1:1 chats; peers without origin-id (Conversations) still get one.
-                                       wireID: content.originID ?? message.originID ?? message.id, wireIDAuthenticated: content.originID != nil,
-                                       attachment: try content.fileSharing.map { try storedAttachment($0, account: account) })
+        do {
+            let material = try local.decrypt(RatchetCiphertext(data: key.data, isPreKey: key.keyExchange), from: address)
+            if let payload = message.envelope.payload {
+                let plaintext = try PayloadCrypto.open(SealedPayload(payload: payload, keyMaterial: material, iv: message.envelope.iv), profile: profile.crypto)
+                let content = try EncryptedContent.decode(plaintext, sender: sender, recipient: sender == account ? peer : account,
+                                                           modern: profile == .modern, sendingTime: retained.sentAt)
+                let date = min(content.timestamp ?? retained.sentAt ?? Date(), Date())
+                // A legacy correction reference sits outside the ciphertext, bound like a legacy reaction.
+                let correction = content.correction ?? (profile == .legacy ? retained.replaces : nil)
+                if let target = content.retraction {
+                    guard profile == .modern, sender == account || sender == peer else { throw OMEMOError.invalidContent }
+                    event = MessageEvent(id: content.originID ?? digest, chatID: peer, actorID: sender, targetWireID: target, kind: .retraction, payload: "{}", updatedAt: date)
+                } else if let target = correction, !content.body.isEmpty {
+                    // An edit is a projection on the original bubble, never a second bubble.
+                    guard sender == account || sender == peer else { throw OMEMOError.invalidContent }
+                    event = MessageEvent(id: content.originID ?? message.originID ?? message.id, chatID: peer, actorID: sender, targetWireID: target,
+                                         kind: .correction, payload: try MessageEvent.correctionPayload(content.body), updatedAt: date)
+                } else if !content.body.isEmpty || content.fileSharing != nil {
+                    stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: peer, senderID: sender,
+                                           body: content.body, sentAt: retained.sentAt ?? Date(), isOutgoing: sender == account,
+                                           reply: content.reply, encryptionProfile: profile.rawValue,
+                                           // XEP-0444 targets the stanza id in 1:1 chats; peers without origin-id (Conversations) still get one.
+                                           wireID: content.originID ?? message.originID ?? message.id, wireIDAuthenticated: content.originID != nil,
+                                           attachment: try content.fileSharing.map { try storedAttachment($0, account: account) })
+                }
+                if let update = content.reaction, event == nil {
+                    guard profile == .modern, sender == account || sender == peer else { throw OMEMOError.invalidContent }
+                    reaction = AuthenticatedReaction(id: content.originID ?? digest, chatID: peer, actorID: sender,
+                                                     targetWireID: update.targetWireID, reactions: update.reactions, updatedAt: date)
+                }
+                // A receipt only confirms one of our messages, and only from the peer; our other device's copy is ignored.
+                if let receipt = content.receipt, profile == .modern, sender == peer, stored == nil, reaction == nil, event == nil,
+                   try await store.reactionTarget(accountID: account, chatID: peer, wireID: receipt.targetID)?.isOutgoing != false {
+                    event = MessageEvent(id: content.originID ?? digest, chatID: peer, actorID: sender, targetWireID: receipt.targetID,
+                                         kind: receipt.kind == .displayed ? .displayed : .delivered, payload: "{}",
+                                         updatedAt: min(content.timestamp ?? retained.sentAt ?? Date(), Date()))
+                }
+            } else if profile == .modern {
+                guard material == Data(repeating: 0, count: 32) else { throw OMEMOError.invalidContent }
             }
-            if let update = content.reaction, event == nil {
-                guard profile == .modern, sender == account || sender == peer else { throw OMEMOError.invalidContent }
-                reaction = AuthenticatedReaction(id: content.originID ?? digest, chatID: peer, actorID: sender,
-                                                 targetWireID: update.targetWireID, reactions: update.reactions, updatedAt: date)
-            }
-            // A receipt only confirms one of our messages, and only from the peer; our other device's copy is ignored.
-            if let receipt = content.receipt, profile == .modern, sender == peer, stored == nil, reaction == nil, event == nil,
-               try await store.reactionTarget(accountID: account, chatID: peer, wireID: receipt.targetID)?.isOutgoing != false {
-                event = MessageEvent(id: content.originID ?? digest, chatID: peer, actorID: sender, targetWireID: receipt.targetID,
-                                     kind: receipt.kind == .displayed ? .displayed : .delivered, payload: "{}",
-                                     updatedAt: min(content.timestamp ?? retained.sentAt ?? Date(), Date()))
-            }
-        } else if profile == .modern {
-            guard material == Data(repeating: 0, count: 32) else { throw OMEMOError.invalidContent }
+        } catch is SendingTimeOutsideWindow {
+            // Context, not ciphertext: the retained row waits for a validated archive stamp (today's behaviour).
+            throw OMEMOError.invalidContent
+        } catch let error as OMEMOCryptoError where error != .invalidSnapshot {
+            // A trusted device's ciphertext that cannot decrypt, authenticate or decode never will: it leaves the
+            // pending table as a durable outcome. The ephemeral engine is discarded; no ratchet state is committed.
+            guard try await recordDecryptFailure(account: account, message: message, sender: sender, digest: digest, sentAt: retained.sentAt) else { return false }
+            throw OMEMOError.undecryptable
+        } catch OMEMOError.invalidContent {
+            guard try await recordDecryptFailure(account: account, message: message, sender: sender, digest: digest, sentAt: retained.sentAt) else { return false }
+            throw OMEMOError.undecryptable
         }
         var control: EncryptionControl?
         if key.keyExchange {
@@ -953,16 +985,65 @@ public actor OMEMOService {
         let keys = message.envelope.keys.filter {
             $0.deviceID == local.deviceID && (message.envelope.profile == .legacy || $0.recipientJID == account)
         }
-        // Old archives can predate this installation. A valid envelope with no key for
-        // this device is an intentional non-recipient disposition, not recoverable work.
-        // Ambiguous duplicate keys still fail closed instead of silently selecting one.
-        if keys.isEmpty { return true }
-        guard keys.count == 1 else { return false }
+        // Old archives can predate this installation, and other own devices may not encrypt for this one. With no
+        // single key for this device the disposition is the placeholder when the envelope would have been a bubble,
+        // and nothing at all otherwise (a reaction or receipt from a device that excluded this one).
+        if keys.count != 1 {
+            guard Self.expectsBubble(message) else { return true }
+            return try await store.hasEncryptedIncoming(accountID: account, sender: sender, digest: try unaddressedDigest(message))
+        }
         let digest = try ciphertextDigest(message, key: keys[0])
         if try await store.hasEncryptedIncoming(accountID: account, sender: sender, digest: digest) { return true }
         return try await store.pendingEncryptedIncoming(accountID: account).contains {
             $0.sender == sender && $0.digest == digest
         }
+    }
+
+    /// D4: would this envelope have been a bubble here? Only then does an exclusion deserve a placeholder. Modern (SCE)
+    /// payloads also carry reactions, receipts and retractions, so they need an outer hint: the XEP-0384 `<body/>`
+    /// fallback, or a receipt/marker request (this client requests those on messages only). Legacy payloads are messages.
+    static func expectsBubble(_ message: XMPPEncryptedMessage) -> Bool {
+        message.envelope.payload != nil
+            && (message.envelope.profile == .legacy || message.hasFallbackBody || message.requestsReceipt || message.markable)
+    }
+    static func expectsBubble(_ message: XMPPEncryptedGroupMessage) -> Bool {
+        message.envelope.payload != nil && message.hasFallbackBody
+    }
+
+    /// Ciphertext identity when no key addresses this device: profile, sender device, iv and payload, domain-separated
+    /// from `ciphertextDigest` so the two can never collide.
+    func unaddressedDigest(_ message: XMPPEncryptedMessage) throws -> String {
+        let identity = UnaddressedCiphertextIdentity(profile: message.envelope.profile, senderDeviceID: message.envelope.senderDeviceID,
+                                                     iv: message.envelope.iv, payload: message.envelope.payload)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        var material = Data("unaddressed\u{0}".utf8)
+        material.append(try encoder.encode(identity))
+        return SHA256.hash(data: material).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Builds the placeholder for a direct envelope: the chat is the peer (the sender, or the recipient of an own send),
+    /// the author is the sender's bare JID, and the time is the validated archive stamp or now. Never content.
+    private func placeholder(for message: XMPPEncryptedMessage, account: String, reason: UnreadableReason, sentAt: Date?,
+                             key: UnreadableMessage.Key) -> UnreadableMessage {
+        let sender = bare(message.from)
+        let outgoing = sender == account
+        return UnreadableMessage(accountID: account, chatID: outgoing ? bare(message.to ?? account) : sender, senderID: sender,
+                                 isOutgoing: outgoing, sentAt: sentAt ?? Date(), reason: reason, key: key)
+    }
+
+    /// Records the durable `decryptFailed` outcome for ciphertext this device will never read. Works whether or not a
+    /// pending row exists (the DELETE inside the store is then a no-op). A key transport (no payload) was never a
+    /// bubble, so only its replay identity is consumed. Returns true when a placeholder row marks the message.
+    /// Never called for storage, cancellation or state errors; those propagate without a disposition.
+    @discardableResult
+    private func recordDecryptFailure(account: String, message: XMPPEncryptedMessage, sender: String, digest: String, sentAt: Date?) async throws -> Bool {
+        guard message.envelope.payload != nil else {
+            try await store.consumeUndecryptableIncoming(accountID: account, sender: sender, digest: digest)
+            return false
+        }
+        try await store.recordUnreadableMessage(placeholder(for: message, account: account, reason: .decryptFailed, sentAt: sentAt,
+                                                            key: .ciphertext(sender: sender, digest: digest)))
+        return true
     }
 
     func ciphertextDigest(_ message: XMPPEncryptedMessage, key: XMPPOMEMOKey) throws -> String {
@@ -997,8 +1078,13 @@ public actor OMEMOService {
         return result
     }
 
-    public func retryPendingIncoming(account: String, transport: any OMEMOTransport) async throws {
-        let pending = try await store.pendingEncryptedIncoming(accountID: account)
+    /// Retries retained ciphertext. `reasons` narrows the work to what the triggering event can unblock: a trust decision
+    /// retries `trustPending`, a device list retries `keysPending` from its owner, a connection retries both.
+    /// A row that now fails permanently becomes a placeholder and leaves the table, so it is never retried again.
+    public func retryPendingIncoming(account: String, transport: any OMEMOTransport,
+                                     reasons: Set<PendingEncryptedReason> = [.trustPending, .keysPending],
+                                     sender: String? = nil) async throws {
+        let pending = try await store.pendingEncryptedIncoming(accountID: account, reasons: reasons, sender: sender)
         var firstFailure: (any Error)?
         for item in pending {
             do {
@@ -1075,6 +1161,13 @@ struct PreparedEnvelope: Codable {
     let envelope: XMPPOMEMOEnvelope
     let recipientIdentities: [String]
     var groupMembers: [String]? = nil
+}
+
+private struct UnaddressedCiphertextIdentity: Codable {
+    let profile: XMPPOMEMOProfile
+    let senderDeviceID: UInt32
+    let iv: Data?
+    let payload: Data?
 }
 
 private struct IncomingCiphertextIdentity: Codable {

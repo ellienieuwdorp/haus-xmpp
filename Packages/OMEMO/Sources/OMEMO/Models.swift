@@ -40,6 +40,9 @@ public struct EncryptionOverview: Sendable {
 
 public enum OMEMOError: Error, Equatable, Sendable, LocalizedError {
     case unavailable, noDevices, trustRequired, identityChanged, notForThisDevice
+    /// Permanently unreadable here (a trusted device's ciphertext failed to decrypt, or keys addressed this device
+    /// ambiguously). Thrown only after the durable outcome exists; nothing is retained for review.
+    case undecryptable
     case invalidContent, stateUnavailable, unsupportedProfile, concurrentChange, recipientSetChanged, cannotRetireCurrentDevice, unsupportedEncryptedReactions, unsupportedMessageUpdate
     public var errorDescription: String? {
         switch self {
@@ -51,6 +54,7 @@ public enum OMEMOError: Error, Equatable, Sendable, LocalizedError {
         case .trustRequired: "Review the encryption devices before sending or opening messages."
         case .identityChanged: "A device’s encryption identity changed. Compare its new fingerprint before continuing."
         case .notForThisDevice: "This message was not encrypted for this device."
+        case .undecryptable: "This message could not be decrypted on this device."
         case .invalidContent: "This encrypted message could not be authenticated."
         case .stateUnavailable: "Encryption keys are unavailable. No new identity has been created."
         case .unsupportedProfile: "These devices do not share the selected encryption version."
