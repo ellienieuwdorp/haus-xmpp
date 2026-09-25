@@ -115,6 +115,17 @@ final class AppModel {
     @ObservationIgnored private var outboxSender: OutboxSender?
     @ObservationIgnored private var outboxRequested = false
     @ObservationIgnored private var drainTask: Task<Void, Never>?
+    /// One connection's setup after `.online` (`ConnectionSetup`), off the event loop; joined like `drainTask`.
+    @ObservationIgnored private var setupTask: Task<Void, Never>?
+    /// Non-nil while a connection's archive walk runs after `.ready`; the Chats bar keeps its spinner.
+    private(set) var catchUp: CatchUpProgress?
+    var isCatchingUp: Bool { catchUp != nil }
+    /// Numbers-only timings of the current connection's setup, for the lab measurement.
+    private static let syncLog = Logger(subsystem: "haus.xmpp.ios", category: "sync")
+    @ObservationIgnored private var onlineAt: ContinuousClock.Instant?
+    @ObservationIgnored private var firstMessageLogged = false
+    @ObservationIgnored private var liveStoredLogged = false
+    @ObservationIgnored private var catchUpByArchive: [String: CatchUpProgress] = [:]
     @ObservationIgnored private var client: XMPPClient?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var openChatID: String? { didSet { syncOpenChatTyping() } }
@@ -299,6 +310,7 @@ final class AppModel {
             guard foreground, !quiescing else { return false }
         }
         let priorEvents = eventTask
+        let priorSetup = setupTask
         let previous = resetSession()
         let token = generation
         session = .connecting(step: "Connecting…")
@@ -313,6 +325,7 @@ final class AppModel {
         selectAccount(account)
         await previous?.disconnectAndWait()
         await priorEvents?.value
+        await priorSetup?.value
         await drainTask?.value
         guard generation == token else { return false }
         await refresh()
@@ -323,6 +336,10 @@ final class AppModel {
                 guard let self, self.generation == token else { break }
                 await self.handle(event, token: token)
             }
+            // A full buffer drops the client's disconnect event and finishes the stream instead; without
+            // this the session would stay "connected" with nothing left to reconnect it.
+            guard let self, self.generation == token else { return }
+            await self.handle(.state(.disconnected("Event consumer could not keep up")), token: token)
         }
         do {
             guard let store, let encryption else { throw MessageStoreError.invalidValue }
@@ -341,6 +358,7 @@ final class AppModel {
                 notificationStatus = "Needs attention"
                 self.error = "Connected, but the password could not be saved. You will be asked for it on the next launch."
             }
+            // `.online` was emitted before `connect` returned, so this runs alongside the setup task.
             await refreshPushRegistration(client: connection, session: endpoint, token: token)
             return true
         } catch {
@@ -512,10 +530,13 @@ final class AppModel {
         quiescing = true
         defer { quiescing = false }
         let events = eventTask
+        let setup = setupTask
         let drain = drainTask
         let previous = resetSession()
         await previous?.disconnectAndWait()
         await events?.value
+        // Setup's archive walk, initialize, rejoin and pending retry are all structured children of it.
+        await setup?.value
         await drain?.value
         // Includes already-started UI trust/repair/discovery work and an acquisition that
         // was suspended in the store actor when the scene changed.
@@ -859,6 +880,9 @@ final class AppModel {
     private func resetSession() -> XMPPClient? {
         generation = UUID()
         drainTask?.cancel()
+        // Cancelled, not cleared: connect() and quiesceTransport() join the handle.
+        setupTask?.cancel()
+        catchUp = nil
         eventTask?.cancel()
         eventTask = nil
         let previous = client
@@ -880,60 +904,42 @@ final class AppModel {
             case .authenticating: session = .connecting(step: "Signing in…")
             case .binding: session = .connecting(step: "Opening session…")
             case .online:
-                var step = "server features" { didSet { session = .connected(settingUp: step) } }
-                session = .connected(settingUp: step)
-                if let encryption, let client {
-                    do {
-                        let features = try await client.discoveryFeatures()
-                        if features.contains("urn:xmpp:carbons:2") { step = "carbons"; try await client.setCarbonsEnabled() }
-                        step = "file upload"
-                        // Optional: a server without XEP-0363 just has no attach button. Only a completed answer changes
-                        // what the button remembers; a discovery that throws keeps the last one.
-                        let discovery: Result<XMPPUploadService?, any Error>
-                        do { discovery = .success(try await client.uploadService()) } catch { discovery = .failure(error) }
+                session = .connected(settingUp: ConnectionSetup.featuresStep)
+                onlineAt = .now
+                firstMessageLogged = false
+                liveStoredLogged = false
+                catchUpByArchive = [:]
+                Self.syncLog.notice("online")
+                guard let encryption, let client, let store else { return }
+                let identityExists: Bool
+                do { identityExists = try await store.encryptionState(accountID: account) != nil }
+                catch { identityExists = true } // the setup task's initialize reports the real problem
+                guard generation == token else { return }
+                if !identityExists {
+                    // A brand-new account has no encryption state yet, and the live consumer cannot persist
+                    // anything without it: publish the identity before letting the setup run concurrently.
+                    session = .connected(settingUp: ConnectionSetup.keysStep)
+                    do { try await encryption.initialize(account: account, transport: client) }
+                    catch {
                         guard generation == token else { return }
-                        uploadService = uploads.settle(account: account, previous: uploadService, discovery: discovery)
-                        step = "publishing this phone’s keys"
-                        try await encryption.initialize(account: account, transport: client)
-                        step = "rejoining groups"
-                        try await rejoinKnownGroups(account: account, client: client, encryption: encryption, token: token)
-                        if features.contains("urn:xmpp:mam:2"), let store {
-                            step = "archive catch-up"
-                            try await ArchiveSynchronizer(store: store).synchronize(account: account, client: client, encryption: encryption)
-                        }
-                        guard generation == token else { return }
-                        session = .ready
-                        reconnectAttempt = 0
-                        reportedSetupFailure = nil
-                        try? await encryption.retryPendingIncoming(account: account, transport: client)
-                        guard generation == token else { return }
-                        await flushEncryptionControls(account: account, client: client)
-                        await refresh()
-                        guard generation == token else { return }
-                        startOutbox()
-                        await reconcileUploads()
-                        if let openChatID { await loadEncryptionDetails(for: openChatID) }
-                        avatarChecked = []
-                        await loadAvatar(for: account)
-                    } catch {
-                        guard generation == token else { return }
-                        let detail: String
-                        if case .stanza(let condition)? = error as? XMPPIQError { detail = condition }
-                        else { detail = (error as? OMEMOError)?.errorDescription ?? String(describing: error).prefix(120).description }
-                        Logger(subsystem: "haus.xmpp.ios", category: "encryption").error("Encryption setup failed at \(step, privacy: .public): \(detail, privacy: .public)")
-                        session = .needsAttention(step: step, detail: detail)
-                        encryptionAttention.note("Setup failed at \(step): \(detail)")
-                        if reportedSetupFailure != detail {
-                            reportedSetupFailure = detail
-                            self.error = "Could not prepare encryption (\(step): \(detail)). Your queued messages have not been sent."
-                        }
-                        await refresh()
-                        guard generation == token else { return }
-                        // A half-alive session is a connection failure: end it and let the reconciler retry.
-                        await client.disconnect()
+                        await reportSetupFailure(step: ConnectionSetup.keysStep, detail: ConnectionSetup.detail(error), client: client, token: token)
+                        return
                     }
+                    guard generation == token else { return }
+                }
+                // The event loop returns at once and keeps persisting and acknowledging live stanzas while setup
+                // runs; OMEMO's operation gate serialises the two per crypto operation.
+                setupTask = Task { [weak self] in
+                    guard let self else { return }
+                    await self.runConnectionSetup(account: account, client: client, encryption: encryption, store: store,
+                                                  identityExists: identityExists, token: token)
+                    if self.generation == token { self.setupTask = nil }
                 }
             case .disconnected(let reason):
+                Self.syncLog.notice("disconnected: \(reason ?? "closed", privacy: .public)")
+                // Its client calls fail with the connection anyway; cancelling makes the exit prompt.
+                setupTask?.cancel()
+                catchUp = nil
                 for room in groupChats.keys { groupChats[room]?.joined = false }
                 // Chat states belong to the stream that carried them.
                 resetTyping()
@@ -1101,6 +1107,107 @@ final class AppModel {
             if generation == token { self.error = groupFailure(error) }
             return false
         }
+    }
+
+    /// Builds `ConnectionSetup`'s operations from this model's calls and applies its events under the
+    /// generation fence. Every operation runs inside the setup task; none spawns an unstructured task.
+    private func runConnectionSetup(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore,
+                                    identityExists: Bool, token: UUID) async {
+        let operations = ConnectionSetup.Operations(
+            features: { try await client.discoveryFeatures() },
+            enableCarbons: { try await client.setCarbonsEnabled() },
+            discoverUploads: { [weak self] in
+                // Optional: a server without XEP-0363 just has no attach button. Only a completed answer changes
+                // what the button remembers; a discovery that throws keeps the last one.
+                let discovery: Result<XMPPUploadService?, any Error>
+                do { discovery = .success(try await client.uploadService()) } catch { discovery = .failure(error) }
+                await self?.settleUploadDiscovery(discovery, account: account, token: token)
+            },
+            initializeEncryption: { try await encryption.initialize(account: account, transport: client) },
+            rejoinGroups: { [weak self] in
+                guard let self else { throw CancellationError() }
+                try await self.rejoinKnownGroups(account: account, client: client, encryption: encryption, token: token)
+                // `.ready` started the outbox before the rooms were joined; group messages queued while
+                // offline need a joined room, so ask for one more pass.
+                await self.startOutbox()
+            },
+            catchUp: { progress in
+                try await ArchiveSynchronizer(store: store).synchronize(account: account, client: client, encryption: encryption) {
+                    await progress(CatchUpProgress(archive: $0.archive, pages: $0.pages, messages: $0.messages))
+                }
+            },
+            retryPending: { try? await encryption.retryPendingIncoming(account: account, transport: client) })
+        await ConnectionSetup(identityExists: identityExists).run(operations: operations) { [weak self] event in
+            await self?.applySetupEvent(event, account: account, client: client, token: token)
+        }
+    }
+
+    private func settleUploadDiscovery(_ discovery: Result<XMPPUploadService?, any Error>, account: String, token: UUID) {
+        guard generation == token else { return }
+        uploadService = uploads.settle(account: account, previous: uploadService, discovery: discovery)
+    }
+
+    private func applySetupEvent(_ event: ConnectionSetup.Event, account: String, client: XMPPClient, token: UUID) async {
+        guard generation == token else { return }
+        switch event {
+        case .step(let step):
+            if !session.isReady { session = .connected(settingUp: step) }
+        case .ready:
+            session = .ready
+            reconnectAttempt = 0
+            reportedSetupFailure = nil
+            Self.syncLog.notice("ready +\(self.syncElapsed(), privacy: .public) ms")
+            await flushEncryptionControls(account: account, client: client, logsLiveStore: false)
+            await refresh()
+            guard generation == token else { return }
+            startOutbox()
+            await reconcileUploads()
+            if let openChatID { await loadEncryptionDetails(for: openChatID) }
+            avatarChecked = []
+            await loadAvatar(for: account)
+        case .catchingUp(let progress):
+            // First, before anything else reads it: a finished walk is `catchUp == nil`.
+            catchUp = progress
+            if let progress {
+                catchUpByArchive[progress.archive ?? ""] = progress
+                if progress.messages >= 1 { logFirstMessage() }
+            } else {
+                let pages = catchUpByArchive.values.reduce(0) { $0 + $1.pages }
+                let messages = catchUpByArchive.values.reduce(0) { $0 + $1.messages }
+                Self.syncLog.notice("catch-up finished +\(self.syncElapsed(), privacy: .public) ms pages=\(pages, privacy: .public) messages=\(messages, privacy: .public)")
+            }
+        case .failed(let step, let detail):
+            catchUp = nil
+            if step == ConnectionSetup.archiveStep { Self.syncLog.notice("catch-up failed +\(self.syncElapsed(), privacy: .public) ms") }
+            await reportSetupFailure(step: step, detail: detail, client: client, token: token)
+        }
+    }
+
+    /// A half-alive session is a connection failure: mark it, end it, and let the reconciler retry.
+    private func reportSetupFailure(step: String, detail: String, client: XMPPClient, token: UUID) async {
+        let wasReady = session.isReady
+        Logger(subsystem: "haus.xmpp.ios", category: "encryption").error("Encryption setup failed at \(step, privacy: .public): \(detail, privacy: .public)")
+        session = .needsAttention(step: step, detail: detail)
+        encryptionAttention.note("Setup failed at \(step): \(detail)")
+        if reportedSetupFailure != detail {
+            reportedSetupFailure = detail
+            self.error = wasReady ? "Could not finish synchronizing (\(step): \(detail))."
+                : "Could not prepare encryption (\(step): \(detail)). Your queued messages have not been sent."
+        }
+        await refresh()
+        guard generation == token else { return }
+        await client.disconnect()
+    }
+
+    private func syncElapsed() -> Int {
+        guard let onlineAt else { return -1 }
+        return Int((ContinuousClock.now - onlineAt) / .milliseconds(1))
+    }
+
+    private func logFirstMessage() {
+        guard !firstMessageLogged else { return }
+        firstMessageLogged = true
+        Self.syncLog.notice("first message +\(self.syncElapsed(), privacy: .public) ms")
     }
 
     private func rejoinKnownGroups(account: String, client: XMPPClient, encryption: OMEMOService, token: UUID) async throws {
@@ -1635,8 +1742,15 @@ final class AppModel {
             if generation == token { self.error = (error as? OMEMOError)?.errorDescription ?? "Could not remove this device. Refresh its fingerprint and try again." }
         }
     }
-    private func flushEncryptionControls(account: String, client: XMPPClient) async {
+    /// `logsLiveStore`: the event loop calls this after every stored live message; during catch-up the first
+    /// one is logged for the lab measurement (not a general metric).
+    private func flushEncryptionControls(account: String, client: XMPPClient, logsLiveStore: Bool = true) async {
         guard accountID == account, self.client === client else { return }
+        if logsLiveStore, catchUp != nil, !liveStoredLogged {
+            liveStoredLogged = true
+            logFirstMessage()
+            Self.syncLog.notice("live stored +\(self.syncElapsed(), privacy: .public) ms")
+        }
         try? await encryption?.flushBundlePublications(account: account, transport: client)
         // Key transports are ordinary durable updates; the outbox drain sends them.
         startOutbox()
