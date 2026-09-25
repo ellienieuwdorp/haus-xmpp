@@ -1,3 +1,4 @@
+import MessageStore
 import QuickLook
 import SwiftUI
 import UIKit
@@ -69,8 +70,15 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     var isEdited = false
     var canEdit = false
     var canUnsend = false
+    /// This device could not show the message; `body` is empty and the bubble shows the reason as a quiet placeholder.
+    var unreadable: UnreadableReason? = nil
 
-    var placeholder: String { isOutgoing ? "You unsent a message" : "Message unsent" }
+    /// Unsent or unreadable: the bubble keeps its shape and time, and its text is a quiet italic notice.
+    var showsPlaceholder: Bool { isRetracted || unreadable != nil }
+    var placeholder: String {
+        if let unreadable { return UnreadableCopy.bubble(unreadable, isOutgoing: isOutgoing) }
+        return isOutgoing ? "You unsent a message" : "Message unsent"
+    }
 
     enum Status: String, Sendable, Equatable {
         case queued, submitting, unconfirmed, failed, serverAccepted, delivered, displayed
@@ -88,6 +96,22 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
         }
 
         var canRetry: Bool { self == .unconfirmed || self == .failed }
+    }
+}
+
+/// One place for the words; the bubble, the chat list and VoiceOver read the same ones.
+enum UnreadableCopy {
+    static func bubble(_ reason: UnreadableReason, isOutgoing: Bool) -> String {
+        switch reason {
+        case .notForThisDevice: isOutgoing ? "Sent from another device and not encrypted for this iPhone" : "Not encrypted for this iPhone"
+        case .unsupportedEncryption, .malformedContent, .decryptFailed: "Couldn't read this message"
+        }
+    }
+    static func preview(_ reason: UnreadableReason) -> String {
+        switch reason {
+        case .notForThisDevice: "Not encrypted for this iPhone"
+        case .unsupportedEncryption, .malformedContent, .decryptFailed: "Couldn't read this message"
+        }
     }
 }
 
@@ -171,6 +195,8 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     var onReaction: (String, String) -> Void = { _, _ in }
     var onEdit: (String) -> Void = { _ in }
     var onUnsend: (String) -> Void = { _ in }
+    /// A placeholder's "Encryption details" action; the parent owns navigation.
+    var onOpenEncryption: () -> Void = {}
     /// A received message's cell came on screen; the model decides whether that is a read marker.
     var onDisplayed: (String) -> Void = { _ in }
     /// The long-press menu put the keyboard away and nothing else claimed focus; bring it back.
@@ -189,7 +215,8 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: ConversationTimelineController, context: Context) {
         if controller.additionalSafeAreaInsets.top != topBannerHeight { controller.additionalSafeAreaInsets.top = topBannerHeight }
         controller.setComposer(composer)
-        controller.update(messages: messages, typing: typing, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onDisplayed: onDisplayed)
+        controller.update(messages: messages, typing: typing, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend,
+                          onOpenEncryption: onOpenEncryption, onDisplayed: onDisplayed)
         controller.onRestoreComposerFocus = onRestoreComposerFocus
         controller.onReachTop = onReachTop
         controller.attachmentKeyboard = attachmentKeyboard
@@ -218,6 +245,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var onReaction: (String, String) -> Void = { _, _ in }
     private var onEdit: (String) -> Void = { _ in }
     private var onUnsend: (String) -> Void = { _ in }
+    private var onOpenEncryption: () -> Void = {}
     private var onDisplayed: (String) -> Void = { _ in }
     private var previousSize: CGSize = .zero
     private var revision = 0
@@ -328,6 +356,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                   let cell = collection.dequeueReusableCell(withReuseIdentifier: "message", for: indexPath) as? MessageBubbleCell else { return nil }
             cell.configure(row: row, toggleStar: { [weak self] in self?.onToggleStar(id) }, retry: { [weak self] in self?.onRetryMessage(id) }, reply: { [weak self] in self?.onReply(id) }, reaction: { [weak self] emoji in self?.onReaction(id, emoji) },
                            edit: { [weak self] in self?.onEdit(id) }, unsend: { [weak self] in self?.onUnsend(id) },
+                           openEncryption: { [weak self] in self?.onOpenEncryption() },
                            presentActions: { [weak self] context in
                                guard let self, presentedViewController == nil else { return false }
                                guard MessageActionsOverlay.present(from: self, context: context,
@@ -358,10 +387,12 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     }
 
     func update(messages incoming: [TimelineMessage], typing: TimelineTyping? = nil, accent: String = "", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in },
-                onEdit: @escaping (String) -> Void = { _ in }, onUnsend: @escaping (String) -> Void = { _ in }, onDisplayed: @escaping (String) -> Void = { _ in }) {
+                onEdit: @escaping (String) -> Void = { _ in }, onUnsend: @escaping (String) -> Void = { _ in }, onOpenEncryption: @escaping () -> Void = {},
+                onDisplayed: @escaping (String) -> Void = { _ in }) {
         loadViewIfNeeded()
         if actionsVisible {
-            heldUpdate = { [weak self] in self?.update(messages: incoming, typing: typing, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onDisplayed: onDisplayed) }
+            heldUpdate = { [weak self] in self?.update(messages: incoming, typing: typing, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend,
+                                                       onOpenEncryption: onOpenEncryption, onDisplayed: onDisplayed) }
             return
         }
         self.onToggleStar = onToggleStar
@@ -370,6 +401,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         self.onReaction = onReaction
         self.onEdit = onEdit
         self.onUnsend = onUnsend
+        self.onOpenEncryption = onOpenEncryption
         self.onDisplayed = onDisplayed
         // The durable store supplies unique IDs. Avoid a diffable crash if a caller repeats an ID.
         var seen = Set<String>()
@@ -497,7 +529,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private static func leavesKeyboardFree(_ kind: MessageAction.Kind) -> Bool {
         switch kind {
         case .copy, .star, .retry: true
-        case .reply, .edit, .selectText, .unsend: false
+        case .reply, .edit, .selectText, .unsend, .encryptionDetails: false
         }
     }
 
@@ -880,6 +912,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private var reactionAction: (String) -> Void = { _ in }
     private var editAction: () -> Void = {}
     private var unsendAction: () -> Void = {}
+    private var openEncryptionAction: () -> Void = {}
     /// Returns whether the menu opened; when it did not, the cell puts its squeezed bubble back.
     private var presentActions: (MessageActionsContext) -> Bool = { _ in false }
     private let pressFeedback = UIImpactFeedbackGenerator(style: .medium)
@@ -1237,6 +1270,10 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     /// The one action list; the overlay menu and VoiceOver custom actions both read it.
     private func actions() -> [MessageAction] {
         guard let message else { return [] }
+        // A placeholder is a notice, not content: nothing to quote, copy, star or select; only why it is unreadable.
+        if message.unreadable != nil {
+            return [MessageAction(kind: .encryptionDetails, title: "Encryption details", symbol: "lock.shield", perform: openEncryptionAction)]
+        }
         let star = MessageAction(kind: .star, title: message.isStarred ? "Unstar message" : "Star message", symbol: message.isStarred ? "star.slash" : "star", perform: toggleStar)
         // An unsent bubble has no text to quote, copy or select.
         if message.isRetracted { return [star] }
@@ -1364,11 +1401,15 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         let distance = max(0, pan.translation(in: contentView).x)
         switch pan.state {
         case .began:
-            replyIndicatorLeading.constant = bubble.frame.minX + 12
-            swipeReplyAction = replyAction
+            // A placeholder has nothing to reply to. The pan still begins, so gesture arbitration with the
+            // collection view is unchanged; the bubble simply does not travel and there is no haptic.
+            swipeReplyAction = message?.unreadable == nil ? replyAction : nil
             crossedReplyThreshold = false
+            guard swipeReplyAction != nil else { break }
+            replyIndicatorLeading.constant = bubble.frame.minX + 12
             replyFeedback.prepare()
         case .changed:
+            guard swipeReplyAction != nil else { break }
             bubble.transform = CGAffineTransform(translationX: min(80, distance), y: 0)
             replyIndicator.alpha = min(1, distance / 56)
             if distance >= 56, !crossedReplyThreshold {
@@ -1437,7 +1478,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     }
 
     func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,
-                   edit: @escaping () -> Void = {}, unsend: @escaping () -> Void = {},
+                   edit: @escaping () -> Void = {}, unsend: @escaping () -> Void = {}, openEncryption: @escaping () -> Void = {},
                    presentActions: @escaping (MessageActionsContext) -> Bool, openAttachment: @escaping (URL) -> Void = { _ in }) {
         let message = row.message
         self.row = row
@@ -1447,6 +1488,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         self.reactionAction = reaction
         self.editAction = edit
         self.unsendAction = unsend
+        self.openEncryptionAction = openEncryption
         self.presentActions = presentActions
         self.openAttachment = openAttachment
         bubble.cornerConfiguration = .corners(topLeftRadius: .fixed(20), topRightRadius: .fixed(20),
@@ -1482,7 +1524,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         textHeight.isActive = message.body.isEmpty && message.attachment != nil
         textView.isHidden = textHeight.isActive
         // A caption keeps its usual 10pt inset from the photo itself, not from the frame below it.
-        let showsPreview = !message.isRetracted && message.attachment?.showsPreview == true
+        let showsPreview = !message.showsPlaceholder && message.attachment?.showsPreview == true
         plainTextTop.constant = showsPreview ? -Self.mediaInset : 0
         NSLayoutConstraint.deactivate([footerAfterText, footerAfterMedia])
         (showsPreview && textHeight.isActive ? footerAfterMedia : footerAfterText)?.isActive = true
@@ -1502,16 +1544,17 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         time.textColor = meta
         star.tintColor = meta
         replyIndicator.tintColor = theme.tint
-        // An unsent message keeps its bubble and time; the text becomes a quiet italic placeholder.
-        let shown = message.isRetracted ? message.placeholder : message.body
+        // An unsent or unreadable message keeps its bubble and time; the text becomes a quiet italic placeholder.
+        let shown = message.showsPlaceholder ? message.placeholder : message.body
         if textView.text != shown { textView.text = shown }
         let bodyDescriptor = UIFontDescriptor.preferredFontDescriptor(withTextStyle: .body)
-        textView.font = message.isRetracted ? UIFont(descriptor: bodyDescriptor.withSymbolicTraits(.traitItalic) ?? bodyDescriptor, size: 0) : .preferredFont(forTextStyle: .body)
-        textView.textColor = message.isRetracted ? meta : text
-        configureAttachment(message.isRetracted ? nil : message.attachment, isOutgoing: message.isOutgoing, textColor: text)
+        textView.font = message.showsPlaceholder ? UIFont(descriptor: bodyDescriptor.withSymbolicTraits(.traitItalic) ?? bodyDescriptor, size: 0) : .preferredFont(forTextStyle: .body)
+        textView.textColor = message.showsPlaceholder ? meta : text
+        configureAttachment(message.showsPlaceholder ? nil : message.attachment, isOutgoing: message.isOutgoing, textColor: text)
         var descriptions = ["\(message.isOutgoing ? "You" : (message.author ?? "Contact")): \(shown)"]
+        if message.unreadable != nil { descriptions.append("not readable on this device") }
         if message.isEdited { descriptions.append("edited") }
-        if !message.isRetracted, let attachment = message.attachment { descriptions.append("\(attachment.kindLabel) \(attachment.name)" + (attachment.localURL == nil ? ", downloading" : "")) }
+        if !message.showsPlaceholder, let attachment = message.attachment { descriptions.append("\(attachment.kindLabel) \(attachment.name)" + (attachment.localURL == nil ? ", downloading" : "")) }
         if let quote = message.reply { descriptions.append("Replying to \(quote.author): \(quote.body)") }
         if message.isStarred { descriptions.append("starred") }
         if let date = message.sentAt { descriptions.append(date.formatted(date: .abbreviated, time: .shortened)) }

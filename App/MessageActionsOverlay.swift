@@ -5,7 +5,7 @@ import XMPPProtocol
 
 /// One list of what a message can do. The long-press overlay and VoiceOver custom actions both read it.
 struct MessageAction: Identifiable {
-    enum Kind: String { case reply, copy, selectText, star, retry, edit, unsend }
+    enum Kind: String { case reply, copy, selectText, star, retry, edit, unsend, encryptionDetails }
     let kind: Kind
     let title: String
     let symbol: String

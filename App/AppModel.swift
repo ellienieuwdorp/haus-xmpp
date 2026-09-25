@@ -78,6 +78,9 @@ final class AppModel {
     var error: String?
     private(set) var notificationStatus = "Not enabled"
     private(set) var notificationRoute: NotificationChatRoute?
+    /// A push onto the Chats stack asked for by a view that owns no navigation path (a bubble's
+    /// "Encryption details" action). RootView appends it and clears it.
+    var requestedRoute: ChatRoute?
     @ObservationIgnored private var sessionAccount: NotificationAccount?
     @ObservationIgnored private var lifecycleTask: Task<Void, Never>?
     @ObservationIgnored private var foreground = true
@@ -248,6 +251,15 @@ final class AppModel {
                                                                 body: "History message \(index)" + (index.isMultiple(of: 7) ? ", with a second sentence so some bubbles wrap onto another line." : ""),
                                                                 sentAt: Date(timeIntervalSince1970: 1_789_300_000 + Double(index) * 60), isOutgoing: index.isMultiple(of: 3)))
                 }
+            }
+            // Two placeholders in Alex's chat, for tests and screenshots: an own send from another device that did
+            // not encrypt for this one, and an incoming message that could not be read. Recorded exactly as the
+            // receive path records them, so they are never content, never reactable and never counted.
+            if ProcessInfo.processInfo.arguments.contains("-demo-unreadable") {
+                try await store.recordUnreadableMessage(UnreadableMessage(accountID: account, chatID: "alex@preview.local", senderID: account, isOutgoing: true,
+                    sentAt: Date(timeIntervalSince1970: 1_789_380_004), reason: .notForThisDevice, key: .archive(archive: account, id: "sample-unreadable-1")))
+                try await store.recordUnreadableMessage(UnreadableMessage(accountID: account, chatID: "alex@preview.local", senderID: "alex@preview.local", isOutgoing: false,
+                    sentAt: Date(timeIntervalSince1970: 1_789_380_005), reason: .decryptFailed, key: .archive(archive: account, id: "sample-unreadable-2")))
             }
             // A peer who is typing, for tests and screenshots; nothing expires it.
             if ProcessInfo.processInfo.arguments.contains("-demo-typing") { typing = ["alex@preview.local": ["alex@preview.local"]] }
@@ -690,6 +702,7 @@ final class AppModel {
         messageReactions = [:]; messageReceipts = [:]
         attachmentFiles = [:]
         openChatID = nil
+        requestedRoute = nil
         encryptionOverviewChatID = nil; encryptionOverview = nil; encryptionDetailsChatID = nil
         refreshFence = [:]; encryptionAttention = EncryptionAttention()
         uploadService = uploads.load(account: account)
@@ -973,6 +986,12 @@ final class AppModel {
                     await refresh()
                     guard generation == token else { return }
                     if let openChatID { await loadEncryptionDetails(for: openChatID, refreshFromServer: false) }
+                case .excluded(let reason):
+                    // Not content, not review: the placeholder row is the record; the reason is a footnote in Devices.
+                    encryptionAttention.note(reason == .notForThisDevice
+                        ? "A message from another device was not encrypted for this iPhone; it is shown as a placeholder."
+                        : "An encrypted message could not be read; it is shown as a placeholder.")
+                    refreshSoon()
                 case .acknowledged, .ignored: break
                 }
             } catch InboundProcessor.Failure.unsavedInbound {
@@ -988,6 +1007,15 @@ final class AppModel {
         case .omemoDevices(let owner, let profile, _):
             if owner == account, let encryption, let client {
                 try? await encryption.maintainLocalAdvertisement(account: account, profile: profile, transport: client)
+            }
+            // A device list is what a keys-pending row waited for; only this owner's rows can be unblocked by it.
+            if let encryption, let client, let store, isConnected,
+               !((try? await store.pendingEncryptedIncoming(accountID: account, reasons: [.keysPending], sender: owner)) ?? []).isEmpty {
+                try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.keysPending], sender: owner)
+                guard generation == token else { return }
+                await flushEncryptionControls(account: account, client: client)
+                guard generation == token else { return }
+                refreshSoon()
             }
             if let openChatID, owner == openChatID || owner == accountID || groupChats[openChatID]?.members.contains(owner) == true {
                 await loadEncryptionDetails(for: openChatID, force: true)
@@ -1295,7 +1323,8 @@ final class AppModel {
 
     /// Own direct messages with a resolvable reference can be unsent or rewritten; sample chats project only.
     func canRevise(_ message: StoredMessage) -> Bool {
-        guard message.accountID == accountID, message.chatID == openChatID, message.isOutgoing, !message.isRetracted, !isGroup(message.chatID) else { return false }
+        guard message.accountID == accountID, message.chatID == openChatID, message.isOutgoing, !message.isRetracted, message.unreadableReason == nil,
+              !isGroup(message.chatID) else { return false }
         if isDemo { return true }
         // ponytail: rooms wait for the group envelope path; mirrors the direct-chat half of canReact.
         return canReact(to: message)
@@ -1451,6 +1480,9 @@ final class AppModel {
         if notificationRoute?.id == id { notificationRoute = nil }
     }
 
+    /// Pushes a page onto the Chats stack from a view without a navigation path; RootView performs it.
+    func requestRoute(_ route: ChatRoute) { requestedRoute = route }
+
     private func routeNotification(_ destination: NotificationDestination) async {
         guard testSessionID == nil, !isDemo,
               !ProcessInfo.processInfo.arguments.contains("--inspect-notification"), let store else { return }
@@ -1594,7 +1626,8 @@ final class AppModel {
             await loadEncryptionDetails(for: chatID, refreshFromServer: isGroup(chatID), force: isGroup(chatID))
             guard generation == token else { return }
             if let client, isConnected {
-                try? await encryption.retryPendingIncoming(account: account, transport: client)
+                // A trust decision can only unblock rows that waited for trust; keys-pending rows wait for device lists.
+                try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.trustPending])
                 guard generation == token else { return }
                 await flushEncryptionControls(account: account, client: client)
                 await refresh()
@@ -1953,7 +1986,10 @@ final class AppModel {
         loadStoredAvatars(storedChats)
         let reviewPreview = "Encrypted message needs attention"
         var summaries = storedChats.map { ChatSummary(id: $0.id, title: $0.title,
-            preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage.map { $0.isRetracted ? "Message unsent" : ($0.body.isEmpty ? ($0.attachment?.kindLabel ?? "") : $0.body) } ?? ""), isPinned: $0.isPinned, avatarHash: $0.avatarHash,
+            preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage.map { last in
+                last.isRetracted ? "Message unsent"
+                    : last.unreadableReason.map(UnreadableCopy.preview) ?? (last.body.isEmpty ? (last.attachment?.kindLabel ?? "") : last.body) } ?? ""),
+            isPinned: $0.isPinned, avatarHash: $0.avatarHash,
             lastMessageAt: $0.lastMessage?.sentAt, lastMessageIsOutgoing: $0.lastMessage?.isOutgoing ?? false,
             lastMessageState: $0.lastMessage?.transportState, lastMessageReceipt: $0.lastMessageReceipt) }
         summaries += pending.keys.filter { !known.contains($0) }.sorted().map {
