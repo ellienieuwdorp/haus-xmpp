@@ -79,10 +79,11 @@ private func seedAccountA(_ store: MessageStore) async throws -> [String: ChatSe
     try await store.insertMessage(message("plain-2", "plain", body: "Two", sentAt: 200, outgoing: true, wireID: "w-plain-2"))
     try await store.insertMessage(message("plain-3", "plain", body: "Three", sentAt: 300, wireID: "w-plain-3"))
 
-    // 2. tie: equal timestamps, the larger ID is last.
+    // 2. tie: equal timestamps, the larger ID is last; a receipt for the other one must not leak onto it.
     try await chat("tie")
-    try await store.insertMessage(message("1", "tie", body: "First", sentAt: 400))
-    try await store.insertMessage(message("2", "tie", body: "Second", sentAt: 400))
+    try await store.insertMessage(message("1", "tie", body: "First", sentAt: 400, outgoing: true, wireID: "w-t1"))
+    try await store.insertMessage(message("2", "tie", body: "Second", sentAt: 400, outgoing: true, wireID: "w-t2"))
+    try await store.recordReceipt(accountID: "a", event: receipt("t-rcpt", "tie", target: "w-t1", kind: .displayed, at: 401))
 
     // 3. retracted: our own unauthenticated message, unsent.
     try await chat("retracted")
@@ -249,7 +250,7 @@ private func seedDecoyAccountB(_ store: MessageStore) async throws -> [String: C
         let plain = try #require(byID["plain"]?.lastMessage)
         #expect(plain.id == "plain-3" && plain.body == "Three" && plain.attachment == nil && !plain.isOutgoing)
         #expect(byID["plain"]?.lastMessageReceipt == nil)
-        #expect(byID["tie"]?.lastMessage?.id == "2")
+        #expect(byID["tie"]?.lastMessage?.id == "2" && byID["tie"]?.lastMessageReceipt == nil)
         let retracted = try #require(byID["retracted"]?.lastMessage)
         #expect(retracted.isRetracted && retracted.body.isEmpty && !retracted.isEdited && retracted.attachment == nil)
         let corrected = try #require(byID["corrected"]?.lastMessage)
