@@ -596,6 +596,32 @@ public actor MessageStore {
         }
     }
 
+    /// One retained row by its primary key, with its wire; nil when nothing is pending for this ciphertext.
+    public func pendingEncryptedIncoming(accountID: String, sender: String, digest: String) throws -> PendingEncryptedMessage? {
+        guard let row = try connection.query("SELECT sender,digest,wire,reason FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?",
+                                             [.text(accountID), .text(sender), .text(digest)]).first else { return nil }
+        guard let wire = row[2].data else { throw MessageStoreError.invalidValue }
+        return PendingEncryptedMessage(sender: row[0].string, digest: row[1].string, wire: wire,
+                                       reason: PendingEncryptedReason(rawValue: row[3].string) ?? .trustPending)
+    }
+
+    /// Every retained row in arrival order without transferring its ciphertext: the conversation fields are projected
+    /// from the envelope JSON in SQL. `CAST(wire AS TEXT)` is required because SQLite before 3.45 rejects BLOB arguments
+    /// to JSON functions; `json_valid` (evaluated first by the outer `CASE`) turns a row that is not JSON into nil fields
+    /// instead of an error. A field that is not a JSON string (an object, a number) also projects as nil.
+    public func pendingEncryptedIncomingSummaries(accountID: String) throws -> [PendingEncryptedSummary] {
+        func field(_ path: String) -> String {
+            "CASE WHEN json_valid(CAST(wire AS TEXT)) THEN CASE WHEN json_type(CAST(wire AS TEXT), '\(path)')='text' THEN json_extract(CAST(wire AS TEXT), '\(path)') END END"
+        }
+        let sql = "SELECT sender,digest,reason," + ["$.message.room", "$.message.sender", "$.from", "$.to", "$.provenance"].map(field).joined(separator: ",")
+            + " FROM pending_encrypted_inbox WHERE account_id=? ORDER BY rowid"
+        return try connection.query(sql, [.text(accountID)]).map {
+            PendingEncryptedSummary(sender: $0[0].string, digest: $0[1].string, reason: $0[2].string,
+                                    room: $0[3].optionalString, roomSender: $0[4].optionalString,
+                                    from: $0[5].optionalString, to: $0[6].optionalString, provenance: $0[7].optionalString)
+        }
+    }
+
     /// Keeps ciphertext that may still decrypt later. An existing row keeps its reason: classification is explicit.
     public func retainEncryptedIncoming(accountID: String, sender: String, digest: String, wire: Data,
                                         reason: PendingEncryptedReason = .trustPending) throws {
@@ -694,6 +720,11 @@ public actor MessageStore {
                 """, [.blob(wire), .text(accountID), .text(sender), .text(digest), .blob(expectedWire)])
             return try connection.query("SELECT changes()").first?[0].integer == 1
         }
+    }
+
+    /// The CAS revision alone: lets a caller that holds a decoded copy of the state skip reading and opening the blob.
+    public func encryptionStateRevision(accountID: String) throws -> Int? {
+        try connection.query("SELECT revision FROM encryption_state WHERE account_id=?", [.text(accountID)]).first?[0].integer
     }
 
     public func encryptionState(accountID: String) throws -> EncryptionState? {

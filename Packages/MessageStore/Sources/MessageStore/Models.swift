@@ -151,6 +151,25 @@ public struct PendingEncryptedMessage: Sendable {
     public let reason: PendingEncryptedReason
 }
 
+/// A pending row without its ciphertext. The optional fields are projected from the retained-envelope JSON that
+/// OMEMO writes; they are untrusted strings for grouping and counting, never display content.
+public struct PendingEncryptedSummary: Sendable, Equatable {
+    public let sender: String
+    public let digest: String
+    /// The stored classification, raw (`trustPending`, `keysPending`); counting by reason needs no second query.
+    public let reason: String
+    /// Group envelopes: `$.message.room`.
+    public let room: String?
+    /// Group envelopes: `$.message.sender`.
+    public let roomSender: String?
+    /// Direct envelopes: `$.from`.
+    public let from: String?
+    /// Direct envelopes: `$.to`.
+    public let to: String?
+    /// Direct envelopes: `$.provenance` (`direct`, `receivedCarbon` or `sentCarbon`).
+    public let provenance: String?
+}
+
 /// Why a message row is a placeholder and not content. Stored in `messages.unreadable_reason`.
 public enum UnreadableReason: String, Sendable, Equatable, CaseIterable {
     /// The envelope carried no key for this device (own other-device send, history before this installation, or a peer that excluded this device).
