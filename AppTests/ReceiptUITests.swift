@@ -30,6 +30,8 @@ final class ReceiptUITests: XCTestCase {
         app.returnToChats(); app.buttons["newConversation"].tap()
         app.textFields["newChatAddress"].tap(); app.textFields["newChatAddress"].typeText(peer)
         app.buttons["startChat"].tap()
+        // With the address field focused, the first tap on iOS 27 can only end editing.
+        if !app.buttons["chatDetails"].waitForExistence(timeout: 4), app.buttons["startChat"].exists { app.buttons["startChat"].tap() }
         let composer = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         let marker = "Please confirm \(UUID().uuidString.prefix(4))"
