@@ -1142,7 +1142,10 @@ final class AppModel {
     private func runConnectionSetup(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore,
                                     identityExists: Bool, token: UUID) async {
         let operations = ConnectionSetup.Operations(
-            features: { try await client.discoveryFeatures() },
+            features: { [domain = accountDomain] in
+                try await ConnectionSetup.discoverFeatures(server: { try await client.discoveryFeatures(for: domain) },
+                                                           account: { try await client.discoveryFeatures() })
+            },
             enableCarbons: { try await client.setCarbonsEnabled() },
             discoverUploads: { [weak self] in
                 // Optional: a server without XEP-0363 just has no attach button. Only a completed answer changes

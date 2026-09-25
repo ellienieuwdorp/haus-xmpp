@@ -173,6 +173,42 @@ final class ConnectionSetupTests: XCTestCase {
         XCTAssertFalse(marks.contains("walk-start"))
     }
 
+    /// Prosody advertises carbons only on the server domain and MAM only on the account: setup must see both.
+    func testFeaturesSplitAcrossDomainAndAccountEnableCarbonsAndTheWalk() async {
+        let recorder = Recorder()
+        var operations = operations(recorder)
+        operations.features = {
+            await recorder.mark("features")
+            return try await ConnectionSetup.discoverFeatures(server: { [ConnectionSetup.carbonsFeature, "urn:xmpp:ping"] },
+                                                              account: { [ConnectionSetup.archiveFeature] })
+        }
+        await run(operations, recorder: recorder)
+        let marks = await recorder.marks
+        XCTAssertTrue(marks.contains("carbons"))
+        XCTAssertTrue(marks.contains("walk-start"))
+        let events = await recorder.events
+        XCTAssertTrue(events.contains(.step("carbons")))
+        XCTAssertEqual(events.last, .catchingUp(nil))
+    }
+
+    func testEitherFeatureQueryFailingFailsTheFeaturesStep() async throws {
+        for failing in ["server", "account"] {
+            let recorder = Recorder()
+            var operations = operations(recorder)
+            operations.features = {
+                try await ConnectionSetup.discoverFeatures(
+                    server: { if failing == "server" { throw XMPPIQError.stanza(condition: "service-unavailable") }; return [ConnectionSetup.carbonsFeature] },
+                    account: { if failing == "account" { throw XMPPIQError.stanza(condition: "service-unavailable") }; return [ConnectionSetup.archiveFeature] })
+            }
+            await run(operations, recorder: recorder)
+            let events = await recorder.events
+            XCTAssertEqual(events.last, .failed(step: "server features", detail: "service-unavailable"), failing)
+            XCTAssertFalse(events.contains(.ready), failing)
+            let marks = await recorder.marks
+            XCTAssertFalse(marks.contains("carbons"), failing)
+        }
+    }
+
     func testInlineIdentityPathSkipsInitialize() async {
         let recorder = Recorder()
         await run(operations(recorder), recorder: recorder, identityExists: false)

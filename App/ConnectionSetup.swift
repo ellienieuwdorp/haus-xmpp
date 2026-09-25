@@ -46,6 +46,17 @@ struct ConnectionSetup: Sendable {
     static let rejoinStep = "rejoining groups"
     static let archiveStep = "archive catch-up"
 
+    /// The feature set setup decides on: the server domain's disco#info union the account's. Servers advertise
+    /// XEP-0280 on the domain (Prosody lists `urn:xmpp:carbons:2` only there) and XEP-0313 for the user's own
+    /// archive on the account's bare JID, so neither query alone sees both. Both run concurrently; either
+    /// failing fails the features step.
+    static func discoverFeatures(server: @escaping @Sendable () async throws -> Set<String>,
+                                 account: @escaping @Sendable () async throws -> Set<String>) async throws -> Set<String> {
+        async let domain = server()
+        async let own = account()
+        return try await domain.union(own)
+    }
+
     /// False when the `.online` handler already ran `initialize` inline (first connection of a new account).
     let identityExists: Bool
 
