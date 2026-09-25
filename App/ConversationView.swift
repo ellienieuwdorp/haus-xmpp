@@ -68,6 +68,13 @@ struct ConversationView: View {
     private var searchTerm: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first(where: { $0.id == chatID })?.title) }
     private var isGroup: Bool { model.isGroup(chatID) }
+    /// Ticks while a relative "Last seen" is shown so "just now" and "today" roll over on their own.
+    @State private var lastSeenClock = Date.now
+    /// The header subtitle; nil keeps the header to the name alone.
+    private var lastSeenLabel: String? {
+        guard !isGroup, let state = model.openChatLastSeen else { return nil }
+        return LastSeen.label(state, now: lastSeenClock, calendar: .autoupdatingCurrent)
+    }
     private var encryptionRoute: ChatRoute { isGroup ? .groupDetails(chatID) : .encryption(chatID) }
 
     private var messages: [ChatMessage] {
@@ -311,14 +318,34 @@ struct ConversationView: View {
                     HStack(spacing: 9) {
                         ChatAvatar(key: chatID, name: title, image: model.avatars[chatID], isGroup: isGroup, size: 36)
                             .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
-                        Text(title).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                        if let lastSeenLabel {
+                            // Known activity: a smaller name over the subtitle, centred in the same row so the avatar stays put.
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+                                Text(lastSeenLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    .contentTransition(.opacity)
+                            }
+                            .transition(.opacity)
+                        } else {
+                            Text(title).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                                .transition(.opacity)
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.2), value: lastSeenLabel)
+                    .task(id: model.openChatLastSeen) {
+                        lastSeenClock = .now
+                        guard case .lastSeen = model.openChatLastSeen else { return }
+                        while !Task.isCancelled {
+                            try? await Task.sleep(for: .seconds(30))
+                            lastSeenClock = .now
+                        }
                     }
                     // Leading toolbar items size to content; give the header a fixed width so the name isn't squeezed out.
                     .frame(width: 236, height: 44, alignment: .leading)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(title)
+                .accessibilityLabel(lastSeenLabel.map { "\(title), \($0)" } ?? title)
                 .accessibilityHint("Shows conversation details")
                 .accessibilityIdentifier("chatDetails")
             }
