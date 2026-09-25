@@ -368,3 +368,22 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     // Content plus barrier per message: the buffer outlasts stream management's 2,000-stanza ceiling.
     #expect(XMPPClient.eventBufferLimit >= 2 * 2_000)
 }
+
+@Test func archiveTimestampsParseConcurrentlyWithSharedFormatters() async {
+    let inputs = ["2026-09-01T10:00:00Z", "2026-09-01T10:00:00.250Z", "2026-09-01T12:00:00+02:00", "garbage"]
+    let sequential = inputs.map(ArchiveQuery.timestamp)
+    #expect(sequential[0] == Date(timeIntervalSince1970: 1_788_256_800))
+    #expect(sequential[1] == Date(timeIntervalSince1970: 1_788_256_800.25))
+    #expect(sequential[2] == sequential[0])
+    #expect(sequential[3] == nil)
+    let concurrent = await withTaskGroup(of: (Int, Date?).self) { group in
+        for index in 0..<200 {
+            group.addTask { (index, ArchiveQuery.timestamp(inputs[index % inputs.count])) }
+        }
+        var results: [(Int, Date?)] = []
+        for await result in group { results.append(result) }
+        return results
+    }
+    #expect(concurrent.count == 200)
+    for (index, date) in concurrent { #expect(date == sequential[index % inputs.count]) }
+}
