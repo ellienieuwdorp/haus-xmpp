@@ -111,7 +111,7 @@ import XMPPProtocol
         print("SM_DURABLE_ACK_AND_RESUME_VERIFIED")
         var cursor: String?, found = Set<String>(), pages = 0, sawIQSlot = false
         while true {
-            let page = try await client.fetchArchivePage(after: cursor, limit: 2)
+            let page = try await client.fetchArchivePage(.after(cursor), limit: 2)
             pages += 1
             // The page IQ was journaled before its write; it must occupy a slot without bytes.
             let journal = await persistence.snapshot?.journal ?? []

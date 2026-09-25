@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 15 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 16 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -218,7 +218,18 @@ public actor MessageStore {
             if version < 15, try connection.query("SELECT 1 FROM pragma_table_info('pending_encrypted_inbox') WHERE name='reason'").isEmpty {
                 try connection.execute("ALTER TABLE pending_encrypted_inbox ADD COLUMN reason TEXT NOT NULL DEFAULT 'trustPending'")
             }
-            try connection.execute("PRAGMA user_version = 15")
+            // v16: the backward cursor of each archive's history backfill; IF NOT EXISTS keeps it idempotent.
+            // An archive with a forward checkpoint and no row here was walked forward from its start (before v16).
+            if version < 16 {
+                try connection.execute("""
+                    CREATE TABLE IF NOT EXISTS archive_backfill (
+                        account_id TEXT NOT NULL, archive_id TEXT NOT NULL, revision INTEGER NOT NULL,
+                        oldest_id TEXT NOT NULL, complete INTEGER NOT NULL DEFAULT 0 CHECK(complete IN (0,1)),
+                        PRIMARY KEY(account_id, archive_id)
+                    )
+                    """)
+            }
+            try connection.execute("PRAGMA user_version = 16")
         }
     }
 
@@ -1034,6 +1045,59 @@ public actor MessageStore {
                 ON CONFLICT(account_id,archive_id) DO UPDATE SET revision=excluded.revision,cursor=excluded.cursor
                 """, [.text(accountID), .text(archiveID), .integer(next), .text(cursor)])
             return next
+        }
+    }
+
+    /// The oldest archive ID this device holds for one archive's history, and whether the archive has nothing older.
+    /// nil when the archive was never synchronized newest-first (see the v16 migration note).
+    public func archiveBackfillCursor(accountID: String, archiveID: String) throws -> ArchiveBackfillCursor? {
+        guard let row = try connection.query("SELECT revision,oldest_id,complete FROM archive_backfill WHERE account_id=? AND archive_id=?", [.text(accountID), .text(archiveID)]).first else { return nil }
+        return ArchiveBackfillCursor(revision: row[0].integer, oldestID: row[1].string, complete: row[2].integer != 0)
+    }
+
+    /// Moves the backfill cursor only after the page it names has committed. CAS on `expectedRevision`
+    /// (nil = no row yet), like `saveArchiveCheckpoint`, so a stale backfill run cannot rewind newer progress.
+    @discardableResult public func saveArchiveBackfillCursor(accountID: String, archiveID: String, expectedRevision: Int?,
+                                                             oldestID: String, complete: Bool) throws -> Int {
+        try requireTransportOwnership()
+        guard !accountID.isEmpty, !archiveID.isEmpty, !oldestID.isEmpty, oldestID.utf8.count <= 4096 else { throw MessageStoreError.invalidValue }
+        return try connection.transaction {
+            let current = try connection.query("SELECT revision FROM archive_backfill WHERE account_id=? AND archive_id=?", [.text(accountID), .text(archiveID)]).first?[0].integer
+            guard current == expectedRevision, (current ?? 0) < Int.max else { throw MessageStoreError.invalidTransition }
+            let next = (current ?? 0) + 1
+            try connection.execute("""
+                INSERT INTO archive_backfill(account_id,archive_id,revision,oldest_id,complete) VALUES(?,?,?,?,?)
+                ON CONFLICT(account_id,archive_id) DO UPDATE SET revision=excluded.revision,oldest_id=excluded.oldest_id,complete=excluded.complete
+                """, [.text(accountID), .text(archiveID), .integer(next), .text(oldestID), .integer(complete ? 1 : 0)])
+            return next
+        }
+    }
+
+    /// The first page of a newest-first sync: the archive's first forward checkpoint and its backfill cursor commit in
+    /// one transaction, so an interruption can never leave one without the other. Requires that the archive has no
+    /// checkpoint yet. A backfill row that is already there (an interrupted first sync of an earlier build) is replaced:
+    /// paging back from this newer page walks through whatever lies between, and reprocessing an entry is idempotent,
+    /// whereas keeping the older cursor would leave the entries between the two pages unfetched by either walk.
+    /// Returns the new checkpoint revision.
+    @discardableResult public func saveNewestArchivePage(accountID: String, archiveID: String, cursor: String,
+                                                         oldestID: String, complete: Bool) throws -> Int {
+        try requireTransportOwnership()
+        guard !accountID.isEmpty, !archiveID.isEmpty, !cursor.isEmpty, cursor.utf8.count <= 4096,
+              !oldestID.isEmpty, oldestID.utf8.count <= 4096 else { throw MessageStoreError.invalidValue }
+        return try connection.transaction {
+            let key: [Value] = [.text(accountID), .text(archiveID)]
+            guard try connection.query("SELECT 1 FROM archive_checkpoints WHERE account_id=? AND archive_id=?", key).isEmpty else {
+                throw MessageStoreError.invalidTransition
+            }
+            let backfill = try connection.query("SELECT revision FROM archive_backfill WHERE account_id=? AND archive_id=?", key).first?[0].integer
+            guard (backfill ?? 0) < Int.max else { throw MessageStoreError.invalidTransition }
+            try connection.execute("""
+                INSERT INTO archive_backfill(account_id,archive_id,revision,oldest_id,complete) VALUES(?,?,?,?,?)
+                ON CONFLICT(account_id,archive_id) DO UPDATE SET revision=excluded.revision,oldest_id=excluded.oldest_id,complete=excluded.complete
+                """, key + [.integer((backfill ?? 0) + 1), .text(oldestID), .integer(complete ? 1 : 0)])
+            try connection.execute("INSERT INTO archive_checkpoints(account_id,archive_id,revision,cursor) VALUES(?,?,?,?)",
+                                   key + [.integer(1), .text(cursor)])
+            return 1
         }
     }
 

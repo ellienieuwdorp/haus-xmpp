@@ -31,9 +31,24 @@ public struct XMPPArchiveMessage: Sendable, Equatable {
     public var rejectedOutgoing: Bool = false
 }
 
+/// Which side of a cursor an archive page is taken from (XEP-0059 §2.2, §2.5; XEP-0313 §4.1).
+public enum XMPPArchiveBound: Sendable, Equatable {
+    /// Forward from a cursor; nil = from the beginning of the archive.
+    case after(String?)
+    /// Backward from a cursor; nil = the newest page (RSM `<before/>`).
+    case before(String?)
+
+    var cursor: String? { switch self { case .after(let id), .before(let id): id } }
+}
+
+/// Results are in chronological order in either direction: `messages.first` is the oldest entry.
 public struct XMPPArchivePage: Sendable, Equatable {
     public let messages: [XMPPArchiveMessage]
+    /// Forward: nothing newer than this page. Backward: nothing older than this page.
     public let complete: Bool
+    /// RSM `<first>`: the oldest returned ID. nil only when the page is empty.
+    public let firstID: String?
+    /// RSM `<last>`: the newest returned ID. nil only when the page is empty.
     public let lastID: String?
     public let handledTokens: [XMPPInboundToken]
 }
@@ -52,6 +67,20 @@ struct ArchiveQuery {
     var archiveOwner: String { room ?? accountBareJID }
 
     static let namespace = "urn:xmpp:mam:2"
+    static let resultSetNamespace = "http://jabber.org/protocol/rsm"
+
+    /// The MAM query with an RSM set of `limit` items on the requested side of the cursor. An empty `<before/>`
+    /// asks for the last (newest) page (XEP-0059 §2.5, XEP-0313 §4.1).
+    static func payload(queryID: String, limit: Int, bound: XMPPArchiveBound) -> String {
+        let cursorXML: String
+        switch bound {
+        case .after(nil): cursorXML = ""
+        case .after(let id?): cursorXML = "<after>\(xmlEscaped(id))</after>"
+        case .before(nil): cursorXML = "<before/>"
+        case .before(let id?): cursorXML = "<before>\(xmlEscaped(id))</before>"
+        }
+        return "<query xmlns='\(namespace)' queryid='\(xmlEscaped(queryID))'><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE' type='hidden'><value>\(namespace)</value></field></x><set xmlns='\(resultSetNamespace)'><max>\(limit)</max>\(cursorXML)</set></query>"
+    }
     static func containsWrapper(_ node: XMLNode) -> Bool {
         node.children.contains { $0.name == "result" && $0.namespace.hasPrefix("urn:xmpp:mam:") }
     }
@@ -136,12 +165,18 @@ struct ArchiveQuery {
         guard fin.attributes["stable"] != "false", fin.attributes["stable"] != "0" else { throw XMPPIQError.malformedResponse }
         let complete: Bool
         switch fin.attributes["complete"] { case nil, "false", "0": complete = false; case "true", "1": complete = true; default: throw XMPPIQError.malformedResponse }
-        let set = try OMEMOWire.singleton(fin, "set", "http://jabber.org/protocol/rsm")
-        let lastNodes = set.children.filter { $0.name == "last" && $0.namespace == set.namespace }
-        guard lastNodes.count <= 1 else { throw XMPPIQError.malformedResponse }
-        let last = lastNodes.first?.text
-        guard last == messages.last?.archiveID, complete || last != nil else { throw XMPPIQError.malformedResponse }
-        return .init(messages: messages, complete: complete, lastID: last, handledTokens: handledTokens)
+        let set = try OMEMOWire.singleton(fin, "set", Self.resultSetNamespace)
+        func bound(_ name: String) throws -> String? {
+            let nodes = set.children.filter { $0.name == name && $0.namespace == set.namespace }
+            guard nodes.count <= 1 else { throw XMPPIQError.malformedResponse }
+            return nodes.first?.text
+        }
+        let first = try bound("first"), last = try bound("last")
+        // Results arrive oldest first whichever direction was asked, so the RSM bounds must name exactly the
+        // returned ends. A non-empty page names both; an empty one names neither and must be complete.
+        guard first == messages.first?.archiveID, last == messages.last?.archiveID,
+              complete || (first != nil && last != nil) else { throw XMPPIQError.malformedResponse }
+        return .init(messages: messages, complete: complete, firstID: first, lastID: last, handledTokens: handledTokens)
     }
 
     /// A MAM result, carbon or `<forwarded/>` inside archived content: never unwrapped a second time.

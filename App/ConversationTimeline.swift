@@ -185,6 +185,8 @@ struct TimelineRow: Equatable {
 struct ConversationTimeline: UIViewControllerRepresentable {
     let messages: [TimelineMessage]
     var typing: TimelineTyping? = nil
+    /// The server's older history is being fetched for this chat: a quiet cell sits above the oldest message.
+    var loadingEarlier = false
     /// SwiftUI banners floating over the top edge. UIKit only sees the navigation bar as safe area, so this adds theirs.
     var topBannerHeight: CGFloat = 0
     /// Hosted above the keyboard by the controller; nil hides it (search).
@@ -215,7 +217,7 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: ConversationTimelineController, context: Context) {
         if controller.additionalSafeAreaInsets.top != topBannerHeight { controller.additionalSafeAreaInsets.top = topBannerHeight }
         controller.setComposer(composer)
-        controller.update(messages: messages, typing: typing, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend,
+        controller.update(messages: messages, typing: typing, loadingEarlier: loadingEarlier, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend,
                           onOpenEncryption: onOpenEncryption, onDisplayed: onDisplayed)
         controller.onRestoreComposerFocus = onRestoreComposerFocus
         controller.onReachTop = onReachTop
@@ -236,7 +238,10 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var rowsByID: [String: TimelineRow] = [:]
     /// The typing bubble is the last item when someone types; no stored message ID contains a NUL.
     private static let typingID = "typing\u{0}"
+    /// The loading-earlier cell is the first item while the model backfills this chat's archive.
+    static let loadingEarlierID = "loading-earlier\u{0}"
     private var typing: TimelineTyping?
+    private var loadingEarlier = false
     private var typingArrived = false
     private var accent = ""
     private var onToggleStar: (String) -> Void = { _ in }
@@ -301,6 +306,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         collectionView.accessibilityIdentifier = "conversation.timeline"
         collectionView.register(MessageBubbleCell.self, forCellWithReuseIdentifier: "message")
         collectionView.register(TypingIndicatorCell.self, forCellWithReuseIdentifier: "typing")
+        collectionView.register(LoadingEarlierCell.self, forCellWithReuseIdentifier: "loadingEarlier")
         collectionView.addGestureRecognizer(TouchGate(down: { [weak self] point in self?.reserveSwipe(forBubbleAt: point) }, up: { [weak self] in self?.releaseSwipe() }))
         let container = UIView()
         container.backgroundColor = .systemBackground
@@ -352,6 +358,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                 if let typing { (cell as? TypingIndicatorCell)?.configure(typing) }
                 return cell
             }
+            if id == Self.loadingEarlierID {
+                let cell = collection.dequeueReusableCell(withReuseIdentifier: "loadingEarlier", for: indexPath)
+                (cell as? LoadingEarlierCell)?.startAnimating()
+                return cell
+            }
             guard let self, let row = rowsByID[id],
                   let cell = collection.dequeueReusableCell(withReuseIdentifier: "message", for: indexPath) as? MessageBubbleCell else { return nil }
             cell.configure(row: row, toggleStar: { [weak self] in self?.onToggleStar(id) }, retry: { [weak self] in self?.onRetryMessage(id) }, reply: { [weak self] in self?.onReply(id) }, reaction: { [weak self] emoji in self?.onReaction(id, emoji) },
@@ -386,12 +397,12 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         present(viewer, animated: true)
     }
 
-    func update(messages incoming: [TimelineMessage], typing: TimelineTyping? = nil, accent: String = "", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in },
+    func update(messages incoming: [TimelineMessage], typing: TimelineTyping? = nil, loadingEarlier: Bool = false, accent: String = "", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in },
                 onEdit: @escaping (String) -> Void = { _ in }, onUnsend: @escaping (String) -> Void = { _ in }, onOpenEncryption: @escaping () -> Void = {},
                 onDisplayed: @escaping (String) -> Void = { _ in }) {
         loadViewIfNeeded()
         if actionsVisible {
-            heldUpdate = { [weak self] in self?.update(messages: incoming, typing: typing, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend,
+            heldUpdate = { [weak self] in self?.update(messages: incoming, typing: typing, loadingEarlier: loadingEarlier, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend,
                                                        onOpenEncryption: onOpenEncryption, onDisplayed: onDisplayed) }
             return
         }
@@ -408,8 +419,10 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         let uniqueRows = TimelineRow.rows(for: incoming.filter { seen.insert($0.id).inserted })
         let accentChanged = accent != self.accent
         let typingChanged = typing != self.typing
-        guard uniqueRows != rows || accentChanged || typingChanged else { return }
+        let loadingChanged = loadingEarlier != self.loadingEarlier
+        guard uniqueRows != rows || accentChanged || typingChanged || loadingChanged else { return }
         self.accent = accent
+        self.loadingEarlier = loadingEarlier
         let typingLeft = self.typing != nil && typing == nil
         typingArrived = self.typing == nil && typing != nil
         self.typing = typing
@@ -434,6 +447,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         let currentRevision = revision
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
+        // Above the oldest message; the anchor below skips it, so it comes and goes without moving the reader.
+        if loadingEarlier { snapshot.appendItems([Self.loadingEarlierID]) }
         snapshot.appendItems(uniqueRows.map(\.message.id))
         if typing != nil { snapshot.appendItems([Self.typingID]) }
         var changed = uniqueRows.compactMap { row -> String? in
@@ -831,9 +846,10 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             - collectionView.contentOffset.y - collectionView.bounds.height < 80
     }
 
+    /// The first visible message. Never the loading-earlier cell: anchored on it, its removal would drop the reader.
     private func visibleAnchor() -> Anchor? {
         let visible = collectionView.indexPathsForVisibleItems.sorted()
-        guard let path = visible.first,
+        guard let path = visible.first(where: { dataSource.itemIdentifier(for: $0) != Self.loadingEarlierID }),
               let id = dataSource.itemIdentifier(for: path),
               let attributes = collectionView.layoutAttributesForItem(at: path) else { return nil }
         return Anchor(id: id, distanceFromTop: attributes.frame.minY - collectionView.contentOffset.y)
@@ -1585,6 +1601,53 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         status.tintColor = meta
         status.show(message.isOutgoing ? message.status.map(MessageStatusGlyph.glyph(for:)) : nil)
         setNeedsLayout()
+    }
+}
+
+/// Shown above the oldest message while older history is fetched: a small spinner and one quiet line, nothing to tap.
+final class LoadingEarlierCell: UICollectionViewCell {
+    static let label = "Loading earlier messages"
+    private let spinner = UIActivityIndicatorView(style: .medium)
+    private let text = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        spinner.hidesWhenStopped = false
+        spinner.color = .secondaryLabel
+        text.text = Self.label + "…"
+        text.font = .preferredFont(forTextStyle: .footnote)
+        text.adjustsFontForContentSizeCategory = true
+        text.textColor = .secondaryLabel
+        text.numberOfLines = 0
+        text.textAlignment = .center
+        let row = UIStackView(arrangedSubviews: [spinner, text])
+        row.axis = .horizontal
+        row.alignment = .center
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(row)
+        let height = contentView.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
+        NSLayoutConstraint.activate([
+            height,
+            row.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            row.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            row.leadingAnchor.constraint(greaterThanOrEqualTo: contentView.leadingAnchor, constant: 16),
+            row.topAnchor.constraint(greaterThanOrEqualTo: contentView.topAnchor, constant: 8),
+        ])
+        isAccessibilityElement = true
+        accessibilityLabel = Self.label
+        accessibilityTraits = [.updatesFrequently]
+        accessibilityIdentifier = "timeline.loadingEarlier"
+        spinner.startAnimating()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func startAnimating() { spinner.startAnimating() }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { spinner.startAnimating() }
     }
 }
 
