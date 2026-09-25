@@ -263,3 +263,17 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
     try await store.classifyPendingEncryptedIncoming(accountID: account, sender: peer, digest: "missing", reason: .keysPending)
     #expect(try await store.pendingEncryptedIncoming(accountID: account).count == 2)
 }
+
+@Test func undecryptableKeyTransportConsumesIdentityWithoutARow() async throws {
+    let url = try unreadableStoreURL()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    try await store.retainEncryptedIncoming(accountID: account, sender: peer, digest: "kt", wire: Data([1]))
+    try await store.consumeUndecryptableIncoming(accountID: account, sender: peer, digest: "kt")
+    try await store.consumeUndecryptableIncoming(accountID: account, sender: peer, digest: "kt")
+    #expect(try await store.pendingEncryptedIncoming(accountID: account).isEmpty)
+    #expect(try await store.hasEncryptedIncoming(accountID: account, sender: peer, digest: "kt"))
+    #expect(try await store.messages(accountID: account, chatID: peer).isEmpty)
+    #expect(try await store.chats(accountID: account).isEmpty)
+    await #expect(throws: MessageStoreError.invalidValue) { try await store.consumeUndecryptableIncoming(accountID: account, sender: peer, digest: "") }
+}

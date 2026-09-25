@@ -543,6 +543,16 @@ public actor MessageStore {
         return try connection.transaction { try insertUnreadableInTransaction(placeholder) }
     }
 
+    /// Consumes the replay identity of ciphertext that failed permanently but was never a message bubble (a key transport
+    /// from a trusted device whose session no longer decrypts): no row, no session change, the pending copy is removed.
+    public func consumeUndecryptableIncoming(accountID: String, sender: String, digest: String) throws {
+        guard !accountID.isEmpty, !sender.isEmpty, !digest.isEmpty, digest.utf8.count <= 128 else { throw MessageStoreError.invalidValue }
+        try connection.transaction {
+            try connection.execute("INSERT OR IGNORE INTO encrypted_inbox(account_id,sender,digest) VALUES(?,?,?)", [.text(accountID), .text(sender), .text(digest)])
+            try connection.execute("DELETE FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?", [.text(accountID), .text(sender), .text(digest)])
+        }
+    }
+
     /// True when the placeholder row exists. `message(accountID:messageID:)` also works; this skips the attachment lookup.
     public func hasUnreadableMessage(accountID: String, id: String) throws -> Bool {
         try !connection.query("SELECT 1 FROM messages WHERE account_id=? AND id=? AND encryption_profile=?",
