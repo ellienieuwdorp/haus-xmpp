@@ -25,35 +25,35 @@ final class LastSeenTrackerTests: XCTestCase {
 
     func testAnyActiveResourceIsOnline() {
         var tracker = LastSeenTracker()
-        tracker.apply(presence("phone", available: true, idle: start), account: me, isDirectChat: true, now: start)
+        tracker.apply(presence("phone", available: true, idle: start), account: me, isContact: true, now: start)
         XCTAssertEqual(tracker.lastSeen(for: alex), .lastSeen(start), "one idle resource dates the contact")
-        tracker.apply(presence("laptop", available: true), account: me, isDirectChat: true, now: start + 5)
+        tracker.apply(presence("laptop", available: true), account: me, isContact: true, now: start + 5)
         XCTAssertEqual(tracker.lastSeen(for: alex), .online)
     }
 
     func testAllIdleUsesTheNewestIdleStart() {
         var tracker = LastSeenTracker()
-        tracker.apply(presence("phone", available: true, idle: start - 600), account: me, isDirectChat: true, now: start)
-        tracker.apply(presence("laptop", available: true, idle: start - 60), account: me, isDirectChat: true, now: start)
+        tracker.apply(presence("phone", available: true, idle: start - 600), account: me, isContact: true, now: start)
+        tracker.apply(presence("laptop", available: true, idle: start - 60), account: me, isContact: true, now: start)
         XCTAssertEqual(tracker.lastSeen(for: alex), .lastSeen(start - 60))
     }
 
     func testWatchedDepartureDatesTheContact() {
         var tracker = LastSeenTracker()
-        tracker.apply(presence("phone", available: true), account: me, isDirectChat: true, now: start)
-        tracker.apply(presence("laptop", available: true), account: me, isDirectChat: true, now: start)
-        tracker.apply(presence("phone", available: false), account: me, isDirectChat: true, now: start + 10)
+        tracker.apply(presence("phone", available: true), account: me, isContact: true, now: start)
+        tracker.apply(presence("laptop", available: true), account: me, isContact: true, now: start)
+        tracker.apply(presence("phone", available: false), account: me, isContact: true, now: start + 10)
         XCTAssertEqual(tracker.lastSeen(for: alex), .online, "another resource is still there")
-        tracker.apply(presence("laptop", available: false), account: me, isDirectChat: true, now: start + 20)
+        tracker.apply(presence("laptop", available: false), account: me, isContact: true, now: start + 20)
         XCTAssertEqual(tracker.lastSeen(for: alex), .lastSeen(start + 20))
     }
 
     func testAProbeAnswerForAnOfflineContactIsNotADeparture() {
         var tracker = LastSeenTracker()
-        XCTAssertTrue(tracker.apply(presence(nil, available: false), account: me, isDirectChat: true, now: start))
+        XCTAssertTrue(tracker.apply(presence(nil, available: false), account: me, isContact: true, now: start))
         XCTAssertNil(tracker.lastSeen(for: alex), "offline without a time stays unknown")
-        tracker.apply(presence("phone", available: true), account: me, isDirectChat: true, now: start)
-        tracker.apply(presence(nil, available: false), account: me, isDirectChat: true, now: start + 30)
+        tracker.apply(presence("phone", available: true), account: me, isContact: true, now: start)
+        tracker.apply(presence(nil, available: false), account: me, isContact: true, now: start + 30)
         XCTAssertEqual(tracker.lastSeen(for: alex), .lastSeen(start + 30), "a bare unavailable ends every resource we saw")
     }
 
@@ -63,7 +63,7 @@ final class LastSeenTrackerTests: XCTestCase {
         XCTAssertNil(tracker.lastSeen(for: alex))
         tracker.recordLastActivity(seconds: 300, of: alex, now: start)
         XCTAssertEqual(tracker.lastSeen(for: alex), .lastSeen(start - 300))
-        tracker.apply(presence("phone", available: true), account: me, isDirectChat: true, now: start)
+        tracker.apply(presence("phone", available: true), account: me, isContact: true, now: start)
         XCTAssertEqual(tracker.lastSeen(for: alex), .online, "an available resource outranks the server's answer")
     }
 
@@ -78,25 +78,25 @@ final class LastSeenTrackerTests: XCTestCase {
 
     func testReconnectKeepsWhatWasSeenButForgetsWhoIsAvailable() {
         var tracker = loaded([XMPPRosterItem(jid: alex, subscription: .both)])
-        tracker.apply(presence("phone", available: true), account: me, isDirectChat: true, now: start)
+        tracker.apply(presence("phone", available: true), account: me, isContact: true, now: start)
         XCTAssertEqual(tracker.askStep(for: alex, now: start), .nothing)
         tracker.resetConnection()
         XCTAssertNil(tracker.lastSeen(for: alex), "online is not assumed across a reconnect")
         XCTAssertFalse(tracker.rosterLoaded)
         XCTAssertTrue(tracker.roster.isEmpty)
-        tracker.apply(presence("phone", available: true), account: me, isDirectChat: true, now: start)
-        tracker.apply(presence("phone", available: false), account: me, isDirectChat: true, now: start + 5)
+        tracker.apply(presence("phone", available: true), account: me, isContact: true, now: start)
+        tracker.apply(presence("phone", available: false), account: me, isContact: true, now: start + 5)
         tracker.resetConnection()
         XCTAssertEqual(tracker.lastSeen(for: alex), .lastSeen(start + 5))
     }
 
     // MARK: Filtering
 
-    func testOwnAccountAndNonDirectChatsAreIgnored() {
+    func testOwnAccountAndGroupsAreIgnored() {
         var tracker = LastSeenTracker()
-        XCTAssertFalse(tracker.apply(presence("tablet", available: true, contact: me), account: me, isDirectChat: true, now: start))
+        XCTAssertFalse(tracker.apply(presence("tablet", available: true, contact: me), account: me, isContact: true, now: start))
         XCTAssertNil(tracker.lastSeen(for: me))
-        XCTAssertFalse(tracker.apply(presence("phone", available: true), account: me, isDirectChat: false, now: start), "groups and unlisted senders")
+        XCTAssertFalse(tracker.apply(presence("phone", available: true), account: me, isContact: false, now: start), "groups")
         XCTAssertNil(tracker.lastSeen(for: alex))
     }
 
@@ -128,7 +128,7 @@ final class LastSeenTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.askStep(for: alex, now: start), .queryLastActivity)
         XCTAssertEqual(tracker.askStep(for: alex, now: start + 59), .nothing)
         XCTAssertEqual(tracker.askStep(for: alex, now: start + 60), .queryLastActivity)
-        tracker.apply(presence("phone", available: true), account: me, isDirectChat: true, now: start + 61)
+        tracker.apply(presence("phone", available: true), account: me, isContact: true, now: start + 61)
         XCTAssertEqual(tracker.askStep(for: alex, now: start + 200), .nothing, "an available contact needs no query")
     }
 

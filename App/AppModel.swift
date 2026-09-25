@@ -1013,8 +1013,8 @@ final class AppModel {
         case .encryptionFailure:
             encryptionAttention.note("An encrypted message could not be opened")
         case .contactPresence(let presence):
-            // Only listed 1:1 chats; our own other resources and room occupants never reach the header.
-            guard !isDemo, lastSeenTracker.apply(presence, account: account, isDirectChat: isDirectChat(presence.contact), now: .now),
+            // Our own other resources and groups are dropped; only listed 1:1 chats reach the header.
+            guard !isDemo, lastSeenTracker.apply(presence, account: account, isContact: !isGroup(presence.contact), now: .now),
                   presence.contact == openChatID else { return }
             syncOpenChatLastSeen()
             // A probe answer says offline without a time: ask the server when the contact was last active.

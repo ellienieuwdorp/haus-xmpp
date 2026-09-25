@@ -66,11 +66,13 @@ struct LastSeenTracker {
         for key in contacts.keys { contacts[key]?.available = [:]; contacts[key]?.lastQueriedAt = nil }
     }
 
-    /// Records a presence from a listed 1:1 chat; anything else (our own resources, groups, strangers) is ignored.
-    /// Returns whether the presence was recorded.
+    /// Records a contact's presence; our own other resources and groups (`isContact == false`) are ignored.
+    /// Contacts without a listed chat are kept too: the server's probe answers arrive once, at login, and a chat
+    /// started later with an online contact would otherwise stay unknown until the contact's presence changes.
+    /// Only listed 1:1 chats ever reach the header. Returns whether the presence was recorded.
     @discardableResult
-    mutating func apply(_ presence: XMPPContactPresence, account: String, isDirectChat: Bool, now: Date) -> Bool {
-        guard isDirectChat, presence.contact != account else { return false }
+    mutating func apply(_ presence: XMPPContactPresence, account: String, isContact: Bool, now: Date) -> Bool {
+        guard isContact, presence.contact != account else { return false }
         var state = contacts[presence.contact] ?? ContactPresenceState()
         let resource = presence.resource ?? ""
         if presence.available {
