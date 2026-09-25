@@ -49,6 +49,9 @@ final class AppModel {
     private(set) var typing: [String: [String]] = [:] { didSet { syncOpenChatTyping() } }
     /// The open chat's entry in `typing`, observed on its own so typing in another chat never re-renders the conversation.
     private(set) var openChatTyping: [String]?
+    /// The open 1:1 chat's contact activity for the header subtitle; nil when unknown. In memory only, cleared whenever
+    /// the open chat changes.
+    private(set) var openChatLastSeen: LastSeen?
     @ObservationIgnored private var typingTracker = TypingTracker()
     @ObservationIgnored private var typingExpiry: Task<Void, Never>?
     /// What we last told the open chat's peer about our own typing.
@@ -117,7 +120,7 @@ final class AppModel {
     @ObservationIgnored private var drainTask: Task<Void, Never>?
     @ObservationIgnored private var client: XMPPClient?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
-    @ObservationIgnored private var openChatID: String? { didSet { syncOpenChatTyping() } }
+    @ObservationIgnored private var openChatID: String? { didSet { syncOpenChatTyping(); syncOpenChatLastSeen() } }
     @ObservationIgnored private var encryptionDetailsChatID: String?
     /// The chat whose Devices footer a held send's reason belongs to: the open conversation, or the chat whose
     /// details pages cover it.
@@ -1710,6 +1713,17 @@ final class AppModel {
     private func syncOpenChatTyping() {
         let open = openChatID.flatMap { typing[$0] }
         if open != openChatTyping { openChatTyping = open }
+    }
+
+    /// The demo's fixed header samples; a real chat starts unknown until presence says otherwise.
+    private static let demoLastSeen: [String: LastSeen] = [
+        "alex@preview.local": .online,
+        "maya@preview.local": .lastSeen(Date(timeIntervalSince1970: 1_789_380_000)),
+    ]
+
+    private func syncOpenChatLastSeen() {
+        let open = isDemo ? openChatID.flatMap { AppModel.demoLastSeen[$0] } : nil
+        if open != openChatLastSeen { openChatLastSeen = open }
     }
 
     private func resetTyping() {
