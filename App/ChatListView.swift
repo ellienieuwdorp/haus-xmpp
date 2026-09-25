@@ -95,9 +95,9 @@ struct ChatListView: View {
                 .accessibilityLabel("Account")
             }
             // Connection progress is a quiet spinner that disappears; only a setup failure gets a glyph.
-            if model.isSettlingConnection {
+            if model.isSettlingConnection || model.isCatchingUp {
                 ToolbarItem(placement: .topBarTrailing) {
-                    ProgressView().controlSize(.small).accessibilityLabel("Connecting")
+                    ProgressView().controlSize(.small).accessibilityLabel(model.isCatchingUp ? "Catching up" : "Connecting")
                 }
                 .sharedBackgroundVisibility(.hidden)
             } else if model.connectionNeedsAttention {

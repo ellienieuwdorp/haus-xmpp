@@ -359,3 +359,12 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     #expect(query.messages.last?.archiveID == "redacted")
     #expect(query.messages.last?.message == nil)
 }
+
+@Test func archiveQueriesGetTheLongerTimeoutAndTheEventBufferOutlastsTheStreamCeiling() {
+    #expect(XMPPClient.archiveQueryTimeout == .seconds(60))
+    #expect(XMPPClient.iqTimeout == .seconds(15))
+    #expect(XMPPClient.archiveQueryTimeout > XMPPClient.iqTimeout)
+    #expect(XMPPClient.eventBufferLimit == 4096)
+    // Content plus barrier per message: the buffer outlasts stream management's 2,000-stanza ceiling.
+    #expect(XMPPClient.eventBufferLimit >= 2 * 2_000)
+}

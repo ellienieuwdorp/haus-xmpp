@@ -16,7 +16,9 @@ extension XCUIApplication {
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         row.tap()
         // The page is pushed; a device row tapped mid-transition is swallowed, so wait for the push to land.
-        XCTAssertTrue(navigationBars["Devices & Encryption"].waitForExistence(timeout: 10))
+        // A direct chat opens "Devices & Encryption", a group opens "Group details".
+        let page = navigationBars.matching(NSPredicate(format: "identifier IN %@", ["Devices & Encryption", "Group details"])).firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 10))
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.8))
     }
 
