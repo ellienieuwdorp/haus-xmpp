@@ -57,10 +57,14 @@ struct SettingsView: View {
                     Label { Text("Read receipts") } icon: { SettingsIconTile(systemName: "eye.fill", color: .blue) }
                 }
                 .accessibilityIdentifier("readReceipts")
+                Toggle(isOn: Binding(get: { model.accountPreferences.lastSeen }, set: { on in Task { await model.updatePreferences { $0.lastSeen = on } } })) {
+                    Label { Text("Last seen") } icon: { SettingsIconTile(systemName: "clock.fill", color: .orange) }
+                }
+                .accessibilityIdentifier("lastSeen")
             } header: {
                 Text("Privacy")
             } footer: {
-                Text("Tell contacts when their messages reach this iPhone and when you read them. You still see what contacts send you, and their messages are still asked for receipts.")
+                Text("Tell contacts when their messages reach this iPhone and when you read them. You still see what contacts send you, and their messages are still asked for receipts. Last seen lets contacts you chat with see when you were last online. Turning it off stops sharing your online status with everyone; you still see what contacts share.")
             }
             Section {
                 NavigationLink {

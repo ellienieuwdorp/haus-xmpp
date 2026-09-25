@@ -52,6 +52,8 @@ final class AppModel {
     /// The open 1:1 chat's contact activity for the header subtitle; nil when unknown. In memory only, cleared whenever
     /// the open chat changes.
     private(set) var openChatLastSeen: LastSeen?
+    /// Contacts' presence, the roster and the subscription policy. In memory only, never stored.
+    @ObservationIgnored private var lastSeenTracker = LastSeenTracker()
     @ObservationIgnored private var typingTracker = TypingTracker()
     @ObservationIgnored private var typingExpiry: Task<Void, Never>?
     /// What we last told the open chat's peer about our own typing.
@@ -697,6 +699,7 @@ final class AppModel {
         refreshFence = [:]; encryptionAttention = EncryptionAttention()
         uploadService = uploads.load(account: account)
         resetTyping()
+        lastSeenTracker = LastSeenTracker()
         preferences.set(account, forKey: "lastAccount")
     }
 
@@ -871,6 +874,7 @@ final class AppModel {
         inbound = nil
         for room in groupChats.keys { groupChats[room]?.joined = false }
         resetTyping()
+        resetPresence()
         return previous
     }
 
@@ -885,6 +889,8 @@ final class AppModel {
             case .online:
                 var step = "server features" { didSet { session = .connected(settingUp: step) } }
                 session = .connected(settingUp: step)
+                // The client answers XEP-0012 queries to our full address only while the account shares last seen.
+                await client?.setSharesLastActivity(accountPreferences.lastSeen)
                 if let encryption, let client {
                     do {
                         let features = try await client.discoveryFeatures()
@@ -908,6 +914,10 @@ final class AppModel {
                         session = .ready
                         reconnectAttempt = 0
                         reportedSetupFailure = nil
+                        // Roster pushes are answered only after a fetch on this stream. Its result arrives as a
+                        // `.rosterItems` event after this handler, which then revokes and asks (see there).
+                        try? await client.fetchRoster()
+                        guard generation == token else { return }
                         try? await encryption.retryPendingIncoming(account: account, transport: client)
                         guard generation == token else { return }
                         await flushEncryptionControls(account: account, client: client)
@@ -938,8 +948,9 @@ final class AppModel {
                 }
             case .disconnected(let reason):
                 for room in groupChats.keys { groupChats[room]?.joined = false }
-                // Chat states belong to the stream that carried them.
+                // Chat states and presence belong to the stream that carried them.
                 resetTyping()
+                resetPresence()
                 drainTask?.cancel()
                 if case .needsAttention = session {} else { session = .offline(reason: reason) }
                 reconcile()
@@ -1001,9 +1012,34 @@ final class AppModel {
             if owner == account || chats.contains(where: { $0.id == owner }) { await loadAvatar(for: owner) }
         case .encryptionFailure:
             encryptionAttention.note("An encrypted message could not be opened")
-        case .contactPresence, .subscription, .rosterItems:
-            // Presence and roster wiring lands with the last-seen integration.
-            break
+        case .contactPresence(let presence):
+            // Only listed 1:1 chats; our own other resources and room occupants never reach the header.
+            guard !isDemo, lastSeenTracker.apply(presence, account: account, isDirectChat: isDirectChat(presence.contact), now: .now),
+                  presence.contact == openChatID else { return }
+            syncOpenChatLastSeen()
+            // A probe answer says offline without a time: ask the server when the contact was last active.
+            if !presence.available { requestLastSeen(for: presence.contact) }
+        case .subscription(let event):
+            guard event.kind == .subscribe, !isDemo, let client else { return }
+            // Unsubscribe/unsubscribed need no answer; the roster push that follows records the change.
+            switch lastSeenTracker.answerSubscribe(from: event.from, sharesLastSeen: accountPreferences.lastSeen, isDirectChat: isDirectChat(event.from)) {
+            case .approve(let alsoSubscribe):
+                try? await client.sendSubscription(.subscribed, to: event.from)
+                if alsoSubscribe { try? await client.sendSubscription(.subscribe, to: event.from) }
+            case .deny:
+                try? await client.sendSubscription(.unsubscribed, to: event.from)
+            case .leavePending:
+                break // A stranger's request waits on the server; it is redelivered on every login.
+            }
+        case .rosterItems(let items, let replacesAll):
+            guard !isDemo else { return }
+            lastSeenTracker.applyRoster(items, replacesAll: replacesAll)
+            // While the account does not share last seen, nobody keeps a subscription to our presence: the
+            // roster fetched on each connection (and any push) is revoked, so a switch turned off offline or on
+            // another device takes effect on the next connection.
+            if !accountPreferences.lastSeen { await revokePresenceSharing(items.filter { $0.subscription == .from || $0.subscription == .both }.map(\.jid), token: token) }
+            guard generation == token, let openChatID, replacesAll || items.contains(where: { $0.jid == openChatID }) else { return }
+            requestLastSeen(for: openChatID)
         case .streamAcknowledged:
             refreshSoon()
         case .message:
@@ -1491,6 +1527,9 @@ final class AppModel {
         if messagesLoadedFor != chatID, let store, let page = try? await loadTimeline(store: store, account: account, chat: chatID, isGroup: isGroup(chatID), limit: timelineWindow),
            accountID == account, openChatID == chatID, messagesLoadedFor != chatID { publishTimeline(page, chat: chatID) }
         await refresh()
+        // The chat may only now be listed (a new conversation); then ask about its contact in the background.
+        syncOpenChatLastSeen()
+        if openChatID == chatID { requestLastSeen(for: chatID) }
         if !isDemo { await loadEncryptionDetails(for: chatID) }
     }
 
@@ -1724,8 +1763,51 @@ final class AppModel {
     ]
 
     private func syncOpenChatLastSeen() {
-        let open = isDemo ? openChatID.flatMap { AppModel.demoLastSeen[$0] } : nil
+        let open = openChatID.flatMap { chat in
+            isDemo ? AppModel.demoLastSeen[chat] : isDirectChat(chat) ? lastSeenTracker.lastSeen(for: chat) : nil
+        }
         if open != openChatLastSeen { openChatLastSeen = open }
+    }
+
+    /// A listed 1:1 chat with someone else: the only chats whose presence we track and whose requests we approve.
+    private func isDirectChat(_ chatID: String) -> Bool {
+        chatID != accountID && !isGroup(chatID) && chats.contains(where: { $0.id == chatID })
+    }
+
+    /// A new stream re-learns who is available; the last departure and last-activity answer stay so the header
+    /// does not blank across a reconnect.
+    private func resetPresence() {
+        lastSeenTracker.resetConnection()
+        syncOpenChatLastSeen()
+    }
+
+    /// Asks about a 1:1 contact without holding up the caller: a presence subscription once per connection, or a
+    /// XEP-0012 query at most once a minute while the contact shows no available resource. Asking does not depend
+    /// on our own switch. A refused or failed query leaves the header unknown and shows no error.
+    private func requestLastSeen(for chatID: String) {
+        guard !isDemo, session.isReady, foreground, !quiescing, let client, isDirectChat(chatID) else { return }
+        let token = generation
+        switch lastSeenTracker.askStep(for: chatID, now: .now) {
+        case .nothing: return
+        case .subscribe:
+            Task { try? await client.sendSubscription(.subscribe, to: chatID) }
+        case .queryLastActivity:
+            Task { [weak self] in
+                guard let seconds = try? await client.lastActivity(of: chatID), let self, self.generation == token else { return }
+                self.lastSeenTracker.recordLastActivity(seconds: seconds, of: chatID, now: .now)
+                self.syncOpenChatLastSeen()
+            }
+        }
+    }
+
+    /// Withdraws our presence from `contacts` (RFC 6121 §3.2). Stops at the first failure; the next connection's
+    /// roster load retries while the switch stays off.
+    private func revokePresenceSharing(_ contacts: [String], token: UUID) async {
+        guard let client, !contacts.isEmpty else { return }
+        for contact in contacts {
+            guard generation == token, !accountPreferences.lastSeen else { return }
+            do { try await client.sendSubscription(.unsubscribed, to: contact) } catch { return }
+        }
     }
 
     private func resetTyping() {
@@ -1753,7 +1835,16 @@ final class AppModel {
             if !hasTransportOwnership { try await acquireForegroundOwnership(store, token: token) }
             guard generation == token else { return }
             try await store.setAccountPreferences(accountID: account, updated)
-            if accountID == account { accountPreferences = updated; notificationPreviewsEnabled = updated.notificationPreviews }
+            guard accountID == account else { return }
+            let sharedLastSeen = accountPreferences.lastSeen
+            accountPreferences = updated; notificationPreviewsEnabled = updated.notificationPreviews
+            guard updated.lastSeen != sharedLastSeen, generation == token, let client else { return }
+            // On only answers queries again; contacts we chat with are approved as they ask. Off revokes every
+            // subscription to our presence now, or on the next connection's roster load when offline.
+            await client.setSharesLastActivity(updated.lastSeen)
+            if !updated.lastSeen, session.isReady, lastSeenTracker.rosterLoaded {
+                await revokePresenceSharing(lastSeenTracker.sharingWith, token: token)
+            }
         } catch { self.error = "Could not save preferences." }
     }
 
