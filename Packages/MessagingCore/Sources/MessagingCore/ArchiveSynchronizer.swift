@@ -40,7 +40,13 @@ public struct ArchiveSynchronizer: Sendable {
                 // Plaintext and unsupported content are deliberately excluded by this client's
                 // encrypted-only policy. They must never be rendered as authenticated messages.
             },
-            acknowledge: { token in try await client.acknowledgeInbound(token) },
+            acknowledge: { tokens in
+                try await client.acknowledgeInbound(tokens)
+                // Ask the server to count our journal so it trims the page, room and bundle IQs.
+                // Swallowed on purpose: a server without SM throws notConnected, and a dead
+                // socket makes the next page fetch fail on its own.
+                try? await client.requestAcknowledgement()
+            },
             disconnect: { await client.disconnect() }
         ))
     }
@@ -109,7 +115,7 @@ public struct ArchiveSynchronizer: Sendable {
             } else if !page.complete {
                 throw XMPPIQError.malformedResponse
             }
-            for token in page.handledTokens { try await operations.acknowledge(token) }
+            if !page.handledTokens.isEmpty { try await operations.acknowledge(page.handledTokens) }
             if page.complete { return }
         }
     }
@@ -122,6 +128,6 @@ struct ArchiveSyncOperations: Sendable {
     let refreshRoom: @Sendable (String) async throws -> Void
     let fetchPage: @Sendable (String?, String?) async throws -> XMPPArchivePage
     let process: @Sendable (XMPPArchiveMessage) async throws -> Void
-    let acknowledge: @Sendable (XMPPInboundToken) async throws -> Void
+    let acknowledge: @Sendable ([XMPPInboundToken]) async throws -> Void
     let disconnect: @Sendable () async -> Void
 }
