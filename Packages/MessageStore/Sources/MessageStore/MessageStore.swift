@@ -424,20 +424,97 @@ public actor MessageStore {
         }
     }
 
+    /// One statement for the whole list: each chat's newest message with its attachment, outbox
+    /// state and the sender's retraction/correction, plus the strongest peer receipt. Same result
+    /// as `messages(limit: 1)` + `events` per chat (see `ChatListQueryTests`).
     public func chats(accountID: String) throws -> [StoredChat] {
-        let rows = try connection.query("""
-            SELECT c.id,c.title,c.pinned,c.avatar_hash FROM chats c WHERE c.account_id=?
-            ORDER BY c.pinned DESC,
-            (SELECT MAX(sent_at) FROM messages m WHERE m.account_id=c.account_id AND m.chat_id=c.id) DESC, c.id
-            """, [.text(accountID)])
-        return try rows.map { row in
-            let last = try messages(accountID: accountID, chatID: row[0].string, limit: 1).first
-            let lastEvents = try last.map { try events(accountID: accountID, chatID: $0.chatID, messageID: $0.id) } ?? []
-            let receipt = last?.isOutgoing != true ? nil : [MessageEventKind.displayed, .delivered].first { kind in lastEvents.contains { $0.kind == kind } }
-            return StoredChat(id: row[0].string, accountID: accountID, title: row[1].string,
-                              isPinned: row[2].integer != 0, lastMessage: last?.applying(lastEvents), avatarHash: row[3].optionalString, lastMessageReceipt: receipt)
+        try connection.query(Self.chatListSQL, [.text(accountID)]).map { row in
+            var last: StoredMessage? = nil
+            let message = Array(row[Self.chatListPrefix...])           // Self.columns order, then `position`
+            if case .text = message[1] {                               // id present: the chat has a message
+                var decoded = try Self.decode(message)
+                if case .text = row[4] {                               // a.name present: attachment
+                    decoded.attachment = StoredAttachment(name: row[4].string, mediaType: row[5].string, size: row[6].integer,
+                        width: Self.optionalInteger(row[7]), height: Self.optionalInteger(row[8]), hash: row[9].string,
+                        cipherHash: row[10].optionalString, secret: row[11].data ?? Data(), url: row[12].optionalString,
+                        uploadState: row[13].optionalString.flatMap(StoredAttachment.UploadState.init(rawValue:)), uploadTaskID: Self.optionalInteger(row[14]))
+                }
+                // Same precedence as `applying`: the sender's retraction wins over any correction.
+                if row[15].integer != 0 {
+                    decoded.isRetracted = true; decoded.isEdited = false; decoded.body = ""; decoded.attachment = nil
+                } else if let payload = row[16].optionalString, let body = MessageEvent.correctionBody(payload) {
+                    decoded.body = body; decoded.isEdited = true
+                }
+                last = decoded
+            }
+            let receipt: MessageEventKind? = last?.isOutgoing == true
+                ? (row[18].integer != 0 ? .displayed : row[17].integer != 0 ? .delivered : nil) : nil
+            return StoredChat(id: row[0].string, accountID: accountID, title: row[1].string, isPinned: row[2].integer != 0,
+                              lastMessage: last, avatarHash: row[3].optionalString, lastMessageReceipt: receipt)
         }
     }
+
+    /// 4 chat + 11 attachment + 4 summary columns precede `l.*` (Self.columns, then `position`).
+    private static let chatListPrefix = 19
+    // `?1` is the account throughout. `ranked` must not alias `messages`: the outbox subquery in
+    // `Self.columns` names the table. Message columns come last so added columns never shift the prefix.
+    private static let chatListSQL = """
+        WITH ranked AS (
+            SELECT \(columns),
+                   ROW_NUMBER() OVER (PARTITION BY chat_id ORDER BY sent_at DESC, id DESC) AS position
+            FROM messages WHERE account_id=?1
+        ), last AS (
+            SELECT * FROM ranked WHERE position=1
+        ), target AS (
+            -- reactionReference: modern+authenticated uses wire_id; modern unauthenticated the room stanza-id, else wire_id; other profiles wire_id.
+            SELECT l.chat_id,l.id,l.sender_id,
+                   CASE WHEN l.encryption_profile='modern' AND l.wire_id_authenticated=1 THEN l.wire_id
+                        WHEN l.encryption_profile='modern' THEN COALESCE(
+                            (SELECT g.stanza_id FROM group_message_references g
+                             WHERE g.account_id=l.account_id AND g.message_id=l.id AND g.room=l.chat_id), l.wire_id)
+                        ELSE l.wire_id END AS wire_id
+            FROM last l
+        ), resolved AS (
+            -- reactionTarget: exactly one authenticated match wins; else a single unauthenticated match; else nothing.
+            SELECT t.chat_id,t.id,t.sender_id,t.wire_id FROM target t
+            WHERE t.wire_id IS NOT NULL AND t.id=(
+                SELECT CASE WHEN SUM(c.wire_id_authenticated)=1 THEN MAX(CASE WHEN c.wire_id_authenticated=1 THEN c.id END)
+                            WHEN SUM(c.wire_id_authenticated)=0 AND COUNT(*)=1 THEN MAX(c.id) END
+                FROM messages c
+                WHERE c.account_id=?1 AND c.chat_id=t.chat_id
+                  AND (c.wire_id=t.wire_id OR c.id IN (
+                        SELECT g.message_id FROM group_message_references g
+                        WHERE g.account_id=?1 AND g.room=t.chat_id AND g.stanza_id=t.wire_id))
+            )
+        ), latest AS (
+            -- events(): latest per (actor, kind); only the sender may unsend or rewrite a message.
+            SELECT r.chat_id,e.actor_id,e.kind,e.payload_json,
+                   ROW_NUMBER() OVER (PARTITION BY r.chat_id,e.actor_id,e.kind ORDER BY e.updated_at DESC,e.id DESC) AS position
+            FROM resolved r
+            JOIN message_events e ON e.account_id=?1 AND e.chat_id=r.chat_id AND e.target_wire_id=r.wire_id
+            WHERE e.kind NOT IN ('retraction','correction') OR e.actor_id=r.sender_id
+        ), summary AS (
+            -- At most one correction row per chat survives (sender-only, one per actor and kind).
+            SELECT chat_id,
+                   MAX(kind='retraction') AS retracted,
+                   MAX(CASE WHEN kind='correction' THEN payload_json END) AS correction,
+                   MAX(kind='delivered') AS delivered,
+                   MAX(kind='displayed') AS displayed
+            FROM latest WHERE position=1 GROUP BY chat_id
+        )
+        SELECT c.id,c.title,c.pinned,c.avatar_hash,
+               a.name,a.media_type,a.size,a.width,a.height,a.hash,a.cipher_hash,a.secret,a.url,a.upload_state,a.task_id,
+               s.retracted,s.correction,s.delivered,s.displayed,
+               l.*
+        FROM chats c
+        LEFT JOIN last l ON l.chat_id=c.id
+        LEFT JOIN attachments a ON a.account_id=?1 AND a.message_id=l.id
+        LEFT JOIN summary s ON s.chat_id=c.id
+        WHERE c.account_id=?1
+        ORDER BY c.pinned DESC,l.sent_at DESC,c.id
+        """
+    // Same body as `decodeRow`'s inline helper; kept apart so `decodeRow` stays untouched.
+    private static func optionalInteger(_ value: Value) -> Int? { if case .integer(let number) = value { return number }; return nil }
 
     /// Records which verified avatar a chat shows; nil when the contact removed theirs.
     public func setAvatarHash(accountID: String, chatID: String, hash: String?) throws {
