@@ -562,6 +562,12 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         reservedPopGesture = nil
     }
 
+    /// After the push settles, so the first "+" finds the panel built (see `AttachmentKeyboard.warmUp`).
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        attachmentKeyboard?.warmUp()
+    }
+
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         releaseSwipe()

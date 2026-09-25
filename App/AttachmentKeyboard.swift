@@ -147,14 +147,29 @@ final class AttachmentKeyboardResponder: UIView {
         host = nil
     }
 
-    func open(actions: AttachmentPanelActions, selection: [String], trayCount: Int) {
-        self.actions = actions
-        guard !isPresented else { update(selection: selection, trayCount: trayCount); return }
-        guard let window = host?.view.window else { actions.dismissed(); return }
+    /// Builds and lays out the panel once the chat is on screen, so the first "+" only presents it. Building the
+    /// glass chips and the rail, and their first layout, measured 60-100 ms of main-thread time in a Debug build
+    /// when they ran between the tap and the start of the keyboard animation.
+    func warmUp() {
+        guard panel == nil, let window = host?.view.window else { return }
+        let panel = makePanel(in: window)
+        panel.frame = CGRect(origin: .zero, size: CGSize(width: window.bounds.width, height: KeyboardHeightCache.height(in: window)))
+        panel.layoutIfNeeded()
+    }
+
+    private func makePanel(in window: UIWindow) -> AttachmentKeyboardView {
         let panel = self.panel ?? AttachmentKeyboardView(keyboard: self)
         self.panel = panel
         responder.panel = panel
         panel.prepare(height: KeyboardHeightCache.height(in: window), compact: window.traitCollection.verticalSizeClass == .compact)
+        return panel
+    }
+
+    func open(actions: AttachmentPanelActions, selection: [String], trayCount: Int) {
+        self.actions = actions
+        guard !isPresented else { update(selection: selection, trayCount: trayCount); return }
+        guard let window = host?.view.window else { actions.dismissed(); return }
+        _ = makePanel(in: window)
         update(selection: selection, trayCount: trayCount)
         if !responder.becomeFirstResponder() { actions.dismissed() }
     }
@@ -327,6 +342,13 @@ final class AttachmentKeyboardView: UIInputView {
         self.compact = compact
         chips.compact = compact
         applyMetrics()
+        // A panel laid out before it was presented (the warm-up) would otherwise be presented at that size when the
+        // keyboard has since been measured taller.
+        if bounds.height != value {
+            frame.size.height = value
+            invalidateIntrinsicContentSize()
+            setNeedsLayout()
+        }
     }
 
     func update(selection: [String], trayCount: Int) {
@@ -425,18 +447,69 @@ private final class LimitedAccessRow: UIView {
 
 // MARK: - Recent photos
 
+/// Reads the library off the main thread. The first PhotoKit call in a process connects to photolibraryd
+/// (measured 60 ms in the simulator, more with a large library and its sorted fetch); on the main thread that ran
+/// between the tap and the start of the keyboard animation. The panel now slides up at once and the tiles land
+/// during the slide.
+private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, @unchecked Sendable {
+    /// `PHFetchResult` is documented thread-safe; the box carries it back to the main actor.
+    struct Batch: @unchecked Sendable { let assets: PHFetchResult<PHAsset> }
+    private let queue = DispatchQueue(label: "haus.xmpp.ios.recentPhotos", qos: .userInitiated)
+    private let lock = NSLock()
+    private var generation = 0
+    /// Touched only on `queue`, and in deinit, which cannot run while a queued block still holds `self`.
+    private var observing = false
+    /// The library changed; called on the main actor.
+    @MainActor var onChange: () -> Void = {}
+
+    deinit { if observing { PHPhotoLibrary.shared().unregisterChangeObserver(self) } }
+
+    /// Outcomes of fetches started before this call are dropped.
+    func invalidate() { lock.withLock { generation += 1 } }
+
+    /// The newest `limit` photos and videos of the user library; the change observer is registered on first use.
+    func fetch(limit: Int, completion: @escaping @MainActor (Batch) -> Void) {
+        let mine = lock.withLock { generation += 1; return generation }
+        queue.async { [self] in
+            if !observing {
+                PHPhotoLibrary.shared().register(self)
+                observing = true
+            }
+            let options = PHFetchOptions()
+            options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+            options.predicate = NSPredicate(format: "mediaType == %d || mediaType == %d", PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
+            options.fetchLimit = limit
+            let assets: PHFetchResult<PHAsset>
+            if let library = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .smartAlbumUserLibrary, options: nil).firstObject {
+                assets = PHAsset.fetchAssets(in: library, options: options)
+            } else {
+                assets = PHAsset.fetchAssets(with: options)
+            }
+            let batch = Batch(assets: assets)
+            DispatchQueue.main.async {
+                guard self.lock.withLock({ self.generation }) == mine else { return }
+                MainActor.assumeIsolated { completion(batch) }
+            }
+        }
+    }
+
+    nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
+        Task { @MainActor in self.onChange() }
+    }
+}
+
 /// Up to 96 of the newest photos and videos, square tiles in one sideways row. Tapping adds to the tray in tap
 /// order; tapping a selected tile takes it back out.
-private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UICollectionViewDelegate, PHPhotoLibraryChangeObserver {
+private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UICollectionViewDelegate {
     private unowned let keyboard: AttachmentKeyboard
     private let layout = UICollectionViewFlowLayout()
     private let collection: UICollectionView
     private let imageManager = PHCachingImageManager()
+    private let source = RecentPhotosSource()
     private var assets: PHFetchResult<PHAsset>?
     private var selection: [String] = []
     private var trayCount = 0
     private var loading: Set<String> = []
-    private var observing = false
     private var itemSide: CGFloat = 0
     var onAccessChanged: (Bool) -> Void = { _ in }
 
@@ -447,6 +520,7 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         layout.minimumInteritemSpacing = 12
         collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
         super.init(frame: .zero)
+        source.onChange = { [weak self] in self?.reload() }
         collection.backgroundColor = .clear
         collection.showsHorizontalScrollIndicator = false
         collection.alwaysBounceHorizontal = true
@@ -460,10 +534,6 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    isolated deinit {
-        if observing { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
-    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -499,30 +569,20 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         onAccessChanged(status == .limited)
         guard status == .authorized || status == .limited else {
+            source.invalidate()
             assets = nil
             collection.reloadData()
             showAccessPrompt()
             return
         }
-        if !observing {
-            PHPhotoLibrary.shared().register(self)
-            observing = true
+        // Tiles already up stay while the library is read again; an empty rail shows nothing until the read lands.
+        if assets == nil { collection.backgroundView = nil }
+        source.fetch(limit: 96) { [weak self] batch in
+            guard let self else { return }
+            assets = batch.assets
+            collection.reloadData()
+            collection.backgroundView = batch.assets.count == 0 ? message("No recent photos", button: nil) : nil
         }
-        let options = PHFetchOptions()
-        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        options.predicate = NSPredicate(format: "mediaType == %d || mediaType == %d", PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
-        options.fetchLimit = 96
-        if let library = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .smartAlbumUserLibrary, options: nil).firstObject {
-            assets = PHAsset.fetchAssets(in: library, options: options)
-        } else {
-            assets = PHAsset.fetchAssets(with: options)
-        }
-        collection.reloadData()
-        collection.backgroundView = (assets?.count ?? 0) == 0 ? message("No recent photos", button: nil) : nil
-    }
-
-    nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
-        Task { @MainActor [weak self] in self?.reload() }
     }
 
     func update(selection: [String], trayCount: Int) {
