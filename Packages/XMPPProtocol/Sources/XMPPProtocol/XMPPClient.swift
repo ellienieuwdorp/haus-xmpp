@@ -552,7 +552,6 @@ public actor XMPPClient {
         archiveQuery = ArchiveQuery(queryID: queryID, accountBareJID: ownBare, accountFullJID: boundJID, limit: limit)
         archiveQuery?.room = room
         archiveQuery?.knownRooms = Set(groupRooms.filter { !$0.value.members.isEmpty }.keys)
-        archiveQuery?.bound = bound
         defer { archiveQuery = nil }
         let payload = ArchiveQuery.payload(queryID: queryID, limit: limit, bound: bound)
         do {

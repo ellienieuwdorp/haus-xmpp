@@ -64,7 +64,6 @@ struct ArchiveQuery {
     var handledTokens: [XMPPInboundToken] = []
     var room: String? = nil
     var knownRooms: Set<String> = []
-    var bound: XMPPArchiveBound = .after(nil)
     var archiveOwner: String { room ?? accountBareJID }
 
     static let namespace = "urn:xmpp:mam:2"

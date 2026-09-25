@@ -393,7 +393,6 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
         try recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2'\(attributes)><set xmlns='http://jabber.org/protocol/rsm'>\(set)</set></fin></iq>")
     }
     var query = ArchiveQuery(queryID: "query", accountBareJID: "a@example.org", accountFullJID: "a@example.org/r", limit: 100)
-    query.bound = .before(nil)
     try query.receive(recoveryNode(archived()))
     #expect(throws: XMPPIQError.self) { try query.finish(fin("", "<first>unseen</first><last>archive-1</last>")) }
     #expect(throws: XMPPIQError.self) { try query.finish(fin("", "<last>archive-1</last>")) }
