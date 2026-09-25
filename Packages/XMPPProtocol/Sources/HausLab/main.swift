@@ -109,18 +109,30 @@ import XMPPProtocol
         try await client.connect(host: env["HAUS_LAB_HOST"] ?? domain, domain: domain, username: user, password: env["HAUS_LAB_PASSWORD"]!)
         guard await persistence.snapshot?.fullJID == oldJID else { throw XMPPClientError.unexpectedProtocol }
         print("SM_DURABLE_ACK_AND_RESUME_VERIFIED")
-        var cursor: String?, found = Set<String>(), pages = 0
+        var cursor: String?, found = Set<String>(), pages = 0, sawIQSlot = false
         while true {
             let page = try await client.fetchArchivePage(after: cursor, limit: 2)
             pages += 1
+            // The page IQ was journaled before its write; it must occupy a slot without bytes.
+            let journal = await persistence.snapshot?.journal ?? []
+            guard journal.allSatisfy({ $0.kind != .iq || $0.xml == nil }) else { throw XMPPClientError.unexpectedProtocol }
+            sawIQSlot = sawIQSlot || journal.contains { $0.kind == .iq }
             for item in page.messages { if let id = item.message?.id { found.insert(id) } }
-            for token in page.handledTokens { try await client.acknowledgeInbound(token) }
+            // Same shape as the app's archive adapter: one batch per page, then <r/> so the server trims our journal.
+            if !page.handledTokens.isEmpty {
+                try await client.acknowledgeInbound(page.handledTokens)
+                try await client.requestAcknowledgement()
+            }
             if page.complete { break }
             guard page.lastID != cursor, pages < 100 else { throw XMPPClientError.unexpectedProtocol }
             cursor = page.lastID
         }
         guard found.isSuperset(of: ids), pages >= 2 else { throw XMPPClientError.unexpectedProtocol }
         print("MAM_PAGED_CATCHUP_VERIFIED")
+        guard sawIQSlot, await persistence.snapshot?.journal.allSatisfy({ $0.kind != .iq || $0.xml == nil }) == true else {
+            throw XMPPClientError.unexpectedProtocol
+        }
+        print("SM_IQ_JOURNAL_BYTES_ABSENT")
     }
 
     /// Verifies delivered fallback body, not incoming structured-reply reconciliation.
