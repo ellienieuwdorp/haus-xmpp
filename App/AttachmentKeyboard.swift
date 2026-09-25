@@ -778,7 +778,10 @@ private final class FormatChipRow: UIView {
     private func item(title: String, symbol: String, identifier: String, action: @escaping () -> Void) -> UIView {
         var configuration = UIButton.Configuration.glass()
         configuration.cornerStyle = .capsule
-        configuration.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 28, weight: .medium))
+        // Signal's "28" is a 28 pt asset canvas with about 22-24 pt of ink. A 22 pt regular symbol at medium
+        // scale draws that ink; set on the configuration, because glass buttons otherwise apply `.large` scale.
+        configuration.image = UIImage(systemName: symbol)
+        configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 22, weight: .regular, scale: .medium)
         let button = UIButton(configuration: configuration, primaryAction: UIAction { _ in
             // One run loop later, so the pressed glass shows before the panel goes.
             DispatchQueue.main.async { action() }
