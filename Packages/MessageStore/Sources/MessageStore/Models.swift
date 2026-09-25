@@ -222,6 +222,16 @@ public struct ArchiveCheckpoint: Sendable, Equatable {
     public let cursor: String
 }
 
+/// The backward cursor of one archive's history backfill (newest-first sync).
+public struct ArchiveBackfillCursor: Sendable, Equatable {
+    public let revision: Int
+    /// The oldest archive ID committed for this archive; the next backfill page ends before it.
+    public let oldestID: String
+    /// True once the server reported that nothing older exists.
+    public let complete: Bool
+    public init(revision: Int, oldestID: String, complete: Bool) { self.revision = revision; self.oldestID = oldestID; self.complete = complete }
+}
+
 
 /// A durable complete reaction set, separate from visible chat messages.
 public struct StoredReactionUpdate: Sendable, Equatable {
