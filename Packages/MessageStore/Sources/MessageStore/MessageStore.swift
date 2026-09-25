@@ -458,8 +458,7 @@ public actor MessageStore {
     private static let chatListPrefix = 19
     // `?1` is the account throughout. Every step is an index seek per chat: the newest message comes
     // from the `timeline` index and is joined by primary key, so the cost follows the number of chats,
-    // not of messages. (A ROW_NUMBER() window over all messages measured 59 s for 100 chats of 1,000
-    // messages on an un-ANALYZEd database; see docs/development/sync-review.md, R8.)
+    // not of messages. The store never runs ANALYZE; plans and measurements are in the package README.
     // `last` must not alias `messages`: the outbox subquery in `Self.columns` names the table.
     // Message columns come last so added columns never shift the prefix.
     private static let chatListSQL = """
