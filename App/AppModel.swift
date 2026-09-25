@@ -37,6 +37,8 @@ final class AppModel {
     @ObservationIgnored private var timelineWindow = AppModel.timelinePage
     @ObservationIgnored private var loadingOlder = false
     private static let timelinePage = 100, timelineCeiling = 1000
+    /// Archive pages (100 messages each) one reach-top asks the server for, and the one idle backfill after catch-up.
+    private static let backfillPagesPerScroll = 5, opportunisticBackfillPages = 3
     /// Newest pages of recently seen chats, so pushing one shows its tail in the first frame. In memory, one account.
     @ObservationIgnored private var timelinePages = TimelinePageCache()
     @ObservationIgnored private var prefetchingPages = false
@@ -83,6 +85,9 @@ final class AppModel {
     var error: String?
     private(set) var notificationStatus = "Not enabled"
     private(set) var notificationRoute: NotificationChatRoute?
+    /// A push onto the Chats stack asked for by a view that owns no navigation path (a bubble's
+    /// "Encryption details" action). RootView appends it and clears it.
+    var requestedRoute: ChatRoute?
     @ObservationIgnored private var sessionAccount: NotificationAccount?
     @ObservationIgnored private var lifecycleTask: Task<Void, Never>?
     @ObservationIgnored private var foreground = true
@@ -120,6 +125,30 @@ final class AppModel {
     @ObservationIgnored private var outboxSender: OutboxSender?
     @ObservationIgnored private var outboxRequested = false
     @ObservationIgnored private var drainTask: Task<Void, Never>?
+    /// One connection's setup after `.online` (`ConnectionSetup`), off the event loop; joined like `drainTask`.
+    @ObservationIgnored private var setupTask: Task<Void, Never>?
+    /// Non-nil while a connection's archive walk runs after `.ready`; the Chats bar keeps its spinner.
+    private(set) var catchUp: CatchUpProgress?
+    var isCatchingUp: Bool { catchUp != nil }
+    /// Numbers-only timings of the current connection's setup, for the lab measurement.
+    private static let syncLog = Logger(subsystem: "haus.xmpp.ios", category: "sync")
+    @ObservationIgnored private var onlineAt: ContinuousClock.Instant?
+    @ObservationIgnored private var firstMessageLogged = false
+    @ObservationIgnored private var liveStoredLogged = false
+    @ObservationIgnored private var catchUpByArchive: [String: CatchUpProgress] = [:]
+    /// Older archive history for one archive (`ArchiveSynchronizer.backfill`); joined like `setupTask`.
+    @ObservationIgnored private var backfillTask: Task<Void, Never>?
+    /// The archive (account or room JID) a backfill is fetching right now; the open chat shows its header.
+    private(set) var backfillingArchive: String?
+    /// Per connection: the idle backfill after catch-up runs at most once.
+    @ObservationIgnored private var opportunisticBackfillDone = false
+    /// Per connection: this connection's forward walk has finished, so the single archive query is free.
+    @ObservationIgnored private var archiveWalkFinished = false
+    /// Per connection: archives (account or room JID) with nothing more to backfill, or whose server refused, so a
+    /// reach-top, which fires on every scroll frame near the top, does not ask again.
+    @ObservationIgnored private var backfillSettled: Set<String> = []
+    /// A reach-top does not start the next backfill run before this instant: one gesture is one request.
+    @ObservationIgnored private var backfillResumesAt: ContinuousClock.Instant?
     @ObservationIgnored private var client: XMPPClient?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var openChatID: String? { didSet { syncOpenChatTyping(); syncOpenChatLastSeen() } }
@@ -254,6 +283,15 @@ final class AppModel {
                                                                 sentAt: Date(timeIntervalSince1970: 1_789_300_000 + Double(index) * 60), isOutgoing: index.isMultiple(of: 3)))
                 }
             }
+            // Two placeholders in Alex's chat, for tests and screenshots: an own send from another device that did
+            // not encrypt for this one, and an incoming message that could not be read. Recorded exactly as the
+            // receive path records them, so they are never content, never reactable and never counted.
+            if ProcessInfo.processInfo.arguments.contains("-demo-unreadable") {
+                try await store.recordUnreadableMessage(UnreadableMessage(accountID: account, chatID: "alex@preview.local", senderID: account, isOutgoing: true,
+                    sentAt: Date(timeIntervalSince1970: 1_789_380_004), reason: .notForThisDevice, key: .archive(archive: account, id: "sample-unreadable-1")))
+                try await store.recordUnreadableMessage(UnreadableMessage(accountID: account, chatID: "alex@preview.local", senderID: "alex@preview.local", isOutgoing: false,
+                    sentAt: Date(timeIntervalSince1970: 1_789_380_005), reason: .decryptFailed, key: .archive(archive: account, id: "sample-unreadable-2")))
+            }
             // A peer who is typing, for tests and screenshots; nothing expires it.
             if ProcessInfo.processInfo.arguments.contains("-demo-typing") { typing = ["alex@preview.local": ["alex@preview.local"]] }
             // One sample photo, drawn here so no asset ships: exercises the bubble thumbnail and the viewer.
@@ -304,6 +342,8 @@ final class AppModel {
             guard foreground, !quiescing else { return false }
         }
         let priorEvents = eventTask
+        let priorSetup = setupTask
+        let priorBackfill = backfillTask
         let previous = resetSession()
         let token = generation
         session = .connecting(step: "Connecting…")
@@ -318,6 +358,9 @@ final class AppModel {
         selectAccount(account)
         await previous?.disconnectAndWait()
         await priorEvents?.value
+        await priorSetup?.value
+        await priorBackfill?.value
+        if backfillTask == priorBackfill { backfillTask = nil }
         await drainTask?.value
         guard generation == token else { return false }
         await refresh()
@@ -328,6 +371,10 @@ final class AppModel {
                 guard let self, self.generation == token else { break }
                 await self.handle(event, token: token)
             }
+            // A full buffer drops the client's disconnect event and finishes the stream instead; without
+            // this the session would stay "connected" with nothing left to reconnect it.
+            guard let self, self.generation == token else { return }
+            await self.handle(.state(.disconnected("Event consumer could not keep up")), token: token)
         }
         do {
             guard let store, let encryption else { throw MessageStoreError.invalidValue }
@@ -346,6 +393,7 @@ final class AppModel {
                 notificationStatus = "Needs attention"
                 self.error = "Connected, but the password could not be saved. You will be asked for it on the next launch."
             }
+            // `.online` was emitted before `connect` returned, so this runs alongside the setup task.
             await refreshPushRegistration(client: connection, session: endpoint, token: token)
             return true
         } catch {
@@ -517,10 +565,16 @@ final class AppModel {
         quiescing = true
         defer { quiescing = false }
         let events = eventTask
+        let setup = setupTask
+        let backfill = backfillTask
         let drain = drainTask
         let previous = resetSession()
         await previous?.disconnectAndWait()
         await events?.value
+        // Setup's archive walk, initialize, rejoin and pending retry are all structured children of it.
+        await setup?.value
+        await backfill?.value
+        if backfillTask == backfill { backfillTask = nil }
         await drain?.value
         // Includes already-started UI trust/repair/discovery work and an acquisition that
         // was suspended in the store actor when the scene changed.
@@ -695,6 +749,7 @@ final class AppModel {
         messageReactions = [:]; messageReceipts = [:]
         attachmentFiles = [:]
         openChatID = nil
+        requestedRoute = nil
         encryptionOverviewChatID = nil; encryptionOverview = nil; encryptionDetailsChatID = nil
         refreshFence = [:]; encryptionAttention = EncryptionAttention()
         uploadService = uploads.load(account: account)
@@ -865,6 +920,16 @@ final class AppModel {
     private func resetSession() -> XMPPClient? {
         generation = UUID()
         drainTask?.cancel()
+        // Cancelled, not cleared: connect() and quiesceTransport() join the handle.
+        setupTask?.cancel()
+        catchUp = nil
+        // Cancelled, not cleared, like the setup task: a new connection's walk must never meet an old backfill.
+        backfillTask?.cancel()
+        backfillingArchive = nil
+        opportunisticBackfillDone = false
+        archiveWalkFinished = false
+        backfillSettled = []
+        backfillResumesAt = nil
         eventTask?.cancel()
         eventTask = nil
         let previous = client
@@ -887,69 +952,50 @@ final class AppModel {
             case .authenticating: session = .connecting(step: "Signing in…")
             case .binding: session = .connecting(step: "Opening session…")
             case .online:
-                var step = "server features" { didSet { session = .connected(settingUp: step) } }
-                session = .connected(settingUp: step)
+                session = .connected(settingUp: ConnectionSetup.featuresStep)
+                onlineAt = .now
+                firstMessageLogged = false
+                liveStoredLogged = false
+                catchUpByArchive = [:]
+                Self.syncLog.notice("online")
                 // The client answers XEP-0012 queries to our full address only while the account shares last seen.
                 await client?.setSharesLastActivity(accountPreferences.lastSeen)
                 // A resumed session gets no probe answers: keep who was available on the previous stream.
                 lastSeenTracker.beginConnection(resumed: await client?.sessionResumed ?? false)
                 syncOpenChatLastSeen()
-                if let encryption, let client {
-                    do {
-                        let features = try await client.discoveryFeatures()
-                        if features.contains("urn:xmpp:carbons:2") { step = "carbons"; try await client.setCarbonsEnabled() }
-                        step = "file upload"
-                        // Optional: a server without XEP-0363 just has no attach button. Only a completed answer changes
-                        // what the button remembers; a discovery that throws keeps the last one.
-                        let discovery: Result<XMPPUploadService?, any Error>
-                        do { discovery = .success(try await client.uploadService()) } catch { discovery = .failure(error) }
+                guard generation == token else { return }
+                guard let encryption, let client, let store else { return }
+                let identityExists: Bool
+                do { identityExists = try await store.encryptionState(accountID: account) != nil }
+                catch { identityExists = true } // the setup task's initialize reports the real problem
+                guard generation == token else { return }
+                if !identityExists {
+                    // A brand-new account has no encryption state yet, and the live consumer cannot persist
+                    // anything without it: publish the identity before letting the setup run concurrently.
+                    session = .connected(settingUp: ConnectionSetup.keysStep)
+                    do { try await encryption.initialize(account: account, transport: client) }
+                    catch {
                         guard generation == token else { return }
-                        uploadService = uploads.settle(account: account, previous: uploadService, discovery: discovery)
-                        step = "publishing this phone’s keys"
-                        try await encryption.initialize(account: account, transport: client)
-                        step = "rejoining groups"
-                        try await rejoinKnownGroups(account: account, client: client, encryption: encryption, token: token)
-                        if features.contains("urn:xmpp:mam:2"), let store {
-                            step = "archive catch-up"
-                            try await ArchiveSynchronizer(store: store).synchronize(account: account, client: client, encryption: encryption)
-                        }
-                        guard generation == token else { return }
-                        session = .ready
-                        reconnectAttempt = 0
-                        reportedSetupFailure = nil
-                        // Roster pushes are answered only after a fetch on this stream. Its result arrives as a
-                        // `.rosterItems` event after this handler, which then revokes and asks (see there).
-                        try? await client.fetchRoster()
-                        guard generation == token else { return }
-                        try? await encryption.retryPendingIncoming(account: account, transport: client)
-                        guard generation == token else { return }
-                        await flushEncryptionControls(account: account, client: client)
-                        await refresh()
-                        guard generation == token else { return }
-                        startOutbox()
-                        await reconcileUploads()
-                        if let openChatID { await loadEncryptionDetails(for: openChatID) }
-                        avatarChecked = []
-                        await loadAvatar(for: account)
-                    } catch {
-                        guard generation == token else { return }
-                        let detail: String
-                        if case .stanza(let condition)? = error as? XMPPIQError { detail = condition }
-                        else { detail = (error as? OMEMOError)?.errorDescription ?? String(describing: error).prefix(120).description }
-                        Logger(subsystem: "haus.xmpp.ios", category: "encryption").error("Encryption setup failed at \(step, privacy: .public): \(detail, privacy: .public)")
-                        session = .needsAttention(step: step, detail: detail)
-                        encryptionAttention.note("Setup failed at \(step): \(detail)")
-                        if reportedSetupFailure != detail {
-                            reportedSetupFailure = detail
-                            self.error = "Could not prepare encryption (\(step): \(detail)). Your queued messages have not been sent."
-                        }
-                        await refresh()
-                        guard generation == token else { return }
-                        // A half-alive session is a connection failure: end it and let the reconciler retry.
-                        await client.disconnect()
+                        await reportSetupFailure(step: ConnectionSetup.keysStep, detail: ConnectionSetup.detail(error), client: client, token: token)
+                        return
                     }
+                    guard generation == token else { return }
+                }
+                // The event loop returns at once and keeps persisting and acknowledging live stanzas while setup
+                // runs; OMEMO's operation gate serialises the two per crypto operation.
+                setupTask = Task { [weak self] in
+                    guard let self else { return }
+                    await self.runConnectionSetup(account: account, client: client, encryption: encryption, store: store,
+                                                  identityExists: identityExists, token: token)
+                    if self.generation == token { self.setupTask = nil }
                 }
             case .disconnected(let reason):
+                Self.syncLog.notice("disconnected: \(reason ?? "closed", privacy: .public)")
+                // Its client calls fail with the connection anyway; cancelling makes the exit prompt.
+                setupTask?.cancel()
+                catchUp = nil
+                backfillTask?.cancel()
+                archiveWalkFinished = false
                 for room in groupChats.keys { groupChats[room]?.joined = false }
                 // Chat states and presence belong to the stream that carried them.
                 resetTyping()
@@ -990,6 +1036,12 @@ final class AppModel {
                     await refresh()
                     guard generation == token else { return }
                     if let openChatID { await loadEncryptionDetails(for: openChatID, refreshFromServer: false) }
+                case .excluded(let reason):
+                    // Not content, not review: the placeholder row is the record; the reason is a footnote in Devices.
+                    encryptionAttention.note(reason == .notForThisDevice
+                        ? "A message from another device was not encrypted for this iPhone; it is shown as a placeholder."
+                        : "An encrypted message could not be read; it is shown as a placeholder.")
+                    refreshSoon()
                 case .acknowledged, .ignored: break
                 }
             } catch InboundProcessor.Failure.unsavedInbound {
@@ -1005,6 +1057,15 @@ final class AppModel {
         case .omemoDevices(let owner, let profile, _):
             if owner == account, let encryption, let client {
                 try? await encryption.maintainLocalAdvertisement(account: account, profile: profile, transport: client)
+            }
+            // A device list is what a keys-pending row waited for; only this owner's rows can be unblocked by it.
+            if let encryption, let client, let store, isConnected,
+               !((try? await store.pendingEncryptedIncoming(accountID: account, reasons: [.keysPending], sender: owner)) ?? []).isEmpty {
+                try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.keysPending], sender: owner)
+                guard generation == token else { return }
+                await flushEncryptionControls(account: account, client: client)
+                guard generation == token else { return }
+                refreshSoon()
             }
             if let openChatID, owner == openChatID || owner == accountID || groupChats[openChatID]?.members.contains(owner) == true {
                 await loadEncryptionDetails(for: openChatID, force: true)
@@ -1148,19 +1209,136 @@ final class AppModel {
         }
     }
 
+    /// Builds `ConnectionSetup`'s operations from this model's calls and applies its events under the
+    /// generation fence. Every operation runs inside the setup task; none spawns an unstructured task.
+    private func runConnectionSetup(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore,
+                                    identityExists: Bool, token: UUID) async {
+        let operations = ConnectionSetup.Operations(
+            features: { [domain = accountDomain] in
+                try await ConnectionSetup.discoverFeatures(server: { try await client.discoveryFeatures(for: domain) },
+                                                           account: { try await client.discoveryFeatures() })
+            },
+            enableCarbons: { try await client.setCarbonsEnabled() },
+            discoverUploads: { [weak self] in
+                // Optional: a server without XEP-0363 just has no attach button. Only a completed answer changes
+                // what the button remembers; a discovery that throws keeps the last one.
+                let discovery: Result<XMPPUploadService?, any Error>
+                do { discovery = .success(try await client.uploadService()) } catch { discovery = .failure(error) }
+                await self?.settleUploadDiscovery(discovery, account: account, token: token)
+            },
+            initializeEncryption: { try await encryption.initialize(account: account, transport: client) },
+            rejoinGroups: { [weak self] in
+                guard let self else { throw CancellationError() }
+                try await self.rejoinKnownGroups(account: account, client: client, encryption: encryption, token: token)
+                // `.ready` started the outbox before the rooms were joined; group messages queued while
+                // offline need a joined room, so ask for one more pass.
+                await self.startOutbox()
+            },
+            catchUp: { progress in
+                try await ArchiveSynchronizer(store: store).synchronize(account: account, client: client, encryption: encryption) {
+                    await progress(CatchUpProgress(archive: $0.archive, pages: $0.pages, messages: $0.messages))
+                }
+            },
+            retryPending: { try? await encryption.retryPendingIncoming(account: account, transport: client) })
+        await ConnectionSetup(identityExists: identityExists).run(operations: operations) { [weak self] event in
+            await self?.applySetupEvent(event, account: account, client: client, token: token)
+        }
+    }
+
+    private func settleUploadDiscovery(_ discovery: Result<XMPPUploadService?, any Error>, account: String, token: UUID) {
+        guard generation == token else { return }
+        uploadService = uploads.settle(account: account, previous: uploadService, discovery: discovery)
+    }
+
+    /// True while this connection's setup may still change state. `.disconnected` cancels the setup task without
+    /// changing the generation, so the generation alone would let a late `.step` or `.ready` overwrite the
+    /// offline state and stop the reconciler from reconnecting (neither state is connectable).
+    private func setupIsCurrent(_ token: UUID) -> Bool { generation == token && !Task.isCancelled }
+
+    private func applySetupEvent(_ event: ConnectionSetup.Event, account: String, client: XMPPClient, token: UUID) async {
+        // Runs in the setup child's task on the main actor, so a `.disconnected` handled before this job ran has
+        // already cancelled it.
+        guard setupIsCurrent(token) else { return }
+        switch event {
+        case .step(let step):
+            if !session.isReady { session = .connected(settingUp: step) }
+        case .ready:
+            session = .ready
+            reconnectAttempt = 0
+            reportedSetupFailure = nil
+            Self.syncLog.notice("ready +\(self.syncElapsed(), privacy: .public) ms")
+            // Roster pushes are answered only after a fetch on this stream. Its result arrives as a
+            // `.rosterItems` event, which then revokes and asks (see there).
+            try? await client.fetchRoster()
+            guard setupIsCurrent(token) else { return }
+            await flushEncryptionControls(account: account, client: client, logsLiveStore: false)
+            await refresh()
+            guard setupIsCurrent(token) else { return }
+            startOutbox()
+            await reconcileUploads()
+            if let openChatID { await loadEncryptionDetails(for: openChatID) }
+            avatarChecked = []
+            await loadAvatar(for: account)
+        case .catchingUp(let progress):
+            // First, before anything else reads it: a finished walk is `catchUp == nil`.
+            catchUp = progress
+            if let progress {
+                catchUpByArchive[progress.archive ?? ""] = progress
+                if progress.messages >= 1 { logFirstMessage() }
+            } else {
+                let pages = catchUpByArchive.values.reduce(0) { $0 + $1.pages }
+                let messages = catchUpByArchive.values.reduce(0) { $0 + $1.messages }
+                Self.syncLog.notice("catch-up finished +\(self.syncElapsed(), privacy: .public) ms pages=\(pages, privacy: .public) messages=\(messages, privacy: .public)")
+                archiveWalkFinished = true
+                requestOpportunisticBackfill()
+            }
+        case .failed(let step, let detail):
+            catchUp = nil
+            if step == ConnectionSetup.archiveStep { Self.syncLog.notice("catch-up failed +\(self.syncElapsed(), privacy: .public) ms") }
+            await reportSetupFailure(step: step, detail: detail, client: client, token: token)
+        }
+    }
+
+    /// A half-alive session is a connection failure: mark it, end it, and let the reconciler retry.
+    private func reportSetupFailure(step: String, detail: String, client: XMPPClient, token: UUID) async {
+        let wasReady = session.isReady
+        Logger(subsystem: "haus.xmpp.ios", category: "encryption").error("Encryption setup failed at \(step, privacy: .public): \(detail, privacy: .public)")
+        session = .needsAttention(step: step, detail: detail)
+        encryptionAttention.note("Setup failed at \(step): \(detail)")
+        if reportedSetupFailure != detail {
+            reportedSetupFailure = detail
+            self.error = wasReady ? "Could not finish synchronizing (\(step): \(detail))."
+                : "Could not prepare encryption (\(step): \(detail)). Your queued messages have not been sent."
+        }
+        await refresh()
+        guard generation == token else { return }
+        await client.disconnect()
+    }
+
+    private func syncElapsed() -> Int {
+        guard let onlineAt else { return -1 }
+        return Int((ContinuousClock.now - onlineAt) / .milliseconds(1))
+    }
+
+    private func logFirstMessage() {
+        guard !firstMessageLogged else { return }
+        firstMessageLogged = true
+        Self.syncLog.notice("first message +\(self.syncElapsed(), privacy: .public) ms")
+    }
+
     private func rejoinKnownGroups(account: String, client: XMPPClient, encryption: OMEMOService, token: UUID) async throws {
         let rooms = try await encryption.knownGroupRooms(account: account)
         for (room, members) in rooms.sorted(by: { $0.key < $1.key }) {
-            guard generation == token, foreground, !quiescing else { throw CancellationError() }
+            guard setupIsCurrent(token), foreground, !quiescing else { throw CancellationError() }
             // Keep the cached devices (and a past join failure) across the rejoin; only the transport state restarts.
             groupChats[room, default: GroupChatState()].members = members
             let nickname = preferences.string(forKey: "groupNickname.\(account).\(room)") ?? String(account.prefix { $0 != "@" })
             do {
                 let snapshot = try await client.joinGroupRoom(room, nickname: nickname)
-                guard generation == token else { throw CancellationError() }
+                guard setupIsCurrent(token) else { throw CancellationError() }
                 groupChats[room]?.joined = snapshot.joined
             } catch {
-                guard generation == token else { throw CancellationError() }
+                guard setupIsCurrent(token) else { throw CancellationError() }
                 groupChats[room]?.issue = groupFailure(error)
                 // No send is allowed until this room's own authenticated presence is received.
                 // Archive synchronization separately fails closed if room provenance is unavailable.
@@ -1340,7 +1518,8 @@ final class AppModel {
 
     /// Own direct messages with a resolvable reference can be unsent or rewritten; sample chats project only.
     func canRevise(_ message: StoredMessage) -> Bool {
-        guard message.accountID == accountID, message.chatID == openChatID, message.isOutgoing, !message.isRetracted, !isGroup(message.chatID) else { return false }
+        guard message.accountID == accountID, message.chatID == openChatID, message.isOutgoing, !message.isRetracted, message.unreadableReason == nil,
+              !isGroup(message.chatID) else { return false }
         if isDemo { return true }
         // ponytail: rooms wait for the group envelope path; mirrors the direct-chat half of canReact.
         return canReact(to: message)
@@ -1476,7 +1655,18 @@ final class AppModel {
             self.drainTask = nil
             // A different account/session may have become ready while this attempt settled.
             if self.outboxRequested || self.generation != token { self.startOutbox() }
+            // Catch-up often finishes while the first drain of a connection is still running; the
+            // deferred history fetch runs now instead of waiting for the next connection.
+            if self.generation == token { self.requestOpportunisticBackfill() }
         }
+    }
+
+    /// Once per connection, after the archive walk and while no outbox drain is running: fetch a few pages of
+    /// older history so a new install shows more than the newest page without a scroll.
+    private func requestOpportunisticBackfill() {
+        guard archiveWalkFinished, !opportunisticBackfillDone, foreground, !quiescing, drainTask == nil else { return }
+        opportunisticBackfillDone = true
+        requestBackfill(archive: nil, pages: AppModel.opportunisticBackfillPages)
     }
 
     private func startNotificationNavigation() {
@@ -1494,6 +1684,9 @@ final class AppModel {
     func consumeNotificationRoute(_ id: UUID) {
         if notificationRoute?.id == id { notificationRoute = nil }
     }
+
+    /// Pushes a page onto the Chats stack from a view without a navigation path; RootView performs it.
+    func requestRoute(_ route: ChatRoute) { requestedRoute = route }
 
     private func routeNotification(_ destination: NotificationDestination) async {
         guard testSessionID == nil, !isDemo,
@@ -1641,7 +1834,8 @@ final class AppModel {
             await loadEncryptionDetails(for: chatID, refreshFromServer: isGroup(chatID), force: isGroup(chatID))
             guard generation == token else { return }
             if let client, isConnected {
-                try? await encryption.retryPendingIncoming(account: account, transport: client)
+                // A trust decision can only unblock rows that waited for trust; keys-pending rows wait for device lists.
+                try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.trustPending])
                 guard generation == token else { return }
                 await flushEncryptionControls(account: account, client: client)
                 await refresh()
@@ -1682,20 +1876,92 @@ final class AppModel {
             if generation == token { self.error = (error as? OMEMOError)?.errorDescription ?? "Could not remove this device. Refresh its fingerprint and try again." }
         }
     }
-    private func flushEncryptionControls(account: String, client: XMPPClient) async {
+    /// `logsLiveStore`: the event loop calls this after every stored live message; during catch-up the first
+    /// one is logged for the lab measurement (not a general metric).
+    private func flushEncryptionControls(account: String, client: XMPPClient, logsLiveStore: Bool = true) async {
         guard accountID == account, self.client === client else { return }
+        if logsLiveStore, catchUp != nil, !liveStoredLogged {
+            liveStoredLogged = true
+            logFirstMessage()
+            Self.syncLog.notice("live stored +\(self.syncElapsed(), privacy: .public) ms")
+        }
         try? await encryption?.flushBundlePublications(account: account, transport: client)
         // Key transports are ordinary durable updates; the outbox drain sends them.
         startOutbox()
     }
 
-    /// The reader reached the oldest loaded message. A full window means the store may hold more.
+    /// The reader reached the oldest loaded message. A full window means the store may hold more; otherwise the
+    /// store is exhausted for this chat and the server's older archive pages are the next source.
     func loadOlderMessages(all: Bool = false) async {
-        guard !loadingOlder, openChatID != nil, timelineWindow < AppModel.timelineCeiling, all || messages.count >= timelineWindow else { return }
-        loadingOlder = true
-        defer { loadingOlder = false }
-        timelineWindow = all ? AppModel.timelineCeiling : min(AppModel.timelineCeiling, timelineWindow + AppModel.timelinePage)
-        await refresh(.openChat)
+        guard !loadingOlder, let chat = openChatID else { return }
+        if all || messages.count >= timelineWindow {
+            guard timelineWindow < AppModel.timelineCeiling else { return }
+            loadingOlder = true
+            defer { loadingOlder = false }
+            timelineWindow = all ? AppModel.timelineCeiling : min(AppModel.timelineCeiling, timelineWindow + AppModel.timelinePage)
+            await refresh(.openChat)
+            return
+        }
+        // The window is not raised here: each committed page reloads the same window, which fills further, and the
+        // next reach-top raises it as above.
+        requestBackfill(archive: isGroup(chat) ? chat : nil, pages: AppModel.backfillPagesPerScroll)
+    }
+
+    /// True while the archive holding `chat` (the account's own for a direct chat, the room's for a group) backfills.
+    func isBackfilling(chat: String) -> Bool { backfillingArchive != nil && backfillingArchive == (isGroup(chat) ? chat : accountID) }
+
+    /// Starts one bounded backfill of older archive pages. This connection's forward walk must have finished and no
+    /// other backfill may run: `XMPPClient` allows one archive query at a time. `resetSession` cancels it, and
+    /// `connect` and `quiesceTransport` join it before the next connection or the lease release. The loading cell shows
+    /// only once the store says there is something to fetch, so a chat with no older history never flashes it.
+    private func requestBackfill(archive: String?, pages: Int) {
+        let archiveID = archive ?? accountID
+        guard foreground, !quiescing, hasTransportOwnership, session.isReady, archiveWalkFinished, catchUp == nil, backfillTask == nil, !isDemo,
+              !backfillSettled.contains(archiveID), backfillResumesAt.map({ ContinuousClock.now >= $0 }) ?? true,
+              let client, let encryption, let store else { return }
+        let account = accountID
+        let token = generation
+        let started = ContinuousClock.now
+        let synchronizer = ArchiveSynchronizer(store: store)
+        backfillTask = Task { [weak self] in
+            let kind = archive == nil ? "direct" : "room"
+            var settled = false
+            do {
+                let pending = try await synchronizer.hasPendingBackfill(account: account, archive: archive)
+                if pending, let model = self, model.generation == token, !Task.isCancelled {
+                    model.backfillingArchive = archiveID
+                    let outcome = try await synchronizer.backfill(account: account, archive: archive, pageBudget: pages,
+                                                                  client: client, encryption: encryption) { [weak self] progress in
+                        await self?.backfillPageCommitted(progress, token: token)
+                    }
+                    // Only a spent budget leaves more to ask for on this connection; a refusal is retried on the next one.
+                    settled = outcome != .budgetExhausted
+                    let elapsed = Int((ContinuousClock.now - started) / .milliseconds(1))
+                    Self.syncLog.notice("backfill \(kind, privacy: .public) \(String(describing: outcome), privacy: .public) +\(elapsed, privacy: .public) ms")
+                } else {
+                    settled = !pending
+                    if !pending { Self.syncLog.notice("backfill \(kind, privacy: .public) nothing pending") }
+                }
+            } catch {
+                // The synchronizer disconnected if a page was abandoned; the reconciler reconnects.
+                Self.syncLog.error("backfill \(kind, privacy: .public) failed: \(String(String(describing: error).prefix(120)), privacy: .public)")
+            }
+            guard let self, self.generation == token else { return }
+            if settled { self.backfillSettled.insert(archiveID) }
+            self.backfillResumesAt = ContinuousClock.now + .seconds(1)
+            let showed = self.backfillingArchive != nil
+            self.backfillingArchive = nil
+            self.backfillTask = nil
+            // Older pages can add chats (and placeholders) the list has not shown yet.
+            if showed { self.refreshSoon() }
+        }
+    }
+
+    /// The store holds a new page of older messages: reload the open chat's window, which now reaches further back.
+    private func backfillPageCommitted(_ progress: ArchiveSyncProgress, token: UUID) {
+        guard generation == token else { return }
+        Self.syncLog.notice("backfill page pages=\(progress.pages, privacy: .public) messages=\(progress.messages, privacy: .public)")
+        refreshSoon(.openChat)
     }
 
     func closeChat(_ chatID: String) {
@@ -2063,7 +2329,10 @@ final class AppModel {
         loadStoredAvatars(storedChats)
         let reviewPreview = "Encrypted message needs attention"
         var summaries = storedChats.map { ChatSummary(id: $0.id, title: $0.title,
-            preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage.map { $0.isRetracted ? "Message unsent" : ($0.body.isEmpty ? ($0.attachment?.kindLabel ?? "") : $0.body) } ?? ""), isPinned: $0.isPinned, avatarHash: $0.avatarHash,
+            preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage.map { last in
+                last.isRetracted ? "Message unsent"
+                    : last.unreadableReason.map(UnreadableCopy.preview) ?? (last.body.isEmpty ? (last.attachment?.kindLabel ?? "") : last.body) } ?? ""),
+            isPinned: $0.isPinned, avatarHash: $0.avatarHash,
             lastMessageAt: $0.lastMessage?.sentAt, lastMessageIsOutgoing: $0.lastMessage?.isOutgoing ?? false,
             lastMessageState: $0.lastMessage?.transportState, lastMessageReceipt: $0.lastMessageReceipt) }
         summaries += pending.keys.filter { !known.contains($0) }.sorted().map {

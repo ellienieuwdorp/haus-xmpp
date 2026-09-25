@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public struct StoredMessage: Identifiable, Equatable, Sendable {
     /// Application-generated stable identity, unique within an account. Not an untrusted stanza ID.
@@ -18,6 +19,8 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public var transportState: OutgoingTransportState?
     /// The one file this message shares; `body` is then its caption and may be empty.
     public var attachment: StoredAttachment?
+    /// Set only on a placeholder row (`encryptionProfile == "unreadable"`, empty body): why this device cannot show it.
+    public var unreadableReason: UnreadableReason?
     /// Projection flags, set only by `applying(_:)`; never persisted.
     public var isRetracted = false
     public var isEdited = false
@@ -39,8 +42,9 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public init(id: String, accountID: String, chatID: String, senderID: String, body: String,
                 sentAt: Date = Date(), isOutgoing: Bool = false, isStarred: Bool = false,
                 transportState: OutgoingTransportState? = nil, reply: MessageReply? = nil, encryptionProfile: String? = nil, wireID: String? = nil, wireIDAuthenticated: Bool = false,
-                attachment: StoredAttachment? = nil) {
+                attachment: StoredAttachment? = nil, unreadableReason: UnreadableReason? = nil) {
         self.attachment = attachment
+        self.unreadableReason = unreadableReason
         self.id = id
         self.accountID = accountID
         self.chatID = chatID
@@ -144,6 +148,79 @@ public struct PendingEncryptedMessage: Sendable {
     public let sender: String
     public let digest: String
     public let wire: Data
+    public let reason: PendingEncryptedReason
+}
+
+/// A pending row without its ciphertext. The optional fields are projected from the retained-envelope JSON that
+/// OMEMO writes; they are untrusted strings for grouping and counting, never display content.
+public struct PendingEncryptedSummary: Sendable, Equatable {
+    public let sender: String
+    public let digest: String
+    /// The stored classification, raw (`trustPending`, `keysPending`); counting by reason needs no second query.
+    public let reason: String
+    /// Group envelopes: `$.message.room`.
+    public let room: String?
+    /// Group envelopes: `$.message.sender`.
+    public let roomSender: String?
+    /// Direct envelopes: `$.from`.
+    public let from: String?
+    /// Direct envelopes: `$.to`.
+    public let to: String?
+    /// Direct envelopes: `$.provenance` (`direct`, `receivedCarbon` or `sentCarbon`).
+    public let provenance: String?
+}
+
+/// Why a message row is a placeholder and not content. Stored in `messages.unreadable_reason`.
+public enum UnreadableReason: String, Sendable, Equatable, CaseIterable {
+    /// The envelope carried no key for this device (own other-device send, history before this installation, or a peer that excluded this device).
+    case notForThisDevice
+    /// Encrypted with something this client does not implement (OpenPGP/OX, an unknown OMEMO namespace, an EME hint without an envelope).
+    case unsupportedEncryption
+    /// The envelope or its key material could not be parsed, or addressed this device ambiguously.
+    case malformedContent
+    /// A trusted sender device's ciphertext failed ratchet decrypt, payload authentication or content decoding.
+    case decryptFailed
+}
+
+/// Why a retained ciphertext is still in `pending_encrypted_inbox`.
+public enum PendingEncryptedReason: String, Sendable, Equatable, CaseIterable {
+    /// The sender device is known; its trust is undecided or changed.
+    case trustPending
+    /// The sender device is unknown, after a failed or completed device refresh.
+    case keysPending
+}
+
+/// A durable "not shown here" marker. Never plaintext, never authenticated, never a reaction target.
+public struct UnreadableMessage: Sendable, Equatable {
+    public enum Key: Sendable, Equatable {
+        /// Ciphertext identity from OMEMO (the addressed-key digest, or the unaddressed digest when no key exists).
+        case ciphertext(sender: String, digest: String)
+        /// A validated own-archive position whose inner content the parser rejected.
+        case archive(archive: String, id: String)
+    }
+    public let accountID: String
+    public let chatID: String
+    public let senderID: String
+    public let isOutgoing: Bool
+    public let sentAt: Date
+    public let reason: UnreadableReason
+    public let key: Key
+
+    public init(accountID: String, chatID: String, senderID: String, isOutgoing: Bool, sentAt: Date, reason: UnreadableReason, key: Key) {
+        self.accountID = accountID; self.chatID = chatID; self.senderID = senderID
+        self.isOutgoing = isOutgoing; self.sentAt = sentAt; self.reason = reason; self.key = key
+    }
+
+    /// `"unreadable-" + SHA-256 hex` of `"ciphertext\u{0}<sender>\u{0}<digest>"` or `"archive\u{0}<archive>\u{0}<id>"`.
+    /// Deterministic, so a repeated observation of the same ciphertext or archive position maps to the same row.
+    public var id: String {
+        let material: String
+        switch key {
+        case let .ciphertext(sender, digest): material = "ciphertext\u{0}\(sender)\u{0}\(digest)"
+        case let .archive(archive, id): material = "archive\u{0}\(archive)\u{0}\(id)"
+        }
+        return "unreadable-" + SHA256.hash(data: Data(material.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 public struct EncryptionControl: Sendable {
@@ -162,6 +239,16 @@ public struct StreamManagementState: Sendable, Equatable {
 public struct ArchiveCheckpoint: Sendable, Equatable {
     public let revision: Int
     public let cursor: String
+}
+
+/// The backward cursor of one archive's history backfill (newest-first sync).
+public struct ArchiveBackfillCursor: Sendable, Equatable {
+    public let revision: Int
+    /// The oldest archive ID committed for this archive; the next backfill page ends before it.
+    public let oldestID: String
+    /// True once the server reported that nothing older exists.
+    public let complete: Bool
+    public init(revision: Int, oldestID: String, complete: Bool) { self.revision = revision; self.oldestID = oldestID; self.complete = complete }
 }
 
 

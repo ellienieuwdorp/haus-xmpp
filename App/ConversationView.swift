@@ -109,6 +109,13 @@ struct ConversationView: View {
         }
         // A quote keeps its snapshot text unless the quoted message has since been unsent.
         let quotedUnsent = message.reply.map { retracted.contains($0.messageID) } ?? false
+        if let unreadable = message.unreadableReason {
+            // A notice, not content: no quote, no reactions, no edits. An own send from another device keeps its
+            // server-held check (receipts cannot project onto it); an incoming one shows no status.
+            return TimelineMessage(id: message.id, body: "", isOutgoing: message.isOutgoing, isStarred: message.isStarred,
+                                   sentAt: message.sentAt, status: status(message), author: isGroup && !message.isOutgoing ? message.senderID : nil,
+                                   unreadable: unreadable)
+        }
         let canRevise = model.canRevise(message)
         return TimelineMessage(id: message.id, body: message.body, isOutgoing: message.isOutgoing, isStarred: message.isStarred,
                                attachment: message.attachment.map { TimelineAttachment(name: $0.name, mediaType: $0.mediaType, size: $0.size, width: $0.width, height: $0.height,
@@ -269,7 +276,8 @@ struct ConversationView: View {
     var body: some View {
         // One layer: the timeline runs under the navigation bar and the banners; UIKit insets it by that safe area.
         ZStack {
-            ConversationTimeline(messages: timelineMessages, typing: timelineTyping, topBannerHeight: bannerHeight, composer: showingSearch ? nil : AnyView(composer), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
+            ConversationTimeline(messages: timelineMessages, typing: timelineTyping,
+                                 loadingEarlier: !showingSearch && !starredOnly && model.isBackfilling(chat: chatID), topBannerHeight: bannerHeight, composer: showingSearch ? nil : AnyView(composer), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
                 cancelEditing()
                 replyingTo = message
@@ -281,9 +289,10 @@ struct ConversationView: View {
             }, onEdit: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
                 beginEditing(message)
-            }, onUnsend: { composerState.focused = false; unsendMessageID = $0 }, onDisplayed: { id in
+            }, onUnsend: { composerState.focused = false; unsendMessageID = $0 }, onOpenEncryption: { model.requestRoute(encryptionRoute) }, onDisplayed: { id in
                 // Only the newest received message is marked; XEP-0333 makes a marker cover everything before it.
-                guard id == model.messages.last(where: { !$0.isOutgoing })?.id else { return }
+                // A placeholder carries no wire ID, so the newest readable received message is the one to mark.
+                guard id == model.messages.last(where: { !$0.isOutgoing && $0.unreadableReason == nil })?.id else { return }
                 Task { await model.markDisplayed(id) }
             }, onRestoreComposerFocus: { composerState.focused = true }, onReachTop: { Task { await model.loadOlderMessages() } },
             attachmentKeyboard: composerState.attachmentKeyboard)

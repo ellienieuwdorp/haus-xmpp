@@ -1,3 +1,4 @@
+import MessageStore
 import QuickLook
 import SwiftUI
 import UIKit
@@ -69,8 +70,15 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     var isEdited = false
     var canEdit = false
     var canUnsend = false
+    /// This device could not show the message; `body` is empty and the bubble shows the reason as a quiet placeholder.
+    var unreadable: UnreadableReason? = nil
 
-    var placeholder: String { isOutgoing ? "You unsent a message" : "Message unsent" }
+    /// Unsent or unreadable: the bubble keeps its shape and time, and its text is a quiet italic notice.
+    var showsPlaceholder: Bool { isRetracted || unreadable != nil }
+    var placeholder: String {
+        if let unreadable { return UnreadableCopy.bubble(unreadable, isOutgoing: isOutgoing) }
+        return isOutgoing ? "You unsent a message" : "Message unsent"
+    }
 
     enum Status: String, Sendable, Equatable {
         case queued, submitting, unconfirmed, failed, serverAccepted, delivered, displayed
@@ -88,6 +96,22 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
         }
 
         var canRetry: Bool { self == .unconfirmed || self == .failed }
+    }
+}
+
+/// One place for the words; the bubble, the chat list and VoiceOver read the same ones.
+enum UnreadableCopy {
+    static func bubble(_ reason: UnreadableReason, isOutgoing: Bool) -> String {
+        switch reason {
+        case .notForThisDevice: isOutgoing ? "Sent from another device and not encrypted for this iPhone" : "Not encrypted for this iPhone"
+        case .unsupportedEncryption, .malformedContent, .decryptFailed: "Couldn't read this message"
+        }
+    }
+    static func preview(_ reason: UnreadableReason) -> String {
+        switch reason {
+        case .notForThisDevice: "Not encrypted for this iPhone"
+        case .unsupportedEncryption, .malformedContent, .decryptFailed: "Couldn't read this message"
+        }
     }
 }
 
@@ -161,6 +185,8 @@ struct TimelineRow: Equatable {
 struct ConversationTimeline: UIViewControllerRepresentable {
     let messages: [TimelineMessage]
     var typing: TimelineTyping? = nil
+    /// The server's older history is being fetched for this chat: a quiet cell sits above the oldest message.
+    var loadingEarlier = false
     /// SwiftUI banners floating over the top edge. UIKit only sees the navigation bar as safe area, so this adds theirs.
     var topBannerHeight: CGFloat = 0
     /// Hosted above the keyboard by the controller; nil hides it (search).
@@ -171,6 +197,8 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     var onReaction: (String, String) -> Void = { _, _ in }
     var onEdit: (String) -> Void = { _ in }
     var onUnsend: (String) -> Void = { _ in }
+    /// A placeholder's "Encryption details" action; the parent owns navigation.
+    var onOpenEncryption: () -> Void = {}
     /// A received message's cell came on screen; the model decides whether that is a read marker.
     var onDisplayed: (String) -> Void = { _ in }
     /// The long-press menu put the keyboard away and nothing else claimed focus; bring it back.
@@ -189,7 +217,8 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: ConversationTimelineController, context: Context) {
         if controller.additionalSafeAreaInsets.top != topBannerHeight { controller.additionalSafeAreaInsets.top = topBannerHeight }
         controller.setComposer(composer)
-        controller.update(messages: messages, typing: typing, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onDisplayed: onDisplayed)
+        controller.update(messages: messages, typing: typing, loadingEarlier: loadingEarlier, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend,
+                          onOpenEncryption: onOpenEncryption, onDisplayed: onDisplayed)
         controller.onRestoreComposerFocus = onRestoreComposerFocus
         controller.onReachTop = onReachTop
         controller.attachmentKeyboard = attachmentKeyboard
@@ -209,7 +238,10 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var rowsByID: [String: TimelineRow] = [:]
     /// The typing bubble is the last item when someone types; no stored message ID contains a NUL.
     private static let typingID = "typing\u{0}"
+    /// The loading-earlier cell is the first item while the model backfills this chat's archive.
+    static let loadingEarlierID = "loading-earlier\u{0}"
     private var typing: TimelineTyping?
+    private var loadingEarlier = false
     private var typingArrived = false
     private var accent = ""
     private var onToggleStar: (String) -> Void = { _ in }
@@ -218,6 +250,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var onReaction: (String, String) -> Void = { _, _ in }
     private var onEdit: (String) -> Void = { _ in }
     private var onUnsend: (String) -> Void = { _ in }
+    private var onOpenEncryption: () -> Void = {}
     private var onDisplayed: (String) -> Void = { _ in }
     private var previousSize: CGSize = .zero
     private var revision = 0
@@ -273,6 +306,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         collectionView.accessibilityIdentifier = "conversation.timeline"
         collectionView.register(MessageBubbleCell.self, forCellWithReuseIdentifier: "message")
         collectionView.register(TypingIndicatorCell.self, forCellWithReuseIdentifier: "typing")
+        collectionView.register(LoadingEarlierCell.self, forCellWithReuseIdentifier: "loadingEarlier")
         collectionView.addGestureRecognizer(TouchGate(down: { [weak self] point in self?.reserveSwipe(forBubbleAt: point) }, up: { [weak self] in self?.releaseSwipe() }))
         let container = UIView()
         container.backgroundColor = .systemBackground
@@ -324,10 +358,16 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                 if let typing { (cell as? TypingIndicatorCell)?.configure(typing) }
                 return cell
             }
+            if id == Self.loadingEarlierID {
+                let cell = collection.dequeueReusableCell(withReuseIdentifier: "loadingEarlier", for: indexPath)
+                (cell as? LoadingEarlierCell)?.startAnimating()
+                return cell
+            }
             guard let self, let row = rowsByID[id],
                   let cell = collection.dequeueReusableCell(withReuseIdentifier: "message", for: indexPath) as? MessageBubbleCell else { return nil }
             cell.configure(row: row, toggleStar: { [weak self] in self?.onToggleStar(id) }, retry: { [weak self] in self?.onRetryMessage(id) }, reply: { [weak self] in self?.onReply(id) }, reaction: { [weak self] emoji in self?.onReaction(id, emoji) },
                            edit: { [weak self] in self?.onEdit(id) }, unsend: { [weak self] in self?.onUnsend(id) },
+                           openEncryption: { [weak self] in self?.onOpenEncryption() },
                            presentActions: { [weak self] context in
                                guard let self, presentedViewController == nil else { return false }
                                guard MessageActionsOverlay.present(from: self, context: context,
@@ -357,11 +397,13 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         present(viewer, animated: true)
     }
 
-    func update(messages incoming: [TimelineMessage], typing: TimelineTyping? = nil, accent: String = "", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in },
-                onEdit: @escaping (String) -> Void = { _ in }, onUnsend: @escaping (String) -> Void = { _ in }, onDisplayed: @escaping (String) -> Void = { _ in }) {
+    func update(messages incoming: [TimelineMessage], typing: TimelineTyping? = nil, loadingEarlier: Bool = false, accent: String = "", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in },
+                onEdit: @escaping (String) -> Void = { _ in }, onUnsend: @escaping (String) -> Void = { _ in }, onOpenEncryption: @escaping () -> Void = {},
+                onDisplayed: @escaping (String) -> Void = { _ in }) {
         loadViewIfNeeded()
         if actionsVisible {
-            heldUpdate = { [weak self] in self?.update(messages: incoming, typing: typing, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onDisplayed: onDisplayed) }
+            heldUpdate = { [weak self] in self?.update(messages: incoming, typing: typing, loadingEarlier: loadingEarlier, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend,
+                                                       onOpenEncryption: onOpenEncryption, onDisplayed: onDisplayed) }
             return
         }
         self.onToggleStar = onToggleStar
@@ -370,14 +412,17 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         self.onReaction = onReaction
         self.onEdit = onEdit
         self.onUnsend = onUnsend
+        self.onOpenEncryption = onOpenEncryption
         self.onDisplayed = onDisplayed
         // The durable store supplies unique IDs. Avoid a diffable crash if a caller repeats an ID.
         var seen = Set<String>()
         let uniqueRows = TimelineRow.rows(for: incoming.filter { seen.insert($0.id).inserted })
         let accentChanged = accent != self.accent
         let typingChanged = typing != self.typing
-        guard uniqueRows != rows || accentChanged || typingChanged else { return }
+        let loadingChanged = loadingEarlier != self.loadingEarlier
+        guard uniqueRows != rows || accentChanged || typingChanged || loadingChanged else { return }
         self.accent = accent
+        self.loadingEarlier = loadingEarlier
         let typingLeft = self.typing != nil && typing == nil
         typingArrived = self.typing == nil && typing != nil
         self.typing = typing
@@ -402,6 +447,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         let currentRevision = revision
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
+        // Above the oldest message; the anchor below skips it, so it comes and goes without moving the reader.
+        if loadingEarlier { snapshot.appendItems([Self.loadingEarlierID]) }
         snapshot.appendItems(uniqueRows.map(\.message.id))
         if typing != nil { snapshot.appendItems([Self.typingID]) }
         var changed = uniqueRows.compactMap { row -> String? in
@@ -497,7 +544,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private static func leavesKeyboardFree(_ kind: MessageAction.Kind) -> Bool {
         switch kind {
         case .copy, .star, .retry: true
-        case .reply, .edit, .selectText, .unsend: false
+        case .reply, .edit, .selectText, .unsend, .encryptionDetails: false
         }
     }
 
@@ -799,9 +846,10 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             - collectionView.contentOffset.y - collectionView.bounds.height < 80
     }
 
+    /// The first visible message. Never the loading-earlier cell: anchored on it, its removal would drop the reader.
     private func visibleAnchor() -> Anchor? {
         let visible = collectionView.indexPathsForVisibleItems.sorted()
-        guard let path = visible.first,
+        guard let path = visible.first(where: { dataSource.itemIdentifier(for: $0) != Self.loadingEarlierID }),
               let id = dataSource.itemIdentifier(for: path),
               let attributes = collectionView.layoutAttributesForItem(at: path) else { return nil }
         return Anchor(id: id, distanceFromTop: attributes.frame.minY - collectionView.contentOffset.y)
@@ -880,6 +928,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private var reactionAction: (String) -> Void = { _ in }
     private var editAction: () -> Void = {}
     private var unsendAction: () -> Void = {}
+    private var openEncryptionAction: () -> Void = {}
     /// Returns whether the menu opened; when it did not, the cell puts its squeezed bubble back.
     private var presentActions: (MessageActionsContext) -> Bool = { _ in false }
     private let pressFeedback = UIImpactFeedbackGenerator(style: .medium)
@@ -1237,6 +1286,10 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     /// The one action list; the overlay menu and VoiceOver custom actions both read it.
     private func actions() -> [MessageAction] {
         guard let message else { return [] }
+        // A placeholder is a notice, not content: nothing to quote, copy, star or select; only why it is unreadable.
+        if message.unreadable != nil {
+            return [MessageAction(kind: .encryptionDetails, title: "Encryption details", symbol: "lock.shield", perform: openEncryptionAction)]
+        }
         let star = MessageAction(kind: .star, title: message.isStarred ? "Unstar message" : "Star message", symbol: message.isStarred ? "star.slash" : "star", perform: toggleStar)
         // An unsent bubble has no text to quote, copy or select.
         if message.isRetracted { return [star] }
@@ -1364,11 +1417,15 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         let distance = max(0, pan.translation(in: contentView).x)
         switch pan.state {
         case .began:
-            replyIndicatorLeading.constant = bubble.frame.minX + 12
-            swipeReplyAction = replyAction
+            // A placeholder has nothing to reply to. The pan still begins, so gesture arbitration with the
+            // collection view is unchanged; the bubble simply does not travel and there is no haptic.
+            swipeReplyAction = message?.unreadable == nil ? replyAction : nil
             crossedReplyThreshold = false
+            guard swipeReplyAction != nil else { break }
+            replyIndicatorLeading.constant = bubble.frame.minX + 12
             replyFeedback.prepare()
         case .changed:
+            guard swipeReplyAction != nil else { break }
             bubble.transform = CGAffineTransform(translationX: min(80, distance), y: 0)
             replyIndicator.alpha = min(1, distance / 56)
             if distance >= 56, !crossedReplyThreshold {
@@ -1437,7 +1494,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     }
 
     func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,
-                   edit: @escaping () -> Void = {}, unsend: @escaping () -> Void = {},
+                   edit: @escaping () -> Void = {}, unsend: @escaping () -> Void = {}, openEncryption: @escaping () -> Void = {},
                    presentActions: @escaping (MessageActionsContext) -> Bool, openAttachment: @escaping (URL) -> Void = { _ in }) {
         let message = row.message
         self.row = row
@@ -1447,6 +1504,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         self.reactionAction = reaction
         self.editAction = edit
         self.unsendAction = unsend
+        self.openEncryptionAction = openEncryption
         self.presentActions = presentActions
         self.openAttachment = openAttachment
         bubble.cornerConfiguration = .corners(topLeftRadius: .fixed(20), topRightRadius: .fixed(20),
@@ -1482,7 +1540,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         textHeight.isActive = message.body.isEmpty && message.attachment != nil
         textView.isHidden = textHeight.isActive
         // A caption keeps its usual 10pt inset from the photo itself, not from the frame below it.
-        let showsPreview = !message.isRetracted && message.attachment?.showsPreview == true
+        let showsPreview = !message.showsPlaceholder && message.attachment?.showsPreview == true
         plainTextTop.constant = showsPreview ? -Self.mediaInset : 0
         NSLayoutConstraint.deactivate([footerAfterText, footerAfterMedia])
         (showsPreview && textHeight.isActive ? footerAfterMedia : footerAfterText)?.isActive = true
@@ -1502,16 +1560,17 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         time.textColor = meta
         star.tintColor = meta
         replyIndicator.tintColor = theme.tint
-        // An unsent message keeps its bubble and time; the text becomes a quiet italic placeholder.
-        let shown = message.isRetracted ? message.placeholder : message.body
+        // An unsent or unreadable message keeps its bubble and time; the text becomes a quiet italic placeholder.
+        let shown = message.showsPlaceholder ? message.placeholder : message.body
         if textView.text != shown { textView.text = shown }
         let bodyDescriptor = UIFontDescriptor.preferredFontDescriptor(withTextStyle: .body)
-        textView.font = message.isRetracted ? UIFont(descriptor: bodyDescriptor.withSymbolicTraits(.traitItalic) ?? bodyDescriptor, size: 0) : .preferredFont(forTextStyle: .body)
-        textView.textColor = message.isRetracted ? meta : text
-        configureAttachment(message.isRetracted ? nil : message.attachment, isOutgoing: message.isOutgoing, textColor: text)
+        textView.font = message.showsPlaceholder ? UIFont(descriptor: bodyDescriptor.withSymbolicTraits(.traitItalic) ?? bodyDescriptor, size: 0) : .preferredFont(forTextStyle: .body)
+        textView.textColor = message.showsPlaceholder ? meta : text
+        configureAttachment(message.showsPlaceholder ? nil : message.attachment, isOutgoing: message.isOutgoing, textColor: text)
         var descriptions = ["\(message.isOutgoing ? "You" : (message.author ?? "Contact")): \(shown)"]
+        if message.unreadable != nil { descriptions.append("not readable on this device") }
         if message.isEdited { descriptions.append("edited") }
-        if !message.isRetracted, let attachment = message.attachment { descriptions.append("\(attachment.kindLabel) \(attachment.name)" + (attachment.localURL == nil ? ", downloading" : "")) }
+        if !message.showsPlaceholder, let attachment = message.attachment { descriptions.append("\(attachment.kindLabel) \(attachment.name)" + (attachment.localURL == nil ? ", downloading" : "")) }
         if let quote = message.reply { descriptions.append("Replying to \(quote.author): \(quote.body)") }
         if message.isStarred { descriptions.append("starred") }
         if let date = message.sentAt { descriptions.append(date.formatted(date: .abbreviated, time: .shortened)) }
@@ -1542,6 +1601,53 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         status.tintColor = meta
         status.show(message.isOutgoing ? message.status.map(MessageStatusGlyph.glyph(for:)) : nil)
         setNeedsLayout()
+    }
+}
+
+/// Shown above the oldest message while older history is fetched: a small spinner and one quiet line, nothing to tap.
+final class LoadingEarlierCell: UICollectionViewCell {
+    static let label = "Loading earlier messages"
+    private let spinner = UIActivityIndicatorView(style: .medium)
+    private let text = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        spinner.hidesWhenStopped = false
+        spinner.color = .secondaryLabel
+        text.text = Self.label + "…"
+        text.font = .preferredFont(forTextStyle: .footnote)
+        text.adjustsFontForContentSizeCategory = true
+        text.textColor = .secondaryLabel
+        text.numberOfLines = 0
+        text.textAlignment = .center
+        let row = UIStackView(arrangedSubviews: [spinner, text])
+        row.axis = .horizontal
+        row.alignment = .center
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(row)
+        let height = contentView.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
+        NSLayoutConstraint.activate([
+            height,
+            row.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            row.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            row.leadingAnchor.constraint(greaterThanOrEqualTo: contentView.leadingAnchor, constant: 16),
+            row.topAnchor.constraint(greaterThanOrEqualTo: contentView.topAnchor, constant: 8),
+        ])
+        isAccessibilityElement = true
+        accessibilityLabel = Self.label
+        accessibilityTraits = [.updatesFrequently]
+        accessibilityIdentifier = "timeline.loadingEarlier"
+        spinner.startAnimating()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func startAnimating() { spinner.startAnimating() }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { spinner.startAnimating() }
     }
 }
 

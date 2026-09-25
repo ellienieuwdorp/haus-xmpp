@@ -201,9 +201,12 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertNil(attention.groupProblems[room])
     }
 
-    func testIncompatibleVersionsAreUnavailableNotReview() {
-        let incompatible = DeviceTrustFacts(peerTrust: [.accepted], needsReview: false, incompatible: true, peerKnown: true)
-        XCTAssertEqual(direct(.stored(incompatible), ready: true).encryption, .unavailable("Devices use incompatible encryption versions"))
+    /// A device published only in the other OMEMO version is a notice on the Devices screen; the chat keeps sending
+    /// to the devices that are in this version (the old rule paused the chat indefinitely).
+    func testDevicesInOnlyTheOtherVersionDoNotHoldTheChat() {
+        let facts = DeviceTrustFacts(peerTrust: [.accepted], needsReview: false, peerKnown: true)
+        XCTAssertEqual(direct(.stored(facts), ready: true).encryption, .encrypted(verified: false))
+        XCTAssertTrue(direct(.stored(facts), ready: true).canSend)
     }
 }
 

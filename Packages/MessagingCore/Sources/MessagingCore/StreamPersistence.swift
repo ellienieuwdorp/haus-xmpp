@@ -20,8 +20,9 @@ public struct StreamPersistence: XMPPStreamManagementPersistence {
     /// otherwise the stream starts fresh and the archive reconciles what the server kept.
     public func permitsResumption(_ snapshot: XMPPStreamManagementSnapshot) async throws -> Bool {
         guard snapshot.accountID == accountID else { return false }
+        // IQ entries carry no bytes and never a message ID; they are never replayed.
         for entry in snapshot.journal where entry.messageID != nil {
-            guard try await encryption.canReplay(account: accountID, xml: entry.xml) else { return false }
+            guard let xml = entry.xml, try await encryption.canReplay(account: accountID, xml: xml) else { return false }
         }
         return true
     }

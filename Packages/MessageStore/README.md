@@ -46,3 +46,21 @@ Reaction updates have a dedicated FIFO outbox, exact ciphertext column and attem
 Incoming authenticated reactions commit their event, replay outcome and cryptographic state in one transaction. Each actor's newest `(updatedAt, id)` event supplies the entire set; an empty set withdraws all reactions. An event ID cannot replace its first accepted contents. Events referring to unavailable targets are retained and resolve only when a unique authenticated target arrives. Peer actors must equal the direct chat JID; own-device actors must equal the account. Message/reaction packet identity remains the OMEMO layer's authentication responsibility. String/count bounds are enforced here; emoji/content validation belongs to the authenticated payload codec.
 
 Tests verify atomic sealing failure, persistence-before-claim, exact retry bytes, uncertain recovery, server-ack callback fencing, full-set withdrawal, stale/reused events, sender/account isolation, retained missing targets, ambiguous authenticated IDs and migration without manufactured wire authentication.
+
+## Chat list query
+
+`chats(accountID:)` is one SQL statement (review item R8 in `docs/development/sync-review.md`). It returns what the earlier per-chat loop returned: `messages(limit: 1)` plus `events(...)` per chat, projected with `applying(_:)`, with the strongest peer receipt on an outgoing last message. `ChatListQueryTests` compares it against that loop, rebuilt from public API, on seeded data that covers ties, sender-only retraction and correction, attachments, ambiguous and authenticated wire IDs, room stanza-id references, outbox state, pins, avatars and a decoy account.
+
+Every step is an index seek per chat. The newest message comes from the `timeline` index (`ORDER BY sent_at DESC, id DESC LIMIT 1`) and is joined by primary key. The reaction target is resolved through a rowid `UNION` of the `message_wire` and `group_reference_target` lookups; the equivalent `OR` scans the chat. Events come from `event_target`. The store never runs `ANALYZE`, so the plan has to be good without statistics. A `ROW_NUMBER()` window over all of the account's messages, the first design, took 59 s for 100 chats of 1,000 messages in that state: the planner nested-loops the materialized window once per chat.
+
+Measured 2026-09-25 on an Apple M1 Pro, macOS 27.0, release build, in-process system SQLite, median of 9 runs through the `MessageStore` actor. Synthetic data: every chat alternates incoming and outgoing messages, each outgoing message has a delivered and a displayed receipt, and each incoming one has a reaction. The benchmark was a throwaway test and is not committed.
+
+| Chats × messages per chat | Per-chat loop | One statement |
+|---|---|---|
+| 100 × 10 | 12.7 ms | 1.2 ms |
+| 100 × 1,000 | 37.3 ms | 1.4 ms |
+| 300 × 300 | 62.6 ms | 4.3 ms |
+| 1,000 × 20 | 149.6 ms | 14.3 ms |
+| 1,000 × 200 | 201.6 ms | 25.1 ms |
+
+Both implementations returned equal `[StoredChat]` values on every shape.

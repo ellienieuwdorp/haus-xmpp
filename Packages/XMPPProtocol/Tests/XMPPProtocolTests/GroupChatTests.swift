@@ -138,3 +138,65 @@ private func groupEnvelope() -> XMPPOMEMOEnvelope {
     #expect(query.messages.first?.encryptedGroupMessage?.room == groupRoom)
     #expect(query.messages.first?.encryptedGroupMessage?.sender == groupAlice)
 }
+
+@Test func groupMessagesRecordFallbackBodyPresence() throws {
+    let xml = try GroupChatWire.outgoing(room: groupRoom, envelope: groupEnvelope(), id: "g1")
+        .replacingOccurrences(of: "to='\(groupRoom)'", with: "from='\(groupRoom)/nick' to='\(groupBob)'")
+    let withBody = xml.replacingOccurrences(of: "</message>", with: "<body>fallback</body></message>")
+    let state = GroupRoomState(members: [groupAlice, groupBob], occupants: [groupRoom + "/nick": groupAlice], joined: true)
+    #expect(try !GroupChatWire.message(groupNode(xml), account: groupBob, room: groupRoom, state: state).hasFallbackBody)
+    #expect(try GroupChatWire.message(groupNode(withBody), account: groupBob, room: groupRoom, state: state).hasFallbackBody)
+
+    let own = try GroupChatWire.outgoing(room: groupRoom, envelope: groupEnvelope(), id: "g2")
+        .replacingOccurrences(of: "<message ", with: "<message from='\(groupAlice)/phone' ")
+    let ownWithBody = own.replacingOccurrences(of: "</message>", with: "<body>fallback</body></message>")
+    let archived = try GroupChatWire.archivedMessage(groupNode(own), account: groupAlice, archiveRoom: nil, knownRooms: [])
+    let archivedWithBody = try GroupChatWire.archivedMessage(groupNode(ownWithBody), account: groupAlice, archiveRoom: nil, knownRooms: [])
+    #expect(archived.provenance == .ownArchive && !archived.hasFallbackBody)
+    #expect(archivedWithBody.hasFallbackBody)
+    // Retained envelopes encoded before the field existed still decode, as "no hint".
+    var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(archivedWithBody)) as? [String: Any])
+    #expect(json["hasFallbackBody"] as? Bool == true)
+    json.removeValue(forKey: "hasFallbackBody")
+    let legacy = try JSONDecoder().decode(XMPPEncryptedGroupMessage.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(!legacy.hasFallbackBody && legacy.envelope == archivedWithBody.envelope)
+}
+
+@Test func groupRefreshDecisionUsesTheCacheUntilPresenceChanges() throws {
+    let members = [groupAlice, groupBob]
+    var state = GroupRoomState()
+    #expect(state.refreshDecision == .readTwice)
+    state.markValidated(members)
+    #expect(state.refreshDecision == .cached)
+    let occupant = try groupNode("<presence from='\(groupRoom)/bob'><x xmlns='\(GroupChatWire.user)'><item affiliation='member' jid='\(groupBob)'/></x></presence>")
+    GroupChatWire.applyPresence(occupant, room: groupRoom, account: groupAlice, state: &state)
+    #expect(state.refreshDecision == .readOnceExpecting(members))
+    state.markValidated(members)
+    #expect(state.refreshDecision == .cached)
+    state.requestNickname("n")
+    #expect(state.refreshDecision == .readOnceExpecting(members))
+    let empty = GroupRoomState(members: [], revision: 4, validatedRevision: 4)
+    #expect(empty.refreshDecision == .readTwice)
+}
+
+@Test func sendsAndKeyDistributionReadMembershipEvenWithoutPresenceChanges() throws {
+    // Adding or removing a member who is not in the room sends no presence (XEP-0045 §9.3, §9.4), so an
+    // unchanged revision must still cost one read on every path except archive paging.
+    let members = [groupAlice, groupBob]
+    var state = GroupRoomState()
+    #expect(state.refreshDecision(reusingValidation: false) == .readTwice)
+    #expect(state.refreshDecision(reusingValidation: true) == .readTwice)
+    state.markValidated(members)
+    #expect(state.refreshDecision(reusingValidation: false) == .readOnceExpecting(members))
+    #expect(state.refreshDecision(reusingValidation: true) == .cached)
+    state.requestNickname("n")
+    #expect(state.refreshDecision(reusingValidation: false) == .readOnceExpecting(members))
+    #expect(state.refreshDecision(reusingValidation: true) == .readOnceExpecting(members))
+}
+
+@Test func aRefreshThatMustReadNeverJoinsOneThatMayAnswerFromTheCache() {
+    let reading = GroupRoomRefreshKey(room: groupRoom, reusesValidation: false)
+    let caching = GroupRoomRefreshKey(room: groupRoom, reusesValidation: true)
+    #expect(GroupRoomRefreshKey.joinable(room: groupRoom, reusingValidation: false) == [reading])
+    #expect(GroupRoomRefreshKey.joinable(room: groupRoom, reusingValidation: true) == [reading, caching])
+}

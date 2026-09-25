@@ -125,6 +125,15 @@ public actor XMPPClient {
     /// Silence longer than this gets a probe; a probe unanswered within `probeTimeout` ends the stream.
     static let silenceInterval: Duration = .seconds(60)
     static let probeTimeout: Duration = .seconds(15)
+    /// Every inbound `<message/>` yields two events (content and barrier), and stream management already
+    /// ends the stream at 2,000 received-but-unhandled stanzas, so for message traffic that ceiling binds
+    /// first. Overflow still ends the connection (`eventConsumerTooSlow`); nothing dropped is acknowledged.
+    public static let eventBufferLimit = 4096
+    /// The default reply deadline for a request.
+    public static let iqTimeout: Duration = .seconds(15)
+    /// A MAM `<fin/>` arrives only after every result of the page was streamed: 100 results of a few KiB
+    /// take tens of seconds on a slow link. Still within one liveness interval, so a dead query stays bounded.
+    public static let archiveQueryTimeout: Duration = .seconds(60)
     private var generation = UUID()
     private var phase: Phase = .idle
     private var framer = XMLStreamFramer()
@@ -150,6 +159,8 @@ public actor XMPPClient {
     /// sent no probe answers and presence seen on the earlier stream still holds.
     public private(set) var sessionResumed = false
     var groupRooms: [String: GroupRoomState] = [:]
+    /// In-flight membership validations by room and cache use, so concurrent refreshes of one room share one read.
+    var roomRefreshes: [GroupRoomRefreshKey: GroupRoomRefresh] = [:]
     private var streamManagement: StreamManagement?
     private var resumeSnapshot: XMPPStreamManagementSnapshot?
     private var smOffered = false
@@ -162,7 +173,7 @@ public actor XMPPClient {
     /// A DER CA certificate is exclusively for the explicit local lab. System trust is the default.
     public init(labCertificateAuthority: Data? = nil) {
         self.labCertificateAuthority = labCertificateAuthority
-        let pair = AsyncStream<XMPPEvent>.makeStream(bufferingPolicy: .bufferingOldest(256))
+        let pair = AsyncStream<XMPPEvent>.makeStream(bufferingPolicy: .bufferingOldest(XMPPClient.eventBufferLimit))
         events = pair.stream
         continuation = pair.continuation
     }
@@ -235,6 +246,10 @@ public actor XMPPClient {
         let previousReader = reader
         finish(nil)
         await previousReader?.value
+        // Best effort, after the socket is gone so a held journal gate never delays the cancel: the
+        // next connection (app or extension) resumes with the highest durable h. A lagging counter
+        // only causes redelivery of stanzas whose dispositions are already saved.
+        _ = try? await streamManagement?.flushHandled()
     }
 
     /// Completion means only that the local socket accepted the write, not server or peer delivery.
@@ -450,14 +465,19 @@ public actor XMPPClient {
                 let replay = try await streamManagement.acknowledge(h, resumed: true)
                 try emit(.streamAcknowledged)
                 guard try await streamManagement.permitsReplay() else { throw XMPPStreamManagementError.invalidState }
-                for entry in replay { try await rawWrite(entry.xml, expectedGeneration: token) }
+                // IQs are never replayed: their continuations failed on disconnect and setup re-runs.
+                for entry in replay {
+                    guard entry.kind != .iq, let xml = entry.xml else { continue }
+                    try await rawWrite(xml, expectedGeneration: token)
+                }
                 try await becomeOnline(token: token, presence: false)
             }
         case .online:
             if node.namespace == "urn:xmpp:sm:3" {
                 guard let streamManagement else { throw XMPPClientError.unexpectedProtocol }
                 if node.name == "r" {
-                    let h = await streamManagement.handledCount()
+                    // Advertise only what the flush made durable; a failed commit ends the stream.
+                    let h = try await streamManagement.flushHandled()
                     try await write("<a xmlns='urn:xmpp:sm:3' h='\(h)'/>")
                 } else if node.name == "a", let h = Self.smCount(node.attributes["h"]) {
                     _ = try await streamManagement.acknowledge(h)
@@ -531,6 +551,11 @@ public actor XMPPClient {
         try await streamManagement?.handled(token)
     }
 
+    /// Acknowledges a page's tokens together after every result and its cursor are durable.
+    public func acknowledgeInbound(_ tokens: [XMPPInboundToken]) async throws {
+        try await streamManagement?.handled(tokens)
+    }
+
     public func requestAcknowledgement() async throws {
         guard phase == .online, streamManagement != nil, smOffered else { throw XMPPClientError.notConnected }
         try await write("<r xmlns='urn:xmpp:sm:3'/>")
@@ -538,20 +563,20 @@ public actor XMPPClient {
 
     /// Caller must persist every result and its archive position before acknowledging handledTokens.
     /// Only one bounded own-account query can be active; no arbitrary archive sender is trusted.
-    public func fetchArchivePage(after: String? = nil, limit: Int = 100, room: String? = nil) async throws -> XMPPArchivePage {
+    public func fetchArchivePage(_ bound: XMPPArchiveBound, limit: Int = 100, room: String? = nil) async throws -> XMPPArchivePage {
         guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
-        guard archiveQuery == nil, (1...200).contains(limit), after.map(validArchiveID) ?? true else { throw XMPPClientError.invalidConfiguration }
-        if let room { _ = try await refreshGroupRoom(room) }
+        guard archiveQuery == nil, (1...200).contains(limit), bound.cursor.map(validArchiveID) ?? true else { throw XMPPClientError.invalidConfiguration }
+        // Later pages of a room reuse the validation its walk just did; sends never do (`refreshGroupRoom(_:)`).
+        if let room { _ = try await refreshGroupRoom(room, reusingValidation: true) }
         guard phase == .online, OMEMOWire.bareJID(boundJID) == ownBare, archiveQuery == nil else { throw XMPPClientError.connectionClosed }
         let queryID = UUID().uuidString
         archiveQuery = ArchiveQuery(queryID: queryID, accountBareJID: ownBare, accountFullJID: boundJID, limit: limit)
         archiveQuery?.room = room
         archiveQuery?.knownRooms = Set(groupRooms.filter { !$0.value.members.isEmpty }.keys)
         defer { archiveQuery = nil }
-        let afterXML = after.map { "<after>\(xmlEscaped($0))</after>" } ?? ""
-        let payload = "<query xmlns='urn:xmpp:mam:2' queryid='\(queryID)'><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE' type='hidden'><value>urn:xmpp:mam:2</value></field></x><set xmlns='http://jabber.org/protocol/rsm'><max>\(limit)</max>\(afterXML)</set></query>"
+        let payload = ArchiveQuery.payload(queryID: queryID, limit: limit, bound: bound)
         do {
-            let response = try await requestIQ(type: "set", to: room ?? ownBare, payload: payload)
+            let response = try await requestIQ(type: "set", to: room ?? ownBare, payload: payload, timeout: Self.archiveQueryTimeout)
             guard let query = archiveQuery else { throw XMPPClientError.connectionClosed }
             return try query.finish(response)
         } catch {
@@ -891,7 +916,7 @@ public actor XMPPClient {
         do { return (owner, try AvatarWire.parseMetadata(item.children[0])) } catch { return nil }
     }
 
-    func requestIQ(type: String, to: String?, payload: String, id: String = UUID().uuidString) async throws -> XMLNode {
+    func requestIQ(type: String, to: String?, payload: String, id: String = UUID().uuidString, timeout: Duration = XMPPClient.iqTimeout) async throws -> XMLNode {
         guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
         guard iqRequests.count < 64 else { throw XMPPIQError.requestLimit }
         if let to {
@@ -900,11 +925,12 @@ public actor XMPPClient {
         }
         let token = generation
         let scope = IQReplyScope(recipient: to, accountBareJID: ownBare, accountFullJID: boundJID, serverDomain: domain)
+        let replyDeadline = timeout
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
                 let timeout = Task { [weak self] in
-                    do { try await Task.sleep(for: .seconds(15)) } catch { return }
+                    do { try await Task.sleep(for: replyDeadline) } catch { return }
                     await self?.failIQ(id, error: XMPPClientError.timedOut)
                 }
                 iqRequests[id] = IQRequest(scope: scope, continuation: continuation, timeout: timeout)
@@ -952,6 +978,9 @@ public actor XMPPClient {
     private func finish(_ reason: String?, error: Error = XMPPClientError.connectionClosed) {
         generation = UUID()
         groupRooms.removeAll(); rosterFetchIDs.removeAll(); rosterRequested = false
+        // Their reads are failed below; a stale refresh must never be joined by the next connection.
+        for refresh in roomRefreshes.values { refresh.task.cancel() }
+        roomRefreshes.removeAll()
         let pending = iqRequests; iqRequests.removeAll()
         for request in pending.values { request.timeout.cancel(); request.continuation.resume(throwing: error) }
         boundJID = ""

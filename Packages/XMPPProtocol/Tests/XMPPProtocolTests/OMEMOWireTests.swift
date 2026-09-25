@@ -144,3 +144,19 @@ private func bundle(_ profile: XMPPOMEMOProfile) -> XMPPOMEMOBundle {
     let two = "<iq type='result'><pubsub xmlns='http://jabber.org/protocol/pubsub'><items node='eu.siacs.conversations.axolotl.devicelist'><item id='a'/><item id='b'/></items></pubsub></iq>"
     #expect(throws: XMPPIQError.malformedResponse) { try XMPPClient.decodeDeviceList(omemoNode(two), profile: .legacy) }
 }
+
+@Test func parseMessageRecordsFallbackBodyPresence() throws {
+    let ns = XMPPOMEMOProfile.legacy.namespace
+    let encrypted = "<encrypted xmlns='\(ns)'><header sid='91'><key rid='123'>AQID</key><iv>AQEBAQEBAQEBAQEB</iv></header><payload>BAUG</payload></encrypted>"
+    let withBody = try XMPPClient.decodeEncryptedMessageXML("<message from='a@example.test/phone' type='chat' id='f1'><body>I sent you an OMEMO encrypted message</body>\(encrypted)</message>")
+    let without = try XMPPClient.decodeEncryptedMessageXML("<message from='a@example.test/phone' type='chat' id='f1'>\(encrypted)</message>")
+    #expect(withBody.hasFallbackBody)
+    #expect(!without.hasFallbackBody)
+    // The hint is part of the value: two otherwise identical envelopes differ only by it.
+    #expect(withBody != without)
+    var normalized = withBody; normalized.hasFallbackBody = false
+    #expect(normalized == without)
+    // A body in another namespace is not the jabber:client fallback.
+    let foreign = try XMPPClient.decodeEncryptedMessageXML("<message from='a@example.test/phone' type='chat' id='f1'><body xmlns='urn:example'>x</body>\(encrypted)</message>")
+    #expect(!foreign.hasFallbackBody)
+}

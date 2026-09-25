@@ -26,6 +26,11 @@ struct RootView: View {
             showingSettings = false
             chatPath = [.chat(route.chatID)]
         }
+        .onChange(of: model.requestedRoute) { _, route in
+            guard let route else { return }
+            model.requestedRoute = nil
+            chatPath.append(route)
+        }
         .onChange(of: model.signInRequested) { _, requested in
             guard requested else { return }
             model.signInRequested = false

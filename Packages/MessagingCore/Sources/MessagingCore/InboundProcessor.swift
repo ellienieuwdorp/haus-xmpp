@@ -1,4 +1,5 @@
 import Foundation
+import MessageStore
 import OMEMO
 import XMPPProtocol
 
@@ -11,8 +12,12 @@ public actor InboundProcessor {
         case ignored
         /// Content persisted and projected.
         case stored
-        /// Decryption failed but the ciphertext is retained for later trust; nothing is lost.
+        /// Decryption failed but the ciphertext is retained for later trust or keys; nothing is lost.
         case retained(problem: String)
+        /// Deliberately not shown as content. When the envelope would have been a bubble, a durable placeholder row now
+        /// marks it; otherwise (an update from a device that excluded this one) nothing is stored. Nothing to review.
+        /// The reason is the error class; the row carries the exact reason.
+        case excluded(reason: UnreadableReason)
         /// The barrier was acknowledged to the server.
         case acknowledged
     }
@@ -38,6 +43,8 @@ public actor InboundProcessor {
         switch event {
         case .encryptedMessage(let message):
             do { _ = try await encryption.receive(account: account, message: message, transport: client); return .stored }
+            catch OMEMOError.notForThisDevice { return .excluded(reason: .notForThisDevice) }
+            catch OMEMOError.undecryptable { return .excluded(reason: .decryptFailed) }
             catch {
                 // A failed decrypt can still be safely retained for later explicit trust.
                 // Storage failures and unretained content must stop before the next barrier.
@@ -48,6 +55,8 @@ public actor InboundProcessor {
             }
         case .encryptedGroupMessage(let message):
             do { _ = try await encryption.receiveGroup(account: account, message: message, transport: client); return .stored }
+            catch OMEMOError.notForThisDevice { return .excluded(reason: .notForThisDevice) }
+            catch OMEMOError.undecryptable { return .excluded(reason: .decryptFailed) }
             catch {
                 guard (try? await encryption.hasDurableGroupDisposition(account: account, message: message)) ?? false else {
                     mayAcknowledge = false; throw error

@@ -39,9 +39,9 @@ extension OMEMOService {
     public func cachedGroupDevices(account: String, room: String) async throws -> [EncryptionDevice] {
         let (_, state) = try await load(account)
         var identities = Set(state.groupRooms[room] ?? [])
-        for pending in try await store.pendingEncryptedIncoming(accountID: account) {
-            if let retained = try? JSONDecoder().decode(RetainedGroupEnvelope.self, from: pending.wire), retained.message.room == room,
-               retained.message.sender == pending.sender { identities.insert(pending.sender) }
+        for pending in try await store.pendingEncryptedIncomingSummaries(accountID: account)
+        where pending.room == room && pending.roomSender == pending.sender {
+            identities.insert(pending.sender)
         }
         return state.devices.filter { $0.profile == .modern && identities.contains($0.jid) }
     }
@@ -132,13 +132,22 @@ extension OMEMOService {
                             sentAt: Date?) async throws -> Bool {
         guard message.envelope.profile == .modern, message.envelope.payload != nil,
               message.occupant.hasPrefix(message.room + "/"), bare(message.sender) == message.sender else { throw OMEMOError.invalidContent }
+        // A. Validate and identify without importing a crypto engine.
         let (_, first) = try await load(account)
-        let initialEngine = try engine(first, .modern)
-        if message.sender == account, message.envelope.senderDeviceID == initialEngine.deviceID {
+        let localID = try localDeviceID(first, .modern)
+        if message.sender == account, message.envelope.senderDeviceID == localID {
             return try await reconcileGroupEcho(account: account, message: message)
         }
-        let keys = message.envelope.keys.filter { $0.recipientJID == account && $0.deviceID == initialEngine.deviceID }
-        guard keys.count == 1 else { throw OMEMOError.notForThisDevice }
+        let keys = message.envelope.keys.filter { $0.recipientJID == account && $0.deviceID == localID }
+        if keys.count != 1 {
+            // Same rule as a direct envelope: a would-be bubble leaves a durable placeholder before the error.
+            let reason: UnreadableReason = keys.isEmpty ? .notForThisDevice : .malformedContent
+            if Self.expectsBubble(message) {
+                _ = try await store.recordUnreadableMessage(groupPlaceholder(for: message, account: account, reason: reason, sentAt: sentAt,
+                                                                             key: .ciphertext(sender: message.sender, digest: try unaddressedGroupDigest(message))))
+            }
+            throw keys.isEmpty ? OMEMOError.notForThisDevice : OMEMOError.undecryptable
+        }
         let digest = try groupDigest(message, key: keys[0])
         if try await store.hasEncryptedIncoming(accountID: account, sender: message.sender, digest: digest) {
             if let stanzaID = message.roomStanzaID {
@@ -146,7 +155,8 @@ extension OMEMOService {
             }
             return false
         }
-        let pending = try await store.pendingEncryptedIncoming(accountID: account).first { $0.sender == message.sender && $0.digest == digest }
+        // B. This ciphertext's retained row only, then the validated-archive context correction.
+        let pending = try await store.pendingEncryptedIncoming(accountID: account, sender: message.sender, digest: digest)
         var retained = try pending.map { try JSONDecoder().decode(RetainedGroupEnvelope.self, from: $0.wire) }
             ?? RetainedGroupEnvelope(message: message, sentAt: sentAt ?? Date())
         if let pending, let sentAt, message.provenance != .liveOccupant,
@@ -156,70 +166,156 @@ extension OMEMOService {
             guard try await store.replacePendingEncryptedIncomingContext(accountID: account, sender: message.sender, digest: digest,
                 expectedWire: pending.wire, wire: JSONEncoder().encode(retained)) else { throw OMEMOError.stateUnavailable }
         }
-        try await store.retainEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, wire: JSONEncoder().encode(retained))
-        if first.groupRooms[message.room] == nil || !first.devices.contains(where: { $0.jid == message.sender && $0.deviceID == message.envelope.senderDeviceID && $0.profile == .modern }) {
-            _ = try await refreshGroupLocked(account: account, room: message.room, transport: transport)
+        // C. Decide retention before any network await or trust wait. Membership that would need a room read, an
+        // unknown sender device and an unapproved one all retain first; a known room whose stored membership admits
+        // this sender and an approved sender device decrypt without the extra write (see `receiveLocked`).
+        func senderDevice(_ state: AccountEncryptionState) -> EncryptionDevice? {
+            state.devices.last { $0.jid == message.sender && $0.deviceID == message.envelope.senderDeviceID && $0.profile == .modern }
         }
-        if message.provenance != .liveOccupant, !first.devices.contains(where: { $0.jid == message.sender && $0.deviceID == message.envelope.senderDeviceID && $0.profile == .modern }) {
-            _ = try await refreshLocked(account: account, peer: message.sender, profile: .modern, transport: transport, updateSelection: false)
+        let storedMembers = first.groupRooms[message.room]
+        let membershipStale = storedMembers == nil || (message.provenance == .liveOccupant && !(storedMembers?.contains(message.sender) ?? false))
+        let known = senderDevice(first)
+        let retentionSkipped = pending == nil && !membershipStale && storedMembers?.contains(account) == true
+            && known?.trust.permitsEncryption == true
+        if pending == nil, !retentionSkipped {
+            try await store.retainEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, wire: JSONEncoder().encode(retained),
+                                                    reason: known != nil ? .trustPending : .keysPending)
         }
-        let (revision, old) = try await load(account)
-        var state = old
-        guard let members = state.groupRooms[message.room], members.contains(account), (message.provenance != .liveOccupant || members.contains(message.sender)) else { throw XMPPGroupError.incompleteMembership }
-        guard let device = state.devices.last(where: { $0.jid == message.sender && $0.deviceID == message.envelope.senderDeviceID && $0.profile == .modern }),
-              device.trust.permitsEncryption else { throw OMEMOError.trustRequired }
-        let local = try engine(state, .modern)
-        let address = DeviceAddress(jid: message.sender, deviceID: device.deviceID)
-        try local.trustIdentity(device.identityKey, for: address, resetSession: device.identityChanged)
-        if let index = state.devices.firstIndex(where: { $0.id == device.id }) { state.devices[index].identityChanged = false }
-        let key = keys[0]
-        let material = try local.decrypt(RatchetCiphertext(data: key.data, isPreKey: key.keyExchange), from: address)
-        let plaintext = try PayloadCrypto.open(SealedPayload(payload: message.envelope.payload!, keyMaterial: material, iv: nil), profile: .modern)
-        let content = try EncryptedContent.decode(plaintext, sender: message.sender, recipient: message.room, modern: true,
-                                                  sendingTime: retained.sentAt, requireGroupAffixes: true)
-        let stored: StoredMessage?
-        let reaction: AuthenticatedReaction?
-        if let update = content.reaction {
-            stored = nil
-            reaction = AuthenticatedReaction(id: content.originID ?? digest, chatID: message.room, actorID: message.sender,
-                targetWireID: update.targetWireID, reactions: update.reactions,
-                updatedAt: min(content.timestamp ?? retained.sentAt, Date()))
-        } else if content.retraction != nil {
-            // ponytail: group retract/edit is not projected yet; commit the ratchet, show nothing.
-            stored = nil; reaction = nil
-        } else {
-            guard !content.body.isEmpty else { throw OMEMOError.invalidContent }
-            stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: message.room, senderID: message.sender,
-                body: content.body, sentAt: retained.sentAt, isOutgoing: message.sender == account, reply: content.reply,
-                encryptionProfile: "modern", wireID: nil, wireIDAuthenticated: false)
-            reaction = nil
+        let context = retained
+        func hold(_ reason: PendingEncryptedReason) async throws {
+            if retentionSkipped {
+                try await store.retainEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, wire: JSONEncoder().encode(context), reason: reason)
+            } else {
+                try await store.classifyPendingEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, reason: reason)
+            }
         }
-        var control: EncryptionControl?
-        if key.keyExchange {
-            let response = try local.encrypt(Data(repeating: 0, count: 32), to: address)
-            let envelope = XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: local.deviceID,
-                keys: [XMPPOMEMOKey(recipientJID: message.sender, deviceID: device.deviceID, keyExchange: response.isPreKey, data: response.data)], payload: nil)
-            control = EncryptionControl(id: UUID().uuidString, recipient: message.sender, wire: try encodeWire(envelope))
-            state.pendingBundlePublications.insert("modern")
+        var refreshedMembers: [String]?
+        if membershipStale {
+            // Membership knowledge is insufficient: read the room and refresh every member, as before.
+            refreshedMembers = try await refreshGroupLocked(account: account, room: message.room, transport: transport).room.members
         }
-        try local.replenishPreKeys()
-        state.engines["modern"] = try local.snapshot()
-        try await store.commitEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, expectedRevision: revision,
-            state: encode(state, account: account), message: stored, control: control, reaction: reaction, groupRoom: message.room,
-            roomStanzaID: stored == nil ? nil : message.roomStanzaID)
-        if key.keyExchange { try? await flushBundlePublicationsLocked(account: account, transport: transport) }
-        return true
+        if known == nil {
+            // Only the sender device is unknown (or the room refresh did not cover this sender): one device list and one
+            // bundle, which also covers historical senders who have left the room.
+            let current = refreshedMembers == nil ? first : try await load(account).1
+            let coveredByRoomRefresh = refreshedMembers?.contains(message.sender) ?? false
+            if senderDevice(current) == nil, !coveredByRoomRefresh, message.provenance != .liveOccupant || refreshedMembers == nil {
+                try await refreshSenderDeviceLocked(account: account, owner: message.sender, deviceID: message.envelope.senderDeviceID,
+                                                    profile: .modern, transport: transport)
+            }
+        }
+        // D. Decrypt and commit.
+        do {
+            let (revision, old) = try await load(account)
+            var state = old
+            guard let members = state.groupRooms[message.room], members.contains(account), (message.provenance != .liveOccupant || members.contains(message.sender)) else { throw XMPPGroupError.incompleteMembership }
+            guard let device = senderDevice(state) else {
+                try await hold(.keysPending)
+                throw OMEMOError.trustRequired
+            }
+            guard device.trust.permitsEncryption else {
+                try await hold(.trustPending)
+                throw OMEMOError.trustRequired
+            }
+            let local = try engine(state, .modern)
+            guard local.deviceID == localID else { throw OMEMOError.stateUnavailable }
+            let address = DeviceAddress(jid: message.sender, deviceID: device.deviceID)
+            try local.trustIdentity(device.identityKey, for: address, resetSession: device.identityChanged)
+            if let index = state.devices.firstIndex(where: { $0.id == device.id }) { state.devices[index].identityChanged = false }
+            let key = keys[0]
+            let stored: StoredMessage?
+            let reaction: AuthenticatedReaction?
+            do {
+                let material = try local.decrypt(RatchetCiphertext(data: key.data, isPreKey: key.keyExchange), from: address)
+                let plaintext = try PayloadCrypto.open(SealedPayload(payload: message.envelope.payload!, keyMaterial: material, iv: nil), profile: .modern)
+                let content = try EncryptedContent.decode(plaintext, sender: message.sender, recipient: message.room, modern: true,
+                                                          sendingTime: retained.sentAt, requireGroupAffixes: true)
+                if let update = content.reaction {
+                    stored = nil
+                    reaction = AuthenticatedReaction(id: content.originID ?? digest, chatID: message.room, actorID: message.sender,
+                        targetWireID: update.targetWireID, reactions: update.reactions,
+                        updatedAt: min(content.timestamp ?? retained.sentAt, Date()))
+                } else if content.retraction != nil {
+                    // ponytail: group retract/edit is not projected yet; commit the ratchet, show nothing.
+                    stored = nil; reaction = nil
+                } else {
+                    guard !content.body.isEmpty else { throw OMEMOError.invalidContent }
+                    stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: message.room, senderID: message.sender,
+                        body: content.body, sentAt: retained.sentAt, isOutgoing: message.sender == account, reply: content.reply,
+                        encryptionProfile: "modern", wireID: nil, wireIDAuthenticated: false)
+                    reaction = nil
+                }
+            } catch is SendingTimeOutsideWindow {
+                // Context, not ciphertext: stays retained for a validated archive stamp (written below when C skipped it).
+                throw OMEMOError.invalidContent
+            } catch let error as OMEMOCryptoError where error != .invalidSnapshot {
+                // Permanent for this ciphertext: a placeholder, no group reference, no committed ratchet.
+                try await recordGroupDecryptFailure(account: account, message: message, digest: digest, sentAt: retained.sentAt)
+                throw OMEMOError.undecryptable
+            } catch OMEMOError.invalidContent {
+                try await recordGroupDecryptFailure(account: account, message: message, digest: digest, sentAt: retained.sentAt)
+                throw OMEMOError.undecryptable
+            }
+            var control: EncryptionControl?
+            if key.keyExchange {
+                let response = try local.encrypt(Data(repeating: 0, count: 32), to: address)
+                let envelope = XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: local.deviceID,
+                    keys: [XMPPOMEMOKey(recipientJID: message.sender, deviceID: device.deviceID, keyExchange: response.isPreKey, data: response.data)], payload: nil)
+                control = EncryptionControl(id: UUID().uuidString, recipient: message.sender, wire: try encodeWire(envelope))
+                state.pendingBundlePublications.insert("modern")
+            }
+            try local.replenishPreKeys()
+            state.engines["modern"] = try local.snapshot()
+            do {
+                try await store.commitEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, expectedRevision: revision,
+                    state: encode(state, account: account), message: stored, control: control, reaction: reaction, groupRoom: message.room,
+                    roomStanzaID: stored == nil ? nil : message.roomStanzaID)
+            } catch { forgetState(account); throw error }
+            committed(state, revision: revision, account: account)
+            if key.keyExchange { try? await flushBundlePublicationsLocked(account: account, transport: transport) }
+            return true
+        } catch let failure {
+            // As in `receiveLocked`: a failure without a durable outcome after skipped retention keeps the ciphertext,
+            // unless storage itself fails, in which case the caller must not acknowledge the stanza.
+            if retentionSkipped, !Self.leavesDurableOutcome(failure) {
+                do {
+                    try await store.retainEncryptedIncoming(accountID: account, sender: message.sender, digest: digest,
+                                                            wire: JSONEncoder().encode(context), reason: .trustPending)
+                } catch { throw failure }
+            }
+            throw failure
+        }
     }
     public func hasDurableGroupDisposition(account: String, message: XMPPEncryptedGroupMessage) async throws -> Bool {
         let (_, state) = try await load(account)
-        let local = try engine(state, .modern)
-        if message.sender == account, message.envelope.senderDeviceID == local.deviceID { return true }
-        let keys = message.envelope.keys.filter { $0.recipientJID == account && $0.deviceID == local.deviceID }
-        if keys.isEmpty { return true }
-        guard keys.count == 1 else { return false }
+        let localID = try localDeviceID(state, .modern)
+        if message.sender == account, message.envelope.senderDeviceID == localID { return true }
+        let keys = message.envelope.keys.filter { $0.recipientJID == account && $0.deviceID == localID }
+        if keys.count != 1 {
+            guard Self.expectsBubble(message) else { return true }
+            return try await store.hasEncryptedIncoming(accountID: account, sender: message.sender, digest: try unaddressedGroupDigest(message))
+        }
         let digest = try groupDigest(message, key: keys[0])
         if try await store.hasEncryptedIncoming(accountID: account, sender: message.sender, digest: digest) { return true }
-        return try await store.pendingEncryptedIncoming(accountID: account).contains { $0.sender == message.sender && $0.digest == digest }
+        return try await store.pendingEncryptedIncoming(accountID: account, sender: message.sender, digest: digest) != nil
+    }
+    /// The room-scoped identity of an envelope with no single key for this device.
+    func unaddressedGroupDigest(_ message: XMPPEncryptedGroupMessage) throws -> String {
+        let direct = XMPPEncryptedMessage(id: message.id, from: message.sender, to: message.room, originID: nil, envelope: message.envelope)
+        let inner = try unaddressedDigest(direct)
+        return SHA256.hash(data: Data((message.room + "\u{0}" + inner).utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+    /// Group placeholder: the room is the chat, the validated real JID is the author. Never a reaction target.
+    private func groupPlaceholder(for message: XMPPEncryptedGroupMessage, account: String, reason: UnreadableReason, sentAt: Date?,
+                                  key: UnreadableMessage.Key) -> UnreadableMessage {
+        UnreadableMessage(accountID: account, chatID: message.room, senderID: message.sender, isOutgoing: message.sender == account,
+                          sentAt: sentAt ?? Date(), reason: reason, key: key)
+    }
+    /// Records the durable `decryptFailed` placeholder for group ciphertext this device will never read. Works whether
+    /// or not a pending row exists. Never called for storage, cancellation or state errors.
+    private func recordGroupDecryptFailure(account: String, message: XMPPEncryptedGroupMessage, digest: String, sentAt: Date?) async throws {
+        try await store.recordUnreadableMessage(groupPlaceholder(for: message, account: account, reason: .decryptFailed, sentAt: sentAt,
+                                                                 key: .ciphertext(sender: message.sender, digest: digest)))
     }
     private func groupDigest(_ message: XMPPEncryptedGroupMessage, key: XMPPOMEMOKey) throws -> String {
         let direct = XMPPEncryptedMessage(id: message.id, from: message.sender, to: message.room, originID: nil, envelope: message.envelope)

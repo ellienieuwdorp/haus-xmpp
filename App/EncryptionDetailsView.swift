@@ -12,7 +12,7 @@ struct EncryptionDetailsView: View {
         List {
             if let overview = model.encryptionOverview(for: chatID) {
                 if overview.hasIncompatibleDevices {
-                    Section { Label("Some devices only support the other encryption version. Sending is paused so they are not silently left out.", systemImage: "exclamationmark.shield").font(.subheadline) }
+                    Section { Label(otherVersionNotice(overview), systemImage: "info.circle").font(.subheadline) }
                 }
                 Section {
                     devices(overview.devices.filter { $0.jid == chatID && $0.jid != model.accountID }, owner: chatID)
@@ -60,6 +60,17 @@ struct EncryptionDetailsView: View {
                 Task { await model.setDeviceTrust(device, trust: trust, chatID: chatID) }
             }
         }
+    }
+
+    /// Which devices will not receive messages in the selected version because they publish keys only in the other one.
+    private func otherVersionNotice(_ overview: EncryptionOverview) -> String {
+        func count(_ owner: String, _ label: String) -> String? {
+            let value = overview.otherVersionOnlyDevices[owner] ?? 0
+            return value > 0 ? "\(value) of \(label) devices" : nil
+        }
+        let parts = [count(model.accountID, "your"), count(chatID, "\(name)’s")].compactMap { $0 }
+        let subject = parts.isEmpty ? "Some devices" : parts.joined(separator: " and ")
+        return "\(subject) only support the other encryption version and won’t receive these messages. Messages still go to the devices listed here; switch the version below to reach the others instead."
     }
 
     /// Why a contact has nothing to review: keys missing on the server, or a list their server does not show us.

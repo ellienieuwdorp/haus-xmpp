@@ -65,13 +65,16 @@ public struct XMPPEncryptedMessage: Sendable, Equatable {
     /// Unencrypted outer `<request/>` / `<markable/>`: the sender wants a receipt or read marker back.
     public var requestsReceipt = false
     public var markable = false
+    /// Unencrypted outer `<body/>` (the XEP-0384 fallback text): a content hint only, never shown and never authenticated.
+    /// It tells an exclusion that the envelope would have been a message bubble rather than a reaction or receipt.
+    public var hasFallbackBody = false
     /// Untrusted XEP-0308 reference outside the ciphertext, the only place legacy OMEMO can carry it.
     public var replaces: String? = nil
 
     public init(id: String, from: String, to: String?, originID: String?, envelope: XMPPOMEMOEnvelope, provenance: XMPPMessageProvenance = .direct,
-                requestsReceipt: Bool = false, markable: Bool = false, replaces: String? = nil) {
+                requestsReceipt: Bool = false, markable: Bool = false, hasFallbackBody: Bool = false, replaces: String? = nil) {
         self.id = id; self.from = from; self.to = to; self.originID = originID; self.envelope = envelope; self.provenance = provenance
-        self.requestsReceipt = requestsReceipt; self.markable = markable; self.replaces = replaces
+        self.requestsReceipt = requestsReceipt; self.markable = markable; self.hasFallbackBody = hasFallbackBody; self.replaces = replaces
     }
 }
 
@@ -264,6 +267,7 @@ enum OMEMOWire {
                                     originID: origin.flatMap { validStanzaID($0) ? $0 : nil }, envelope: try parseEnvelope(encrypted), provenance: provenance,
                                     requestsReceipt: !node.children("request", namespace: "urn:xmpp:receipts").isEmpty,
                                     markable: !node.children("markable", namespace: "urn:xmpp:chat-markers:0").isEmpty,
+                                    hasFallbackBody: !node.children("body", namespace: "jabber:client").isEmpty,
                                     replaces: replace.flatMap { validStanzaID($0) ? $0 : nil })
     }
     static func validStanzaID(_ value: String) -> Bool {

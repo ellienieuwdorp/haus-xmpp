@@ -91,3 +91,68 @@ private func encryptedStoreURL() throws -> URL {
     #expect(waiting.map(\.id) == ["waiting-for-trust", "new-during-drain"])
     #expect(waiting.allSatisfy { $0.transportState == .queued })
 }
+
+@Test func pendingRowLookupIsScopedByAccountSenderAndDigest() async throws {
+    let url = try encryptedStoreURL()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    try await store.saveEncryptionState(accountID: "a", expectedRevision: nil, data: Data([1]))
+    try await store.retainEncryptedIncoming(accountID: "a", sender: "peer", digest: "d", wire: Data([7, 8]), reason: .keysPending)
+    let found = try #require(await store.pendingEncryptedIncoming(accountID: "a", sender: "peer", digest: "d"))
+    #expect(found.wire == Data([7, 8]))
+    #expect(found.reason == .keysPending)
+    #expect(found.sender == "peer" && found.digest == "d")
+    #expect(try await store.pendingEncryptedIncoming(accountID: "b", sender: "peer", digest: "d") == nil)
+    #expect(try await store.pendingEncryptedIncoming(accountID: "a", sender: "other", digest: "d") == nil)
+    #expect(try await store.pendingEncryptedIncoming(accountID: "a", sender: "peer", digest: "e") == nil)
+    let message = StoredMessage(id: "m", accountID: "a", chatID: "peer", senderID: "peer", body: "secret", encryptionProfile: "modern")
+    try await store.commitEncryptedIncoming(accountID: "a", sender: "peer", digest: "d", expectedRevision: 1, state: Data([2]), message: message)
+    #expect(try await store.pendingEncryptedIncoming(accountID: "a", sender: "peer", digest: "d") == nil)
+}
+
+@Test func pendingSummariesProjectEnvelopeFieldsWithoutTheWire() async throws {
+    let url = try encryptedStoreURL()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    let direct = Data(#"{"from":"alice@localhost/phone","provenance":"receivedCarbon","envelope":{"profile":"modern"},"sentAt":1}"#.utf8)
+    let sent = Data(#"{"from":"a@localhost/x","to":"carol@localhost","provenance":"sentCarbon"}"#.utf8)
+    let group = Data(#"{"message":{"room":"r@conference.localhost","sender":"carol@localhost"},"sentAt":1}"#.utf8)
+    let nested = Data(#"{"from":{"not":"a string"},"to":42}"#.utf8)
+    try await store.retainEncryptedIncoming(accountID: "a", sender: "alice@localhost", digest: "1", wire: direct)
+    try await store.retainEncryptedIncoming(accountID: "a", sender: "a@localhost", digest: "2", wire: sent, reason: .keysPending)
+    try await store.retainEncryptedIncoming(accountID: "a", sender: "carol@localhost", digest: "3", wire: group)
+    try await store.retainEncryptedIncoming(accountID: "a", sender: "x@localhost", digest: "4", wire: Data([1]))
+    try await store.retainEncryptedIncoming(accountID: "a", sender: "y@localhost", digest: "5", wire: nested)
+    try await store.retainEncryptedIncoming(accountID: "other", sender: "alice@localhost", digest: "1", wire: direct)
+    let summaries = try await store.pendingEncryptedIncomingSummaries(accountID: "a")
+    #expect(summaries == [
+        PendingEncryptedSummary(sender: "alice@localhost", digest: "1", reason: "trustPending", room: nil, roomSender: nil,
+                                from: "alice@localhost/phone", to: nil, provenance: "receivedCarbon"),
+        PendingEncryptedSummary(sender: "a@localhost", digest: "2", reason: "keysPending", room: nil, roomSender: nil,
+                                from: "a@localhost/x", to: "carol@localhost", provenance: "sentCarbon"),
+        PendingEncryptedSummary(sender: "carol@localhost", digest: "3", reason: "trustPending", room: "r@conference.localhost",
+                                roomSender: "carol@localhost", from: nil, to: nil, provenance: nil),
+        // Not JSON at all: every projected field is nil rather than an error.
+        PendingEncryptedSummary(sender: "x@localhost", digest: "4", reason: "trustPending", room: nil, roomSender: nil,
+                                from: nil, to: nil, provenance: nil),
+        // JSON, but the fields are not strings: never coerced into an address.
+        PendingEncryptedSummary(sender: "y@localhost", digest: "5", reason: "trustPending", room: nil, roomSender: nil,
+                                from: nil, to: nil, provenance: nil),
+    ])
+    #expect(try await store.pendingEncryptedIncomingSummaries(accountID: "nobody").isEmpty)
+}
+
+@Test func encryptionStateRevisionMatchesTheRow() async throws {
+    let url = try encryptedStoreURL()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    #expect(try await store.encryptionStateRevision(accountID: "a") == nil)
+    try await store.saveEncryptionState(accountID: "a", expectedRevision: nil, data: Data([1]))
+    #expect(try await store.encryptionStateRevision(accountID: "a") == 1)
+    try await store.saveEncryptionState(accountID: "a", expectedRevision: 1, data: Data([2]))
+    #expect(try await store.encryptionStateRevision(accountID: "a") == 2)
+    #expect(try await store.encryptionState(accountID: "a")?.revision == 2)
+    try await store.saveEncryptionState(accountID: "b", expectedRevision: nil, data: Data([3]))
+    #expect(try await store.encryptionStateRevision(accountID: "a") == 2)
+    #expect(try await store.encryptionStateRevision(accountID: "b") == 1)
+}

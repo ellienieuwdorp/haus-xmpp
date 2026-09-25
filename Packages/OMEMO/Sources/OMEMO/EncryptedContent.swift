@@ -105,7 +105,7 @@ struct EncryptedContent: Equatable {
             // A signed time is optional. When present SCE requires comparison with the
             // trusted archive/live sending context; never accept an arbitrary future time.
             let reference = sendingTime ?? Date()
-            guard abs(parsed.timeIntervalSince(reference)) <= 300 else { throw OMEMOError.invalidContent }
+            guard abs(parsed.timeIntervalSince(reference)) <= 300 else { throw SendingTimeOutsideWindow() }
             timestamp = parsed
         }
         guard let content = try? MessageContent.decode(root.children("content", namespace: ns)[0], strict: true),
@@ -151,3 +151,8 @@ struct ReactionContent: Equatable, Sendable {
     }
     static func isEmoji(_ value: String) -> Bool { MessageContent.isEmoji(value) }
 }
+
+/// The signed SCE time lies outside the window around the trusted sending context. Unlike every other content failure
+/// this depends on the context, not the ciphertext: a validated archive stamp can later make the same ciphertext valid,
+/// so the receive path keeps it retained (reported as `OMEMOError.invalidContent`) instead of declaring it unreadable.
+struct SendingTimeOutsideWindow: Error {}

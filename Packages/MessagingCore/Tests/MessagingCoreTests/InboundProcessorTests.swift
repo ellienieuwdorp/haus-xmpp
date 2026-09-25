@@ -62,6 +62,47 @@ struct InboundProcessorTests {
         #expect(try await store.events(accountID: account, chatID: peer, messageID: "t").isEmpty)
     }
 
+    private func initializedFixture() async throws -> (MessageStore, OMEMOService, InboundProcessor) {
+        let store = try MessageStore(url: FileManager.default.temporaryDirectory.appending(path: "inbound-\(UUID()).sqlite"))
+        try await store.acquireTransportOwnership()
+        let encryption = OMEMOService(store: store, protection: try StateProtection(key: Data(repeating: 7, count: 32)))
+        try await encryption.initialize(account: account, transport: NullTransport(account: account))
+        return (store, encryption, InboundProcessor(encryption: encryption, client: XMPPClient(labCertificateAuthority: nil), account: account))
+    }
+
+    /// Another device's message without a key for this one is a placeholder, not retained work: the chat needs no
+    /// review, the barrier stays acknowledgeable, and a redelivery adds nothing.
+    @Test func excludedMessageReturnsExcludedAndKeepsTheBarrierAcknowledgeable() async throws {
+        let (store, _, processor) = try await initializedFixture()
+        let envelope = XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: 4242, keys: [], payload: Data([1, 2, 3]))
+        let message = XMPPEncryptedMessage(id: "m1", from: peer + "/x", to: account, originID: nil, envelope: envelope, hasFallbackBody: true)
+        #expect(try await processor.process(.encryptedMessage(message)) == .excluded(reason: .notForThisDevice))
+        #expect(try await store.messages(accountID: account, chatID: peer).map(\.unreadableReason) == [.notForThisDevice])
+        #expect(try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: 1))) == .acknowledged)
+        #expect(try await processor.process(.encryptedMessage(message)) == .excluded(reason: .notForThisDevice))
+        #expect(try await store.messages(accountID: account, chatID: peer).count == 1)
+        #expect(try await store.pendingEncryptedIncoming(accountID: account).isEmpty)
+        // An update-shaped envelope (no hint) is excluded silently.
+        let other = XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: 4242, keys: [], payload: Data([4, 5, 6]))
+        let silent = XMPPEncryptedMessage(id: "m2", from: peer + "/x", to: account, originID: nil, envelope: other)
+        #expect(try await processor.process(.encryptedMessage(silent)) == .excluded(reason: .notForThisDevice))
+        #expect(try await store.messages(accountID: account, chatID: peer).count == 1)
+        #expect(try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: 2))) == .acknowledged)
+    }
+
+    /// Keys that address this device twice can never be decrypted safely: excluded with the decrypt-failure class,
+    /// recorded as malformed content. (A trusted peer device is not needed to reach this arm.)
+    @Test func undecryptableMessageReturnsExcludedDecryptFailed() async throws {
+        let (store, encryption, processor) = try await initializedFixture()
+        let local = try await encryption.localIdentity(account: account, profile: .legacy)
+        let key = XMPPOMEMOKey(deviceID: local.deviceID, keyExchange: false, data: Data([9, 9, 9]))
+        let envelope = XMPPOMEMOEnvelope(profile: .legacy, senderDeviceID: 4242, keys: [key, key], iv: Data(repeating: 1, count: 12), payload: Data([1, 2, 3]))
+        let message = XMPPEncryptedMessage(id: "d1", from: peer + "/x", to: account, originID: nil, envelope: envelope)
+        #expect(try await processor.process(.encryptedMessage(message)) == .excluded(reason: .decryptFailed))
+        #expect(try await store.messages(accountID: account, chatID: peer).map(\.unreadableReason) == [.malformedContent])
+        #expect(try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: 1))) == .acknowledged)
+    }
+
     /// A stanza without a durable disposition withholds the next barrier and ends the stream.
     @Test func undisposedInboundRefusesTheBarrier() async throws {
         let (store, processor) = try await fixture()
