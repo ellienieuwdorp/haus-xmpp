@@ -191,22 +191,33 @@ final class ConnectionSetupTests: XCTestCase {
         XCTAssertEqual(events.last, .catchingUp(nil))
     }
 
-    func testEitherFeatureQueryFailingFailsTheFeaturesStep() async throws {
-        for failing in ["server", "account"] {
-            let recorder = Recorder()
-            var operations = operations(recorder)
-            operations.features = {
-                try await ConnectionSetup.discoverFeatures(
-                    server: { if failing == "server" { throw XMPPIQError.stanza(condition: "service-unavailable") }; return [ConnectionSetup.carbonsFeature] },
-                    account: { if failing == "account" { throw XMPPIQError.stanza(condition: "service-unavailable") }; return [ConnectionSetup.archiveFeature] })
-            }
-            await run(operations, recorder: recorder)
-            let events = await recorder.events
-            XCTAssertEqual(events.last, .failed(step: "server features", detail: "service-unavailable"), failing)
-            XCTAssertFalse(events.contains(.ready), failing)
-            let marks = await recorder.marks
-            XCTAssertFalse(marks.contains("carbons"), failing)
+    func testAccountFeatureQueryFailingFailsTheFeaturesStepButServerQueryFailingOnlyDropsCarbons() async throws {
+        let failing = Recorder()
+        var failingOperations = operations(failing)
+        failingOperations.features = {
+            try await ConnectionSetup.discoverFeatures(server: { [ConnectionSetup.carbonsFeature] },
+                                                       account: { throw XMPPIQError.stanza(condition: "service-unavailable") })
         }
+        await run(failingOperations, recorder: failing)
+        let failingEvents = await failing.events
+        XCTAssertEqual(failingEvents.last, .failed(step: "server features", detail: "service-unavailable"))
+        XCTAssertFalse(failingEvents.contains(.ready))
+        let failingMarks = await failing.marks
+        XCTAssertFalse(failingMarks.contains("carbons"))
+
+        let tolerant = Recorder()
+        var tolerantOperations = operations(tolerant)
+        tolerantOperations.features = {
+            try await ConnectionSetup.discoverFeatures(server: { throw XMPPIQError.stanza(condition: "service-unavailable") },
+                                                       account: { [ConnectionSetup.archiveFeature] })
+        }
+        await run(tolerantOperations, recorder: tolerant)
+        let tolerantEvents = await tolerant.events
+        XCTAssertTrue(tolerantEvents.contains(.ready))
+        XCTAssertEqual(tolerantEvents.last, .catchingUp(nil))
+        let marks = await tolerant.marks
+        XCTAssertFalse(marks.contains("carbons"))
+        XCTAssertTrue(marks.contains("walk-start"))
     }
 
     func testInlineIdentityPathSkipsInitialize() async {

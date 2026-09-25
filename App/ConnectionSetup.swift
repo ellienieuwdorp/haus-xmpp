@@ -50,11 +50,14 @@ struct ConnectionSetup: Sendable {
     /// XEP-0280 on the domain (Prosody lists `urn:xmpp:carbons:2` only there) and XEP-0313 for the user's own
     /// archive on the account's bare JID, so neither query alone sees both. Both run concurrently; either
     /// failing fails the features step.
+    /// The account query decides the step (it advertises the archive); the server-domain query only adds
+    /// optional features such as carbons, so a server that refuses it degrades to "no carbons" instead of
+    /// failing the connection.
     static func discoverFeatures(server: @escaping @Sendable () async throws -> Set<String>,
                                  account: @escaping @Sendable () async throws -> Set<String>) async throws -> Set<String> {
-        async let domain = server()
+        async let domain: Set<String> = { (try? await server()) ?? [] }()
         async let own = account()
-        return try await domain.union(own)
+        return try await own.union(domain)
     }
 
     /// False when the `.online` handler already ran `initialize` inline (first connection of a new account).
