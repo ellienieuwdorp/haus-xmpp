@@ -6,31 +6,56 @@ import MessageStore
 /// This is a lookup hint, never authorization to load another account or connect a server.
 public struct NotificationDestination: Sendable, Equatable, CustomStringConvertible {
     public static let userInfoKey = "xmpp_local_destination"
+    /// What `messageID` names: an incoming message (every message notification), or this account's own message that
+    /// someone reacted to (plan D8). Only `.message` stands for something unread; read-state cleanup and message
+    /// actions ignore `.reaction`.
+    public enum Kind: String, Sendable { case message, reaction }
     public let accountScope: String
     public let messageID: String
+    public let kind: Kind
 
-    public init?(accountID: String, messageID: String) {
+    public init?(accountID: String, messageID: String, kind: Kind = .message) {
         guard !accountID.isEmpty, UUID(uuidString: messageID) != nil else { return nil }
         self.accountScope = Self.scope(for: accountID)
         self.messageID = messageID
+        self.kind = kind
     }
 
+    /// The message payload is unchanged from the single-preview design; a reaction adds `kind`.
     public init?(payload: [String: String]) {
-        guard Set(payload.keys) == ["version", "account", "message"], payload["version"] == "1",
+        let kind: Kind
+        switch Set(payload.keys) {
+        case ["version", "account", "message"]: kind = .message
+        case ["version", "account", "message", "kind"] where payload["kind"] == Kind.reaction.rawValue: kind = .reaction
+        default: return nil
+        }
+        guard payload["version"] == "1",
               let account = payload["account"], account.utf8.count == 64,
               account.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
               let message = payload["message"], message.utf8.count == 36, UUID(uuidString: message) != nil else { return nil }
-        accountScope = account; messageID = message
+        accountScope = account; messageID = message; self.kind = kind
     }
 
-    public var payload: [String: String] { ["version": "1", "account": accountScope, "message": messageID] }
+    public var payload: [String: String] {
+        var payload = ["version": "1", "account": accountScope, "message": messageID]
+        if kind == .reaction { payload["kind"] = kind.rawValue }
+        return payload
+    }
     public var description: String { "NotificationDestination(<redacted>)" }
 
+    /// The stored message a tap may open the chat of: an incoming encrypted message, or for a reaction this account's
+    /// own message in the same account. Never another account's.
     public func resolve(accountID: String, active: Bool, store: MessageStore) async throws -> StoredMessage? {
         guard active, !accountID.isEmpty, Self.scope(for: accountID) == accountScope,
               let message = try await store.message(accountID: accountID, messageID: messageID),
-              message.accountID == accountID, !message.isOutgoing, message.senderID != accountID,
-              ["legacy", "modern"].contains(message.encryptionProfile ?? "") else { return nil }
+              message.accountID == accountID else { return nil }
+        switch kind {
+        case .message:
+            guard !message.isOutgoing, message.senderID != accountID,
+                  ["legacy", "modern"].contains(message.encryptionProfile ?? "") else { return nil }
+        case .reaction:
+            guard message.isOutgoing || message.senderID == accountID else { return nil }
+        }
         return message
     }
 

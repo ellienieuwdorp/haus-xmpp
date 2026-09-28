@@ -411,6 +411,7 @@ final class AppModel {
         do {
             guard let store, let encryption else { throw MessageStoreError.invalidValue }
             try await acquireForegroundOwnership(store, token: token)
+            await dismissOpenChatNotifications(store: store, account: account)
             try await store.recoverInterruptedSubmissions(accountID: account)
             guard generation == token else { return false }
             try await connection.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
@@ -531,6 +532,8 @@ final class AppModel {
             UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
             appBadge = nil
             setAppBadge(0)
+            // Donated communication interactions name this account's contacts, rooms and avatars: they go with it.
+            await CommunicationHistory.deleteAll()
         }
         sessionAccount = nil
         notificationStatus = "Not enabled"
@@ -619,6 +622,14 @@ final class AppModel {
         }
         hasTransportOwnership = false
         try? await store?.releaseTransportOwnership()
+    }
+
+    /// Right after the lease is ours: an extension run that held it may have posted for the chat already on screen
+    /// (its candidates were read before the chat opened). Every such run is over now, so what it posted is delivered.
+    private func dismissOpenChatNotifications(store: MessageStore, account: String) async {
+        guard let chatID = openChatID, !isDemo, accountID == account, hasTransportOwnership else { return }
+        try? await store.dismissReactionNotifications(accountID: account, chatID: chatID)
+        await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID)
     }
 
     private func acquireForegroundOwnership(_ store: MessageStore, token: UUID) async throws {
@@ -1765,8 +1776,13 @@ final class AppModel {
         prepareChat(chatID)
         // The chat is on screen: its delivered notifications have done their job.
         if !isDemo { let account = accountID; Task { await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID) } }
-        // Reactions have no read state: an opened chat shows them, so waiting reaction alerts go (plan D8).
-        if let store { let account = accountID; Task { try? await store.dismissReactionNotifications(accountID: account, chatID: chatID) } }
+        // Reactions have no read state: an opened chat shows them, so waiting reaction alerts go (plan D8). Only under the
+        // transport lease: without it an extension run may be posting them right now, and the lease acquisition repeats
+        // this for the open chat once that run is over (`dismissOpenChatNotifications`).
+        if foreground, hasTransportOwnership, !quiescing, let store {
+            let account = accountID
+            Task { try? await store.dismissReactionNotifications(accountID: account, chatID: chatID) }
+        }
         // Keep the same chat's devices across pop-back and reconnect; another chat starts pending until its store read.
         if encryptionOverviewChatID != chatID { encryptionOverviewChatID = chatID; encryptionOverview = nil }
         encryptionDetailsChatID = chatID
@@ -2157,6 +2173,9 @@ final class AppModel {
             if !hasTransportOwnership { try await acquireForegroundOwnership(store, token: token) }
             guard generation == token else { return }
             try await store.setAccountPreferences(accountID: account, updated)
+            // Previews off: names and avatars donated while they were on leave the system too. The lease is held, so
+            // no extension run is donating meanwhile, and later runs read the new setting.
+            if CommunicationHistory.purgesDonations(from: accountPreferences, to: updated) { await CommunicationHistory.deleteAll() }
             guard accountID == account else { return }
             let sharedLastSeen = accountPreferences.lastSeen
             accountPreferences = updated; notificationPreviewsEnabled = updated.notificationPreviews

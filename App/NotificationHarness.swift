@@ -64,7 +64,9 @@ import MessagingCore
                                               groupMembers: [NotificationParticipant(id: "maya@preview.local", title: "Maya", avatarHash: maya)])
             ])
         let plan = NotificationPlanner.plan(batch, accountID: account, badge: 3)
-        let poster = UserNotificationPoster(avatarData: { hash in AvatarStore.notificationImageData(root: root, account: account, hash: hash) })
+        // `-notification-harness-nodonate`: the communication update alone, as when a donation fails or times out.
+        let donates = !ProcessInfo.processInfo.arguments.contains("-notification-harness-nodonate")
+        let poster = UserNotificationPoster(donates: donates, avatarData: { hash in AvatarStore.notificationImageData(root: root, account: account, hash: hash) })
         for request in plan.requests {
             do { try await poster.add(request) } catch { print("notification harness: add failed \(error)") }
             try? await Task.sleep(for: .seconds(2))

@@ -195,7 +195,8 @@ public struct NotificationPresenter: Sendable {
         let plan = NotificationPlanner.plan(batch, accountID: accountID, badge: badge)
         for request in plan.requests {
             try Task.checkCancellation()
-            try await withTimeout(addTimeout) { try await posting.add(request) }
+            // The system add keeps its whole limit; an intent donation before it has its own allowance.
+            try await withTimeout(addTimeout + posting.preparationAllowance(for: request)) { try await posting.add(request) }
         }
         try await store.removeNotificationCandidates(accountID: accountID, keys: plan.claimed)
         progress.update {
@@ -223,7 +224,7 @@ public struct NotificationPresenter: Sendable {
         let fallbacks = delivered.filter { $0.categoryIdentifier == NotificationIdentity.fallbackCategory }.map(\.identifier)
         let mine = delivered.filter { $0.categoryIdentifier == NotificationIdentity.messageCategory }
         let owned = mine.compactMap { notification -> String? in
-            if let destination = notification.destination { return destination.belongs(to: accountID) ? destination.messageID : nil }
+            if let destination = notification.destination, destination.kind == .message { return destination.belongs(to: accountID) ? destination.messageID : nil }
             if let reference = notification.reference, reference.kind == .placeholder, reference.belongs(to: accountID) { return reference.messageID }
             return nil
         }
@@ -239,19 +240,28 @@ public struct NotificationPresenter: Sendable {
             })
             messages += retained.map(\.identifier).filter { !live.contains($0) }
         }
-        // Reactions whose actor has since withdrawn them (or whose target is gone): no longer live (plan D8).
-        let reactions = mine.filter { $0.reference?.kind == .reaction && $0.reference?.belongs(to: accountID) == true }
-        if !reactions.isEmpty {
-            let targets = Set(reactions.compactMap(\.reference?.messageID).prefix(1000))
-            let live = Set(try await store.liveReactionNotifications(accountID: accountID, targetMessageIDs: targets).map {
-                NotificationIdentity.reaction(accountID: accountID, chatID: $0.chatID, actorID: $0.actorID, targetMessageID: $0.targetMessageID)
-            })
-            messages += reactions.map(\.identifier).filter { !live.contains($0) }
-        }
+        messages += try await ReactionNotificationCleanup.staleIdentifiers(store: store, accountID: accountID, delivered: delivered)
         let summary = NotificationIdentity.overflow(accountID: accountID)
         if !summaryPosted, mine.contains(where: { $0.identifier == summary }) { messages.append(summary) }
         await posting.removeDelivered(identifiers: fallbacks + messages.sorted())
         return (fallbacks.count, messages.count)
+    }
+}
+
+/// Delivered reaction notifications that are no longer current (plan D8): withdrawn in part or whole, the target gone,
+/// or the chat read or opened since they were posted (`MessageStore.liveReactionNotifications`). Shared by the
+/// extension's end-of-run cleanup and the app's cleanup after a read pointer moved.
+public enum ReactionNotificationCleanup {
+    public static func staleIdentifiers(store: MessageStore, accountID: String, delivered: [DeliveredNotification]) async throws -> [String] {
+        let reactions = delivered.filter {
+            $0.categoryIdentifier == NotificationIdentity.reactionCategory && $0.reference?.kind == .reaction && $0.reference?.belongs(to: accountID) == true
+        }
+        guard !reactions.isEmpty else { return [] }
+        let targets = Set(reactions.compactMap(\.reference?.messageID).sorted().prefix(1000))
+        let live = Set(try await store.liveReactionNotifications(accountID: accountID, targetMessageIDs: targets).map {
+            NotificationIdentity.reaction(accountID: accountID, chatID: $0.chatID, actorID: $0.actorID, targetMessageID: $0.targetMessageID)
+        })
+        return reactions.map(\.identifier).filter { !live.contains($0) }
     }
 }
 

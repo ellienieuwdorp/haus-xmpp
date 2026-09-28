@@ -29,6 +29,16 @@ final class DeliveredNotificationCleanerTests: XCTestCase {
         XCTAssertEqual(Set(identifiers), ["gateway-1", NotificationIdentity.message(accountID: account, messageID: read)])
     }
 
+    func testAReactionsOwnTargetNeverCountsAsAReadMessage() throws {
+        let mine = UUID().uuidString
+        // A reaction notification names this account's reacted-to message for the tap; reading does not make it stale here.
+        let reaction = DeliveredNotificationCleaner.Delivered(
+            request("r-1", destination: NotificationDestination(accountID: account, messageID: mine, kind: .reaction)), accountID: account)
+        XCTAssertNil(reaction.messageID)
+        XCTAssertEqual(DeliveredNotificationCleaner.identifiers(accountID: account, readMessageIDs: [mine], delivered: [reaction]),
+                       [NotificationIdentity.message(accountID: account, messageID: mine)])
+    }
+
     func testOpeningAChatRemovesOnlyItsThread() {
         let thread = NotificationIdentity.thread(accountID: account, chatID: "peer@localhost")
         let delivered = [

@@ -79,6 +79,24 @@ private func batch(_ candidates: [NotificationCandidate], previews: Bool = true)
     // Stable per ciphertext, distinct from any message identity.
     #expect(plan.requests[0].identifier == NotificationPlanner.identifier(for: pending))
     #expect(plan.requests[0].identifier.hasPrefix("m-") && plan.requests[0].identifier != plan.requests[2].identifier)
+    // Neither retained ciphertext (possibly a stranger awaiting trust) nor an undecryptable placeholder makes its sender
+    // a communication partner: they post plain even with previews on. A committed message does.
+    #expect(plan.requests.allSatisfy { $0.communication == nil })
+    #expect(NotificationPlanner.plan(batch([candidate(UUID().uuidString)])).requests.first?.communication != nil)
+}
+
+@Test func reactionDestinationsRoundTripAndLeaveMessagePayloadsUnchanged() throws {
+    let id = UUID().uuidString
+    let message = try #require(NotificationDestination(accountID: account, messageID: id))
+    #expect(message.kind == .message && Set(message.payload.keys) == ["version", "account", "message"])
+    #expect(NotificationDestination(payload: message.payload) == message)
+    let reaction = try #require(NotificationDestination(accountID: account, messageID: id, kind: .reaction))
+    #expect(reaction.payload["kind"] == "reaction" && NotificationDestination(payload: reaction.payload) == reaction)
+    #expect(reaction != message)
+    var unknown = reaction.payload; unknown["kind"] = "message"
+    #expect(NotificationDestination(payload: unknown) == nil, "only the reaction kind is spelled out")
+    var extra = message.payload; extra["title"] = "Bob"
+    #expect(NotificationDestination(payload: extra) == nil)
 }
 
 @Test func retractedMessagesAreClaimedButNeverShownAndOlderOnesSummarize() {
@@ -207,12 +225,17 @@ private func reaction(_ emoji: [String], chat: String = "peer@example.org", acto
     #expect(plan.requests[0].identifier == NotificationIdentity.reaction(accountID: account, chatID: "peer@example.org", actorID: "peer@example.org",
                                                                           targetMessageID: direct.target.id))
     #expect(plan.requests[0].threadIdentifier == NotificationIdentity.thread(accountID: account, chatID: "peer@example.org"))
-    // No tap destination (the target is our own message); a cleanup reference that names only the local message ID.
-    #expect(plan.requests[0].destination == nil && plan.requests[0].reference == .reaction(accountID: account, targetMessageID: direct.target.id))
+    // A tap opens the reacted-to own message's chat; a cleanup reference that names only the local message ID.
+    let destination = try #require(plan.requests[0].destination)
+    #expect(destination.kind == .reaction && destination.messageID == direct.target.id && destination.belongs(to: account))
+    #expect(plan.requests[0].reference == .reaction(accountID: account, targetMessageID: direct.target.id))
     #expect(plan.requests[1].communication?.sender.handle == "bob@x" && plan.requests[1].communication?.groupName == "Book club")
     #expect(plan.requests[1].communication?.body.hasPrefix("Reacted ❤️🔥 to “long long") == true)
     #expect(plan.requests[0].communication?.body == plan.requests[0].body)
-    #expect(plan.requests.allSatisfy { $0.badge == 2 && $0.categoryIdentifier == NotificationIdentity.messageCategory })
+    #expect(plan.requests.allSatisfy { $0.badge == 2 })
+    // Reactions have their own category, without the message actions; the message keeps its own.
+    #expect(plan.requests.map(\.categoryIdentifier) == [NotificationIdentity.reactionCategory, NotificationIdentity.reactionCategory,
+                                                        NotificationIdentity.messageCategory])
     #expect(plan.claimed.count == 3)
     // The identifier is per actor and target, whatever the emoji.
     #expect(NotificationPlanner.plan(MessageNotification(candidates: [], claimed: [], previewsEnabled: true, reactions: [reaction(["🎉"], sequence: 9)]))

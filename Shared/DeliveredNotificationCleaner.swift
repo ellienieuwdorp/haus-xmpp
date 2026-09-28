@@ -25,7 +25,8 @@ enum DeliveredNotificationCleaner {
             let destination = (request.content.userInfo[NotificationDestination.userInfoKey] as? [String: String]).flatMap(NotificationDestination.init(payload:))
             // Scope first: the payload names a message only within the account it was posted for.
             let scope = NotificationDestination(accountID: accountID, messageID: UUID().uuidString)?.accountScope
-            messageID = destination.flatMap { $0.accountScope == scope ? $0.messageID : nil }
+            // A reaction's destination names this account's own reacted-to message, which says nothing about reading.
+            messageID = destination.flatMap { $0.accountScope == scope && $0.kind == .message ? $0.messageID : nil }
         }
     }
 
@@ -59,13 +60,21 @@ enum DeliveredNotificationCleaner {
     /// Asks the store which delivered messages are now at or below their chat's read pointer and removes them. For the
     /// app after any pointer moved (a local read, another device's marker, an XEP-0490 item), and for the extension at
     /// the end of a run.
+    /// Reaction notifications go the same way: a pointer that moved after they were posted means the chat was seen
+    /// (`ReactionNotificationCleanup`, which also drops ones withdrawn in part or whole).
     static func removeRead(accountID: String, store: MessageStore, center: UNUserNotificationCenter = .current()) async throws {
-        let delivered = await deliveredRequests(accountID: accountID, center: center)
+        let notifications = await center.deliveredNotifications()
+        let delivered = notifications.map { Delivered($0.request, accountID: accountID) }
         let named = Set(delivered.compactMap(\.messageID))
-        guard !named.isEmpty else { return }
-        // The store bounds one question to 1,000 ids; Notification Center holds far fewer.
-        let read = try await store.readNotificationMessageIDs(accountID: accountID, messageIDs: Set(named.sorted().prefix(1_000)))
-        remove(identifiers(accountID: accountID, readMessageIDs: read, delivered: delivered), center: center)
+        var stale: [String] = []
+        if !named.isEmpty {
+            // The store bounds one question to 1,000 ids; Notification Center holds far fewer.
+            let read = try await store.readNotificationMessageIDs(accountID: accountID, messageIDs: Set(named.sorted().prefix(1_000)))
+            stale = identifiers(accountID: accountID, readMessageIDs: read, delivered: delivered)
+        }
+        stale += try await ReactionNotificationCleanup.staleIdentifiers(store: store, accountID: accountID,
+                                                                         delivered: notifications.map { DeliveredNotification($0.request) })
+        remove(Array(Set(stale)).sorted(), center: center)
     }
 
     /// After a completed catch-up the "You may have new messages" fallback and the deferred-chats summary are answered:

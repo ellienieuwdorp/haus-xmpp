@@ -115,6 +115,60 @@ private func waiting(_ store: MessageStore) async throws -> [String] {
     }
 }
 
+/// Posts whatever waits, as a settled extension run does, and returns which (actor, target) notifications are current.
+private func postAndCheck(_ store: MessageStore, targets: Set<String> = ["mine"]) async throws -> Set<String> {
+    let batch = try await store.pendingNotifications(accountID: account)
+    try await store.removeNotificationCandidates(accountID: account, keys: batch.claimed)
+    return try await live(store, targets: targets)
+}
+
+private func live(_ store: MessageStore, targets: Set<String> = ["mine"]) async throws -> Set<String> {
+    Set(try await store.liveReactionNotifications(accountID: account, targetMessageIDs: targets).map { "\($0.actorID)>\($0.targetMessageID)" })
+}
+
+@Test func aDeliveredReactionStaysCurrentOnlyWhileEverythingItShowedRemainsAndTheChatIsUnseen() async throws {
+    try await reactionStore { store, _ in
+        try await insert(store, "mine")
+        try await insert(store, "incoming", sender: peer, at: 1)
+        try await react(store, "r1", target: "mine", ["❤️", "👍"], at: 100)
+        #expect(try await postAndCheck(store) == ["peer@example.org>mine"])
+        // Dropping an emoji the notification showed makes it stale, although another one is still there.
+        try await react(store, "r2", target: "mine", ["❤️"], at: 110)
+        #expect(try await waiting(store).isEmpty, "a removal never re-alerts")
+        #expect(try await live(store).isEmpty)
+        // A new emoji alerts again and becomes what the notification shows.
+        try await react(store, "r3", target: "mine", ["❤️", "🔥"], at: 120)
+        #expect(try await waiting(store) == ["peer@example.org>mine:🔥"])
+        #expect(try await live(store) == ["peer@example.org>mine"], "a waiting replacement keeps it until the next run replaces it")
+        #expect(try await postAndCheck(store) == ["peer@example.org>mine"])
+        // Dropping an emoji it did not show changes nothing.
+        try await react(store, "r4", target: "mine", ["🔥"], at: 130)
+        #expect(try await live(store) == ["peer@example.org>mine"])
+        // Read here or on another device after it was posted: seen.
+        #expect(try await store.markRead(accountID: account, chatID: peer, throughMessageID: "incoming"))
+        #expect(try await live(store).isEmpty)
+    }
+}
+
+@Test func openingAChatEndsItsReactionNotificationsAndNeedsTheTransportLease() async throws {
+    try await reactionStore { store, _ in
+        try await insert(store, "mine")
+        try await react(store, "r1", target: "mine", ["👍"], at: 100)
+        #expect(try await postAndCheck(store) == ["peer@example.org>mine"])
+        try await react(store, "r2", target: "mine", ["👍", "🎉"], at: 110)
+        // Without the lease an extension run may already hold these candidates: the app must not race it.
+        try await store.releaseTransportOwnership()
+        await #expect(throws: MessageStoreError.transportOwnershipRequired) {
+            try await store.dismissReactionNotifications(accountID: account, chatID: peer)
+        }
+        #expect(try await waiting(store).count == 1)
+        try await store.acquireTransportOwnership()
+        try await store.dismissReactionNotifications(accountID: account, chatID: peer)
+        #expect(try await waiting(store).isEmpty)
+        #expect(try await live(store).isEmpty)
+    }
+}
+
 @Test func muteSwitchReadingOpeningAndHistoryStopReactionAlerts() async throws {
     try await reactionStore { store, _ in
         try await insert(store, "mine")
@@ -214,13 +268,14 @@ private func waiting(_ store: MessageStore) async throws -> [String] {
     try await store.close()
     var db: OpaquePointer?
     #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, "DROP TABLE reaction_notification_candidates; ALTER TABLE account_preferences DROP COLUMN reaction_alerts; PRAGMA user_version=20;", nil, nil, nil) == SQLITE_OK)
+    #expect(sqlite3_exec(db, "DROP TABLE reaction_notification_candidates; DROP TABLE reaction_notifications_posted; ALTER TABLE account_preferences DROP COLUMN reaction_alerts; PRAGMA user_version=20;", nil, nil, nil) == SQLITE_OK)
     sqlite3_close(db)
     let migrated = try MessageStore(url: url)
     #expect(try await migrated.accountPreferences(accountID: account) == AccountPreferences(readReceipts: false, reactionNotifications: true))
     try await migrated.acquireTransportOwnership()
     try await migrated.setAccountPreferences(accountID: account, AccountPreferences(reactionNotifications: false))
     #expect(try await migrated.pendingReactionCandidates(accountID: account).isEmpty)
+    #expect(try await migrated.liveReactionNotifications(accountID: account, targetMessageIDs: ["none"]).isEmpty, "the posted table exists again")
     try await migrated.close()
     let reopened = try MessageStore(url: url)
     #expect(try await reopened.accountPreferences(accountID: account).reactionNotifications == false)

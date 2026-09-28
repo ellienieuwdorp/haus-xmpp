@@ -316,6 +316,16 @@ public actor MessageStore {
                     FOREIGN KEY(account_id,target_message_id) REFERENCES messages(account_id,id) ON DELETE CASCADE
                 )
                 """)
+            // What a run posted per actor and target, so cleanup can tell a delivered reaction notification that still
+            // matches the actor's reaction from one that was withdrawn (in part or whole) or seen since (plan D8).
+            try connection.execute("""
+                CREATE TABLE IF NOT EXISTS reaction_notifications_posted (
+                    account_id TEXT NOT NULL, chat_id TEXT NOT NULL, actor_id TEXT NOT NULL, target_message_id TEXT NOT NULL,
+                    reactions_json TEXT NOT NULL,
+                    PRIMARY KEY(account_id,chat_id,actor_id,target_message_id),
+                    FOREIGN KEY(account_id,target_message_id) REFERENCES messages(account_id,id) ON DELETE CASCADE
+                )
+                """)
             try connection.execute("PRAGMA user_version = 21")
         }
     }
@@ -1165,10 +1175,16 @@ public actor MessageStore {
         }
     }
 
-    /// The chat was opened: its reactions are on screen, so none of them may still alert (plan D8). Reactions have no
-    /// read pointer of their own. Delivered ones go with the chat's thread (`DeliveredNotificationCleaner.removeThread`).
+    /// The chat was opened: its reactions are on screen, so none of them may still alert, and none that was delivered is
+    /// current any more (plan D8). Reactions have no read pointer of their own. Delivered ones go with the chat's thread
+    /// (`DeliveredNotificationCleaner.removeThread`). Like `dismissPendingMessageNotifications` it needs the transport
+    /// lease, so it cannot race an extension run that already read the candidates it is about to post.
     public func dismissReactionNotifications(accountID: String, chatID: String) throws {
-        try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=? AND chat_id=?", [.text(accountID), .text(chatID)])
+        try requireTransportOwnership()
+        try connection.transaction {
+            try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=? AND chat_id=?", [.text(accountID), .text(chatID)])
+            try connection.execute("DELETE FROM reaction_notifications_posted WHERE account_id=? AND chat_id=?", [.text(accountID), .text(chatID)])
+        }
     }
 
     /// Plan D8 cap: reaction requests per run. Older reaction rows of the same run are claimed without a request.
@@ -1353,15 +1369,28 @@ public actor MessageStore {
         return (result.reversed(), rows.map { .reaction(sequence: $0[0].integer) })
     }
 
-    /// Of the reaction notifications cleanup finds delivered, keyed by their target messages: which actors still have a
-    /// reaction on each of this account's messages. A delivered one missing here was withdrawn (or its target is gone).
+    /// Of the reaction notifications cleanup finds delivered, keyed by their target messages: which are still current.
+    /// One is current while a newer version waits to replace it, or while everything it showed is still among the
+    /// actor's reactions. A delivered one missing here was withdrawn, in part or whole, its target is gone, or its chat
+    /// was read or opened since it was posted (reactions have no read state of their own).
     public func liveReactionNotifications(accountID: String, targetMessageIDs: Set<String>) throws -> Set<LiveReactionNotification> {
         guard targetMessageIDs.count <= 1000 else { throw MessageStoreError.invalidValue }
         var live = Set<LiveReactionNotification>()
         for id in targetMessageIDs.sorted() {
             guard let stored = try message(accountID: accountID, messageID: id), stored.isOutgoing || stored.senderID == accountID else { continue }
-            for reaction in try reactions(accountID: accountID, chatID: stored.chatID, messageID: id) where reaction.actorID != accountID && !reaction.reactions.isEmpty {
-                live.insert(LiveReactionNotification(chatID: stored.chatID, actorID: reaction.actorID, targetMessageID: id))
+            let current = Dictionary(try reactions(accountID: accountID, chatID: stored.chatID, messageID: id).map { ($0.actorID, Set($0.reactions)) },
+                                     uniquingKeysWith: { first, _ in first })
+            let waiting = Set(try connection.query("SELECT actor_id FROM reaction_notification_candidates WHERE account_id=? AND chat_id=? AND target_message_id=?",
+                                                   [.text(accountID), .text(stored.chatID), .text(id)]).map { $0[0].string })
+            let posted = try connection.query("SELECT actor_id,reactions_json FROM reaction_notifications_posted WHERE account_id=? AND chat_id=? AND target_message_id=?",
+                                              [.text(accountID), .text(stored.chatID), .text(id)])
+            var actors = waiting
+            for row in posted {
+                let shown = Set((try? JSONDecoder().decode([String].self, from: Data(row[1].string.utf8))) ?? [])
+                if let now = current[row[0].string], !shown.isEmpty, shown.isSubset(of: now) { actors.insert(row[0].string) }
+            }
+            for actor in actors where actor != accountID {
+                live.insert(LiveReactionNotification(chatID: stored.chatID, actorID: actor, targetMessageID: id))
             }
         }
         return live
@@ -1386,6 +1415,13 @@ public actor MessageStore {
                     try connection.execute("DELETE FROM pending_notification_candidates WHERE account_id=? AND sender=? AND digest=?",
                                            [.text(accountID), .text(sender), .text(digest)])
                 case let .reaction(sequence):
+                    // Remember what was posted; a replacement that arrived meanwhile has a new sequence and stays.
+                    try connection.execute("""
+                        INSERT INTO reaction_notifications_posted(account_id,chat_id,actor_id,target_message_id,reactions_json)
+                        SELECT account_id,chat_id,actor_id,target_message_id,reactions_json FROM reaction_notification_candidates
+                        WHERE account_id=? AND sequence=?
+                        ON CONFLICT(account_id,chat_id,actor_id,target_message_id) DO UPDATE SET reactions_json=excluded.reactions_json
+                        """, [.text(accountID), .integer(sequence)])
                     try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=? AND sequence=?",
                                            [.text(accountID), .integer(sequence)])
                 }
@@ -1808,8 +1844,10 @@ public actor MessageStore {
             DELETE FROM pending_notification_candidates WHERE account_id=?1 AND chat_id=?2
             AND sent_at <= (SELECT read_sent_at FROM chat_read_state WHERE account_id=?1 AND chat_id=?2)
             """, Array(values.prefix(2)))
-        // Reactions have no read state of their own: the chat was read after they arrived, so they were seen (plan D8).
+        // Reactions have no read state of their own: the chat was read after they arrived, so they were seen (plan D8), and
+        // delivered ones are no longer current (cleanup removes them, here or on the next extension run).
         try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=? AND chat_id=?", Array(values.prefix(2)))
+        try connection.execute("DELETE FROM reaction_notifications_posted WHERE account_id=? AND chat_id=?", Array(values.prefix(2)))
         return true
     }
 
@@ -2112,6 +2150,7 @@ public actor MessageStore {
             // An unsent message no longer deserves an alert; a corrected one alerts with its new text through the projection.
             try connection.execute("DELETE FROM notification_candidates WHERE account_id=? AND message_id=?", [.text(accountID), .text(target.id)])
             try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=? AND target_message_id=?", [.text(accountID), .text(target.id)])
+            try connection.execute("DELETE FROM reaction_notifications_posted WHERE account_id=? AND target_message_id=?", [.text(accountID), .text(target.id)])
         }
     }
 

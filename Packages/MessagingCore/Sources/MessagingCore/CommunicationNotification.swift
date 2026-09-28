@@ -1,6 +1,7 @@
 #if canImport(Intents) && canImport(UserNotifications)
 import Foundation
 import Intents
+import MessageStore
 import os
 import UserNotifications
 
@@ -31,18 +32,64 @@ public enum CommunicationNotification {
         return intent
     }
 
-    /// Donates the incoming interaction (bounded by `donationTimeout`) and returns the content updated from the intent,
-    /// or nil when either step fails; the caller then posts `content` as it is. The result is not mutated further.
-    public static func content(_ content: UNNotificationContent, intent: INSendMessageIntent, donate: Bool = true,
-                               donationTimeout: Duration = .milliseconds(1500)) async -> UNNotificationContent? {
-        if donate {
-            let interaction = Unchecked(INInteraction(intent: intent, response: nil))
-            interaction.value.direction = .incoming
-            do { try await withTimeout(donationTimeout) { try await interaction.value.donate() } }
-            catch { log.notice("communication donation failed: \(Self.describe(error), privacy: .public)"); return nil }
+    /// Donates one interaction; injectable for tests.
+    public typealias Donate = @Sendable (INInteraction) async throws -> Void
+
+    /// The system donation, through its completion handler.
+    public static let systemDonate: Donate = { interaction in
+        let box = Unchecked(interaction)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            box.value.donate { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
         }
-        do { return try content.updating(from: intent) }
+    }
+
+    /// The incoming interaction donated for one request. Its group identifier is the conversation identifier
+    /// (`NotificationIdentity.thread`), so a conversation's donations can be deleted together (`CommunicationHistory`).
+    public static func interaction(for intent: INSendMessageIntent) -> INInteraction {
+        let interaction = INInteraction(intent: intent, response: nil)
+        interaction.direction = .incoming
+        interaction.groupIdentifier = intent.conversationIdentifier
+        return interaction
+    }
+
+    /// Donates the incoming interaction (bounded by `donationTimeout`), then returns the content updated from the
+    /// intent, or nil when the update fails; the caller then posts `content` as it is. The result is not mutated further.
+    /// The update does not depend on the donation: a donation that fails or times out (a cold Intents service) is logged
+    /// and the communication style is still applied.
+    public static func content(_ content: UNNotificationContent, intent: INSendMessageIntent,
+                               donate: Donate? = systemDonate,
+                               donationTimeout: Duration = .milliseconds(1500),
+                               update: (UNNotificationContent, INSendMessageIntent) throws -> UNNotificationContent = { try $0.updating(from: $1) })
+    async -> UNNotificationContent? {
+        if let donate {
+            let interaction = Unchecked(interaction(for: intent))
+            do { try await withTimeout(donationTimeout) { try await donate(interaction.value) } }
+            catch { log.notice("communication donation failed: \(Self.describe(error), privacy: .public)") }
+        }
+        do { return try update(content, intent) }
         catch { log.notice("communication update failed: \(Self.describe(error), privacy: .public)"); return nil }
+    }
+}
+
+/// Deletes donated interactions (Apple, "INInteraction.deleteAll(completion:)", accessed 2026-09-28). Each donation
+/// holds a contact's address, name and avatar and the conversation identifier; they feed system suggestions. Signing
+/// out and turning previews off both delete them all: the app has one account, and previews off means no name or
+/// avatar should stay with the system.
+public enum CommunicationHistory {
+    /// The deletion the app runs, injectable for tests.
+    public typealias DeleteAll = @Sendable () async throws -> Void
+
+    /// Whether a preferences change must delete the donations: previews went from shown to hidden.
+    public static func purgesDonations(from old: AccountPreferences, to new: AccountPreferences) -> Bool {
+        old.notificationPreviews && !new.notificationPreviews
+    }
+
+    /// Best effort: a failure is logged (domain and code only) and never blocks sign-out or the setting.
+    public static func deleteAll(_ delete: DeleteAll = { try await INInteraction.deleteAll() }) async {
+        do { try await delete() }
+        catch { log.notice("communication history deletion failed: \(CommunicationNotification.describe(error), privacy: .public)") }
     }
 }
 

@@ -11,7 +11,8 @@ public struct PlannedNotification: Sendable, Equatable, CustomStringConvertible 
     public let body: String
     /// Only the newest request of a run plays a sound.
     public let playsSound: Bool
-    /// Tap routing, unchanged from the single-preview design; nil for placeholders, retained ciphertext and reactions.
+    /// Tap routing, unchanged from the single-preview design for messages; a reaction's names the reacted-to own
+    /// message (kind `.reaction`); nil for placeholders and retained ciphertext.
     public let destination: NotificationDestination?
     /// Who the notification is from, for a communication notification (`INSendMessageIntent`). Only when previews are
     /// shown: with previews off no name or avatar reaches the system.
@@ -138,20 +139,24 @@ public enum NotificationPlanner {
             let more = earlier > 0 ? "\nand \(earlier) more" : ""
             let body = (previews ? (candidate.isGroup ? senderName(candidate) + ": " + text : text) : hiddenBody) + more
             let destination: NotificationDestination?, reference: NotificationReference?
+            // Only a committed, authenticated message makes its sender a communication partner. Retained ciphertext
+            // (possibly a stranger's first contact, before any key is trusted) and a placeholder this device could not
+            // decrypt post plain: the system must not learn an unauthenticated sender for suggestions or priority.
+            let authenticated: Bool
             switch candidate.content {
             case let .message(message):
-                destination = NotificationDestination(accountID: candidate.accountID, messageID: message.id); reference = nil
+                destination = NotificationDestination(accountID: candidate.accountID, messageID: message.id); reference = nil; authenticated = true
             case let .unreadable(messageID):
-                destination = nil; reference = .placeholder(accountID: candidate.accountID, messageID: messageID)
+                destination = nil; reference = .placeholder(accountID: candidate.accountID, messageID: messageID); authenticated = false
             case .pendingEncrypted:
-                destination = nil; reference = .retained(accountID: candidate.accountID)
+                destination = nil; reference = .retained(accountID: candidate.accountID); authenticated = false
             }
             let thread = NotificationIdentity.thread(accountID: candidate.accountID, chatID: candidate.chatID)
             let chatName = clean(displayName(candidate.chatID, title: candidate.chatTitle), limit: 80, maximumBytes: 320)
             timed.append((candidate.sentAt, PlannedNotification(
                 identifier: identifier(for: candidate), threadIdentifier: thread,
                 title: previews ? chatName : "", body: body, playsSound: false, destination: destination,
-                communication: previews ? communication(accountID: candidate.accountID, thread: thread, chatName: chatName, chatAvatarHash: candidate.chatAvatarHash,
+                communication: previews && authenticated ? communication(accountID: candidate.accountID, thread: thread, chatName: chatName, chatAvatarHash: candidate.chatAvatarHash,
                                                         isGroup: candidate.isGroup, sender: NotificationParticipant(id: candidate.senderID, title: candidate.senderTitle,
                                                                                                                     avatarHash: candidate.senderAvatarHash),
                                                         members: candidate.groupMembers, body: text + more) : nil,
@@ -163,8 +168,9 @@ public enum NotificationPlanner {
             timed.append((reaction.reactedAt, PlannedNotification(
                 identifier: NotificationIdentity.reaction(accountID: reaction.accountID, chatID: reaction.chatID, actorID: reaction.actor.id,
                                                           targetMessageID: reaction.target.id),
-                threadIdentifier: thread, title: previews ? chatName : "", body: previews ? reactionBody(reaction) : hiddenReactionBody,
-                playsSound: false, destination: nil,
+                threadIdentifier: thread, categoryIdentifier: NotificationIdentity.reactionCategory,
+                title: previews ? chatName : "", body: previews ? reactionBody(reaction) : hiddenReactionBody, playsSound: false,
+                destination: NotificationDestination(accountID: reaction.accountID, messageID: reaction.target.id, kind: .reaction),
                 communication: previews ? communication(accountID: reaction.accountID, thread: thread, chatName: chatName, chatAvatarHash: reaction.chatAvatarHash,
                                                         isGroup: reaction.isGroup, sender: reaction.actor, members: reaction.groupMembers,
                                                         body: reactionBody(reaction, namingActor: false)) : nil,
