@@ -269,7 +269,7 @@ extension OMEMOService {
             do {
                 try await store.commitEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, expectedRevision: revision,
                     state: encode(state, account: account), message: stored, control: control, reaction: reaction, groupRoom: message.room,
-                    roomStanzaID: stored == nil ? nil : message.roomStanzaID)
+                    roomStanzaID: stored == nil ? nil : message.roomStanzaID, groupMembers: members)
             } catch { forgetState(account); throw error }
             committed(state, revision: revision, account: account)
             if key.keyExchange { try? await flushBundlePublicationsLocked(account: account, transport: transport) }

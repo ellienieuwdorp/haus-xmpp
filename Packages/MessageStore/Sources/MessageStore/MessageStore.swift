@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 17 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 20 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -233,7 +233,18 @@ public actor MessageStore {
             if try connection.query("SELECT 1 FROM pragma_table_info('account_preferences') WHERE name='last_seen'").isEmpty {
                 try connection.execute("ALTER TABLE account_preferences ADD COLUMN last_seen INTEGER NOT NULL DEFAULT 1")
             }
-            try connection.execute("PRAGMA user_version = 17")
+            // v20: per-chat notification level and mute, and the own room nickname for mention detection. Local only;
+            // column checks keep it idempotent whatever order the v18/v19 migrations land in.
+            if try connection.query("SELECT 1 FROM pragma_table_info('chats') WHERE name='notification_level'").isEmpty {
+                try connection.execute("ALTER TABLE chats ADD COLUMN notification_level TEXT NOT NULL DEFAULT 'all' CHECK(notification_level IN ('all','mentions'))")
+            }
+            if try connection.query("SELECT 1 FROM pragma_table_info('chats') WHERE name='muted_until'").isEmpty {
+                try connection.execute("ALTER TABLE chats ADD COLUMN muted_until REAL")
+            }
+            if try connection.query("SELECT 1 FROM pragma_table_info('chats') WHERE name='room_nickname'").isEmpty {
+                try connection.execute("ALTER TABLE chats ADD COLUMN room_nickname TEXT")
+            }
+            try connection.execute("PRAGMA user_version = 20")
         }
     }
 
@@ -454,7 +465,8 @@ public actor MessageStore {
     /// state and the sender's retraction/correction, plus the strongest peer receipt. Same result
     /// as `messages(limit: 1)` + `events` per chat (see `ChatListQueryTests`).
     public func chats(accountID: String) throws -> [StoredChat] {
-        try connection.query(Self.chatListSQL, [.text(accountID)]).map { row in
+        let notifications = try chatNotificationSettings(accountID: accountID)
+        return try connection.query(Self.chatListSQL, [.text(accountID)]).map { row in
             var last: StoredMessage? = nil
             let message = Array(row[Self.chatListPrefix...])           // Self.columns order
             if case .text = message[1] {                               // id present: the chat has a message
@@ -476,7 +488,8 @@ public actor MessageStore {
             let receipt: MessageEventKind? = last?.isOutgoing == true
                 ? (row[18].integer != 0 ? .displayed : row[17].integer != 0 ? .delivered : nil) : nil
             return StoredChat(id: row[0].string, accountID: accountID, title: row[1].string, isPinned: row[2].integer != 0,
-                              lastMessage: last, avatarHash: row[3].optionalString, lastMessageReceipt: receipt)
+                              lastMessage: last, avatarHash: row[3].optionalString, lastMessageReceipt: receipt,
+                              notification: notifications[row[0].string] ?? ChatNotificationSetting())
         }
     }
 
@@ -856,12 +869,13 @@ public actor MessageStore {
     /// A key-transport-only message commits state and replay outcome without creating an empty bubble.
     public func commitEncryptedIncoming(accountID: String, sender: String, digest: String,
                                         expectedRevision: Int, state: Data, message: StoredMessage?, control: EncryptionControl? = nil, reaction: AuthenticatedReaction? = nil,
-                                        event: MessageEvent? = nil, groupRoom: String? = nil, roomStanzaID: String? = nil) throws {
+                                        event: MessageEvent? = nil, groupRoom: String? = nil, roomStanzaID: String? = nil,
+                                        groupMembers: [String] = []) throws {
         guard !sender.isEmpty, !digest.isEmpty,
               message.map({ $0.accountID == accountID && $0.senderID == sender && $0.encryptionProfile != nil }) ?? true else { throw MessageStoreError.invalidValue }
         if let groupRoom {
             guard message.map({ $0.chatID == groupRoom }) ?? reaction.map({ $0.chatID == groupRoom }) ?? false, event == nil else { throw MessageStoreError.invalidValue }
-        } else if roomStanzaID != nil { throw MessageStoreError.invalidValue }
+        } else if roomStanzaID != nil || !groupMembers.isEmpty { throw MessageStoreError.invalidValue }
         try connection.transaction {
             guard try !hasEncryptedIncoming(accountID: accountID, sender: sender, digest: digest) else { throw MessageStoreError.invalidTransition }
             try writeEncryptionState(accountID: accountID, expectedRevision: expectedRevision, data: state)
@@ -882,7 +896,7 @@ public actor MessageStore {
                     try connection.execute("INSERT INTO group_ciphertext_messages VALUES(?,?,?,?)", [.text(accountID), .text(sender), .text(digest), .text(message.id)])
                     if let roomStanzaID { try bindGroupReference(accountID: accountID, room: groupRoom, messageID: message.id, stanzaID: roomStanzaID) }
                 }
-                if inserted, try queuesNotification(accountID: accountID, message: message) {
+                if inserted, try queuesNotification(accountID: accountID, message: message, groupMembers: groupMembers) {
                     try connection.execute("INSERT INTO notification_candidates(account_id,message_id) VALUES(?,?)", [.text(accountID), .text(message.id)])
                 }
             }
@@ -897,8 +911,80 @@ public actor MessageStore {
 
     /// Whether a newly committed incoming message may alert. Each notification rule (own/outgoing,
     /// read pointer, mute) is its own small condition here; runs inside the commit transaction.
-    private func queuesNotification(accountID: String, message: StoredMessage) throws -> Bool {
-        !message.isOutgoing && message.senderID != accountID
+    /// `groupMembers` are the room's members at decryption (bare JIDs), for the mass-mention rule.
+    private func queuesNotification(accountID: String, message: StoredMessage, groupMembers: [String] = []) throws -> Bool {
+        guard !message.isOutgoing, message.senderID != accountID else { return false }
+        return try chatNotificationAllows(accountID: accountID, message: message, groupMembers: groupMembers)
+    }
+
+    /// Mute and mentions (plan D7): a muted chat queues nothing; a mentions-only chat queues a message whose
+    /// decrypted body mentions this account. Reads only local state; nothing here reaches the server.
+    private func chatNotificationAllows(accountID: String, message: StoredMessage, groupMembers: [String], now: Date = Date()) throws -> Bool {
+        guard let row = try connection.query("SELECT notification_level,muted_until,room_nickname FROM chats WHERE account_id=? AND id=?",
+                                             [.text(accountID), .text(message.chatID)]).first else { return true }
+        let setting = Self.notificationSetting(level: row[0], mutedUntil: row[1])
+        if setting.isMuted(at: now) { return false }
+        switch setting.level {
+        case .all: return true
+        case .mentions: return Mention.mentions(message.body, account: accountID, nickname: row[2].optionalString, members: groupMembers)
+        }
+    }
+
+    private static func notificationSetting(level: Value, mutedUntil: Value) -> ChatNotificationSetting {
+        let until: Date?
+        switch mutedUntil {
+        case .real(let seconds): until = Date(timeIntervalSince1970: seconds)
+        case .integer(let seconds): until = Date(timeIntervalSince1970: TimeInterval(seconds))
+        default: until = nil
+        }
+        return ChatNotificationSetting(level: ChatNotificationLevel(rawValue: level.string) ?? .all, mutedUntil: until)
+    }
+
+    public func chatNotificationSetting(accountID: String, chatID: String) throws -> ChatNotificationSetting {
+        guard let row = try connection.query("SELECT notification_level,muted_until FROM chats WHERE account_id=? AND id=?",
+                                             [.text(accountID), .text(chatID)]).first else { return ChatNotificationSetting() }
+        return Self.notificationSetting(level: row[0], mutedUntil: row[1])
+    }
+
+    /// Every chat of the account with a setting other than the default, by chat ID.
+    public func chatNotificationSettings(accountID: String) throws -> [String: ChatNotificationSetting] {
+        var result: [String: ChatNotificationSetting] = [:]
+        for row in try connection.query("SELECT id,notification_level,muted_until FROM chats WHERE account_id=? AND (notification_level<>'all' OR muted_until IS NOT NULL)", [.text(accountID)]) {
+            result[row[0].string] = Self.notificationSetting(level: row[1], mutedUntil: row[2])
+        }
+        return result
+    }
+
+    /// Local only. A mute that is in force deletes the chat's pending candidates in the same transaction, so a later
+    /// extension run cannot alert for them; notifications already delivered stay (muting stops future alerts only).
+    /// A level change applies to messages committed afterwards.
+    public func setChatNotificationSetting(accountID: String, chatID: String, _ setting: ChatNotificationSetting) throws {
+        guard !accountID.isEmpty, !chatID.isEmpty, setting.mutedUntil.map({ $0.timeIntervalSince1970.isFinite }) ?? true else { throw MessageStoreError.invalidValue }
+        try connection.transaction {
+            try connection.execute("UPDATE chats SET notification_level=?,muted_until=? WHERE account_id=? AND id=?",
+                                   [.text(setting.level.rawValue), setting.mutedUntil.map { .real($0.timeIntervalSince1970) } ?? .null, .text(accountID), .text(chatID)])
+            guard try connection.query("SELECT changes()").first?[0].integer == 1 else { throw MessageStoreError.invalidValue }
+            if setting.isMuted() {
+                try connection.execute("""
+                    DELETE FROM notification_candidates WHERE account_id=?1
+                    AND message_id IN (SELECT id FROM messages WHERE account_id=?1 AND chat_id=?2)
+                    """, [.text(accountID), .text(chatID)])
+            }
+        }
+    }
+
+    /// This account's own nickname in `room`, kept on the device so a commit (app or extension) can detect mentions.
+    public func setGroupNickname(accountID: String, room: String, nickname: String) throws {
+        guard !accountID.isEmpty, !room.isEmpty, !nickname.isEmpty, nickname.utf8.count <= 128 else { throw MessageStoreError.invalidValue }
+        try connection.transaction {
+            try connection.execute("UPDATE chats SET room_nickname=? WHERE account_id=? AND id=?", [.text(nickname), .text(accountID), .text(room)])
+            guard try connection.query("SELECT changes()").first?[0].integer == 1 else { throw MessageStoreError.invalidValue }
+        }
+    }
+
+    /// Test seam: the queued candidates' message IDs, oldest first.
+    func pendingNotificationMessageIDs(accountID: String) throws -> [String] {
+        try connection.query("SELECT message_id FROM notification_candidates WHERE account_id=? ORDER BY sequence", [.text(accountID)]).map { $0[0].string }
     }
 
     public func notificationPreviewsEnabled(accountID: String) throws -> Bool { try accountPreferences(accountID: accountID).notificationPreviews }

@@ -103,14 +103,14 @@ struct ChatDetailsView: View {
                         Label {
                             Text(isGroup ? "Group details" : "Devices & Encryption").foregroundStyle(.primary)
                         } icon: {
-                            Image(systemName: isGroup ? "person.2" : "key").foregroundStyle(.white)
-                                .frame(width: 30, height: 30).background(.tint, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            DetailsIconTile(systemName: isGroup ? "person.2" : "key")
                         }
                         Spacer()
                         if let count = deviceCount { Text(count).foregroundStyle(.secondary) }
                     }
                 }
                 .accessibilityIdentifier("encryptionDetails")
+                ChatNotificationRow(model: model, chatID: chatID)
             } header: {
                 VStack(spacing: 0) {
                     hero
