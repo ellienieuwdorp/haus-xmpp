@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 20 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 21 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -302,7 +302,21 @@ public actor MessageStore {
             if try connection.query("SELECT 1 FROM pragma_table_info('chats') WHERE name='room_nickname'").isEmpty {
                 try connection.execute("ALTER TABLE chats ADD COLUMN room_nickname TEXT")
             }
-            try connection.execute("PRAGMA user_version = 20")
+            // v21: others' authenticated reactions to this account's own messages may alert (plan D8), behind a per-account
+            // switch that defaults on. One row per actor and target: a replacement updates it, a removal deletes it.
+            // Column and table checks keep it idempotent in any merge order.
+            if try connection.query("SELECT 1 FROM pragma_table_info('account_preferences') WHERE name='reaction_alerts'").isEmpty {
+                try connection.execute("ALTER TABLE account_preferences ADD COLUMN reaction_alerts INTEGER NOT NULL DEFAULT 1")
+            }
+            try connection.execute("""
+                CREATE TABLE IF NOT EXISTS reaction_notification_candidates (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, chat_id TEXT NOT NULL,
+                    actor_id TEXT NOT NULL, target_message_id TEXT NOT NULL, reactions_json TEXT NOT NULL, reacted_at REAL NOT NULL,
+                    UNIQUE(account_id,chat_id,actor_id,target_message_id),
+                    FOREIGN KEY(account_id,target_message_id) REFERENCES messages(account_id,id) ON DELETE CASCADE
+                )
+                """)
+            try connection.execute("PRAGMA user_version = 21")
         }
     }
 
@@ -983,7 +997,10 @@ public actor MessageStore {
             try writeEncryptionState(accountID: accountID, expectedRevision: expectedRevision, data: state)
             if let reaction {
                 guard message == nil, reaction.actorID == sender else { throw MessageStoreError.invalidValue }
+                // Authenticated (SCE) reactions only reach here; plaintext ones go through `recordReaction` and never alert.
+                let previous = try latestReaction(accountID: accountID, reaction: reaction)
                 try insertEvent(accountID: accountID, event: try reaction.event(), groupRoom: groupRoom)
+                try queueReactionNotification(accountID: accountID, reaction: reaction, previous: previous)
             }
             if let event {
                 // Authenticated content about another message, never a bubble of its own: a peer's receipt, or a retraction/correction.
@@ -1078,6 +1095,7 @@ public actor MessageStore {
                     AND message_id IN (SELECT id FROM messages WHERE account_id=?1 AND chat_id=?2)
                     """, [.text(accountID), .text(chatID)])
                 try connection.execute("DELETE FROM pending_notification_candidates WHERE account_id=? AND chat_id=?", [.text(accountID), .text(chatID)])
+                try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=? AND chat_id=?", [.text(accountID), .text(chatID)])
             }
         }
     }
@@ -1117,16 +1135,23 @@ public actor MessageStore {
     }
 
     public func accountPreferences(accountID: String) throws -> AccountPreferences {
-        guard let row = try connection.query("SELECT previews,delivery_receipts,read_receipts,last_seen FROM account_preferences WHERE account_id=?", [.text(accountID)]).first else { return AccountPreferences() }
-        return AccountPreferences(notificationPreviews: row[0].integer != 0, deliveryReceipts: row[1].integer != 0, readReceipts: row[2].integer != 0, lastSeen: row[3].integer != 0)
+        guard let row = try connection.query("SELECT previews,delivery_receipts,read_receipts,last_seen,reaction_alerts FROM account_preferences WHERE account_id=?", [.text(accountID)]).first else { return AccountPreferences() }
+        return AccountPreferences(notificationPreviews: row[0].integer != 0, deliveryReceipts: row[1].integer != 0, readReceipts: row[2].integer != 0, lastSeen: row[3].integer != 0,
+                                  reactionNotifications: row[4].integer != 0)
     }
 
+    /// Turning reaction alerts off also drops the reaction candidates still waiting, so a later run cannot post them.
     public func setAccountPreferences(accountID: String, _ preferences: AccountPreferences) throws {
         try requireTransportOwnership()
         guard !accountID.isEmpty else { throw MessageStoreError.invalidValue }
-        try connection.execute("INSERT INTO account_preferences(account_id,previews,delivery_receipts,read_receipts,last_seen) VALUES(?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET previews=excluded.previews,delivery_receipts=excluded.delivery_receipts,read_receipts=excluded.read_receipts,last_seen=excluded.last_seen",
-                               [.text(accountID), .integer(preferences.notificationPreviews ? 1 : 0), .integer(preferences.deliveryReceipts ? 1 : 0),
-                                .integer(preferences.readReceipts ? 1 : 0), .integer(preferences.lastSeen ? 1 : 0)])
+        try connection.transaction {
+            try connection.execute("INSERT INTO account_preferences(account_id,previews,delivery_receipts,read_receipts,last_seen,reaction_alerts) VALUES(?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET previews=excluded.previews,delivery_receipts=excluded.delivery_receipts,read_receipts=excluded.read_receipts,last_seen=excluded.last_seen,reaction_alerts=excluded.reaction_alerts",
+                                   [.text(accountID), .integer(preferences.notificationPreviews ? 1 : 0), .integer(preferences.deliveryReceipts ? 1 : 0),
+                                    .integer(preferences.readReceipts ? 1 : 0), .integer(preferences.lastSeen ? 1 : 0), .integer(preferences.reactionNotifications ? 1 : 0)])
+            if !preferences.reactionNotifications {
+                try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=?", [.text(accountID)])
+            }
+        }
     }
 
     /// The foreground owner has already presented these messages. This is notification
@@ -1136,8 +1161,18 @@ public actor MessageStore {
         try connection.transaction {
             try connection.execute("DELETE FROM notification_candidates WHERE account_id=?", [.text(accountID)])
             try connection.execute("DELETE FROM pending_notification_candidates WHERE account_id=?", [.text(accountID)])
+            try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=?", [.text(accountID)])
         }
     }
+
+    /// The chat was opened: its reactions are on screen, so none of them may still alert (plan D8). Reactions have no
+    /// read pointer of their own. Delivered ones go with the chat's thread (`DeliveredNotificationCleaner.removeThread`).
+    public func dismissReactionNotifications(accountID: String, chatID: String) throws {
+        try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=? AND chat_id=?", [.text(accountID), .text(chatID)])
+    }
+
+    /// Plan D8 cap: reaction requests per run. Older reaction rows of the same run are claimed without a request.
+    public static let reactionNotificationsPerRun = 8
 
     /// Plan D4 limits: requests per chat and per run.
     public static let notificationsPerChat = 8
@@ -1187,9 +1222,10 @@ public actor MessageStore {
             let result = selected.reversed().map { entry in
                 oldestSelected[entry.row.chatID] == entry.row.key ? entry.candidate.withEarlierCount(earlier[entry.row.chatID] ?? 0) : entry.candidate
             }
-            return MessageNotification(candidates: result, claimed: selected.map(\.row.key) + silent + summarized.map(\.key),
+            let (reactions, reactionClaims) = try pendingReactionNotifications(accountID: accountID)
+            return MessageNotification(candidates: result, claimed: selected.map(\.row.key) + silent + summarized.map(\.key) + reactionClaims,
                                        deferredCount: deferred.count, deferredChatCount: Set(deferred.map(\.chatID)).count,
-                                       previewsEnabled: try notificationPreviewsEnabled(accountID: accountID))
+                                       previewsEnabled: try notificationPreviewsEnabled(accountID: accountID), reactions: reactions)
         }
     }
 
@@ -1207,13 +1243,134 @@ public actor MessageStore {
             }
         case let .pending(sender, _):
             senderID = sender; when = sentAt; content = .pendingEncrypted
+        case .reaction:
+            return nil
         }
         let chat = try connection.query("SELECT title,avatar_hash FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(chatID)]).first
         let isGroup = chatID != senderID
-        let senderTitle = isGroup ? try connection.query("SELECT title FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(senderID)]).first?[0].string : nil
+        let sender = isGroup ? try participant(accountID: accountID, id: senderID) : nil
         return NotificationCandidate(key: key, accountID: accountID, chatID: chatID, chatTitle: chat?[0].string, chatAvatarHash: chat?[1].optionalString,
-                                     senderID: senderID, senderTitle: senderTitle, isGroup: isGroup, sentAt: when, content: content,
-                                     earlierCount: earlierCount)
+                                     senderID: senderID, senderTitle: sender?.title, senderAvatarHash: sender?.avatarHash, isGroup: isGroup,
+                                     sentAt: when, content: content, earlierCount: earlierCount,
+                                     groupMembers: isGroup ? try groupMembers(accountID: accountID, room: chatID, excluding: senderID) : [])
+    }
+
+    /// A person as notifications name them: the title and avatar of their direct chat, when there is one.
+    private func participant(accountID: String, id: String) throws -> NotificationParticipant {
+        let row = try connection.query("SELECT title,avatar_hash FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(id)]).first
+        return NotificationParticipant(id: id, title: row?[0].string, avatarHash: row?[1].optionalString)
+    }
+
+    /// Other members a room's recent history shows (never the account itself), newest speakers first, at most eight.
+    /// Local knowledge only: a communication notification names them as the conversation's other recipients.
+    private func groupMembers(accountID: String, room: String, excluding author: String) throws -> [NotificationParticipant] {
+        try connection.query("""
+            SELECT sender_id FROM (SELECT sender_id,MAX(sent_at) AS newest FROM (
+                SELECT sender_id,sent_at FROM messages WHERE account_id=?1 AND chat_id=?2 ORDER BY sent_at DESC,id DESC LIMIT 200)
+            WHERE sender_id<>?1 AND sender_id<>?3 AND sender_id<>?2 GROUP BY sender_id) ORDER BY newest DESC,sender_id LIMIT 8
+            """, [.text(accountID), .text(room), .text(author)]).map { try participant(accountID: accountID, id: $0[0].string) }
+    }
+
+    // MARK: Reaction notifications (plan D8)
+
+    /// This actor's newest stored reaction set on the same target wire ID, before a new event is inserted.
+    private func latestReaction(accountID: String, reaction: AuthenticatedReaction) throws -> (id: String, reactions: [String])? {
+        guard let row = try connection.query("""
+            SELECT id,payload_json FROM message_events WHERE account_id=? AND chat_id=? AND actor_id=? AND target_wire_id=? AND kind='reaction'
+            ORDER BY updated_at DESC,id DESC LIMIT 1
+            """, [.text(accountID), .text(reaction.chatID), .text(reaction.actorID), .text(reaction.targetWireID)]).first else { return nil }
+        return (row[0].string, (try? JSONDecoder().decode([String].self, from: Data(row[1].string.utf8))) ?? [])
+    }
+
+    /// Inside the commit transaction of an authenticated reaction. Another person's reaction to one of this account's
+    /// messages becomes (or replaces) one candidate per actor and target, holding the emoji they added. A removal, or a
+    /// replacement that drops emoji, trims or deletes the waiting candidate; delivered notifications of a withdrawn
+    /// reaction are removed by cleanup (`liveReactionNotifications`). Never for own reactions, reactions to other
+    /// people's messages, an event older than the actor's newest, a muted chat, history before the archive baseline, or
+    /// with the account's reaction switch off.
+    private func queueReactionNotification(accountID: String, reaction: AuthenticatedReaction, previous: (id: String, reactions: [String])?) throws {
+        guard reaction.actorID != accountID,
+              let latest = try latestReaction(accountID: accountID, reaction: reaction), latest.id == reaction.id,
+              let target = try reactionTarget(accountID: accountID, chatID: reaction.chatID, wireID: reaction.targetWireID),
+              target.isOutgoing || target.senderID == accountID else { return }
+        let key: [Value] = [.text(accountID), .text(reaction.chatID), .text(reaction.actorID), .text(target.id)]
+        let waiting = try connection.query("""
+            SELECT reactions_json FROM reaction_notification_candidates WHERE account_id=? AND chat_id=? AND actor_id=? AND target_message_id=?
+            """, key).first.map { (try? JSONDecoder().decode([String].self, from: Data($0[0].string.utf8))) ?? [] }
+        let current = Set(reaction.reactions)
+        let added = current.subtracting(previous.map { previous in previous.id == reaction.id ? current : Set(previous.reactions) } ?? [])
+        var shown: [String]
+        if added.isEmpty {
+            guard let waiting else { return }
+            shown = waiting.filter(current.contains)
+        } else {
+            guard try accountPreferences(accountID: accountID).reactionNotifications,
+                  try !chatNotificationSetting(accountID: accountID, chatID: reaction.chatID).isMuted(),
+                  try !isReactionHistory(accountID: accountID, chatID: reaction.chatID, at: reaction.updatedAt) else { return }
+            shown = Array(Set(waiting ?? []).intersection(current).union(added))
+        }
+        shown.sort()
+        // A new row (and sequence) per version: a run that claimed the old one deletes only what it posted.
+        try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=? AND chat_id=? AND actor_id=? AND target_message_id=?", key)
+        guard !shown.isEmpty else { return }
+        try connection.execute("""
+            INSERT INTO reaction_notification_candidates(account_id,chat_id,actor_id,target_message_id,reactions_json,reacted_at) VALUES(?,?,?,?,?,?)
+            """, key + [.text(try Self.reactionJSON(shown)), .real(reaction.updatedAt.timeIntervalSince1970)])
+    }
+
+    /// No newer than the history baseline of the archive that holds the chat: fetched history, never news.
+    private func isReactionHistory(accountID: String, chatID: String, at date: Date) throws -> Bool {
+        try !connection.query("""
+            SELECT 1 WHERE ?3 <= COALESCE((SELECT sent_at FROM read_baselines WHERE account_id=?1 AND archive_id=?2),
+                                          (SELECT sent_at FROM read_baselines WHERE account_id=?1 AND archive_id=?1), -1e308)
+            """, [.text(accountID), .text(chatID), .real(date.timeIntervalSince1970)]).isEmpty
+    }
+
+    /// Runs inside `pendingNotifications`' transaction: the newest reaction rows (at most `reactionNotificationsPerRun`
+    /// with a current target) oldest first, and every row considered, which the run deletes after posting.
+    private func pendingReactionNotifications(accountID: String) throws -> ([ReactionNotificationCandidate], [NotificationCandidateKey]) {
+        let rows = try connection.query("""
+            SELECT sequence,chat_id,actor_id,target_message_id,reactions_json,reacted_at FROM reaction_notification_candidates
+            WHERE account_id=? ORDER BY reacted_at DESC,sequence DESC LIMIT 200
+            """, [.text(accountID)])
+        var result: [ReactionNotificationCandidate] = []
+        for row in rows where result.count < Self.reactionNotificationsPerRun {
+            let chatID = row[1].string, actorID = row[2].string
+            guard let stored = try message(accountID: accountID, messageID: row[3].string), stored.chatID == chatID,
+                  stored.isOutgoing || stored.senderID == accountID,
+                  let reactions = try? JSONDecoder().decode([String].self, from: Data(row[4].string.utf8)), !reactions.isEmpty else { continue }
+            let target = stored.applying(try events(accountID: accountID, chatID: chatID, messageID: stored.id))
+            guard !target.isRetracted else { continue }
+            let chat = try connection.query("SELECT title,avatar_hash FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(chatID)]).first
+            let isGroup = chatID != actorID
+            result.append(ReactionNotificationCandidate(key: .reaction(sequence: row[0].integer), accountID: accountID, chatID: chatID,
+                chatTitle: chat?[0].string, chatAvatarHash: chat?[1].optionalString,
+                actor: isGroup ? try participant(accountID: accountID, id: actorID)
+                               : NotificationParticipant(id: actorID, title: chat?[0].string, avatarHash: chat?[1].optionalString),
+                isGroup: isGroup, target: target, reactions: reactions, reactedAt: Date(timeIntervalSince1970: row[5].double),
+                groupMembers: isGroup ? try groupMembers(accountID: accountID, room: chatID, excluding: actorID) : []))
+        }
+        return (result.reversed(), rows.map { .reaction(sequence: $0[0].integer) })
+    }
+
+    /// Of the reaction notifications cleanup finds delivered, keyed by their target messages: which actors still have a
+    /// reaction on each of this account's messages. A delivered one missing here was withdrawn (or its target is gone).
+    public func liveReactionNotifications(accountID: String, targetMessageIDs: Set<String>) throws -> Set<LiveReactionNotification> {
+        guard targetMessageIDs.count <= 1000 else { throw MessageStoreError.invalidValue }
+        var live = Set<LiveReactionNotification>()
+        for id in targetMessageIDs.sorted() {
+            guard let stored = try message(accountID: accountID, messageID: id), stored.isOutgoing || stored.senderID == accountID else { continue }
+            for reaction in try reactions(accountID: accountID, chatID: stored.chatID, messageID: id) where reaction.actorID != accountID && !reaction.reactions.isEmpty {
+                live.insert(LiveReactionNotification(chatID: stored.chatID, actorID: reaction.actorID, targetMessageID: id))
+            }
+        }
+        return live
+    }
+
+    /// Test seam: each waiting reaction candidate as (actor, target message, emoji), oldest first.
+    func pendingReactionCandidates(accountID: String) throws -> [(actor: String, target: String, reactions: [String])] {
+        try connection.query("SELECT actor_id,target_message_id,reactions_json FROM reaction_notification_candidates WHERE account_id=? ORDER BY sequence", [.text(accountID)])
+            .map { ($0[0].string, $0[1].string, (try? JSONDecoder().decode([String].self, from: Data($0[2].string.utf8))) ?? []) }
     }
 
     /// Deletes exactly the claimed rows, after their requests were posted. Rows that disappeared meanwhile are ignored.
@@ -1228,6 +1385,9 @@ public actor MessageStore {
                 case let .pending(sender, digest):
                     try connection.execute("DELETE FROM pending_notification_candidates WHERE account_id=? AND sender=? AND digest=?",
                                            [.text(accountID), .text(sender), .text(digest)])
+                case let .reaction(sequence):
+                    try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=? AND sequence=?",
+                                           [.text(accountID), .integer(sequence)])
                 }
             }
         }
@@ -1612,6 +1772,11 @@ public actor MessageStore {
                 SELECT m.id FROM notification_candidates n JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id
                 \(Self.readJoins) WHERE n.account_id=?1 AND NOT \(Self.unreadCondition))
             """, [.text(accountID)])
+        try connection.execute("""
+            DELETE FROM reaction_notification_candidates WHERE account_id=?1 AND reacted_at <= COALESCE(
+                (SELECT sent_at FROM read_baselines WHERE account_id=?1 AND archive_id=reaction_notification_candidates.chat_id),
+                (SELECT sent_at FROM read_baselines WHERE account_id=?1 AND archive_id=?1), -1e308)
+            """, [.text(accountID)])
     }
 
     private static func validStanzaID(_ value: String) -> Bool {
@@ -1643,6 +1808,8 @@ public actor MessageStore {
             DELETE FROM pending_notification_candidates WHERE account_id=?1 AND chat_id=?2
             AND sent_at <= (SELECT read_sent_at FROM chat_read_state WHERE account_id=?1 AND chat_id=?2)
             """, Array(values.prefix(2)))
+        // Reactions have no read state of their own: the chat was read after they arrived, so they were seen (plan D8).
+        try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=? AND chat_id=?", Array(values.prefix(2)))
         return true
     }
 
@@ -1944,6 +2111,7 @@ public actor MessageStore {
         if event.kind == .retraction, let target = try reactionTarget(accountID: accountID, chatID: event.chatID, wireID: event.targetWireID), target.senderID == event.actorID {
             // An unsent message no longer deserves an alert; a corrected one alerts with its new text through the projection.
             try connection.execute("DELETE FROM notification_candidates WHERE account_id=? AND message_id=?", [.text(accountID), .text(target.id)])
+            try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=? AND target_message_id=?", [.text(accountID), .text(target.id)])
         }
     }
 

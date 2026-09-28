@@ -95,7 +95,7 @@ private func receipt(_ id: String, kind: MessageEventKind, actor: String = "peer
     #expect(try await reopened.accountPreferences(accountID: "self").lastSeen == false)
     try await reopened.close()
     #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, "PRAGMA user_version=21;", nil, nil, nil) == SQLITE_OK)
+    #expect(sqlite3_exec(db, "PRAGMA user_version=22;", nil, nil, nil) == SQLITE_OK)
     sqlite3_close(db)
     #expect(throws: MessageStoreError.self) { try MessageStore(url: url) }
 }

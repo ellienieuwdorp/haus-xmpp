@@ -154,9 +154,9 @@ private func deliver(_ store: MessageStore, _ id: String, chat: String = "peer@e
     try await migrated.close()
     try await MessageStore(url: url).close()
     #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, "PRAGMA user_version=21;", nil, nil, nil) == SQLITE_OK)
+    #expect(sqlite3_exec(db, "PRAGMA user_version=22;", nil, nil, nil) == SQLITE_OK)
     sqlite3_close(db)
-    #expect(throws: MessageStoreError.unsupportedSchema(21)) { _ = try MessageStore(url: url) }
+    #expect(throws: MessageStoreError.unsupportedSchema(22)) { _ = try MessageStore(url: url) }
 }
 
 @Test func mentionDetectionIsCaseInsensitiveOnWordBoundaries() {

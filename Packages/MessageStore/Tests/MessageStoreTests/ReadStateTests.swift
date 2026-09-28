@@ -102,7 +102,7 @@ private func execute(_ url: URL, _ sql: String) -> Bool {
         #expect(try await upgraded.readPointer(accountID: account, chatID: peer)?.publishPending == false)
         #expect(try await upgraded.unreadCounts(accountID: account).isEmpty)
         #expect(try await upgraded.takeMessageNotification(accountID: account).messageCount == 0)
-        #expect(rows(url, "PRAGMA user_version") == [["20"]])
+        #expect(rows(url, "PRAGMA user_version") == [["21"]])
         // The walked archive's baseline is its newest stored message: backfill of an older chat is history, not news.
         #expect(rows(url, "SELECT archive_id,CAST(sent_at AS INTEGER) FROM read_baselines") == [[account, "1800000002"]])
         try await commit(upgraded, digest: "old", sender: "old@x", message: message("o1", at: 0, chat: "old@x", sender: "old@x"))
