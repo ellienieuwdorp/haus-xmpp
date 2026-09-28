@@ -1128,9 +1128,11 @@ public actor MessageStore {
     /// or another (MAM catch-up of history an other device displayed), so it never alerts. The row exists already.
     private func isAfterReadPointer(accountID: String, message: StoredMessage) throws -> Bool {
         if try connection.query("SELECT 1 FROM messages WHERE account_id=? AND id=?", [.text(accountID), .text(message.id)]).isEmpty {
-            // Retained ciphertext (plan D5) has no row yet: compare its time with the chat's pointer.
-            return try connection.query("SELECT 1 FROM chat_read_state WHERE account_id=? AND chat_id=? AND read_sent_at>=?",
-                                        [.text(accountID), .text(message.chatID), .real(message.sentAt.timeIntervalSince1970)]).isEmpty
+            // Retained ciphertext (plan D5) has no row yet: compare its time with the chat's pointer and with the history
+            // baseline of the archive that holds the chat, the same two rules a message row is held to.
+            guard try connection.query("SELECT 1 FROM chat_read_state WHERE account_id=? AND chat_id=? AND read_sent_at>=?",
+                                       [.text(accountID), .text(message.chatID), .real(message.sentAt.timeIntervalSince1970)]).isEmpty else { return false }
+            return try !isReactionHistory(accountID: accountID, chatID: message.chatID, at: message.sentAt)
         }
         return try connection.query("SELECT 1 FROM messages m \(Self.readJoins) WHERE m.account_id=?1 AND m.id=?2 AND NOT \(Self.unreadCondition)",
                              [.text(accountID), .text(message.id)]).isEmpty
@@ -1334,7 +1336,8 @@ public actor MessageStore {
             """, key + [.text(try Self.reactionJSON(shown)), .real(reaction.updatedAt.timeIntervalSince1970)])
     }
 
-    /// No newer than the history baseline of the archive that holds the chat: fetched history, never news.
+    /// No newer than the history baseline of the archive that holds the chat: fetched history, never news. Shared by
+    /// reactions and retained ciphertext, which have no message row to hold to `unreadCondition`.
     private func isReactionHistory(accountID: String, chatID: String, at date: Date) throws -> Bool {
         try !connection.query("""
             SELECT 1 WHERE ?3 <= COALESCE((SELECT sent_at FROM read_baselines WHERE account_id=?1 AND archive_id=?2),
@@ -1807,6 +1810,12 @@ public actor MessageStore {
             DELETE FROM notification_candidates WHERE account_id=?1 AND message_id IN (
                 SELECT m.id FROM notification_candidates n JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id
                 \(Self.readJoins) WHERE n.account_id=?1 AND NOT \(Self.unreadCondition))
+            """, [.text(accountID)])
+        // Retained ciphertext from the same history page was retained before the baseline existed (plan D5 review alerts).
+        try connection.execute("""
+            DELETE FROM pending_notification_candidates WHERE account_id=?1 AND sent_at <= COALESCE(
+                (SELECT sent_at FROM read_baselines WHERE account_id=?1 AND archive_id=pending_notification_candidates.chat_id),
+                (SELECT sent_at FROM read_baselines WHERE account_id=?1 AND archive_id=?1), -1e308)
             """, [.text(accountID)])
         try connection.execute("""
             DELETE FROM reaction_notification_candidates WHERE account_id=?1 AND reacted_at <= COALESCE(

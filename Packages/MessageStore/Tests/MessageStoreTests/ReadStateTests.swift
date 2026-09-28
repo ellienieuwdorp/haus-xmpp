@@ -268,3 +268,28 @@ private func execute(_ url: URL, _ sql: String) -> Bool {
         #expect(try await store.pendingDisplayedSyncPublications(accountID: account).isEmpty)
     }
 }
+
+/// Retained ciphertext waiting for trust or keys (plan D5) is held to the same history rule as a message row: what the
+/// first archive page or a later backfill brings from before the baseline never asks for review, and a candidate the
+/// first page retained before its baseline existed goes when the baseline is recorded. Newer ciphertext still alerts.
+@Test func retainedHistoryCiphertextDoesNotAlert() async throws {
+    try await readStateStore { store, _ in
+        let at = { (second: Double) in Date(timeIntervalSince1970: 1_800_000_000 + second) }
+        // First page: one message and one retained ciphertext, both from before this device joined.
+        try await commit(store, digest: "d1", message: message("m1", at: 2), archiveStanzaID: "s1")
+        try await store.retainEncryptedIncoming(accountID: account, sender: peer, digest: "p1", wire: Data([1]),
+                                                notification: PendingNotificationContext(chatID: peer, sentAt: at(1)))
+        #expect(try await store.pendingNotifications(accountID: account).claimed.count == 2)
+        try await store.saveNewestArchivePage(accountID: account, archiveID: account, cursor: "c2", oldestID: "c1", complete: false,
+                                              historyThrough: at(2))
+        #expect(try await store.pendingNotifications(accountID: account).claimed.isEmpty)
+        // Backfill from further back retains more history: no candidate.
+        try await store.retainEncryptedIncoming(accountID: account, sender: "old@x", digest: "p0", wire: Data([2]),
+                                                notification: PendingNotificationContext(chatID: "old@x", sentAt: at(0.5)))
+        #expect(try await store.pendingNotifications(accountID: account).claimed.isEmpty)
+        // News after the baseline still asks for review.
+        try await store.retainEncryptedIncoming(accountID: account, sender: peer, digest: "p3", wire: Data([3]),
+                                                notification: PendingNotificationContext(chatID: peer, sentAt: at(3)))
+        #expect(try await store.pendingNotifications(accountID: account).claimed == [.pending(sender: peer, digest: "p3")])
+    }
+}
