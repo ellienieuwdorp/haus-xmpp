@@ -68,6 +68,16 @@ enum DeliveredNotificationCleaner {
         remove(identifiers(accountID: accountID, readMessageIDs: read, delivered: delivered), center: center)
     }
 
+    /// After a completed catch-up the "You may have new messages" fallback and the deferred-chats summary are answered:
+    /// the messages they stood for are in the app now.
+    static func removeCatchUpPlaceholders(accountID: String, center: UNUserNotificationCenter = .current()) async {
+        let overflow = NotificationIdentity.overflow(accountID: accountID)
+        let stale = await center.deliveredNotifications()
+            .filter { $0.request.content.categoryIdentifier == NotificationIdentity.fallbackCategory || $0.request.identifier == overflow }
+            .map(\.request.identifier)
+        remove(stale, center: center)
+    }
+
     private static func deliveredRequests(accountID: String, center: UNUserNotificationCenter) async -> [Delivered] {
         await center.deliveredNotifications().map { Delivered($0.request, accountID: accountID) }
     }

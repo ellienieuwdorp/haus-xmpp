@@ -929,15 +929,22 @@ public actor OMEMOService {
         // acknowledged and the archive cursor does not move, so a process death before the commit below is redelivered,
         // and nothing was written. A retry keeps its row until the commit deletes it.
         let retentionSkipped = previous == nil && known?.trust.permitsEncryption == true
+        // Plan D5: someone else's message waiting for trust or keys still alerts, with review wording and no content.
+        // Own-device sends (sent carbons, own other devices) never do; the store applies the shared rules as well. Only
+        // an envelope that would have been a bubble alerts (the placeholder rule): a key transport, or an SCE reaction,
+        // receipt or retraction, must not ask the user to review a message.
+        let alert = sender == account || !Self.expectsBubble(message) ? nil
+            : PendingNotificationContext(chatID: sender, sentAt: retained.sentAt ?? Date())
         if previous == nil, !retentionSkipped {
             try await store.retainEncryptedIncoming(accountID: account, sender: sender, digest: digest, wire: JSONEncoder().encode(retained),
-                                                    reason: known == nil ? .keysPending : .trustPending)
+                                                    reason: known == nil ? .keysPending : .trustPending, notification: alert)
         }
         let context = retained
         /// Keeps the ciphertext for a later retry with `reason`: retains it now when C skipped that, else relabels the row.
         func hold(_ reason: PendingEncryptedReason) async throws {
             if retentionSkipped {
-                try await store.retainEncryptedIncoming(accountID: account, sender: sender, digest: digest, wire: JSONEncoder().encode(context), reason: reason)
+                try await store.retainEncryptedIncoming(accountID: account, sender: sender, digest: digest, wire: JSONEncoder().encode(context), reason: reason,
+                                                        notification: alert)
             } else {
                 try await store.classifyPendingEncryptedIncoming(accountID: account, sender: sender, digest: digest, reason: reason)
             }

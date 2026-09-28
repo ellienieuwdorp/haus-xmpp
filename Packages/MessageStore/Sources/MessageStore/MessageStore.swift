@@ -233,6 +233,15 @@ public actor MessageStore {
             if try connection.query("SELECT 1 FROM pragma_table_info('account_preferences') WHERE name='last_seen'").isEmpty {
                 try connection.execute("ALTER TABLE account_preferences ADD COLUMN last_seen INTEGER NOT NULL DEFAULT 1")
             }
+            // v18: retained ciphertext waiting for trust or keys may alert (plan D5). It has no message row, so its
+            // candidate lives beside the pending row and disappears with it. IF NOT EXISTS keeps it idempotent.
+            try connection.execute("""
+                CREATE TABLE IF NOT EXISTS pending_notification_candidates (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, sender TEXT NOT NULL, digest TEXT NOT NULL,
+                    chat_id TEXT NOT NULL, sent_at REAL NOT NULL, UNIQUE(account_id,sender,digest),
+                    FOREIGN KEY(account_id,sender,digest) REFERENCES pending_encrypted_inbox(account_id,sender,digest) ON DELETE CASCADE
+                )
+                """)
             // v19: read state. Each chat's read pointer (the newest message read on any device of the account) and the
             // XEP-0359 id the account's own archive gave a direct message, by which XEP-0490 names it. Every step checks
             // for its column or table, so the v18–v20 branches migrate correctly in any merge order.
@@ -702,28 +711,61 @@ public actor MessageStore {
     }
 
     /// Keeps ciphertext that may still decrypt later. An existing row keeps its reason: classification is explicit.
+    /// `notification` names the chat of an incoming message that is waiting for trust or keys: the new row then also
+    /// becomes a notification candidate (plan D5), which is removed with the row when it commits or is converted.
     public func retainEncryptedIncoming(accountID: String, sender: String, digest: String, wire: Data,
-                                        reason: PendingEncryptedReason = .trustPending) throws {
+                                        reason: PendingEncryptedReason = .trustPending,
+                                        notification: PendingNotificationContext? = nil) throws {
         guard !accountID.isEmpty, !sender.isEmpty, !digest.isEmpty, !wire.isEmpty, wire.count <= 1_048_576 else { throw MessageStoreError.invalidValue }
         try connection.transaction {
             if try hasEncryptedIncoming(accountID: accountID, sender: sender, digest: digest) { return }
             if try !connection.query("SELECT 1 FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?", [.text(accountID), .text(sender), .text(digest)]).isEmpty { return }
             guard try connection.query("SELECT COUNT(*) FROM pending_encrypted_inbox WHERE account_id=?", [.text(accountID)]).first![0].integer < 1000 else { throw MessageStoreError.invalidValue }
             try connection.execute("INSERT INTO pending_encrypted_inbox(account_id,sender,digest,wire,reason) VALUES(?,?,?,?,?)", [.text(accountID), .text(sender), .text(digest), .blob(wire), .text(reason.rawValue)])
+            if let notification, try queuesPendingNotification(accountID: accountID, sender: sender, digest: digest, context: notification) {
+                try connection.execute("INSERT OR IGNORE INTO pending_notification_candidates(account_id,sender,digest,chat_id,sent_at) VALUES(?,?,?,?,?)",
+                                       [.text(accountID), .text(sender), .text(digest), .text(notification.chatID), .real(notification.sentAt.timeIntervalSince1970)])
+            }
         }
     }
 
+    /// Retained ciphertext has no message row, so the shared notification rules see a stand-in with the conversation,
+    /// author and time only: no body, no content, and an ID that never names a stored row.
+    private func queuesPendingNotification(accountID: String, sender: String, digest: String, context: PendingNotificationContext) throws -> Bool {
+        guard !context.chatID.isEmpty, context.chatID.utf8.count <= 3071, context.sentAt.timeIntervalSince1970.isFinite else { throw MessageStoreError.invalidValue }
+        return try queuesNotification(accountID: accountID, message: StoredMessage(id: "pending-" + digest, accountID: accountID, chatID: context.chatID,
+            senderID: sender, body: "", sentAt: context.sentAt, isOutgoing: false))
+    }
+
     /// Re-labels a retained row; a no-op when the row no longer exists (it may have been committed or converted meanwhile).
-    public func classifyPendingEncryptedIncoming(accountID: String, sender: String, digest: String, reason: PendingEncryptedReason) throws {
-        try connection.execute("UPDATE pending_encrypted_inbox SET reason=? WHERE account_id=? AND sender=? AND digest=?",
-                               [.text(reason.rawValue), .text(accountID), .text(sender), .text(digest)])
+    /// `notification` makes an existing row a notification candidate (plan D5) when it was retained without one because
+    /// only later work (a room read) showed it waits for trust or keys. Pass it on the ciphertext's first observation
+    /// only: a candidate that was already posted is gone, and a retry must not alert again.
+    public func classifyPendingEncryptedIncoming(accountID: String, sender: String, digest: String, reason: PendingEncryptedReason,
+                                                 notification: PendingNotificationContext? = nil) throws {
+        try connection.transaction {
+            try connection.execute("UPDATE pending_encrypted_inbox SET reason=? WHERE account_id=? AND sender=? AND digest=?",
+                                   [.text(reason.rawValue), .text(accountID), .text(sender), .text(digest)])
+            guard let notification, try connection.query("SELECT changes()").first?[0].integer == 1,
+                  try queuesPendingNotification(accountID: accountID, sender: sender, digest: digest, context: notification) else { return }
+            try connection.execute("INSERT OR IGNORE INTO pending_notification_candidates(account_id,sender,digest,chat_id,sent_at) VALUES(?,?,?,?,?)",
+                                   [.text(accountID), .text(sender), .text(digest), .text(notification.chatID), .real(notification.sentAt.timeIntervalSince1970)])
+        }
+    }
+
+    /// The keys of every retained ciphertext row (at most 1000 per account), without wires. Notification cleanup keeps a
+    /// delivered review notification (plan D5) only while its ciphertext is still retained here.
+    public func retainedEncryptedIncomingKeys(accountID: String) throws -> [NotificationCandidateKey] {
+        try connection.query("SELECT sender,digest FROM pending_encrypted_inbox WHERE account_id=? ORDER BY rowid LIMIT 1000", [.text(accountID)])
+            .map { .pending(sender: $0[0].string, digest: $0[1].string) }
     }
 
     /// Records a placeholder for a message this device will never show as content. Idempotent by `placeholder.id`
     /// (first observation wins, `sentAt` is never rewritten). A `.ciphertext` key also consumes the replay identity
     /// and removes the pending row. Returns true when the row was inserted now. Does not require transport ownership
     /// (the extension's archive walk and the app's live path both call it, exactly like `commitEncryptedIncoming`).
-    /// The row is never plaintext, never authenticated, never a notification candidate and never an event target.
+    /// The row is never plaintext, never authenticated and never an event target. An incoming placeholder from someone
+    /// else is a notification candidate (plan D5: "Sent a message this device can't read"); an own-device one never is.
     @discardableResult public func recordUnreadableMessage(_ placeholder: UnreadableMessage) throws -> Bool {
         try Self.validate(placeholder)
         return try connection.transaction { try insertUnreadableInTransaction(placeholder) }
@@ -776,6 +818,10 @@ public actor MessageStore {
                   .real(placeholder.sentAt.timeIntervalSince1970), .integer(placeholder.isOutgoing ? 1 : 0),
                   .text(Self.unreadableProfile), .text(placeholder.reason.rawValue)])
         let inserted = try connection.query("SELECT changes()").first?[0].integer == 1
+        if inserted, !placeholder.isOutgoing, let row = try message(accountID: placeholder.accountID, messageID: placeholder.id),
+           try queuesNotification(accountID: placeholder.accountID, message: row) {
+            try connection.execute("INSERT OR IGNORE INTO notification_candidates(account_id,message_id) VALUES(?,?)", [account, .text(placeholder.id)])
+        }
         if case let .ciphertext(sender, digest) = placeholder.key {
             // The ciphertext identity is now consumed: re-seeing it costs one lookup and never yields a second bubble.
             try connection.execute("INSERT OR IGNORE INTO encrypted_inbox(account_id,sender,digest) VALUES(?,?,?)", [account, .text(sender), .text(digest)])
@@ -921,7 +967,8 @@ public actor MessageStore {
     public func commitEncryptedIncoming(accountID: String, sender: String, digest: String,
                                         expectedRevision: Int, state: Data, message: StoredMessage?, control: EncryptionControl? = nil, reaction: AuthenticatedReaction? = nil,
                                         event: MessageEvent? = nil, groupRoom: String? = nil, roomStanzaID: String? = nil,
-                                        groupMembers: [String] = [], archiveStanzaID: String? = nil, readMarker: OwnReadMarker? = nil) throws {
+                                        groupMembers: [String] = [], archiveStanzaID: String? = nil, readMarker: OwnReadMarker? = nil,
+                                        correctsEarlierMessage: Bool = false) throws {
         guard !sender.isEmpty, !digest.isEmpty,
               // Another device of this account said it displayed a peer message: nothing else rides with it.
               readMarker.map({ _ in message == nil && reaction == nil && event == nil && groupRoom == nil && sender == accountID }) ?? true,
@@ -952,7 +999,9 @@ public actor MessageStore {
                     if let roomStanzaID { try bindGroupReference(accountID: accountID, room: groupRoom, messageID: message.id, stanzaID: roomStanzaID) }
                 }
                 if let archiveStanzaID { try bindDirectStanzaID(accountID: accountID, messageID: message.id, stanzaID: archiveStanzaID) }
-                if inserted, try queuesNotification(accountID: accountID, message: message, groupMembers: groupMembers) {
+                // A room correction is still stored as its own row (the group decoder cannot resolve its target yet),
+                // but it edits a message the user was already alerted about: it never alerts as a new message.
+                if inserted, !correctsEarlierMessage, try queuesNotification(accountID: accountID, message: message, groupMembers: groupMembers) {
                     try connection.execute("INSERT INTO notification_candidates(account_id,message_id) VALUES(?,?)", [.text(accountID), .text(message.id)])
                 }
             }
@@ -1028,6 +1077,7 @@ public actor MessageStore {
                     DELETE FROM notification_candidates WHERE account_id=?1
                     AND message_id IN (SELECT id FROM messages WHERE account_id=?1 AND chat_id=?2)
                     """, [.text(accountID), .text(chatID)])
+                try connection.execute("DELETE FROM pending_notification_candidates WHERE account_id=? AND chat_id=?", [.text(accountID), .text(chatID)])
             }
         }
     }
@@ -1049,7 +1099,12 @@ public actor MessageStore {
     /// Read-state condition (stream B): a message at or below its chat's read pointer was already read, on this device
     /// or another (MAM catch-up of history an other device displayed), so it never alerts. The row exists already.
     private func isAfterReadPointer(accountID: String, message: StoredMessage) throws -> Bool {
-        try connection.query("SELECT 1 FROM messages m \(Self.readJoins) WHERE m.account_id=?1 AND m.id=?2 AND NOT \(Self.unreadCondition)",
+        if try connection.query("SELECT 1 FROM messages WHERE account_id=? AND id=?", [.text(accountID), .text(message.id)]).isEmpty {
+            // Retained ciphertext (plan D5) has no row yet: compare its time with the chat's pointer.
+            return try connection.query("SELECT 1 FROM chat_read_state WHERE account_id=? AND chat_id=? AND read_sent_at>=?",
+                                        [.text(accountID), .text(message.chatID), .real(message.sentAt.timeIntervalSince1970)]).isEmpty
+        }
+        return try connection.query("SELECT 1 FROM messages m \(Self.readJoins) WHERE m.account_id=?1 AND m.id=?2 AND NOT \(Self.unreadCondition)",
                              [.text(accountID), .text(message.id)]).isEmpty
     }
 
@@ -1078,28 +1133,116 @@ public actor MessageStore {
     /// bookkeeping, not a read receipt. It cannot race the extension's transport owner.
     public func dismissPendingMessageNotifications(accountID: String) throws {
         try requireTransportOwnership()
-        try connection.execute("DELETE FROM notification_candidates WHERE account_id=?", [.text(accountID)])
+        try connection.transaction {
+            try connection.execute("DELETE FROM notification_candidates WHERE account_id=?", [.text(accountID)])
+            try connection.execute("DELETE FROM pending_notification_candidates WHERE account_id=?", [.text(accountID)])
+        }
     }
 
-    /// Consume only authenticated incoming messages committed with their ratchet state.
-    /// Replayed ciphertext, key controls, plaintext and outgoing carbons never enter this queue.
-    /// Crash before this transaction leaves candidates for the next wakeup; after it, the OS
-    /// retains the original generic remote alert if delivery of this richer content fails.
-    public func takeMessageNotification(accountID: String) throws -> MessageNotification {
+    /// Plan D4 limits: requests per chat and per run.
+    public static let notificationsPerChat = 8
+    public static let notificationsPerRun = 20
+
+    /// A bounded, read-only claim of the account's notification candidates (plan D4). The newest `perChat` of each chat
+    /// and the newest `total` overall are selected and returned oldest first; older candidates of a selected chat are
+    /// folded into that chat's "and N more" and claimed with it; chats beyond the total cap stay for a later run and are
+    /// counted in `deferredChatCount`, which the planner turns into one visible summary request. Messages their sender
+    /// has since unsent are claimed without taking a slot, so they never hide an older message's "and N more".
+    /// Nothing is deleted here: the caller posts, then passes `claimed` to `removeNotificationCandidates`. A crash in
+    /// between reposts the same stable identifiers, which replace rather than duplicate.
+    public func pendingNotifications(accountID: String, perChat: Int = MessageStore.notificationsPerChat,
+                                     total: Int = MessageStore.notificationsPerRun) throws -> MessageNotification {
         try requireTransportOwnership()
+        guard perChat > 0, total > 0, total <= 64 else { throw MessageStoreError.invalidValue }
         return try connection.transaction {
-            let values: [Value] = [.text(accountID)]
-            let count = try connection.query("SELECT COUNT(*),COUNT(DISTINCT m.chat_id) FROM notification_candidates n JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id WHERE n.account_id=?", values).first!
-            let newest = try connection.query("SELECT n.message_id FROM notification_candidates n JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id WHERE n.account_id=? ORDER BY m.sent_at DESC,n.sequence DESC LIMIT 1", values).first?[0].string
-            let latest = try newest.flatMap { try message(accountID: accountID, messageID: $0) }.map { try $0.applying(events(accountID: accountID, chatID: $0.chatID, messageID: $0.id)) }
-            let chat = try latest.flatMap { message in
-                try connection.query("SELECT title,avatar_hash FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(message.chatID)]).first
+            let account = Value.text(accountID)
+            let rows = try connection.query("""
+                SELECT 0,n.message_id,NULL,NULL,m.chat_id,m.sent_at,n.sequence FROM notification_candidates n
+                JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id WHERE n.account_id=?
+                UNION ALL
+                SELECT 1,NULL,p.sender,p.digest,p.chat_id,p.sent_at,p.sequence FROM pending_notification_candidates p WHERE p.account_id=?
+                ORDER BY 6 DESC,1,7 DESC LIMIT 1000
+                """, [account, account])
+            struct Row { let key: NotificationCandidateKey; let chatID: String; let sentAt: Double }
+            let candidates = rows.map { row in
+                Row(key: row[0].integer == 0 ? .message(row[1].string) : .pending(sender: row[2].string, digest: row[3].string),
+                    chatID: row[4].string, sentAt: row[5].double)
             }
-            let result = MessageNotification(latest: latest, chatTitle: chat?[0].string, chatAvatarHash: chat?[1].optionalString,
-                messageCount: count[0].integer, conversationCount: count[1].integer, previewsEnabled: try notificationPreviewsEnabled(accountID: accountID))
-            try dismissPendingMessageNotifications(accountID: accountID)
-            return result
+            // Newest first: the first `perChat` shown rows of a chat are its window; a chat's unselected rows are older than its selected ones.
+            var selected: [(row: Row, candidate: NotificationCandidate)] = [], selectedPerChat: [String: Int] = [:]
+            var unselected: [Row] = [], silent: [NotificationCandidateKey] = []
+            for row in candidates {
+                let count = selectedPerChat[row.chatID, default: 0]
+                guard count < perChat, selected.count < total else { unselected.append(row); continue }
+                guard let candidate = try notificationCandidate(accountID: accountID, key: row.key, chatID: row.chatID,
+                                                                sentAt: Date(timeIntervalSince1970: row.sentAt), earlierCount: 0),
+                      !candidate.isRetracted else { silent.append(row.key); continue }
+                selected.append((row, candidate)); selectedPerChat[row.chatID] = count + 1
+            }
+            let summarized = unselected.filter { selectedPerChat[$0.chatID] != nil }
+            let deferred = unselected.filter { selectedPerChat[$0.chatID] == nil }
+            let earlier = Dictionary(grouping: summarized, by: \.chatID).mapValues(\.count)
+            var oldestSelected: [String: NotificationCandidateKey] = [:]
+            for entry in selected { oldestSelected[entry.row.chatID] = entry.row.key }
+            let result = selected.reversed().map { entry in
+                oldestSelected[entry.row.chatID] == entry.row.key ? entry.candidate.withEarlierCount(earlier[entry.row.chatID] ?? 0) : entry.candidate
+            }
+            return MessageNotification(candidates: result, claimed: selected.map(\.row.key) + silent + summarized.map(\.key),
+                                       deferredCount: deferred.count, deferredChatCount: Set(deferred.map(\.chatID)).count,
+                                       previewsEnabled: try notificationPreviewsEnabled(accountID: accountID))
         }
+    }
+
+    private func notificationCandidate(accountID: String, key: NotificationCandidateKey, chatID: String, sentAt: Date,
+                                       earlierCount: Int) throws -> NotificationCandidate? {
+        let senderID: String, content: NotificationCandidate.Content, when: Date
+        switch key {
+        case let .message(id):
+            guard let stored = try message(accountID: accountID, messageID: id) else { return nil }
+            senderID = stored.senderID; when = stored.sentAt
+            if stored.unreadableReason != nil || stored.encryptionProfile == Self.unreadableProfile {
+                content = .unreadable(messageID: id)
+            } else {
+                content = .message(stored.applying(try events(accountID: accountID, chatID: stored.chatID, messageID: stored.id)))
+            }
+        case let .pending(sender, _):
+            senderID = sender; when = sentAt; content = .pendingEncrypted
+        }
+        let chat = try connection.query("SELECT title,avatar_hash FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(chatID)]).first
+        let isGroup = chatID != senderID
+        let senderTitle = isGroup ? try connection.query("SELECT title FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(senderID)]).first?[0].string : nil
+        return NotificationCandidate(key: key, accountID: accountID, chatID: chatID, chatTitle: chat?[0].string, chatAvatarHash: chat?[1].optionalString,
+                                     senderID: senderID, senderTitle: senderTitle, isGroup: isGroup, sentAt: when, content: content,
+                                     earlierCount: earlierCount)
+    }
+
+    /// Deletes exactly the claimed rows, after their requests were posted. Rows that disappeared meanwhile are ignored.
+    public func removeNotificationCandidates(accountID: String, keys: [NotificationCandidateKey]) throws {
+        try requireTransportOwnership()
+        guard keys.count <= 2000 else { throw MessageStoreError.invalidValue }
+        try connection.transaction {
+            for key in keys {
+                switch key {
+                case let .message(id):
+                    try connection.execute("DELETE FROM notification_candidates WHERE account_id=? AND message_id=?", [.text(accountID), .text(id)])
+                case let .pending(sender, digest):
+                    try connection.execute("DELETE FROM pending_notification_candidates WHERE account_id=? AND sender=? AND digest=?",
+                                           [.text(accountID), .text(sender), .text(digest)])
+                }
+            }
+        }
+    }
+
+    /// Of the messages behind delivered notifications, those that should no longer be shown: missing, or retracted by
+    /// their sender. Read state is a separate rule (plan D6).
+    public func staleNotificationMessageIDs(accountID: String, messageIDs: [String]) throws -> Set<String> {
+        guard messageIDs.count <= 1000 else { throw MessageStoreError.invalidValue }
+        var stale = Set<String>()
+        for id in Set(messageIDs) {
+            guard let stored = try message(accountID: accountID, messageID: id) else { stale.insert(id); continue }
+            if stored.applying(try events(accountID: accountID, chatID: stored.chatID, messageID: id)).isRetracted { stale.insert(id) }
+        }
+        return stale
     }
 
     public func message(accountID: String, messageID: String) throws -> StoredMessage? {
@@ -1495,6 +1638,10 @@ public actor MessageStore {
                 JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id AND m.chat_id=?2
                 JOIN chat_read_state r ON r.account_id=m.account_id AND r.chat_id=m.chat_id
                 WHERE n.account_id=?1 AND (m.sent_at,m.id) <= (r.read_sent_at,r.read_message_id))
+            """, Array(values.prefix(2)))
+        try connection.execute("""
+            DELETE FROM pending_notification_candidates WHERE account_id=?1 AND chat_id=?2
+            AND sent_at <= (SELECT read_sent_at FROM chat_read_state WHERE account_id=?1 AND chat_id=?2)
             """, Array(values.prefix(2)))
         return true
     }

@@ -33,10 +33,12 @@ public enum BackgroundSynchronizationError: Error, Sendable, Equatable {
 public struct BackgroundSynchronizer: Sendable {
     public init() {}
 
-    @discardableResult public func synchronize(databaseURL: URL, wrappingKey: Data, account: BackgroundAccount,
-                            timeBudget: Duration = .seconds(20),
-                            presentation: (@Sendable (MessageNotification) throws -> Void)? = nil) async throws -> MessageNotification {
-        guard timeBudget > .zero, timeBudget <= .seconds(25) else {
+    /// `leaseWait` is spent inside `timeBudget`: the app or another run may briefly hold the lease (plan D2).
+    public func synchronize(databaseURL: URL, wrappingKey: Data, account: BackgroundAccount,
+                            timeBudget: Duration = .seconds(20), leaseWait: Duration = .seconds(6),
+                            progress: NotificationRunProgress? = nil,
+                            presentation: (@Sendable (MessageStore) async throws -> Void)? = nil) async throws {
+        guard timeBudget > .zero, timeBudget <= .seconds(25), leaseWait >= .zero, leaseWait < timeBudget else {
             throw BackgroundSynchronizationError.invalidTimeBudget
         }
         try Task.checkCancellation()
@@ -45,8 +47,11 @@ public struct BackgroundSynchronizer: Sendable {
         }
         let store = try MessageStore(url: databaseURL)
         do {
-            // Busy means defer, never expire another process's lock or reset its attempts.
-            try await store.acquireTransportOwnership()
+            // Busy means wait a bounded time, then defer: never expire another process's lock or reset its attempts.
+            progress?.enter(.leaseWait)
+            let waited = try await acquireTransportOwnership(store, waitingUpTo: leaseWait)
+            progress?.update { $0.leaseWaitMilliseconds = Int(waited / .milliseconds(1)) }
+            progress?.enter(.syncing)
             guard try await store.encryptionState(accountID: account.accountID) != nil else {
                 throw BackgroundSynchronizationError.identityUnavailable
             }
@@ -56,9 +61,9 @@ public struct BackgroundSynchronizer: Sendable {
                 store: store, accountID: account.accountID, encryption: encryption))
             try await store.recoverInterruptedSubmissions(accountID: account.accountID)
             // Taken before the timer starts, so it is never later than the real deadline.
-            let deadline = ContinuousClock.now + timeBudget
+            let deadline = ContinuousClock.now + timeBudget - waited
             let caughtUp = CatchUpMark()
-            try await runBackgroundWork(timeBudget: timeBudget, operation: {
+            try await runBackgroundWork(timeBudget: timeBudget - waited, operation: {
                 try await client.connect(host: account.host, port: account.port, domain: account.domain,
                                          username: account.username, password: account.password)
                 try Task.checkCancellation()
@@ -79,7 +84,9 @@ public struct BackgroundSynchronizer: Sendable {
                 }
             }, stop: { await client.disconnectAndWait() })
             try Task.checkCancellation()
-            return try await finishBackgroundPresentation(store: store, accountID: account.accountID, presentation: presentation)
+            // From here a new push starts the next run: this one's network work is over.
+            progress?.enter(.presenting)
+            try await finishBackgroundPresentation(store: store, presentation: presentation)
         } catch {
             // runBackgroundWork joins crypto, archive and reader work before reaching here.
             // close releases ownership only if this instance acquired it.
@@ -112,18 +119,30 @@ func consumeUntilDisconnect(after mark: CatchUpMark, _ consume: () async throws 
     }
 }
 
-/// Keep the cross-process lease through the final synchronous authorization check and
-/// content handoff. The caller must still revalidate its current protected credentials;
-/// this cannot make local state and the operating system's presentation atomic.
-func finishBackgroundPresentation(store: MessageStore, accountID: String,
-                                  presentation: (@Sendable (MessageNotification) throws -> Void)?) async throws -> MessageNotification {
+/// Polls the non-blocking kernel lease until it is free or `limit` passes; cancellable. Returns the time spent waiting.
+func acquireTransportOwnership(_ store: MessageStore, waitingUpTo limit: Duration,
+                               interval: Duration = .milliseconds(250)) async throws -> Duration {
+    let clock = ContinuousClock(), start = clock.now
+    while true {
+        do {
+            try await store.acquireTransportOwnership()
+            return clock.now - start
+        } catch MessageStoreError.transportOwnedElsewhere {
+            guard clock.now - start + interval <= limit else { throw MessageStoreError.transportOwnedElsewhere }
+            try await Task.sleep(for: interval)
+        }
+    }
+}
+
+/// Keep the cross-process lease through authorization, posting and the candidate delete. The caller must still
+/// revalidate its current protected credentials; this cannot make local state and the operating system's
+/// presentation atomic, which is why posting replaces by stable identifier.
+func finishBackgroundPresentation(store: MessageStore,
+                                  presentation: (@Sendable (MessageStore) async throws -> Void)?) async throws {
     do {
         try Task.checkCancellation()
-        let notification = try await store.takeMessageNotification(accountID: accountID)
-        try Task.checkCancellation()
-        try presentation?(notification)
+        try await presentation?(store)
         try await store.close()
-        return notification
     } catch {
         try await store.close()
         throw error

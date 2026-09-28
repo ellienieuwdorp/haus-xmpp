@@ -25,8 +25,8 @@ struct BackgroundSynchronizerTests {
         for shouldFail in [false, true] {
             let store = try MessageStore(url: url)
             try await store.acquireTransportOwnership()
-            let present: @Sendable (MessageNotification) throws -> Void = { batch in
-                #expect(batch.messageCount == 0)
+            let present: @Sendable (MessageStore) async throws -> Void = { store in
+                #expect(try await store.pendingNotifications(accountID: "alice").candidates.isEmpty)
                 let descriptor = Darwin.open(url.resolvingSymlinksInPath().path + ".transport-lock", O_RDWR | O_CLOEXEC)
                 #expect(descriptor >= 0)
                 guard descriptor >= 0 else { throw PresentationFailure.cancelledAuthorization }
@@ -37,10 +37,10 @@ struct BackgroundSynchronizerTests {
             }
             if shouldFail {
                 await #expect(throws: PresentationFailure.self) {
-                    try await finishBackgroundPresentation(store: store, accountID: "alice", presentation: present)
+                    try await finishBackgroundPresentation(store: store, presentation: present)
                 }
             } else {
-                _ = try await finishBackgroundPresentation(store: store, accountID: "alice", presentation: present)
+                try await finishBackgroundPresentation(store: store, presentation: present)
             }
             let nextOwner = try MessageStore(url: url)
             try await nextOwner.acquireTransportOwnership()

@@ -15,12 +15,13 @@ import MessageStore
         #expect(NotificationDestination(payload: payload) == nil)
     }
     let message = StoredMessage(id: id, accountID: "alice@example.org", chatID: "bob@example.org", senderID: "bob@example.org", body: "Secret body", encryptionProfile: "modern")
-    let hidden = NotificationPreview(MessageNotification(latest: message, chatTitle: "Private sender", messageCount: 1, conversationCount: 1, previewsEnabled: false))
+    let hidden = NotificationPlanner.plan(MessageNotification(candidates: [NotificationCandidate(key: .message(id), accountID: "alice@example.org",
+        chatID: "bob@example.org", chatTitle: "Private sender", senderID: "bob@example.org", isGroup: false, sentAt: message.sentAt,
+        content: .message(message))], claimed: [.message(id)], previewsEnabled: false)).requests[0]
     #expect(hidden.destination == destination)
-    #expect(!String(describing: hidden.destination!.payload).contains("Secret body"))
-    #expect(!String(describing: hidden.destination!.payload).contains("bob@example.org"))
-    #expect(NotificationPreview(MessageNotification(latest: message, chatTitle: nil, messageCount: 2, conversationCount: 2, previewsEnabled: true)).destination == nil)
-    #expect(NotificationPreview(MessageNotification(latest: nil, chatTitle: nil, messageCount: 0, conversationCount: 0, previewsEnabled: true)).destination == nil)
+    #expect(!String(describing: hidden.userInfo).contains("Secret body"))
+    #expect(!String(describing: hidden.userInfo).contains("bob@example.org"))
+    #expect(destination.belongs(to: "alice@example.org") && !destination.belongs(to: "other@example.org") && !destination.belongs(to: ""))
 }
 
 @Test func notificationResolutionRejectsInactiveOtherAccountMissingAndUnauthenticatedMessages() async throws {

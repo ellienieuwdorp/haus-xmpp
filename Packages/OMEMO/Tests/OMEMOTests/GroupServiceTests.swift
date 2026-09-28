@@ -69,6 +69,11 @@ private struct GroupTransport: OMEMOGroupTransport {
         XCTAssertEqual(messages.count, 1)
         XCTAssertEqual(messages.first?.senderID, f.alice)
         XCTAssertEqual(messages.first?.body, outgoing.body)
+        // The room copy alerts once, as a room message from its authenticated sender; the DM substitute is unreadable.
+        let alerts = try await f.bStore.pendingNotifications(accountID: f.bob)
+        let group = alerts.candidates.filter(\.isGroup)
+        XCTAssertEqual(group.map(\.chatID), [roomID])
+        XCTAssertEqual(group.first?.senderID, f.alice)
         let duplicate = try await f.b.receiveGroup(account: f.bob, message: incoming, transport: bt)
         XCTAssertFalse(duplicate)
         let control = try await f.bStore.claimNextUpdate(accountID: f.bob)
@@ -121,9 +126,14 @@ private struct GroupTransport: OMEMOGroupTransport {
         try await f.a.prepareGroupMessage(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
         let prepared = try await f.a.outgoingGroupEnvelope(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
         XCTAssertEqual(Set(prepared.envelope.keys.compactMap(\.recipientJID)), Set([f.bob, carol]))
-        let received = try XMPPEncryptedGroupMessage(id: outgoing.id, room: roomID, occupant: roomID + "/alice", sender: f.alice, envelope: prepared.envelope, provenance: .roomArchive)
+        let received = try XMPPEncryptedGroupMessage(id: outgoing.id, room: roomID, occupant: roomID + "/alice", sender: f.alice, envelope: prepared.envelope,
+                                                     provenance: .roomArchive, hasFallbackBody: true)
         do { _ = try await c.receiveGroup(account: carol, message: received, transport: ct); XCTFail("Unknown fingerprint") }
         catch { XCTAssertEqual(error as? OMEMOError, .trustRequired) }
+        // An unapproved sender's room message alerts once in the room, without content (plan D5).
+        let review = try await cStore.pendingNotifications(accountID: carol)
+        XCTAssertEqual(review.candidates.map(\.content), [.pendingEncrypted])
+        XCTAssertEqual(review.candidates.first?.chatID, roomID)
         let pending = try await c.pendingConversations(account: carol)
         XCTAssertEqual(pending[roomID], 1)
         let devices = try await c.refreshGroupDevices(account: carol, room: roomID, transport: ct).devices
@@ -377,7 +387,7 @@ private struct GroupTransport: OMEMOGroupTransport {
             try await f.a.prepareGroupMessage(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
             let prepared = try await f.a.outgoingGroupEnvelope(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
             messages.append(try XMPPEncryptedGroupMessage(id: outgoing.id, room: roomID, occupant: roomID + "/alice", sender: f.alice,
-                                                          envelope: prepared.envelope, provenance: .roomArchive))
+                                                          envelope: prepared.envelope, provenance: .roomArchive, hasFallbackBody: true))
         }
         // Bob has never read this room and cannot read it now: both messages are retained.
         let unreadable = GroupTransport(base: f.bTransport, room: room, roomUnavailable: true)
@@ -386,6 +396,9 @@ private struct GroupTransport: OMEMOGroupTransport {
         }
         var pending = try await f.bStore.pendingEncryptedIncoming(accountID: f.bob)
         XCTAssertEqual(pending.count, 2)
+        // The sender device is trusted; only the room read is missing. Nothing here needs the user's review (plan D5).
+        let alerts = try await f.bStore.pendingNotifications(accountID: f.bob)
+        XCTAssertTrue(alerts.candidates.isEmpty)
         // One retry pass reads the still-unreadable room once, not once per row, and reports the failure.
         let log = TransportLog()
         do { try await f.b.retryPendingIncoming(account: f.bob, transport: GroupTransport(base: f.bTransport, room: room, log: log, roomUnavailable: true)); XCTFail("Room was unreadable") }

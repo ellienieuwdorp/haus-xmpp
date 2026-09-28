@@ -105,8 +105,10 @@ private func shown(_ store: MessageStore, _ id: String) async throws -> StoredMe
     // The unsend removes n1's pending alert.
     try await store.commitEncryptedIncoming(accountID: "self", sender: "peer", digest: "d4", expectedRevision: 4, state: Data([5]), message: nil,
                                             event: try event("r", actor: "peer", target: "w1", kind: .retraction))
-    let batch = try await store.takeMessageNotification(accountID: "self")
-    #expect(batch.messageCount == 1 && batch.latest?.id == "n2" && batch.latest?.body == "Second, corrected")
+    let batch = try await store.pendingNotifications(accountID: "self")
+    guard case let .message(latest)? = batch.candidates.map(\.content).first else { Issue.record("no candidate"); return }
+    #expect(batch.candidates.count == 1 && batch.claimed == [.message("n2")])
+    #expect(latest.id == "n2" && latest.body == "Second, corrected" && latest.isEdited)
     #expect(try await store.messages(accountID: "self", chatID: "peer").count == 2)
     // An event with a bubble of its own, or from someone other than the authenticated sender, is refused.
     await #expect(throws: MessageStoreError.invalidValue) {

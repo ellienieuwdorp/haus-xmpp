@@ -177,16 +177,25 @@ extension OMEMOService {
         let known = senderDevice(first)
         let retentionSkipped = pending == nil && !membershipStale && storedMembers?.contains(account) == true
             && known?.trust.permitsEncryption == true
+        // Plan D5, as for a direct message: a member's message waiting for trust or keys alerts in the room without content,
+        // and only when it would have been a bubble. Retention for a stale membership alone (a trusted sender device) does
+        // not alert: the room read usually lets it decrypt, and offline it is simply retried. If the read shows the message
+        // does wait for trust or keys, `hold` adds the candidate then, on this first observation only.
+        let alert = message.sender == account || !Self.expectsBubble(message) ? nil
+            : PendingNotificationContext(chatID: message.room, sentAt: retained.sentAt)
         if pending == nil, !retentionSkipped {
             try await store.retainEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, wire: JSONEncoder().encode(retained),
-                                                    reason: known != nil ? .trustPending : .keysPending)
+                                                    reason: known != nil ? .trustPending : .keysPending,
+                                                    notification: known?.trust.permitsEncryption == true ? nil : alert)
         }
         let context = retained
         func hold(_ reason: PendingEncryptedReason) async throws {
             if retentionSkipped {
-                try await store.retainEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, wire: JSONEncoder().encode(context), reason: reason)
+                try await store.retainEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, wire: JSONEncoder().encode(context), reason: reason,
+                                                        notification: alert)
             } else {
-                try await store.classifyPendingEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, reason: reason)
+                try await store.classifyPendingEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, reason: reason,
+                                                                 notification: pending == nil ? alert : nil)
             }
         }
         var refreshedMembers: [String]?
@@ -225,6 +234,7 @@ extension OMEMOService {
             let key = keys[0]
             let stored: StoredMessage?
             let reaction: AuthenticatedReaction?
+            var isCorrection = false
             do {
                 let material = try local.decrypt(RatchetCiphertext(data: key.data, isPreKey: key.keyExchange), from: address)
                 let plaintext = try PayloadCrypto.open(SealedPayload(payload: message.envelope.payload!, keyMaterial: material, iv: nil), profile: .modern)
@@ -240,6 +250,8 @@ extension OMEMOService {
                     stored = nil; reaction = nil
                 } else {
                     guard !content.body.isEmpty else { throw OMEMOError.invalidContent }
+                    // ponytail: a room correction is still stored as a new row; it only stops alerting as a new message.
+                    isCorrection = content.correction != nil
                     stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: message.room, senderID: message.sender,
                         body: content.body, sentAt: retained.sentAt, isOutgoing: message.sender == account, reply: content.reply,
                         encryptionProfile: "modern", wireID: nil, wireIDAuthenticated: false)
@@ -269,7 +281,7 @@ extension OMEMOService {
             do {
                 try await store.commitEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, expectedRevision: revision,
                     state: encode(state, account: account), message: stored, control: control, reaction: reaction, groupRoom: message.room,
-                    roomStanzaID: stored == nil ? nil : message.roomStanzaID, groupMembers: members)
+                    roomStanzaID: stored == nil ? nil : message.roomStanzaID, groupMembers: members, correctsEarlierMessage: isCorrection)
             } catch { forgetState(account); throw error }
             committed(state, revision: revision, account: account)
             if key.keyExchange { try? await flushBundlePublicationsLocked(account: account, transport: transport) }

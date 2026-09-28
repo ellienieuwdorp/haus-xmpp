@@ -2218,6 +2218,7 @@ final class AppModel {
             } catch { Self.syncLog.notice("read state not fetched: \(ConnectionSetup.detail(error), privacy: .public)") }
             guard generation == token else { return }
             publishReadState()
+            await DeliveredNotificationCleaner.removeCatchUpPlaceholders(accountID: account)
         }
     }
 
