@@ -31,7 +31,10 @@ private func batch(_ candidates: [NotificationCandidate], previews: Bool = true)
     #expect(plan.requests[0].threadIdentifier == NotificationIdentity.thread(accountID: account, chatID: "peer@example.org"))
     #expect(plan.requests[0].destination == NotificationDestination(accountID: account, messageID: first))
     #expect(plan.requests[0].userInfo == [NotificationDestination.userInfoKey: try #require(plan.requests[0].destination).payload])
-    #expect(plan.requests[0].avatarHash == "abc")
+    #expect(plan.requests[0].communication == NotificationCommunication(
+        sender: .init(handle: "peer@example.org", displayName: "Peer", avatarHash: "abc"),
+        conversationIdentifier: plan.requests[0].threadIdentifier, account: .init(handle: account, displayName: "me", avatarHash: nil)))
+    #expect(plan.requests.allSatisfy { $0.badge == nil })
     #expect(plan.claimed == [.message(first), .message(second)])
     #expect(NotificationPlanner.plan(batch([])).requests.isEmpty)
 }
@@ -43,7 +46,8 @@ private func batch(_ candidates: [NotificationCandidate], previews: Bool = true)
                                                 .withContent(.pendingEncrypted)], previews: false))
     #expect(plan.requests.map(\.title) == ["", ""])
     #expect(plan.requests.map(\.body) == ["New message", "New message"])
-    #expect(plan.requests.allSatisfy { $0.avatarHash == nil })
+    // No name or avatar reaches the system: no communication notification at all.
+    #expect(plan.requests.allSatisfy { $0.communication == nil })
     #expect(!String(describing: plan.requests.map(\.userInfo)).contains("Secret"))
     // Tap routing is unchanged by the privacy setting.
     #expect(plan.requests[0].destination == NotificationDestination(accountID: account, messageID: id))
@@ -155,4 +159,90 @@ extension NotificationCandidate {
         NotificationCandidate(key: key, accountID: accountID, chatID: chatID, chatTitle: chatTitle, chatAvatarHash: chatAvatarHash,
                               senderID: senderID, senderTitle: senderTitle, isGroup: isGroup, sentAt: sentAt, content: content, earlierCount: earlierCount)
     }
+}
+
+// MARK: Communication notifications, badge and reactions (wave 2, stream D)
+
+@Test func groupCommunicationNamesTheSenderTheRoomAndOtherMembers() throws {
+    let members = [NotificationParticipant(id: "carol@x", title: "Carol", avatarHash: "c"), NotificationParticipant(id: account, title: nil, avatarHash: nil),
+                   NotificationParticipant(id: "bob@x", title: "Bob", avatarHash: "b")]
+    let message = StoredMessage(id: UUID().uuidString, accountID: account, chatID: "room@rooms", senderID: "bob@x", body: "Hi all", encryptionProfile: "modern")
+    let group = NotificationCandidate(key: .message(message.id), accountID: account, chatID: "room@rooms", chatTitle: "Book club", chatAvatarHash: "room",
+                                      senderID: "bob@x", senderTitle: "Bob", senderAvatarHash: "b", isGroup: true, sentAt: message.sentAt,
+                                      content: .message(message), groupMembers: members)
+    let request = try #require(NotificationPlanner.plan(batch([group]), badge: 4).requests.first)
+    let communication = try #require(request.communication)
+    #expect(communication.sender == .init(handle: "bob@x", displayName: "Bob", avatarHash: "b"))
+    #expect(communication.groupName == "Book club" && communication.groupAvatarHash == "room" && communication.isGroup)
+    #expect(communication.conversationIdentifier == NotificationIdentity.thread(accountID: account, chatID: "room@rooms"))
+    // Never the sender or the account among the other recipients.
+    #expect(communication.otherRecipients == [.init(handle: "carol@x", displayName: "Carol", avatarHash: "c")])
+    #expect(request.badge == 4)
+    #expect(!String(describing: communication).contains("Bob"))
+}
+
+private func reaction(_ emoji: [String], chat: String = "peer@example.org", actor: String = "peer@example.org", actorTitle: String? = "Peer",
+                      target body: String = "Lunch at noon?", at: TimeInterval = 5, sequence: Int = 1) -> ReactionNotificationCandidate {
+    let target = StoredMessage(id: "6F9619FF-8B86-D011-B42D-00C04FC964FF", accountID: account, chatID: chat, senderID: account, body: body,
+                               isOutgoing: true, encryptionProfile: "modern")
+    return ReactionNotificationCandidate(key: .reaction(sequence: sequence), accountID: account, chatID: chat, chatTitle: chat == actor ? "Peer" : "Book club",
+                                         actor: NotificationParticipant(id: actor, title: actorTitle, avatarHash: "a"), isGroup: chat != actor,
+                                         target: target, reactions: emoji, reactedAt: Date(timeIntervalSince1970: at))
+}
+
+@Test func reactionsReadAsReactedToTheQuotedMessageAndReplaceByActorAndTarget() throws {
+    let direct = reaction(["👍"])
+    let group = reaction(["❤️", "🔥"], chat: "room@rooms", actor: "bob@x", actorTitle: "Bob", target: String(repeating: "long ", count: 80), at: 6, sequence: 2)
+    let message = candidate(UUID().uuidString, body: "Newest message", at: 7)
+    let batch = MessageNotification(candidates: [message], claimed: [message.key, direct.key, group.key], previewsEnabled: true, reactions: [direct, group])
+    let plan = NotificationPlanner.plan(batch, badge: 2)
+    #expect(plan.requests.map(\.body).first == "Reacted 👍 to “Lunch at noon?”")
+    #expect(plan.requests[1].body.hasPrefix("Bob reacted ❤️🔥 to “long long") && plan.requests[1].body.hasSuffix("…”"))
+    #expect(plan.requests[1].body.count < 280)
+    #expect(plan.requests.map(\.title) == ["Peer", "Book club", "Peer"])
+    // By time: the message is newest and alone plays the sound.
+    #expect(plan.requests.map(\.playsSound) == [false, false, true])
+    #expect(plan.requests[0].identifier == NotificationIdentity.reaction(accountID: account, chatID: "peer@example.org", actorID: "peer@example.org",
+                                                                          targetMessageID: direct.target.id))
+    #expect(plan.requests[0].threadIdentifier == NotificationIdentity.thread(accountID: account, chatID: "peer@example.org"))
+    // No tap destination (the target is our own message); a cleanup reference that names only the local message ID.
+    #expect(plan.requests[0].destination == nil && plan.requests[0].reference == .reaction(accountID: account, targetMessageID: direct.target.id))
+    #expect(plan.requests[1].communication?.sender.handle == "bob@x" && plan.requests[1].communication?.groupName == "Book club")
+    #expect(plan.requests.allSatisfy { $0.badge == 2 && $0.categoryIdentifier == NotificationIdentity.messageCategory })
+    #expect(plan.claimed.count == 3)
+    // The identifier is per actor and target, whatever the emoji.
+    #expect(NotificationPlanner.plan(MessageNotification(candidates: [], claimed: [], previewsEnabled: true, reactions: [reaction(["🎉"], sequence: 9)]))
+                .requests[0].identifier == plan.requests[0].identifier)
+}
+
+@Test func hiddenPreviewReactionsNameNobody() throws {
+    let plan = NotificationPlanner.plan(MessageNotification(candidates: [], claimed: [], previewsEnabled: false,
+                                                            reactions: [reaction(["👍"]), reaction(["😂"], chat: "room@rooms", actor: "bob@x", sequence: 2)]))
+    #expect(plan.requests.map(\.body) == ["Reacted to your message", "Reacted to your message"])
+    #expect(plan.requests.allSatisfy { $0.title.isEmpty && $0.communication == nil })
+    // A file without text is named by its kind.
+    var file = reaction(["👍"], target: "")
+    file = ReactionNotificationCandidate(key: file.key, accountID: account, chatID: file.chatID, chatTitle: file.chatTitle, actor: file.actor, isGroup: false,
+                                         target: StoredMessage(id: file.target.id, accountID: account, chatID: file.chatID, senderID: account, body: "",
+                                                               isOutgoing: true, encryptionProfile: "modern",
+                                                               attachment: StoredAttachment(name: "p.jpg", mediaType: "image/jpeg", size: 1, hash: "h", secret: Data())),
+                                         reactions: ["👍"], reactedAt: file.reactedAt)
+    #expect(NotificationPlanner.reactionBody(file) == "Reacted 👍 to your photo")
+    let reference = try #require(NotificationReference.reaction(accountID: account, targetMessageID: file.target.id))
+    #expect(NotificationReference(payload: reference.payload) == reference && reference.kind == .reaction)
+    #expect(NotificationReference.reaction(accountID: account, targetMessageID: "peer@example.org") == nil)
+    #expect(NotificationReference(payload: ["version": "1", "account": reference.accountScope, "kind": "reaction", "message": "bob@x"]) == nil)
+}
+
+@Test func badgeCountsUnreadOutsideMutedChats() {
+    let now = Date(timeIntervalSince1970: 1_000)
+    let unread = ["a": 3, "b": 2, "c": 4, "d": 1]
+    let settings: [String: ChatNotificationSetting] = [
+        "b": ChatNotificationSetting(mutedUntil: now.addingTimeInterval(60)),       // muted: excluded
+        "c": ChatNotificationSetting(mutedUntil: now.addingTimeInterval(-60)),      // expired: counts
+        "d": ChatNotificationSetting(level: .mentions)                              // mentions only: counts
+    ]
+    #expect(NotificationBadge.count(unread: unread, settings: settings, now: now) == 8)
+    #expect(NotificationBadge.count(unread: [:], settings: settings, now: now) == 0)
+    #expect(NotificationBadge.count(unread: ["b": 5], settings: ["b": ChatNotificationSetting(mutedUntil: ChatNotificationSetting.always)], now: now) == 0)
 }

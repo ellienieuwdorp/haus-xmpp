@@ -34,11 +34,14 @@ targets:
         NSPhotoLibraryUsageDescription: Pick recent photos and videos to send.
         # The attachment panel shows its own limited-access row with a Manage menu instead of the system prompt.
         PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
+        # Communication notifications: the app declares the intent it donates through the extension.
+        NSUserActivityTypes: [INSendMessageIntent]
     dependencies:
       - package: XMPPProtocol
       - package: MessageStore
       - package: MessagingCore
       - package: OMEMO
+      - sdk: Intents.framework
       - target: XMPPNotificationService
     settings:
       base:
@@ -67,6 +70,7 @@ targets:
       - package: MessagingCore
       - package: OMEMO
       - package: XMPPProtocol
+      - sdk: Intents.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: haus.xmpp.ios.notifications

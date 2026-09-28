@@ -44,19 +44,25 @@ public struct NotificationDestination: Sendable, Equatable, CustomStringConverti
 }
 
 /// Cleanup-only marker for a notification that has no tap destination (plan D5): an unreadable placeholder, which
-/// is named by its opaque `unreadable-<digest>` row ID, or retained ciphertext, which carries no ID at all (cleanup
-/// recomputes the identifiers of what is still retained). It never routes a tap and holds no address or content.
+/// is named by its opaque `unreadable-<digest>` row ID, retained ciphertext, which carries no ID at all (cleanup
+/// recomputes the identifiers of what is still retained), or a reaction to one of this account's messages (plan D8),
+/// named by the reacted-to message's local UUID. It never routes a tap and holds no address or content.
 public struct NotificationReference: Sendable, Equatable, CustomStringConvertible {
     public static let userInfoKey = "xmpp_local_reference"
-    public enum Kind: String, Sendable { case placeholder, retained }
+    public enum Kind: String, Sendable { case placeholder, retained, reaction }
     public let accountScope: String
     public let kind: Kind
-    /// The placeholder's message row ID; nil for retained ciphertext.
+    /// The placeholder's message row ID, or a reaction's target message ID; nil for retained ciphertext.
     public let messageID: String?
 
     public static func placeholder(accountID: String, messageID: String) -> NotificationReference? {
         guard !accountID.isEmpty, isPlaceholderID(messageID) else { return nil }
         return NotificationReference(accountScope: NotificationDestination.scope(for: accountID), kind: .placeholder, messageID: messageID)
+    }
+
+    public static func reaction(accountID: String, targetMessageID: String) -> NotificationReference? {
+        guard !accountID.isEmpty, UUID(uuidString: targetMessageID) != nil else { return nil }
+        return NotificationReference(accountScope: NotificationDestination.scope(for: accountID), kind: .reaction, messageID: targetMessageID)
     }
 
     public static func retained(accountID: String) -> NotificationReference? {
@@ -76,6 +82,10 @@ public struct NotificationReference: Sendable, Equatable, CustomStringConvertibl
         case .placeholder:
             guard Set(payload.keys) == ["version", "account", "kind", "message"], let message = payload["message"],
                   Self.isPlaceholderID(message) else { return nil }
+            messageID = message
+        case .reaction:
+            guard Set(payload.keys) == ["version", "account", "kind", "message"], let message = payload["message"],
+                  message.utf8.count == 36, UUID(uuidString: message) != nil else { return nil }
             messageID = message
         case .retained:
             guard Set(payload.keys) == ["version", "account", "kind"] else { return nil }

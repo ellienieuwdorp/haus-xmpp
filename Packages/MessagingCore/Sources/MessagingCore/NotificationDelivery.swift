@@ -37,6 +37,8 @@ public struct NotificationRunReport: Sendable, Equatable, Codable {
     public var removedFallbacks = 0
     public var removedStale = 0
     public var leaseWaitMilliseconds = 0
+    /// The icon badge the run computed (a count, not content); nil when it could not.
+    public var badge: Int?
     public init() {}
 }
 
@@ -187,7 +189,10 @@ public struct NotificationPresenter: Sendable {
         try Task.checkCancellation()
         try authorize()
         let batch = try await store.pendingNotifications(accountID: accountID)
-        let plan = NotificationPlanner.plan(batch, accountID: accountID)
+        // Best effort: an unknown badge leaves the icon as it is rather than failing the run.
+        let badge = try? await NotificationBadge.count(store: store, accountID: accountID)
+        progress.update { $0.badge = badge }
+        let plan = NotificationPlanner.plan(batch, accountID: accountID, badge: badge)
         for request in plan.requests {
             try Task.checkCancellation()
             try await withTimeout(addTimeout) { try await posting.add(request) }
@@ -209,6 +214,7 @@ public struct NotificationPresenter: Sendable {
     /// - message notifications whose message was retracted or no longer exists, including unreadable placeholders;
     /// - review notifications of retained ciphertext that is no longer retained (it committed, and then alerts as the
     ///   message itself, or became a placeholder);
+    /// - reaction notifications whose reaction was withdrawn;
     /// - the deferred-chats summary, when this run posted none: its chats were posted since, or dismissed.
     /// Removes fallbacks, a stale overflow summary, and messages that were retracted, went missing or were read
     /// (`owned` lists the message IDs behind delivered destinations and placeholder references).
@@ -232,6 +238,15 @@ public struct NotificationPresenter: Sendable {
                 NotificationPlanner.identifier(accountID: accountID, key: key)
             })
             messages += retained.map(\.identifier).filter { !live.contains($0) }
+        }
+        // Reactions whose actor has since withdrawn them (or whose target is gone): no longer live (plan D8).
+        let reactions = mine.filter { $0.reference?.kind == .reaction && $0.reference?.belongs(to: accountID) == true }
+        if !reactions.isEmpty {
+            let targets = Set(reactions.compactMap(\.reference?.messageID).prefix(1000))
+            let live = Set(try await store.liveReactionNotifications(accountID: accountID, targetMessageIDs: targets).map {
+                NotificationIdentity.reaction(accountID: accountID, chatID: $0.chatID, actorID: $0.actorID, targetMessageID: $0.targetMessageID)
+            })
+            messages += reactions.map(\.identifier).filter { !live.contains($0) }
         }
         let summary = NotificationIdentity.overflow(accountID: accountID)
         if !summaryPosted, mine.contains(where: { $0.identifier == summary }) { messages.append(summary) }

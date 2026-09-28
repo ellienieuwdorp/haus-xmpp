@@ -27,15 +27,32 @@ public protocol NotificationPosting: Sendable {
 /// `UNUserNotificationCenter` behind `NotificationPosting`. Never requests authorization: the app owns that.
 public struct UserNotificationPoster: NotificationPosting, @unchecked Sendable {
     private let center: UNUserNotificationCenter
-    /// A fresh file URL the system may take ownership of, for a verified cached avatar; nil when there is none.
-    private let avatarCopy: @Sendable (_ hash: String, _ requestIdentifier: String) -> URL?
+    /// The bytes of the app's pre-scaled copy of a verified avatar (at most 256 px); nil when there is none. Read, never
+    /// decoded here: the extension's memory budget is small.
+    private let avatarData: @Sendable (_ hash: String) -> Data?
+    private let donates: Bool
 
-    public init(center: UNUserNotificationCenter = .current(),
-                avatarCopy: @escaping @Sendable (_ hash: String, _ requestIdentifier: String) -> URL? = { _, _ in nil }) {
-        self.center = center; self.avatarCopy = avatarCopy
+    public init(center: UNUserNotificationCenter = .current(), donates: Bool = true,
+                avatarData: @escaping @Sendable (_ hash: String) -> Data? = { _ in nil }) {
+        self.center = center; self.avatarData = avatarData; self.donates = donates
     }
 
     public func add(_ request: PlannedNotification) async throws {
+        let plain = Self.content(for: request)
+        var content: UNNotificationContent = plain
+        #if canImport(Intents)
+        // Previews on: a communication notification with the sender's name and avatar. A failed donation or update
+        // posts the plain request, never the gateway's generic alert.
+        if let communication = request.communication {
+            let intent = CommunicationNotification.intent(communication, avatar: avatarData)
+            content = await CommunicationNotification.content(plain, intent: intent, donate: donates) ?? plain
+        }
+        #endif
+        try await center.add(UNNotificationRequest(identifier: request.identifier, content: content, trigger: nil))
+    }
+
+    /// Everything the request carries, set before any intent update (the updated content is not mutated afterwards).
+    static func content(for request: PlannedNotification) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = request.title
         content.body = request.body
@@ -43,11 +60,8 @@ public struct UserNotificationPoster: NotificationPosting, @unchecked Sendable {
         content.categoryIdentifier = request.categoryIdentifier
         content.userInfo = request.userInfo
         content.sound = request.playsSound ? .default : nil
-        if let hash = request.avatarHash, let url = avatarCopy(hash, request.identifier),
-           let attachment = try? UNNotificationAttachment(identifier: "avatar", url: url, options: [UNNotificationAttachmentOptionsTypeHintKey: "public.png"]) {
-            content.attachments = [attachment]
-        }
-        try await center.add(UNNotificationRequest(identifier: request.identifier, content: content, trigger: nil))
+        content.badge = request.badge.map { NSNumber(value: $0) }
+        return content
     }
 
     public func deliveredNotifications() async -> [DeliveredNotification] {

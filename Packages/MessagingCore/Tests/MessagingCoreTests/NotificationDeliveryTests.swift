@@ -429,3 +429,52 @@ struct NotificationLeaseAndLogTests {
         #expect(!text.contains("@"))
     }
 }
+
+struct NotificationBadgeAndReactionDeliveryTests {
+    @Test func settledRunsCarryTheBadgeOnRequestsAndInTheReport() async throws {
+        try await withStore { store in
+            try await receive(store, chat: "bob@example.org", body: "One", at: 1)
+            try await receive(store, chat: "carol@example.org", body: "Two", at: 2)
+            try await receive(store, chat: "carol@example.org", body: "Three", at: 3)
+            try await store.setChatNotificationSetting(accountID: account, chatID: "bob@example.org", ChatNotificationSetting(mutedUntil: ChatNotificationSetting.always))
+            let posting = FakePosting()
+            let progress = NotificationRunProgress()
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: progress)
+            // Bob is muted: his unread message neither alerts nor counts.
+            #expect(await posting.added.map(\.badge) == [2, 2])
+            #expect(progress.report.badge == 2)
+            #expect(try await NotificationBadge.count(store: store, accountID: account) == 2)
+        }
+    }
+
+    @Test func aWithdrawnReactionLosesItsDeliveredNotificationAndAReplacementReusesTheIdentifier() async throws {
+        try await withStore { store in
+            let mine = StoredMessage(id: UUID().uuidString, accountID: account, chatID: "bob@example.org", senderID: account, body: "Lunch?",
+                                     isOutgoing: true, encryptionProfile: "modern", wireID: "wire-mine", wireIDAuthenticated: true)
+            try await store.upsertChat(accountID: account, chatID: "bob@example.org", title: "Bob")
+            try await store.insertMessage(mine)
+            func react(_ id: String, _ emoji: [String], at second: TimeInterval) async throws {
+                let revision = try #require(try await store.encryptionStateRevision(accountID: account))
+                try await store.commitEncryptedIncoming(accountID: account, sender: "bob@example.org", digest: id, expectedRevision: revision,
+                    state: Data([UInt8(revision % 250 + 1)]), message: nil,
+                    reaction: AuthenticatedReaction(id: id, chatID: "bob@example.org", actorID: "bob@example.org", targetWireID: "wire-mine",
+                                                    reactions: emoji, updatedAt: Date(timeIntervalSince1970: second)))
+            }
+            let posting = FakePosting()
+            let identifier = NotificationIdentity.reaction(accountID: account, chatID: "bob@example.org", actorID: "bob@example.org", targetMessageID: mine.id)
+            try await react("r1", ["👍"], at: 10)
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
+            #expect(await posting.added.map(\.identifier) == [identifier])
+            #expect(await posting.added.map(\.body) == ["Reacted 👍 to “Lunch?”"])
+            try await react("r2", ["🔥"], at: 20)
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
+            #expect(await posting.added.map(\.body) == ["Reacted 👍 to “Lunch?”", "Reacted 🔥 to “Lunch?”"])
+            #expect(await posting.delivered.map(\.identifier) == [identifier], "a replacement replaces")
+            #expect(await posting.removed.isEmpty)
+            try await react("r3", [], at: 30)
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
+            #expect(await posting.removed == [identifier])
+            #expect(await posting.delivered.isEmpty)
+        }
+    }
+}

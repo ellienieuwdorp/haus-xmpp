@@ -11,19 +11,22 @@ public struct PlannedNotification: Sendable, Equatable, CustomStringConvertible 
     public let body: String
     /// Only the newest request of a run plays a sound.
     public let playsSound: Bool
-    /// Tap routing, unchanged from the single-preview design; nil for placeholders and retained ciphertext.
+    /// Tap routing, unchanged from the single-preview design; nil for placeholders, retained ciphertext and reactions.
     public let destination: NotificationDestination?
-    /// The chat's verified avatar hash, attached only when previews are shown.
-    public let avatarHash: String?
-    /// Lets cleanup find placeholder and retained-ciphertext notifications, which have no destination (plan D5).
+    /// Who the notification is from, for a communication notification (`INSendMessageIntent`). Only when previews are
+    /// shown: with previews off no name or avatar reaches the system.
+    public let communication: NotificationCommunication?
+    /// Lets cleanup find placeholder, retained-ciphertext and reaction notifications, which have no destination (plan D5, D8).
     public let reference: NotificationReference?
+    /// The app icon badge: unread messages outside muted chats, when the run knows it.
+    public let badge: Int?
 
     public init(identifier: String, threadIdentifier: String, categoryIdentifier: String = NotificationIdentity.messageCategory,
-                title: String, body: String, playsSound: Bool, destination: NotificationDestination?, avatarHash: String?,
-                reference: NotificationReference? = nil) {
+                title: String, body: String, playsSound: Bool, destination: NotificationDestination?,
+                communication: NotificationCommunication? = nil, reference: NotificationReference? = nil, badge: Int? = nil) {
         self.identifier = identifier; self.threadIdentifier = threadIdentifier; self.categoryIdentifier = categoryIdentifier
-        self.title = title; self.body = body; self.playsSound = playsSound; self.destination = destination; self.avatarHash = avatarHash
-        self.reference = reference
+        self.title = title; self.body = body; self.playsSound = playsSound; self.destination = destination; self.communication = communication
+        self.reference = reference; self.badge = badge
     }
 
     /// The `userInfo` payload: the opaque destination or cleanup reference only, never an address or body.
@@ -36,9 +39,42 @@ public struct PlannedNotification: Sendable, Equatable, CustomStringConvertible 
 
     func withSound() -> PlannedNotification {
         PlannedNotification(identifier: identifier, threadIdentifier: threadIdentifier, categoryIdentifier: categoryIdentifier, title: title,
-                            body: body, playsSound: true, destination: destination, avatarHash: avatarHash, reference: reference)
+                            body: body, playsSound: true, destination: destination, communication: communication, reference: reference, badge: badge)
     }
     public var description: String { "PlannedNotification(<redacted>)" }
+}
+
+/// The people behind a communication notification (Apple, "Implementing communication notifications"). Local,
+/// authenticated state only; never serialized into `userInfo`, gateway traffic or logs.
+public struct NotificationCommunication: Sendable, Equatable, CustomStringConvertible {
+    public struct Person: Sendable, Equatable {
+        /// The bare JID: the `INPersonHandle` value (type unknown).
+        public let handle: String
+        public let displayName: String
+        /// A verified avatar hash; the app writes a pre-scaled copy into the App Group.
+        public let avatarHash: String?
+        public init(handle: String, displayName: String, avatarHash: String?) {
+            self.handle = handle; self.displayName = displayName; self.avatarHash = avatarHash
+        }
+    }
+    public let sender: Person
+    /// `NotificationIdentity.thread`, so the system groups the conversation the same way as the notifications.
+    public let conversationIdentifier: String
+    /// The account itself, a recipient of every incoming message.
+    public let account: Person
+    /// The room's title; nil for a direct chat.
+    public let groupName: String?
+    public let groupAvatarHash: String?
+    /// Other room members this device knows of (never the sender or the account); empty for a direct chat.
+    public let otherRecipients: [Person]
+
+    public init(sender: Person, conversationIdentifier: String, account: Person, groupName: String? = nil, groupAvatarHash: String? = nil,
+                otherRecipients: [Person] = []) {
+        self.sender = sender; self.conversationIdentifier = conversationIdentifier; self.account = account; self.groupName = groupName
+        self.groupAvatarHash = groupAvatarHash; self.otherRecipients = otherRecipients
+    }
+    public var isGroup: Bool { groupName != nil }
+    public var description: String { "NotificationCommunication(<redacted>)" }
 }
 
 /// What a settled run posts, and the candidate rows it may delete once every post completed.
@@ -67,20 +103,27 @@ public enum NotificationPlanner {
         chats == 1 ? "New messages in 1 more chat" : "New messages in \(chats) more chats"
     }
 
+    /// A reaction to one of this account's messages, with previews off (plan D8).
+    public static let hiddenReactionBody = "Reacted to your message"
+
     /// `accountID` names the account for the deferred-chats summary; it defaults to the batch's own candidates.
-    public static func plan(_ batch: MessageNotification, accountID: String? = nil) -> NotificationPlan {
+    /// `badge` (unread outside muted chats) is set on every request; nil leaves the icon badge as it is.
+    public static func plan(_ batch: MessageNotification, accountID: String? = nil, badge: Int? = nil) -> NotificationPlan {
         var requests: [PlannedNotification] = []
         // Chats beyond the cap are older than every selected message, so their summary goes first and never takes the
         // sound from a newer message. Settling without it would hide that those chats have news (plan D2).
-        let account = accountID ?? batch.candidates.first?.accountID
+        let account = accountID ?? batch.candidates.first?.accountID ?? batch.reactions.first?.accountID
         var summarizes = false
         if batch.deferredChatCount > 0, let account, !account.isEmpty {
             let identifier = NotificationIdentity.overflow(accountID: account)
             requests.append(PlannedNotification(identifier: identifier, threadIdentifier: identifier, title: "",
                                                 body: overflowBody(chats: batch.deferredChatCount), playsSound: false,
-                                                destination: nil, avatarHash: nil))
+                                                destination: nil, badge: badge))
             summarizes = true
         }
+        let previews = batch.previewsEnabled
+        // Messages and reactions interleave by time; both lists arrive oldest first, so the newest request is added last.
+        var timed: [(at: Date, request: PlannedNotification)] = []
         // An unsent message is skipped; an "and N more" it carried moves to the chat's next shown message.
         var carried: [String: Int] = [:]
         for candidate in batch.candidates {
@@ -88,7 +131,6 @@ public enum NotificationPlanner {
                 if candidate.earlierCount > 0 { carried[candidate.chatID, default: 0] += candidate.earlierCount }
                 continue
             }
-            let previews = batch.previewsEnabled
             let earlier = candidate.earlierCount + (carried.removeValue(forKey: candidate.chatID) ?? 0)
             var body = previews ? (candidate.isGroup ? senderName(candidate) + ": " + text : text) : hiddenBody
             if earlier > 0 { body += "\nand \(earlier) more" }
@@ -101,15 +143,60 @@ public enum NotificationPlanner {
             case .pendingEncrypted:
                 destination = nil; reference = .retained(accountID: candidate.accountID)
             }
-            requests.append(PlannedNotification(
-                identifier: identifier(for: candidate),
-                threadIdentifier: NotificationIdentity.thread(accountID: candidate.accountID, chatID: candidate.chatID),
-                title: previews ? clean(displayName(candidate.chatID, title: candidate.chatTitle), limit: 80, maximumBytes: 320) : "",
-                body: body, playsSound: false, destination: destination,
-                avatarHash: previews ? candidate.chatAvatarHash : nil, reference: reference))
+            let thread = NotificationIdentity.thread(accountID: candidate.accountID, chatID: candidate.chatID)
+            let chatName = clean(displayName(candidate.chatID, title: candidate.chatTitle), limit: 80, maximumBytes: 320)
+            timed.append((candidate.sentAt, PlannedNotification(
+                identifier: identifier(for: candidate), threadIdentifier: thread,
+                title: previews ? chatName : "", body: body, playsSound: false, destination: destination,
+                communication: previews ? communication(accountID: candidate.accountID, thread: thread, chatName: chatName, chatAvatarHash: candidate.chatAvatarHash,
+                                                        isGroup: candidate.isGroup, sender: NotificationParticipant(id: candidate.senderID, title: candidate.senderTitle,
+                                                                                                                    avatarHash: candidate.senderAvatarHash),
+                                                        members: candidate.groupMembers) : nil,
+                reference: reference, badge: badge)))
         }
+        for reaction in batch.reactions {
+            let thread = NotificationIdentity.thread(accountID: reaction.accountID, chatID: reaction.chatID)
+            let chatName = clean(displayName(reaction.chatID, title: reaction.chatTitle), limit: 80, maximumBytes: 320)
+            timed.append((reaction.reactedAt, PlannedNotification(
+                identifier: NotificationIdentity.reaction(accountID: reaction.accountID, chatID: reaction.chatID, actorID: reaction.actor.id,
+                                                          targetMessageID: reaction.target.id),
+                threadIdentifier: thread, title: previews ? chatName : "", body: previews ? reactionBody(reaction) : hiddenReactionBody,
+                playsSound: false, destination: nil,
+                communication: previews ? communication(accountID: reaction.accountID, thread: thread, chatName: chatName, chatAvatarHash: reaction.chatAvatarHash,
+                                                        isGroup: reaction.isGroup, sender: reaction.actor, members: reaction.groupMembers) : nil,
+                reference: .reaction(accountID: reaction.accountID, targetMessageID: reaction.target.id), badge: badge)))
+        }
+        requests += timed.enumerated().sorted { ($0.element.at, $0.offset) < ($1.element.at, $1.offset) }.map(\.element.request)
         if let newest = requests.popLast() { requests.append(newest.withSound()) }
         return NotificationPlan(requests: requests, claimed: batch.claimed, summarizesDeferredChats: summarizes)
+    }
+
+    /// "Reacted 👍 to “Lunch?”" in a direct chat, "Bob reacted 👍 to “Lunch?”" in a room. The quoted text is bounded like
+    /// a preview; a file without text is named by its kind.
+    static func reactionBody(_ reaction: ReactionNotificationCandidate) -> String {
+        let emoji = clean(reaction.reactions.joined(), limit: 24, maximumBytes: 128)
+        let text = clean(reaction.target.body, limit: 240)
+        let object = text.isEmpty ? "your " + (reaction.target.attachment?.kindLabel.lowercased() ?? "message") : "“" + text + "”"
+        let verb = "eacted \(emoji) to \(object)"
+        guard reaction.isGroup else { return "R" + verb }
+        return clean(displayName(reaction.actor.id, title: reaction.actor.title), limit: 40, maximumBytes: 160) + " r" + verb
+    }
+
+    /// The communication notification's people. A direct chat's sender is the chat itself, named like the title.
+    private static func communication(accountID: String, thread: String, chatName: String, chatAvatarHash: String?, isGroup: Bool,
+                                      sender: NotificationParticipant, members: [NotificationParticipant]) -> NotificationCommunication {
+        func person(_ participant: NotificationParticipant) -> NotificationCommunication.Person {
+            .init(handle: participant.id, displayName: clean(displayName(participant.id, title: participant.title), limit: 40, maximumBytes: 160),
+                  avatarHash: participant.avatarHash)
+        }
+        let me = NotificationCommunication.Person(handle: accountID, displayName: displayName(accountID, title: nil), avatarHash: nil)
+        guard isGroup else {
+            return NotificationCommunication(sender: .init(handle: sender.id, displayName: chatName, avatarHash: sender.avatarHash ?? chatAvatarHash),
+                                             conversationIdentifier: thread, account: me)
+        }
+        return NotificationCommunication(sender: person(sender), conversationIdentifier: thread, account: me, groupName: chatName,
+                                         groupAvatarHash: chatAvatarHash,
+                                         otherRecipients: members.filter { $0.id != sender.id && $0.id != accountID }.prefix(8).map(person))
     }
 
     /// Stable per message, so posting again replaces rather than duplicates (plan D3). Retained ciphertext has no
@@ -122,6 +209,8 @@ public enum NotificationPlanner {
         switch key {
         case let .message(id): NotificationIdentity.message(accountID: accountID, messageID: id)
         case let .pending(sender, digest): NotificationIdentity.message(accountID: accountID, messageID: "pending\u{0}\(sender)\u{0}\(digest)")
+        // Never posted under this identifier: a reaction request uses `NotificationIdentity.reaction`.
+        case let .reaction(sequence): NotificationIdentity.message(accountID: accountID, messageID: "reaction\u{0}\(sequence)")
         }
     }
 
