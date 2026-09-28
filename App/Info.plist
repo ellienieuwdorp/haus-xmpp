@@ -26,6 +26,10 @@
 	<string>Record sound with videos you take to send.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Pick recent photos and videos to send.</string>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INSendMessageIntent</string>
+	</array>
 	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>
 	<true/>
 </dict>

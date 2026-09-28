@@ -383,9 +383,12 @@ public struct AccountPreferences: Sendable, Equatable {
     public var deliveryReceipts = true
     public var readReceipts = true
     public var lastSeen = true
-    public init(notificationPreviews: Bool = true, deliveryReceipts: Bool = true, readReceipts: Bool = true, lastSeen: Bool = true) {
+    /// Others' authenticated reactions to this account's messages alert (plan D8). Defaults on.
+    public var reactionNotifications = true
+    public init(notificationPreviews: Bool = true, deliveryReceipts: Bool = true, readReceipts: Bool = true, lastSeen: Bool = true,
+                reactionNotifications: Bool = true) {
         self.notificationPreviews = notificationPreviews; self.deliveryReceipts = deliveryReceipts; self.readReceipts = readReceipts
-        self.lastSeen = lastSeen
+        self.lastSeen = lastSeen; self.reactionNotifications = reactionNotifications
     }
 }
 

@@ -19,6 +19,14 @@ struct SettingsView: View {
         }
     }
 
+    /// Staging accounts only (push needs the staging gateway); DEBUG's notification harness shows it for captures.
+    private var showsNotificationSettings: Bool {
+        #if DEBUG
+        if NotificationHarness.isRequested { return true }
+        #endif
+        return model.accountID.hasSuffix("@staging.example.net")
+    }
+
     var body: some View {
         List {
             Section {
@@ -31,7 +39,7 @@ struct SettingsView: View {
                     Button("Disconnect") { Task { await model.disconnect() } }
                 }
             }
-            if model.accountID.hasSuffix("@staging.example.net") {
+            if showsNotificationSettings {
                 Section {
                     LabeledContent("Status", value: model.notificationStatus)
                     Button { Task { await model.enableNotifications() } } label: {
@@ -42,6 +50,9 @@ struct SettingsView: View {
                     Toggle("Message previews", isOn: Binding(get: { model.notificationPreviewsEnabled },
                         set: { enabled in Task { await model.setNotificationPreviews(enabled) } }))
                         .accessibilityIdentifier("notificationPreviews")
+                    Toggle("Reactions", isOn: Binding(get: { model.accountPreferences.reactionNotifications },
+                        set: { on in Task { await model.updatePreferences { $0.reactionNotifications = on } } }))
+                        .accessibilityIdentifier("reactionNotifications")
                 } header: {
                     Text("Notifications")
                 } footer: {

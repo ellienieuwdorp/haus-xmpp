@@ -99,6 +99,8 @@ final class AppModel {
     @ObservationIgnored private var lifecycleTask: Task<Void, Never>?
     @ObservationIgnored private var foreground = true
     @ObservationIgnored private var quiescing = false
+    /// The icon badge last set by the app; nil after a lifecycle change, so the next load sets it whatever it holds.
+    @ObservationIgnored private var appBadge: Int?
     @ObservationIgnored private var activeEncryptionOperations = 0
     @ObservationIgnored private var acquiringOwnership = false
     @ObservationIgnored private var hasTransportOwnership = false
@@ -409,6 +411,7 @@ final class AppModel {
         do {
             guard let store, let encryption else { throw MessageStoreError.invalidValue }
             try await acquireForegroundOwnership(store, token: token)
+            await dismissOpenChatNotifications(store: store, account: account)
             try await store.recoverInterruptedSubmissions(accountID: account)
             guard generation == token else { return false }
             try await connection.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
@@ -527,6 +530,10 @@ final class AppModel {
             }
             UNUserNotificationCenter.current().removeAllDeliveredNotifications()
             UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+            appBadge = nil
+            setAppBadge(0)
+            // Donated communication interactions name this account's contacts, rooms and avatars: they go with it.
+            await CommunicationHistory.deleteAll()
         }
         sessionAccount = nil
         notificationStatus = "Not enabled"
@@ -572,6 +579,8 @@ final class AppModel {
     /// Serialize scene transitions; never release the lease with a suspended writer alive.
     func setForeground(_ active: Bool) {
         foreground = active
+        // The extension may set the icon badge while the app is away: the next chat-list load sets it again.
+        appBadge = nil
         if !active { quiescing = true }
         let previous = lifecycleTask
         lifecycleTask = Task { [weak self] in
@@ -613,6 +622,14 @@ final class AppModel {
         }
         hasTransportOwnership = false
         try? await store?.releaseTransportOwnership()
+    }
+
+    /// Right after the lease is ours: an extension run that held it may have posted for the chat already on screen
+    /// (its candidates were read before the chat opened). Every such run is over now, so what it posted is delivered.
+    private func dismissOpenChatNotifications(store: MessageStore, account: String) async {
+        guard let chatID = openChatID, !isDemo, accountID == account, hasTransportOwnership else { return }
+        try? await store.dismissReactionNotifications(accountID: account, chatID: chatID)
+        await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID)
     }
 
     private func acquireForegroundOwnership(_ store: MessageStore, token: UUID) async throws {
@@ -1180,6 +1197,8 @@ final class AppModel {
                 try AvatarStore.save(fetched.data, root: storageRoot, account: account, hash: fetched.hash)
                 if let image = AvatarStore.image(root: storageRoot, account: account, hash: fetched.hash) {
                     avatars[chatID] = image
+                    // The communication-notification copy: pre-scaled here, so the extension never decodes an image.
+                    AvatarStore.saveNotificationImage(root: storageRoot, account: account, hash: fetched.hash)
                 } else {
                     try? FileManager.default.removeItem(at: AvatarStore.url(root: storageRoot, account: account, hash: fetched.hash))
                     hash = nil
@@ -1204,6 +1223,8 @@ final class AppModel {
         // ponytail: decoded on the main actor; the files are ≤512 KiB and become 256 px thumbnails. Move off-main if the list ever stutters.
         for (id, hash) in wanted where avatars[id] == nil {
             avatars[id] = AvatarStore.image(root: storageRoot, account: account, hash: hash)
+            // Avatars stored before communication notifications get their pre-scaled copy once (a stat when it exists).
+            if avatars[id] != nil { AvatarStore.saveNotificationImage(root: storageRoot, account: account, hash: hash) }
         }
     }
     func canSend(to chatID: String) -> Bool {
@@ -1755,6 +1776,13 @@ final class AppModel {
         prepareChat(chatID)
         // The chat is on screen: its delivered notifications have done their job.
         if !isDemo { let account = accountID; Task { await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID) } }
+        // Reactions have no read state: an opened chat shows them, so waiting reaction alerts go (plan D8). Only under the
+        // transport lease: without it an extension run may be posting them right now, and the lease acquisition repeats
+        // this for the open chat once that run is over (`dismissOpenChatNotifications`).
+        if foreground, hasTransportOwnership, !quiescing, let store {
+            let account = accountID
+            Task { try? await store.dismissReactionNotifications(accountID: account, chatID: chatID) }
+        }
         // Keep the same chat's devices across pop-back and reconnect; another chat starts pending until its store read.
         if encryptionOverviewChatID != chatID { encryptionOverviewChatID = chatID; encryptionOverview = nil }
         encryptionDetailsChatID = chatID
@@ -2145,6 +2173,9 @@ final class AppModel {
             if !hasTransportOwnership { try await acquireForegroundOwnership(store, token: token) }
             guard generation == token else { return }
             try await store.setAccountPreferences(accountID: account, updated)
+            // Previews off: names and avatars donated while they were on leave the system too. The lease is held, so
+            // no extension run is donating meanwhile, and later runs read the new setting.
+            if CommunicationHistory.purgesDonations(from: accountPreferences, to: updated) { await CommunicationHistory.deleteAll() }
             guard accountID == account else { return }
             let sharedLastSeen = accountPreferences.lastSeen
             accountPreferences = updated; notificationPreviewsEnabled = updated.notificationPreviews
@@ -2479,5 +2510,21 @@ final class AppModel {
         // A reorder (pin, new activity) animates; List only does so inside an explicit transaction.
         withAnimation(summaries.map(\.id) == chats.map(\.id) ? nil : .default) { chats = summaries }
         hasLoadedChats = true
+        updateAppBadge(summaries)
+    }
+
+    /// The icon badge: unread messages outside muted chats (`NotificationBadge`, the extension's rule too). Every
+    /// change of unread totals or mute reloads the chat list, so this follows reads here, reads on other devices
+    /// (markers and XEP-0490) and mute changes.
+    private func updateAppBadge(_ summaries: [ChatSummary]) {
+        guard !accountID.isEmpty else { return }
+        setAppBadge(NotificationBadge.count(unread: Dictionary(summaries.map { ($0.id, $0.unreadCount) }, uniquingKeysWith: max),
+                                            settings: Dictionary(summaries.map { ($0.id, $0.notification) }, uniquingKeysWith: { first, _ in first })))
+    }
+
+    private func setAppBadge(_ count: Int) {
+        guard appBadge != count else { return }
+        appBadge = count
+        Task { try? await UNUserNotificationCenter.current().setBadgeCount(count) }
     }
 }

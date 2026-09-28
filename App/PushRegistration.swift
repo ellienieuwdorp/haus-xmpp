@@ -15,12 +15,18 @@ final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificatio
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
-        // One category per message notification and one for the extension's generic fallback (plan D2, D3).
+        // One category per message notification, one for reactions to own messages (no message actions) and one for the
+        // extension's generic fallback (plan D2, D3, D8).
         let message = UNNotificationCategory(identifier: NotificationIdentity.messageCategory, actions: [], intentIdentifiers: [],
             hiddenPreviewsBodyPlaceholder: "New message", options: [])
+        let reaction = UNNotificationCategory(identifier: NotificationIdentity.reactionCategory, actions: [], intentIdentifiers: [],
+            hiddenPreviewsBodyPlaceholder: NotificationPlanner.hiddenReactionBody, options: [])
         let fallback = UNNotificationCategory(identifier: NotificationIdentity.fallbackCategory, actions: [], intentIdentifiers: [],
             hiddenPreviewsBodyPlaceholder: NotificationPlanner.fallbackBody, options: [])
-        UNUserNotificationCenter.current().setNotificationCategories([message, fallback])
+        UNUserNotificationCenter.current().setNotificationCategories([message, reaction, fallback])
+        #if DEBUG
+        NotificationHarness.install()
+        #endif
         return true
     }
 

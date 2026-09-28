@@ -48,6 +48,7 @@ enum NotificationDiagnostics {
             try await store.acquireTransportOwnership()
             do {
                 try await store.setNotificationPreviews(accountID: account.accountID, enabled: requested == "1")
+                if requested == "0" { await CommunicationHistory.deleteAll() }
                 try await store.releaseTransportOwnership()
             } catch {
                 try? await store.releaseTransportOwnership()

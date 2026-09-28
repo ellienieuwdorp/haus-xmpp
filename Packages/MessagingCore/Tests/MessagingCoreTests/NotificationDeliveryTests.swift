@@ -11,13 +11,22 @@ actor FakePosting: NotificationPosting {
     private(set) var removed: [String] = []
     var failAtIndex: Int?
     var hang = false
+    /// Time each add spends preparing (an intent donation) before the system add, and the system add itself.
+    var preparation: Duration = .zero
+    var systemAdd: Duration = .zero
+    nonisolated let allowance: Duration
 
-    init(delivered: [DeliveredNotification] = []) { self.delivered = delivered }
-    func configure(failAtIndex: Int? = nil, hang: Bool = false) { self.failAtIndex = failAtIndex; self.hang = hang }
+    init(delivered: [DeliveredNotification] = [], allowance: Duration = .zero) { self.delivered = delivered; self.allowance = allowance }
+    func configure(failAtIndex: Int? = nil, hang: Bool = false, preparation: Duration = .zero, systemAdd: Duration = .zero) {
+        self.failAtIndex = failAtIndex; self.hang = hang; self.preparation = preparation; self.systemAdd = systemAdd
+    }
+    nonisolated func preparationAllowance(for request: PlannedNotification) -> Duration { allowance }
 
     func add(_ request: PlannedNotification) async throws {
         // Like the UNUserNotificationCenter completion-handler bridge: a hung add ignores cancellation.
         if hang { await ignoringCancellation(for: .seconds(2)) }
+        if preparation > .zero { await ignoringCancellation(for: preparation) }
+        if systemAdd > .zero { await ignoringCancellation(for: systemAdd) }
         if failAtIndex == added.count { throw Failure.rejected }
         added.append(request)
         delivered.removeAll { $0.identifier == request.identifier }
@@ -427,5 +436,116 @@ struct NotificationLeaseAndLogTests {
         #expect(records.last?.outcome == "fallback" && records.last?.reason == .leaseBusy && records.last?.phase == .committed)
         let text = try String(contentsOf: directory.appending(path: NotificationOutcomeLog.fileName), encoding: .utf8)
         #expect(!text.contains("@"))
+    }
+}
+
+struct NotificationBadgeAndReactionDeliveryTests {
+    @Test func settledRunsCarryTheBadgeOnRequestsAndInTheReport() async throws {
+        try await withStore { store in
+            try await receive(store, chat: "bob@example.org", body: "One", at: 1)
+            try await receive(store, chat: "carol@example.org", body: "Two", at: 2)
+            try await receive(store, chat: "carol@example.org", body: "Three", at: 3)
+            try await store.setChatNotificationSetting(accountID: account, chatID: "bob@example.org", ChatNotificationSetting(mutedUntil: ChatNotificationSetting.always))
+            let posting = FakePosting()
+            let progress = NotificationRunProgress()
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: progress)
+            // Bob is muted: his unread message neither alerts nor counts.
+            #expect(await posting.added.map(\.badge) == [2, 2])
+            #expect(progress.report.badge == 2)
+            #expect(try await NotificationBadge.count(store: store, accountID: account) == 2)
+        }
+    }
+
+    @Test func aSlowDonationDoesNotShortenTheSystemAddsLimit() async throws {
+        try await withStore { store in
+            try await receive(store, at: 1)
+            // Scaled down: a 240 ms donation (allowance 250 ms) followed by a 200 ms system add, with a 300 ms add limit.
+            let posting = FakePosting(allowance: .milliseconds(250))
+            await posting.configure(preparation: .milliseconds(240), systemAdd: .milliseconds(200))
+            let progress = NotificationRunProgress()
+            try await NotificationPresenter(posting: posting, addTimeout: .milliseconds(300)).present(store: store, accountID: account, progress: progress)
+            #expect(progress.isCommitted && progress.report.posted == 1)
+            // Without the allowance the same timings fall back, which is what the donation used to cause.
+            try await receive(store, at: 2)
+            let unallowed = FakePosting()
+            await unallowed.configure(preparation: .milliseconds(240), systemAdd: .milliseconds(200))
+            let failed = NotificationRunProgress()
+            do {
+                try await NotificationPresenter(posting: unallowed, addTimeout: .milliseconds(300)).present(store: store, accountID: account, progress: failed)
+                Issue.record("the add limit alone must not cover the donation")
+            } catch { #expect(NotificationFallbackReason(error) == .postFailed) }
+        }
+        let plain = PlannedNotification(identifier: "m", threadIdentifier: "t", title: "", body: "b", playsSound: false, destination: nil)
+        let person = NotificationCommunication.Person(handle: "bob@x", displayName: "Bob", avatarHash: nil)
+        let communicated = PlannedNotification(identifier: "m", threadIdentifier: "t", title: "Bob", body: "b", playsSound: false, destination: nil,
+                                               communication: NotificationCommunication(sender: person, conversationIdentifier: "t", account: person, body: "b"))
+        #expect(UserNotificationPoster.allowance(for: plain, donates: true) == .zero, "no communication, no donation")
+        #expect(UserNotificationPoster.allowance(for: communicated, donates: false) == .zero)
+        #expect(UserNotificationPoster.allowance(for: communicated, donates: true) == UserNotificationPoster.donationLimit)
+    }
+
+    @Test func aPartlyWithdrawnOrSeenReactionLeavesNotificationCenterAtTheEndOfARun() async throws {
+        try await withStore { store in
+            let mine = StoredMessage(id: UUID().uuidString, accountID: account, chatID: "bob@example.org", senderID: account, body: "Lunch?",
+                                     isOutgoing: true, encryptionProfile: "modern", wireID: "wire-mine", wireIDAuthenticated: true)
+            try await store.upsertChat(accountID: account, chatID: "bob@example.org", title: "Bob")
+            try await store.insertMessage(mine)
+            func react(_ id: String, _ emoji: [String], at second: TimeInterval) async throws {
+                let revision = try #require(try await store.encryptionStateRevision(accountID: account))
+                try await store.commitEncryptedIncoming(accountID: account, sender: "bob@example.org", digest: id, expectedRevision: revision,
+                    state: Data([UInt8(revision % 250 + 1)]), message: nil,
+                    reaction: AuthenticatedReaction(id: id, chatID: "bob@example.org", actorID: "bob@example.org", targetWireID: "wire-mine",
+                                                    reactions: emoji, updatedAt: Date(timeIntervalSince1970: second)))
+            }
+            let posting = FakePosting()
+            let identifier = NotificationIdentity.reaction(accountID: account, chatID: "bob@example.org", actorID: "bob@example.org", targetMessageID: mine.id)
+            try await react("r1", ["❤️", "👍"], at: 10)
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
+            #expect(await posting.delivered.map(\.categoryIdentifier) == [NotificationIdentity.reactionCategory])
+            // 👍 is withdrawn but ❤️ stays: the delivered "Reacted ❤️👍" is no longer true, and it does not re-alert.
+            try await react("r2", ["❤️"], at: 20)
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
+            let removed = await posting.removed
+            #expect(await posting.added.count == 1 && removed == [identifier])
+            // A new reaction alerts; a message read after it (here or elsewhere) takes it out of Notification Center.
+            try await react("r3", ["❤️", "🔥"], at: 30)
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
+            #expect(await posting.delivered.map(\.identifier) == [identifier])
+            let incoming = try await receive(store, at: 40)
+            #expect(try await store.markRead(accountID: account, chatID: "bob@example.org", throughMessageID: incoming.id))
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
+            #expect(await !posting.delivered.map(\.identifier).contains(identifier))
+        }
+    }
+
+    @Test func aWithdrawnReactionLosesItsDeliveredNotificationAndAReplacementReusesTheIdentifier() async throws {
+        try await withStore { store in
+            let mine = StoredMessage(id: UUID().uuidString, accountID: account, chatID: "bob@example.org", senderID: account, body: "Lunch?",
+                                     isOutgoing: true, encryptionProfile: "modern", wireID: "wire-mine", wireIDAuthenticated: true)
+            try await store.upsertChat(accountID: account, chatID: "bob@example.org", title: "Bob")
+            try await store.insertMessage(mine)
+            func react(_ id: String, _ emoji: [String], at second: TimeInterval) async throws {
+                let revision = try #require(try await store.encryptionStateRevision(accountID: account))
+                try await store.commitEncryptedIncoming(accountID: account, sender: "bob@example.org", digest: id, expectedRevision: revision,
+                    state: Data([UInt8(revision % 250 + 1)]), message: nil,
+                    reaction: AuthenticatedReaction(id: id, chatID: "bob@example.org", actorID: "bob@example.org", targetWireID: "wire-mine",
+                                                    reactions: emoji, updatedAt: Date(timeIntervalSince1970: second)))
+            }
+            let posting = FakePosting()
+            let identifier = NotificationIdentity.reaction(accountID: account, chatID: "bob@example.org", actorID: "bob@example.org", targetMessageID: mine.id)
+            try await react("r1", ["👍"], at: 10)
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
+            #expect(await posting.added.map(\.identifier) == [identifier])
+            #expect(await posting.added.map(\.body) == ["Reacted 👍 to “Lunch?”"])
+            try await react("r2", ["🔥"], at: 20)
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
+            #expect(await posting.added.map(\.body) == ["Reacted 👍 to “Lunch?”", "Reacted 🔥 to “Lunch?”"])
+            #expect(await posting.delivered.map(\.identifier) == [identifier], "a replacement replaces")
+            #expect(await posting.removed.isEmpty)
+            try await react("r3", [], at: 30)
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
+            #expect(await posting.removed == [identifier])
+            #expect(await posting.delivered.isEmpty)
+        }
     }
 }

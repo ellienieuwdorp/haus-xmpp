@@ -47,9 +47,12 @@ private final class RemoteDelivery: @unchecked Sendable {
             defer { handler = nil }
             return handler
         }) else { return }
-        if outcome.suppressesRemoteAlert {
+        if case let .settled(report) = outcome {
             // Every local add already completed: empty content suppresses the remote alert (no title, body or sound).
-            callback(UNNotificationContent())
+            // The badge is the one field it may carry: unread outside muted chats, when the run knew it.
+            let content = UNMutableNotificationContent()
+            content.badge = report.badge.map { NSNumber(value: $0) }
+            callback(content)
             return
         }
         // Plan D2: generic, no message content, the fallback category, and the identifier the system gave this request
@@ -62,6 +65,8 @@ private final class RemoteDelivery: @unchecked Sendable {
         content.threadIdentifier = ""
         content.userInfo = [:]
         content.attachments = []
+        // Unknown: leave the icon badge as it is.
+        content.badge = nil
         callback(content)
     }
 }
@@ -81,13 +86,9 @@ private enum ExtensionRun {
             do { key = try EncryptionKeychain.load(storageID: "primary", allowCreation: false) }
             catch { throw NotificationRunError.protectedDataUnavailable }
             let accountID = account.accountID
-            let presenter = NotificationPresenter(posting: UserNotificationPoster(avatarCopy: { hash, identifier in
-                // The app's verified avatar file, copied because iOS takes ownership of an attachment.
-                let cached = AvatarStore.url(root: root, account: accountID, hash: hash)
-                let copy = FileManager.default.temporaryDirectory.appending(path: "avatar-\(identifier).png")
-                try? FileManager.default.removeItem(at: copy)
-                guard AvatarStore.image(at: cached) != nil, (try? FileManager.default.copyItem(at: cached, to: copy)) != nil else { return nil }
-                return copy
+            let presenter = NotificationPresenter(posting: UserNotificationPoster(avatarData: { hash in
+                // The app's pre-scaled copy of a verified avatar, read as bytes: nothing is decoded in the extension.
+                AvatarStore.notificationImageData(root: root, account: accountID, hash: hash)
             }))
             try await BackgroundSynchronizer().synchronize(databaseURL: root.appending(path: "messages.sqlite"), wrappingKey: key,
                 account: BackgroundAccount(host: account.host, port: account.port, domain: account.domain,

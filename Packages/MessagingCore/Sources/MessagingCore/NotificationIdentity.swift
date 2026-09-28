@@ -27,8 +27,17 @@ public enum NotificationIdentity {
         "o-" + hex("xmpp-notification-overflow-v1\u{0}" + accountID)
     }
 
+    /// One request per person and reacted-to message of this account (plan D8): a replacement reaction reposts the same
+    /// identifier, which replaces the delivered notification, and a withdrawn one is removed by it.
+    public static func reaction(accountID: String, chatID: String, actorID: String, targetMessageID: String) -> String {
+        "r-" + hex("xmpp-notification-reaction-v1\u{0}" + accountID + "\u{0}" + chatID + "\u{0}" + actorID + "\u{0}" + targetMessageID)
+    }
+
     /// Category of every notification that represents one stored message.
     public static let messageCategory = "message"
+    /// Category of a reaction to one of this account's messages (plan D8). It has no message actions: there is no
+    /// incoming message to reply to or mark as read, and a tap opens the reacted-to message's chat.
+    public static let reactionCategory = "reaction"
     /// Category of the generic fallback; never carries message content.
     public static let fallbackCategory = "fallback"
 

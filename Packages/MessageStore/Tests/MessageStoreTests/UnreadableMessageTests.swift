@@ -56,17 +56,17 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
     try await migrated.close()
     #expect(sqliteRows(url, "SELECT name FROM pragma_table_info('messages') WHERE name='unreadable_reason'") == [["unreadable_reason"]])
     #expect(sqliteRows(url, "SELECT dflt_value,\"notnull\" FROM pragma_table_info('pending_encrypted_inbox') WHERE name='reason'") == [["'trustPending'", "1"]])
-    #expect(sqliteRows(url, "PRAGMA user_version") == [["20"]])
+    #expect(sqliteRows(url, "PRAGMA user_version") == [["21"]])
 
     // Reopening is idempotent: no second ALTER, same version.
     try await MessageStore(url: url).close()
     #expect(sqliteRows(url, "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='unreadable_reason'") == [["1"]])
-    #expect(sqliteRows(url, "PRAGMA user_version") == [["20"]])
+    #expect(sqliteRows(url, "PRAGMA user_version") == [["21"]])
 
     #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, "PRAGMA user_version=21;", nil, nil, nil) == SQLITE_OK)
+    #expect(sqlite3_exec(db, "PRAGMA user_version=22;", nil, nil, nil) == SQLITE_OK)
     sqlite3_close(db)
-    #expect(throws: MessageStoreError.unsupportedSchema(21)) { _ = try MessageStore(url: url) }
+    #expect(throws: MessageStoreError.unsupportedSchema(22)) { _ = try MessageStore(url: url) }
 }
 
 @Test func placeholderIsDeterministicIdempotentAndOrderedByStamp() async throws {

@@ -37,6 +37,8 @@ public struct NotificationRunReport: Sendable, Equatable, Codable {
     public var removedFallbacks = 0
     public var removedStale = 0
     public var leaseWaitMilliseconds = 0
+    /// The icon badge the run computed (a count, not content); nil when it could not.
+    public var badge: Int?
     public init() {}
 }
 
@@ -187,10 +189,14 @@ public struct NotificationPresenter: Sendable {
         try Task.checkCancellation()
         try authorize()
         let batch = try await store.pendingNotifications(accountID: accountID)
-        let plan = NotificationPlanner.plan(batch, accountID: accountID)
+        // Best effort: an unknown badge leaves the icon as it is rather than failing the run.
+        let badge = try? await NotificationBadge.count(store: store, accountID: accountID)
+        progress.update { $0.badge = badge }
+        let plan = NotificationPlanner.plan(batch, accountID: accountID, badge: badge)
         for request in plan.requests {
             try Task.checkCancellation()
-            try await withTimeout(addTimeout) { try await posting.add(request) }
+            // The system add keeps its whole limit; an intent donation before it has its own allowance.
+            try await withTimeout(addTimeout + posting.preparationAllowance(for: request)) { try await posting.add(request) }
         }
         try await store.removeNotificationCandidates(accountID: accountID, keys: plan.claimed)
         progress.update {
@@ -209,6 +215,7 @@ public struct NotificationPresenter: Sendable {
     /// - message notifications whose message was retracted or no longer exists, including unreadable placeholders;
     /// - review notifications of retained ciphertext that is no longer retained (it committed, and then alerts as the
     ///   message itself, or became a placeholder);
+    /// - reaction notifications whose reaction was withdrawn;
     /// - the deferred-chats summary, when this run posted none: its chats were posted since, or dismissed.
     /// Removes fallbacks, a stale overflow summary, and messages that were retracted, went missing or were read
     /// (`owned` lists the message IDs behind delivered destinations and placeholder references).
@@ -217,7 +224,7 @@ public struct NotificationPresenter: Sendable {
         let fallbacks = delivered.filter { $0.categoryIdentifier == NotificationIdentity.fallbackCategory }.map(\.identifier)
         let mine = delivered.filter { $0.categoryIdentifier == NotificationIdentity.messageCategory }
         let owned = mine.compactMap { notification -> String? in
-            if let destination = notification.destination { return destination.belongs(to: accountID) ? destination.messageID : nil }
+            if let destination = notification.destination, destination.kind == .message { return destination.belongs(to: accountID) ? destination.messageID : nil }
             if let reference = notification.reference, reference.kind == .placeholder, reference.belongs(to: accountID) { return reference.messageID }
             return nil
         }
@@ -233,10 +240,28 @@ public struct NotificationPresenter: Sendable {
             })
             messages += retained.map(\.identifier).filter { !live.contains($0) }
         }
+        messages += try await ReactionNotificationCleanup.staleIdentifiers(store: store, accountID: accountID, delivered: delivered)
         let summary = NotificationIdentity.overflow(accountID: accountID)
         if !summaryPosted, mine.contains(where: { $0.identifier == summary }) { messages.append(summary) }
         await posting.removeDelivered(identifiers: fallbacks + messages.sorted())
         return (fallbacks.count, messages.count)
+    }
+}
+
+/// Delivered reaction notifications that are no longer current (plan D8): withdrawn in part or whole, the target gone,
+/// or the chat read or opened since they were posted (`MessageStore.liveReactionNotifications`). Shared by the
+/// extension's end-of-run cleanup and the app's cleanup after a read pointer moved.
+public enum ReactionNotificationCleanup {
+    public static func staleIdentifiers(store: MessageStore, accountID: String, delivered: [DeliveredNotification]) async throws -> [String] {
+        let reactions = delivered.filter {
+            $0.categoryIdentifier == NotificationIdentity.reactionCategory && $0.reference?.kind == .reaction && $0.reference?.belongs(to: accountID) == true
+        }
+        guard !reactions.isEmpty else { return [] }
+        let targets = Set(reactions.compactMap(\.reference?.messageID).sorted().prefix(1000))
+        let live = Set(try await store.liveReactionNotifications(accountID: accountID, targetMessageIDs: targets).map {
+            NotificationIdentity.reaction(accountID: accountID, chatID: $0.chatID, actorID: $0.actorID, targetMessageID: $0.targetMessageID)
+        })
+        return reactions.map(\.identifier).filter { !live.contains($0) }
     }
 }
 
