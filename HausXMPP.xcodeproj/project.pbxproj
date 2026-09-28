@@ -46,6 +46,7 @@
 		61C0E7505FC9C539AE274A1B /* EncryptionKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68FF6093D4D7789019FDED79 /* EncryptionKeychain.swift */; };
 		6964A48D8B3885B4336A2F5E /* OrganizationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C8D5B118A7A8265703C0701 /* OrganizationUITests.swift */; };
 		6CD66E39F6B66B34D6923F66 /* PushRegistrationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A804ED5CE56EF792DB11C29 /* PushRegistrationState.swift */; };
+		6D99BAA5013AC5727BE47234 /* OutboxDrain.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E9F16915706C304AAE9D42 /* OutboxDrain.swift */; };
 		701B533528A008A47E940216 /* AvatarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 665ABAF78DE8CC58D961254E /* AvatarStore.swift */; };
 		71C07A7A7BFC3DCF6C197C31 /* UnreadablePlaceholderUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE515A70164915088E16B82C /* UnreadablePlaceholderUITests.swift */; };
 		72C7E7A9558B483CDAC73323 /* NotificationNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0554E0B736A32101FBE1D193 /* NotificationNavigationTests.swift */; };
@@ -77,6 +78,7 @@
 		BAD829949F27036DE79F2BF4 /* ConnectionSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 219AF3065A8866C0E26F5FFF /* ConnectionSetup.swift */; };
 		BB4D31211D0CAB5F23F04AA0 /* AppearanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 926773F781198BFF2F0E2AEC /* AppearanceView.swift */; };
 		BE7EE3B8CB94E27CE1018CED /* ChatCapabilitiesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69109BFFF3B0297A85EED828 /* ChatCapabilitiesTests.swift */; };
+		C0BAB96CB2D5D0620CCB4750 /* NotificationActionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90337AF076A86319FB692875 /* NotificationActionTests.swift */; };
 		C2C391634056660D0C3A775A /* UITestStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD46841CB3F00F5A791CDFEF /* UITestStorage.swift */; };
 		CA1473BDCD93F12D49215EAD /* ReceiptUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 198B61EF24F8F532830EF75A /* ReceiptUITests.swift */; };
 		CA6A4BE7AC0F7581EE9CDA72 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = C1FD7887F5B6566A54B370AD /* MessageStore */; };
@@ -93,6 +95,7 @@
 		DB54591ACA8DA3CADA3CDDDF /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = 5AF2851E21B6D587A421DE98 /* MessageStore */; };
 		DC910FDC979FB743D000181A /* ConversationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79318867472966FE7C1CE331 /* ConversationUITests.swift */; };
 		DCA02E204E43ED4D678791C5 /* OMEMO in Frameworks */ = {isa = PBXBuildFile; productRef = 3E9C53216836835810A07D0D /* OMEMO */; };
+		DCCCCA8B4897042F34684899 /* NotificationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 843FF17A13C02A39A0E7F1F1 /* NotificationActions.swift */; };
 		DF8CCB525B41DAB27670D91E /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70D8DDFCEAC226CF360BB9B /* NotificationService.swift */; };
 		E40B06FA5622DF39341E4C90 /* NotificationAccountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C173CF664784D46CDDD2530B /* NotificationAccountTests.swift */; };
 		E5FF332C7F7C8994826D084E /* TypingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F6C87896726C22E2B4737A2 /* TypingUITests.swift */; };
@@ -205,9 +208,11 @@
 		79318867472966FE7C1CE331 /* ConversationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationUITests.swift; sourceTree = "<group>"; };
 		7EE5082F6FC8DC6C22351DAF /* ChatNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatNotifications.swift; sourceTree = "<group>"; };
 		82A37AE4DB1C65BDCB4BD991 /* OMEMO */ = {isa = PBXFileReference; lastKnownFileType = folder; name = OMEMO; path = Packages/OMEMO; sourceTree = SOURCE_ROOT; };
+		843FF17A13C02A39A0E7F1F1 /* NotificationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationActions.swift; sourceTree = "<group>"; };
 		879BC5B4DD701F8AEF61EC4F /* NotificationNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNavigation.swift; sourceTree = "<group>"; };
 		8B0F64A02BD00375CC7900FB /* ChatMuteUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMuteUITests.swift; sourceTree = "<group>"; };
 		8EA646B2D3BEC5BEF134632A /* Typing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Typing.swift; sourceTree = "<group>"; };
+		90337AF076A86319FB692875 /* NotificationActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationActionTests.swift; sourceTree = "<group>"; };
 		921322F2680A7D27A742491B /* DeliveredNotificationCleanerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeliveredNotificationCleanerTests.swift; sourceTree = "<group>"; };
 		926773F781198BFF2F0E2AEC /* AppearanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceView.swift; sourceTree = "<group>"; };
 		95271CA1D981A3BB07F06A3C /* OutboxUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutboxUITests.swift; sourceTree = "<group>"; };
@@ -238,6 +243,7 @@
 		E160244791260F63C8CEF3B6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		E41E998128645D4AA55981D3 /* TypingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingTests.swift; sourceTree = "<group>"; };
 		E70D8DDFCEAC226CF360BB9B /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		E7E9F16915706C304AAE9D42 /* OutboxDrain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutboxDrain.swift; sourceTree = "<group>"; };
 		E92B47FBB2381FF8C35F67FC /* ReplyUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyUITests.swift; sourceTree = "<group>"; };
 		E940D874460B96243A4EC3DA /* LastSeenUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LastSeenUITests.swift; sourceTree = "<group>"; };
 		ECB57CE3D62350BCA14A7C97 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
@@ -335,6 +341,7 @@
 				58E60B640C2EF71B3370C56C /* MessageStatusGlyphTests.swift */,
 				697CE48AFD71A7D39DBA7C50 /* NotificationAccessGateTests.swift */,
 				C173CF664784D46CDDD2530B /* NotificationAccountTests.swift */,
+				90337AF076A86319FB692875 /* NotificationActionTests.swift */,
 				0554E0B736A32101FBE1D193 /* NotificationNavigationTests.swift */,
 				DA5E39D1304108242CD5C4E3 /* PushTokenCallbackTests.swift */,
 				FA7A448E9D7C66724DCB4084 /* README.md */,
@@ -398,8 +405,10 @@
 				E160244791260F63C8CEF3B6 /* Info.plist */,
 				CB0B97AF3403EEDD27A52DA9 /* LastSeen.swift */,
 				08AB25F55ECA4190D03927E7 /* MessageActionsOverlay.swift */,
+				843FF17A13C02A39A0E7F1F1 /* NotificationActions.swift */,
 				6453F2E8354AAD847B7383F8 /* NotificationDiagnostics.swift */,
 				879BC5B4DD701F8AEF61EC4F /* NotificationNavigation.swift */,
+				E7E9F16915706C304AAE9D42 /* OutboxDrain.swift */,
 				15074E4EC097CD346A8BE93B /* PushRegistration.swift */,
 				721516AB2DE102AB78AB3630 /* RootView.swift */,
 				4AE59BD38D134F3C88543871 /* SessionState.swift */,
@@ -635,8 +644,10 @@
 				B609ACDCA30A71618D921BAC /* MessageActionsOverlay.swift in Sources */,
 				D74C290BF1ED6052EBC51BF9 /* NotificationAccessGate.swift in Sources */,
 				EDBA7EAFF388CC7F100D65D1 /* NotificationAccount.swift in Sources */,
+				DCCCCA8B4897042F34684899 /* NotificationActions.swift in Sources */,
 				9662884FF8B2A06C778BD5DF /* NotificationDiagnostics.swift in Sources */,
 				5DC00F7EFBF1219558D1A4F3 /* NotificationNavigation.swift in Sources */,
+				6D99BAA5013AC5727BE47234 /* OutboxDrain.swift in Sources */,
 				3BD066C2E602834E25133D16 /* PushRegistration.swift in Sources */,
 				A0920557A279DC90E4FEB750 /* PushRegistrationState.swift in Sources */,
 				106C2F5D77A7AD14FAABBDDC /* RootView.swift in Sources */,
@@ -711,6 +722,7 @@
 				E823AB41D8CEB14E11F534AB /* MessageStatusGlyphTests.swift in Sources */,
 				F8183D3D7DFC25A9569869FE /* NotificationAccessGateTests.swift in Sources */,
 				E40B06FA5622DF39341E4C90 /* NotificationAccountTests.swift in Sources */,
+				C0BAB96CB2D5D0620CCB4750 /* NotificationActionTests.swift in Sources */,
 				72C7E7A9558B483CDAC73323 /* NotificationNavigationTests.swift in Sources */,
 				98522509C03F0A2E2EC5DDC8 /* PushTokenCallbackTests.swift in Sources */,
 				B21729FE4DB8DE48D1890762 /* SessionStateTests.swift in Sources */,
