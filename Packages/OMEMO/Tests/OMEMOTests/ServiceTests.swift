@@ -828,6 +828,45 @@ final class ServiceTests: XCTestCase {
         expectEqual(try await f.a.overview(account: f.alice, peer: f.bob).devices, before.devices)
     }
 
+    func testRetainedAndUnreadableIncomingAlertWithoutContentOrTrustChange() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern, trust: false)
+        for device in try await f.a.overview(account: f.alice, peer: f.bob).devices where device.active {
+            try await f.a.setTrust(account: f.alice, deviceID: device.id, trust: .accepted)
+        }
+        let outgoing = try await f.queue("Synthetic secret")
+        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
+        let envelope = try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id)
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        do { _ = try await f.b.receive(account: f.bob, message: f.message(envelope), transport: f.bTransport, sentAt: stamp); XCTFail("Trust missing") } catch {}
+        // Plan D5: the retained ciphertext is a review candidate in Alice's chat; nothing about trust changed.
+        let batch = try await f.bStore.pendingNotifications(accountID: f.bob)
+        expectEqual(batch.candidates.map(\.content), [.pendingEncrypted])
+        expectEqual(batch.candidates.first?.chatID, f.alice)
+        expectEqual(batch.candidates.first?.sentAt, stamp)
+        for device in try await f.b.overview(account: f.bob, peer: f.alice).devices where device.active {
+            expectEqual(device.trust, .undecided)
+        }
+        // Approval commits the message: the review candidate goes with the pending row and the message alerts itself.
+        for device in try await f.b.overview(account: f.bob, peer: f.alice).devices where device.active {
+            try await f.b.setTrust(account: f.bob, deviceID: device.id, trust: .accepted)
+        }
+        try await f.b.retryPendingIncoming(account: f.bob, transport: OfflineTransport())
+        let approved = try await f.bStore.pendingNotifications(accountID: f.bob)
+        expectEqual(approved.candidates.count, 1)
+        guard case let .message(shown)? = approved.candidates.first?.content else { return XCTFail("Expected the committed message") }
+        expectEqual(shown.body, "Synthetic secret")
+        try await f.bStore.removeNotificationCandidates(accountID: f.bob, keys: approved.claimed)
+        // A message not encrypted for this device alerts as unreadable; Alice's own-device copy of it would not.
+        let notAddressed = XMPPOMEMOEnvelope(profile: envelope.profile, senderDeviceID: envelope.senderDeviceID,
+                                            keys: [], iv: envelope.iv, payload: envelope.payload)
+        do { _ = try await f.b.receive(account: f.bob, message: f.message(notAddressed, fallbackBody: true), transport: OfflineTransport()); XCTFail("No key") }
+        catch { expectEqual(error as? OMEMOError, .notForThisDevice) }
+        let unreadable = try await f.bStore.pendingNotifications(accountID: f.bob)
+        expectEqual(unreadable.candidates.count, 1)
+        guard case .unreadable? = unreadable.candidates.first?.content else { return XCTFail("Expected an unreadable candidate") }
+    }
+
     func testRetainedArchiveTimestampAndDurableDispositionSurviveTrustRetry() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern, trust: false)

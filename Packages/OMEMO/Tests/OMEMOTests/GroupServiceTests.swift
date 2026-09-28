@@ -69,6 +69,11 @@ private struct GroupTransport: OMEMOGroupTransport {
         XCTAssertEqual(messages.count, 1)
         XCTAssertEqual(messages.first?.senderID, f.alice)
         XCTAssertEqual(messages.first?.body, outgoing.body)
+        // The room copy alerts once, as a room message from its authenticated sender; the DM substitute is unreadable.
+        let alerts = try await f.bStore.pendingNotifications(accountID: f.bob)
+        let group = alerts.candidates.filter(\.isGroup)
+        XCTAssertEqual(group.map(\.chatID), [roomID])
+        XCTAssertEqual(group.first?.senderID, f.alice)
         let duplicate = try await f.b.receiveGroup(account: f.bob, message: incoming, transport: bt)
         XCTAssertFalse(duplicate)
         let control = try await f.bStore.claimNextUpdate(accountID: f.bob)
