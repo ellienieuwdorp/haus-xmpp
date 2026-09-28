@@ -21,6 +21,9 @@ final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificatio
         let fallback = UNNotificationCategory(identifier: NotificationIdentity.fallbackCategory, actions: [], intentIdentifiers: [],
             hiddenPreviewsBodyPlaceholder: NotificationPlanner.fallbackBody, options: [])
         UNUserNotificationCenter.current().setNotificationCategories([message, fallback])
+        #if DEBUG
+        NotificationHarness.install()
+        #endif
         return true
     }
 
