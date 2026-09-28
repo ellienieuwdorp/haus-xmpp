@@ -10,13 +10,15 @@ extension NotificationPlanner {
     /// How old a message may be and still show a banner. Older candidates are history the connection caught up on.
     public static let foregroundWindow: TimeInterval = 600
 
-    /// The extension's plan for the candidates a foreground banner may show: not the open chat (it is on screen), and
-    /// nothing older than `window`. Claims the whole batch; what is not posted is dismissed. There is no deferred-chats
-    /// summary in front of the app.
+    /// The extension's plan for the candidates a foreground banner may show, messages and reactions (plan D8) alike:
+    /// not the open chat (it is on screen), and nothing older than `window`. Claims the whole batch; what is not posted
+    /// is dismissed. There is no deferred-chats summary in front of the app.
     public static func foreground(_ batch: MessageNotification, accountID: String, openChatID: String?, now: Date,
                                   window: TimeInterval = foregroundWindow) -> NotificationPlan {
         let shown = batch.candidates.filter { $0.chatID != openChatID && now.timeIntervalSince($0.sentAt) <= window }
-        let plan = plan(MessageNotification(candidates: shown, claimed: [], previewsEnabled: batch.previewsEnabled), accountID: accountID)
+        let reactions = batch.reactions.filter { $0.chatID != openChatID && now.timeIntervalSince($0.reactedAt) <= window }
+        let plan = plan(MessageNotification(candidates: shown, claimed: [], previewsEnabled: batch.previewsEnabled, reactions: reactions),
+                        accountID: accountID)
         return NotificationPlan(requests: plan.requests, claimed: batch.claimed, summarizesDeferredChats: false)
     }
 }

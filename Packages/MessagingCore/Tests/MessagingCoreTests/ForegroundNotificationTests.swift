@@ -88,6 +88,45 @@ struct ForegroundNotificationTests {
         }
     }
 
+    /// Plan D8 in front of the app: another person's reaction to our message banners like the extension would post it,
+    /// but not in the open chat and not when it is old; either way it is claimed.
+    @Test func reactionsInOtherChatsBannerAsTheExtensionWould() async throws {
+        try await withStore { store in
+            let now = Date()
+            func mine(_ chat: String) async throws -> StoredMessage {
+                let message = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chat, senderID: account, body: "Lunch?",
+                                            sentAt: now.addingTimeInterval(-60), isOutgoing: true, encryptionProfile: "modern",
+                                            wireID: "wire-" + chat, wireIDAuthenticated: true)
+                try await store.upsertChat(accountID: account, chatID: chat, title: chat)
+                try await store.insertMessage(message)
+                return message
+            }
+            func react(_ chat: String, at date: Date) async throws {
+                let revision = try #require(try await store.encryptionStateRevision(accountID: account))
+                try await store.commitEncryptedIncoming(accountID: account, sender: chat, digest: "r-" + chat, expectedRevision: revision,
+                    state: Data([UInt8(revision % 250 + 1)]), message: nil,
+                    reaction: AuthenticatedReaction(id: "r-" + chat, chatID: chat, actorID: chat, targetWireID: "wire-" + chat,
+                                                    reactions: ["👍"], updatedAt: date))
+            }
+            let carol = try await mine("carol@example.org")
+            _ = try await mine("bob@example.org")
+            _ = try await mine("erin@example.org")
+            try await react("carol@example.org", at: now.addingTimeInterval(-2))
+            try await react("bob@example.org", at: now.addingTimeInterval(-1))
+            try await react("erin@example.org", at: now.addingTimeInterval(-3_600))
+            let posting = FakePosting()
+            let posted = try await NotificationPresenter(posting: posting)
+                .presentForeground(store: store, accountID: account, openChatID: "bob@example.org", presents: true, now: now)
+            let added = await posting.added
+            #expect(posted == 1)
+            #expect(added.map(\.identifier) == [NotificationIdentity.reaction(accountID: account, chatID: "carol@example.org",
+                                                                                actorID: "carol@example.org", targetMessageID: carol.id)])
+            #expect(added.map(\.categoryIdentifier) == [NotificationIdentity.reactionCategory])
+            #expect(added.map(\.body) == ["Reacted 👍 to “Lunch?”"])
+            #expect(try await store.pendingNotifications(accountID: account).claimed.isEmpty)
+        }
+    }
+
     @Test func previewsOffBannersWithoutTitleOrText() async throws {
         try await withStore { store in
             try await store.setNotificationPreviews(accountID: account, enabled: false)

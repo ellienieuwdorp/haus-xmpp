@@ -310,7 +310,8 @@ enum ForegroundPresentation {
         // The rejected-reply notice names no account; it answers something the user just did, so it shows.
         if !request.isRemote, request.identifier == NotificationActionCopy.replyRejectedIdentifier,
            request.categoryIdentifier == NotificationIdentity.noticeCategory { return [.banner, .list, .sound] }
-        guard !request.isRemote, NotificationIdentity.isMessageRun(category: request.categoryIdentifier), !accountID.isEmpty,
+        guard !request.isRemote, !accountID.isEmpty,
+              NotificationIdentity.isMessageRun(category: request.categoryIdentifier) || request.categoryIdentifier == NotificationIdentity.reactionCategory,
               let scope = request.accountScope,
               NotificationDestination(accountID: accountID, messageID: UUID().uuidString)?.accountScope == scope else { return [] }
         if let openChatID, request.threadIdentifier == NotificationIdentity.thread(accountID: accountID, chatID: openChatID) { return [] }

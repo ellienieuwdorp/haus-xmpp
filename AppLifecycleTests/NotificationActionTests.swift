@@ -397,6 +397,9 @@ import MessagingCore
         XCTAssertEqual(options(banner(chat: "carol@example.org", sound: false), nil), [.banner, .list])
         // A review or failed-reply notice for another chat shows too; it is still about that chat.
         XCTAssertEqual(options(banner(chat: "carol@example.org", category: NotificationIdentity.noticeCategory), nil), [.banner, .list, .sound])
+        // A reaction to one of our messages in another chat is posted in front of the app too (plan D8); never in the open chat.
+        XCTAssertEqual(options(banner(chat: "carol@example.org", category: NotificationIdentity.reactionCategory), "bob@example.org"), [.banner, .list, .sound])
+        XCTAssertEqual(options(banner(chat: "bob@example.org", category: NotificationIdentity.reactionCategory), "bob@example.org"), [])
     }
 
     func testRemoteFallbackAndForeignRequestsStayHidden() {
