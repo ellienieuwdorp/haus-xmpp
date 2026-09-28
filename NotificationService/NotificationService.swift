@@ -72,13 +72,14 @@ private enum ExtensionRun {
         var directory: URL?
         let outcome: NotificationRunOutcome
         do {
+            // The shared directory first, so that even a run without an account leaves a diagnostic record.
+            let root: URL
+            do { root = try await SharedStorage.directory(migrate: false) } catch { throw NotificationRunError.protectedDataUnavailable }
+            directory = root
             guard let account = try NotificationAccount.load(), account.push != nil else { throw NotificationRunError.noAccount }
             let key: Data
-            do {
-                directory = try await SharedStorage.directory(migrate: false)
-                key = try EncryptionKeychain.load(storageID: "primary", allowCreation: false)
-            } catch { throw NotificationRunError.protectedDataUnavailable }
-            guard let root = directory else { throw NotificationRunError.protectedDataUnavailable }
+            do { key = try EncryptionKeychain.load(storageID: "primary", allowCreation: false) }
+            catch { throw NotificationRunError.protectedDataUnavailable }
             let accountID = account.accountID
             let presenter = NotificationPresenter(posting: UserNotificationPoster(avatarCopy: { hash, identifier in
                 // The app's verified avatar file, copied because iOS takes ownership of an attachment.
