@@ -51,21 +51,35 @@ public struct NotificationCandidate: Sendable, Equatable, CustomStringConvertibl
         self.content = content; self.earlierCount = earlierCount
     }
     public var description: String { "NotificationCandidate(<redacted>)" }
+
+    /// A message its sender has since unsent: claimed, never shown.
+    public var isRetracted: Bool { if case let .message(message) = content { message.isRetracted } else { false } }
+
+    func withEarlierCount(_ count: Int) -> NotificationCandidate {
+        NotificationCandidate(key: key, accountID: accountID, chatID: chatID, chatTitle: chatTitle, chatAvatarHash: chatAvatarHash,
+                              senderID: senderID, senderTitle: senderTitle, isGroup: isGroup, sentAt: sentAt, content: content, earlierCount: count)
+    }
 }
 
 /// A bounded, per-message claim (plan D4): at most `perChat` newest candidates per chat and `total` overall,
 /// oldest first. Nothing is deleted by reading it; the run deletes `claimed` after its posts completed.
 public struct MessageNotification: Sendable, Equatable, CustomStringConvertible {
-    /// Selected candidates, oldest first. Includes retracted messages, which the planner skips but still claims.
+    /// Selected candidates, oldest first. The store leaves out retracted messages (it claims them silently); the
+    /// planner still skips any it is given.
     public let candidates: [NotificationCandidate]
-    /// Every row this batch represents: the selected ones and the older ones folded into "and N more".
+    /// Every row this batch represents: the selected ones, silently claimed retracted ones, and the older ones folded
+    /// into "and N more".
     public let claimed: [NotificationCandidateKey]
     /// Candidates of chats that got no request because the total cap was reached; left for a later run.
     public let deferredCount: Int
+    /// The chats those deferred candidates belong to. Nonzero means the run must still show something for them.
+    public let deferredChatCount: Int
     public let previewsEnabled: Bool
 
-    public init(candidates: [NotificationCandidate], claimed: [NotificationCandidateKey], deferredCount: Int = 0, previewsEnabled: Bool) {
-        self.candidates = candidates; self.claimed = claimed; self.deferredCount = deferredCount; self.previewsEnabled = previewsEnabled
+    public init(candidates: [NotificationCandidate], claimed: [NotificationCandidateKey], deferredCount: Int = 0,
+                deferredChatCount: Int = 0, previewsEnabled: Bool) {
+        self.candidates = candidates; self.claimed = claimed; self.deferredCount = deferredCount
+        self.deferredChatCount = deferredChatCount; self.previewsEnabled = previewsEnabled
     }
     public var description: String { "MessageNotification(<redacted>)" }
 }

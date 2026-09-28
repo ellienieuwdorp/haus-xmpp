@@ -674,9 +674,26 @@ public actor MessageStore {
     }
 
     /// Re-labels a retained row; a no-op when the row no longer exists (it may have been committed or converted meanwhile).
-    public func classifyPendingEncryptedIncoming(accountID: String, sender: String, digest: String, reason: PendingEncryptedReason) throws {
-        try connection.execute("UPDATE pending_encrypted_inbox SET reason=? WHERE account_id=? AND sender=? AND digest=?",
-                               [.text(reason.rawValue), .text(accountID), .text(sender), .text(digest)])
+    /// `notification` makes an existing row a notification candidate (plan D5) when it was retained without one because
+    /// only later work (a room read) showed it waits for trust or keys. Pass it on the ciphertext's first observation
+    /// only: a candidate that was already posted is gone, and a retry must not alert again.
+    public func classifyPendingEncryptedIncoming(accountID: String, sender: String, digest: String, reason: PendingEncryptedReason,
+                                                 notification: PendingNotificationContext? = nil) throws {
+        try connection.transaction {
+            try connection.execute("UPDATE pending_encrypted_inbox SET reason=? WHERE account_id=? AND sender=? AND digest=?",
+                                   [.text(reason.rawValue), .text(accountID), .text(sender), .text(digest)])
+            guard let notification, try connection.query("SELECT changes()").first?[0].integer == 1,
+                  try queuesPendingNotification(accountID: accountID, sender: sender, digest: digest, context: notification) else { return }
+            try connection.execute("INSERT OR IGNORE INTO pending_notification_candidates(account_id,sender,digest,chat_id,sent_at) VALUES(?,?,?,?,?)",
+                                   [.text(accountID), .text(sender), .text(digest), .text(notification.chatID), .real(notification.sentAt.timeIntervalSince1970)])
+        }
+    }
+
+    /// The keys of every retained ciphertext row (at most 1000 per account), without wires. Notification cleanup keeps a
+    /// delivered review notification (plan D5) only while its ciphertext is still retained here.
+    public func retainedEncryptedIncomingKeys(accountID: String) throws -> [NotificationCandidateKey] {
+        try connection.query("SELECT sender,digest FROM pending_encrypted_inbox WHERE account_id=? ORDER BY rowid LIMIT 1000", [.text(accountID)])
+            .map { .pending(sender: $0[0].string, digest: $0[1].string) }
     }
 
     /// Records a placeholder for a message this device will never show as content. Idempotent by `placeholder.id`
@@ -970,7 +987,9 @@ public actor MessageStore {
 
     /// A bounded, read-only claim of the account's notification candidates (plan D4). The newest `perChat` of each chat
     /// and the newest `total` overall are selected and returned oldest first; older candidates of a selected chat are
-    /// folded into that chat's "and N more" and claimed with it; chats beyond the total cap stay for a later run.
+    /// folded into that chat's "and N more" and claimed with it; chats beyond the total cap stay for a later run and are
+    /// counted in `deferredChatCount`, which the planner turns into one visible summary request. Messages their sender
+    /// has since unsent are claimed without taking a slot, so they never hide an older message's "and N more".
     /// Nothing is deleted here: the caller posts, then passes `claimed` to `removeNotificationCandidates`. A crash in
     /// between reposts the same stable identifiers, which replace rather than duplicate.
     public func pendingNotifications(accountID: String, perChat: Int = MessageStore.notificationsPerChat,
@@ -991,27 +1010,28 @@ public actor MessageStore {
                 Row(key: row[0].integer == 0 ? .message(row[1].string) : .pending(sender: row[2].string, digest: row[3].string),
                     chatID: row[4].string, sentAt: row[5].double)
             }
-            // Newest first: the first `perChat` rows seen for a chat are its window; a chat's unselected rows are older than its selected ones.
-            var selected: [Row] = [], selectedPerChat: [String: Int] = [:], unselected: [Row] = []
+            // Newest first: the first `perChat` shown rows of a chat are its window; a chat's unselected rows are older than its selected ones.
+            var selected: [(row: Row, candidate: NotificationCandidate)] = [], selectedPerChat: [String: Int] = [:]
+            var unselected: [Row] = [], silent: [NotificationCandidateKey] = []
             for row in candidates {
                 let count = selectedPerChat[row.chatID, default: 0]
-                if count < perChat, selected.count < total {
-                    selected.append(row); selectedPerChat[row.chatID] = count + 1
-                } else { unselected.append(row) }
+                guard count < perChat, selected.count < total else { unselected.append(row); continue }
+                guard let candidate = try notificationCandidate(accountID: accountID, key: row.key, chatID: row.chatID,
+                                                                sentAt: Date(timeIntervalSince1970: row.sentAt), earlierCount: 0),
+                      !candidate.isRetracted else { silent.append(row.key); continue }
+                selected.append((row, candidate)); selectedPerChat[row.chatID] = count + 1
             }
             let summarized = unselected.filter { selectedPerChat[$0.chatID] != nil }
+            let deferred = unselected.filter { selectedPerChat[$0.chatID] == nil }
             let earlier = Dictionary(grouping: summarized, by: \.chatID).mapValues(\.count)
             var oldestSelected: [String: NotificationCandidateKey] = [:]
-            for row in selected { oldestSelected[row.chatID] = row.key }
-            var result: [NotificationCandidate] = []
-            for row in selected.reversed() {
-                if let candidate = try notificationCandidate(accountID: accountID, key: row.key, chatID: row.chatID,
-                        sentAt: Date(timeIntervalSince1970: row.sentAt), earlierCount: oldestSelected[row.chatID] == row.key ? earlier[row.chatID] ?? 0 : 0) {
-                    result.append(candidate)
-                }
+            for entry in selected { oldestSelected[entry.row.chatID] = entry.row.key }
+            let result = selected.reversed().map { entry in
+                oldestSelected[entry.row.chatID] == entry.row.key ? entry.candidate.withEarlierCount(earlier[entry.row.chatID] ?? 0) : entry.candidate
             }
-            return MessageNotification(candidates: result, claimed: selected.map(\.key) + summarized.map(\.key),
-                                       deferredCount: unselected.count - summarized.count, previewsEnabled: try notificationPreviewsEnabled(accountID: accountID))
+            return MessageNotification(candidates: result, claimed: selected.map(\.row.key) + silent + summarized.map(\.key),
+                                       deferredCount: deferred.count, deferredChatCount: Set(deferred.map(\.chatID)).count,
+                                       previewsEnabled: try notificationPreviewsEnabled(accountID: accountID))
         }
     }
 

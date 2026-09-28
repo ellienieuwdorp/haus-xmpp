@@ -141,9 +141,28 @@ private func message(_ id: String, chat: String, sender: String? = nil, at: Time
         for index in 0..<3 { try await commit(store, message("m-\(index)", chat: "chat-\(index)", at: Double(index))) }
         let batch = try await store.pendingNotifications(accountID: "a", perChat: 8, total: 2)
         #expect(batch.candidates.map(\.key) == [.message("m-1"), .message("m-2")])
-        #expect(batch.claimed.count == 2 && batch.deferredCount == 1)
+        #expect(batch.claimed.count == 2 && batch.deferredCount == 1 && batch.deferredChatCount == 1)
         try await store.removeNotificationCandidates(accountID: "a", keys: batch.claimed)
         #expect(try await store.pendingNotifications(accountID: "a").candidates.map(\.key) == [.message("m-0")])
+    }
+}
+
+@Test func unsentMessagesAreClaimedWithoutTakingASlotOrLosingEarlierCounts() async throws {
+    try await notificationFixture { store, _ in
+        // The sender's unsend arrives before the message it names (archive order), so the candidate is already retracted
+        // when it is inserted. It was the window's oldest message and would have carried "and 1 more".
+        try await store.saveEncryptionState(accountID: "a", expectedRevision: nil, data: Data([1]))
+        try await store.commitEncryptedIncoming(accountID: "a", sender: "peer", digest: "unsend", expectedRevision: 1, state: Data([200]),
+            message: nil, event: MessageEvent(id: "r", chatID: "peer", actorID: "peer", targetWireID: "w2", kind: .retraction, payload: "{}", updatedAt: Date()))
+        for index in 0..<10 {
+            try await commit(store, StoredMessage(id: "m-\(index)", accountID: "a", chatID: "peer", senderID: "peer", body: "Synthetic",
+                                                  sentAt: Date(timeIntervalSince1970: Double(index)), encryptionProfile: "modern",
+                                                  wireID: "w\(index)", wireIDAuthenticated: true))
+        }
+        let batch = try await store.pendingNotifications(accountID: "a")
+        #expect(batch.candidates.map(\.key) == [1, 3, 4, 5, 6, 7, 8, 9].map { .message("m-\($0)") })
+        #expect(batch.candidates.first?.earlierCount == 1 && batch.candidates.dropFirst().allSatisfy { $0.earlierCount == 0 })
+        #expect(Set(batch.claimed) == Set((0..<10).map { NotificationCandidateKey.message("m-\($0)") }))
     }
 }
 
@@ -193,6 +212,14 @@ private func message(_ id: String, chat: String, sender: String? = nil, at: Time
                                                 notification: PendingNotificationContext(chatID: "room@rooms", sentAt: Date(timeIntervalSince1970: 9)))
         let group = try await store.pendingNotifications(accountID: "a")
         #expect(group.candidates.last?.isGroup == true && group.candidates.last?.senderID == "carol@x")
+        // A row retained without a candidate (a room read was still needed) gets one when classification shows it waits.
+        try await store.classifyPendingEncryptedIncoming(accountID: "a", sender: "peer", digest: "quiet", reason: .trustPending,
+                                                         notification: PendingNotificationContext(chatID: "peer", sentAt: Date(timeIntervalSince1970: 7)))
+        try await store.classifyPendingEncryptedIncoming(accountID: "a", sender: "peer", digest: "gone", reason: .trustPending,
+                                                         notification: PendingNotificationContext(chatID: "peer", sentAt: Date(timeIntervalSince1970: 8)))
+        #expect(try await store.pendingNotifications(accountID: "a").candidates.map(\.key).contains(.pending(sender: "peer", digest: "quiet")))
+        #expect(try await Set(store.retainedEncryptedIncomingKeys(accountID: "a"))
+                == [.pending(sender: "peer", digest: "quiet"), .pending(sender: "a", digest: "own"), .pending(sender: "carol@x", digest: "g")])
         try await store.dismissPendingMessageNotifications(accountID: "a")
         #expect(try await store.pendingNotifications(accountID: "a").candidates.isEmpty)
     }
