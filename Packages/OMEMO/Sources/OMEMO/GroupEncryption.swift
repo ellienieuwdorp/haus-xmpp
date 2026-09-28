@@ -177,11 +177,16 @@ extension OMEMOService {
         let known = senderDevice(first)
         let retentionSkipped = pending == nil && !membershipStale && storedMembers?.contains(account) == true
             && known?.trust.permitsEncryption == true
-        // Plan D5, as for a direct message: a member's message waiting for trust or keys alerts in the room without content.
-        let alert = message.sender == account ? nil : PendingNotificationContext(chatID: message.room, sentAt: retained.sentAt)
+        // Plan D5, as for a direct message: a member's message waiting for trust or keys alerts in the room without content,
+        // and only when it would have been a bubble. Retention for a stale membership alone (a trusted sender device) does
+        // not alert: the room read usually lets it decrypt, and offline it is simply retried. If the read shows the message
+        // does wait for trust or keys, `hold` adds the candidate then, on this first observation only.
+        let alert = message.sender == account || !Self.expectsBubble(message) ? nil
+            : PendingNotificationContext(chatID: message.room, sentAt: retained.sentAt)
         if pending == nil, !retentionSkipped {
             try await store.retainEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, wire: JSONEncoder().encode(retained),
-                                                    reason: known != nil ? .trustPending : .keysPending, notification: alert)
+                                                    reason: known != nil ? .trustPending : .keysPending,
+                                                    notification: known?.trust.permitsEncryption == true ? nil : alert)
         }
         let context = retained
         func hold(_ reason: PendingEncryptedReason) async throws {
@@ -189,7 +194,8 @@ extension OMEMOService {
                 try await store.retainEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, wire: JSONEncoder().encode(context), reason: reason,
                                                         notification: alert)
             } else {
-                try await store.classifyPendingEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, reason: reason)
+                try await store.classifyPendingEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, reason: reason,
+                                                                 notification: pending == nil ? alert : nil)
             }
         }
         var refreshedMembers: [String]?

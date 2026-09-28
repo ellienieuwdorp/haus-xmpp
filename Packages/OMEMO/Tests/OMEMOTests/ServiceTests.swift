@@ -835,10 +835,16 @@ final class ServiceTests: XCTestCase {
             try await f.a.setTrust(account: f.alice, deviceID: device.id, trust: .accepted)
         }
         let outgoing = try await f.queue("Synthetic secret")
+        let unhinted = try await f.queue("Synthetic stand-in")
         try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
         let envelope = try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id)
         let stamp = Date(timeIntervalSince1970: 1_700_000_000)
-        do { _ = try await f.b.receive(account: f.bob, message: f.message(envelope), transport: f.bTransport, sentAt: stamp); XCTFail("Trust missing") } catch {}
+        // A modern envelope without a bubble hint may be a reaction, receipt or retraction: retained, but never a review alert.
+        let quiet = try await f.a.outgoingEnvelope(account: f.alice, messageID: unhinted.id)
+        do { _ = try await f.b.receive(account: f.bob, message: f.message(quiet, id: "quiet"), transport: f.bTransport, sentAt: stamp); XCTFail("Trust missing") } catch {}
+        expectEqual(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).count, 1)
+        expectTrue(try await f.bStore.pendingNotifications(accountID: f.bob).candidates.isEmpty)
+        do { _ = try await f.b.receive(account: f.bob, message: f.message(envelope, fallbackBody: true), transport: f.bTransport, sentAt: stamp); XCTFail("Trust missing") } catch {}
         // Plan D5: the retained ciphertext is a review candidate in Alice's chat; nothing about trust changed.
         let batch = try await f.bStore.pendingNotifications(accountID: f.bob)
         expectEqual(batch.candidates.map(\.content), [.pendingEncrypted])
@@ -853,9 +859,11 @@ final class ServiceTests: XCTestCase {
         }
         try await f.b.retryPendingIncoming(account: f.bob, transport: OfflineTransport())
         let approved = try await f.bStore.pendingNotifications(accountID: f.bob)
-        expectEqual(approved.candidates.count, 1)
-        guard case let .message(shown)? = approved.candidates.first?.content else { return XCTFail("Expected the committed message") }
-        expectEqual(shown.body, "Synthetic secret")
+        expectEqual(approved.candidates.count, 2)
+        let shown = approved.candidates.compactMap { candidate -> String? in
+            if case let .message(message) = candidate.content { return message.body } else { return nil }
+        }
+        expectEqual(Set(shown), ["Synthetic secret", "Synthetic stand-in"])
         try await f.bStore.removeNotificationCandidates(accountID: f.bob, keys: approved.claimed)
         // A message not encrypted for this device alerts as unreadable; Alice's own-device copy of it would not.
         let notAddressed = XMPPOMEMOEnvelope(profile: envelope.profile, senderDeviceID: envelope.senderDeviceID,
