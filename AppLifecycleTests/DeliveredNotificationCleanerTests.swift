@@ -39,6 +39,25 @@ final class DeliveredNotificationCleanerTests: XCTestCase {
                        [NotificationIdentity.message(accountID: account, messageID: mine)])
     }
 
+    func testAReadPlaceholderIsRemovedByItsReference() throws {
+        let placeholder = "unreadable-" + String(repeating: "ab", count: 32)
+        func referenced(_ identifier: String, _ reference: NotificationReference?) -> UNNotificationRequest {
+            let content = UNMutableNotificationContent()
+            if let reference { content.userInfo = [NotificationReference.userInfoKey: reference.payload] }
+            return UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+        }
+        let mine = DeliveredNotificationCleaner.Delivered(referenced("p-1", .placeholder(accountID: account, messageID: placeholder)), accountID: account)
+        let foreign = DeliveredNotificationCleaner.Delivered(referenced("p-2", .placeholder(accountID: "other@localhost", messageID: placeholder)), accountID: account)
+        let retained = DeliveredNotificationCleaner.Delivered(referenced("p-3", .retained(accountID: account)), accountID: account)
+        let reaction = DeliveredNotificationCleaner.Delivered(referenced("p-4", .reaction(accountID: account, targetMessageID: UUID().uuidString)), accountID: account)
+        XCTAssertEqual(mine.messageID, placeholder)
+        XCTAssertNil(foreign.messageID)
+        XCTAssertNil(retained.messageID)
+        XCTAssertNil(reaction.messageID, "a reaction's target is our own message; reading says nothing about it")
+        XCTAssertEqual(Set(DeliveredNotificationCleaner.identifiers(accountID: account, readMessageIDs: [placeholder], delivered: [mine, foreign, retained, reaction])),
+                       ["p-1", NotificationIdentity.message(accountID: account, messageID: placeholder)])
+    }
+
     func testOpeningAChatRemovesOnlyItsThread() {
         let thread = NotificationIdentity.thread(accountID: account, chatID: "peer@localhost")
         let delivered = [

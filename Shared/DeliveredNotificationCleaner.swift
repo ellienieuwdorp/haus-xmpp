@@ -12,7 +12,8 @@ enum DeliveredNotificationCleaner {
     struct Delivered: Sendable, Equatable {
         let identifier: String
         let threadIdentifier: String
-        /// The message a `NotificationDestination` names, when the request carries one for this account.
+        /// The message a `NotificationDestination` names, when the request carries one for this account, or the
+        /// placeholder row an unreadable message's cleanup `NotificationReference` names (plan D5).
         let messageID: String?
 
         init(identifier: String, threadIdentifier: String, messageID: String?) {
@@ -26,7 +27,10 @@ enum DeliveredNotificationCleaner {
             // Scope first: the payload names a message only within the account it was posted for.
             let scope = NotificationDestination(accountID: accountID, messageID: UUID().uuidString)?.accountScope
             // A reaction's destination names this account's own reacted-to message, which says nothing about reading.
+            let reference = (request.content.userInfo[NotificationReference.userInfoKey] as? [String: String]).flatMap(NotificationReference.init(payload:))
             messageID = destination.flatMap { $0.accountScope == scope && $0.kind == .message ? $0.messageID : nil }
+                // "Sent a message this device can't read" is a message row too: read here or elsewhere, it goes with the rest.
+                ?? reference.flatMap { $0.accountScope == scope && $0.kind == .placeholder ? $0.messageID : nil }
         }
     }
 
