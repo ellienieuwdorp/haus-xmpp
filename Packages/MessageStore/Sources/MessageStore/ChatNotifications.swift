@@ -42,9 +42,27 @@ public enum Mention {
     public static func mentions(_ text: String, account: String, nickname: String?, members: [String]) -> Bool {
         let own = names(jid: account) + [nickname].compactMap { $0 }
         guard own.contains(where: { names($0, in: text) }) else { return false }
+        return namedOthers(in: text, account: account, ownNames: own, members: members) + 1 <= massMentionLimit
+    }
+
+    /// How many other members the text names, for the mass-mention tally.
+    ///
+    /// A text that names the user must not make other members look named: a name equal to one of the user's
+    /// own names (`me` for both me@a and me@b) is attributed to the user alone. A localpart shared by several
+    /// other members counts once, and not at all when one of those members is already named by full address.
+    static func namedOthers(in text: String, account: String, ownNames: [String], members: [String]) -> Int {
+        let own = Set(ownNames.map { $0.lowercased() })
         let others = Set(members.map { $0.lowercased() }).subtracting([account.lowercased()])
-        let named = others.filter { member in names(jid: member).contains { names($0, in: text) } }.count + 1
-        return named <= massMentionLimit
+        let byAddress = others.filter { names($0, in: text) }
+        let addressedLocalparts = Set(byAddress.compactMap { names(jid: $0).count == 2 ? names(jid: $0)[0] : nil })
+        let byLocalpart = Set(others.subtracting(byAddress).compactMap { member -> String? in
+            let parts = names(jid: member)
+            guard parts.count == 2 else { return nil }
+            let localpart = parts[0]
+            guard !own.contains(localpart), !addressedLocalparts.contains(localpart), names(localpart, in: text) else { return nil }
+            return localpart
+        })
+        return byAddress.count + byLocalpart.count
     }
 
     /// A bare JID's names: its localpart and the whole address.

@@ -183,3 +183,28 @@ private func deliver(_ store: MessageStore, _ id: String, chat: String = "peer@e
     // Unknown words are not members.
     #expect(check("elle zed yan xavier walt vic uma"))
 }
+
+@Test func namesSharedWithTheUserDoNotInflateTheMassMentionTally() {
+    // Other members on other domains share the user's localpart or nickname: naming the user must not name them.
+    let members = ["me@example.org", "me@other.example", "elle@third.example", "alice@example.org", "bob@example.org",
+                   "carol@example.org", "dave@example.org"]
+    func tally(_ text: String) -> Int {
+        Mention.namedOthers(in: text, account: "me@example.org", ownNames: ["me", "me@example.org", "Elle"], members: members)
+    }
+    #expect(tally("me: see this") == 0)
+    #expect(tally("Elle, look") == 0)
+    #expect(tally("elle alice bob carol dave") == 4)
+    #expect(Mention.mentions("elle alice bob carol dave", account: "me@example.org", nickname: "Elle", members: members))
+    // Their full addresses still name them.
+    #expect(tally("me@other.example elle@third.example") == 2)
+    #expect(!Mention.mentions("me alice bob carol dave me@other.example", account: "me@example.org", nickname: "Elle", members: members))
+
+    // Other members sharing one localpart count once, and not again when one of them is named by address.
+    let shared = ["me@example.org", "bob@a.example", "bob@b.example", "carol@example.org"]
+    func sharedTally(_ text: String) -> Int {
+        Mention.namedOthers(in: text, account: "me@example.org", ownNames: ["me", "me@example.org"], members: shared)
+    }
+    #expect(sharedTally("bob and carol") == 2)
+    #expect(sharedTally("bob@a.example and carol") == 2)
+    #expect(sharedTally("bob@a.example bob@b.example carol") == 3)
+}
