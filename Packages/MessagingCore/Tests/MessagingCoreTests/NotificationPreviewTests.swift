@@ -52,3 +52,15 @@ import Testing
     #expect(preview.includesMessageText)
     #expect(preview.title == "Bob")
 }
+
+@Test func notificationIdentitiesAreStableOpaqueAndScoped() {
+    let thread = NotificationIdentity.thread(accountID: "me@example.org", chatID: "peer@example.org")
+    #expect(thread == NotificationIdentity.thread(accountID: "me@example.org", chatID: "peer@example.org"))
+    #expect(thread != NotificationIdentity.thread(accountID: "other@example.org", chatID: "peer@example.org"))
+    let message = NotificationIdentity.message(accountID: "me@example.org", messageID: "8C1F2C1E-8E0B-4E0B-9E43-0B1C9E8A0F11")
+    #expect(message.hasPrefix("m-") && !message.contains("example") && !message.contains("8C1F"))
+    #expect(NotificationIdentity.fallback(accountID: "me@example.org") != NotificationIdentity.fallback(accountID: "other@example.org"))
+    let message2 = StoredMessage(id: "one", accountID: "me@example.org", chatID: "peer@example.org", senderID: "peer@example.org", body: "hi", encryptionProfile: "modern")
+    let preview = NotificationPreview(MessageNotification(latest: message2, chatTitle: "Peer", messageCount: 1, conversationCount: 1, previewsEnabled: true))
+    #expect(preview.threadIdentifier == thread)
+}

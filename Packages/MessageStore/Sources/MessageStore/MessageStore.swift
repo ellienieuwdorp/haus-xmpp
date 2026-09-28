@@ -882,7 +882,7 @@ public actor MessageStore {
                     try connection.execute("INSERT INTO group_ciphertext_messages VALUES(?,?,?,?)", [.text(accountID), .text(sender), .text(digest), .text(message.id)])
                     if let roomStanzaID { try bindGroupReference(accountID: accountID, room: groupRoom, messageID: message.id, stanzaID: roomStanzaID) }
                 }
-                if inserted, !message.isOutgoing, message.senderID != accountID {
+                if inserted, try queuesNotification(accountID: accountID, message: message) {
                     try connection.execute("INSERT INTO notification_candidates(account_id,message_id) VALUES(?,?)", [.text(accountID), .text(message.id)])
                 }
             }
@@ -893,6 +893,12 @@ public actor MessageStore {
                 try insertEncryptionControl(accountID: accountID, control: control)
             }
         }
+    }
+
+    /// Whether a newly committed incoming message may alert. Each notification rule (own/outgoing,
+    /// read pointer, mute) is its own small condition here; runs inside the commit transaction.
+    private func queuesNotification(accountID: String, message: StoredMessage) throws -> Bool {
+        !message.isOutgoing && message.senderID != accountID
     }
 
     public func notificationPreviewsEnabled(accountID: String) throws -> Bool { try accountPreferences(accountID: accountID).notificationPreviews }

@@ -1,6 +1,5 @@
 import Foundation
 import MessageStore
-import CryptoKit
 
 /// Only local authenticated state may create a preview. iOS separately enforces its Show
 /// Previews setting; the notification category never opts into revealing hidden titles.
@@ -24,8 +23,7 @@ public struct NotificationPreview: Sendable, Equatable {
             title = "XMPP"; body = "New encrypted activity"; threadIdentifier = ""
             return
         }
-        let digest = SHA256.hash(data: Data((latest.accountID + "\u{0}" + latest.chatID).utf8))
-        threadIdentifier = batch.conversationCount == 1 ? digest.map { String(format: "%02x", $0) }.joined() : ""
+        threadIdentifier = batch.conversationCount == 1 ? NotificationIdentity.thread(accountID: latest.accountID, chatID: latest.chatID) : ""
         guard batch.previewsEnabled else {
             title = "XMPP"; body = batch.messageCount == 1 ? "New message" : "\(batch.messageCount) new messages"
             return
