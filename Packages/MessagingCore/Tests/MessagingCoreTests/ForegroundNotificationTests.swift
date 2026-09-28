@@ -33,6 +33,20 @@ private func candidate(_ chat: String, at: TimeInterval) -> NotificationCandidat
 }
 
 struct ForegroundNotificationTests {
+    /// Ten minutes: tolerant of a sender clock that runs behind and of a short server queue, while history the
+    /// connection caught up on stays silent.
+    @Test func theWindowIsTenMinutesInclusive() {
+        let now = Date(timeIntervalSince1970: 10_000)
+        #expect(NotificationPlanner.foregroundWindow == 600)
+        let inside = candidate("carol@example.org", at: 10_000 - 599)
+        let edge = candidate("dave@example.org", at: 10_000 - 600)
+        let outside = candidate("erin@example.org", at: 10_000 - 601)
+        let batch = MessageNotification(candidates: [inside, edge, outside], claimed: [inside.key, edge.key, outside.key], previewsEnabled: true)
+        let plan = NotificationPlanner.foreground(batch, accountID: account, openChatID: nil, now: now)
+        #expect(Set(plan.requests.map(\.identifier)) == Set([inside, edge].map { NotificationPlanner.identifier(for: $0) }))
+        #expect(Set(plan.claimed) == Set([inside.key, edge.key, outside.key]), "the old one is dismissed, not left behind")
+    }
+
     @Test func theOpenChatAndOldHistoryNeverBannerButEverythingIsClaimed() {
         let now = Date(timeIntervalSince1970: 10_000)
         let open = candidate("bob@example.org", at: 9_990)
