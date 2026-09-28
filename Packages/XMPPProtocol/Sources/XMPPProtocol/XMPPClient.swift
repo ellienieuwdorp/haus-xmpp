@@ -827,13 +827,33 @@ public actor XMPPClient {
         return "\(node.name)" + (attributes.isEmpty ? "" : "{\(attributes)}") + (node.children.isEmpty ? "" : "[\(children)]")
     }
 
-    /// XEP-0490: every chat's displayed state from our own PEP node. A missing node is no state.
-    public func fetchDisplayedSync() async throws -> [XMPPDisplayedItem] {
+    /// XEP-0490: every chat's displayed state from our own PEP node. A missing node is no state. `timeout` bounds the
+    /// query for a caller with a budget (the notification extension).
+    public func fetchDisplayedSync(timeout: Duration = XMPPClient.iqTimeout) async throws -> [XMPPDisplayedItem] {
         guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
         do {
-            let response = try await requestIQ(type: "get", to: ownBare, payload: DisplayedSync.fetchXML)
-            return try Self.logged(response, "displayed sync") { try DisplayedSync.items(fromResult: response) }
+            let response = try await requestIQ(type: "get", to: ownBare, payload: DisplayedSync.fetchXML, timeout: timeout)
+            return try Self.loggedPrivately(response, "displayed sync") { try DisplayedSync.items(fromResult: response) }
         } catch XMPPIQError.stanza(condition: "item-not-found") { return [] }
+    }
+
+    /// For a private node (XEP-0490 item ids are contact and room JIDs): a decoding failure logs only element names and
+    /// child counts, never an attribute value or text, so nothing identifying reaches the unified log.
+    private static func loggedPrivately<T>(_ response: XMLNode, _ what: String, _ decode: () throws -> T) throws -> T {
+        do { return try decode() }
+        catch XMPPIQError.malformedResponse {
+            #if canImport(os)
+            Logger(subsystem: "haus.xmpp.ios", category: "xmpp").error("Malformed \(what, privacy: .public): \(shape(response), privacy: .public)")
+            #endif
+            throw XMPPIQError.malformedResponse
+        }
+    }
+
+    /// Element names and child counts only, 4 levels deep and 4 children wide.
+    static func shape(_ node: XMLNode, depth: Int = 0) -> String {
+        guard depth < 4 else { return "…" }
+        let children = node.children.prefix(4).map { shape($0, depth: depth + 1) }.joined(separator: ",")
+        return node.name + (node.children.isEmpty ? "" : "#\(node.children.count)[\(children)]")
     }
 
     /// XEP-0490: publish one chat's displayed state with the node options the XEP requires. A node that exists with
