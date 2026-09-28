@@ -67,11 +67,14 @@ public struct NotificationCommunication: Sendable, Equatable, CustomStringConver
     public let groupAvatarHash: String?
     /// Other room members this device knows of (never the sender or the account); empty for a direct chat.
     public let otherRecipients: [Person]
+    /// The body when the system shows the sender itself: a room's title line names the sender and its subtitle the
+    /// room, so the plain body's "Bob: " prefix would repeat the name. Equal to the plain body in a direct chat.
+    public let body: String
 
     public init(sender: Person, conversationIdentifier: String, account: Person, groupName: String? = nil, groupAvatarHash: String? = nil,
-                otherRecipients: [Person] = []) {
+                otherRecipients: [Person] = [], body: String) {
         self.sender = sender; self.conversationIdentifier = conversationIdentifier; self.account = account; self.groupName = groupName
-        self.groupAvatarHash = groupAvatarHash; self.otherRecipients = otherRecipients
+        self.groupAvatarHash = groupAvatarHash; self.otherRecipients = otherRecipients; self.body = body
     }
     public var isGroup: Bool { groupName != nil }
     public var description: String { "NotificationCommunication(<redacted>)" }
@@ -132,8 +135,8 @@ public enum NotificationPlanner {
                 continue
             }
             let earlier = candidate.earlierCount + (carried.removeValue(forKey: candidate.chatID) ?? 0)
-            var body = previews ? (candidate.isGroup ? senderName(candidate) + ": " + text : text) : hiddenBody
-            if earlier > 0 { body += "\nand \(earlier) more" }
+            let more = earlier > 0 ? "\nand \(earlier) more" : ""
+            let body = (previews ? (candidate.isGroup ? senderName(candidate) + ": " + text : text) : hiddenBody) + more
             let destination: NotificationDestination?, reference: NotificationReference?
             switch candidate.content {
             case let .message(message):
@@ -151,7 +154,7 @@ public enum NotificationPlanner {
                 communication: previews ? communication(accountID: candidate.accountID, thread: thread, chatName: chatName, chatAvatarHash: candidate.chatAvatarHash,
                                                         isGroup: candidate.isGroup, sender: NotificationParticipant(id: candidate.senderID, title: candidate.senderTitle,
                                                                                                                     avatarHash: candidate.senderAvatarHash),
-                                                        members: candidate.groupMembers) : nil,
+                                                        members: candidate.groupMembers, body: text + more) : nil,
                 reference: reference, badge: badge)))
         }
         for reaction in batch.reactions {
@@ -163,7 +166,8 @@ public enum NotificationPlanner {
                 threadIdentifier: thread, title: previews ? chatName : "", body: previews ? reactionBody(reaction) : hiddenReactionBody,
                 playsSound: false, destination: nil,
                 communication: previews ? communication(accountID: reaction.accountID, thread: thread, chatName: chatName, chatAvatarHash: reaction.chatAvatarHash,
-                                                        isGroup: reaction.isGroup, sender: reaction.actor, members: reaction.groupMembers) : nil,
+                                                        isGroup: reaction.isGroup, sender: reaction.actor, members: reaction.groupMembers,
+                                                        body: reactionBody(reaction, namingActor: false)) : nil,
                 reference: .reaction(accountID: reaction.accountID, targetMessageID: reaction.target.id), badge: badge)))
         }
         requests += timed.enumerated().sorted { ($0.element.at, $0.offset) < ($1.element.at, $1.offset) }.map(\.element.request)
@@ -173,18 +177,19 @@ public enum NotificationPlanner {
 
     /// "Reacted 👍 to “Lunch?”" in a direct chat, "Bob reacted 👍 to “Lunch?”" in a room. The quoted text is bounded like
     /// a preview; a file without text is named by its kind.
-    static func reactionBody(_ reaction: ReactionNotificationCandidate) -> String {
+    /// `namingActor: false` is the communication form, where the system already shows who reacted.
+    static func reactionBody(_ reaction: ReactionNotificationCandidate, namingActor: Bool = true) -> String {
         let emoji = clean(reaction.reactions.joined(), limit: 24, maximumBytes: 128)
         let text = clean(reaction.target.body, limit: 240)
         let object = text.isEmpty ? "your " + (reaction.target.attachment?.kindLabel.lowercased() ?? "message") : "“" + text + "”"
         let verb = "eacted \(emoji) to \(object)"
-        guard reaction.isGroup else { return "R" + verb }
+        guard reaction.isGroup, namingActor else { return "R" + verb }
         return clean(displayName(reaction.actor.id, title: reaction.actor.title), limit: 40, maximumBytes: 160) + " r" + verb
     }
 
     /// The communication notification's people. A direct chat's sender is the chat itself, named like the title.
     private static func communication(accountID: String, thread: String, chatName: String, chatAvatarHash: String?, isGroup: Bool,
-                                      sender: NotificationParticipant, members: [NotificationParticipant]) -> NotificationCommunication {
+                                      sender: NotificationParticipant, members: [NotificationParticipant], body: String) -> NotificationCommunication {
         func person(_ participant: NotificationParticipant) -> NotificationCommunication.Person {
             .init(handle: participant.id, displayName: clean(displayName(participant.id, title: participant.title), limit: 40, maximumBytes: 160),
                   avatarHash: participant.avatarHash)
@@ -192,11 +197,11 @@ public enum NotificationPlanner {
         let me = NotificationCommunication.Person(handle: accountID, displayName: displayName(accountID, title: nil), avatarHash: nil)
         guard isGroup else {
             return NotificationCommunication(sender: .init(handle: sender.id, displayName: chatName, avatarHash: sender.avatarHash ?? chatAvatarHash),
-                                             conversationIdentifier: thread, account: me)
+                                             conversationIdentifier: thread, account: me, body: body)
         }
         return NotificationCommunication(sender: person(sender), conversationIdentifier: thread, account: me, groupName: chatName,
                                          groupAvatarHash: chatAvatarHash,
-                                         otherRecipients: members.filter { $0.id != sender.id && $0.id != accountID }.prefix(8).map(person))
+                                         otherRecipients: members.filter { $0.id != sender.id && $0.id != accountID }.prefix(8).map(person), body: body)
     }
 
     /// Stable per message, so posting again replaces rather than duplicates (plan D3). Retained ciphertext has no

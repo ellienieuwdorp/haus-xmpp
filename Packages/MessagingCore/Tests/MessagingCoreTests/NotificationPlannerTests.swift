@@ -33,7 +33,7 @@ private func batch(_ candidates: [NotificationCandidate], previews: Bool = true)
     #expect(plan.requests[0].userInfo == [NotificationDestination.userInfoKey: try #require(plan.requests[0].destination).payload])
     #expect(plan.requests[0].communication == NotificationCommunication(
         sender: .init(handle: "peer@example.org", displayName: "Peer", avatarHash: "abc"),
-        conversationIdentifier: plan.requests[0].threadIdentifier, account: .init(handle: account, displayName: "me", avatarHash: nil)))
+        conversationIdentifier: plan.requests[0].threadIdentifier, account: .init(handle: account, displayName: "me", avatarHash: nil), body: "One"))
     #expect(plan.requests.allSatisfy { $0.badge == nil })
     #expect(plan.claimed == [.message(first), .message(second)])
     #expect(NotificationPlanner.plan(batch([])).requests.isEmpty)
@@ -178,6 +178,8 @@ extension NotificationCandidate {
     // Never the sender or the account among the other recipients.
     #expect(communication.otherRecipients == [.init(handle: "carol@x", displayName: "Carol", avatarHash: "c")])
     #expect(request.badge == 4)
+    // The system names the sender in a group's communication notification; the plain fallback keeps the prefix.
+    #expect(request.body == "Bob: Hi all" && communication.body == "Hi all")
     #expect(!String(describing: communication).contains("Bob"))
 }
 
@@ -208,6 +210,8 @@ private func reaction(_ emoji: [String], chat: String = "peer@example.org", acto
     // No tap destination (the target is our own message); a cleanup reference that names only the local message ID.
     #expect(plan.requests[0].destination == nil && plan.requests[0].reference == .reaction(accountID: account, targetMessageID: direct.target.id))
     #expect(plan.requests[1].communication?.sender.handle == "bob@x" && plan.requests[1].communication?.groupName == "Book club")
+    #expect(plan.requests[1].communication?.body.hasPrefix("Reacted ❤️🔥 to “long long") == true)
+    #expect(plan.requests[0].communication?.body == plan.requests[0].body)
     #expect(plan.requests.allSatisfy { $0.badge == 2 && $0.categoryIdentifier == NotificationIdentity.messageCategory })
     #expect(plan.claimed.count == 3)
     // The identifier is per actor and target, whatever the emoji.
@@ -245,4 +249,13 @@ private func reaction(_ emoji: [String], chat: String = "peer@example.org", acto
     #expect(NotificationBadge.count(unread: unread, settings: settings, now: now) == 8)
     #expect(NotificationBadge.count(unread: [:], settings: settings, now: now) == 0)
     #expect(NotificationBadge.count(unread: ["b": 5], settings: ["b": ChatNotificationSetting(mutedUntil: ChatNotificationSetting.always)], now: now) == 0)
+}
+
+@Test func donationBudgetBoundsEachDonationAndTheirTotal() {
+    let budget = DonationBudget(.seconds(3))
+    #expect(budget.next(maximum: .milliseconds(2500)) == .milliseconds(2500))
+    budget.spend(.milliseconds(2500))
+    #expect(budget.next(maximum: .milliseconds(2500)) == .milliseconds(500))
+    budget.spend(.milliseconds(400))
+    #expect(budget.next(maximum: .milliseconds(2500)) == nil)
 }

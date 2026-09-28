@@ -10,7 +10,7 @@ private let me = NotificationCommunication.Person(handle: "me@example.org", disp
 
 @Test func directChatIntentCarriesTheSenderHandleNameAvatarAndThread() throws {
     let communication = NotificationCommunication(sender: .init(handle: "peer@example.org", displayName: "Peer", avatarHash: "abc"),
-                                                  conversationIdentifier: "thread-1", account: me)
+                                                  conversationIdentifier: "thread-1", account: me, body: "Hi")
     var asked: [String] = []
     let intent = CommunicationNotification.intent(communication) { hash in asked.append(hash); return Data([0x89, 0x50, 0x4E, 0x47]) }
     let sender = try #require(intent.sender)
@@ -26,7 +26,7 @@ private let me = NotificationCommunication.Person(handle: "me@example.org", disp
 @Test func groupIntentNamesTheRoomAndEveryKnownRecipientIncludingTheAccount() throws {
     let communication = NotificationCommunication(sender: .init(handle: "bob@x", displayName: "Bob", avatarHash: nil), conversationIdentifier: "thread-2",
                                                   account: me, groupName: "Book club", groupAvatarHash: "room",
-                                                  otherRecipients: [.init(handle: "carol@x", displayName: "Carol", avatarHash: nil)])
+                                                  otherRecipients: [.init(handle: "carol@x", displayName: "Carol", avatarHash: nil)], body: "Hi all")
     let intent = CommunicationNotification.intent(communication) { _ in nil }
     #expect(intent.speakableGroupName?.spokenPhrase == "Book club")
     #expect(intent.recipients?.map { $0.personHandle?.value } == ["me@example.org", "carol@x"])
@@ -37,6 +37,7 @@ private let me = NotificationCommunication.Person(handle: "me@example.org", disp
     let request = PlannedNotification(identifier: "m-1", threadIdentifier: "t", title: "Peer", body: "Hi", playsSound: true, destination: nil, badge: 3)
     let content = UserNotificationPoster.content(for: request)
     #expect(content.title == "Peer" && content.body == "Hi" && content.threadIdentifier == "t" && content.badge == 3 && content.sound != nil)
+    #expect(UserNotificationPoster.content(for: request, body: "Only the text").body == "Only the text")
     #expect(UserNotificationPoster.content(for: PlannedNotification(identifier: "m-2", threadIdentifier: "t", title: "", body: "New message",
                                                                     playsSound: false, destination: nil)).badge == nil)
 }

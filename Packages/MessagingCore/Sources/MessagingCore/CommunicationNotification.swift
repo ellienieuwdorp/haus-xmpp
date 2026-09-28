@@ -1,6 +1,7 @@
 #if canImport(Intents) && canImport(UserNotifications)
 import Foundation
 import Intents
+import os
 import UserNotifications
 
 /// Turns a planned request into a communication notification (Apple, "Implementing communication notifications",
@@ -37,9 +38,22 @@ public enum CommunicationNotification {
         if donate {
             let interaction = Unchecked(INInteraction(intent: intent, response: nil))
             interaction.value.direction = .incoming
-            do { try await withTimeout(donationTimeout) { try await interaction.value.donate() } } catch { return nil }
+            do { try await withTimeout(donationTimeout) { try await interaction.value.donate() } }
+            catch { log.notice("communication donation failed: \(Self.describe(error), privacy: .public)"); return nil }
         }
-        return try? content.updating(from: intent)
+        do { return try content.updating(from: intent) }
+        catch { log.notice("communication update failed: \(Self.describe(error), privacy: .public)"); return nil }
+    }
+}
+
+private let log = Logger(subsystem: "haus.xmpp.ios", category: "notifications")
+
+extension CommunicationNotification {
+    /// Domain and code only: never a name, handle or body.
+    static func describe(_ error: any Error) -> String {
+        if error is NotificationRunError { return "timeout" }
+        let error = error as NSError
+        return "\(error.domain) \(error.code)"
     }
 }
 
