@@ -15,16 +15,28 @@ public struct PlannedNotification: Sendable, Equatable, CustomStringConvertible 
     public let destination: NotificationDestination?
     /// The chat's verified avatar hash, attached only when previews are shown.
     public let avatarHash: String?
+    /// Lets cleanup find placeholder and retained-ciphertext notifications, which have no destination (plan D5).
+    public let reference: NotificationReference?
 
     public init(identifier: String, threadIdentifier: String, categoryIdentifier: String = NotificationIdentity.messageCategory,
-                title: String, body: String, playsSound: Bool, destination: NotificationDestination?, avatarHash: String?) {
+                title: String, body: String, playsSound: Bool, destination: NotificationDestination?, avatarHash: String?,
+                reference: NotificationReference? = nil) {
         self.identifier = identifier; self.threadIdentifier = threadIdentifier; self.categoryIdentifier = categoryIdentifier
         self.title = title; self.body = body; self.playsSound = playsSound; self.destination = destination; self.avatarHash = avatarHash
+        self.reference = reference
     }
 
-    /// The `userInfo` payload: the opaque destination only, never an address or body.
+    /// The `userInfo` payload: the opaque destination or cleanup reference only, never an address or body.
     public var userInfo: [String: [String: String]] {
-        destination.map { [NotificationDestination.userInfoKey: $0.payload] } ?? [:]
+        var info: [String: [String: String]] = [:]
+        if let destination { info[NotificationDestination.userInfoKey] = destination.payload }
+        if let reference { info[NotificationReference.userInfoKey] = reference.payload }
+        return info
+    }
+
+    func withSound() -> PlannedNotification {
+        PlannedNotification(identifier: identifier, threadIdentifier: threadIdentifier, categoryIdentifier: categoryIdentifier, title: title,
+                            body: body, playsSound: true, destination: destination, avatarHash: avatarHash, reference: reference)
     }
     public var description: String { "PlannedNotification(<redacted>)" }
 }
@@ -33,51 +45,83 @@ public struct PlannedNotification: Sendable, Equatable, CustomStringConvertible 
 public struct NotificationPlan: Sendable, Equatable {
     public let requests: [PlannedNotification]
     public let claimed: [NotificationCandidateKey]
+    /// True when `requests` includes the summary for chats beyond the run's cap; a settled run without one removes a
+    /// delivered summary, whose chats have since been posted or dismissed.
+    public let summarizesDeferredChats: Bool
 }
 
 /// Pure: store snapshot in, ordered requests out (plan D1, D3–D5). Oldest first, so the newest is added last and sits on top.
 public enum NotificationPlanner {
     /// The visible alert whenever a run cannot settle (plan D2). It never carries message content.
     public static let fallbackBody = "You may have new messages"
-    /// Retained ciphertext waiting for trust or keys (plan D5); matches the app's review wording.
+    /// Retained ciphertext waiting for trust or keys: the wording plan D5 fixes. The app's chat list says "Encrypted
+    /// message needs attention" for the same state; the two are not the same string.
     public static let reviewBody = "Sent an encrypted message. Open the chat to review."
     /// An incoming placeholder this device cannot read (plan D5).
     public static let unreadableBody = "Sent a message this device can't read"
     /// Every body when previews are off.
     public static let hiddenBody = "New message"
 
-    public static func plan(_ batch: MessageNotification) -> NotificationPlan {
+    /// The summary for chats a run had no room for (plan D4): a count only, so it is the same with previews off.
+    public static func overflowBody(chats: Int) -> String {
+        chats == 1 ? "New messages in 1 more chat" : "New messages in \(chats) more chats"
+    }
+
+    /// `accountID` names the account for the deferred-chats summary; it defaults to the batch's own candidates.
+    public static func plan(_ batch: MessageNotification, accountID: String? = nil) -> NotificationPlan {
         var requests: [PlannedNotification] = []
+        // Chats beyond the cap are older than every selected message, so their summary goes first and never takes the
+        // sound from a newer message. Settling without it would hide that those chats have news (plan D2).
+        let account = accountID ?? batch.candidates.first?.accountID
+        var summarizes = false
+        if batch.deferredChatCount > 0, let account, !account.isEmpty {
+            let identifier = NotificationIdentity.overflow(accountID: account)
+            requests.append(PlannedNotification(identifier: identifier, threadIdentifier: identifier, title: "",
+                                                body: overflowBody(chats: batch.deferredChatCount), playsSound: false,
+                                                destination: nil, avatarHash: nil))
+            summarizes = true
+        }
+        // An unsent message is skipped; an "and N more" it carried moves to the chat's next shown message.
+        var carried: [String: Int] = [:]
         for candidate in batch.candidates {
-            guard let text = text(for: candidate) else { continue }
+            guard let text = text(for: candidate) else {
+                if candidate.earlierCount > 0 { carried[candidate.chatID, default: 0] += candidate.earlierCount }
+                continue
+            }
             let previews = batch.previewsEnabled
+            let earlier = candidate.earlierCount + (carried.removeValue(forKey: candidate.chatID) ?? 0)
             var body = previews ? (candidate.isGroup ? senderName(candidate) + ": " + text : text) : hiddenBody
-            if candidate.earlierCount > 0 { body += "\nand \(candidate.earlierCount) more" }
-            let destination: NotificationDestination?
-            if case let .message(message) = candidate.content {
-                destination = NotificationDestination(accountID: candidate.accountID, messageID: message.id)
-            } else { destination = nil }
+            if earlier > 0 { body += "\nand \(earlier) more" }
+            let destination: NotificationDestination?, reference: NotificationReference?
+            switch candidate.content {
+            case let .message(message):
+                destination = NotificationDestination(accountID: candidate.accountID, messageID: message.id); reference = nil
+            case let .unreadable(messageID):
+                destination = nil; reference = .placeholder(accountID: candidate.accountID, messageID: messageID)
+            case .pendingEncrypted:
+                destination = nil; reference = .retained(accountID: candidate.accountID)
+            }
             requests.append(PlannedNotification(
                 identifier: identifier(for: candidate),
                 threadIdentifier: NotificationIdentity.thread(accountID: candidate.accountID, chatID: candidate.chatID),
                 title: previews ? clean(displayName(candidate.chatID, title: candidate.chatTitle), limit: 80, maximumBytes: 320) : "",
                 body: body, playsSound: false, destination: destination,
-                avatarHash: previews ? candidate.chatAvatarHash : nil))
+                avatarHash: previews ? candidate.chatAvatarHash : nil, reference: reference))
         }
-        if let newest = requests.popLast() {
-            requests.append(PlannedNotification(identifier: newest.identifier, threadIdentifier: newest.threadIdentifier,
-                categoryIdentifier: newest.categoryIdentifier, title: newest.title, body: newest.body, playsSound: true,
-                destination: newest.destination, avatarHash: newest.avatarHash))
-        }
-        return NotificationPlan(requests: requests, claimed: batch.claimed)
+        if let newest = requests.popLast() { requests.append(newest.withSound()) }
+        return NotificationPlan(requests: requests, claimed: batch.claimed, summarizesDeferredChats: summarizes)
     }
 
     /// Stable per message, so posting again replaces rather than duplicates (plan D3). Retained ciphertext has no
     /// message row yet; its identity is derived from its ciphertext key instead, inside the same opaque digest.
     public static func identifier(for candidate: NotificationCandidate) -> String {
-        switch candidate.key {
-        case let .message(id): NotificationIdentity.message(accountID: candidate.accountID, messageID: id)
-        case let .pending(sender, digest): NotificationIdentity.message(accountID: candidate.accountID, messageID: "pending\u{0}\(sender)\u{0}\(digest)")
+        identifier(accountID: candidate.accountID, key: candidate.key)
+    }
+
+    static func identifier(accountID: String, key: NotificationCandidateKey) -> String {
+        switch key {
+        case let .message(id): NotificationIdentity.message(accountID: accountID, messageID: id)
+        case let .pending(sender, digest): NotificationIdentity.message(accountID: accountID, messageID: "pending\u{0}\(sender)\u{0}\(digest)")
         }
     }
 

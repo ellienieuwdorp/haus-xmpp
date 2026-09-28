@@ -8,8 +8,10 @@ public struct DeliveredNotification: Sendable, Equatable {
     public let identifier: String
     public let categoryIdentifier: String
     public let destination: NotificationDestination?
-    public init(identifier: String, categoryIdentifier: String, destination: NotificationDestination?) {
-        self.identifier = identifier; self.categoryIdentifier = categoryIdentifier; self.destination = destination
+    /// Set on placeholder and retained-ciphertext notifications, which have no destination.
+    public let reference: NotificationReference?
+    public init(identifier: String, categoryIdentifier: String, destination: NotificationDestination?, reference: NotificationReference? = nil) {
+        self.identifier = identifier; self.categoryIdentifier = categoryIdentifier; self.destination = destination; self.reference = reference
     }
 }
 
@@ -52,8 +54,10 @@ public struct UserNotificationPoster: NotificationPosting, @unchecked Sendable {
         await center.deliveredNotifications().map { notification in
             let content = notification.request.content
             let payload = content.userInfo[NotificationDestination.userInfoKey] as? [String: String]
+            let reference = content.userInfo[NotificationReference.userInfoKey] as? [String: String]
             return DeliveredNotification(identifier: notification.request.identifier, categoryIdentifier: content.categoryIdentifier,
-                                         destination: payload.flatMap(NotificationDestination.init(payload:)))
+                                         destination: payload.flatMap(NotificationDestination.init(payload:)),
+                                         reference: reference.flatMap(NotificationReference.init(payload:)))
         }
     }
 

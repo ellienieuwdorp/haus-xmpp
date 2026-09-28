@@ -187,7 +187,7 @@ public struct NotificationPresenter: Sendable {
         try Task.checkCancellation()
         try authorize()
         let batch = try await store.pendingNotifications(accountID: accountID)
-        let plan = NotificationPlanner.plan(batch)
+        let plan = NotificationPlanner.plan(batch, accountID: accountID)
         for request in plan.requests {
             try Task.checkCancellation()
             try await withTimeout(addTimeout) { try await posting.add(request) }
@@ -199,34 +199,87 @@ public struct NotificationPresenter: Sendable {
         progress.enter(.committed)
         // Settled. Cleanup is best effort and never changes the outcome.
         let removed = try? await withTimeout(cleanupTimeout) {
-            try await removeStaleDelivered(store: store, accountID: accountID)
+            try await removeStaleDelivered(store: store, accountID: accountID, summaryPosted: plan.summarizesDeferredChats)
         }
         if let removed { progress.update { $0.removedFallbacks = removed.fallbacks; $0.removedStale = removed.messages } }
     }
 
-    /// Removes delivered notifications a successful run supersedes: every fallback (category `fallback`, whatever its
-    /// request or collapse identifier) and message notifications whose message was retracted or no longer exists.
-    /// Merge point: stream B's read-pointer rule adds the identifiers of read messages here.
-    func removeStaleDelivered(store: MessageStore, accountID: String) async throws -> (fallbacks: Int, messages: Int) {
+    /// Removes delivered notifications a successful run supersedes:
+    /// - every fallback (category `fallback`, whatever its request or collapse identifier);
+    /// - message notifications whose message was retracted or no longer exists, including unreadable placeholders;
+    /// - review notifications of retained ciphertext that is no longer retained (it committed, and then alerts as the
+    ///   message itself, or became a placeholder);
+    /// - the deferred-chats summary, when this run posted none: its chats were posted since, or dismissed.
+    /// Merge point: stream B's read-pointer rule adds the identifiers of read messages here (`owned` lists the message
+    /// IDs behind delivered destinations and placeholder references).
+    func removeStaleDelivered(store: MessageStore, accountID: String, summaryPosted: Bool) async throws -> (fallbacks: Int, messages: Int) {
         let delivered = await posting.deliveredNotifications()
         let fallbacks = delivered.filter { $0.categoryIdentifier == NotificationIdentity.fallbackCategory }.map(\.identifier)
-        let owned = delivered.filter { $0.categoryIdentifier == NotificationIdentity.messageCategory }
-            .compactMap { notification in notification.destination.flatMap { $0.belongs(to: accountID) ? $0.messageID : nil } }
+        let mine = delivered.filter { $0.categoryIdentifier == NotificationIdentity.messageCategory }
+        let owned = mine.compactMap { notification -> String? in
+            if let destination = notification.destination { return destination.belongs(to: accountID) ? destination.messageID : nil }
+            if let reference = notification.reference, reference.kind == .placeholder, reference.belongs(to: accountID) { return reference.messageID }
+            return nil
+        }
         let stale = try await store.staleNotificationMessageIDs(accountID: accountID, messageIDs: Array(owned.prefix(1000)))
-        let messages = stale.map { NotificationIdentity.message(accountID: accountID, messageID: $0) }
+        var messages = stale.map { NotificationIdentity.message(accountID: accountID, messageID: $0) }
+        let retained = mine.filter { $0.reference?.kind == .retained && $0.reference?.belongs(to: accountID) == true }
+        if !retained.isEmpty {
+            let live = Set(try await store.retainedEncryptedIncomingKeys(accountID: accountID).map { key in
+                NotificationPlanner.identifier(accountID: accountID, key: key)
+            })
+            messages += retained.map(\.identifier).filter { !live.contains($0) }
+        }
+        let summary = NotificationIdentity.overflow(accountID: accountID)
+        if !summaryPosted, mine.contains(where: { $0.identifier == summary }) { messages.append(summary) }
         await posting.removeDelivered(identifiers: fallbacks + messages.sorted())
         return (fallbacks.count, messages.count)
     }
 }
 
-/// Runs `operation`, throwing `NotificationRunError.postTimedOut` when it does not finish within `limit`.
-/// The operation is cancelled on timeout; a system call that ignores cancellation may still complete later.
+/// Runs `operation`, throwing `NotificationRunError.postTimedOut` when it does not finish within `limit`. Returns at
+/// the limit even when the operation ignores cancellation (as the `UNUserNotificationCenter` completion-handler
+/// bridges do): the operation is raced in an unstructured task that is cancelled and left to finish on its own. A
+/// system call that completes after the limit may still show its notification; the run has already fallen back and
+/// kept its candidates, and a later run reposts the same identifier, which replaces it.
 func withTimeout<T: Sendable>(_ limit: Duration, _ operation: @escaping @Sendable () async throws -> T) async throws -> T {
-    try await withThrowingTaskGroup(of: T?.self) { group in
-        group.addTask { try await operation() }
-        group.addTask { try await Task.sleep(for: limit); return nil }
-        defer { group.cancelAll() }
-        guard let first = try await group.next(), let value = first else { throw NotificationRunError.postTimedOut }
-        return value
+    let race = TimeoutRace<T>()
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, any Error>) in
+            race.start(continuation,
+                       work: Task { do { race.finish(.success(try await operation())) } catch { race.finish(.failure(error)) } },
+                       timer: Task { try? await Task.sleep(for: limit); race.finish(.failure(NotificationRunError.postTimedOut)) })
+        }
+    } onCancel: { race.finish(.failure(CancellationError())) }
+}
+
+/// Resumes its continuation exactly once, with whichever of work, timer or cancellation finishes first, then cancels
+/// the other tasks. A result that arrives before the continuation is installed is kept and delivered on `start`.
+private final class TimeoutRace<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, any Error>?
+    private var result: Result<T, any Error>?
+    private var tasks: [Task<Void, Never>] = []
+    private var done = false
+
+    func start(_ continuation: CheckedContinuation<T, any Error>, work: Task<Void, Never>, timer: Task<Void, Never>) {
+        let early: Result<T, any Error>? = lock.withLock {
+            if let result { done = true; return result }
+            self.continuation = continuation; tasks = [work, timer]
+            return nil
+        }
+        if let early { work.cancel(); timer.cancel(); continuation.resume(with: early) }
+    }
+
+    func finish(_ outcome: Result<T, any Error>) {
+        let (waiting, pending): (CheckedContinuation<T, any Error>?, [Task<Void, Never>]) = lock.withLock {
+            guard !done else { return (nil, []) }
+            guard let continuation else { if result == nil { result = outcome }; return (nil, []) }
+            done = true; self.continuation = nil
+            defer { tasks = [] }
+            return (continuation, tasks)
+        }
+        pending.forEach { $0.cancel() }
+        waiting?.resume(with: outcome)
     }
 }

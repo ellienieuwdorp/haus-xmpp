@@ -16,12 +16,15 @@ actor FakePosting: NotificationPosting {
     func configure(failAtIndex: Int? = nil, hang: Bool = false) { self.failAtIndex = failAtIndex; self.hang = hang }
 
     func add(_ request: PlannedNotification) async throws {
-        if hang { try await Task.sleep(for: .seconds(30)) }
+        // Like the UNUserNotificationCenter completion-handler bridge: a hung add ignores cancellation.
+        if hang { await ignoringCancellation(for: .seconds(2)) }
         if failAtIndex == added.count { throw Failure.rejected }
         added.append(request)
         delivered.removeAll { $0.identifier == request.identifier }
-        delivered.append(DeliveredNotification(identifier: request.identifier, categoryIdentifier: request.categoryIdentifier, destination: request.destination))
+        delivered.append(DeliveredNotification(identifier: request.identifier, categoryIdentifier: request.categoryIdentifier,
+                                               destination: request.destination, reference: request.reference))
     }
+    func deliver(_ notification: DeliveredNotification) { delivered.append(notification) }
     func deliveredNotifications() async -> [DeliveredNotification] { delivered }
     func removeDelivered(identifiers: [String]) async {
         removed += identifiers
@@ -30,6 +33,15 @@ actor FakePosting: NotificationPosting {
 }
 
 private let account = "alice@example.org"
+
+/// Suspends for `duration` without observing cancellation, as a completion-handler bridge does.
+func ignoringCancellation(for duration: Duration) async {
+    let (seconds, attoseconds) = duration.components
+    let delay = Double(seconds) + Double(attoseconds) / 1e18
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) { continuation.resume() }
+    }
+}
 
 private func withStore(_ body: (MessageStore) async throws -> Void) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "delivery-\(UUID())")
@@ -86,10 +98,13 @@ struct NotificationPresenterTests {
             #expect(try await store.pendingNotifications(accountID: account).candidates.count == 2)
             await posting.configure(hang: true)
             let slow = NotificationRunProgress()
+            let clock = ContinuousClock(), start = clock.now
             do {
                 try await NotificationPresenter(posting: posting, addTimeout: .milliseconds(50)).present(store: store, accountID: account, progress: slow)
                 Issue.record("A hanging add must not settle")
             } catch { #expect(NotificationFallbackReason(error) == .postFailed) }
+            // The timeout returns at its limit although the hung add ignores cancellation.
+            #expect(clock.now - start < .seconds(1))
             #expect(!slow.isCommitted)
             // The retry reposts the same identifiers: the one already added is replaced, not duplicated.
             await posting.configure()
@@ -114,10 +129,50 @@ struct NotificationPresenterTests {
         try await withStore { store in
             for index in 0..<25 { try await receive(store, chat: "peer\(index)@example.org", at: Double(index)) }
             let posting = FakePosting()
-            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
-            #expect(await posting.added.count == 20)
-            #expect(await posting.added.filter(\.playsSound).count == 1)
+            let progress = NotificationRunProgress()
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: progress)
+            // 20 messages plus one summary for the 5 chats without room: the settled run never hides them.
+            let added = await posting.added
+            #expect(added.count == 21 && progress.isCommitted && progress.report.deferred == 5)
+            let summary = NotificationIdentity.overflow(accountID: account)
+            #expect(added.first?.identifier == summary && added.first?.body == "New messages in 5 more chats" && added.first?.playsSound == false)
+            #expect(added.filter(\.playsSound).map(\.identifier) == [added.last?.identifier])
             #expect(try await store.pendingNotifications(accountID: account).candidates.count == 5)
+            // The next run posts the deferred chats themselves and removes the summary it no longer needs.
+            let next = NotificationRunProgress()
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: next)
+            #expect(next.report.posted == 5 && next.report.deferred == 0)
+            #expect(await !posting.delivered.map(\.identifier).contains(summary))
+            #expect(await posting.removed.contains(summary))
+        }
+    }
+
+    @Test func reviewAndPlaceholderNotificationsAreRemovedOnceStale() async throws {
+        try await withStore { store in
+            let revision = try #require(try await store.encryptionStateRevision(accountID: account))
+            try await store.retainEncryptedIncoming(accountID: account, sender: "bob@example.org", digest: "held", wire: Data([1]), reason: .trustPending,
+                notification: PendingNotificationContext(chatID: "bob@example.org", sentAt: Date(timeIntervalSince1970: 1)))
+            try await store.retainEncryptedIncoming(accountID: account, sender: "bob@example.org", digest: "still", wire: Data([2]), reason: .trustPending,
+                notification: PendingNotificationContext(chatID: "bob@example.org", sentAt: Date(timeIntervalSince1970: 2)))
+            let posting = FakePosting()
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
+            let review = await posting.added
+            #expect(review.count == 2 && review.allSatisfy { $0.reference?.kind == .retained && $0.destination == nil })
+            // Approval commits the first ciphertext: its review notification goes, the still-retained one stays.
+            let approved = StoredMessage(id: UUID().uuidString, accountID: account, chatID: "bob@example.org", senderID: "bob@example.org",
+                                         body: "Synthetic", sentAt: Date(timeIntervalSince1970: 1), encryptionProfile: "modern")
+            try await store.commitEncryptedIncoming(accountID: account, sender: "bob@example.org", digest: "held", expectedRevision: revision,
+                                                    state: Data([9]), message: approved)
+            // A delivered placeholder whose row no longer exists (for example after the account was reset).
+            let gone = try #require(NotificationReference.placeholder(accountID: account, messageID: "unreadable-" + String(repeating: "a", count: 64)))
+            let goneID = NotificationIdentity.message(accountID: account, messageID: try #require(gone.messageID))
+            await posting.deliver(DeliveredNotification(identifier: goneID, categoryIdentifier: NotificationIdentity.messageCategory, destination: nil, reference: gone))
+            let progress = NotificationRunProgress()
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: progress)
+            let remaining = Set(await posting.delivered.map(\.identifier))
+            #expect(!remaining.contains(review[0].identifier) && remaining.contains(review[1].identifier) && !remaining.contains(goneID))
+            #expect(remaining.contains(NotificationIdentity.message(accountID: account, messageID: approved.id)))
+            #expect(progress.report.removedStale == 2)
         }
     }
 
@@ -254,6 +309,27 @@ struct NotificationRunCoordinatorTests {
         #expect(report.posted == 3)
         await finish.release()
         _ = await first.value; _ = await second.value
+    }
+}
+
+struct NotificationTimeoutTests {
+    @Test func timeoutReturnsAtItsLimitWhenTheOperationIgnoresCancellation() async throws {
+        let clock = ContinuousClock(), start = clock.now
+        await #expect(throws: NotificationRunError.postTimedOut) {
+            try await withTimeout(.milliseconds(100)) { await ignoringCancellation(for: .seconds(2)); return 1 }
+        }
+        #expect(clock.now - start < .seconds(1))
+        #expect(try await withTimeout(.seconds(2)) { 7 } == 7)
+        await #expect(throws: FakePosting.Failure.self) { try await withTimeout(.seconds(2)) { () async throws -> Int in throw FakePosting.Failure.rejected } }
+    }
+
+    @Test func cancellingTheCallerReturnsWithoutWaitingForTheOperation() async throws {
+        let clock = ContinuousClock(), start = clock.now
+        let task = Task { try await withTimeout(.seconds(5)) { await ignoringCancellation(for: .seconds(2)); return 1 } }
+        try await Task.sleep(for: .milliseconds(50))
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(clock.now - start < .seconds(1))
     }
 }
 

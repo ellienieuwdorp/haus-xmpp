@@ -57,16 +57,21 @@ private func batch(_ candidates: [NotificationCandidate], previews: Bool = true)
     #expect(plan.requests.map(\.body) == ["Bob: Hi all", "carol: Hello"])
 }
 
-@Test func undisplayableIncomingMessagesUseReviewWordingWithoutContent() {
+@Test func undisplayableIncomingMessagesUseReviewWordingWithoutContent() throws {
     let pending = candidate("p", body: "", key: .pending(sender: "peer@example.org", digest: "d")).withContent(.pendingEncrypted)
-    let unreadable = candidate("unreadable-1", body: "").withContent(.unreadable(messageID: "unreadable-1"))
+    let placeholderID = "unreadable-" + String(repeating: "0f", count: 32)
+    let unreadable = candidate(placeholderID, body: "").withContent(.unreadable(messageID: placeholderID))
     let groupPending = candidate("g", chat: "room@rooms", sender: "bob@x", chatTitle: "Book club", key: .pending(sender: "bob@x", digest: "e"))
         .withContent(.pendingEncrypted)
     let plan = NotificationPlanner.plan(batch([pending, unreadable, groupPending]))
     #expect(plan.requests.map(\.body) == ["Sent an encrypted message. Open the chat to review.", "Sent a message this device can't read",
                                           "bob: Sent an encrypted message. Open the chat to review."])
     #expect(plan.requests.map(\.title) == ["Peer", "Peer", "Book club"])
-    #expect(plan.requests.allSatisfy { $0.destination == nil && $0.userInfo.isEmpty })
+    // No tap destination; a cleanup reference without address or content: the placeholder's opaque row ID, or nothing.
+    #expect(plan.requests.allSatisfy { $0.destination == nil && $0.userInfo[NotificationDestination.userInfoKey] == nil })
+    #expect(plan.requests.map { $0.reference?.kind } == [.retained, .placeholder, .retained])
+    #expect(plan.requests[0].userInfo == [NotificationReference.userInfoKey: ["version": "1", "kind": "retained",
+                                                                               "account": try #require(plan.requests[0].reference).accountScope]])
     // Stable per ciphertext, distinct from any message identity.
     #expect(plan.requests[0].identifier == NotificationPlanner.identifier(for: pending))
     #expect(plan.requests[0].identifier.hasPrefix("m-") && plan.requests[0].identifier != plan.requests[2].identifier)
@@ -80,6 +85,44 @@ private func batch(_ candidates: [NotificationCandidate], previews: Bool = true)
     #expect(plan.requests.map(\.body) == ["Newest\nand 3 more"])
     #expect(plan.requests.map(\.playsSound) == [true])
     #expect(plan.claimed.count == 2)
+}
+
+@Test func anUnsentOldestMessageHandsItsEarlierCountToTheNextOne() {
+    var unsent = StoredMessage(id: UUID().uuidString, accountID: account, chatID: "peer@example.org", senderID: "peer@example.org", body: "", encryptionProfile: "modern")
+    unsent.isRetracted = true
+    let plan = NotificationPlanner.plan(batch([candidate(unsent.id, at: 1, earlier: 2).withContent(.message(unsent)),
+                                               candidate(UUID().uuidString, chat: "other@example.org", body: "Elsewhere", at: 2),
+                                               candidate(UUID().uuidString, body: "Kept", at: 3)]))
+    #expect(plan.requests.map(\.body) == ["Elsewhere", "Kept\nand 2 more"])
+}
+
+@Test func chatsBeyondTheCapGetOneSummaryThatNeverTakesTheSound() throws {
+    let newest = UUID().uuidString
+    let capped = MessageNotification(candidates: [candidate(newest, body: "Newest", at: 9)], claimed: [.message(newest)],
+                                     deferredCount: 7, deferredChatCount: 3, previewsEnabled: false)
+    let plan = NotificationPlanner.plan(capped)
+    #expect(plan.summarizesDeferredChats)
+    #expect(plan.requests.map(\.identifier) == [NotificationIdentity.overflow(accountID: account), NotificationIdentity.message(accountID: account, messageID: newest)])
+    #expect(plan.requests.map(\.body) == ["New messages in 3 more chats", "New message"])
+    #expect(plan.requests.map(\.playsSound) == [false, true])
+    #expect(plan.requests[0].title.isEmpty && plan.requests[0].userInfo.isEmpty && plan.requests[0].categoryIdentifier == NotificationIdentity.messageCategory)
+    // Only the deferred chats: a summary alone still sounds, and the account comes from the caller.
+    let alone = NotificationPlanner.plan(MessageNotification(candidates: [], claimed: [], deferredCount: 1, deferredChatCount: 1, previewsEnabled: true),
+                                         accountID: account)
+    #expect(alone.requests.map(\.body) == ["New messages in 1 more chat"] && alone.requests[0].playsSound)
+    #expect(!NotificationPlanner.plan(batch([candidate(newest)])).summarizesDeferredChats)
+}
+
+@Test func cleanupReferencesRoundTripAndRejectAddresses() throws {
+    let placeholder = try #require(NotificationReference.placeholder(accountID: account, messageID: "unreadable-" + String(repeating: "ab", count: 32)))
+    #expect(NotificationReference(payload: placeholder.payload) == placeholder && placeholder.belongs(to: account) && !placeholder.belongs(to: "x@y"))
+    let retained = try #require(NotificationReference.retained(accountID: account))
+    #expect(NotificationReference(payload: retained.payload) == retained && retained.messageID == nil)
+    #expect(NotificationReference.placeholder(accountID: account, messageID: "peer@example.org") == nil)
+    #expect(NotificationReference.placeholder(accountID: account, messageID: UUID().uuidString) == nil)
+    var extra = retained.payload; extra["message"] = "unreadable-" + String(repeating: "ab", count: 32)
+    #expect(NotificationReference(payload: extra) == nil)
+    #expect(!String(describing: placeholder.payload).contains("@"))
 }
 
 @Test func planBoundsUntrustedDisplayTextAndNamesFileKinds() {

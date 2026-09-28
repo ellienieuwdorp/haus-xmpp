@@ -21,6 +21,12 @@ public enum NotificationIdentity {
         "f-" + hex("xmpp-notification-fallback-v1\u{0}" + accountID)
     }
 
+    /// The one summary request for chats a run had no room for (plan D4 cap). A later run replaces it with its own
+    /// count, or removes it once nothing is deferred any more.
+    public static func overflow(accountID: String) -> String {
+        "o-" + hex("xmpp-notification-overflow-v1\u{0}" + accountID)
+    }
+
     /// Category of every notification that represents one stored message.
     public static let messageCategory = "message"
     /// Category of the generic fallback; never carries message content.
