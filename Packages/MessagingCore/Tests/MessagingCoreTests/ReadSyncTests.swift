@@ -26,6 +26,11 @@ struct ReadSyncTests {
         let sync = ReadSync(store: store)
         // A server without the node, or one that refuses: nothing changes, nothing fails.
         #expect(try await !sync.pull(account: account, encryption: encryption, fetch: { throw XMPPIQError.stanza(condition: "feature-not-implemented") }))
+        // Nor does a slow or lost connection: the pull is best effort wherever it runs.
+        #expect(try await !sync.pull(account: account, encryption: encryption, fetch: { throw XMPPClientError.timedOut }))
+        #expect(try await !sync.pull(account: account, encryption: encryption, fetch: { throw XMPPClientError.notConnected }))
+        #expect(try await !sync.pull(account: account, encryption: encryption, fetch: { throw XMPPClientError.connectionClosed }))
+        await #expect(throws: CancellationError.self) { try await sync.pull(account: account, encryption: encryption, fetch: { throw CancellationError() }) }
         #expect(try await !sync.pull(account: account, encryption: encryption, fetch: { [XMPPDisplayedItem(chat: "bob@localhost", stanzaID: "unknown", by: "alice@localhost")] }))
         #expect(try await store.takeMessageNotification(accountID: account).messageCount == 2)
         try await store.commitEncryptedIncoming(accountID: account, sender: peer, digest: "m3", expectedRevision: 3, state: Data([3]),

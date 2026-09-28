@@ -11,18 +11,18 @@ public struct ReadSync: Sendable {
     private let store: MessageStore
     public init(store: MessageStore) { self.store = store }
 
-    /// Best effort: a server without the node or refusing the query changes nothing. A storage failure propagates.
-    /// Returns true when any chat's pointer moved.
+    /// Best effort: a server without the node, a refusal, a timeout or a lost connection changes nothing. Only a
+    /// storage failure or cancellation propagates. `timeout` bounds the query. Returns true when any chat's pointer moved.
     @discardableResult
-    public func pull(account: String, client: XMPPClient, encryption: OMEMOService) async throws -> Bool {
-        try await pull(account: account, encryption: encryption, fetch: { try await client.fetchDisplayedSync() })
+    public func pull(account: String, client: XMPPClient, encryption: OMEMOService, timeout: Duration = XMPPClient.iqTimeout) async throws -> Bool {
+        try await pull(account: account, encryption: encryption, fetch: { try await client.fetchDisplayedSync(timeout: timeout) })
     }
 
     func pull(account: String, encryption: OMEMOService, fetch: @Sendable () async throws -> [XMPPDisplayedItem]) async throws -> Bool {
         let items: [XMPPDisplayedItem]
         do { items = try await fetch() }
-        catch is XMPPIQError { return false }
-        catch XMPPClientError.timedOut { return false }
+        catch is CancellationError { throw CancellationError() }
+        catch { try Task.checkCancellation(); return false }
         return try await encryption.receiveDisplayedSync(account: account, items: items)
     }
 
