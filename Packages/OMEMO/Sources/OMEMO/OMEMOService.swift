@@ -758,7 +758,9 @@ public actor OMEMOService {
     }
 
     /// A plain XEP-0184/0333 element from the peer (Conversations, slixmpp), or our own coming back
-    /// from the archive. Receiving is unconditional; the store decides whether the target is ours.
+    /// from the archive or as a carbon. Receiving is unconditional; the store decides whether the target is ours.
+    /// Our own `displayed` (this device's, or another device's) moves the chat's read pointer forward: the sender is
+    /// our account as the server stamped it (a validated carbon or own-archive entry), never a peer's claim.
     @discardableResult
     public func receivePlaintextReceipt(account: String, receipt: XMPPReceipt, sentAt: Date? = nil) async throws -> Bool {
         let actor = bare(receipt.from)
@@ -770,13 +772,25 @@ public actor OMEMOService {
                let wire = try await store.updateWire(accountID: account, updateID: receipt.id) {
                 _ = try? await store.reconcileArchivedUpdate(accountID: account, updateID: receipt.id, expectedWire: wire)
             }
-            return false
+            guard receipt.kind == .displayed, peer != account else { return false }
+            return try await store.recordOwnDisplayed(accountID: account, chatID: peer, targetWireID: receipt.targetID)
         }
         let event = MessageEvent(id: receipt.id, chatID: peer, actorID: actor, targetWireID: receipt.targetID,
                                  kind: receipt.kind == .displayed ? .displayed : .delivered, payload: "{}", updatedAt: min(sentAt ?? Date(), Date()))
         do { try await store.recordReceipt(accountID: account, event: event) }
         catch MessageStoreError.invalidValue { return false }
         return true
+    }
+
+    /// XEP-0490 items from our own PEP node (the transport verified they came from our bare JID). Each moves its chat's
+    /// read pointer forward when its id names a stored message; unknown ids are ignored. True when any pointer moved.
+    @discardableResult
+    public func receiveDisplayedSync(account: String, items: [XMPPDisplayedItem]) async throws -> Bool {
+        var moved = false
+        for item in items where item.chat != account {
+            if try await store.applyDisplayedSync(accountID: account, chatID: item.chat, stanzaID: item.stanzaID, by: item.by) { moved = true }
+        }
+        return moved
     }
 
     public func reactions(account: String, chatID: String, messageID: String) async throws -> [AuthenticatedReaction] {
@@ -869,7 +883,13 @@ public actor OMEMOService {
             throw addressedKeys.isEmpty ? OMEMOError.notForThisDevice : OMEMOError.undecryptable
         }
         let digest = try ciphertextDigest(message, key: addressedKeys[0])
-        if try await store.hasEncryptedIncoming(accountID: account, sender: sender, digest: digest) { return false }
+        if try await store.hasEncryptedIncoming(accountID: account, sender: sender, digest: digest) {
+            // Seen live before our archive's id was known: the archive copy names the message XEP-0490 will refer to.
+            if let stanzaID = message.archiveStanzaID {
+                try await store.bindArchivedDirectStanzaID(accountID: account, sender: sender, digest: digest, stanzaID: stanzaID)
+            }
+            return false
+        }
         // B. This ciphertext's retained row only (a primary-key lookup), then the validated-archive context correction.
         let previous = try await store.pendingEncryptedIncoming(accountID: account, sender: sender, digest: digest)
         var retained = try previous.map { try JSONDecoder().decode(RetainedEnvelope.self, from: $0.wire) }
@@ -953,6 +973,7 @@ public actor OMEMOService {
             var stored: StoredMessage?
             var reaction: AuthenticatedReaction?
             var event: MessageEvent?
+            var readMarker: OwnReadMarker?
             do {
                 let material = try local.decrypt(RatchetCiphertext(data: key.data, isPreKey: key.keyExchange), from: address)
                 if let payload = message.envelope.payload {
@@ -990,6 +1011,11 @@ public actor OMEMOService {
                                              kind: receipt.kind == .displayed ? .displayed : .delivered, payload: "{}",
                                              updatedAt: min(content.timestamp ?? retained.sentAt ?? Date(), Date()))
                     }
+                    // Another device of ours displayed a peer message: authenticated as our account, it moves the read pointer.
+                    if let receipt = content.receipt, receipt.kind == .displayed, profile == .modern, sender == account, peer != account,
+                       stored == nil, reaction == nil, event == nil {
+                        readMarker = OwnReadMarker(chatID: peer, targetWireID: receipt.targetID)
+                    }
                 } else if profile == .modern {
                     guard material == Data(repeating: 0, count: 32) else { throw OMEMOError.invalidContent }
                 }
@@ -1019,7 +1045,8 @@ public actor OMEMOService {
             if key.keyExchange { state.pendingBundlePublications.insert(profile.rawValue) }
             do {
                 try await store.commitEncryptedIncoming(accountID: account, sender: sender, digest: digest, expectedRevision: revision,
-                                                        state: encode(state, account: account), message: stored, control: control, reaction: reaction, event: event)
+                                                        state: encode(state, account: account), message: stored, control: control, reaction: reaction, event: event,
+                                                        archiveStanzaID: stored == nil ? nil : message.archiveStanzaID, readMarker: readMarker)
             } catch { forgetState(account); throw error }
             committed(state, revision: revision, account: account)
             // The peer asked for a delivery receipt: queue it durably now; the drain sends it under the account switch.
@@ -1029,7 +1056,7 @@ public actor OMEMOService {
             // The authenticated message is already durable. A network error must not turn
             // success into a decryption failure; the pending publication survives a restart.
             if key.keyExchange { try? await flushBundlePublicationsLocked(account: account, transport: transport) }
-            return stored != nil || reaction != nil || event != nil
+            return stored != nil || reaction != nil || event != nil || readMarker != nil
         } catch let failure {
             // C skipped retention and this failure left no durable outcome (a commit conflict, a state or storage error,
             // content the store refuses, a sending time awaiting an archive stamp): keep the ciphertext now, with the
