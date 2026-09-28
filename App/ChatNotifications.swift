@@ -109,8 +109,7 @@ struct ChatNotificationRow: View {
                         if large { Text(setting.summary(isGroup: isGroup)).foregroundStyle(.secondary) }
                     }
                 } icon: {
-                    Image(systemName: muted ? "bell.slash" : "bell").foregroundStyle(.white)
-                        .frame(width: 30, height: 30).background(.tint, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    DetailsIconTile(systemName: muted ? "bell.slash" : "bell")
                 }
                 Spacer(minLength: 8)
                 if !large { Text(setting.summary(isGroup: isGroup)).foregroundStyle(.secondary).lineLimit(1) }
@@ -127,5 +126,19 @@ struct ChatNotificationRow: View {
     /// A checkmarked menu item: a Toggle is how a menu draws the leading checkmark.
     private func choice(_ title: String, selected: Bool, action: @escaping @MainActor () async -> Void) -> some View {
         Toggle(title, isOn: Binding(get: { selected }, set: { _ in Task { await action() } }))
+    }
+}
+
+/// The details screens' 30 pt tinted tile. The glyph keeps the body size of the default text setting: a glyph
+/// that followed Dynamic Type drew outside the fixed tile at accessibility sizes.
+struct DetailsIconTile: View {
+    let systemName: String
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: 17))
+            .foregroundStyle(.white)
+            .frame(width: 30, height: 30)
+            .background(.tint, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
