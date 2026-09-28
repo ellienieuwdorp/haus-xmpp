@@ -7,6 +7,57 @@ import XCTest
 final class NotificationActionLabUITests: XCTestCase {
     @MainActor func testForegroundBannerAndBackgroundReply() throws {
         continueAfterFailure = false
+        let (app, peer) = try launchLab()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let other = otherChat(peer)
+        connect(app)
+        app.returnToChats()
+        trustPeer(app, peer: peer, other: other)
+
+        // The peer waits 8 s before echoing: open the other chat meanwhile, so the echo is news somewhere else.
+        let marker = "Banner check \(UUID().uuidString.prefix(6))"
+        send(app, marker)
+        app.navigationBars.buttons["BackButton"].tap()
+        let otherRow = app.buttons["chat.\(other)"]
+        XCTAssertTrue(otherRow.waitForExistence(timeout: 5)); otherRow.tap()
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 5))
+        let banner = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
+        XCTAssertTrue(banner.waitForExistence(timeout: 40), "the echo shows a banner while another chat is open")
+        capture(XCUIScreen.main.screenshot(), "Foreground banner for another chat")
+        XCTAssertTrue(banner.waitForNonExistence(timeout: 15), "the banner goes away on its own")
+        backgroundReply(app, springboard: springboard, peer: peer, marker: marker)
+    }
+
+    /// While a background action's connection is online the server pushes nothing for what it delivers there, so the
+    /// action presents those messages itself before it releases the lease, as the extension would. The host drives the
+    /// setup, because the peer's echo timing cannot keep one message unread and land another on the suspended app from
+    /// here: with the app signed in on the lab, a one-shot peer message banners in front of the chat list
+    /// (`XMPP_ACTION_TARGET`), Home, then a second one-shot message (`XMPP_ACTION_EXPECT`) reaches the hibernated
+    /// session. This step then uses Mark as Read on the first; the second must appear in Notification Center.
+    @MainActor func testMarkAsReadPresentsWhatArrivedOnTheActionsConnection() throws {
+        continueAfterFailure = false
+        let env = ProcessInfo.processInfo.environment
+        guard env["XMPP_NOTIFICATION_ACTION_LAB"] == "1", let target = env["XMPP_ACTION_TARGET"], let expected = env["XMPP_ACTION_EXPECT"] else {
+            throw XCTSkip("Host-driven lab step: requires XMPP_ACTION_TARGET and XMPP_ACTION_EXPECT set up as documented")
+        }
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        springboard.activate()
+        springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.002))
+            .press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.75)))
+        let cell = { (text: String) in springboard.buttons.matching(NSPredicate(format: "identifier == 'ListCell' AND label CONTAINS %@", text)).firstMatch }
+        XCTAssertTrue(cell(target).waitForExistence(timeout: 10))
+        capture(XCUIScreen.main.screenshot(), "Before Mark as Read")
+        XCTAssertFalse(cell(expected).exists, "nothing alerted for the second message yet: the app is not running and the lab has no push")
+        XCTAssertTrue(revealActions(cell(target), springboard: springboard))
+        springboard.buttons["Mark as Read"].tap()
+        XCTAssertTrue(cell(expected).waitForExistence(timeout: 30), "the message that arrived on the action's connection alerts")
+        capture(XCUIScreen.main.screenshot(), "Arrival presented by the action")
+        XCTAssertTrue(cell(target).waitForNonExistence(timeout: 10), "the read message's notification is removed")
+    }
+
+    // MARK: Steps
+
+    @MainActor private func launchLab() throws -> (XCUIApplication, String) {
         let env = ProcessInfo.processInfo.environment
         guard env["XMPP_NOTIFICATION_ACTION_LAB"] == "1", let user = env["HAUS_LAB_USERNAME"], let password = env["HAUS_LAB_PASSWORD"],
               let peer = env["XMPP_OMEMO_PEER"] else {
@@ -17,18 +68,20 @@ final class NotificationActionLabUITests: XCTestCase {
         app.launchEnvironment = ["HAUS_LAB_USERNAME": user, "HAUS_LAB_PASSWORD": password]
         for key in ["HAUS_LAB_HOST", "HAUS_LAB_CA_DER"] { if let value = env[key] { app.launchEnvironment[key] = value } }
         app.launch()
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let allow = springboard.alerts.buttons["Allow"]
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"]
         if allow.waitForExistence(timeout: 5) { allow.tap() }
-        connect(app)
-        app.returnToChats()
+        return (app, peer)
+    }
 
-        // The other chat exists first, so opening it later is one tap.
-        let other = "notification-other@" + (peer.split(separator: "@").last.map(String.init) ?? "localhost")
+    private func otherChat(_ peer: String) -> String {
+        "notification-other@" + (peer.split(separator: "@").last.map(String.init) ?? "localhost")
+    }
+
+    /// Creates the other chat, then a trusted round trip with the peer: only a message from an accepted device gets
+    /// Reply and Mark as Read. Ends in the peer's chat.
+    @MainActor private func trustPeer(_ app: XCUIApplication, peer: String, other: String) {
         startChat(app, with: other)
         app.navigationBars.buttons["BackButton"].tap()
-
-        // A trusted round trip: only a message from an accepted device gets Reply and Mark as Read.
         startChat(app, with: peer)
         let first = "Trust check \(UUID().uuidString.prefix(6))"
         send(app, first)
@@ -47,19 +100,9 @@ final class NotificationActionLabUITests: XCTestCase {
         let echoedFirst = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"),
                                                     object: app.textViews.containing(NSPredicate(format: "value == %@", first)))
         wait(for: [echoedFirst], timeout: 40)
+    }
 
-        // The peer waits 8 s before echoing: open the other chat meanwhile, so the echo is news somewhere else.
-        let marker = "Banner check \(UUID().uuidString.prefix(6))"
-        send(app, marker)
-        app.navigationBars.buttons["BackButton"].tap()
-        let otherRow = app.buttons["chat.\(other)"]
-        XCTAssertTrue(otherRow.waitForExistence(timeout: 5)); otherRow.tap()
-        XCTAssertTrue(app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 5))
-        let banner = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
-        XCTAssertTrue(banner.waitForExistence(timeout: 40), "the echo shows a banner while another chat is open")
-        capture(XCUIScreen.main.screenshot(), "Foreground banner for another chat")
-        XCTAssertTrue(banner.waitForNonExistence(timeout: 15), "the banner goes away on its own")
-
+    @MainActor private func backgroundReply(_ app: XCUIApplication, springboard: XCUIApplication, peer: String, marker: String) {
         // Background, then Reply from Notification Center: the app handles it without coming to the front.
         XCUIDevice.shared.press(.home)
         XCTAssertTrue(app.wait(for: .runningBackgroundSuspended, timeout: 30) || app.state == .runningBackground)

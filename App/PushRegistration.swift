@@ -80,7 +80,13 @@ final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificatio
             guard let request = NotificationActionRequest(userInfo: content.userInfo, categoryIdentifier: content.categoryIdentifier,
                                                           actionIdentifier: response.actionIdentifier,
                                                           text: (response as? UNTextInputNotificationResponse)?.userText) else {
-                Task { @MainActor in completion.call(()) }
+                // Typed text that cannot become a request (over the composer's limit, or no destination) is not sent:
+                // say so, naming nothing. A blank reply had nothing to send.
+                let typed = (response as? UNTextInputNotificationResponse)?.userText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                Task { @MainActor in
+                    if !typed.isEmpty { await NotificationActionCenter.postRejectedReply() }
+                    completion.call(())
+                }
                 return
             }
             Task { @MainActor in

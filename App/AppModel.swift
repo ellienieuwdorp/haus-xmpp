@@ -222,9 +222,10 @@ final class AppModel {
         // The saved account is known before storage opens, so the first frame already carries the account avatar
         // and the Chats stack is not rebuilt (its identity is the account) once `prepare()` reads the same value.
         accountID = preferences.string(forKey: "lastAccount") ?? ""
-        NotificationActionCenter.shared.handler = { [weak self] request in
-            await self?.performNotificationAction(request) ?? .rejected
+        NotificationActionCenter.shared.handler = { [weak self] request, budget in
+            await self?.performNotificationAction(request, budget: budget) ?? .rejected
         }
+        NotificationActionCenter.shared.abort = { [weak self] in self?.abortNotificationAction() ?? false }
     }
 
     /// Opens storage and the saved account once. Every caller (the root view, a notification action on a background
@@ -2463,64 +2464,65 @@ final class AppModel {
 // MARK: Notification actions and foreground banners (wave 2, stream E; docs/development/notification-actions.md)
 
 /// The transport one Reply or Mark as Read took. In front of the app it is the app's own live session; in the
-/// background it is the store's lease plus a short-lived connection of its own, which the watchdog ends at the budget.
+/// background it is the store's lease plus a short-lived connection of its own, which the watchdog ends at the
+/// budget's deadline.
 @MainActor private final class NotificationActionSession {
     let account: String
     let isForeground: Bool
+    let budget: NotificationActionBudget
     var client: XMPPClient?
     var consumer: Task<Void, Never>?
     var watchdog: Task<Void, Never>?
     /// Ends the lifecycle slot this action holds, so a scene transition queued behind it can run.
     var releaseLifecycle: AsyncStream<Void>.Continuation?
+    /// True from the moment the kernel lease was taken until it was released; `acquiringLease` covers the call in
+    /// flight, whose lock may already be held before the main actor hears of it.
     var holdsLease = false
+    var acquiringLease = false
+    /// The deadline passed or the system is ending the background time: nothing new starts on the network.
+    private(set) var aborted = false
     /// Bound and past `initialize`, as the app's `.ready`: only then is anything sealed or sent.
     var ready = false
     var joinedRooms: Set<String> = []
 
-    init(account: String, isForeground: Bool) { self.account = account; self.isForeground = isForeground }
+    init(account: String, isForeground: Bool, budget: NotificationActionBudget) {
+        self.account = account; self.isForeground = isForeground; self.budget = budget
+    }
+
+    /// Past the deadline, or aborted: stop before the next network step.
+    var isOver: Bool { aborted || ContinuousClock.now >= budget.deadline }
 
     /// The budget ran out or the system is ending the background task: close the connection so every call returns.
     func abort() {
+        aborted = true
         guard let client else { return }
         Task { await client.disconnect() }
     }
 }
 
-/// Ends a UIKit background task exactly once, from the expiration handler or when the action returns.
-@MainActor private final class BackgroundTaskToken {
-    var id = UIBackgroundTaskIdentifier.invalid
-    func end() {
-        guard id != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(id)
-        id = .invalid
-    }
-}
+@MainActor private final class ActionWaitCompletion { var finished = false }
 
 extension AppModel: NotificationActionEnvironment {
-    /// The network part of a background action: under the extension's 20 s, well inside the system's background time.
-    private static let actionBudget: Duration = .seconds(20)
-    /// How long an action waits for the extension (or another run) to release the lease, as the extension waits for the app.
-    private static let actionLeaseWait: Duration = .seconds(6)
     /// After the reply was written: how long to wait for the server's stream-management acknowledgement.
     private static let acknowledgementWait: Duration = .seconds(3)
     /// In front of the app, how long a reply waits for the live session's outbox pass.
     private static let foregroundReplyWait: Duration = .seconds(10)
 
-    /// A notification's Reply or Mark as Read, possibly on a launch into the background. Always returns within the
-    /// background budget; the delegate's completion is its return.
-    func performNotificationAction(_ request: NotificationActionRequest) async -> NotificationActionOutcome {
+    /// A notification's Reply or Mark as Read, possibly on a launch into the background. `NotificationActionCenter`
+    /// holds the background task and measured `budget` from the delegate callback, so `prepare()` counts against it.
+    func performNotificationAction(_ request: NotificationActionRequest, budget: NotificationActionBudget) async -> NotificationActionOutcome {
         await prepare()
-        let token = BackgroundTaskToken()
-        token.id = UIApplication.shared.beginBackgroundTask(withName: "Notification action") { [weak self] in
-            MainActor.assumeIsolated {
-                self?.actionSession?.abort()
-                token.end()
-            }
-        }
-        defer { token.end() }
-        let outcome = await NotificationActionHandler.perform(request, in: self)
+        let outcome = await NotificationActionHandler.perform(request, budget: budget, in: self)
         Self.syncLog.notice("notification action: \(outcome.rawValue, privacy: .public)")
         return outcome
+    }
+
+    /// The system is ending the background time. Closes the action's connection; true while the action holds or is
+    /// taking the lease, so the center leaves the task to expire (termination frees the lock, suspension would not).
+    func abortNotificationAction() -> Bool {
+        guard let session = actionSession else { return false }
+        session.abort()
+        return session.holdsLease || session.acquiringLease
     }
 
     func authorizedNotificationAccount() -> String? {
@@ -2535,33 +2537,38 @@ extension AppModel: NotificationActionEnvironment {
         return try? await destination.resolve(accountID: account, active: true, store: store)
     }
 
-    func beginNotificationAction(account: String, chatID: String) async -> Bool {
+    func beginNotificationAction(account: String, chatID: String, budget: NotificationActionBudget) async -> Bool {
         guard let store, let encryption, let credentials = sessionAccount, credentials.accountID == account else { return false }
         // In front (or still holding the live session while the scene goes): the app's own connection does the work.
         if UIApplication.shared.applicationState != .background || (foreground && !quiescing && hasTransportOwnership) {
-            actionSession = NotificationActionSession(account: account, isForeground: true)
+            actionSession = NotificationActionSession(account: account, isForeground: true, budget: budget)
             return true
         }
-        let session = NotificationActionSession(account: account, isForeground: false)
+        let session = NotificationActionSession(account: account, isForeground: false, budget: budget)
         actionSession = session
+        // Measured from the delegate callback: a slow start or a queued action ahead of this one used part of it.
+        session.watchdog = Task { [weak session] in
+            try? await Task.sleep(until: budget.deadline, clock: .continuous)
+            session?.abort()
+        }
         // Take the lifecycle slot: a quiesce in flight finishes first, and a return to the foreground waits for this.
+        // The wait for it and for the lease share one bound; past it the action works locally only.
+        let waitEnd = budget.leaseDeadline(from: .now)
         let previous = lifecycleTask
         let (gate, release) = AsyncStream<Void>.makeStream()
         session.releaseLifecycle = release
         lifecycleTask = Task { await previous?.value; for await _ in gate {} }
-        await previous?.value
-        session.watchdog = Task { [weak session] in
-            try? await Task.sleep(for: Self.actionBudget)
-            session?.abort()
-        }
+        guard await Self.finishes(previous, by: waitEnd), !session.isOver else { return true }
         // Without the lease (the extension is syncing) the action still reads and queues locally; nothing is sent.
-        guard (try? await acquireActionLease(store)) != nil else { return true }
-        session.holdsLease = true
+        guard (try? await acquireActionLease(store, session: session, until: waitEnd)) != nil else { return true }
+        guard !session.isOver else { return true }
         do {
             try await store.recoverInterruptedSubmissions(accountID: account)
             let client = XMPPClient(labCertificateAuthority: DevelopmentEndpoint.certificateAuthority)
             try await client.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
             session.client = client
+            // From here an abort closes this client; one that came before it was set is honoured here.
+            guard !session.isOver else { throw CancellationError() }
             // Everything that arrives meanwhile is persisted exactly as the extension would, and acknowledged.
             let processor = InboundProcessor(encryption: encryption, client: client, account: account)
             session.consumer = Task {
@@ -2572,12 +2579,14 @@ extension AppModel: NotificationActionEnvironment {
             }
             try await client.connect(host: credentials.host, port: credentials.port, domain: credentials.domain,
                                      username: credentials.username, password: credentials.password)
+            guard !session.isOver else { throw CancellationError() }
             // As before `.ready`: an identity mismatch fails closed before anything can be sealed.
             try await encryption.initialize(account: account, transport: client)
             if isGroup(chatID) {
                 let nickname = preferences.string(forKey: "groupNickname.\(account).\(chatID)") ?? String(account.prefix { $0 != "@" })
                 if let snapshot = try? await client.joinGroupRoom(chatID, nickname: nickname), snapshot.joined { session.joinedRooms.insert(chatID) }
             }
+            guard !session.isOver else { throw CancellationError() }
             session.ready = true
         } catch {
             Self.syncLog.notice("notification action offline: \(ConnectionSetup.detail(error), privacy: .public)")
@@ -2585,15 +2594,36 @@ extension AppModel: NotificationActionEnvironment {
         return true
     }
 
-    private func acquireActionLease(_ store: MessageStore) async throws {
-        let clock = ContinuousClock(), start = clock.now
+    /// Polls the lease until `end`. `holdsLease` is set in the same main-actor turn the acquisition returns in, and
+    /// `acquiringLease` covers the call in flight, so the expiration handler never ends the task over a held lock.
+    private func acquireActionLease(_ store: MessageStore, session: NotificationActionSession, until end: ContinuousClock.Instant) async throws {
         while true {
-            do { try await store.acquireTransportOwnership(); return }
-            catch MessageStoreError.transportOwnedElsewhere {
-                guard clock.now - start < Self.actionLeaseWait else { throw MessageStoreError.transportOwnedElsewhere }
+            guard !session.isOver else { throw CancellationError() }
+            session.acquiringLease = true
+            do {
+                try await store.acquireTransportOwnership()
+                session.holdsLease = true
+                session.acquiringLease = false
+                return
+            } catch MessageStoreError.transportOwnedElsewhere {
+                session.acquiringLease = false
+                guard ContinuousClock.now + .milliseconds(250) <= end else { throw MessageStoreError.transportOwnedElsewhere }
                 try await Task.sleep(for: .milliseconds(250))
+            } catch {
+                session.acquiringLease = false
+                throw error
             }
         }
+    }
+
+    /// Waits for `task` until `deadline`; false when it had not finished by then (the task itself keeps running).
+    private static func finishes(_ task: Task<Void, Never>?, by deadline: ContinuousClock.Instant) async -> Bool {
+        guard let task else { return true }
+        // Awaiting a task's value ignores cancellation, so the race is polled rather than put in a task group.
+        let completion = ActionWaitCompletion()
+        Task { @MainActor in await task.value; completion.finished = true }
+        while !completion.finished, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        return completion.finished
     }
 
     func markNotificationMessageRead(_ message: StoredMessage) async throws {
@@ -2633,7 +2663,7 @@ extension AppModel: NotificationActionEnvironment {
             // finished and left it there (held for a decision), or the session never got ready.
             let before = drainPasses
             startOutbox()
-            let clock = ContinuousClock(), deadline = clock.now + Self.foregroundReplyWait
+            let clock = ContinuousClock(), deadline = clock.now + session.budget.remaining(at: clock.now, atMost: Self.foregroundReplyWait)
             while clock.now < deadline {
                 if let state = try? await store.message(accountID: account, messageID: messageID)?.transportState, state != .queued { break }
                 if drainPasses > before, drainTask == nil, !outboxRequested { break }
@@ -2642,14 +2672,14 @@ extension AppModel: NotificationActionEnvironment {
         } else {
             await flushBackgroundAction(session)
         }
-        return await replyDelivery(messageID, account: account)
+        return await replyDelivery(messageID, account: account, budget: session.budget)
     }
 
     /// Server acceptance when it comes in time; a written but unacknowledged reply still counts as sent (the archive
     /// reconciles it). Queued (held) and failed are not sent.
-    private func replyDelivery(_ messageID: String, account: String) async -> ReplyDelivery {
+    private func replyDelivery(_ messageID: String, account: String, budget: NotificationActionBudget) async -> ReplyDelivery {
         guard let store else { return .held }
-        let clock = ContinuousClock(), deadline = clock.now + Self.acknowledgementWait
+        let clock = ContinuousClock(), deadline = clock.now + budget.remaining(at: clock.now, atMost: Self.acknowledgementWait)
         while true {
             switch try? await store.message(accountID: account, messageID: messageID)?.transportState {
             case .serverAccepted?: return .sent
@@ -2667,7 +2697,7 @@ extension AppModel: NotificationActionEnvironment {
 
     /// Read state first, then one outbox pass: the reply, the marker and anything else the user queued earlier.
     private func flushBackgroundAction(_ session: NotificationActionSession) async {
-        guard session.ready, let client = session.client, let store, let encryption, let outboxSender else { return }
+        guard session.ready, !session.isOver, let client = session.client, let store, let encryption, let outboxSender else { return }
         _ = try? await ReadSync(store: store).push(account: session.account, client: client)
         let drain = OutboxDrain(account: session.account, client: client, encryption: encryption, store: store,
                                 sender: outboxSender, joinedGroups: session.joinedRooms)
@@ -2693,17 +2723,40 @@ extension AppModel: NotificationActionEnvironment {
     }
 
     func endNotificationAction() async {
+        // `actionSession` stays set until the lease is back, so an expiring background task sees that it is held.
         guard let session = actionSession else { return }
-        actionSession = nil
         session.watchdog?.cancel()
         if let client = session.client { await client.disconnectAndWait() }
         session.consumer?.cancel()
         await session.consumer?.value
         // Still in the background: the lease goes back, so the extension can run. A foreground session that took it
         // meanwhile keeps it.
-        if session.holdsLease, !hasTransportOwnership { try? await store?.releaseTransportOwnership() }
+        if session.holdsLease, !hasTransportOwnership, let store {
+            if session.client != nil { await presentActionArrivals(store: store, session: session) }
+            try? await store.releaseTransportOwnership()
+        }
+        session.holdsLease = false
+        actionSession = nil
         session.releaseLifecycle?.finish()
         await refresh()
+    }
+
+    /// While the action's connection was online (with initial presence) the server pushed nothing for what it
+    /// delivered there, so those messages alert now, under the lease, exactly as the extension would present them:
+    /// its planner, identifiers, mute, read state and previews, and the claim that keeps a later run from repeating
+    /// them. Bounded; what does not get posted in time stays a candidate for the next run or the foreground claim.
+    private func presentActionArrivals(store: MessageStore, session: NotificationActionSession) async {
+        guard authorizedNotificationAccount() == session.account else { return }
+        let presenter = NotificationPresenter(posting: notificationPoster(account: session.account),
+                                              addTimeout: .seconds(2), cleanupTimeout: .seconds(1))
+        let account = session.account, progress = NotificationRunProgress()
+        let timeout = session.budget.presentationTimeout(at: .now)
+        guard timeout > .zero else { return }
+        let presentation = Task { try await presenter.present(store: store, accountID: account, progress: progress) }
+        let watchdog = Task { try? await Task.sleep(for: timeout); presentation.cancel() }
+        _ = await presentation.result
+        watchdog.cancel()
+        if progress.report.posted > 0 { Self.syncLog.notice("notification action presented=\(progress.report.posted, privacy: .public)") }
     }
 
     // MARK: Foreground banners

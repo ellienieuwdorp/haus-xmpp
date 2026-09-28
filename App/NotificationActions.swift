@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import UserNotifications
 import MessageStore
 import MessagingCore
@@ -12,14 +13,20 @@ enum NotificationActionIdentifier {
 /// Copy the notification actions post and show.
 enum NotificationActionCopy {
     static let replyFailed = "Couldn't send your reply. Open the chat to review."
+    /// A reply the app could not attribute to the current account (signed out, switched, keychain locked before the
+    /// first unlock, message gone): no chat, no account, nothing to route to.
+    static let replyRejected = "Couldn't send your reply."
+    /// One content-free notice for every rejected reply; posting again replaces it.
+    static let replyRejectedIdentifier = "r-rejected"
 }
 
 enum NotificationCategories {
     /// `message` names one authenticated incoming message and offers Reply and Mark as Read. Neither asks for
     /// authentication, as in Messages: iOS's own "Allow access when locked" settings decide whether they appear on the
     /// lock screen. Sending needs only after-first-unlock data (keychain and store), so it works on a locked phone that
-    /// was unlocked once since boot; before that the reply is reported as not sent. `notice` (review, placeholder,
-    /// summary, failed reply) and `fallback` have no actions.
+    /// was unlocked once since boot. Before that the account cannot be read: the reply is rejected and only the
+    /// content-free "Couldn't send your reply." notice is posted (`NotificationActionCenter`). `notice` (review,
+    /// placeholder, summary, failed reply) and `fallback` have no actions.
     static var all: Set<UNNotificationCategory> {
         let reply = UNTextInputNotificationAction(identifier: NotificationActionIdentifier.reply, title: "Reply", options: [],
                                                   icon: UNNotificationActionIcon(systemImageName: "arrowshape.turn.up.left"),
@@ -82,6 +89,45 @@ enum NotificationActionOutcome: String, Sendable, Equatable {
 /// Where a reply stands once the session tried to deliver it.
 enum ReplyDelivery: Sendable, Equatable { case sent, held }
 
+/// The time one action may use, measured from the moment the delegate handed it over: before the model finished
+/// starting, before an action queued ahead of it and before `prepare()`. The network work ends at `deadline`; the
+/// teardown (disconnect, consumer join, presenting what arrived, releasing the lease) has `teardown` after it, so the
+/// lease is back well before the system's background time runs out.
+struct NotificationActionBudget: Sendable, Equatable {
+    /// The network part never runs longer than the extension's own budget.
+    static let cap: Duration = .seconds(20)
+    /// Kept free after `deadline` for the teardown.
+    static let teardown: Duration = .seconds(9)
+    /// How long the action waits for the lifecycle slot and the store's lease together, as the extension waits for the app.
+    static let leaseWait: Duration = .seconds(6)
+    /// How long presenting what arrived on the action's connection may take.
+    static let presentation: Duration = .seconds(4)
+
+    let start: ContinuousClock.Instant
+    /// Everything that needs the network stops here: the watchdog closes the connection at this instant.
+    let deadline: ContinuousClock.Instant
+
+    /// `backgroundTimeRemaining` is UIKit's value right after the action's background task began. In front of the app
+    /// it is effectively unlimited (`greatestFiniteMagnitude`) and only the cap applies.
+    init(start: ContinuousClock.Instant, backgroundTimeRemaining: TimeInterval) {
+        self.start = start
+        var network = Self.cap
+        if backgroundTimeRemaining.isFinite, backgroundTimeRemaining < 3_600 {
+            network = max(.zero, min(network, .seconds(max(0, backgroundTimeRemaining)) - Self.teardown))
+        }
+        deadline = start + network
+    }
+
+    /// When the waits before connecting give up: `leaseWait` after `now`, never past the deadline.
+    func leaseDeadline(from now: ContinuousClock.Instant) -> ContinuousClock.Instant { min(now + Self.leaseWait, deadline) }
+    /// How long a step that must end by the deadline may still take (zero once it passed).
+    func remaining(at now: ContinuousClock.Instant, atMost limit: Duration) -> Duration { max(.zero, min(limit, deadline - now)) }
+    /// Presentation after the connection closed: at most `presentation`, ending 2 s before the reserved teardown does.
+    func presentationTimeout(at now: ContinuousClock.Instant) -> Duration {
+        max(.zero, min(Self.presentation, deadline + Self.teardown - .seconds(2) - now))
+    }
+}
+
 /// The steps an action needs, so the decision logic is testable with fakes. The app implements it on `AppModel`.
 @MainActor protocol NotificationActionEnvironment: AnyObject {
     /// The account the protected saved credentials, the session and the selected account all agree on; nil when
@@ -90,9 +136,10 @@ enum ReplyDelivery: Sendable, Equatable { case sent, held }
     /// Tap routing's resolution: an existing incoming encrypted message of `account`.
     func resolveNotificationMessage(_ destination: NotificationDestination, account: String) async -> StoredMessage?
     /// Takes the transport for this action: the live foreground session, or the lease plus a background connection.
-    /// Without either (the lease stayed busy, no network) the action still reads and queues locally. False only when
-    /// there is no storage; nothing has changed then.
-    func beginNotificationAction(account: String, chatID: String) async -> Bool
+    /// Without either (the lease stayed busy, no network, the budget was spent) the action still reads and queues
+    /// locally. False only when there is no storage; nothing has changed then. Nothing network-bound outlasts
+    /// `budget.deadline`.
+    func beginNotificationAction(account: String, chatID: String, budget: NotificationActionBudget) async -> Bool
     /// Moves the read pointer through `message`, publishes XEP-0490 and queues the XEP-0333 marker when the
     /// read-receipts switch allows (the store enforces it).
     func markNotificationMessageRead(_ message: StoredMessage) async throws
@@ -106,18 +153,21 @@ enum ReplyDelivery: Sendable, Equatable { case sent, held }
     func flushNotificationAction(account: String) async
     /// Posts the one "Couldn't send your reply" notice of the chat, or removes a stale one after a sent reply.
     func reportNotificationReply(failed: Bool, for message: StoredMessage) async
-    /// Leaves the transport as it found it: disconnected and the lease released if the app is still in the background.
+    /// Leaves the transport as it found it: disconnected, what arrived on the action's connection presented as the
+    /// extension would, and the lease released if the app is still in the background.
     func endNotificationAction() async
 }
 
 /// The decision logic of Reply and Mark as Read. The account is checked before anything is touched, and again
-/// before the reply is saved; a reply that is not sent is never retried as plaintext and always reported.
+/// before the reply is saved; a reply that is not sent is never retried as plaintext and always reported (a rejected
+/// one by `NotificationActionCenter`, which knows no chat to name).
 enum NotificationActionHandler {
-    @MainActor static func perform(_ request: NotificationActionRequest, in environment: some NotificationActionEnvironment) async -> NotificationActionOutcome {
+    @MainActor static func perform(_ request: NotificationActionRequest, budget: NotificationActionBudget,
+                                   in environment: some NotificationActionEnvironment) async -> NotificationActionOutcome {
         guard let account = environment.authorizedNotificationAccount(), request.destination.belongs(to: account),
               let message = await environment.resolveNotificationMessage(request.destination, account: account),
               environment.authorizedNotificationAccount() == account else { return .rejected }
-        guard await environment.beginNotificationAction(account: account, chatID: message.chatID) else {
+        guard await environment.beginNotificationAction(account: account, chatID: message.chatID, budget: budget) else {
             if case .reply = request.kind { await environment.reportNotificationReply(failed: true, for: message) }
             return .unavailable
         }
@@ -149,25 +199,93 @@ enum NotificationActionHandler {
     }
 }
 
+/// The system's background time, behind a seam so the center's task handling is testable.
+@MainActor protocol NotificationActionBackgroundTime: AnyObject {
+    /// Begins a background task. The system calls `expiration` on the main thread when the time runs out; a task
+    /// still not ended when it returns gets the process terminated.
+    func begin(expiration: @escaping @MainActor () -> Void) -> UIBackgroundTaskIdentifier
+    func end(_ task: UIBackgroundTaskIdentifier)
+    /// `UIApplication.backgroundTimeRemaining`: effectively unlimited in front of the app.
+    var remaining: TimeInterval { get }
+}
+
+@MainActor final class UIKitBackgroundTime: NotificationActionBackgroundTime {
+    func begin(expiration: @escaping @MainActor () -> Void) -> UIBackgroundTaskIdentifier {
+        UIApplication.shared.beginBackgroundTask(withName: "Notification action") { MainActor.assumeIsolated { expiration() } }
+    }
+    func end(_ task: UIBackgroundTaskIdentifier) { UIApplication.shared.endBackgroundTask(task) }
+    var remaining: TimeInterval { UIApplication.shared.backgroundTimeRemaining }
+}
+
 /// Lets the delegate reach the model, which may still be starting after a background launch. The latest model to
-/// register handles actions, one at a time.
+/// register handles actions, one at a time. Each request runs inside its own background task, begun the moment the
+/// delegate hands it over; the action's budget is measured from there.
 @MainActor final class NotificationActionCenter {
-    static let shared = NotificationActionCenter()
-    var handler: (@MainActor (NotificationActionRequest) async -> NotificationActionOutcome)?
+    static let shared = NotificationActionCenter(time: UIKitBackgroundTime(), reportRejectedReply: postRejectedReply)
+    var handler: (@MainActor (NotificationActionRequest, NotificationActionBudget) async -> NotificationActionOutcome)?
+    /// The system is ending the background time: closes the running action's connection and answers whether the action
+    /// still holds, or is acquiring, the store's transport lease.
+    var abort: (@MainActor () -> Bool)?
+    private let time: any NotificationActionBackgroundTime
+    private let reportRejectedReply: @MainActor () async -> Void
     private var queue: Task<NotificationActionOutcome, Never>?
+
+    init(time: any NotificationActionBackgroundTime, reportRejectedReply: @escaping @MainActor () async -> Void) {
+        self.time = time
+        self.reportRejectedReply = reportRejectedReply
+    }
 
     @discardableResult
     func perform(_ request: NotificationActionRequest, waitingForHandler limit: Duration = .seconds(5)) async -> NotificationActionOutcome {
-        let previous = queue
-        let task = Task { @MainActor in
-            _ = await previous?.value
-            let clock = ContinuousClock(), start = clock.now
-            while handler == nil, clock.now - start < limit { try? await Task.sleep(for: .milliseconds(50)) }
-            guard let handler else { return NotificationActionOutcome.rejected }
-            return await handler(request)
+        let task = ActionBackgroundTask(time: time)
+        task.begin { [weak self] in
+            // Termination releases the kernel lease; a suspended owner keeps it, and every extension run would wait
+            // and fall back until the app ran again. So while the action holds the lease the task is left to expire and
+            // the system ends the process, as for the app's own quiesce. Otherwise the connection is closed and the
+            // task ends here.
+            if self?.abort?() == true { return }
+            task.end()
         }
-        queue = task
-        return await task.value
+        let budget = NotificationActionBudget(start: .now, backgroundTimeRemaining: time.remaining)
+        let previous = queue
+        let run = Task { @MainActor [weak self] () -> NotificationActionOutcome in
+            _ = await previous?.value
+            guard let self else { return .rejected }
+            let clock = ContinuousClock(), waitEnd = min(clock.now + limit, budget.deadline)
+            while self.handler == nil, clock.now < waitEnd { try? await Task.sleep(for: .milliseconds(50)) }
+            let outcome = await self.handler?(request, budget) ?? .rejected
+            // Rejected means nothing was saved: the typed text is gone, so the user hears about it, without naming a
+            // chat or an account the app could not attribute.
+            if outcome == .rejected, case .reply = request.kind { await self.reportRejectedReply() }
+            return outcome
+        }
+        queue = run
+        let outcome = await run.value
+        task.end()
+        return outcome
+    }
+
+    /// The content-free notice of a rejected reply: no title, no chat, no destination; one at a time.
+    static func postRejectedReply() async {
+        let content = UNMutableNotificationContent()
+        content.body = NotificationActionCopy.replyRejected
+        content.categoryIdentifier = NotificationIdentity.noticeCategory
+        content.sound = .default
+        try? await UNUserNotificationCenter.current().add(UNNotificationRequest(
+            identifier: NotificationActionCopy.replyRejectedIdentifier, content: content, trigger: nil))
+    }
+}
+
+/// Ends one background task exactly once, from the expiration handler or when the action returned.
+@MainActor private final class ActionBackgroundTask {
+    private let time: any NotificationActionBackgroundTime
+    private var id = UIBackgroundTaskIdentifier.invalid
+    init(time: any NotificationActionBackgroundTime) { self.time = time }
+    func begin(expiration: @escaping @MainActor () -> Void) { id = time.begin(expiration: expiration) }
+    func end() {
+        guard id != .invalid else { return }
+        time.end(id)
+        id = .invalid
     }
 }
 
@@ -176,6 +294,7 @@ enum NotificationActionHandler {
 /// extension's fallback) and anything unknown stays hidden, as before.
 enum ForegroundPresentation {
     struct Request: Sendable, Equatable {
+        var identifier = ""
         var isRemote: Bool
         var categoryIdentifier: String
         var threadIdentifier: String
@@ -186,6 +305,9 @@ enum ForegroundPresentation {
 
     /// `openChatID` is the conversation on screen; nil on the chat list.
     static func options(for request: Request, accountID: String, openChatID: String?) -> UNNotificationPresentationOptions {
+        // The rejected-reply notice names no account; it answers something the user just did, so it shows.
+        if !request.isRemote, request.identifier == NotificationActionCopy.replyRejectedIdentifier,
+           request.categoryIdentifier == NotificationIdentity.noticeCategory { return [.banner, .list, .sound] }
         guard !request.isRemote, NotificationIdentity.isMessageRun(category: request.categoryIdentifier), !accountID.isEmpty,
               let scope = request.accountScope,
               NotificationDestination(accountID: accountID, messageID: UUID().uuidString)?.accountScope == scope else { return [] }
@@ -198,7 +320,7 @@ enum ForegroundPresentation {
         let destination = (content.userInfo[NotificationDestination.userInfoKey] as? [String: String]).flatMap(NotificationDestination.init(payload:))
         let reference = (content.userInfo[NotificationReference.userInfoKey] as? [String: String]).flatMap(NotificationReference.init(payload:))
         let failed = (content.userInfo[NotificationNavigation.replyFailureKey] as? [String: String]).flatMap(NotificationDestination.init(payload:))
-        return Request(isRemote: notification.request.trigger is UNPushNotificationTrigger, categoryIdentifier: content.categoryIdentifier,
+        return Request(identifier: notification.request.identifier, isRemote: notification.request.trigger is UNPushNotificationTrigger, categoryIdentifier: content.categoryIdentifier,
                        threadIdentifier: content.threadIdentifier, playsSound: content.sound != nil,
                        accountScope: destination?.accountScope ?? reference?.accountScope ?? failed?.accountScope)
     }
