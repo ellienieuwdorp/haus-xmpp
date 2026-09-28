@@ -63,6 +63,9 @@ public struct BackgroundSynchronizer: Sendable {
                 // outbox drain. Resumption may replay only previously authorized exact bytes.
                 try await ArchiveSynchronizer(store: store).synchronize(
                     account: account.accountID, client: client, encryption: encryption)
+                // After catch-up, before the claim: chats read on another device have their pointers moved, which
+                // removes their candidates. Own XEP-0333 markers were applied by the walk and the live consumer.
+                try await ReadSync(store: store).pull(account: account.accountID, client: client, encryption: encryption)
             }, consume: {
                 try await consumeBackgroundEvents(client.events, processor: InboundProcessor(encryption: encryption, client: client, account: account.accountID))
             }, stop: { await client.disconnectAndWait() })

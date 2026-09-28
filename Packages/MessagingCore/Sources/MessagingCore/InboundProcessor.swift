@@ -72,6 +72,10 @@ public actor InboundProcessor {
         case .receipt(let receipt):
             do { _ = try await encryption.receivePlaintextReceipt(account: account, receipt: receipt); return .stored }
             catch { mayAcknowledge = false; throw error }
+        case .displayedSync(let items):
+            // XEP-0490 state another device of ours published; the client verified it came from our bare JID.
+            do { _ = try await encryption.receiveDisplayedSync(account: account, items: items); return .stored }
+            catch { mayAcknowledge = false; throw error }
         case .streamManagementBarrier(let token):
             defer { mayAcknowledge = true }
             guard mayAcknowledge else { await client.disconnect(); throw Failure.unsavedInbound }
