@@ -70,6 +70,8 @@ private func batch(_ candidates: [NotificationCandidate], previews: Bool = true)
     // No tap destination; a cleanup reference without address or content: the placeholder's opaque row ID, or nothing.
     #expect(plan.requests.allSatisfy { $0.destination == nil && $0.userInfo[NotificationDestination.userInfoKey] == nil })
     #expect(plan.requests.map { $0.reference?.kind } == [.retained, .placeholder, .retained])
+    // Nothing to reply to or mark read from the notification: the category without actions.
+    #expect(plan.requests.allSatisfy { $0.categoryIdentifier == NotificationIdentity.noticeCategory })
     #expect(plan.requests[0].userInfo == [NotificationReference.userInfoKey: ["version": "1", "kind": "retained",
                                                                                "account": try #require(plan.requests[0].reference).accountScope]])
     // Stable per ciphertext, distinct from any message identity.
@@ -105,7 +107,7 @@ private func batch(_ candidates: [NotificationCandidate], previews: Bool = true)
     #expect(plan.requests.map(\.identifier) == [NotificationIdentity.overflow(accountID: account), NotificationIdentity.message(accountID: account, messageID: newest)])
     #expect(plan.requests.map(\.body) == ["New messages in 3 more chats", "New message"])
     #expect(plan.requests.map(\.playsSound) == [false, true])
-    #expect(plan.requests[0].title.isEmpty && plan.requests[0].userInfo.isEmpty && plan.requests[0].categoryIdentifier == NotificationIdentity.messageCategory)
+    #expect(plan.requests[0].title.isEmpty && plan.requests[0].userInfo.isEmpty && plan.requests[0].categoryIdentifier == NotificationIdentity.noticeCategory)
     // Only the deferred chats: a summary alone still sounds, and the account comes from the caller.
     let alone = NotificationPlanner.plan(MessageNotification(candidates: [], claimed: [], deferredCount: 1, deferredChatCount: 1, previewsEnabled: true),
                                          accountID: account)

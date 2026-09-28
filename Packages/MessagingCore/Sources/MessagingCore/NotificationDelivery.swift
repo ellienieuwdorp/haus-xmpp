@@ -215,7 +215,7 @@ public struct NotificationPresenter: Sendable {
     func removeStaleDelivered(store: MessageStore, accountID: String, summaryPosted: Bool) async throws -> (fallbacks: Int, messages: Int) {
         let delivered = await posting.deliveredNotifications()
         let fallbacks = delivered.filter { $0.categoryIdentifier == NotificationIdentity.fallbackCategory }.map(\.identifier)
-        let mine = delivered.filter { $0.categoryIdentifier == NotificationIdentity.messageCategory }
+        let mine = delivered.filter { NotificationIdentity.isMessageRun(category: $0.categoryIdentifier) }
         let owned = mine.compactMap { notification -> String? in
             if let destination = notification.destination { return destination.belongs(to: accountID) ? destination.messageID : nil }
             if let reference = notification.reference, reference.kind == .placeholder, reference.belongs(to: accountID) { return reference.messageID }

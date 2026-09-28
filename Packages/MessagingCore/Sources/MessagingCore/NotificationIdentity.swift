@@ -27,8 +27,20 @@ public enum NotificationIdentity {
         "o-" + hex("xmpp-notification-overflow-v1\u{0}" + accountID)
     }
 
-    /// Category of every notification that represents one stored message.
+    /// The "Couldn't send your reply" request of one chat (stream E): a later failure in the same chat replaces it,
+    /// and opening the chat removes it with the rest of its thread.
+    public static func replyFailure(accountID: String, chatID: String) -> String {
+        "r-" + hex("xmpp-notification-reply-failure-v1\u{0}" + accountID + "\u{0}" + chatID)
+    }
+
+    /// Category of every notification that names one authenticated incoming message (it carries a
+    /// `NotificationDestination`). Only this category offers Reply and Mark as Read.
     public static let messageCategory = "message"
+    /// Category of a notification that cannot be answered from the notification itself: retained ciphertext waiting for
+    /// review, an unreadable placeholder, the deferred-chats summary and a failed reply. It has no actions.
+    public static let noticeCategory = "notice"
+    /// The categories whose requests belong to a message run (everything but the fallback), for cleanup.
+    public static func isMessageRun(category: String) -> Bool { category == messageCategory || category == noticeCategory }
     /// Category of the generic fallback; never carries message content.
     public static let fallbackCategory = "fallback"
 
