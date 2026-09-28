@@ -1,5 +1,6 @@
 import UIKit
 import UserNotifications
+import MessagingCore
 
 @MainActor
 final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -14,9 +15,12 @@ final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificatio
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
-        let category = UNNotificationCategory(identifier: "message", actions: [], intentIdentifiers: [],
+        // One category per message notification and one for the extension's generic fallback (plan D2, D3).
+        let message = UNNotificationCategory(identifier: NotificationIdentity.messageCategory, actions: [], intentIdentifiers: [],
             hiddenPreviewsBodyPlaceholder: "New message", options: [])
-        UNUserNotificationCenter.current().setNotificationCategories([category])
+        let fallback = UNNotificationCategory(identifier: NotificationIdentity.fallbackCategory, actions: [], intentIdentifiers: [],
+            hiddenPreviewsBodyPlaceholder: NotificationPlanner.fallbackBody, options: [])
+        UNUserNotificationCenter.current().setNotificationCategories([message, fallback])
         return true
     }
 

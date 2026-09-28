@@ -2,98 +2,112 @@ import Foundation
 import UserNotifications
 import MessagingCore
 
+/// Thin shell: every remote request joins the process's run (`NotificationRunCoordinator`) and finishes with its outcome.
+/// A settled run posted one local request per new message, so the remote alert is suppressed with empty content
+/// (the filtering entitlement). Anything else shows the generic fallback; unknown is never suppressed.
 final class NotificationService: UNNotificationServiceExtension, @unchecked Sendable {
+    /// One per process: `didReceive` may arrive concurrently for coalesced pushes, on this or another instance.
+    private static let coordinator = NotificationRunCoordinator { progress in await ExtensionRun.run(progress) }
+
     private let lock = NSLock()
-    private var work: Task<Void, Never>?
-    private var delivery: NotificationDelivery?
+    private var deliveries: [UUID: RemoteDelivery] = [:]
 
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
-        let content = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
-        // The gateway sends no plaintext. Only authenticated local decryption can replace
-        // this fallback; iOS and the app's preview preference govern message presentation.
-        content.title = "XMPP"
-        content.body = "New encrypted activity"
-        content.categoryIdentifier = "message"
-        content.userInfo = [:]
-        let delivery = NotificationDelivery(content: content, handler: contentHandler)
-        lock.lock()
-        self.delivery?.finish()
-        work?.cancel()
-        self.delivery = delivery
-        work = Task {
-            defer { delivery.finish() }
-            do {
-                guard let account = try NotificationAccount.load(), account.push != nil else { return }
-                let directory = try await SharedStorage.directory(migrate: false)
-                let started = Date().timeIntervalSince1970
-                let key = try EncryptionKeychain.load(storageID: "primary", allowCreation: false)
-                try await BackgroundSynchronizer().synchronize(databaseURL: directory.appending(path: "messages.sqlite"),
-                    wrappingKey: key, account: BackgroundAccount(host: account.host, port: account.port,
-                        domain: account.domain, username: account.username, password: account.password), presentation: { batch in
-                    // Keep the transport lease through presentation. Preferences cannot change
-                    // under this lease; logout authorization is reread after the network work.
-                    guard try NotificationAccount.load() == account else { throw CancellationError() }
-                    let preview = NotificationPreview(batch)
-                    try Task.checkCancellation()
-                    #if DEBUG
-                    // Synthetic staging diagnostics contain no account, token, body or key data.
-                    let marker = try JSONEncoder().encode(["started": started, "completed": Date().timeIntervalSince1970])
-                    try? marker.write(to: directory.appending(path: "notification-result.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-                    #endif
-                    delivery.finish(preview: preview, storageRoot: directory, account: account.accountID)
-                })
-            } catch {
-                // Contention, unavailable protected data, network failure and expiration all
-                // preserve a generic alert. The next foreground MAM pass recovers content.
-            }
+        let ticket = UUID()
+        let delivery = RemoteDelivery(request: request, handler: contentHandler)
+        lock.withLock { deliveries[ticket] = delivery }
+        Task {
+            let outcome = await Self.coordinator.deliver(ticket: ticket)
+            delivery.finish(outcome)
+            _ = lock.withLock { deliveries.removeValue(forKey: ticket) }
         }
-        lock.unlock()
     }
 
     override func serviceExtensionTimeWillExpire() {
-        lock.lock()
-        let work = work
-        let delivery = delivery
-        lock.unlock()
-        work?.cancel()
-        delivery?.finish()
+        let pending = lock.withLock {
+            defer { deliveries.removeAll() }
+            return deliveries
+        }
+        for (ticket, delivery) in pending { delivery.finish(Self.coordinator.expire(ticket: ticket)) }
     }
 }
 
-private final class NotificationDelivery: @unchecked Sendable {
+/// Calls the system's content handler exactly once per remote request.
+private final class RemoteDelivery: @unchecked Sendable {
     private let lock = NSLock()
-    private let content: UNNotificationContent
+    private let request: UNNotificationRequest
     private var handler: ((UNNotificationContent) -> Void)?
-    init(content: UNNotificationContent, handler: @escaping (UNNotificationContent) -> Void) {
-        self.content = content; self.handler = handler
+
+    init(request: UNNotificationRequest, handler: @escaping (UNNotificationContent) -> Void) {
+        self.request = request; self.handler = handler
     }
-    func finish(preview: NotificationPreview? = nil, storageRoot: URL? = nil, account: String? = nil) {
-        lock.lock()
-        let callback = handler
-        handler = nil
-        let finalContent: UNNotificationContent
-        if let preview, let updated = content.mutableCopy() as? UNMutableNotificationContent {
-            updated.title = preview.title
-            updated.body = preview.body
-            updated.threadIdentifier = preview.threadIdentifier
-            updated.userInfo = preview.destination.map { [NotificationDestination.userInfoKey: $0.payload] } ?? [:]
-            // The app's verified avatar file, copied because iOS takes ownership of an attachment.
-            if let hash = preview.avatarHash, let storageRoot, let account {
-                let cached = AvatarStore.url(root: storageRoot, account: account, hash: hash)
-                let copy = FileManager.default.temporaryDirectory.appending(path: "avatar-\(hash).png")
-                if AvatarStore.image(at: cached) != nil, (try? FileManager.default.copyItem(at: cached, to: copy)) != nil,
-                   let attachment = try? UNNotificationAttachment(identifier: "avatar", url: copy, options: [UNNotificationAttachmentOptionsTypeHintKey: "public.png"]) {
-                    updated.attachments = [attachment]
-                }
-            }
-            #if NOTIFICATION_FILTERING_APPROVED
-            // Enable only after Apple grants the entitlement and the signing profile includes it.
-            finalContent = preview.hasNewMessage ? updated : UNNotificationContent()
-            #else
-            finalContent = updated
-            #endif
-        } else { finalContent = content }
-        lock.unlock()
-        callback?(finalContent)
+
+    func finish(_ outcome: NotificationRunOutcome) {
+        guard let callback = lock.withLock({ () -> ((UNNotificationContent) -> Void)? in
+            defer { handler = nil }
+            return handler
+        }) else { return }
+        if outcome.suppressesRemoteAlert {
+            // Every local add already completed: empty content suppresses the remote alert (no title, body or sound).
+            callback(UNNotificationContent())
+            return
+        }
+        // Plan D2: generic, no message content, the fallback category, and the identifier the system gave this request
+        // (the gateway's per-registration collapse ID), so repeated fallbacks replace each other.
+        let content = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
+        content.title = ""
+        content.subtitle = ""
+        content.body = NotificationPlanner.fallbackBody
+        content.categoryIdentifier = NotificationIdentity.fallbackCategory
+        content.threadIdentifier = ""
+        content.userInfo = [:]
+        content.attachments = []
+        callback(content)
+    }
+}
+
+/// One run in this process: load the protected account, catch up under the lease, post, settle, and record counts.
+private enum ExtensionRun {
+    static func run(_ progress: NotificationRunProgress) async -> NotificationRunOutcome {
+        var directory: URL?
+        let outcome: NotificationRunOutcome
+        do {
+            guard let account = try NotificationAccount.load(), account.push != nil else { throw NotificationRunError.noAccount }
+            let key: Data
+            do {
+                directory = try await SharedStorage.directory(migrate: false)
+                key = try EncryptionKeychain.load(storageID: "primary", allowCreation: false)
+            } catch { throw NotificationRunError.protectedDataUnavailable }
+            guard let root = directory else { throw NotificationRunError.protectedDataUnavailable }
+            let accountID = account.accountID
+            let presenter = NotificationPresenter(posting: UserNotificationPoster(avatarCopy: { hash, identifier in
+                // The app's verified avatar file, copied because iOS takes ownership of an attachment.
+                let cached = AvatarStore.url(root: root, account: accountID, hash: hash)
+                let copy = FileManager.default.temporaryDirectory.appending(path: "avatar-\(identifier).png")
+                try? FileManager.default.removeItem(at: copy)
+                guard AvatarStore.image(at: cached) != nil, (try? FileManager.default.copyItem(at: cached, to: copy)) != nil else { return nil }
+                return copy
+            }))
+            try await BackgroundSynchronizer().synchronize(databaseURL: root.appending(path: "messages.sqlite"), wrappingKey: key,
+                account: BackgroundAccount(host: account.host, port: account.port, domain: account.domain,
+                                           username: account.username, password: account.password),
+                progress: progress, presentation: { store in
+                    // Keep the transport lease through presentation. Preferences cannot change under this lease;
+                    // logout authorization is reread after the network work.
+                    try await presenter.present(store: store, accountID: accountID, progress: progress, authorize: {
+                        guard try NotificationAccount.load() == account else { throw CancellationError() }
+                    })
+                })
+            outcome = .settled(progress.report)
+        } catch {
+            // A committed run already posted and deleted its claims; a failure closing the store afterwards is not a
+            // reason to show the fallback on top of the real notifications.
+            outcome = progress.isCommitted ? .settled(progress.report) : .fallback(NotificationFallbackReason(error))
+        }
+        #if DEBUG
+        // Synthetic staging diagnostics: timestamps, phase and counts only; no account, token, body or key data.
+        if let directory { try? NotificationOutcomeLog.append(NotificationOutcomeRecord(progress: progress, outcome: outcome), directory: directory) }
+        #endif
+        return outcome
     }
 }
