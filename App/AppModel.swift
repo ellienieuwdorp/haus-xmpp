@@ -2712,8 +2712,9 @@ extension AppModel: NotificationActionEnvironment {
     fileprivate func presentForegroundNotifications(store: MessageStore, account: String) async throws {
         let presents = mayPostNotifications && testSessionID == nil && !isDemo && session.isReady && catchUp == nil
             && sessionAccount?.accountID == account
-        try await NotificationPresenter(posting: notificationPoster(account: account))
+        let posted = try await NotificationPresenter(posting: notificationPoster(account: account))
             .presentForeground(store: store, accountID: account, openChatID: openChatID, presents: presents)
+        if posted > 0 { Self.syncLog.notice("foreground notifications posted=\(posted, privacy: .public)") }
     }
 
     /// The extension's poster, with the app's verified avatar files.

@@ -182,6 +182,20 @@ import MessagingCore
         XCTAssertEqual(categories[NotificationIdentity.fallbackCategory]?.actions.count, 0)
     }
 
+    /// The host app registered the categories at launch: the system, not just the value, has Reply and Mark as Read.
+    func testTheSystemHasTheMessageCategoryActions() async throws {
+        var registered: Set<UNNotificationCategory> = []
+        for _ in 0..<20 {
+            registered = await UNUserNotificationCenter.current().notificationCategories()
+            if !registered.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let message = try XCTUnwrap(registered.first { $0.identifier == NotificationIdentity.messageCategory })
+        XCTAssertEqual(message.actions.map(\.identifier), [NotificationActionIdentifier.reply, NotificationActionIdentifier.markRead])
+        XCTAssertEqual(Set(registered.map(\.identifier)), [NotificationIdentity.messageCategory, NotificationIdentity.noticeCategory,
+                                                             NotificationIdentity.fallbackCategory])
+    }
+
     func testAFailedReplyNoticeOpensItsChatButActionButtonsNeverRoute() throws {
         let destination = try XCTUnwrap(NotificationDestination(accountID: account, messageID: incoming.id))
         XCTAssertEqual(NotificationNavigation.destination(userInfo: [NotificationNavigation.replyFailureKey: destination.payload],

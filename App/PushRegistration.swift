@@ -57,28 +57,49 @@ final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificatio
     }
     /// In front of the app only the local requests for another chat's messages show (the app posts them; see
     /// `NotificationPresenter.presentForeground`). The open chat, remote requests and fallbacks stay hidden.
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+    /// Completion-handler form: UIKit requires the handler on the main thread, which the async form does not
+    /// guarantee (a response handled in the background crashed with an assertion when it returned off main).
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         let request = ForegroundPresentation.request(notification)
-        return await MainActor.run {
+        let completion = MainThreadCompletion(completionHandler)
+        Task { @MainActor in
             let state = ForegroundNotificationState.shared
-            return ForegroundPresentation.options(for: request, accountID: state.accountID, openChatID: state.openChatID)
+            completion.call(ForegroundPresentation.options(for: request, accountID: state.accountID, openChatID: state.openChatID))
         }
     }
 
-    /// May run with the app launched into the background. Returning completes the response, so an action returns only
-    /// once its work settled (bounded by the model's action budget).
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+    /// May run with the app launched into the background. The handler is called on the main thread once an action's
+    /// work settled (bounded by the model's action budget).
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
         let content = response.notification.request.content
+        let completion = MainThreadCompletion<Void>({ _ in completionHandler() })
         switch response.actionIdentifier {
         case NotificationActionIdentifier.reply, NotificationActionIdentifier.markRead:
             guard let request = NotificationActionRequest(userInfo: content.userInfo, categoryIdentifier: content.categoryIdentifier,
                                                           actionIdentifier: response.actionIdentifier,
-                                                          text: (response as? UNTextInputNotificationResponse)?.userText) else { return }
-            await NotificationActionCenter.shared.perform(request)
+                                                          text: (response as? UNTextInputNotificationResponse)?.userText) else {
+                Task { @MainActor in completion.call(()) }
+                return
+            }
+            Task { @MainActor in
+                await NotificationActionCenter.shared.perform(request)
+                completion.call(())
+            }
         default:
-            guard let destination = NotificationNavigation.destination(userInfo: content.userInfo,
-                                                                       actionIdentifier: response.actionIdentifier) else { return }
-            await NotificationNavigation.shared.receive(destination)
+            let destination = NotificationNavigation.destination(userInfo: content.userInfo, actionIdentifier: response.actionIdentifier)
+            Task { @MainActor in
+                if let destination { NotificationNavigation.shared.receive(destination) }
+                completion.call(())
+            }
         }
     }
+}
+
+/// Carries a system completion handler to the main actor, where it is called exactly as UIKit requires.
+private struct MainThreadCompletion<Value>: @unchecked Sendable {
+    private let handler: (Value) -> Void
+    init(_ handler: @escaping (Value) -> Void) { self.handler = handler }
+    @MainActor func call(_ value: Value) { handler(value) }
 }
