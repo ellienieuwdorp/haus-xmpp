@@ -56,17 +56,17 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
     try await migrated.close()
     #expect(sqliteRows(url, "SELECT name FROM pragma_table_info('messages') WHERE name='unreadable_reason'") == [["unreadable_reason"]])
     #expect(sqliteRows(url, "SELECT dflt_value,\"notnull\" FROM pragma_table_info('pending_encrypted_inbox') WHERE name='reason'") == [["'trustPending'", "1"]])
-    #expect(sqliteRows(url, "PRAGMA user_version") == [["17"]])
+    #expect(sqliteRows(url, "PRAGMA user_version") == [["18"]])
 
     // Reopening is idempotent: no second ALTER, same version.
     try await MessageStore(url: url).close()
     #expect(sqliteRows(url, "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='unreadable_reason'") == [["1"]])
-    #expect(sqliteRows(url, "PRAGMA user_version") == [["17"]])
+    #expect(sqliteRows(url, "PRAGMA user_version") == [["18"]])
 
     #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, "PRAGMA user_version=18;", nil, nil, nil) == SQLITE_OK)
+    #expect(sqlite3_exec(db, "PRAGMA user_version=19;", nil, nil, nil) == SQLITE_OK)
     sqlite3_close(db)
-    #expect(throws: MessageStoreError.unsupportedSchema(18)) { _ = try MessageStore(url: url) }
+    #expect(throws: MessageStoreError.unsupportedSchema(19)) { _ = try MessageStore(url: url) }
 }
 
 @Test func placeholderIsDeterministicIdempotentAndOrderedByStamp() async throws {
@@ -136,7 +136,7 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
     #expect(try await !store.hasUnreadableMessage(accountID: account, id: placeholder(.ciphertext(sender: peer, digest: "d2")).id))
 }
 
-@Test func placeholderIsNeverAReactionTargetEventHolderOrCandidate() async throws {
+@Test func placeholderIsNeverAReactionTargetOrEventHolderButAlertsAsUnreadable() async throws {
     let url = try unreadableStoreURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     let store = try MessageStore(url: url)
@@ -158,8 +158,10 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
     await #expect(throws: MessageStoreError.invalidValue) {
         try await store.enqueueReceipt(accountID: account, chatID: peer, targetMessageID: id, kind: .marker)
     }
-    let notification = try await store.takeMessageNotification(accountID: account)
-    #expect(notification.messageCount == 0 && notification.latest == nil)
+    // Plan D5: an incoming placeholder alerts as unreadable, never with content, and never as a reaction or receipt target.
+    let notification = try await store.pendingNotifications(accountID: account)
+    #expect(notification.candidates.map(\.content) == [.unreadable(messageID: id)])
+    #expect(notification.claimed == [.message(id)])
 
     try await store.upsertChat(accountID: account, chatID: peer, title: "Bob")
     await #expect(throws: MessageStoreError.invalidValue) {

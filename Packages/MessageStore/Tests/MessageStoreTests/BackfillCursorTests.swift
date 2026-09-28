@@ -71,7 +71,7 @@ private func execute(_ url: URL, _ sql: String) -> Bool {
     let url = try backfillStoreURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     try await MessageStore(url: url).close()
-    #expect(rows(url, "PRAGMA user_version") == [["17"]])
+    #expect(rows(url, "PRAGMA user_version") == [["18"]])
     #expect(rows(url, "SELECT name FROM sqlite_master WHERE type='table' AND name='archive_backfill'") == [["archive_backfill"]])
 
     // Reopening keeps the version and the table's rows (the CREATE is not repeated destructively).
@@ -80,7 +80,7 @@ private func execute(_ url: URL, _ sql: String) -> Bool {
     try await store.saveArchiveBackfillCursor(accountID: "a@x", archiveID: "a@x", expectedRevision: nil, oldestID: "m1", complete: false)
     try await store.close()
     try await MessageStore(url: url).close()
-    #expect(rows(url, "PRAGMA user_version") == [["17"]])
+    #expect(rows(url, "PRAGMA user_version") == [["18"]])
     #expect(rows(url, "SELECT revision,oldest_id,complete FROM archive_backfill") == [["1", "m1", "0"]])
 
     // A v15 file (no table) upgrades and keeps its other rows.
@@ -92,12 +92,12 @@ private func execute(_ url: URL, _ sql: String) -> Bool {
     #expect(try await upgraded.archiveBackfillCursor(accountID: "a@x", archiveID: "a@x") == nil)
     #expect(try await upgraded.chats(accountID: "a@x").map(\.title) == ["Peer"])
     try await upgraded.close()
-    #expect(rows(url, "PRAGMA user_version") == [["17"]])
+    #expect(rows(url, "PRAGMA user_version") == [["18"]])
     #expect(rows(url, "SELECT name FROM sqlite_master WHERE type='table' AND name='archive_backfill'") == [["archive_backfill"]])
 
     // A database written by a newer build is refused, never downgraded.
-    #expect(execute(url, "PRAGMA user_version=18;"))
-    #expect(throws: MessageStoreError.unsupportedSchema(18)) { _ = try MessageStore(url: url) }
+    #expect(execute(url, "PRAGMA user_version=19;"))
+    #expect(throws: MessageStoreError.unsupportedSchema(19)) { _ = try MessageStore(url: url) }
 }
 
 @Test func newestArchivePageSavesBothCursorsTogetherAndReplacesAnOrphanedBackfillRow() async throws {
