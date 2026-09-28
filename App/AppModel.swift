@@ -99,6 +99,8 @@ final class AppModel {
     @ObservationIgnored private var lifecycleTask: Task<Void, Never>?
     @ObservationIgnored private var foreground = true
     @ObservationIgnored private var quiescing = false
+    /// The icon badge last set by the app; nil after a lifecycle change, so the next load sets it whatever it holds.
+    @ObservationIgnored private var appBadge: Int?
     @ObservationIgnored private var activeEncryptionOperations = 0
     @ObservationIgnored private var acquiringOwnership = false
     @ObservationIgnored private var hasTransportOwnership = false
@@ -527,6 +529,8 @@ final class AppModel {
             }
             UNUserNotificationCenter.current().removeAllDeliveredNotifications()
             UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+            appBadge = nil
+            setAppBadge(0)
         }
         sessionAccount = nil
         notificationStatus = "Not enabled"
@@ -572,6 +576,8 @@ final class AppModel {
     /// Serialize scene transitions; never release the lease with a suspended writer alive.
     func setForeground(_ active: Bool) {
         foreground = active
+        // The extension may set the icon badge while the app is away: the next chat-list load sets it again.
+        appBadge = nil
         if !active { quiescing = true }
         let previous = lifecycleTask
         lifecycleTask = Task { [weak self] in
@@ -1180,6 +1186,8 @@ final class AppModel {
                 try AvatarStore.save(fetched.data, root: storageRoot, account: account, hash: fetched.hash)
                 if let image = AvatarStore.image(root: storageRoot, account: account, hash: fetched.hash) {
                     avatars[chatID] = image
+                    // The communication-notification copy: pre-scaled here, so the extension never decodes an image.
+                    AvatarStore.saveNotificationImage(root: storageRoot, account: account, hash: fetched.hash)
                 } else {
                     try? FileManager.default.removeItem(at: AvatarStore.url(root: storageRoot, account: account, hash: fetched.hash))
                     hash = nil
@@ -1204,6 +1212,8 @@ final class AppModel {
         // ponytail: decoded on the main actor; the files are ≤512 KiB and become 256 px thumbnails. Move off-main if the list ever stutters.
         for (id, hash) in wanted where avatars[id] == nil {
             avatars[id] = AvatarStore.image(root: storageRoot, account: account, hash: hash)
+            // Avatars stored before communication notifications get their pre-scaled copy once (a stat when it exists).
+            if avatars[id] != nil { AvatarStore.saveNotificationImage(root: storageRoot, account: account, hash: hash) }
         }
     }
     func canSend(to chatID: String) -> Bool {
@@ -1755,6 +1765,8 @@ final class AppModel {
         prepareChat(chatID)
         // The chat is on screen: its delivered notifications have done their job.
         if !isDemo { let account = accountID; Task { await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID) } }
+        // Reactions have no read state: an opened chat shows them, so waiting reaction alerts go (plan D8).
+        if let store { let account = accountID; Task { try? await store.dismissReactionNotifications(accountID: account, chatID: chatID) } }
         // Keep the same chat's devices across pop-back and reconnect; another chat starts pending until its store read.
         if encryptionOverviewChatID != chatID { encryptionOverviewChatID = chatID; encryptionOverview = nil }
         encryptionDetailsChatID = chatID
@@ -2479,5 +2491,21 @@ final class AppModel {
         // A reorder (pin, new activity) animates; List only does so inside an explicit transaction.
         withAnimation(summaries.map(\.id) == chats.map(\.id) ? nil : .default) { chats = summaries }
         hasLoadedChats = true
+        updateAppBadge(summaries)
+    }
+
+    /// The icon badge: unread messages outside muted chats (`NotificationBadge`, the extension's rule too). Every
+    /// change of unread totals or mute reloads the chat list, so this follows reads here, reads on other devices
+    /// (markers and XEP-0490) and mute changes.
+    private func updateAppBadge(_ summaries: [ChatSummary]) {
+        guard !accountID.isEmpty else { return }
+        setAppBadge(NotificationBadge.count(unread: Dictionary(summaries.map { ($0.id, $0.unreadCount) }, uniquingKeysWith: max),
+                                            settings: Dictionary(summaries.map { ($0.id, $0.notification) }, uniquingKeysWith: { first, _ in first })))
+    }
+
+    private func setAppBadge(_ count: Int) {
+        guard appBadge != count else { return }
+        appBadge = count
+        Task { try? await UNUserNotificationCenter.current().setBadgeCount(count) }
     }
 }

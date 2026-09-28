@@ -42,6 +42,9 @@ struct SettingsView: View {
                     Toggle("Message previews", isOn: Binding(get: { model.notificationPreviewsEnabled },
                         set: { enabled in Task { await model.setNotificationPreviews(enabled) } }))
                         .accessibilityIdentifier("notificationPreviews")
+                    Toggle("Reactions", isOn: Binding(get: { model.accountPreferences.reactionNotifications },
+                        set: { on in Task { await model.updatePreferences { $0.reactionNotifications = on } } }))
+                        .accessibilityIdentifier("reactionNotifications")
                 } header: {
                     Text("Notifications")
                 } footer: {
