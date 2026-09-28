@@ -111,6 +111,7 @@ struct ChatDetailsView: View {
                     }
                 }
                 .accessibilityIdentifier("encryptionDetails")
+                ChatNotificationRow(model: model, chatID: chatID)
             } header: {
                 VStack(spacing: 0) {
                     hero

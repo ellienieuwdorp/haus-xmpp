@@ -9,6 +9,8 @@ struct ChatListView: View {
     @State private var recipient = ""
     @State private var showingNewChat = false
     @State private var newChatDetent: PresentationDetent = .medium
+    /// The chat whose Mute swipe action asked for a duration.
+    @State private var muting: String?
 
     private var searchTerm: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -49,8 +51,9 @@ struct ChatListView: View {
                     .buttonStyle(.plain)
                     .task(id: "\(chat.id)|\(model.session.isReady)") { await model.loadAvatar(for: chat.id) }
                     .listRowInsets(EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16))
-                    .accessibilityValue(chat.isPinned ? "Pinned" : "")
+                    .accessibilityValue([chat.isPinned ? "Pinned" : nil, chat.notification.isMuted() ? "Muted" : nil].compactMap { $0 }.joined(separator: ", "))
                     .accessibilityIdentifier("chat.\(chat.id)")
+                    .modifier(MuteDialog(model: model, chat: chat, muting: $muting))
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button(chat.isPinned ? "Unpin" : "Pin", systemImage: chat.isPinned ? "pin.slash" : "pin") {
                             Task {
@@ -60,6 +63,18 @@ struct ChatListView: View {
                                 await model.togglePin(chat)
                             }
                         }.tint(Color(uiColor: AccentTheme.current.tint))
+                        // One neutral tint for both states, so it never reads as a second pin beside the accent.
+                        if chat.notification.isMuted() {
+                            Button("Unmute", systemImage: "bell") {
+                                Task {
+                                    try? await Task.sleep(for: pinCommitDelay)
+                                    await model.unmuteChat(chat.id)
+                                }
+                            }.tint(Color(.systemGray))
+                        } else {
+                            // The durations are a choice, so they follow in a dialog; nothing changes until one is picked.
+                            Button("Mute", systemImage: "bell.slash") { muting = chat.id }.tint(Color(.systemGray))
+                        }
                     }
             }
         }
@@ -289,6 +304,9 @@ private struct ChatRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(chat.displayTitle).font(.headline).foregroundStyle(.primary).lineLimit(1)
                     Spacer(minLength: 8)
+                    if chat.notification.isMuted() {
+                        Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.secondary).accessibilityHidden(true)
+                    }
                     if chat.isPinned {
                         Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary).accessibilityHidden(true)
                     }

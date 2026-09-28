@@ -27,6 +27,7 @@ struct GroupDetailsView: View {
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 8)
             }
+            Section { ChatNotificationRow(model: model, chatID: room) }
             ForEach(state.members, id: \.self) { member in
                 Section {
                     let devices = state.devices.filter { $0.jid == member }

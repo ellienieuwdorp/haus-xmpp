@@ -20,6 +20,8 @@ struct ChatSummary: Identifiable {
     var lastMessageIsOutgoing = false
     var lastMessageState: OutgoingTransportState? = nil
     var lastMessageReceipt: MessageEventKind? = nil
+    /// Local notification level and mute; never sent to the server.
+    var notification = ChatNotificationSetting()
     /// Title for display: the stored title, or the address local part when the title is just the address.
     var displayTitle: String { AppModel.displayName(for: id, title: title) }
 }
@@ -304,6 +306,8 @@ final class AppModel {
                 try await store.recordUnreadableMessage(UnreadableMessage(accountID: account, chatID: "alex@preview.local", senderID: "alex@preview.local", isOutgoing: false,
                     sentAt: Date(timeIntervalSince1970: 1_789_380_005), reason: .decryptFailed, key: .archive(archive: account, id: "sample-unreadable-2")))
             }
+            // One muted chat, so the list's muted glyph shows in sample captures.
+            try await store.setChatNotificationSetting(accountID: account, chatID: "maya@preview.local", ChatNotificationSetting(mutedUntil: ChatNotificationSetting.always))
             // A peer who is typing, for tests and screenshots; nothing expires it.
             if ProcessInfo.processInfo.arguments.contains("-demo-typing") { typing = ["alex@preview.local": ["alex@preview.local"]] }
             // One sample photo, drawn here so no asset ships: exercises the bubble thumbnail and the viewer.
@@ -1213,6 +1217,8 @@ final class AppModel {
             preferences.set(nickname, forKey: "groupNickname.\(account).\(room)")
             groupChats[room]?.joined = confirmed?.joined == true
             try await store.upsertChat(accountID: account, chatID: room, title: String(room.prefix { $0 != "@" }))
+            // On the device only, where a commit (app or extension) can tell a mention of this nickname.
+            try await store.setGroupNickname(accountID: account, room: room, nickname: nickname)
             guard generation == token else { return false }
             await refresh()
             return true
@@ -1346,6 +1352,8 @@ final class AppModel {
             // Keep the cached devices (and a past join failure) across the rejoin; only the transport state restarts.
             groupChats[room, default: GroupChatState()].members = members
             let nickname = preferences.string(forKey: "groupNickname.\(account).\(room)") ?? String(account.prefix { $0 != "@" })
+            // Rooms joined before the store kept the nickname learn it here; mention detection is best effort.
+            try? await store?.setGroupNickname(accountID: account, room: room, nickname: nickname)
             do {
                 let snapshot = try await client.joinGroupRoom(room, nickname: nickname)
                 guard setupIsCurrent(token) else { throw CancellationError() }
@@ -2159,6 +2167,37 @@ final class AppModel {
         } catch { self.error = "Could not update pinned conversation." }
     }
 
+    func notificationSetting(for chatID: String) -> ChatNotificationSetting {
+        chats.first { $0.id == chatID }?.notification ?? ChatNotificationSetting()
+    }
+
+    /// Local only (plan D7): the store keeps it and the notification commit reads it; nothing reaches the server.
+    private func setChatNotifications(_ chatID: String, _ setting: ChatNotificationSetting) async {
+        guard let store else { return }
+        do {
+            try await store.setChatNotificationSetting(accountID: accountID, chatID: chatID, setting)
+            await refresh(.chats)
+        } catch { self.error = "Could not update notifications for this chat." }
+    }
+
+    /// Keeps the level, so unmuting a mentions-only group returns to mentions only.
+    func muteChat(_ chatID: String, for duration: MuteDuration) async {
+        var setting = notificationSetting(for: chatID)
+        setting.mutedUntil = duration.until(from: .now)
+        await setChatNotifications(chatID, setting)
+    }
+
+    func unmuteChat(_ chatID: String) async {
+        var setting = notificationSetting(for: chatID)
+        setting.mutedUntil = nil
+        await setChatNotifications(chatID, setting)
+    }
+
+    /// Choosing a level is choosing to be notified again: it also ends a mute.
+    func setNotificationLevel(_ chatID: String, _ level: ChatNotificationLevel) async {
+        await setChatNotifications(chatID, ChatNotificationSetting(level: isGroup(chatID) ? level : .all))
+    }
+
     @ObservationIgnored private lazy var reload = CoalescedReload { [weak self] scope in await self?.load(scope) }
 
     /// Returns after a load that started after this call; concurrent calls share one follow-up load.
@@ -2347,7 +2386,7 @@ final class AppModel {
                     : last.unreadableReason.map(UnreadableCopy.preview) ?? (last.body.isEmpty ? (last.attachment?.kindLabel ?? "") : last.body) } ?? ""),
             isPinned: $0.isPinned, avatarHash: $0.avatarHash,
             lastMessageAt: $0.lastMessage?.sentAt, lastMessageIsOutgoing: $0.lastMessage?.isOutgoing ?? false,
-            lastMessageState: $0.lastMessage?.transportState, lastMessageReceipt: $0.lastMessageReceipt) }
+            lastMessageState: $0.lastMessage?.transportState, lastMessageReceipt: $0.lastMessageReceipt, notification: $0.notification) }
         summaries += pending.keys.filter { !known.contains($0) }.sorted().map {
             ChatSummary(id: $0, title: $0, preview: reviewPreview, isPinned: false)
         }
