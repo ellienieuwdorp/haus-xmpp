@@ -147,7 +147,7 @@ struct ArchiveQuery {
         if OMEMOWire.hasEncryptedContent(inner) {
             let known = inner.children.filter { child in child.name == "encrypted" && XMPPOMEMOProfile.allCases.contains { $0.namespace == child.namespace } }
             guard known.count == 1 else { return reject(.unsupportedDirectContent, peer: peer, outgoing: outgoing) }
-            do { encrypted = try OMEMOWire.parseMessage(inner, provenance: provenance) }
+            do { encrypted = try OMEMOWire.parseMessage(inner, provenance: provenance); encrypted?.archiveStanzaID = id }
             catch { return reject(.malformedEncryptedContent, peer: peer, outgoing: outgoing) }
         }
         let retraction = encrypted == nil ? XMPPClient.parsedRetraction(inner, provenance: provenance) : nil

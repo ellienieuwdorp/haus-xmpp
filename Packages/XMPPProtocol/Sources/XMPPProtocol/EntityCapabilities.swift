@@ -8,7 +8,7 @@ public enum EntityCapabilities {
     public static let node = "https://xmpp.haus/ios"
     public static let identity = "client/phone//Haus XMPP"
     public static var features: [String] {
-        ["http://jabber.org/protocol/disco#info", "http://jabber.org/protocol/caps", "urn:xmpp:ping", "urn:xmpp:receipts", "urn:xmpp:chat-markers:0", "urn:xmpp:message-retract:1", "urn:xmpp:message-correct:0", XMPPChatState.namespace, PresenceWire.lastActivityNamespace, AvatarWire.metadataNode + "+notify"]
+        ["http://jabber.org/protocol/disco#info", "http://jabber.org/protocol/caps", "urn:xmpp:ping", "urn:xmpp:receipts", "urn:xmpp:chat-markers:0", "urn:xmpp:message-retract:1", "urn:xmpp:message-correct:0", XMPPChatState.namespace, PresenceWire.lastActivityNamespace, AvatarWire.metadataNode + "+notify", DisplayedSync.node + "+notify"]
             + XMPPOMEMOProfile.allCases.flatMap { [$0.namespace, $0.devicesNode + "+notify"] }
     }
 
