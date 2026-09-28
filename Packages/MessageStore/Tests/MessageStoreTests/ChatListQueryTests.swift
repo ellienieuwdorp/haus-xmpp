@@ -20,8 +20,14 @@ private func legacyChats(_ store: MessageStore, accountID: String, seeds: [Strin
         var events: [MessageEvent] = []
         if let last { events = try await store.events(accountID: accountID, chatID: chatID, messageID: last.id) }
         let receipt = last?.isOutgoing != true ? nil : [MessageEventKind.displayed, .delivered].first { kind in events.contains { $0.kind == kind } }
+        // Unread: incoming messages after the read pointer (none recorded: all of them), counted the slow way.
+        let pointer = try await store.readPointer(accountID: accountID, chatID: chatID)
+        let unread = try await store.messages(accountID: accountID, chatID: chatID, limit: 1000).filter { message in
+            !message.isOutgoing && message.senderID != accountID
+                && pointer.map { (message.sentAt, message.id) > ($0.sentAt, $0.messageID) } ?? true
+        }.count
         result.append(StoredChat(id: chatID, accountID: accountID, title: seed.title, isPinned: seed.pinned,
-                                 lastMessage: last?.applying(events), avatarHash: seed.avatar, lastMessageReceipt: receipt))
+                                 lastMessage: last?.applying(events), avatarHash: seed.avatar, lastMessageReceipt: receipt, unreadCount: unread))
     }
     return result.sorted { lhs, rhs in
         if lhs.isPinned != rhs.isPinned { return lhs.isPinned }
