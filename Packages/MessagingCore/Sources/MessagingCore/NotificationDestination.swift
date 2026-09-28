@@ -34,6 +34,9 @@ public struct NotificationDestination: Sendable, Equatable, CustomStringConverti
         return message
     }
 
+    /// Whether this destination was issued for `accountID`; says nothing about the message itself.
+    public func belongs(to accountID: String) -> Bool { !accountID.isEmpty && Self.scope(for: accountID) == accountScope }
+
     private static func scope(for account: String) -> String {
         SHA256.hash(data: Data(("xmpp-notification-account-v1\u{0}" + account).utf8))
             .map { String(format: "%02x", $0) }.joined()
