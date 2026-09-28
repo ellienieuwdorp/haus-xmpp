@@ -100,6 +100,37 @@ struct BackgroundSynchronizerTests {
         #expect(await probe.events.contains("transport stopped"))
     }
 
+    /// The XEP-0490 pull after catch-up is best effort: a connection lost during it (the consumer sees the disconnect
+    /// first) still ends the run successfully once the walk committed; before the walk it fails the run as always.
+    @Test func connectionLostAfterCatchUpStillSucceeds() async throws {
+        let caughtUp = CatchUpMark()
+        try await runBackgroundWork(timeBudget: .seconds(20), operation: {
+            await caughtUp.reach()
+            try await Task.sleep(for: .seconds(20))   // a slow pull, cut short by the ended connection
+        }, consume: {
+            try await consumeUntilDisconnect(after: caughtUp) {
+                while await !caughtUp.reached { await Task.yield() }
+                throw BackgroundSynchronizationError.connectionEnded
+            }
+        }, stop: {})
+        let early = CatchUpMark()
+        await #expect(throws: BackgroundSynchronizationError.connectionEnded) {
+            try await runBackgroundWork(timeBudget: .seconds(20), operation: {
+                try await Task.sleep(for: .seconds(20))
+            }, consume: {
+                try await consumeUntilDisconnect(after: early) { throw BackgroundSynchronizationError.connectionEnded }
+            }, stop: {})
+        }
+    }
+
+    @Test func readSyncPullNeverOutlastsTheBudget() {
+        let now = ContinuousClock.now
+        #expect(readSyncTimeout(until: now + .seconds(20), now: now) == .seconds(5))
+        #expect(readSyncTimeout(until: now + .seconds(3), now: now) == .seconds(2))
+        #expect(readSyncTimeout(until: now + .milliseconds(1_200), now: now) == nil)
+        #expect(readSyncTimeout(until: now - .seconds(1), now: now) == nil)
+    }
+
     @Test func refusesBusyStoreAndNeverCreatesMissingIdentity() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "background-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

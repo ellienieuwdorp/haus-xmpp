@@ -99,6 +99,8 @@ public enum XMPPEvent: Sendable, Equatable {
     case subscription(XMPPSubscriptionEvent)
     /// A roster fetch result (`replacesAll`) or one server push, in stream order.
     case rosterItems([XMPPRosterItem], replacesAll: Bool)
+    /// XEP-0490 items another device of this account published; the notification came from our own bare JID.
+    case displayedSync([XMPPDisplayedItem])
     /// Consume previous events durably before acknowledging this token.
     case streamManagementBarrier(XMPPInboundToken)
     case streamAcknowledged
@@ -652,8 +654,15 @@ public actor XMPPClient {
             return
         }
         if OMEMOWire.hasEncryptedContent(node) {
-            do { try emit(.encryptedMessage(OMEMOWire.parseMessage(node, provenance: provenance))) }
+            do {
+                var message = try OMEMOWire.parseMessage(node, provenance: provenance)
+                // XEP-0359: the id our own server gave this message when it archived it; XEP-0490 names messages by it.
+                message.archiveStanzaID = OMEMOWire.bareJID(boundJID).flatMap { DisplayedSync.ownStanzaID(node, accountBareJID: $0) }
+                try emit(.encryptedMessage(message))
+            }
             catch { try emit(.encryptionFailure(from: node.attributes["from"] ?? "", id: node.attributes["id"])) }
+        } else if provenance == .direct, let account = OMEMOWire.bareJID(boundJID), let items = DisplayedSync.event(node, accountBareJID: account) {
+            if !items.isEmpty { try emit(.displayedSync(items)) }
         } else if provenance == .direct, let update = Self.deviceUpdate(node) {
             try emit(.omemoDevices(owner: update.owner, profile: update.profile, devices: update.devices))
         } else if let retraction = Self.parsedRetraction(node, provenance: provenance) {
@@ -816,6 +825,47 @@ public actor XMPPClient {
         let attributes = node.attributes.keys.sorted().map { "\($0)=\(node.attributes[$0]!.prefix(24))" }.joined(separator: " ")
         let children = node.children.prefix(12).map { outline($0, depth: depth + 1) }.joined(separator: ",")
         return "\(node.name)" + (attributes.isEmpty ? "" : "{\(attributes)}") + (node.children.isEmpty ? "" : "[\(children)]")
+    }
+
+    /// XEP-0490: every chat's displayed state from our own PEP node. A missing node is no state. `timeout` bounds the
+    /// query for a caller with a budget (the notification extension).
+    public func fetchDisplayedSync(timeout: Duration = XMPPClient.iqTimeout) async throws -> [XMPPDisplayedItem] {
+        guard phase == .online, let ownBare = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
+        do {
+            let response = try await requestIQ(type: "get", to: ownBare, payload: DisplayedSync.fetchXML, timeout: timeout)
+            return try Self.loggedPrivately(response, "displayed sync") { try DisplayedSync.items(fromResult: response) }
+        } catch XMPPIQError.stanza(condition: "item-not-found") { return [] }
+    }
+
+    /// For a private node (XEP-0490 item ids are contact and room JIDs): a decoding failure logs only element names and
+    /// child counts, never an attribute value or text, so nothing identifying reaches the unified log.
+    private static func loggedPrivately<T>(_ response: XMLNode, _ what: String, _ decode: () throws -> T) throws -> T {
+        do { return try decode() }
+        catch XMPPIQError.malformedResponse {
+            #if canImport(os)
+            Logger(subsystem: "haus.xmpp.ios", category: "xmpp").error("Malformed \(what, privacy: .public): \(shape(response), privacy: .public)")
+            #endif
+            throw XMPPIQError.malformedResponse
+        }
+    }
+
+    /// Element names and child counts only, 4 levels deep and 4 children wide.
+    static func shape(_ node: XMLNode, depth: Int = 0) -> String {
+        guard depth < 4 else { return "…" }
+        let children = node.children.prefix(4).map { shape($0, depth: depth + 1) }.joined(separator: ",")
+        return node.name + (node.children.isEmpty ? "" : "#\(node.children.count)[\(children)]")
+    }
+
+    /// XEP-0490: publish one chat's displayed state with the node options the XEP requires. A node that exists with
+    /// other options is reconfigured once, then the publish is repeated.
+    public func publishDisplayedSync(_ item: XMPPDisplayedItem) async throws {
+        guard phase == .online else { throw XMPPClientError.notConnected }
+        let payload = try DisplayedSync.publishXML(item)
+        do { _ = try await requestIQ(type: "set", to: nil, payload: payload) }
+        catch XMPPIQError.stanza(condition: "conflict") {
+            _ = try await requestIQ(type: "set", to: nil, payload: DisplayedSync.configureXML())
+            _ = try await requestIQ(type: "set", to: nil, payload: payload)
+        }
     }
 
     public func publishOMEMODevices(_ devices: [UInt32], profile: XMPPOMEMOProfile) async throws {

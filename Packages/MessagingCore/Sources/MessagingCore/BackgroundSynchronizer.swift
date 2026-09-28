@@ -55,6 +55,9 @@ public struct BackgroundSynchronizer: Sendable {
             try await client.configureStreamManagement(persistence: StreamPersistence(
                 store: store, accountID: account.accountID, encryption: encryption))
             try await store.recoverInterruptedSubmissions(accountID: account.accountID)
+            // Taken before the timer starts, so it is never later than the real deadline.
+            let deadline = ContinuousClock.now + timeBudget
+            let caughtUp = CatchUpMark()
             try await runBackgroundWork(timeBudget: timeBudget, operation: {
                 try await client.connect(host: account.host, port: account.port, domain: account.domain,
                                          username: account.username, password: account.password)
@@ -63,8 +66,17 @@ public struct BackgroundSynchronizer: Sendable {
                 // outbox drain. Resumption may replay only previously authorized exact bytes.
                 try await ArchiveSynchronizer(store: store).synchronize(
                     account: account.accountID, client: client, encryption: encryption)
+                await caughtUp.reach()
+                // After catch-up, before the claim: chats read on another device have their pointers moved, which
+                // removes their candidates. Own XEP-0333 markers were applied by the walk and the live consumer.
+                // Best effort within what is left of the budget: a slow or lost server leaves the run a success.
+                if let timeout = readSyncTimeout(until: deadline) {
+                    try await ReadSync(store: store).pull(account: account.accountID, client: client, encryption: encryption, timeout: timeout)
+                }
             }, consume: {
-                try await consumeBackgroundEvents(client.events, processor: InboundProcessor(encryption: encryption, client: client, account: account.accountID))
+                try await consumeUntilDisconnect(after: caughtUp) {
+                    try await consumeBackgroundEvents(client.events, processor: InboundProcessor(encryption: encryption, client: client, account: account.accountID))
+                }
             }, stop: { await client.disconnectAndWait() })
             try Task.checkCancellation()
             return try await finishBackgroundPresentation(store: store, accountID: account.accountID, presentation: presentation)
@@ -74,6 +86,29 @@ public struct BackgroundSynchronizer: Sendable {
             try await store.close()
             throw error
         }
+    }
+}
+
+/// Set once the archive walk has committed: from then on the run's outcome no longer depends on the connection.
+actor CatchUpMark {
+    private(set) var reached = false
+    func reach() { reached = true }
+}
+
+/// How long the post-catch-up XEP-0490 pull may take: at most 5 s, ending 1 s before the run's deadline so the pull
+/// can never turn a finished catch-up into `deadlineExceeded`. nil when too little is left to try.
+func readSyncTimeout(until deadline: ContinuousClock.Instant, now: ContinuousClock.Instant = .now) -> Duration? {
+    let left = deadline - now - .seconds(1)
+    guard left >= .milliseconds(500) else { return nil }
+    return min(.seconds(5), left)
+}
+
+/// A connection that ends after catch-up committed (while the best-effort pull runs) ends the run as the walk alone
+/// would have: successfully, with the candidates it committed. Before that, a lost connection fails the run as always.
+func consumeUntilDisconnect(after mark: CatchUpMark, _ consume: () async throws -> Void) async throws {
+    do { try await consume() }
+    catch BackgroundSynchronizationError.connectionEnded {
+        guard await mark.reached else { throw BackgroundSynchronizationError.connectionEnded }
     }
 }
 

@@ -101,6 +101,35 @@ public struct StoredChat: Identifiable, Equatable, Sendable {
     public var lastMessageReceipt: MessageEventKind? = nil
     /// Local notification level and mute; the default when never changed.
     public var notification = ChatNotificationSetting()
+    /// Incoming messages after the chat's read pointer (`MessageStore.unreadCounts`).
+    public var unreadCount: Int = 0
+}
+
+/// A chat's read pointer: everything at or below this message (by `sentAt`, then id) has been read on some device.
+public struct ReadPointer: Sendable, Equatable {
+    public let messageID: String
+    public let sentAt: Date
+    /// A local read that XEP-0490 has not published yet.
+    public let publishPending: Bool
+}
+
+/// Another device of this account displayed a peer message (XEP-0333 inside authenticated SCE content).
+public struct OwnReadMarker: Sendable, Equatable {
+    public let chatID: String
+    public let targetWireID: String
+    public init(chatID: String, targetWireID: String) { self.chatID = chatID; self.targetWireID = targetWireID }
+}
+
+/// One XEP-0490 item to publish: `chatID` read through the message the archive `by` named `stanzaID`.
+/// `pointerMessageID` is the read pointer it was computed from, so a newer read is not cleared by an older publish.
+public struct DisplayedSyncPublication: Sendable, Equatable {
+    public let chatID: String
+    public let stanzaID: String
+    public let by: String
+    public let pointerMessageID: String
+    public init(chatID: String, stanzaID: String, by: String, pointerMessageID: String) {
+        self.chatID = chatID; self.stanzaID = stanzaID; self.by = by; self.pointerMessageID = pointerMessageID
+    }
 }
 
 public enum MessageStoreError: Error, Equatable, Sendable {

@@ -55,6 +55,11 @@ struct ChatListView: View {
                     .accessibilityIdentifier("chat.\(chat.id)")
                     .modifier(MuteDialog(model: model, chat: chat, muting: $muting))
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        if chat.unreadCount > 0 {
+                            Button("Read", systemImage: "envelope.open") {
+                                Task { try? await Task.sleep(for: pinCommitDelay); await model.markChatRead(chat.id) }
+                            }.tint(.gray)
+                        }
                         Button(chat.isPinned ? "Unpin" : "Pin", systemImage: chat.isPinned ? "pin.slash" : "pin") {
                             Task {
                                 // Let the swipe action close first (~0.30 s on 26.5 plus the highlight
@@ -314,22 +319,45 @@ private struct ChatRow: View {
                         Text(timeLabel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).layoutPriority(1)
                     }
                 }
-                // The preview keeps its lines while hidden, so the row never changes height.
-                preview.font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .opacity(typing == nil ? 1 : 0)
-                    .accessibilityHidden(typing != nil)
-                    .overlay(alignment: .topLeading) {
-                        if let typing {
-                            Text(TypingTracker.description(typing, isGroup: isGroup))
-                                .font(.subheadline).foregroundStyle(Color(uiColor: AccentTheme.current.tint)).lineLimit(1)
-                                .transition(.opacity)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    // The preview keeps its lines while hidden, so the row never changes height.
+                    preview.font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .opacity(typing == nil ? 1 : 0)
+                        .accessibilityHidden(typing != nil)
+                        .overlay(alignment: .topLeading) {
+                            if let typing {
+                                Text(TypingTracker.description(typing, isGroup: isGroup))
+                                    .font(.subheadline).foregroundStyle(Color(uiColor: AccentTheme.current.tint)).lineLimit(1)
+                                    .transition(.opacity)
+                            }
                         }
-                    }
-                    .animation(.easeInOut(duration: 0.2), value: typing)
+                        .animation(.easeInOut(duration: 0.2), value: typing)
+                    if chat.unreadCount > 0 { UnreadPill(count: chat.unreadCount) }
+                }
             }
         }
         .contentShape(Rectangle())
+    }
+}
+
+/// Incoming messages after the read pointer, in the row's trailing column under the time: a small accent capsule
+/// that sits on the preview's first line, so it never changes the row's height. It takes the sent-bubble pair, measured
+/// at 4.5:1 for text in both appearances (the tint with white text was 3.5:1 in dark mode).
+private struct UnreadPill: View {
+    let count: Int
+    @ScaledMetric(relativeTo: .footnote) private var height: CGFloat = 18
+
+    var body: some View {
+        Text(count > 999 ? "999+" : "\(count)")
+            .font(.footnote.weight(.semibold)).monospacedDigit()
+            .foregroundStyle(Color(uiColor: AccentTheme.current.bubbleText))
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .frame(minWidth: height, minHeight: height, maxHeight: height)
+            .background(Color(uiColor: AccentTheme.current.bubble), in: Capsule())
+            .fixedSize()
+            .accessibilityLabel("\(count) unread")
     }
 }
 

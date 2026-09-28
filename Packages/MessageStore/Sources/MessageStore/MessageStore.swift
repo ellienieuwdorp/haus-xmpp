@@ -233,6 +233,55 @@ public actor MessageStore {
             if try connection.query("SELECT 1 FROM pragma_table_info('account_preferences') WHERE name='last_seen'").isEmpty {
                 try connection.execute("ALTER TABLE account_preferences ADD COLUMN last_seen INTEGER NOT NULL DEFAULT 1")
             }
+            // v19: read state. Each chat's read pointer (the newest message read on any device of the account) and the
+            // XEP-0359 id the account's own archive gave a direct message, by which XEP-0490 names it. Every step checks
+            // for its column or table, so the v18–v20 branches migrate correctly in any merge order.
+            if try connection.query("SELECT 1 FROM pragma_table_info('messages') WHERE name='stanza_id'").isEmpty {
+                try connection.execute("ALTER TABLE messages ADD COLUMN stanza_id TEXT")
+            }
+            try connection.execute("CREATE INDEX IF NOT EXISTS message_stanza ON messages(account_id,chat_id,stanza_id) WHERE stanza_id IS NOT NULL")
+            // Which message a consumed ciphertext became, so a later archive copy of it can still bind the stanza-id.
+            if try connection.query("SELECT 1 FROM pragma_table_info('encrypted_inbox') WHERE name='message_id'").isEmpty {
+                try connection.execute("ALTER TABLE encrypted_inbox ADD COLUMN message_id TEXT")
+            }
+            if try connection.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_read_state'").isEmpty {
+                try connection.execute("""
+                    CREATE TABLE chat_read_state (
+                        account_id TEXT NOT NULL, chat_id TEXT NOT NULL,
+                        read_sent_at REAL NOT NULL, read_message_id TEXT NOT NULL,
+                        publish_pending INTEGER NOT NULL DEFAULT 0 CHECK(publish_pending IN (0,1)),
+                        published_stanza_id TEXT,
+                        PRIMARY KEY(account_id, chat_id)
+                    )
+                    """)
+                // An upgrade is not news: every existing chat counts as read up to its newest message, and nothing
+                // already waiting may alert. One index seek per chat.
+                try connection.execute("""
+                    INSERT INTO chat_read_state(account_id,chat_id,read_sent_at,read_message_id)
+                    SELECT c.account_id,c.id,m.sent_at,m.id FROM chats c JOIN messages m ON m.account_id=c.account_id
+                    AND m.id=(SELECT x.id FROM messages x WHERE x.account_id=c.account_id AND x.chat_id=c.id ORDER BY x.sent_at DESC,x.id DESC LIMIT 1)
+                    """)
+                try connection.execute("DELETE FROM notification_candidates")
+            }
+            // v19: each archive's history baseline. Its first (newest) page is history, read before this device joined
+            // the account, as is anything backfill brings from further back: a message no newer than the baseline of
+            // the archive that holds its chat counts as read even where no pointer exists. An upgrade seeds it from
+            // what each walked archive has stored.
+            if try connection.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='read_baselines'").isEmpty {
+                try connection.execute("""
+                    CREATE TABLE read_baselines (
+                        account_id TEXT NOT NULL, archive_id TEXT NOT NULL, sent_at REAL NOT NULL,
+                        PRIMARY KEY(account_id, archive_id)
+                    )
+                    """)
+                try connection.execute("""
+                    INSERT INTO read_baselines(account_id,archive_id,sent_at)
+                    SELECT account_id,archive_id,newest FROM (
+                        SELECT a.account_id,a.archive_id,(SELECT MAX(m.sent_at) FROM messages m WHERE m.account_id=a.account_id
+                            AND (a.archive_id=a.account_id OR m.chat_id=a.archive_id)) AS newest
+                        FROM archive_checkpoints a) WHERE newest IS NOT NULL
+                    """)
+            }
             // v20: per-chat notification level and mute, and the own room nickname for mention detection. Local only;
             // column checks keep it idempotent whatever order the v18/v19 migrations land in.
             if try connection.query("SELECT 1 FROM pragma_table_info('chats') WHERE name='notification_level'").isEmpty {
@@ -466,6 +515,7 @@ public actor MessageStore {
     /// as `messages(limit: 1)` + `events` per chat (see `ChatListQueryTests`).
     public func chats(accountID: String) throws -> [StoredChat] {
         let notifications = try chatNotificationSettings(accountID: accountID)
+        let unread = try unreadCounts(accountID: accountID)
         return try connection.query(Self.chatListSQL, [.text(accountID)]).map { row in
             var last: StoredMessage? = nil
             let message = Array(row[Self.chatListPrefix...])           // Self.columns order
@@ -489,7 +539,8 @@ public actor MessageStore {
                 ? (row[18].integer != 0 ? .displayed : row[17].integer != 0 ? .delivered : nil) : nil
             return StoredChat(id: row[0].string, accountID: accountID, title: row[1].string, isPinned: row[2].integer != 0,
                               lastMessage: last, avatarHash: row[3].optionalString, lastMessageReceipt: receipt,
-                              notification: notifications[row[0].string] ?? ChatNotificationSetting())
+                              notification: notifications[row[0].string] ?? ChatNotificationSetting(),
+                              unreadCount: unread[row[0].string] ?? 0)
         }
     }
 
@@ -870,8 +921,12 @@ public actor MessageStore {
     public func commitEncryptedIncoming(accountID: String, sender: String, digest: String,
                                         expectedRevision: Int, state: Data, message: StoredMessage?, control: EncryptionControl? = nil, reaction: AuthenticatedReaction? = nil,
                                         event: MessageEvent? = nil, groupRoom: String? = nil, roomStanzaID: String? = nil,
-                                        groupMembers: [String] = []) throws {
+                                        groupMembers: [String] = [], archiveStanzaID: String? = nil, readMarker: OwnReadMarker? = nil) throws {
         guard !sender.isEmpty, !digest.isEmpty,
+              // Another device of this account said it displayed a peer message: nothing else rides with it.
+              readMarker.map({ _ in message == nil && reaction == nil && event == nil && groupRoom == nil && sender == accountID }) ?? true,
+              // A room's ids travel as `roomStanzaID`; this one is the account's own archive's.
+              archiveStanzaID == nil || groupRoom == nil,
               message.map({ $0.accountID == accountID && $0.senderID == sender && $0.encryptionProfile != nil }) ?? true else { throw MessageStoreError.invalidValue }
         if let groupRoom {
             guard message.map({ $0.chatID == groupRoom }) ?? reaction.map({ $0.chatID == groupRoom }) ?? false, event == nil else { throw MessageStoreError.invalidValue }
@@ -896,11 +951,14 @@ public actor MessageStore {
                     try connection.execute("INSERT INTO group_ciphertext_messages VALUES(?,?,?,?)", [.text(accountID), .text(sender), .text(digest), .text(message.id)])
                     if let roomStanzaID { try bindGroupReference(accountID: accountID, room: groupRoom, messageID: message.id, stanzaID: roomStanzaID) }
                 }
+                if let archiveStanzaID { try bindDirectStanzaID(accountID: accountID, messageID: message.id, stanzaID: archiveStanzaID) }
                 if inserted, try queuesNotification(accountID: accountID, message: message, groupMembers: groupMembers) {
                     try connection.execute("INSERT INTO notification_candidates(account_id,message_id) VALUES(?,?)", [.text(accountID), .text(message.id)])
                 }
             }
-            try connection.execute("INSERT INTO encrypted_inbox(account_id,sender,digest) VALUES(?,?,?)", [.text(accountID), .text(sender), .text(digest)])
+            try connection.execute("INSERT INTO encrypted_inbox(account_id,sender,digest,message_id) VALUES(?,?,?,?)",
+                                   [.text(accountID), .text(sender), .text(digest), message.map { .text($0.id) } ?? .null])
+            if let readMarker { _ = try advanceReadPointer(accountID: accountID, ownMarker: readMarker) }
             try connection.execute("DELETE FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?", [.text(accountID), .text(sender), .text(digest)])
             if let control {
                 guard control.recipient == sender else { throw MessageStoreError.invalidValue }
@@ -914,6 +972,7 @@ public actor MessageStore {
     /// `groupMembers` are the room's members at decryption (bare JIDs), for the mass-mention rule.
     private func queuesNotification(accountID: String, message: StoredMessage, groupMembers: [String] = []) throws -> Bool {
         guard !message.isOutgoing, message.senderID != accountID else { return false }
+        guard try isAfterReadPointer(accountID: accountID, message: message) else { return false }
         return try chatNotificationAllows(accountID: accountID, message: message, groupMembers: groupMembers)
     }
 
@@ -985,6 +1044,13 @@ public actor MessageStore {
     /// Test seam: the queued candidates' message IDs, oldest first.
     func pendingNotificationMessageIDs(accountID: String) throws -> [String] {
         try connection.query("SELECT message_id FROM notification_candidates WHERE account_id=? ORDER BY sequence", [.text(accountID)]).map { $0[0].string }
+    }
+
+    /// Read-state condition (stream B): a message at or below its chat's read pointer was already read, on this device
+    /// or another (MAM catch-up of history an other device displayed), so it never alerts. The row exists already.
+    private func isAfterReadPointer(accountID: String, message: StoredMessage) throws -> Bool {
+        try connection.query("SELECT 1 FROM messages m \(Self.readJoins) WHERE m.account_id=?1 AND m.id=?2 AND NOT \(Self.unreadCondition)",
+                             [.text(accountID), .text(message.id)]).isEmpty
     }
 
     public func notificationPreviewsEnabled(accountID: String) throws -> Bool { try accountPreferences(accountID: accountID).notificationPreviews }
@@ -1176,8 +1242,9 @@ public actor MessageStore {
     /// paging back from this newer page walks through whatever lies between, and reprocessing an entry is idempotent,
     /// whereas keeping the older cursor would leave the entries between the two pages unfetched by either walk.
     /// Returns the new checkpoint revision.
+    /// `historyThrough` is the newest archive timestamp in the page: the archive's read baseline (see `read_baselines`).
     @discardableResult public func saveNewestArchivePage(accountID: String, archiveID: String, cursor: String,
-                                                         oldestID: String, complete: Bool) throws -> Int {
+                                                         oldestID: String, complete: Bool, historyThrough: Date? = nil) throws -> Int {
         try requireTransportOwnership()
         guard !accountID.isEmpty, !archiveID.isEmpty, !cursor.isEmpty, cursor.utf8.count <= 4096,
               !oldestID.isEmpty, oldestID.utf8.count <= 4096 else { throw MessageStoreError.invalidValue }
@@ -1194,6 +1261,7 @@ public actor MessageStore {
                 """, key + [.integer((backfill ?? 0) + 1), .text(oldestID), .integer(complete ? 1 : 0)])
             try connection.execute("INSERT INTO archive_checkpoints(account_id,archive_id,revision,cursor) VALUES(?,?,?,?)",
                                    key + [.integer(1), .text(cursor)])
+            if let historyThrough { try recordReadBaseline(accountID: accountID, archiveID: archiveID, sentAt: historyThrough) }
             return 1
         }
     }
@@ -1220,6 +1288,223 @@ public actor MessageStore {
             guard let id = try connection.query("SELECT message_id FROM group_ciphertext_messages WHERE account_id=? AND sender=? AND digest=?", [.text(accountID), .text(sender), .text(digest)]).first?[0].string else { return }
             try bindGroupReference(accountID: accountID, room: room, messageID: id, stanzaID: stanzaID)
         }
+    }
+
+    // MARK: Read state
+
+    /// The newest message this account has read in a chat, on any of its devices; nil when nothing was ever read.
+    public func readPointer(accountID: String, chatID: String) throws -> ReadPointer? {
+        guard let row = try connection.query("SELECT read_message_id,read_sent_at,publish_pending FROM chat_read_state WHERE account_id=? AND chat_id=?",
+                                             [.text(accountID), .text(chatID)]).first else { return nil }
+        return ReadPointer(messageID: row[0].string, sentAt: Date(timeIntervalSince1970: row[1].double), publishPending: row[2].integer != 0)
+    }
+
+    /// This device showed the chat up to `messageID` (the newest message was on screen in the foreground). Forward only;
+    /// queues an XEP-0490 publication. The peer's read marker is separate and stays under the read-receipts switch.
+    /// Returns true when the pointer moved.
+    @discardableResult public func markRead(accountID: String, chatID: String, throughMessageID messageID: String) throws -> Bool {
+        try connection.transaction {
+            guard let target = try message(accountID: accountID, messageID: messageID), target.chatID == chatID else { throw MessageStoreError.invalidValue }
+            return try advanceReadPointer(accountID: accountID, target: target, publish: true)
+        }
+    }
+
+    /// The user marked the whole chat read: the pointer moves to its newest message. False when it was already there.
+    @discardableResult public func markChatRead(accountID: String, chatID: String) throws -> Bool {
+        try connection.transaction {
+            guard let newest = try messages(accountID: accountID, chatID: chatID, limit: 1).last else { return false }
+            return try advanceReadPointer(accountID: accountID, target: newest, publish: true)
+        }
+    }
+
+    /// Another device of this account sent an XEP-0333 `displayed` for a peer message; the caller has established that it
+    /// came from our own account (a carbon or our own archive). Unknown, ambiguous and own targets are ignored, the rule
+    /// XEP-0490 gives for unknown ids. Never publishes: the displaying device owns its state. True when the pointer moved.
+    @discardableResult public func recordOwnDisplayed(accountID: String, chatID: String, targetWireID: String) throws -> Bool {
+        try connection.transaction { try advanceReadPointer(accountID: accountID, ownMarker: OwnReadMarker(chatID: chatID, targetWireID: targetWireID)) }
+    }
+
+    /// An XEP-0490 item for `chatID`, fetched after bind or pushed by our own PEP service (the caller verified the
+    /// publisher). The id resolves only through the archive that assigned it: ours for a direct chat (`by` = account),
+    /// the room's for a group (`by` = chat). Unknown ids are ignored and older state never moves the pointer back
+    /// (XEP-0490 business rules). True when the pointer moved.
+    @discardableResult public func applyDisplayedSync(accountID: String, chatID: String, stanzaID: String, by: String) throws -> Bool {
+        guard !accountID.isEmpty, !chatID.isEmpty, chatID != accountID, Self.validStanzaID(stanzaID) else { return false }
+        return try connection.transaction {
+            let matches: [[Value]]
+            if by == accountID {
+                matches = try connection.query("SELECT id FROM messages WHERE account_id=? AND chat_id=? AND stanza_id=? LIMIT 2",
+                                               [.text(accountID), .text(chatID), .text(stanzaID)])
+            } else if by == chatID {
+                matches = try connection.query("""
+                    SELECT g.message_id FROM group_message_references g JOIN messages m ON m.account_id=g.account_id AND m.id=g.message_id AND m.chat_id=g.room
+                    WHERE g.account_id=? AND g.room=? AND g.stanza_id=? LIMIT 2
+                    """, [.text(accountID), .text(chatID), .text(stanzaID)])
+            } else { return false }
+            guard matches.count == 1, let target = try message(accountID: accountID, messageID: matches[0][0].string) else { return false }
+            let moved = try advanceReadPointer(accountID: accountID, target: target, publish: false)
+            // The server holds this id now. Publishing it again would be a no-op; a newer local read stays pending. An
+            // item older than our pointer (another device overwrote the node with older state) means the server is
+            // behind: publish our newer state again, or every device that pulls later inherits the older one.
+            try connection.execute("""
+                UPDATE chat_read_state SET published_stanza_id=?1,
+                    publish_pending=CASE WHEN read_message_id=?2 THEN 0 WHEN ?5 THEN 1 ELSE publish_pending END
+                WHERE account_id=?3 AND chat_id=?4
+                """, [.text(stanzaID), .text(target.id), .text(accountID), .text(chatID), .integer(moved ? 0 : 1)])
+            return moved
+        }
+    }
+
+    /// Local reads still to publish: for each chat, the stanza-id of the newest incoming message at or below its
+    /// pointer that has one (XEP-0490: outgoing messages are never published). A chat with no such id, or whose id the
+    /// server already holds, is settled here without a publication.
+    public func pendingDisplayedSyncPublications(accountID: String) throws -> [DisplayedSyncPublication] {
+        try connection.transaction {
+            let pending = try connection.query("SELECT chat_id,read_sent_at,read_message_id,published_stanza_id FROM chat_read_state WHERE account_id=? AND publish_pending=1 ORDER BY chat_id LIMIT 200",
+                                               [.text(accountID)])
+            var result: [DisplayedSyncPublication] = []
+            for row in pending {
+                let chatID = row[0].string, pointer = row[2].string
+                let reference = try connection.query("""
+                    SELECT g.stanza_id,m.stanza_id FROM messages m
+                    LEFT JOIN group_message_references g ON g.account_id=m.account_id AND g.message_id=m.id AND g.room=m.chat_id
+                    WHERE m.account_id=?1 AND m.chat_id=?2 AND m.outgoing=0 AND m.sender_id<>?1
+                      AND (m.sent_at,m.id) <= (?3,?4) AND (m.stanza_id IS NOT NULL OR g.stanza_id IS NOT NULL)
+                    ORDER BY m.sent_at DESC,m.id DESC LIMIT 1
+                    """, [.text(accountID), .text(chatID), row[1], .text(pointer)]).first
+                let publication = reference.map { reference in
+                    reference[0].optionalString.map { DisplayedSyncPublication(chatID: chatID, stanzaID: $0, by: chatID, pointerMessageID: pointer) }
+                        ?? DisplayedSyncPublication(chatID: chatID, stanzaID: reference[1].string, by: accountID, pointerMessageID: pointer)
+                }
+                if let publication, publication.stanzaID != row[3].optionalString { result.append(publication) }
+                else { try connection.execute("UPDATE chat_read_state SET publish_pending=0 WHERE account_id=? AND chat_id=? AND read_message_id=?", [.text(accountID), .text(chatID), .text(pointer)]) }
+            }
+            return result
+        }
+    }
+
+    /// The server accepted `publication`. Pending clears only while the pointer is still the one it was computed from.
+    public func finishDisplayedSyncPublication(accountID: String, _ publication: DisplayedSyncPublication) throws {
+        try connection.execute("""
+            UPDATE chat_read_state SET published_stanza_id=?1, publish_pending=CASE WHEN read_message_id=?2 THEN 0 ELSE publish_pending END
+            WHERE account_id=?3 AND chat_id=?4
+            """, [.text(publication.stanzaID), .text(publication.pointerMessageID), .text(accountID), .text(publication.chatID)])
+    }
+
+    /// Incoming messages after each chat's read pointer and newer than its archive's history baseline, by chat; chats
+    /// with none are absent. A chat never read counts every incoming message since this device joined. One index range
+    /// per chat.
+    public func unreadCounts(accountID: String) throws -> [String: Int] {
+        let rows = try connection.query("""
+            SELECT c.id,(SELECT COUNT(*) FROM messages m WHERE m.account_id=?1 AND m.chat_id=c.id AND m.outgoing=0 AND m.sender_id<>?1
+                         AND \(Self.unreadCondition))
+            FROM chats c LEFT JOIN chat_read_state r ON r.account_id=c.account_id AND r.chat_id=c.id
+            LEFT JOIN read_baselines bc ON bc.account_id=c.account_id AND bc.archive_id=c.id
+            LEFT JOIN read_baselines ba ON ba.account_id=c.account_id AND ba.archive_id=c.account_id
+            WHERE c.account_id=?1
+            """, [.text(accountID)])
+        var result: [String: Int] = [:]
+        for row in rows where row[1].integer > 0 { result[row[0].string] = row[1].integer }
+        return result
+    }
+
+    /// Which of `messageIDs` are at or below their chat's read pointer: their notifications may be removed. For the
+    /// extension's end-of-run cleanup and the app's; unknown IDs are simply absent.
+    public func readNotificationMessageIDs(accountID: String, messageIDs: Set<String>) throws -> Set<String> {
+        guard !messageIDs.isEmpty else { return [] }
+        guard messageIDs.count <= 1000 else { throw MessageStoreError.invalidValue }
+        let ids = messageIDs.sorted()
+        return Set(try connection.query("""
+            SELECT m.id FROM messages m \(Self.readJoins)
+            WHERE m.account_id=? AND m.id IN (\(ids.map { _ in "?" }.joined(separator: ","))) AND NOT \(Self.unreadCondition)
+            """, [.text(accountID)] + ids.map(Value.text)).map { $0[0].string })
+    }
+
+    /// The own archive's XEP-0359 id of a direct message; nil when it is not known (or the message is a group's).
+    public func archiveStanzaID(accountID: String, messageID: String) throws -> String? {
+        try connection.query("SELECT stanza_id FROM messages WHERE account_id=? AND id=?", [.text(accountID), .text(messageID)]).first?[0].optionalString
+    }
+
+    /// A validated own-archive copy of ciphertext already consumed (live, before its archive id was known): bind the id
+    /// to the message it became. A no-op for ciphertext that became no message or consumed before v19.
+    public func bindArchivedDirectStanzaID(accountID: String, sender: String, digest: String, stanzaID: String) throws {
+        try connection.transaction {
+            guard let id = try connection.query("SELECT message_id FROM encrypted_inbox WHERE account_id=? AND sender=? AND digest=? AND message_id IS NOT NULL",
+                                                [.text(accountID), .text(sender), .text(digest)]).first?[0].string else { return }
+            try bindDirectStanzaID(accountID: accountID, messageID: id, stanzaID: stanzaID)
+        }
+    }
+
+    /// First binding wins; a later, different id for the same message is ignored rather than trusted. Group messages
+    /// keep their room's id in `group_message_references`.
+    private func bindDirectStanzaID(accountID: String, messageID: String, stanzaID: String) throws {
+        guard Self.validStanzaID(stanzaID) else { return }
+        try connection.execute("""
+            UPDATE messages SET stanza_id=?1 WHERE account_id=?2 AND id=?3 AND stanza_id IS NULL
+            AND NOT EXISTS (SELECT 1 FROM group_message_references WHERE account_id=?2 AND message_id=?3)
+            """, [.text(stanzaID), .text(accountID), .text(messageID)])
+    }
+
+    /// The read test's joins for a message `m`: its chat's pointer `r` and the history baselines of the chat's own archive
+    /// (`bc`, a room) and of the account's archive (`ba`).
+    private static let readJoins = """
+        LEFT JOIN chat_read_state r ON r.account_id=m.account_id AND r.chat_id=m.chat_id
+        LEFT JOIN read_baselines bc ON bc.account_id=m.account_id AND bc.archive_id=m.chat_id
+        LEFT JOIN read_baselines ba ON ba.account_id=m.account_id AND ba.archive_id=m.account_id
+        """
+    /// Unread: after the pointer (if any) and newer than the history baseline (if any). Written as two ranges so the
+    /// timeline index still bounds a count.
+    private static let unreadCondition = """
+        ((m.sent_at,m.id) > (COALESCE(r.read_sent_at,-1e308),COALESCE(r.read_message_id,'')) AND m.sent_at > COALESCE(bc.sent_at,ba.sent_at,-1e308))
+        """
+
+    /// The first (newest) page of `archiveID` was history through `sentAt`. First baseline wins; candidates it covers go,
+    /// as a pointer's would. Runs inside the caller's transaction.
+    private func recordReadBaseline(accountID: String, archiveID: String, sentAt: Date) throws {
+        guard sentAt.timeIntervalSince1970.isFinite else { throw MessageStoreError.invalidValue }
+        try connection.execute("INSERT INTO read_baselines(account_id,archive_id,sent_at) VALUES(?,?,?) ON CONFLICT(account_id,archive_id) DO NOTHING",
+                               [.text(accountID), .text(archiveID), .real(sentAt.timeIntervalSince1970)])
+        try connection.execute("""
+            DELETE FROM notification_candidates WHERE account_id=?1 AND message_id IN (
+                SELECT m.id FROM notification_candidates n JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id
+                \(Self.readJoins) WHERE n.account_id=?1 AND NOT \(Self.unreadCondition))
+            """, [.text(accountID)])
+    }
+
+    private static func validStanzaID(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 1024 && !value.contains(where: { $0.isWhitespace || $0.isNewline })
+    }
+
+    /// Forward only, compared in SQL on the stored timestamp so no Date round trip can reorder equal instants. Removes the
+    /// notification candidates the pointer now covers: a read message never alerts. Runs inside the caller's transaction.
+    private func advanceReadPointer(accountID: String, target: StoredMessage, publish: Bool) throws -> Bool {
+        let values: [Value] = [.text(accountID), .text(target.chatID), .text(target.id)]
+        guard try connection.query("""
+            SELECT 1 FROM chat_read_state r JOIN messages m ON m.account_id=r.account_id AND m.id=?3
+            WHERE r.account_id=?1 AND r.chat_id=?2 AND (m.sent_at,m.id) <= (r.read_sent_at,r.read_message_id)
+            """, values).isEmpty else { return false }
+        try connection.execute("""
+            INSERT INTO chat_read_state(account_id,chat_id,read_sent_at,read_message_id,publish_pending)
+            SELECT ?1,?2,sent_at,id,?4 FROM messages WHERE account_id=?1 AND chat_id=?2 AND id=?3
+            ON CONFLICT(account_id,chat_id) DO UPDATE SET read_sent_at=excluded.read_sent_at,read_message_id=excluded.read_message_id,
+                publish_pending=MAX(publish_pending,excluded.publish_pending)
+            """, values + [.integer(publish ? 1 : 0)])
+        try connection.execute("""
+            DELETE FROM notification_candidates WHERE account_id=?1 AND message_id IN (
+                SELECT n.message_id FROM notification_candidates n
+                JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id AND m.chat_id=?2
+                JOIN chat_read_state r ON r.account_id=m.account_id AND r.chat_id=m.chat_id
+                WHERE n.account_id=?1 AND (m.sent_at,m.id) <= (r.read_sent_at,r.read_message_id))
+            """, Array(values.prefix(2)))
+        return true
+    }
+
+    /// An own XEP-0333 marker names a peer message by its wire id, resolved like every event target.
+    private func advanceReadPointer(accountID: String, ownMarker: OwnReadMarker) throws -> Bool {
+        guard !ownMarker.chatID.isEmpty, ownMarker.chatID != accountID, !ownMarker.targetWireID.isEmpty, ownMarker.targetWireID.utf8.count <= 1024,
+              let target = try reactionTarget(accountID: accountID, chatID: ownMarker.chatID, wireID: ownMarker.targetWireID),
+              !target.isOutgoing, target.senderID != accountID else { return false }
+        return try advanceReadPointer(accountID: accountID, target: target, publish: false)
     }
 
     /// Resolve a single wire ID within this account and conversation. An authenticated (SCE) ID

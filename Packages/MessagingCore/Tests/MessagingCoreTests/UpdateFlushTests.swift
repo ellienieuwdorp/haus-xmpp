@@ -90,8 +90,10 @@ struct ReceiptFlushTests {
             #expect(try await !encryption.canReplay(account: "alice@localhost", xml: markerXML.replacingOccurrences(of: "wire-target", with: "other")))
             // The peer's stanza ID coming back through the archive proves server acceptance.
             let echoed = try #require(XMPPClient.decodeOutgoingReceiptXML(markerXML, from: "alice@localhost"))
-            #expect(try await !encryption.receivePlaintextReceipt(account: "alice@localhost", receipt: echoed))
+            // Our own marker also reads the chat up to its target (XEP-0490 read state follows own markers too).
+            #expect(try await encryption.receivePlaintextReceipt(account: "alice@localhost", receipt: echoed))
             #expect(try await store.update(accountID: "alice@localhost", updateID: marker)?.transportState == .serverAccepted)
+            #expect(try await store.readPointer(accountID: "alice@localhost", chatID: "bob@localhost")?.messageID == "target")
         }
     }
 }

@@ -70,6 +70,9 @@ public struct XMPPEncryptedMessage: Sendable, Equatable {
     public var hasFallbackBody = false
     /// Untrusted XEP-0308 reference outside the ciphertext, the only place legacy OMEMO can carry it.
     public var replaces: String? = nil
+    /// XEP-0359 id the account's own archive assigned (`by` = the account's bare JID): the MAM result id, or a live
+    /// `<stanza-id/>` from our server. Direct chats' XEP-0490 state refers to messages by it. Nil when unknown.
+    public var archiveStanzaID: String? = nil
 
     public init(id: String, from: String, to: String?, originID: String?, envelope: XMPPOMEMOEnvelope, provenance: XMPPMessageProvenance = .direct,
                 requestsReceipt: Bool = false, markable: Bool = false, hasFallbackBody: Bool = false, replaces: String? = nil) {
