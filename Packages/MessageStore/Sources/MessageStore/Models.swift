@@ -99,6 +99,8 @@ public struct StoredChat: Identifiable, Equatable, Sendable {
     public var avatarHash: String? = nil
     /// Strongest receipt on an outgoing `lastMessage`: `.displayed`, `.delivered` or nil.
     public var lastMessageReceipt: MessageEventKind? = nil
+    /// Local notification level and mute; the default when never changed.
+    public var notification = ChatNotificationSetting()
 }
 
 public enum MessageStoreError: Error, Equatable, Sendable {

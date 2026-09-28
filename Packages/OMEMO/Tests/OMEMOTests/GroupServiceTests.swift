@@ -76,6 +76,31 @@ private struct GroupTransport: OMEMOGroupTransport {
         XCTAssertEqual(control?.update.kind, .keyTransport)
     }
 
+    /// The room's mention settings are read inside the decrypt commit: only the message naming the own nickname alerts.
+    func testMentionsOnlyRoomQueuesOnlyMentioningMessagesOnGroupDecrypt() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let room = RoomFixture(), roomID = "private@conference.localhost"
+        let at = GroupTransport(base: f.aTransport, room: room), bt = GroupTransport(base: f.bTransport, room: room)
+        try await f.aStore.upsertChat(accountID: f.alice, chatID: roomID, title: "Room")
+        try await f.bStore.upsertChat(accountID: f.bob, chatID: roomID, title: "Room")
+        try await f.bStore.setGroupNickname(accountID: f.bob, room: roomID, nickname: "Bobby")
+        try await f.bStore.setChatNotificationSetting(accountID: f.bob, chatID: roomID, ChatNotificationSetting(level: .mentions))
+        for (id, body) in [("quiet", "Lunch at noon?"), ("named", "BOBBY, lunch?")] {
+            _ = try await f.aStore.enqueueOutgoing(StoredMessage(id: id, accountID: f.alice, chatID: roomID, senderID: f.alice, body: body, isOutgoing: true))
+            try await f.a.prepareGroupMessage(account: f.alice, messageID: id, room: roomID, transport: at)
+            let prepared = try await f.a.outgoingGroupEnvelope(account: f.alice, messageID: id, room: roomID, transport: at)
+            let incoming = try XMPPEncryptedGroupMessage(id: id, room: roomID, occupant: roomID + "/alice", sender: f.alice, envelope: prepared.envelope)
+            let inserted = try await f.b.receiveGroup(account: f.bob, message: incoming, transport: bt)
+            XCTAssertTrue(inserted)
+        }
+        let received = try await f.bStore.messages(accountID: f.bob, chatID: roomID)
+        XCTAssertEqual(received.count, 2)
+        let notification = try await f.bStore.takeMessageNotification(accountID: f.bob)
+        XCTAssertEqual(notification.messageCount, 1)
+        XCTAssertEqual(notification.latest?.body, "BOBBY, lunch?")
+    }
+
     func testAllThreeMembersReceiveAndUntrustedGroupRemainsDiscoverable() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
