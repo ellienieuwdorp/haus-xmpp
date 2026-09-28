@@ -120,7 +120,8 @@ public enum NotificationPlanner {
         var summarizes = false
         if batch.deferredChatCount > 0, let account, !account.isEmpty {
             let identifier = NotificationIdentity.overflow(accountID: account)
-            requests.append(PlannedNotification(identifier: identifier, threadIdentifier: identifier, title: "",
+            requests.append(PlannedNotification(identifier: identifier, threadIdentifier: identifier,
+                                                categoryIdentifier: NotificationIdentity.noticeCategory, title: "",
                                                 body: overflowBody(chats: batch.deferredChatCount), playsSound: false,
                                                 destination: nil, badge: badge))
             summarizes = true
@@ -155,6 +156,8 @@ public enum NotificationPlanner {
             let chatName = clean(displayName(candidate.chatID, title: candidate.chatTitle), limit: 80, maximumBytes: 320)
             timed.append((candidate.sentAt, PlannedNotification(
                 identifier: identifier(for: candidate), threadIdentifier: thread,
+                // Only a request naming one authenticated message can be replied to or marked read from the notification.
+                categoryIdentifier: destination == nil ? NotificationIdentity.noticeCategory : NotificationIdentity.messageCategory,
                 title: previews ? chatName : "", body: body, playsSound: false, destination: destination,
                 communication: previews && authenticated ? communication(accountID: candidate.accountID, thread: thread, chatName: chatName, chatAvatarHash: candidate.chatAvatarHash,
                                                         isGroup: candidate.isGroup, sender: NotificationParticipant(id: candidate.senderID, title: candidate.senderTitle,

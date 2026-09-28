@@ -75,7 +75,12 @@ final class AppModel {
     /// Addresses whose avatar was checked on this session; a PEP notify clears its entry.
     @ObservationIgnored private var avatarChecked: Set<String> = []
     @ObservationIgnored private var storageRoot: URL?
-    private(set) var accountID = "" { didSet { if accountID != oldValue { timelinePages.removeAll() } } }
+    private(set) var accountID = "" {
+        didSet {
+            if accountID != oldValue { timelinePages.removeAll() }
+            ForegroundNotificationState.shared.accountID = isDemo ? "" : accountID
+        }
+    }
     /// The only connection state views read. Chat trust is derived from stored devices, not from this.
     private(set) var session: SessionState = .offline(reason: nil)
     var isConnected: Bool { session.isConnected }
@@ -160,13 +165,23 @@ final class AppModel {
     @ObservationIgnored private var backfillResumesAt: ContinuousClock.Instant?
     @ObservationIgnored private var client: XMPPClient?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
-    @ObservationIgnored private var openChatID: String? { didSet { syncOpenChatTyping(); syncOpenChatLastSeen() } }
+    @ObservationIgnored private var openChatID: String? {
+        didSet { syncOpenChatTyping(); syncOpenChatLastSeen(); ForegroundNotificationState.shared.openChatID = openChatID }
+    }
     @ObservationIgnored private var encryptionDetailsChatID: String?
     /// The chat whose Devices footer a held send's reason belongs to: the open conversation, or the chat whose
     /// details pages cover it.
     private var encryptionShownChatID: String? { openChatID ?? encryptionOverviewChatID }
     @ObservationIgnored private var generation = UUID()
-    @ObservationIgnored private var prepared = false
+    /// `prepare()` runs once; a notification action on a background launch joins it.
+    @ObservationIgnored private var preparation: Task<Void, Never>?
+    @ObservationIgnored private var backgroundLaunchObserver: (any NSObjectProtocol)?
+    /// Notification permission as last read; foreground banners are posted only with it.
+    @ObservationIgnored private var mayPostNotifications = false
+    /// The transport a Reply or Mark as Read took; nil when no action runs.
+    @ObservationIgnored private var actionSession: NotificationActionSession?
+    /// Finished outbox passes, so an action can tell that a pass ran after its reply was queued.
+    @ObservationIgnored private var drainPasses = 0
     @ObservationIgnored private var pushTokenTask: Task<Void, Never>?
     @ObservationIgnored private var notificationTapTask: Task<Void, Never>?
     /// Owns the durable-disposition rule for the current stream; replaced with the client.
@@ -209,11 +224,37 @@ final class AppModel {
         // The saved account is known before storage opens, so the first frame already carries the account avatar
         // and the Chats stack is not rebuilt (its identity is the account) once `prepare()` reads the same value.
         accountID = preferences.string(forKey: "lastAccount") ?? ""
+        NotificationActionCenter.shared.handler = { [weak self] request, budget in
+            await self?.performNotificationAction(request, budget: budget) ?? .rejected
+        }
+        NotificationActionCenter.shared.abort = { [weak self] in self?.abortNotificationAction() ?? false }
     }
 
+    /// Opens storage and the saved account once. Every caller (the root view, a notification action on a background
+    /// launch) returns only after it finished.
     func prepare() async {
-        guard !prepared else { return }
-        prepared = true
+        if let preparation { await preparation.value; return }
+        let task = Task { await prepareOnce() }
+        preparation = task
+        await task.value
+    }
+
+    private func prepareOnce() async {
+        // A launch into the background (a notification action) must not connect: the scene is not in front. Its
+        // first activation then counts as a return to the foreground even if the scene phase was never seen to change.
+        if UIApplication.shared.applicationState == .background {
+            foreground = false
+            backgroundLaunchObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                                                                              object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    if let observer = self.backgroundLaunchObserver { NotificationCenter.default.removeObserver(observer) }
+                    self.backgroundLaunchObserver = nil
+                    if !self.foreground { self.setForeground(true) }
+                }
+            }
+        }
+        refreshNotificationPermission()
         if testSessionID == nil {
             let tokens = PushRegistration.unsolicitedTokens()
             pushTokenTask = Task { [weak self] in
@@ -588,6 +629,7 @@ final class AppModel {
             guard let self else { return }
             if active {
                 guard self.foreground else { return }
+                self.refreshNotificationPermission()
                 self.reconnectAttempt = 0
                 self.reconcile()
                 if let client = self.client { try? await client.setClientActive(true) }
@@ -1627,80 +1669,22 @@ final class AppModel {
         let token = generation
         drainTask = Task { [weak self] in
             do {
-                let preparation = try await encryption.prepareAvailableMessages(account: account, transport: client)
-                // Sends held for a fingerprint decision mark their chat for review; any other reason is a footnote.
-                var heldForTrust = Set<String>()
-                if let self, self.generation == token {
-                    heldForTrust.formUnion(self.encryptionAttention.hold(preparation.blockedChats, shownChat: self.encryptionShownChatID))
-                }
-                var preparedIDs = preparation.messageIDs
-                for message in try await store.queuedOutgoing(accountID: account) where joinedGroups.contains(message.chatID) {
-                    do {
-                        try await encryption.prepareGroupMessage(account: account, messageID: message.id, room: message.chatID, transport: client)
-                        preparedIDs.insert(message.id)
-                        if let self, self.generation == token { self.groupChats[message.chatID]?.issue = nil }
-                    } catch {
-                        if error is CancellationError { throw error }
-                        if let self, self.generation == token {
-                            self.groupChats[message.chatID]?.issue = self.groupFailure(error)
-                            heldForTrust.formUnion(self.encryptionAttention.hold([message.chatID: self.groupFailure(error)], shownChat: self.encryptionShownChatID))
-                        }
-                    }
-                }
-                try await outboxSender.drain(accountID: account, messageIDs: preparedIDs, send: { message in
-                    if joinedGroups.contains(message.chatID) {
-                        let prepared: PreparedGroupMessage
-                        do { prepared = try await encryption.outgoingGroupEnvelope(account: account, messageID: message.id, room: message.chatID, transport: client) }
-                        catch { throw OutboxSendFailure.notAttempted }
-                        _ = try await client.sendEncryptedGroupMessage(room: message.chatID, envelope: prepared.envelope, id: message.id, expectedMembers: prepared.members)
-                    } else {
-                        let envelope: XMPPOMEMOEnvelope
-                        do { envelope = try await encryption.outgoingEnvelope(account: account, messageID: message.id) }
-                        catch { throw OutboxSendFailure.notAttempted }
-                        // Requesting is unconditional; the receipt switches only gate what we send back.
-                        _ = try await client.sendEncryptedMessage(to: message.chatID, envelope: envelope, id: message.id,
-                                                                  requestReceipt: true, markable: true)
-                    }
-                    try? await client.requestAcknowledgement()
-                }, didChange: { [weak self] in
-                    await self?.refresh()
-                })
-                // Everything that is not a chat message rides one queue: reactions (plain, encrypted,
-                // group) and key transports. Preparation seals; the flush re-validates and sends.
-                let updates = try await encryption.prepareAvailableUpdates(account: account, transport: client)
-                if let self, self.generation == token {
-                    heldForTrust.formUnion(self.encryptionAttention.hold(updates.blockedChats, shownChat: self.encryptionShownChatID))
-                }
-                var updateIDs = updates.messageIDs
-                for update in try await store.queuedReactions(accountID: account) where joinedGroups.contains(update.chatID) {
-                    do {
-                        try await encryption.prepareGroupReaction(account: account, updateID: update.id, room: update.chatID, transport: client)
-                        updateIDs.insert(update.id)
-                    } catch {
-                        if error is CancellationError { throw error }
-                        if let self, self.generation == token {
-                            self.groupChats[update.chatID]?.issue = self.groupFailure(error)
-                            heldForTrust.formUnion(self.encryptionAttention.hold([update.chatID: self.groupFailure(error)], shownChat: self.encryptionShownChatID))
-                        }
-                    }
-                }
-                try await encryption.flushUpdates(account: account, updateIDs: updateIDs, groupTransport: client) { update, prepared in
-                    switch prepared {
-                    case .encrypted(let to, let envelope):
-                        // A legacy correction carries its reference outside the ciphertext; the sealed target is the reference.
-                        let replaces = update.kind == .correction && envelope.profile == .legacy ? update.targetWireID : nil
-                        _ = try await client.sendEncryptedMessage(to: to, envelope: envelope, id: update.id, replaces: replaces)
-                    case .group(let room, let envelope, let members):
-                        _ = try await client.sendEncryptedGroupMessage(room: room, envelope: envelope, id: update.id, expectedMembers: members)
-                    case .plainReaction(let to, let targetID, let reactions):
-                        _ = try await client.sendReaction(to: to, targetID: targetID, reactions: reactions, id: update.id)
-                    case .plainRetraction(let to, let targetID):
-                        _ = try await client.sendRetraction(to: to, targetID: targetID, id: update.id)
-                    case .plainReceipt(let to, let targetID, let kind):
-                        _ = try await client.sendReceipt(to: to, targetID: targetID, kind: kind, id: update.id)
-                    }
-                    try? await client.requestAcknowledgement()
-                }
+                let drain = OutboxDrain(account: account, client: client, encryption: encryption, store: store,
+                                        sender: outboxSender, joinedGroups: joinedGroups)
+                let heldForTrust = try await drain.run(OutboxDrain.Hooks(
+                    hold: { [weak self] blocked in
+                        guard let self, self.generation == token else { return [] }
+                        return self.encryptionAttention.hold(blocked, shownChat: self.encryptionShownChatID)
+                    },
+                    groupPrepared: { [weak self] room in
+                        if let self, self.generation == token { self.groupChats[room]?.issue = nil }
+                    },
+                    groupFailed: { [weak self] room, error in
+                        guard let self, self.generation == token else { return [] }
+                        self.groupChats[room]?.issue = self.groupFailure(error)
+                        return self.encryptionAttention.hold([room: self.groupFailure(error)], shownChat: self.encryptionShownChatID)
+                    },
+                    didChange: { [weak self] in await self?.refresh() }))
                 if let self, self.generation == token { self.encryptionAttention.settlePass(heldForTrust: heldForTrust) }
                 await self?.refresh()
             } catch {
@@ -1713,6 +1697,7 @@ final class AppModel {
             }
             guard let self else { return }
             self.drainTask = nil
+            self.drainPasses += 1
             // A different account/session may have become ready while this attempt settled.
             if self.outboxRequested || self.generation != token { self.startOutbox() }
             // Catch-up often finishes while the first drain of a connection is still running; the
@@ -1751,17 +1736,11 @@ final class AppModel {
     private func routeNotification(_ destination: NotificationDestination) async {
         guard testSessionID == nil, !isDemo,
               !ProcessInfo.processInfo.arguments.contains("--inspect-notification"), let store else { return }
-        let account = accountID
-        do {
-            guard let authorization = try NotificationAccount.load(), authorization.push != nil,
-                  authorization.accountID == account, sessionAccount?.accountID == account,
-                  let message = try await destination.resolve(accountID: account, active: true, store: store),
-                  accountID == account, sessionAccount?.accountID == account,
-                  try NotificationAccount.load() == authorization else { return }
-            notificationRoute = NotificationChatRoute(accountID: account, chatID: message.chatID)
-        } catch {
-            // A tap never prompts for another account, creates a chat or changes endpoints.
-        }
+        // A tap never prompts for another account, creates a chat or changes endpoints.
+        guard let account = authorizedNotificationAccount(),
+              let message = try? await destination.resolve(accountID: account, active: true, store: store),
+              authorizedNotificationAccount() == account else { return }
+        notificationRoute = NotificationChatRoute(accountID: account, chatID: message.chatID)
     }
 
     /// The synchronous half of opening, run before the pushed screen's first frame: resets the open chat's projection
@@ -2481,7 +2460,7 @@ final class AppModel {
         accountPreferences = try await store.accountPreferences(accountID: account)
         notificationPreviewsEnabled = accountPreferences.notificationPreviews
         if foreground, hasTransportOwnership, !quiescing {
-            try await store.dismissPendingMessageNotifications(accountID: account)
+            try await presentForegroundNotifications(store: store, account: account)
         }
         guard accountID == account else { return }
         for (room, members) in rooms {
@@ -2526,5 +2505,342 @@ final class AppModel {
         guard appBadge != count else { return }
         appBadge = count
         Task { try? await UNUserNotificationCenter.current().setBadgeCount(count) }
+    }
+}
+
+// MARK: Notification actions and foreground banners (wave 2, stream E; docs/development/notification-actions.md)
+
+/// The transport one Reply or Mark as Read took. In front of the app it is the app's own live session; in the
+/// background it is the store's lease plus a short-lived connection of its own, which the watchdog ends at the
+/// budget's deadline.
+@MainActor private final class NotificationActionSession {
+    let account: String
+    let isForeground: Bool
+    let budget: NotificationActionBudget
+    var client: XMPPClient?
+    var consumer: Task<Void, Never>?
+    var watchdog: Task<Void, Never>?
+    /// Ends the lifecycle slot this action holds, so a scene transition queued behind it can run.
+    var releaseLifecycle: AsyncStream<Void>.Continuation?
+    /// True from the moment the kernel lease was taken until it was released; `acquiringLease` covers the call in
+    /// flight, whose lock may already be held before the main actor hears of it.
+    var holdsLease = false
+    var acquiringLease = false
+    /// The deadline passed or the system is ending the background time: nothing new starts on the network.
+    private(set) var aborted = false
+    /// Bound and past `initialize`, as the app's `.ready`: only then is anything sealed or sent.
+    var ready = false
+    var joinedRooms: Set<String> = []
+
+    init(account: String, isForeground: Bool, budget: NotificationActionBudget) {
+        self.account = account; self.isForeground = isForeground; self.budget = budget
+    }
+
+    /// Past the deadline, or aborted: stop before the next network step.
+    var isOver: Bool { aborted || ContinuousClock.now >= budget.deadline }
+
+    /// The budget ran out or the system is ending the background task: close the connection so every call returns.
+    func abort() {
+        aborted = true
+        guard let client else { return }
+        Task { await client.disconnect() }
+    }
+}
+
+@MainActor private final class ActionWaitCompletion { var finished = false }
+
+extension AppModel: NotificationActionEnvironment {
+    /// After the reply was written: how long to wait for the server's stream-management acknowledgement.
+    private static let acknowledgementWait: Duration = .seconds(3)
+    /// In front of the app, how long a reply waits for the live session's outbox pass.
+    private static let foregroundReplyWait: Duration = .seconds(10)
+
+    /// A notification's Reply or Mark as Read, possibly on a launch into the background. `NotificationActionCenter`
+    /// holds the background task and measured `budget` from the delegate callback, so `prepare()` counts against it.
+    func performNotificationAction(_ request: NotificationActionRequest, budget: NotificationActionBudget) async -> NotificationActionOutcome {
+        await prepare()
+        let outcome = await NotificationActionHandler.perform(request, budget: budget, in: self)
+        Self.syncLog.notice("notification action: \(outcome.rawValue, privacy: .public)")
+        return outcome
+    }
+
+    /// The system is ending the background time. Closes the action's connection; true while the action holds or is
+    /// taking the lease, so the center leaves the task to expire (termination frees the lock, suspension would not).
+    func abortNotificationAction() -> Bool {
+        guard let session = actionSession else { return false }
+        session.abort()
+        return session.holdsLease || session.acquiringLease
+    }
+
+    func authorizedNotificationAccount() -> String? {
+        guard testSessionID == nil, !isDemo, !accountID.isEmpty, sessionAccount?.accountID == accountID,
+              !ProcessInfo.processInfo.arguments.contains("--inspect-notification"),
+              let saved = try? NotificationAccount.load(), saved.accountID == accountID else { return nil }
+        return accountID
+    }
+
+    func resolveNotificationMessage(_ destination: NotificationDestination, account: String) async -> StoredMessage? {
+        guard let store else { return nil }
+        return try? await destination.resolve(accountID: account, active: true, store: store)
+    }
+
+    func beginNotificationAction(account: String, chatID: String, budget: NotificationActionBudget) async -> Bool {
+        guard let store, let encryption, let credentials = sessionAccount, credentials.accountID == account else { return false }
+        // In front (or still holding the live session while the scene goes): the app's own connection does the work.
+        if UIApplication.shared.applicationState != .background || (foreground && !quiescing && hasTransportOwnership) {
+            actionSession = NotificationActionSession(account: account, isForeground: true, budget: budget)
+            return true
+        }
+        let session = NotificationActionSession(account: account, isForeground: false, budget: budget)
+        actionSession = session
+        // Measured from the delegate callback: a slow start or a queued action ahead of this one used part of it.
+        session.watchdog = Task { [weak session] in
+            try? await Task.sleep(until: budget.deadline, clock: .continuous)
+            session?.abort()
+        }
+        // Take the lifecycle slot: a quiesce in flight finishes first, and a return to the foreground waits for this.
+        // The wait for it and for the lease share one bound; past it the action works locally only.
+        let waitEnd = budget.leaseDeadline(from: .now)
+        let previous = lifecycleTask
+        let (gate, release) = AsyncStream<Void>.makeStream()
+        session.releaseLifecycle = release
+        lifecycleTask = Task { await previous?.value; for await _ in gate {} }
+        guard await Self.finishes(previous, by: waitEnd), !session.isOver else { return true }
+        // Without the lease (the extension is syncing) the action still reads and queues locally; nothing is sent.
+        guard (try? await acquireActionLease(store, session: session, until: waitEnd)) != nil else { return true }
+        guard !session.isOver else { return true }
+        do {
+            try await store.recoverInterruptedSubmissions(accountID: account)
+            let client = XMPPClient(labCertificateAuthority: DevelopmentEndpoint.certificateAuthority)
+            try await client.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
+            session.client = client
+            // From here an abort closes this client; one that came before it was set is honoured here.
+            guard !session.isOver else { throw CancellationError() }
+            // Everything that arrives meanwhile is persisted exactly as the extension would, and acknowledged.
+            let processor = InboundProcessor(encryption: encryption, client: client, account: account)
+            session.consumer = Task {
+                for await event in client.events {
+                    if case .state(.disconnected) = event { break }
+                    _ = try? await processor.process(event)
+                }
+            }
+            try await client.connect(host: credentials.host, port: credentials.port, domain: credentials.domain,
+                                     username: credentials.username, password: credentials.password)
+            guard !session.isOver else { throw CancellationError() }
+            // As before `.ready`: an identity mismatch fails closed before anything can be sealed.
+            try await encryption.initialize(account: account, transport: client)
+            if isGroup(chatID) {
+                let nickname = preferences.string(forKey: "groupNickname.\(account).\(chatID)") ?? String(account.prefix { $0 != "@" })
+                if let snapshot = try? await client.joinGroupRoom(chatID, nickname: nickname), snapshot.joined { session.joinedRooms.insert(chatID) }
+            }
+            guard !session.isOver else { throw CancellationError() }
+            session.ready = true
+        } catch {
+            Self.syncLog.notice("notification action offline: \(ConnectionSetup.detail(error), privacy: .public)")
+        }
+        return true
+    }
+
+    /// Polls the lease until `end`. `holdsLease` is set in the same main-actor turn the acquisition returns in, and
+    /// `acquiringLease` covers the call in flight, so the expiration handler never ends the task over a held lock.
+    private func acquireActionLease(_ store: MessageStore, session: NotificationActionSession, until end: ContinuousClock.Instant) async throws {
+        while true {
+            guard !session.isOver else { throw CancellationError() }
+            session.acquiringLease = true
+            do {
+                try await store.acquireTransportOwnership()
+                session.holdsLease = true
+                session.acquiringLease = false
+                return
+            } catch MessageStoreError.transportOwnedElsewhere {
+                session.acquiringLease = false
+                guard ContinuousClock.now + .milliseconds(250) <= end else { throw MessageStoreError.transportOwnedElsewhere }
+                try await Task.sleep(for: .milliseconds(250))
+            } catch {
+                session.acquiringLease = false
+                throw error
+            }
+        }
+    }
+
+    /// Waits for `task` until `deadline`; false when it had not finished by then (the task itself keeps running).
+    private static func finishes(_ task: Task<Void, Never>?, by deadline: ContinuousClock.Instant) async -> Bool {
+        guard let task else { return true }
+        // Awaiting a task's value ignores cancellation, so the race is polled rather than put in a task group.
+        let completion = ActionWaitCompletion()
+        Task { @MainActor in await task.value; completion.finished = true }
+        while !completion.finished, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        return completion.finished
+    }
+
+    func markNotificationMessageRead(_ message: StoredMessage) async throws {
+        guard let store else { throw MessageStoreError.closed }
+        let account = message.accountID
+        if try await store.markRead(accountID: account, chatID: message.chatID, throughMessageID: message.id) { await refresh(.chats) }
+        // The peer's read marker, only when the read-receipts switch allows it (the store checks); it leaves with the
+        // outbox's updates. The pointer and XEP-0490 do not depend on the switch.
+        _ = try? await encryption?.queueReceipt(account: account, chatID: message.chatID, messageID: message.id, kind: .marker)
+        if actionSession?.isForeground == true { publishReadState(); startOutbox() }
+    }
+
+    func clearReadNotifications(for message: StoredMessage) async {
+        await DeliveredNotificationCleaner.removeMessages(accountID: message.accountID, messageIDs: [message.id])
+        if let store { try? await DeliveredNotificationCleaner.removeRead(accountID: message.accountID, store: store) }
+    }
+
+    /// The composer's outbox: one queued, still unencrypted row that only the drain seals. A plain answer in the chat,
+    /// as in Messages; not an XEP-0461 reply.
+    func enqueueNotificationReply(_ text: String, to message: StoredMessage) async throws -> String {
+        guard let store else { throw MessageStoreError.closed }
+        let account = message.accountID, chatID = message.chatID
+        guard isGroup(chatID) || !isLabAccount || chatID.hasSuffix("@" + accountDomain) else { throw MessageStoreError.invalidValue }
+        let reply = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chatID, senderID: account, body: text,
+                                  isOutgoing: true, encryptionProfile: "pending")
+        try XMPPClient.validateMessage(to: chatID, body: text, id: reply.id, reply: nil)
+        try await store.enqueueOutgoing(reply)
+        await refresh()
+        if actionSession?.isForeground == true { startOutbox() }
+        return reply.id
+    }
+
+    func deliverNotificationReply(_ messageID: String, account: String) async -> ReplyDelivery {
+        guard let store, let session = actionSession else { return .held }
+        if session.isForeground {
+            // The live session's pass: wait until the reply left the queue, or a pass that started after it was queued
+            // finished and left it there (held for a decision), or the session never got ready.
+            let before = drainPasses
+            startOutbox()
+            let clock = ContinuousClock(), deadline = clock.now + session.budget.remaining(at: clock.now, atMost: Self.foregroundReplyWait)
+            while clock.now < deadline {
+                if let state = try? await store.message(accountID: account, messageID: messageID)?.transportState, state != .queued { break }
+                if drainPasses > before, drainTask == nil, !outboxRequested { break }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        } else {
+            await flushBackgroundAction(session)
+        }
+        return await replyDelivery(messageID, account: account, budget: session.budget)
+    }
+
+    /// Server acceptance when it comes in time; a written but unacknowledged reply still counts as sent (the archive
+    /// reconciles it). Queued (held) and failed are not sent.
+    private func replyDelivery(_ messageID: String, account: String, budget: NotificationActionBudget) async -> ReplyDelivery {
+        guard let store else { return .held }
+        let clock = ContinuousClock(), deadline = clock.now + budget.remaining(at: clock.now, atMost: Self.acknowledgementWait)
+        while true {
+            switch try? await store.message(accountID: account, messageID: messageID)?.transportState {
+            case .serverAccepted?: return .sent
+            case .submitting?, .unconfirmed?: if clock.now >= deadline { return .sent }
+            default: return .held
+            }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+    }
+
+    func flushNotificationAction(account: String) async {
+        guard let session = actionSession, !session.isForeground else { return }
+        await flushBackgroundAction(session)
+    }
+
+    /// Read state first, then one outbox pass: the reply, the marker and anything else the user queued earlier.
+    private func flushBackgroundAction(_ session: NotificationActionSession) async {
+        guard session.ready, !session.isOver, let client = session.client, let store, let encryption, let outboxSender else { return }
+        _ = try? await ReadSync(store: store).push(account: session.account, client: client)
+        let drain = OutboxDrain(account: session.account, client: client, encryption: encryption, store: store,
+                                sender: outboxSender, joinedGroups: session.joinedRooms)
+        do { _ = try await drain.run() }
+        catch { Self.syncLog.notice("notification action outbox: \(ConnectionSetup.detail(error), privacy: .public)") }
+    }
+
+    func reportNotificationReply(failed: Bool, for message: StoredMessage) async {
+        let account = message.accountID
+        let identifier = NotificationIdentity.replyFailure(accountID: account, chatID: message.chatID)
+        let center = UNUserNotificationCenter.current()
+        guard failed else { center.removeDeliveredNotifications(withIdentifiers: [identifier]); return }
+        guard let destination = NotificationDestination(accountID: account, messageID: message.id) else { return }
+        let content = UNMutableNotificationContent()
+        // The chat's name only when previews are on, as for the message notification itself.
+        content.title = notificationPreviewsEnabled ? chats.first { $0.id == message.chatID }?.displayTitle ?? "" : ""
+        content.body = NotificationActionCopy.replyFailed
+        content.threadIdentifier = NotificationIdentity.thread(accountID: account, chatID: message.chatID)
+        content.categoryIdentifier = NotificationIdentity.noticeCategory
+        content.userInfo = [NotificationNavigation.replyFailureKey: destination.payload]
+        content.sound = .default
+        try? await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+    }
+
+    func endNotificationAction() async {
+        // `actionSession` stays set until the lease is back, so an expiring background task sees that it is held.
+        guard let session = actionSession else { return }
+        session.watchdog?.cancel()
+        if let client = session.client { await client.disconnectAndWait() }
+        session.consumer?.cancel()
+        await session.consumer?.value
+        // Still in the background: the lease goes back, so the extension can run. A foreground session that took it
+        // meanwhile keeps it.
+        if session.holdsLease, !hasTransportOwnership, let store {
+            if session.client != nil { await presentActionArrivals(store: store, session: session) }
+            try? await store.releaseTransportOwnership()
+        }
+        session.holdsLease = false
+        actionSession = nil
+        session.releaseLifecycle?.finish()
+        await refresh()
+    }
+
+    /// While the action's connection was online (with initial presence) the server pushed nothing for what it
+    /// delivered there, so those messages alert now, under the lease, exactly as the extension would present them:
+    /// its planner, identifiers, mute, read state and previews, and the claim that keeps a later run from repeating
+    /// them. Bounded; what does not get posted in time stays a candidate for the next run or the foreground claim.
+    private func presentActionArrivals(store: MessageStore, session: NotificationActionSession) async {
+        guard authorizedNotificationAccount() == session.account else { return }
+        let presenter = NotificationPresenter(posting: notificationPoster(account: session.account),
+                                              addTimeout: .seconds(2), cleanupTimeout: .seconds(1))
+        let account = session.account, progress = NotificationRunProgress()
+        let timeout = session.budget.presentationTimeout(at: .now)
+        guard timeout > .zero else { return }
+        let presentation = Task { try await presenter.present(store: store, accountID: account, progress: progress) }
+        let watchdog = Task { try? await Task.sleep(for: timeout); presentation.cancel() }
+        _ = await presentation.result
+        watchdog.cancel()
+        if progress.report.posted > 0 { Self.syncLog.notice("notification action presented=\(progress.report.posted, privacy: .public)") }
+    }
+
+    // MARK: Foreground banners
+
+    /// Claims what this connection committed; banners for other chats when permitted and caught up.
+    fileprivate func presentForegroundNotifications(store: MessageStore, account: String) async throws {
+        let presents = mayPostNotifications && testSessionID == nil && !isDemo && session.isReady && catchUp == nil
+            && sessionAccount?.accountID == account
+        let posted = try await NotificationPresenter(posting: notificationPoster(account: account))
+            .presentForeground(store: store, accountID: account, openChatID: openChatID, presents: presents)
+        if posted > 0 { Self.syncLog.notice("foreground notifications posted=\(posted, privacy: .public)") }
+    }
+
+    /// The extension's poster, with the app's pre-scaled notification avatars, so banners match the extension's requests.
+    private func notificationPoster(account: String) -> UserNotificationPoster {
+        let root = storageRoot
+        return UserNotificationPoster(avatarData: { hash in
+            guard let root else { return nil }
+            return AvatarStore.notificationImageData(root: root, account: account, hash: hash)
+        })
+    }
+
+    fileprivate func refreshNotificationPermission() {
+        guard testSessionID == nil else { return }
+        Task { [weak self] in
+            #if DEBUG
+            // Simulator lab runs only: the lab account has no staging push, which is what normally asks.
+            if ProcessInfo.processInfo.arguments.contains("-request-notification-permission") {
+                _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+            }
+            #endif
+            let status = await Self.notificationAuthorization()
+            self?.mayPostNotifications = [.authorized, .provisional, .ephemeral].contains(status)
+        }
+    }
+
+    private nonisolated static func notificationAuthorization() async -> UNAuthorizationStatus {
+        await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 }

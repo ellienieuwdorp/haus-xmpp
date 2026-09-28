@@ -15,15 +15,9 @@ final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificatio
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
-        // One category per message notification, one for reactions to own messages (no message actions) and one for the
-        // extension's generic fallback (plan D2, D3, D8).
-        let message = UNNotificationCategory(identifier: NotificationIdentity.messageCategory, actions: [], intentIdentifiers: [],
-            hiddenPreviewsBodyPlaceholder: "New message", options: [])
-        let reaction = UNNotificationCategory(identifier: NotificationIdentity.reactionCategory, actions: [], intentIdentifiers: [],
-            hiddenPreviewsBodyPlaceholder: NotificationPlanner.hiddenReactionBody, options: [])
-        let fallback = UNNotificationCategory(identifier: NotificationIdentity.fallbackCategory, actions: [], intentIdentifiers: [],
-            hiddenPreviewsBodyPlaceholder: NotificationPlanner.fallbackBody, options: [])
-        UNUserNotificationCenter.current().setNotificationCategories([message, reaction, fallback])
+        // `message` offers Reply and Mark as Read; `notice`, `reaction` and the extension's `fallback` have none
+        // (plan D2, D3, D8, E).
+        UNUserNotificationCenter.current().setNotificationCategories(NotificationCategories.all)
         #if DEBUG
         NotificationHarness.install()
         #endif
@@ -65,13 +59,57 @@ final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificatio
         Self.shared.waiters.removeAll()
         for waiter in pending.values { waiter.resume(throwing: Failure.unavailable) }
     }
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        // Foreground conversation UI already presents durable messages. No duplicate banner.
-        []
+    /// In front of the app only the local requests for another chat's messages show (the app posts them; see
+    /// `NotificationPresenter.presentForeground`). The open chat, remote requests and fallbacks stay hidden.
+    /// Completion-handler form: UIKit requires the handler on the main thread, which the async form does not
+    /// guarantee (a response handled in the background crashed with an assertion when it returned off main).
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        let request = ForegroundPresentation.request(notification)
+        let completion = MainThreadCompletion(completionHandler)
+        Task { @MainActor in
+            let state = ForegroundNotificationState.shared
+            completion.call(ForegroundPresentation.options(for: request, accountID: state.accountID, openChatID: state.openChatID))
+        }
     }
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard let destination = NotificationNavigation.destination(userInfo: response.notification.request.content.userInfo,
-                                                                   actionIdentifier: response.actionIdentifier) else { return }
-        await NotificationNavigation.shared.receive(destination)
+
+    /// May run with the app launched into the background. The handler is called on the main thread once an action's
+    /// work settled (bounded by the model's action budget).
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        let content = response.notification.request.content
+        let completion = MainThreadCompletion<Void>({ _ in completionHandler() })
+        switch response.actionIdentifier {
+        case NotificationActionIdentifier.reply, NotificationActionIdentifier.markRead:
+            guard let request = NotificationActionRequest(userInfo: content.userInfo, categoryIdentifier: content.categoryIdentifier,
+                                                          actionIdentifier: response.actionIdentifier,
+                                                          text: (response as? UNTextInputNotificationResponse)?.userText) else {
+                // Typed text that cannot become a request (over the composer's limit, or no destination) is not sent:
+                // say so, naming nothing. A blank reply had nothing to send.
+                let typed = (response as? UNTextInputNotificationResponse)?.userText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                Task { @MainActor in
+                    if !typed.isEmpty { await NotificationActionCenter.postRejectedReply() }
+                    completion.call(())
+                }
+                return
+            }
+            Task { @MainActor in
+                await NotificationActionCenter.shared.perform(request)
+                completion.call(())
+            }
+        default:
+            let destination = NotificationNavigation.destination(userInfo: content.userInfo, actionIdentifier: response.actionIdentifier)
+            Task { @MainActor in
+                if let destination { NotificationNavigation.shared.receive(destination) }
+                completion.call(())
+            }
+        }
     }
+}
+
+/// Carries a system completion handler to the main actor, where it is called exactly as UIKit requires.
+private struct MainThreadCompletion<Value>: @unchecked Sendable {
+    private let handler: (Value) -> Void
+    init(_ handler: @escaping (Value) -> Void) { self.handler = handler }
+    @MainActor func call(_ value: Value) { handler(value) }
 }
