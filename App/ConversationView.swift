@@ -291,8 +291,10 @@ struct ConversationView: View {
                 beginEditing(message)
             }, onUnsend: { composerState.focused = false; unsendMessageID = $0 }, onOpenEncryption: { model.requestRoute(encryptionRoute) }, onDisplayed: { id in
                 // Only the newest received message is marked; XEP-0333 makes a marker cover everything before it.
-                // A placeholder carries no wire ID, so the newest readable received message is the one to mark.
-                guard id == model.messages.last(where: { !$0.isOutgoing && $0.unreadableReason == nil })?.id else { return }
+                // A placeholder carries no wire ID, so the newest readable received message is the one the peer hears
+                // about; the newest received message of any kind is where this chat's read pointer goes.
+                guard id == model.messages.last(where: { !$0.isOutgoing && $0.unreadableReason == nil })?.id
+                        || id == model.messages.last(where: { !$0.isOutgoing })?.id else { return }
                 Task { await model.markDisplayed(id) }
             }, onRestoreComposerFocus: { composerState.focused = true }, onReachTop: { Task { await model.loadOlderMessages() } },
             attachmentKeyboard: composerState.attachmentKeyboard)

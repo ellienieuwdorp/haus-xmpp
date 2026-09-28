@@ -20,6 +20,8 @@ struct ChatSummary: Identifiable {
     var lastMessageIsOutgoing = false
     var lastMessageState: OutgoingTransportState? = nil
     var lastMessageReceipt: MessageEventKind? = nil
+    /// Incoming messages after the chat's read pointer; shown as a count pill in the row.
+    var unreadCount = 0
     /// Title for display: the stored title, or the address local part when the title is just the address.
     var displayTitle: String { AppModel.displayName(for: id, title: title) }
 }
@@ -165,6 +167,9 @@ final class AppModel {
     @ObservationIgnored private var notificationTapTask: Task<Void, Never>?
     /// Owns the durable-disposition rule for the current stream; replaced with the client.
     @ObservationIgnored private var inbound: InboundProcessor?
+    /// One XEP-0490 publication run at a time; a read made meanwhile asks for one more.
+    @ObservationIgnored private var publishingReadState = false
+    @ObservationIgnored private var readStateChangedWhilePublishing = false
     /// Local plaintext files of the open chat's attachments, by message ID, once downloaded or sent.
     private(set) var attachmentFiles: [String: URL] = [:]
     /// The account's upload service as last discovered; persisted per account so the attach button survives launch
@@ -319,6 +324,15 @@ final class AppModel {
                 try files.write(photo, to: files.cacheURL(attachment, messageID: "sample-photo"))
                 try await store.insertMessage(StoredMessage(id: "sample-photo", accountID: account, chatID: "alex@preview.local", senderID: "alex@preview.local", body: "",
                                                             sentAt: Date(timeIntervalSince1970: 1_789_380_000.5), isOutgoing: false, attachment: attachment))
+            }
+            // Sample history is read history; only `-demo-unread` leaves something new, for screenshots of the count pill.
+            for chat in try await store.chats(accountID: account) { try await store.markChatRead(accountID: account, chatID: chat.id) }
+            if ProcessInfo.processInfo.arguments.contains("-demo-unread") {
+                let unread = [("maya@preview.local", "Also, bring the map 🗺️"), ("maya@preview.local", "The trail opens at nine."), ("alex@preview.local", "Bringing pastries 🥐")]
+                for (index, (chatID, body)) in unread.enumerated() {
+                    try await store.insertMessage(StoredMessage(id: "sample-unread-\(index)", accountID: account, chatID: chatID, senderID: chatID, body: body,
+                                                                sentAt: Date(timeIntervalSince1970: 1_789_380_100 + Double(index)), isOutgoing: false))
+                }
             }
             guard generation == token else { return }
             await refresh()
@@ -1022,7 +1036,7 @@ final class AppModel {
             guard chats.contains(where: { $0.id == update.chat }) else { return }
             typingTracker.apply(update.state, chat: update.chat, participant: update.participant ?? update.chat, settles: update.ridesOnMessage, now: .now)
             publishTyping()
-        case .reaction, .retraction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier:
+        case .reaction, .retraction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier, .displayedSync:
             guard let encryption, let client else { return }
             if case .encryptedMessage = event { receivedCount += 1 }
             // A real message ends its sender's typing, even from a client that sends no `active` with it.
@@ -1304,6 +1318,8 @@ final class AppModel {
                 Self.syncLog.notice("catch-up finished +\(self.syncElapsed(), privacy: .public) ms pages=\(pages, privacy: .public) messages=\(messages, privacy: .public)")
                 archiveWalkFinished = true
                 requestOpportunisticBackfill()
+                // XEP-0490 after the walk, so the ids other devices published name messages we now hold.
+                syncReadState(account: account, client: client, token: token)
             }
         case .failed(let step, let detail):
             catchUp = nil
@@ -1727,6 +1743,8 @@ final class AppModel {
 
     func openChat(_ chatID: String) async {
         prepareChat(chatID)
+        // The chat is on screen: its delivered notifications have done their job.
+        if !isDemo { let account = accountID; Task { await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID) } }
         // Keep the same chat's devices across pop-back and reconnect; another chat starts pending until its store read.
         if encryptionOverviewChatID != chatID { encryptionOverviewChatID = chatID; encryptionOverview = nil }
         encryptionDetailsChatID = chatID
@@ -2130,17 +2148,77 @@ final class AppModel {
         } catch { self.error = "Could not save preferences." }
     }
 
-    /// The timeline showed the newest received message while the app is in front: queue the read marker.
+    /// The timeline showed the newest received message while the app is in front: the chat is read up to it on this
+    /// device (published with XEP-0490), and the peer gets a read marker when the read-receipts switch allows.
     func markDisplayed(_ messageID: String) async {
-        guard foreground, !quiescing, hasTransportOwnership, !isDemo, let encryption,
-              let message = messages.first(where: { $0.id == messageID }), !message.isOutgoing, message.chatID == openChatID,
+        guard foreground, !quiescing, let store,
+              let message = messages.first(where: { $0.id == messageID }), !message.isOutgoing, message.chatID == openChatID else { return }
+        let account = accountID, token = generation
+        // Local-first and independent of the read-receipts switch, which governs only what the peer is told.
+        if (try? await store.markRead(accountID: account, chatID: message.chatID, throughMessageID: messageID)) == true, generation == token {
+            refreshSoon(.chats)
+            publishReadState()
+        }
+        guard hasTransportOwnership, !isDemo, let encryption, generation == token,
               message.encryptionProfile == "modern" || message.encryptionProfile == "legacy" else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
-        let account = accountID, token = generation
         let queued = (try? await encryption.queueReceipt(account: account, chatID: message.chatID, messageID: messageID, kind: .marker)) ?? nil
         guard queued != nil, generation == token else { return }
         startOutbox()
+    }
+
+    /// The chat list's Read action: everything in the chat counts as read here and on the account's other devices.
+    /// The peer is not sent a read marker: nothing was shown.
+    func markChatRead(_ chatID: String) async {
+        guard let store else { return }
+        let account = accountID
+        guard (try? await store.markChatRead(accountID: account, chatID: chatID)) == true, accountID == account else { return }
+        await refresh(.chats)
+        publishReadState()
+    }
+
+    /// Publishes this device's pending reads (XEP-0490) while the session is ready. Counted as an operation so a
+    /// background transition joins it; what fails stays pending in the store for the next connection.
+    private func publishReadState() {
+        guard !isDemo, session.isReady, !quiescing, let client, let store else { return }
+        guard !publishingReadState else { readStateChangedWhilePublishing = true; return }
+        publishingReadState = true
+        let account = accountID, token = generation
+        activeEncryptionOperations += 1
+        Task {
+            defer { publishingReadState = false; activeEncryptionOperations -= 1 }
+            repeat {
+                readStateChangedWhilePublishing = false
+                guard generation == token, !quiescing else { return }
+                do { try await ReadSync(store: store).push(account: account, client: client) }
+                catch { Self.syncLog.notice("read state not published: \(ConnectionSetup.detail(error), privacy: .public)"); return }
+            } while readStateChangedWhilePublishing
+        }
+    }
+
+    /// After catch-up: apply what the account's other devices read (XEP-0490 items), then publish our own reads.
+    private func syncReadState(account: String, client: XMPPClient, token: UUID) {
+        guard !isDemo, let store, let encryption else { return }
+        activeEncryptionOperations += 1
+        Task {
+            defer { activeEncryptionOperations -= 1 }
+            do {
+                if try await ReadSync(store: store).pull(account: account, client: client, encryption: encryption), generation == token { refreshSoon(.chats) }
+            } catch { Self.syncLog.notice("read state not fetched: \(ConnectionSetup.detail(error), privacy: .public)") }
+            guard generation == token else { return }
+            publishReadState()
+        }
+    }
+
+    /// Notification Center keeps only unread messages: requests for messages now at or below their chat's pointer go.
+    private func removeReadNotifications(account: String, store: MessageStore) {
+        guard !isDemo else { return }
+        activeEncryptionOperations += 1
+        Task {
+            defer { activeEncryptionOperations -= 1 }
+            try? await DeliveredNotificationCleaner.removeRead(accountID: account, store: store)
+        }
     }
 
     func toggleStar(_ id: String) async {
@@ -2347,9 +2425,14 @@ final class AppModel {
                     : last.unreadableReason.map(UnreadableCopy.preview) ?? (last.body.isEmpty ? (last.attachment?.kindLabel ?? "") : last.body) } ?? ""),
             isPinned: $0.isPinned, avatarHash: $0.avatarHash,
             lastMessageAt: $0.lastMessage?.sentAt, lastMessageIsOutgoing: $0.lastMessage?.isOutgoing ?? false,
-            lastMessageState: $0.lastMessage?.transportState, lastMessageReceipt: $0.lastMessageReceipt) }
+            lastMessageState: $0.lastMessage?.transportState, lastMessageReceipt: $0.lastMessageReceipt, unreadCount: $0.unreadCount) }
         summaries += pending.keys.filter { !known.contains($0) }.sorted().map {
             ChatSummary(id: $0, title: $0, preview: reviewPreview, isPinned: false)
+        }
+        // A pointer moved (here, on another device, or before this launch): its chat's notifications may go.
+        let previousUnread = Dictionary(chats.map { ($0.id, $0.unreadCount) }, uniquingKeysWith: max)
+        if !hasLoadedChats || summaries.contains(where: { $0.unreadCount < (previousUnread[$0.id] ?? 0) }) {
+            removeReadNotifications(account: account, store: store)
         }
         // A reorder (pin, new activity) animates; List only does so inside an explicit transaction.
         withAnimation(summaries.map(\.id) == chats.map(\.id) ? nil : .default) { chats = summaries }
