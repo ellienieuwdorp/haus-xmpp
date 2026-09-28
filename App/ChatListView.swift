@@ -324,7 +324,8 @@ private struct ChatRow: View {
 }
 
 /// Incoming messages after the read pointer, in the row's trailing column under the time: a small accent capsule
-/// that sits on the preview's first line, so it never changes the row's height.
+/// that sits on the preview's first line, so it never changes the row's height. It takes the sent-bubble pair, measured
+/// at 4.5:1 for text in both appearances (the tint with white text was 3.5:1 in dark mode).
 private struct UnreadPill: View {
     let count: Int
     @ScaledMetric(relativeTo: .footnote) private var height: CGFloat = 18
@@ -332,11 +333,11 @@ private struct UnreadPill: View {
     var body: some View {
         Text(count > 999 ? "999+" : "\(count)")
             .font(.footnote.weight(.semibold)).monospacedDigit()
-            .foregroundStyle(.white)
+            .foregroundStyle(Color(uiColor: AccentTheme.current.bubbleText))
             .lineLimit(1)
             .padding(.horizontal, 6)
             .frame(minWidth: height, minHeight: height, maxHeight: height)
-            .background(Color(uiColor: AccentTheme.current.tint), in: Capsule())
+            .background(Color(uiColor: AccentTheme.current.bubble), in: Capsule())
             .fixedSize()
             .accessibilityLabel("\(count) unread")
     }
