@@ -263,6 +263,25 @@ public actor MessageStore {
                     """)
                 try connection.execute("DELETE FROM notification_candidates")
             }
+            // v19: each archive's history baseline. Its first (newest) page is history, read before this device joined
+            // the account, as is anything backfill brings from further back: a message no newer than the baseline of
+            // the archive that holds its chat counts as read even where no pointer exists. An upgrade seeds it from
+            // what each walked archive has stored.
+            if try connection.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='read_baselines'").isEmpty {
+                try connection.execute("""
+                    CREATE TABLE read_baselines (
+                        account_id TEXT NOT NULL, archive_id TEXT NOT NULL, sent_at REAL NOT NULL,
+                        PRIMARY KEY(account_id, archive_id)
+                    )
+                    """)
+                try connection.execute("""
+                    INSERT INTO read_baselines(account_id,archive_id,sent_at)
+                    SELECT account_id,archive_id,newest FROM (
+                        SELECT a.account_id,a.archive_id,(SELECT MAX(m.sent_at) FROM messages m WHERE m.account_id=a.account_id
+                            AND (a.archive_id=a.account_id OR m.chat_id=a.archive_id)) AS newest
+                        FROM archive_checkpoints a) WHERE newest IS NOT NULL
+                    """)
+            }
             try connection.execute("PRAGMA user_version = 19")
         }
     }
@@ -945,10 +964,8 @@ public actor MessageStore {
     /// Read-state condition (stream B): a message at or below its chat's read pointer was already read, on this device
     /// or another (MAM catch-up of history an other device displayed), so it never alerts. The row exists already.
     private func isAfterReadPointer(accountID: String, message: StoredMessage) throws -> Bool {
-        try connection.query("""
-            SELECT 1 FROM chat_read_state r JOIN messages m ON m.account_id=r.account_id AND m.id=?2
-            WHERE r.account_id=?1 AND r.chat_id=m.chat_id AND (m.sent_at,m.id) <= (r.read_sent_at,r.read_message_id)
-            """, [.text(accountID), .text(message.id)]).isEmpty
+        try connection.query("SELECT 1 FROM messages m \(Self.readJoins) WHERE m.account_id=?1 AND m.id=?2 AND NOT \(Self.unreadCondition)",
+                             [.text(accountID), .text(message.id)]).isEmpty
     }
 
     public func notificationPreviewsEnabled(accountID: String) throws -> Bool { try accountPreferences(accountID: accountID).notificationPreviews }
@@ -1140,8 +1157,9 @@ public actor MessageStore {
     /// paging back from this newer page walks through whatever lies between, and reprocessing an entry is idempotent,
     /// whereas keeping the older cursor would leave the entries between the two pages unfetched by either walk.
     /// Returns the new checkpoint revision.
+    /// `historyThrough` is the newest archive timestamp in the page: the archive's read baseline (see `read_baselines`).
     @discardableResult public func saveNewestArchivePage(accountID: String, archiveID: String, cursor: String,
-                                                         oldestID: String, complete: Bool) throws -> Int {
+                                                         oldestID: String, complete: Bool, historyThrough: Date? = nil) throws -> Int {
         try requireTransportOwnership()
         guard !accountID.isEmpty, !archiveID.isEmpty, !cursor.isEmpty, cursor.utf8.count <= 4096,
               !oldestID.isEmpty, oldestID.utf8.count <= 4096 else { throw MessageStoreError.invalidValue }
@@ -1158,6 +1176,7 @@ public actor MessageStore {
                 """, key + [.integer((backfill ?? 0) + 1), .text(oldestID), .integer(complete ? 1 : 0)])
             try connection.execute("INSERT INTO archive_checkpoints(account_id,archive_id,revision,cursor) VALUES(?,?,?,?)",
                                    key + [.integer(1), .text(cursor)])
+            if let historyThrough { try recordReadBaseline(accountID: accountID, archiveID: archiveID, sentAt: historyThrough) }
             return 1
         }
     }
@@ -1239,11 +1258,14 @@ public actor MessageStore {
             } else { return false }
             guard matches.count == 1, let target = try message(accountID: accountID, messageID: matches[0][0].string) else { return false }
             let moved = try advanceReadPointer(accountID: accountID, target: target, publish: false)
-            // The server holds this id now. Publishing it again would be a no-op; a newer local read stays pending.
+            // The server holds this id now. Publishing it again would be a no-op; a newer local read stays pending. An
+            // item older than our pointer (another device overwrote the node with older state) means the server is
+            // behind: publish our newer state again, or every device that pulls later inherits the older one.
             try connection.execute("""
-                UPDATE chat_read_state SET published_stanza_id=?1, publish_pending=CASE WHEN read_message_id=?2 THEN 0 ELSE publish_pending END
+                UPDATE chat_read_state SET published_stanza_id=?1,
+                    publish_pending=CASE WHEN read_message_id=?2 THEN 0 WHEN ?5 THEN 1 ELSE publish_pending END
                 WHERE account_id=?3 AND chat_id=?4
-                """, [.text(stanzaID), .text(target.id), .text(accountID), .text(chatID)])
+                """, [.text(stanzaID), .text(target.id), .text(accountID), .text(chatID), .integer(moved ? 0 : 1)])
             return moved
         }
     }
@@ -1284,13 +1306,16 @@ public actor MessageStore {
             """, [.text(publication.stanzaID), .text(publication.pointerMessageID), .text(accountID), .text(publication.chatID)])
     }
 
-    /// Incoming messages after each chat's read pointer, by chat; chats with none are absent. A chat never read counts
-    /// every incoming message. One index range per chat.
+    /// Incoming messages after each chat's read pointer and newer than its archive's history baseline, by chat; chats
+    /// with none are absent. A chat never read counts every incoming message since this device joined. One index range
+    /// per chat.
     public func unreadCounts(accountID: String) throws -> [String: Int] {
         let rows = try connection.query("""
             SELECT c.id,(SELECT COUNT(*) FROM messages m WHERE m.account_id=?1 AND m.chat_id=c.id AND m.outgoing=0 AND m.sender_id<>?1
-                         AND (m.sent_at,m.id) > (COALESCE(r.read_sent_at,-1e308),COALESCE(r.read_message_id,'')))
+                         AND \(Self.unreadCondition))
             FROM chats c LEFT JOIN chat_read_state r ON r.account_id=c.account_id AND r.chat_id=c.id
+            LEFT JOIN read_baselines bc ON bc.account_id=c.account_id AND bc.archive_id=c.id
+            LEFT JOIN read_baselines ba ON ba.account_id=c.account_id AND ba.archive_id=c.account_id
             WHERE c.account_id=?1
             """, [.text(accountID)])
         var result: [String: Int] = [:]
@@ -1305,9 +1330,8 @@ public actor MessageStore {
         guard messageIDs.count <= 1000 else { throw MessageStoreError.invalidValue }
         let ids = messageIDs.sorted()
         return Set(try connection.query("""
-            SELECT m.id FROM messages m JOIN chat_read_state r ON r.account_id=m.account_id AND r.chat_id=m.chat_id
-            WHERE m.account_id=? AND m.id IN (\(ids.map { _ in "?" }.joined(separator: ",")))
-              AND (m.sent_at,m.id) <= (r.read_sent_at,r.read_message_id)
+            SELECT m.id FROM messages m \(Self.readJoins)
+            WHERE m.account_id=? AND m.id IN (\(ids.map { _ in "?" }.joined(separator: ","))) AND NOT \(Self.unreadCondition)
             """, [.text(accountID)] + ids.map(Value.text)).map { $0[0].string })
     }
 
@@ -1334,6 +1358,32 @@ public actor MessageStore {
             UPDATE messages SET stanza_id=?1 WHERE account_id=?2 AND id=?3 AND stanza_id IS NULL
             AND NOT EXISTS (SELECT 1 FROM group_message_references WHERE account_id=?2 AND message_id=?3)
             """, [.text(stanzaID), .text(accountID), .text(messageID)])
+    }
+
+    /// The read test's joins for a message `m`: its chat's pointer `r` and the history baselines of the chat's own archive
+    /// (`bc`, a room) and of the account's archive (`ba`).
+    private static let readJoins = """
+        LEFT JOIN chat_read_state r ON r.account_id=m.account_id AND r.chat_id=m.chat_id
+        LEFT JOIN read_baselines bc ON bc.account_id=m.account_id AND bc.archive_id=m.chat_id
+        LEFT JOIN read_baselines ba ON ba.account_id=m.account_id AND ba.archive_id=m.account_id
+        """
+    /// Unread: after the pointer (if any) and newer than the history baseline (if any). Written as two ranges so the
+    /// timeline index still bounds a count.
+    private static let unreadCondition = """
+        ((m.sent_at,m.id) > (COALESCE(r.read_sent_at,-1e308),COALESCE(r.read_message_id,'')) AND m.sent_at > COALESCE(bc.sent_at,ba.sent_at,-1e308))
+        """
+
+    /// The first (newest) page of `archiveID` was history through `sentAt`. First baseline wins; candidates it covers go,
+    /// as a pointer's would. Runs inside the caller's transaction.
+    private func recordReadBaseline(accountID: String, archiveID: String, sentAt: Date) throws {
+        guard sentAt.timeIntervalSince1970.isFinite else { throw MessageStoreError.invalidValue }
+        try connection.execute("INSERT INTO read_baselines(account_id,archive_id,sent_at) VALUES(?,?,?) ON CONFLICT(account_id,archive_id) DO NOTHING",
+                               [.text(accountID), .text(archiveID), .real(sentAt.timeIntervalSince1970)])
+        try connection.execute("""
+            DELETE FROM notification_candidates WHERE account_id=?1 AND message_id IN (
+                SELECT m.id FROM notification_candidates n JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id
+                \(Self.readJoins) WHERE n.account_id=?1 AND NOT \(Self.unreadCondition))
+            """, [.text(accountID)])
     }
 
     private static func validStanzaID(_ value: String) -> Bool {

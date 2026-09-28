@@ -1052,6 +1052,8 @@ final class AppModel {
             do {
                 let outcome = try await inbound.process(event)
                 guard generation == token else { return }
+                // An XEP-0490 item older than our pointer leaves our newer state pending: answer it now.
+                if case .displayedSync = event { publishReadState() }
                 switch outcome {
                 case .stored:
                     await flushEncryptionControls(account: account, client: client)

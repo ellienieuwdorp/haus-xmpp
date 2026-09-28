@@ -195,8 +195,10 @@ public struct ArchiveSynchronizer: Sendable {
                     // One transaction: an archive with a checkpoint and no backfill row counts as walked from its start
                     // (pre-v16), and a backfill row left without its checkpoint would sit behind a gap after a newer first
                     // page, so neither may exist on its own after a crash.
+                    // The newest page is history: it and anything backfill brings count as read (the read baseline).
                     _ = try await store.saveNewestArchivePage(accountID: account, archiveID: archive, cursor: cursor,
-                                                              oldestID: oldest, complete: page.complete)
+                                                              oldestID: oldest, complete: page.complete,
+                                                              historyThrough: page.messages.map(\.timestamp).max())
                 } else {
                     _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: archive,
                                                              expectedRevision: checkpoint?.revision, cursor: cursor)

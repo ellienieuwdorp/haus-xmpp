@@ -90,9 +90,10 @@ private func execute(_ url: URL, _ sql: String) -> Bool {
         try await store.upsertChat(accountID: account, chatID: "empty@x", title: "Empty")
         try await commit(store, digest: "d1", message: message("m1", at: 1))
         try await commit(store, digest: "d2", message: message("m2", at: 2))
+        try await store.saveArchiveCheckpoint(accountID: account, archiveID: account, expectedRevision: nil, cursor: "c2")
         try await store.close()
         // A v17 store: today's schema minus the v19 additions, with two messages waiting to alert.
-        #expect(execute(url, "DROP TABLE chat_read_state; DROP INDEX message_stanza; ALTER TABLE messages DROP COLUMN stanza_id; ALTER TABLE encrypted_inbox DROP COLUMN message_id; PRAGMA user_version=17;"))
+        #expect(execute(url, "DROP TABLE chat_read_state; DROP TABLE read_baselines; DROP INDEX message_stanza; ALTER TABLE messages DROP COLUMN stanza_id; ALTER TABLE encrypted_inbox DROP COLUMN message_id; PRAGMA user_version=17;"))
         #expect(rows(url, "SELECT COUNT(*) FROM notification_candidates") == [["2"]])
         let upgraded = try MessageStore(url: url)
         try await upgraded.acquireTransportOwnership()
@@ -102,6 +103,10 @@ private func execute(_ url: URL, _ sql: String) -> Bool {
         #expect(try await upgraded.unreadCounts(accountID: account).isEmpty)
         #expect(try await upgraded.takeMessageNotification(accountID: account).messageCount == 0)
         #expect(rows(url, "PRAGMA user_version") == [["19"]])
+        // The walked archive's baseline is its newest stored message: backfill of an older chat is history, not news.
+        #expect(rows(url, "SELECT archive_id,CAST(sent_at AS INTEGER) FROM read_baselines") == [[account, "1800000002"]])
+        try await commit(upgraded, digest: "old", sender: "old@x", message: message("o1", at: 0, chat: "old@x", sender: "old@x"))
+        #expect(try await upgraded.unreadCounts(accountID: account).isEmpty)
         // New traffic after the upgrade is unread and alerts; reopening does not reset it.
         try await commit(upgraded, digest: "d3", message: message("m3", at: 3))
         try await upgraded.close()
@@ -203,6 +208,63 @@ private func execute(_ url: URL, _ sql: String) -> Bool {
         #expect(try await store.pendingDisplayedSyncPublications(accountID: account).map(\.stanzaID) == ["s4"])
         // The same id arriving from the server settles it without a publication.
         #expect(try await !store.applyDisplayedSync(accountID: account, chatID: peer, stanzaID: "s4", by: account))
+        #expect(try await store.pendingDisplayedSyncPublications(accountID: account).isEmpty)
+    }
+}
+
+/// A first sign-in is not news: the newest archive page, and whatever backfill later brings from before it, count as
+/// read without any pointer (nothing is published). Messages after it are unread and alert. XEP-0490 state older than the
+/// baseline does not make history unread again.
+@Test func firstArchivePageIsReadHistoryWithoutPublishing() async throws {
+    try await readStateStore { store, _ in
+        try await commit(store, digest: "d1", message: message("m1", at: 1), archiveStanzaID: "s1")
+        try await commit(store, digest: "d2", message: message("m2", at: 2), archiveStanzaID: "s2")
+        #expect(try await store.unreadCounts(accountID: account) == [peer: 2])
+        try await store.saveNewestArchivePage(accountID: account, archiveID: account, cursor: "c2", oldestID: "c1", complete: false,
+                                              historyThrough: Date(timeIntervalSince1970: 1_800_000_002))
+        #expect(try await store.unreadCounts(accountID: account).isEmpty)
+        #expect(try await store.readPointer(accountID: account, chatID: peer) == nil)
+        #expect(try await store.pendingDisplayedSyncPublications(accountID: account).isEmpty)
+        // Backfill: a chat first seen in an older page is read, and never alerts.
+        try await commit(store, digest: "o1", sender: "old@x", message: message("o1", at: 0.5, chat: "old@x", sender: "old@x"))
+        #expect(try await store.unreadCounts(accountID: account).isEmpty)
+        #expect(try await store.readNotificationMessageIDs(accountID: account, messageIDs: ["m1", "o1"]) == ["m1", "o1"])
+        // A room counts against its own archive's baseline once it has one, the account's before that.
+        let member = { (id: String, at: Double) in StoredMessage(id: id, accountID: account, chatID: room, senderID: "member@x", body: "Synthetic group",
+                                                                  sentAt: Date(timeIntervalSince1970: 1_800_000_000 + at), encryptionProfile: "modern", wireID: "origin-" + id) }
+        try await commit(store, digest: "g1", sender: "member@x", message: member("g1", 2.5), groupRoom: room, roomStanzaID: "room-1")
+        #expect(try await store.unreadCounts(accountID: account) == [room: 1])
+        try await store.saveNewestArchivePage(accountID: account, archiveID: room, cursor: "r1", oldestID: "r1", complete: true,
+                                              historyThrough: Date(timeIntervalSince1970: 1_800_000_002.5))
+        #expect(try await store.unreadCounts(accountID: account).isEmpty)
+        // Nothing of the history alerts; what follows it does.
+        try await commit(store, digest: "d3", message: message("m3", at: 3), archiveStanzaID: "s3")
+        try await commit(store, digest: "g2", sender: "member@x", message: member("g2", 4), groupRoom: room, roomStanzaID: "room-2")
+        #expect(try await store.unreadCounts(accountID: account) == [peer: 1, room: 1])
+        // Another device's older XEP-0490 state sets a pointer but history stays read.
+        #expect(try await store.applyDisplayedSync(accountID: account, chatID: peer, stanzaID: "s1", by: account))
+        #expect(try await store.unreadCounts(accountID: account) == [peer: 1, room: 1])
+        let batch = try await store.takeMessageNotification(accountID: account)
+        #expect(batch.messageCount == 2)
+    }
+}
+
+/// Another device overwrote the node with state older than ours: this device publishes its newer state again rather
+/// than taking the older id as what the server should keep.
+@Test func olderDisplayedSyncItemIsAnsweredWithOurNewerState() async throws {
+    try await readStateStore { store, _ in
+        try await commit(store, digest: "d1", message: message("m1", at: 1), archiveStanzaID: "s1")
+        try await commit(store, digest: "d2", message: message("m2", at: 2), archiveStanzaID: "s2")
+        #expect(try await store.markRead(accountID: account, chatID: peer, throughMessageID: "m2"))
+        let publication = try #require(try await store.pendingDisplayedSyncPublications(accountID: account).first)
+        #expect(publication.stanzaID == "s2")
+        try await store.finishDisplayedSyncPublication(accountID: account, publication)
+        #expect(try await store.pendingDisplayedSyncPublications(accountID: account).isEmpty)
+        #expect(try await !store.applyDisplayedSync(accountID: account, chatID: peer, stanzaID: "s1", by: account))
+        #expect(try await store.readPointer(accountID: account, chatID: peer)?.messageID == "m2")
+        #expect(try await store.pendingDisplayedSyncPublications(accountID: account).map(\.stanzaID) == ["s2"])
+        // Once the server holds our state again, nothing is left to publish.
+        #expect(try await !store.applyDisplayedSync(accountID: account, chatID: peer, stanzaID: "s2", by: account))
         #expect(try await store.pendingDisplayedSyncPublications(accountID: account).isEmpty)
     }
 }
