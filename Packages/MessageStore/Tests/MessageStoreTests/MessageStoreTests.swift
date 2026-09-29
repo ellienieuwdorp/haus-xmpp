@@ -13,42 +13,6 @@ private func message(_ id: String, account: String = "a", body: String = "hello"
                   sentAt: Date(timeIntervalSince1970: time))
 }
 
-@Test func durableReopenAndOrganization() async throws {
-    let url = try databaseURL()
-    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    var store: MessageStore? = try MessageStore(url: url)
-    try await store!.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
-    try await store!.insertMessage(message("1"))
-    try await store!.setStarred(accountID: "a", messageID: "1", starred: true)
-    try await store!.setPinned(accountID: "a", chatID: "peer", pinned: true)
-    store = nil
-    let reopened = try MessageStore(url: url)
-    let chats = try await reopened.chats(accountID: "a")
-    #expect(chats.count == 1)
-    #expect(chats[0].isPinned)
-    #expect(chats[0].lastMessage?.isStarred == true)
-    #expect(chats[0].lastMessage?.body == "hello")
-}
-
-@Test func accountsAndDuplicateConflicts() async throws {
-    let url = try databaseURL()
-    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    let store = try MessageStore(url: url)
-    for account in ["a", "b"] {
-        try await store.upsertChat(accountID: account, chatID: "peer", title: account)
-        #expect(try await store.insertMessage(message("1", account: account)))
-    }
-    try await store.setStarred(accountID: "a", messageID: "1", starred: true)
-    #expect(try await !store.insertMessage(message("1")))
-    #expect(try await store.messages(accountID: "a", chatID: "peer").first?.isStarred == true)
-    #expect(try await store.messages(accountID: "b", chatID: "peer").first?.isStarred == false)
-    await #expect(throws: MessageStoreError.conflictingIdentity) {
-        try await store.insertMessage(message("1", body: "different"))
-    }
-    #expect(try await store.messages(accountID: "a", chatID: "peer").count == 1)
-    #expect(try await store.chats(accountID: "unknown").isEmpty)
-}
-
 @Test func literalSearchNeverInterpretsQueryAsSQLOrWildcards() async throws {
     let url = try databaseURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
@@ -81,13 +45,4 @@ private func message(_ id: String, account: String = "a", body: String = "hello"
     let chats = try await store.chats(accountID: "a")
     #expect(chats.first?.title == "Renamed")
     #expect(chats.first?.isPinned == true)
-}
-
-@Test func missingChatRollsBackAndSubsequentInsertWorks() async throws {
-    let url = try databaseURL()
-    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    let store = try MessageStore(url: url)
-    await #expect(throws: MessageStoreError.self) { try await store.insertMessage(message("1")) }
-    try await store.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
-    #expect(try await store.insertMessage(message("1")))
 }

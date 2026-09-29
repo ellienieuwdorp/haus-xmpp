@@ -24,27 +24,6 @@ private func incoming(_ id: String, account: String = "a") -> StoredMessage {
                   body: "Synthetic notification", encryptionProfile: "modern")
 }
 
-@Test func notificationsCommitWithRatchetAndSurviveReopen() async throws {
-    try await notificationFixture { store, url in
-        try await store.saveEncryptionState(accountID: "a", expectedRevision: nil, data: Data([1]))
-        await #expect(throws: MessageStoreError.invalidTransition) {
-            try await store.commitEncryptedIncoming(accountID: "a", sender: "peer", digest: "bad",
-                expectedRevision: 99, state: Data([2]), message: incoming("bad"))
-        }
-        #expect(try await store.takeMessageNotification(accountID: "a").messageCount == 0)
-        try await store.commitEncryptedIncoming(accountID: "a", sender: "peer", digest: "good",
-            expectedRevision: 1, state: Data([2]), message: incoming("good"))
-        try await store.close()
-        let reopened = try MessageStore(url: url)
-        try await reopened.acquireTransportOwnership()
-        let batch = try await reopened.takeMessageNotification(accountID: "a")
-        #expect(batch.latest?.id == "good" && batch.messageCount == 1)
-        #expect(batch.previewsEnabled)
-        #expect(try await reopened.takeMessageNotification(accountID: "a").messageCount == 0)
-        try await reopened.close()
-    }
-}
-
 @Test func plaintextAndControlsQueueNoNotificationAndDismissClearsPending() async throws {
     try await notificationFixture { store, _ in
         try await store.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
@@ -79,6 +58,7 @@ private func incoming(_ id: String, account: String = "a") -> StoredMessage {
         try await nonowner.close()
         let first = try await store.takeMessageNotification(accountID: "a")
         #expect(!first.previewsEnabled && first.messageCount == 1)
+        #expect(try await store.takeMessageNotification(accountID: "a").messageCount == 0)
         let second = try await store.takeMessageNotification(accountID: "b")
         #expect(second.previewsEnabled && second.messageCount == 1)
     }

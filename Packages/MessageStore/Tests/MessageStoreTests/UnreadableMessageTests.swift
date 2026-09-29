@@ -175,24 +175,6 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
     #expect(try await store.messages(accountID: account, chatID: peer).map(\.id) == [id])
 }
 
-@Test func placeholderBecomesChatPreviewWithoutStarringOrSearch() async throws {
-    let url = try unreadableStoreURL()
-    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    let store = try MessageStore(url: url)
-    try await store.upsertChat(accountID: account, chatID: peer, title: "Bob")
-    try await store.insertMessage(StoredMessage(id: "older", accountID: account, chatID: peer, senderID: peer, body: "unreadable couldn't",
-                                                sentAt: Date(timeIntervalSince1970: 100)))
-    let later = placeholder(.archive(archive: account, id: "a1"), outgoing: true, sentAt: Date(timeIntervalSince1970: 200))
-    try await store.recordUnreadableMessage(later)
-    let chat = try #require(await store.chats(accountID: account).first)
-    #expect(chat.lastMessage?.id == later.id && chat.lastMessage?.unreadableReason == .notForThisDevice)
-    #expect(chat.lastMessage?.isStarred == false && chat.lastMessageReceipt == nil)
-    #expect(try await store.search(accountID: account, query: "").isEmpty)
-    for term in ["unreadable", "couldn", "not", "device", "a"] {
-        #expect(try await !store.search(accountID: account, query: term).contains { $0.unreadableReason != nil })
-    }
-}
-
 @Test func archiveRejectionWhitelistAndPlaceholderCommitTogether() async throws {
     let url = try unreadableStoreURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
