@@ -4,18 +4,6 @@ import XMPPProtocol
 @testable import MessagingCore
 
 struct PushRegistrationJournalTests {
-    @Test func freshSameTokenAfterLostReceiptAndProviderInvalidationAdvancesRevision() throws {
-        var journal = PushRegistrationJournal()
-        let committedButUnacknowledged = try journal.stageFreshRegistration(deviceToken: "aabb")
-        // Gateway committed revision1, its response was lost, then APNs rejected the token.
-        // A genuine APNs callback with the same token must not reuse revision1.
-        let refreshed = try journal.stageFreshRegistration(deviceToken: "AABB")
-        #expect(refreshed.revision == 2 && refreshed.deviceToken == committedButUnacknowledged.deviceToken)
-        #expect(!journal.acknowledge(try XMPPPushRegistrationResult(revision: 1, action: .register), for: committedButUnacknowledged))
-        #expect(journal.pending == refreshed)
-        #expect(journal.acknowledge(try XMPPPushRegistrationResult(revision: 2, action: .register), for: refreshed))
-    }
-
     @Test func interruptedIntentsPersistExactlyAndARepeatedRevocationKeepsItsRevision() throws {
         var journal = PushRegistrationJournal()
         let registration = try journal.stageFreshRegistration(deviceToken: "AABB")

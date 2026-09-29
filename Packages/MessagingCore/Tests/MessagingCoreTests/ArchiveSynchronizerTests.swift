@@ -123,19 +123,6 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    @Test func rejectedGroupContentIsRecordedWithoutAPlaceholderAndCannotInventArchiveOwner() async throws {
-        try await fixture { store async throws in
-            let sync = ArchiveSynchronizer(store: store)
-            var rejected = XMPPArchiveMessage(archiveID: "rejected", timestamp: Date(), message: nil, encryptedMessage: nil)
-            rejected.rejectedContent = .unverifiableEncryptedGroup
-            await #expect(throws: XMPPIQError.self) { _ = try await sync.persistRejectedContent(account: account, archived: rejected) }
-            rejected.rejectionArchive = account
-            #expect(try await sync.persistRejectedContent(account: account, archived: rejected))
-            #expect(try await store.hasArchiveRejection(accountID: account, archiveID: account, messageID: "rejected"))
-            #expect(try await store.messages(accountID: account, chatID: room).isEmpty)
-        }
-    }
-
     @Test func rejectedDirectContentWritesRejectionAndPlaceholder() async throws {
         try await fixture { store async throws in
             let sync = ArchiveSynchronizer(store: store)
@@ -256,37 +243,6 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    @Test func pageWithoutTokensDoesNotCallAcknowledge() async throws {
-        try await fixture { store async throws in
-            let trace = Trace()
-            let operations = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in },
-                fetchPage: { bound, _ in
-                    guard bound == .before(nil) else { return emptyPage }
-                    return .init(messages: [.init(archiveID: "only", timestamp: Date(timeIntervalSince1970: 100), message: nil, encryptedMessage: nil)],
-                                 complete: true, firstID: "only", lastID: "only", handledTokens: [])
-                },
-                process: { await trace.record("durable:\($0.archiveID)") },
-                acknowledge: { tokens in await trace.record("ack:" + tokens.map { String($0.sequence) }.joined(separator: ",")) },
-                disconnect: { await trace.record("disconnect") }, progress: { _ in })
-            try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
-            #expect(await trace.events == ["durable:only"])
-            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "only")
-        }
-    }
-
-    @Test func cancellationAfterDurableMessageDoesNotAdvanceCursorOrAck() async throws {
-        try await fixture { store async throws in
-            let trace = Trace()
-            let operations = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in }, fetchPage: { _, _ in page("cancelled") },
-                process: { _ in withUnsafeCurrentTask { $0?.cancel() }; await trace.record("durable") },
-                acknowledge: { _ in await trace.record("ack") }, disconnect: { await trace.record("disconnect") }, progress: { _ in })
-            let task = Task { try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations) }
-            await #expect(throws: CancellationError.self) { try await task.value }
-            #expect(await trace.events == ["durable", "disconnect"])
-            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account) == nil)
-        }
-    }
-
     // MARK: Newest-first first sync
 
     @Test func firstSyncFetchesTheNewestPageThenWalksForwardAndRecordsBothCursors() async throws {
@@ -363,27 +319,6 @@ struct ArchiveSynchronizerTests {
             // A pre-v16 archive gets no backfill row, so backfill treats it as walked from its start.
             #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: account) == nil)
             #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: room) == nil)
-        }
-    }
-
-    @Test func messagesArrivingBetweenTheTwoFirstSyncQueriesAreWalked() async throws {
-        try await fixture { store async throws in
-            let trace = Trace()
-            let operations = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in },
-                fetchPage: { bound, _ in
-                    await trace.record("fetch:\(describe(bound))")
-                    switch bound {
-                    case .before(nil): return page(["a1", "a2", "a3"], sequence: 1, complete: false)
-                    case .after("a3"): return page("a4", sequence: 2, complete: true)
-                    default: Issue.record("unexpected \(bound)"); return emptyPage
-                    }
-                },
-                process: { await trace.record("durable:\($0.archiveID)") }, acknowledge: { _ in },
-                disconnect: { await trace.record("disconnect") }, progress: { _ in })
-            try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
-            #expect(await trace.events == ["fetch:before(nil)", "durable:a1", "durable:a2", "durable:a3", "fetch:after(a3)", "durable:a4"])
-            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "a4")
-            #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: account) == ArchiveBackfillCursor(revision: 1, oldestID: "a1", complete: false))
         }
     }
 

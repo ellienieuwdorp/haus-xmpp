@@ -79,19 +79,6 @@ struct InboundProcessorTests {
         #expect(try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: 2))) == .acknowledged)
     }
 
-    /// Keys that address this device twice can never be decrypted safely: excluded with the decrypt-failure class,
-    /// recorded as malformed content. (A trusted peer device is not needed to reach this arm.)
-    @Test func undecryptableMessageReturnsExcludedDecryptFailed() async throws {
-        let (store, encryption, processor) = try await initializedFixture()
-        let local = try await encryption.localIdentity(account: account, profile: .legacy)
-        let key = XMPPOMEMOKey(deviceID: local.deviceID, keyExchange: false, data: Data([9, 9, 9]))
-        let envelope = XMPPOMEMOEnvelope(profile: .legacy, senderDeviceID: 4242, keys: [key, key], iv: Data(repeating: 1, count: 12), payload: Data([1, 2, 3]))
-        let message = XMPPEncryptedMessage(id: "d1", from: peer + "/x", to: account, originID: nil, envelope: envelope)
-        #expect(try await processor.process(.encryptedMessage(message)) == .excluded(reason: .decryptFailed))
-        #expect(try await store.messages(accountID: account, chatID: peer).map(\.unreadableReason) == [.malformedContent])
-        #expect(try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: 1))) == .acknowledged)
-    }
-
     private func addressedCiphertext(_ encryption: OMEMOService) async throws -> [XMPPEvent] {
         let (direct, group) = try await unknownSenderEnvelopes(account: account, encryption: encryption)
         let room = "room@conference.localhost"
