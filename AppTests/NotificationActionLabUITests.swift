@@ -10,7 +10,7 @@ final class NotificationActionLabUITests: XCTestCase {
         let (app, peer) = try launchLab()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let other = otherChat(peer)
-        connect(app)
+        app.connectToLab()
         app.returnToChats()
         trustPeer(app, peer: peer, other: other)
 
@@ -86,16 +86,7 @@ final class NotificationActionLabUITests: XCTestCase {
         let first = "Trust check \(UUID().uuidString.prefix(6))"
         send(app, first)
         app.openEncryptionDetails()
-        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "encryptionDevice."))
-        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 15))
-        for _ in 0..<20 {
-            let pending = rows.matching(NSPredicate(format: "label CONTAINS %@", "Review required")).firstMatch
-            if !pending.exists { break }
-            pending.tap()
-            XCTAssertTrue(app.buttons["Accept without verifying"].waitForExistence(timeout: 5))
-            app.buttons["Accept without verifying"].tap()
-            XCTAssertTrue(app.navigationBars["Devices & Encryption"].waitForExistence(timeout: 5))
-        }
+        app.acceptPendingDevices()
         app.closeEncryptionDetails()
         let echoedFirst = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"),
                                                     object: app.textViews.containing(NSPredicate(format: "value == %@", first)))
@@ -172,17 +163,6 @@ final class NotificationActionLabUITests: XCTestCase {
         input.tap(); input.typeText(text)
         app.buttons["sendMessage"].tap()
         XCTAssertTrue(app.textViews.containing(NSPredicate(format: "value == %@", text)).firstMatch.waitForExistence(timeout: 5))
-    }
-
-    @MainActor private func connect(_ app: XCUIApplication) {
-        app.buttons["Settings"].tap(); app.buttons["Connect to local lab"].tap()
-        let consent = app.switches["labConsent"]
-        XCTAssertTrue(consent.waitForExistence(timeout: 5))
-        consent.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        app.buttons["Connect"].tap()
-        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"]
-        if allow.waitForExistence(timeout: 3) { allow.tap() }
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected")).firstMatch.waitForExistence(timeout: 25))
     }
 
     @MainActor private func capture(_ screenshot: XCUIScreenshot, _ name: String) {
