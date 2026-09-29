@@ -211,6 +211,67 @@ struct ArchiveSynchronizerTests {
         }
     }
 
+    /// However full the retained-ciphertext table is, a message that cannot be kept for review gets a final outcome: the
+    /// live stream still acknowledges it (direct and room), and an archive page holding another one still advances.
+    @Test func everyRetentionLimitKeepsTheStreamAcknowledgingAndTheArchiveMoving() async throws {
+        let bob = "bob@localhost", limits = MessageStore.pendingLimits
+        let everyKnownSender = (0..<(limits.perAccount / limits.perKnownSender)).map { ("known-\($0)@localhost", limits.perKnownSender) }
+        let cases: [(limit: String, fill: [(sender: String, rows: Int)], wroteToBob: Bool)] = [
+            ("stranger quota", [(bob, limits.perStranger)], false),
+            ("known sender quota", [(bob, limits.perKnownSender)], true),
+            ("stranger ceiling", [(account, limits.strangerCeiling)], false),
+            ("account ceiling", everyKnownSender, true),
+        ]
+        for entry in cases {
+            try await fixture { store async throws in
+                for (sender, rows) in entry.fill {
+                    if sender != account, sender != bob || entry.wroteToBob {
+                        try await store.upsertChat(accountID: account, chatID: sender, title: sender)
+                        _ = try await store.insertMessage(StoredMessage(id: "wrote-\(sender)", accountID: account, chatID: sender, senderID: account, body: "Hi", isOutgoing: true))
+                    }
+                    for index in 0..<rows { try await store.retainEncryptedIncoming(accountID: account, sender: sender, digest: "\(sender)-\(index)", wire: Data([1])) }
+                }
+                if entry.wroteToBob, !entry.fill.contains(where: { $0.sender == bob }) {
+                    try await store.upsertChat(accountID: account, chatID: bob, title: bob)
+                    _ = try await store.insertMessage(StoredMessage(id: "wrote-bob", accountID: account, chatID: bob, senderID: account, body: "Hi", isOutgoing: true))
+                }
+                let filled = try await store.pendingEncryptedIncoming(accountID: account).count
+                #expect(filled == entry.fill.reduce(0) { $0 + $1.rows }, "\(entry.limit)")
+                let encryption = OMEMOService(store: store, protection: try StateProtection(key: Data(repeating: 7, count: 32)))
+                try await encryption.initialize(account: account, transport: NullTransport(account: account))
+                let client = XMPPClient(labCertificateAuthority: nil)
+                let processor = InboundProcessor(encryption: encryption, client: client, account: account)
+                let (direct, group) = try await unknownSenderEnvelopes(account: account, encryption: encryption)
+                let live: [XMPPEvent] = [
+                    .encryptedMessage(XMPPEncryptedMessage(id: "live", from: bob + "/x", to: account, originID: nil, envelope: direct)),
+                    .encryptedGroupMessage(try XMPPEncryptedGroupMessage(id: "room", room: room, occupant: room + "/bob", sender: bob, envelope: group, hasFallbackBody: true)),
+                ]
+                for (sequence, event) in live.enumerated() {
+                    _ = try await processor.process(event)
+                    #expect(try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: UInt64(sequence + 1)))) == .acknowledged,
+                            "\(entry.limit)")
+                }
+                let another = XMPPOMEMOEnvelope(profile: direct.profile, senderDeviceID: direct.senderDeviceID, keys: direct.keys, iv: direct.iv, payload: Data([7, 7, 7]))
+                let entryInArchive = XMPPArchiveMessage(archiveID: "a1", timestamp: Date(timeIntervalSince1970: 100), message: nil,
+                    encryptedMessage: XMPPEncryptedMessage(id: "archived", from: bob + "/x", to: account, originID: nil, envelope: another, provenance: .receivedCarbon))
+                let sync = ArchiveSynchronizer(store: store)
+                let operations = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in },
+                    fetchPage: { bound, _ in
+                        bound == .before(nil) ? XMPPArchivePage(messages: [entryInArchive], complete: true, firstID: "a1", lastID: "a1",
+                                                                handledTokens: [.init(session: UUID(), sequence: 3)]) : emptyPage
+                    },
+                    process: { try await sync.process(account: account, archived: $0, encryption: encryption, transport: client) },
+                    acknowledge: { _ in }, disconnect: { Issue.record("Disconnected at the \(entry.limit)") }, progress: { _ in })
+                try await sync.synchronize(account: account, operations: operations)
+                #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "a1", "\(entry.limit)")
+                // Nothing new was kept; each refused message is a quiet placeholder in its conversation.
+                #expect(try await store.pendingEncryptedIncoming(accountID: account).count == filled, "\(entry.limit)")
+                #expect(try await store.messages(accountID: account, chatID: bob).compactMap(\.unreadableReason) == [.retentionLimit, .retentionLimit], "\(entry.limit)")
+                #expect(try await store.messages(accountID: account, chatID: room).map(\.unreadableReason) == [.retentionLimit], "\(entry.limit)")
+            }
+        }
+    }
+
     @Test func failedAckKeepsAlreadyDurableCheckpointAndDisconnects() async throws {
         try await fixture { store async throws in
             let trace = Trace()

@@ -105,12 +105,16 @@ enum UnreadableCopy {
         switch reason {
         case .notForThisDevice: isOutgoing ? "Sent from another device and not encrypted for this iPhone" : "Not encrypted for this iPhone"
         case .unsupportedEncryption, .malformedContent, .decryptFailed: "Couldn't read this message"
+        case .rejectedDevice: isOutgoing ? "Sent from a device you blocked" : "From a device you blocked"
+        case .retentionLimit: "Not kept: too many messages waiting for review"
         }
     }
     static func preview(_ reason: UnreadableReason) -> String {
         switch reason {
         case .notForThisDevice: "Not encrypted for this iPhone"
         case .unsupportedEncryption, .malformedContent, .decryptFailed: "Couldn't read this message"
+        case .rejectedDevice: "From a device you blocked"
+        case .retentionLimit: "Not kept: too many messages waiting"
         }
     }
 }
