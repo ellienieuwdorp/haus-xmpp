@@ -107,7 +107,7 @@ public enum XMPPEvent: Sendable, Equatable {
 }
 
 /// What the session tells contacts and the server about the user's attention.
-public enum XMPPAvailability: Sendable, Equatable {
+public enum XMPPAvailability: Sendable, Equatable, Codable {
     /// The app is in front: plain available presence, and CSI `<active/>` on a resumed stream.
     case active
     /// Away from the app (backgrounded, the notification extension, a notification action): XEP-0319
@@ -165,6 +165,8 @@ public actor XMPPClient {
     /// A bind the server refused (for example a resource conflict) is retried once with a server-assigned resource.
     private var bindRetried = false
     private var availability = XMPPAvailability.active
+    /// What the server holds for this session: nil until initial presence; on a resume, what the snapshot recorded.
+    private var announced: XMPPAvailability?
     /// Counts emitted events, so the reader can tell whether a stanza produced any.
     private var emittedEvents: UInt64 = 0
     /// Set by `disconnectAndWait` for its farewell; cleared by `finish`.
@@ -616,12 +618,15 @@ public actor XMPPClient {
         }
     }
 
-    /// Before connecting: what the session announces once online (fresh or resumed). Online: announces it now,
-    /// bounded like a farewell, since the caller is on its way to the background.
+    /// Before connecting: what the session announces once online (fresh or resumed). Online: announces it now if it
+    /// changed, bounded like a farewell, since the caller is on its way to the background.
     public func setAvailability(_ availability: XMPPAvailability) async throws {
-        self.availability = availability
+        // Whole seconds, as the wire carries it: the same moment computed by two processes compares equal.
+        if case .away(let since?) = availability {
+            self.availability = .away(since: Date(timeIntervalSince1970: since.timeIntervalSince1970.rounded(.down)))
+        } else { self.availability = availability }
         guard phase == .online else { return }
-        try await withFarewellDeadline { try await self.announceAvailability(resumed: true) }
+        try await withFarewellDeadline { try await self.announceAvailability(initial: false) }
     }
 
     public func acknowledgeInbound(_ token: XMPPInboundToken) async throws {
@@ -684,7 +689,8 @@ public actor XMPPClient {
     }
 
     private func becomeOnline(token: UUID, resumed: Bool = false) async throws {
-        try await announceAvailability(resumed: resumed)
+        announced = resumed ? resumeSnapshot?.availability : nil
+        try await announceAvailability(initial: !resumed)
         guard generation == token else { throw XMPPClientError.connectionClosed }
         sessionResumed = resumed
         phase = .online; deadline?.cancel(); deadline = nil
@@ -693,18 +699,23 @@ public actor XMPPClient {
         handshake?.resume(); handshake = nil
     }
 
-    /// Fresh sessions always send initial presence. A resumed session may carry what an earlier process announced
-    /// (the extension's away presence, or the app's on its way out), so it is re-announced. Presence goes before CSI
-    /// `<inactive/>`, which would otherwise let the server hold it back.
-    private func announceAvailability(resumed: Bool) async throws {
+    /// A fresh session always sends initial presence. Otherwise presence goes out only when it differs from what the
+    /// server holds: a resumed session keeps the presence an earlier process announced, and repeating it would reach
+    /// every contact and push their hibernating sessions, whose extensions would answer in kind. CSI is a nonza that
+    /// goes nowhere else, so it is always restated. Presence goes before CSI `<inactive/>`, which would otherwise let
+    /// the server hold it back.
+    private func announceAvailability(initial: Bool) async throws {
+        let presence = initial || announced != availability
         switch availability {
         case .active:
-            if resumed, csiOffered { try await write(PushNotifications.clientStateXML(active: true)) }
-            try await write(Self.presenceXML(.active))
+            if !initial, csiOffered { try await write(PushNotifications.clientStateXML(active: true)) }
+            if presence { try await write(Self.presenceXML(.active)) }
         case .away:
-            try await write(Self.presenceXML(availability))
+            if presence { try await write(Self.presenceXML(availability)) }
             if csiOffered { try await write(PushNotifications.clientStateXML(active: false)) }
         }
+        announced = availability
+        if presence { try await streamManagement?.recordAvailability(availability) }
     }
 
     static func presenceXML(_ availability: XMPPAvailability) -> String {

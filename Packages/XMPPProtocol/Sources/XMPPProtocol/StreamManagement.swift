@@ -51,6 +51,9 @@ public struct XMPPStreamManagementSnapshot: Codable, Sendable, Equatable {
     public var expiresAt: Date?
     /// The server's `<enabled max='…'/>`, capped at `StreamManagement.maxResumeTimeout`; nil when it named none.
     public var resumeTimeoutSeconds: UInt32?
+    /// What this session last announced (presence and CSI). A resume repeats presence only when it changed: every
+    /// presence reaches contacts and the account's other resources, and a push-enabled hibernating one is pushed for it.
+    public var availability: XMPPAvailability?
     public var inboundHandled: UInt64
     public var outboundSent: UInt64
     public var outboundAcknowledged: UInt64
@@ -302,6 +305,19 @@ actor StreamManagement {
             let persisted = persistedHandledCount()
             await gate.leave()
             return persisted
+        } catch { await gate.leave(); throw error }
+    }
+
+    /// Records what the session just announced, in the snapshot a later resume starts from.
+    func recordAvailability(_ availability: XMPPAvailability) async throws {
+        await gate.enter()
+        do {
+            if active, var next = snapshot, next.availability != availability {
+                next.availability = availability
+                next.inboundHandled = handledContiguous
+                try await commit(next)
+            }
+            await gate.leave()
         } catch { await gate.leave(); throw error }
     }
 

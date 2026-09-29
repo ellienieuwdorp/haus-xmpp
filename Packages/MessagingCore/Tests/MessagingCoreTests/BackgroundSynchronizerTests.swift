@@ -134,9 +134,10 @@ struct BackgroundSynchronizerTests {
     @Test func backgroundSessionsLookAwaySinceTheAppWasLastInFront() {
         let now = Date(timeIntervalSince1970: 2_000_000_000)
         #expect(BackgroundSession.availability(sharesLastSeen: true, leftForeground: now - 600, now: now) == .away(since: now - 600))
-        // Never recorded, or a clock that moved backwards: away since now, never since the future.
-        #expect(BackgroundSession.availability(sharesLastSeen: true, leftForeground: nil, now: now) == .away(since: now))
+        // A clock that moved backwards: away since now, never since the future.
         #expect(BackgroundSession.availability(sharesLastSeen: true, leftForeground: now + 60, now: now) == .away(since: now))
+        // Never recorded: no timestamp rather than the time of this run, which would change (and be announced) every run.
+        #expect(BackgroundSession.availability(sharesLastSeen: true, leftForeground: nil, now: now) == .away(since: nil))
         // An account that does not share last seen is still away, without the time.
         #expect(BackgroundSession.availability(sharesLastSeen: false, leftForeground: now - 600, now: now) == .away(since: nil))
     }

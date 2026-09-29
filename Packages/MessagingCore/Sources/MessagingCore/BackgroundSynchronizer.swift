@@ -123,10 +123,11 @@ public enum BackgroundSession {
     /// Rooms joined at once; the rest wait for a slot, all inside one deadline.
     static let concurrentJoins = 8
 
-    /// Away since the app was last in front (or now, when that was never recorded), without the timestamp for an account
-    /// that does not share last seen.
+    /// Away since the app was last in front, without the timestamp for an account that does not share last seen or
+    /// when that time was never recorded. Stable across runs: a changed value is announced to every contact, and a
+    /// value that moved with each run would make every resumed run broadcast presence.
     public static func availability(sharesLastSeen: Bool, leftForeground: Date?, now: Date = Date()) -> XMPPAvailability {
-        .away(since: sharesLastSeen ? min(leftForeground ?? now, now) : nil)
+        .away(since: sharesLastSeen ? leftForeground.map { min($0, now) } : nil)
     }
 
     /// XEP-0357 enable of the saved subscription on the new session. Registration with the gateway stays the app's

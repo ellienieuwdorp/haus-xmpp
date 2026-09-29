@@ -1,0 +1,94 @@
+import Foundation
+import Testing
+@testable import XMPPProtocol
+
+/// Resume, bind, presence and the final acknowledgement over a real socket, against `LoopbackServer`.
+@Suite(.serialized)
+struct SessionLifecycleTests {
+    private actor Persistence: XMPPStreamManagementPersistence {
+        var value: XMPPStreamManagementSnapshot?
+        init(_ value: XMPPStreamManagementSnapshot?) { self.value = value }
+        func load() -> XMPPStreamManagementSnapshot? { value }
+        func save(_ snapshot: XMPPStreamManagementSnapshot, expectedRevision: Int?, acknowledgedMessageIDs: [String]) throws {
+            guard value?.revision == expectedRevision else { throw XMPPStreamManagementError.invalidState }
+            value = snapshot
+        }
+    }
+
+    private static let bindNamespace = "urn:ietf:params:xml:ns:xmpp-bind"
+
+    /// A hibernating session of `alice@localhost/haus-r1` that had handled three stanzas.
+    private static func saved(availability: XMPPAvailability?) -> XMPPStreamManagementSnapshot {
+        var snapshot = XMPPStreamManagementSnapshot(revision: 1, accountID: "alice@localhost", fullJID: "alice@localhost/haus-r1",
+                                                    streamID: "s1", expiresAt: nil, inboundHandled: 3, outboundSent: 0,
+                                                    outboundAcknowledged: 0, journal: [])
+        snapshot.availability = availability
+        return snapshot
+    }
+
+    @Test func refusedResumeBindsTheInstallationResourceOnTheSameConnection() async throws {
+        let server = try await LoopbackServer.start()
+        let persistence = Persistence(Self.saved(availability: .active))
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: persistence)
+        try await client.configureResource("haus-r1")
+        async let online: Void = server.connect(client)
+        try await server.authenticate()
+        let resume = try await server.next()
+        #expect(resume.name == "resume" && resume.attributes["previd"] == "s1" && resume.attributes["h"] == "3")
+        try await server.send("<failed xmlns='urn:xmpp:sm:3'/>")
+        let bind = try await server.next()
+        #expect(bind.child("bind", namespace: Self.bindNamespace)?.child("resource", namespace: Self.bindNamespace)?.text == "haus-r1")
+        try await server.send("<iq type='result' id='\(bind.attributes["id"] ?? "")'><bind xmlns='\(Self.bindNamespace)'><jid>alice@localhost/haus-r1</jid></bind></iq>")
+        let enable = try await server.next()
+        // No `max`: the server's own window applies.
+        #expect(enable.name == "enable" && enable.attributes["resume"] == "true" && enable.attributes["max"] == nil)
+        try await server.send("<enabled xmlns='urn:xmpp:sm:3' id='s2' resume='true' max='600'/>")
+        #expect(try await server.next().name == "presence")
+        try await online
+        #expect(await !client.sessionResumed)
+        let saved = try #require(await persistence.value)
+        #expect(saved.streamID == "s2" && saved.fullJID == "alice@localhost/haus-r1")
+        #expect(saved.inboundHandled == 0 && saved.resumeTimeoutSeconds == 600)
+        await client.disconnect()
+        await server.stop()
+    }
+
+    /// Presence from a resumed session reaches every contact and the account's other resources, and the server pushes
+    /// their hibernating sessions for it; their extensions would then resume and answer in kind. Only a change is sent.
+    @Test func resumedSessionRepeatsPresenceOnlyWhenItChanged() async throws {
+        let since = Date(timeIntervalSince1970: 1_790_000_000)
+        let persistence = Persistence(Self.saved(availability: .away(since: since)))
+        // The extension resumes what the app left away; its own reading of the time carries a fraction.
+        var written = try await resume(persistence, availability: .away(since: since.addingTimeInterval(0.4)))
+        #expect(written.map(\.name) == ["inactive", "iq", "a"])
+        // Back in front: announced once, and remembered for the next resume.
+        written = try await resume(persistence, availability: .active)
+        #expect(written.map(\.name) == ["active", "presence", "iq", "a"])
+        #expect(written.first { $0.name == "presence" }?.child("idle", namespace: PresenceWire.idleNamespace) == nil)
+        #expect(await persistence.value?.availability == .active)
+        written = try await resume(persistence, availability: .active)
+        #expect(written.map(\.name) == ["active", "iq", "a"])
+    }
+
+    /// Resumes the saved session with `availability` and disconnects; returns what the client wrote after `<resume/>`.
+    private func resume(_ persistence: Persistence, availability: XMPPAvailability) async throws -> [XMPPProtocol.XMLNode] {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: persistence)
+        try await client.setAvailability(availability)
+        async let online: Void = server.connect(client)
+        try await server.authenticate()
+        #expect(try await server.next().name == "resume")
+        // The server received everything the previous connection sent: nothing is replayed.
+        let sent = await persistence.value?.outboundSent ?? 0
+        try await server.send("<resumed xmlns='urn:xmpp:sm:3' previd='s1' h='\(sent)'/>")
+        try await online
+        #expect(await client.sessionResumed)
+        async let closed: Void = client.disconnectAndWait()
+        let written = try await server.remainder()
+        await closed
+        await server.stop()
+        return written
+    }
+}
