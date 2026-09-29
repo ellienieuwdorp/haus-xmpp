@@ -2,9 +2,6 @@ import SwiftUI
 
 struct AppearanceView: View {
     static let modeKey = "appearanceMode"
-    static func colorScheme(for mode: String) -> ColorScheme? {
-        switch mode { case "light": .light; case "dark": .dark; default: nil }
-    }
 
     @Environment(\.appearance) private var appearance
 

@@ -85,7 +85,7 @@ struct GroupRoomState {
 
     /// How much reading a membership refresh needs. Occupant presence and nickname changes bump `revision`,
     /// so an unchanged revision means no presence this connection can observe has changed since validation.
-    var refreshDecision: GroupRoomRefreshDecision {
+    private var refreshDecision: GroupRoomRefreshDecision {
         guard !members.isEmpty, let validatedRevision else { return .readTwice }
         return validatedRevision == revision ? .cached : .readOnceExpecting(members)
     }

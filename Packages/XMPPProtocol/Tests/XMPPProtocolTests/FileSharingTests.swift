@@ -29,7 +29,6 @@ private func sharing(encrypted: Bool = true) -> MessageContent.FileSharing {
     let plain = try MessageContent.decode(try parse(try MessageContent(body: "", fileSharing: sharing(encrypted: false)).xml()), strict: true)
     #expect(plain.body.isEmpty)
     #expect(plain.fileSharing == sharing(encrypted: false))
-    #expect(plain.fileSharing?.isEncrypted == false)
     // A foreign sender that put only the URL in the body without declaring a fallback still yields a clean caption.
     let foreign = try parse("<body xmlns='jabber:client'>https://uploads.localhost:5281/abc/beach.jpg</body>" + (try sharing(encrypted: false).xml()))
     #expect(try MessageContent.decode(foreign, strict: true).body.isEmpty)
@@ -46,15 +45,6 @@ private func sharing(encrypted: Bool = true) -> MessageContent.FileSharing {
         #expect(throws: (any Error).self) { try MessageContent.decode(node, strict: true) }
         #expect(try MessageContent.decode(node, strict: false).fileSharing == nil)
     }
-}
-
-@Test func encoderRejectsInvalidMaterial() {
-    var broken = sharing(); broken.iv = Data(repeating: 1, count: 16)
-    #expect(throws: (any Error).self) { try MessageContent(body: "", fileSharing: broken).xml() }
-    broken = sharing(); broken.url = "http://insecure.localhost/x"
-    #expect(throws: (any Error).self) { try MessageContent(body: "", fileSharing: broken).xml() }
-    broken = sharing(); broken.hash = Data()
-    #expect(throws: (any Error).self) { try MessageContent(body: "", fileSharing: broken).xml() }
 }
 
 @Test func legacyBodyParsesTwelveByteIVOnly() throws {

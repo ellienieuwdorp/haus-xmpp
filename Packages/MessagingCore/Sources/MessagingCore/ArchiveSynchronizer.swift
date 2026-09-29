@@ -12,7 +12,7 @@ public struct ArchiveSyncProgress: Sendable, Equatable {
     public let pages: Int
     /// Messages processed for this archive so far.
     public let messages: Int
-    public init(archive: String?, pages: Int, messages: Int) { self.archive = archive; self.pages = pages; self.messages = messages }
+    init(archive: String?, pages: Int, messages: Int) { self.archive = archive; self.pages = pages; self.messages = messages }
 }
 
 /// How one `backfill` run ended.

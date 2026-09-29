@@ -45,8 +45,8 @@ public struct NotificationDestination: Sendable, Equatable, CustomStringConverti
 
     /// The stored message a tap may open the chat of: an incoming encrypted message, or for a reaction this account's
     /// own message in the same account. Never another account's.
-    public func resolve(accountID: String, active: Bool, store: MessageStore) async throws -> StoredMessage? {
-        guard active, !accountID.isEmpty, Self.scope(for: accountID) == accountScope,
+    public func resolve(accountID: String, store: MessageStore) async throws -> StoredMessage? {
+        guard !accountID.isEmpty, Self.scope(for: accountID) == accountScope,
               let message = try await store.message(accountID: accountID, messageID: messageID),
               message.accountID == accountID else { return nil }
         switch kind {

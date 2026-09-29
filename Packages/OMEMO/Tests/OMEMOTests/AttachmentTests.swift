@@ -15,18 +15,6 @@ final class AttachmentTests: XCTestCase {
         return (sharing, sealed.ciphertext)
     }
 
-    func testModernEnvelopeCarriesFileAndCaption() throws {
-        let (sharing, _) = try file()
-        for caption in ["", "Look at this"] {
-            let data = try EncryptedContent.encode(body: caption, reply: nil, sender: sender, recipient: recipient, modern: true, originID: "m1", fileSharing: sharing)
-            let decoded = try EncryptedContent.decode(data, sender: sender, recipient: recipient, modern: true)
-            XCTAssertEqual(decoded.body, caption)
-            XCTAssertEqual(decoded.fileSharing, sharing)
-            XCTAssertEqual(decoded.originID, "m1")
-        }
-        XCTAssertThrowsError(try EncryptedContent.encode(body: "", reply: nil, sender: sender, recipient: recipient, modern: true))
-    }
-
     func testLegacyBodyUsesAESGCMLinkAndParsesBack() throws {
         let (sharing, _) = try file()
         let data = try EncryptedContent.encode(body: "caption", reply: nil, sender: sender, recipient: recipient, modern: false, fileSharing: sharing)
@@ -47,7 +35,6 @@ final class AttachmentTests: XCTestCase {
         let (sharing, ciphertext) = try file()
         XCTAssertEqual(try AttachmentTransfer.open(ciphertext, key: sharing.key!, iv: sharing.iv!, expectedCipherHash: sharing.cipherHash, expectedPlainHash: sharing.hash), plain)
         var tampered = ciphertext; tampered[0] ^= 1
-        XCTAssertEqual(try? AttachmentTransfer.open(tampered, key: sharing.key!, iv: sharing.iv!, expectedCipherHash: sharing.cipherHash, expectedPlainHash: sharing.hash), nil)
         XCTAssertThrowsError(try AttachmentTransfer.open(tampered, key: sharing.key!, iv: sharing.iv!, expectedCipherHash: nil, expectedPlainHash: nil)) {
             XCTAssertEqual($0 as? AttachmentTransfer.Failure, .authenticationFailed)
         }

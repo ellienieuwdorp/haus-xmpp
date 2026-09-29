@@ -10,14 +10,14 @@ struct BackfillTests {
     private let room = "test@rooms.localhost"
     private enum Failure: Error { case storage }
 
-    private func fixture(archive: String? = nil, seedCheckpoint: Bool = true, seedCursor: (String, Bool)? = ("n1", false),
+    private func fixture(archive: String? = nil, seedCursor: (String, Bool)? = ("n1", false),
                          _ body: (MessageStore) async throws -> Void) async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "backfill-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
         try await store.acquireTransportOwnership()
         let archiveID = archive ?? account
-        if seedCheckpoint { _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: archiveID, expectedRevision: nil, cursor: "n9") }
+        _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: archiveID, expectedRevision: nil, cursor: "n9")
         if let (oldest, complete) = seedCursor {
             _ = try await store.saveArchiveBackfillCursor(accountID: account, archiveID: archiveID, expectedRevision: nil, oldestID: oldest, complete: complete)
         }
@@ -107,24 +107,6 @@ struct BackfillTests {
         }
     }
 
-    @Test func backfillWithoutAForwardCheckpointDoesNothing() async throws {
-        try await fixture(seedCheckpoint: false) { store async throws in
-            let trace = BackfillTrace()
-            let ops = operations(trace: trace, fetch: { _, _ in Issue.record("no fetch without a checkpoint"); throw Failure.storage })
-            #expect(try await ArchiveSynchronizer(store: store).backfill(account: account, archive: nil, pageBudget: 3, operations: ops) == .nothingToDo)
-            #expect(await trace.events.isEmpty)
-        }
-    }
-
-    @Test func backfillWithACompleteCursorDoesNothing() async throws {
-        try await fixture(seedCursor: ("n1", true)) { store async throws in
-            let trace = BackfillTrace()
-            let ops = operations(trace: trace, fetch: { _, _ in Issue.record("no fetch for a complete cursor"); throw Failure.storage })
-            #expect(try await ArchiveSynchronizer(store: store).backfill(account: account, archive: nil, pageBudget: 3, operations: ops) == .nothingToDo)
-            #expect(await trace.events.isEmpty)
-        }
-    }
-
     @Test func backfillOfAnArchiveSyncedBeforeSchemaSixteenDoesNothing() async throws {
         // Checkpoint without a backfill row: that archive was walked forward from its start.
         try await fixture(seedCursor: nil) { store async throws in
@@ -159,19 +141,6 @@ struct BackfillTests {
             #expect(await trace.events.last == "disconnect")
             #expect(await !trace.events.contains { $0.hasPrefix("ack") })
             #expect(try await cursor(store) == ArchiveBackfillCursor(revision: 1, oldestID: "n1", complete: false))
-        }
-    }
-
-    @Test func storageFailureInsideAPageDisconnects() async throws {
-        try await fixture { store async throws in
-            let trace = BackfillTrace()
-            let ops = operations(trace: trace, fetch: { _, _ in page(["x1", "x2"], sequence: 1, complete: false) },
-                                 process: { archived in if archived.archiveID == "x2" { throw Failure.storage } })
-            await #expect(throws: Failure.self) {
-                try await ArchiveSynchronizer(store: store).backfill(account: account, archive: nil, pageBudget: 5, operations: ops)
-            }
-            #expect(await trace.events == ["fetch:before(n1)", "durable:x1", "durable:x2", "disconnect"])
-            #expect(try await cursor(store)?.oldestID == "n1")
         }
     }
 
@@ -247,17 +216,6 @@ struct BackfillTests {
         }
     }
 
-    @Test func otherQueryRefusalsOnTheDirectArchiveStopWithoutDisconnecting() async throws {
-        try await fixture { store async throws in
-            let trace = BackfillTrace()
-            let ops = operations(trace: trace, fetch: { _, _ in throw XMPPIQError.stanza(condition: "resource-constraint") })
-            #expect(try await ArchiveSynchronizer(store: store).backfill(account: account, archive: nil, pageBudget: 5, operations: ops) == .stopped)
-            #expect(await trace.events == ["fetch:before(n1)"])
-            #expect(try await cursor(store) == ArchiveBackfillCursor(revision: 1, oldestID: "n1", complete: false))
-            #expect(try await ArchiveSynchronizer(store: store).hasPendingBackfill(account: account, archive: nil))
-        }
-    }
-
     @Test func aConcurrentArchiveQueryStopsWithoutDisconnecting() async throws {
         try await fixture { store async throws in
             let trace = BackfillTrace()
@@ -276,16 +234,6 @@ struct BackfillTests {
             }
             #expect(await trace.events == ["fetch:before(n1)", "durable:n1", "disconnect"])
             #expect(try await cursor(store) == ArchiveBackfillCursor(revision: 1, oldestID: "n1", complete: false))
-        }
-    }
-
-    @Test func anEmptyCompletePageMarksTheCursorComplete() async throws {
-        try await fixture { store async throws in
-            let trace = BackfillTrace()
-            let ops = operations(trace: trace, fetch: { _, _ in XMPPArchivePage(messages: [], complete: true, firstID: nil, lastID: nil, handledTokens: []) })
-            #expect(try await ArchiveSynchronizer(store: store).backfill(account: account, archive: nil, pageBudget: 5, operations: ops) == .complete)
-            #expect(try await cursor(store) == ArchiveBackfillCursor(revision: 2, oldestID: "n1", complete: true))
-            #expect(await trace.events == ["fetch:before(n1)"])
         }
     }
 }

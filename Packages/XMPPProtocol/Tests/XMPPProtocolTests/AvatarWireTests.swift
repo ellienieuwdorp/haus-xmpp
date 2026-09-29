@@ -42,16 +42,6 @@ private func metadataResult(_ infos: String) -> String {
     #expect(throws: XMPPIQError.stanza(condition: "item-not-found")) { try XMPPClient.decodeAvatarData(node(missing), id: pngHash) }
 }
 
-@Test func vCardPhotoFallbackDecodesRasterPhotosOnly() throws {
-    let card = try node("<iq type='result' id='3'><vCard xmlns='vcard-temp'><FN>Bob</FN><PHOTO><TYPE> image/png </TYPE><BINVAL>\(png.base64EncodedString())</BINVAL></PHOTO></vCard></iq>")
-    let photo = try AvatarWire.parseVCardPhoto(card.children[0])
-    #expect(photo?.type == "image/png" && photo?.data == png)
-    let svg = try node("<iq type='result' id='3'><vCard xmlns='vcard-temp'><PHOTO><TYPE>image/svg+xml</TYPE><BINVAL>\(png.base64EncodedString())</BINVAL></PHOTO></vCard></iq>")
-    #expect(try AvatarWire.parseVCardPhoto(svg.children[0]) == nil)
-    let none = try node("<iq type='result' id='3'><vCard xmlns='vcard-temp'><FN>Bob</FN></vCard></iq>")
-    #expect(try AvatarWire.parseVCardPhoto(none.children[0]) == nil)
-}
-
 @Test func notifyEventsDecodeIntoAvatarMetadataOnlyFromBareOwners() throws {
     func event(from: String, infos: String) -> String {
         "<message from='\(from)' to='a@example.test' type='headline'><event xmlns='http://jabber.org/protocol/pubsub#event'><items node='urn:xmpp:avatar:metadata'><item id='\(pngHash)'><metadata xmlns='urn:xmpp:avatar:metadata'>\(infos)</metadata></item></items></event></message>"

@@ -1,9 +1,31 @@
 import Foundation
 import Darwin
+import SQLite3
 import Testing
 @testable import MessageStore
 
+/// The schema this build writes. A schema bump changes this one literal.
+private let currentSchemaVersion: Int32 = 21
+
 struct MigrationTests {
+    @Test func openingStampsTheCurrentSchemaAndRefusesANewerOne() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "schema-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "messages.sqlite")
+        try await MessageStore(url: url).close()
+        var db: OpaquePointer?, statement: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        #expect(sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &statement, nil) == SQLITE_OK)
+        #expect(sqlite3_step(statement) == SQLITE_ROW)
+        #expect(sqlite3_column_int(statement, 0) == currentSchemaVersion)
+        sqlite3_finalize(statement)
+        // A database written by a newer build is refused, never downgraded.
+        #expect(sqlite3_exec(db, "PRAGMA user_version=\(currentSchemaVersion + 1);", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+        #expect(throws: MessageStoreError.unsupportedSchema(Int(currentSchemaVersion) + 1)) { _ = try MessageStore(url: url) }
+    }
+
     @Test func migrationClosesSQLiteAndHoldsLockAcrossRename() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "migration-\(UUID())")
         let source = root.appending(path: "old"), destination = root.appending(path: "new")

@@ -212,7 +212,7 @@ private func queue(_ store: MessageStore, account: String = "a", id: String = "m
     #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
     sqlite3_close(db)
     let migrated = try MessageStore(url: url)
-    let projected = try await migrated.reactionsForChat(accountID: "a", chatID: "peer", messageIDs: ["t"])["t"]
+    let projected = try await migrated.eventsForChat(accountID: "a", chatID: "peer", messageIDs: ["t"])["t"]?.compactMap(AuthenticatedReaction.init)
     #expect(projected?.map(\.actorID) == ["a", "peer"])
     #expect(projected?.map(\.reactions) == [[], ["❤️"]])
     let events = try await migrated.events(accountID: "a", chatID: "peer", messageID: "t")
@@ -261,6 +261,8 @@ private func queue(_ store: MessageStore, account: String = "a", id: String = "m
         DROP INDEX message_wire;
         ALTER TABLE messages DROP COLUMN wire_id;
         ALTER TABLE messages DROP COLUMN wire_id_authenticated;
+        INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing,encryption_profile) VALUES
+        ('a','legacy-out','peer','a','Old',1,1,'legacy'),('a','legacy-in','peer','peer','Old',2,0,'legacy');
         PRAGMA user_version=4;
         COMMIT;
         """
@@ -271,6 +273,9 @@ private func queue(_ store: MessageStore, account: String = "a", id: String = "m
     #expect(chat.isPinned && chat.lastMessage?.isStarred == true)
     #expect(chat.lastMessage?.transportState == .submitting)
     #expect(chat.lastMessage?.wireID == nil && chat.lastMessage?.wireIDAuthenticated == false)
+    // A legacy send's stanza ID becomes its unauthenticated wire ID, so a peer's plain reaction finds it.
+    #expect(try await migrated.reactionTarget(accountID: "a", chatID: "peer", wireID: "legacy-out")?.id == "legacy-out")
+    #expect(try await migrated.message(accountID: "a", messageID: "legacy-in")?.wireID == nil)
     #expect(try await migrated.encryptedOutgoing(accountID: "a", messageID: "m") == Data([7, 8, 9]))
     #expect(try await migrated.encryptionState(accountID: "a")?.data == trustAndIdentity)
     #expect(try await store.finishOutgoingSubmission(attempt))

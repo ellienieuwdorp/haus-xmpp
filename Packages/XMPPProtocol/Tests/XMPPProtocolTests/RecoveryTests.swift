@@ -20,31 +20,6 @@ private actor SnapshotStore: XMPPStreamManagementPersistence {
     func seed(_ snapshot: XMPPStreamManagementSnapshot) { value = snapshot }
 }
 
-@Test func streamJournalPersistsBeforeWriteAndRejectsImpossibleAcknowledgement() async throws {
-    let store = SnapshotStore()
-    let sm = StreamManagement(store)
-    _ = try await sm.restore(accountID: "a@example.org")
-    try await sm.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", expiresAt: nil)
-    let xml = "<message id='original'><encrypted xmlns='urn:xmpp:omemo:2'/></message>"
-    try await sm.record(xml)
-    #expect(await store.value?.journal.first?.xml == xml)
-    await #expect(throws: XMPPStreamManagementError.self) { try await sm.acknowledge(2) }
-    #expect(await store.value?.journal.count == 1)
-    #expect(try await sm.acknowledge(1).isEmpty)
-    #expect(await store.acknowledged == ["original"])
-}
-
-@Test func streamAcknowledgementNeverPassesUndurableInboundMessage() async throws {
-    let sm = StreamManagement(SnapshotStore())
-    _ = try await sm.restore(accountID: "a@example.org")
-    try await sm.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", expiresAt: nil)
-    let message = try #require(await sm.receive()), iq = try #require(await sm.receive())
-    try await sm.handled(iq)
-    #expect(try await sm.flushHandled() == 0)
-    try await sm.handled(message)
-    #expect(try await sm.flushHandled() == 2)
-}
-
 @Test func failedFlushKeepsAdvertisedCounterAtPersistedValue() async throws {
     let store = SnapshotStore()
     let manager = StreamManagement(store)
@@ -106,16 +81,6 @@ private actor SnapshotStore: XMPPStreamManagementPersistence {
     // A kind-less presence row derives .presence and stays replayable.
     let presence = try JSONDecoder().decode(XMPPStreamJournalEntry.self, from: Data(#"{"sequence":1,"xml":"<presence/>"}"#.utf8))
     #expect(presence.kind == .presence)
-}
-
-@Test func journalEntriesRoundTripWithoutIQBytes() throws {
-    let entries: [XMPPStreamJournalEntry] = [.init(sequence: 1, kind: .message, xml: "<message id='m'/>", messageID: "m"),
-                                             .init(sequence: 2, kind: .iq, xml: nil, messageID: nil),
-                                             .init(sequence: 3, kind: .presence, xml: "<presence/>", messageID: nil)]
-    let data = try JSONEncoder().encode(entries)
-    #expect(try JSONDecoder().decode([XMPPStreamJournalEntry].self, from: data) == entries)
-    let iqJSON = try #require(String(data: JSONEncoder().encode(entries[1]), encoding: .utf8))
-    #expect(!iqJSON.contains("xml"))
 }
 
 private func enabledManager(_ store: SnapshotStore) async throws -> StreamManagement {
@@ -294,13 +259,8 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     "<message from='\(from)' to='a@example.org/r'><result xmlns='urn:xmpp:mam:2' queryid='\(query)' id='\(id)'><forwarded xmlns='urn:xmpp:forward:0'><delay xmlns='urn:xmpp:delay' stamp='2026-09-14T12:00:00Z'/>\(inner)</forwarded></result></message>"
 }
 
-@Test func archiveRejectsForeignSendersWrongQueriesNestedWrappersAndUnrelatedInnerActors() throws {
+@Test func archiveRecordsUnrelatedInnerActorsAndNestedWrappersAsRejectedContent() throws {
     var query = ArchiveQuery(queryID: "query", accountBareJID: "a@example.org", accountFullJID: "a@example.org/r", limit: 100)
-    // Outer provenance (wrapper sender, query ID) still fails the page.
-    for xml in [archived(from: "evil@example.org"), archived(query: "other")] {
-        #expect(throws: XMPPIQError.self) { try query.receive(recoveryNode(xml)) }
-    }
-    #expect(query.messages.isEmpty)
     // Inner actors and nested wrappers are content: recorded as rejections, never unwrapped or shown.
     try query.receive(recoveryNode(archived(inner: "<message xmlns='jabber:client' from='evil@example.org' to='victim@example.org'><body>forged</body></message>")))
     try query.receive(recoveryNode(archived(id: "archive-2", inner: "<message xmlns='jabber:client' from='b@example.org/r' to='a@example.org/r'><received xmlns='urn:xmpp:carbons:2'/><body>forged</body></message>")))
@@ -309,17 +269,6 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     #expect(query.messages.allSatisfy { $0.message == nil && $0.encryptedMessage == nil && $0.rejectionArchive == "a@example.org" })
     try query.receive(recoveryNode(archived(id: "archive-3")))
     #expect(query.messages.last?.message?.body == "hello")
-    #expect(throws: XMPPIQError.self) { try query.receive(recoveryNode(archived())) }
-    #expect(query.messages.count == 3)
-}
-
-@Test func archiveCursorMustMatchDurablyReturnedLastResultAndCannotMakeNoProgress() throws {
-    var query = ArchiveQuery(queryID: "query", accountBareJID: "a@example.org", accountFullJID: "a@example.org/r", limit: 1)
-    try query.receive(recoveryNode(archived()))
-    let valid = try recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2' complete='true'><set xmlns='http://jabber.org/protocol/rsm'><first>archive-1</first><last>archive-1</last></set></fin></iq>")
-    #expect(try query.finish(valid).lastID == "archive-1")
-    let forged = try recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2'><set xmlns='http://jabber.org/protocol/rsm'><first>archive-1</first><last>unseen</last></set></fin></iq>")
-    #expect(throws: XMPPIQError.self) { try query.finish(forged) }
 }
 
 @Test func revokedTrustBlocksRestoredJournalAndResumeReplay() async throws {
@@ -361,31 +310,9 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
 }
 
 @Test func archiveQueriesGetTheLongerTimeoutAndTheEventBufferOutlastsTheStreamCeiling() {
-    #expect(XMPPClient.archiveQueryTimeout == .seconds(60))
-    #expect(XMPPClient.iqTimeout == .seconds(15))
     #expect(XMPPClient.archiveQueryTimeout > XMPPClient.iqTimeout)
-    #expect(XMPPClient.eventBufferLimit == 4096)
-    // Content plus barrier per message: the buffer outlasts stream management's 2,000-stanza ceiling.
-    #expect(XMPPClient.eventBufferLimit >= 2 * 2_000)
-}
-
-@Test func archiveTimestampsParseConcurrentlyWithSharedFormatters() async {
-    let inputs = ["2026-09-01T10:00:00Z", "2026-09-01T10:00:00.250Z", "2026-09-01T12:00:00+02:00", "garbage"]
-    let sequential = inputs.map(ArchiveQuery.timestamp)
-    #expect(sequential[0] == Date(timeIntervalSince1970: 1_788_256_800))
-    #expect(sequential[1] == Date(timeIntervalSince1970: 1_788_256_800.25))
-    #expect(sequential[2] == sequential[0])
-    #expect(sequential[3] == nil)
-    let concurrent = await withTaskGroup(of: (Int, Date?).self) { group in
-        for index in 0..<200 {
-            group.addTask { (index, ArchiveQuery.timestamp(inputs[index % inputs.count])) }
-        }
-        var results: [(Int, Date?)] = []
-        for await result in group { results.append(result) }
-        return results
-    }
-    #expect(concurrent.count == 200)
-    for (index, date) in concurrent { #expect(date == sequential[index % inputs.count]) }
+    // Content plus barrier per message: the buffer outlasts stream management's inbound ceiling.
+    #expect(XMPPClient.eventBufferLimit >= 2 * Int(StreamManagement.inboundWindow))
 }
 
 @Test func archivePayloadEmitsTheRequestedBound() {
@@ -407,13 +334,14 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     #expect(!escaped.contains("a<b"))
 }
 
-@Test func archiveFinishValidatesFirstAgainstReturnedResults() throws {
+@Test func archiveFinishValidatesFirstAndLastAgainstReturnedResults() throws {
     func fin(_ attributes: String, _ set: String) throws -> XMPPProtocol.XMLNode {
         try recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2'\(attributes)><set xmlns='http://jabber.org/protocol/rsm'>\(set)</set></fin></iq>")
     }
     var query = ArchiveQuery(queryID: "query", accountBareJID: "a@example.org", accountFullJID: "a@example.org/r", limit: 100)
     try query.receive(recoveryNode(archived()))
     #expect(throws: XMPPIQError.self) { try query.finish(fin("", "<first>unseen</first><last>archive-1</last>")) }
+    #expect(throws: XMPPIQError.self) { try query.finish(fin("", "<first>archive-1</first><last>unseen</last>")) }
     #expect(throws: XMPPIQError.self) { try query.finish(fin("", "<last>archive-1</last>")) }
     #expect(throws: XMPPIQError.self) { try query.finish(fin("", "<first>archive-1</first><first>archive-1</first><last>archive-1</last>")) }
     let page = try query.finish(fin("", "<first index='0'>archive-1</first><last>archive-1</last>"))

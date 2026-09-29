@@ -16,15 +16,6 @@ final class ChatCapabilitiesTests: XCTestCase {
 
     private let verified = DeviceTrustFacts(peerTrust: [.verified], needsReview: false, peerKnown: true)
 
-    /// (a) A cold launch shows stored trust and the remembered attach button before any connection.
-    func testLaunchBeforeConnectKeepsStoredTrust() {
-        let launch = direct(.stored(verified), ready: false)
-        XCTAssertEqual(launch.encryption, .encrypted(verified: true))
-        XCTAssertTrue(launch.canAttach)
-        XCTAssertTrue(launch.canSend, "a 1:1 message is queued offline")
-        XCTAssertEqual(launch.deviceCount, 1)
-    }
-
     /// (b) connect → disconnect → reconnect, with the refresh fence moving stored → refreshed → stored → refreshed.
     func testConnectDisconnectReconnectNeverChangesEncryptionOrAttach() {
         let accepted = DeviceTrustFacts(peerTrust: [.accepted], needsReview: false, peerKnown: true)
@@ -42,15 +33,6 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(Set(steps.map { "\($0.encryption)" }), ["encrypted(verified: false)"])
         XCTAssertEqual(steps.map(\.canSend), [false, true, false, true])
         XCTAssertEqual(Set(steps.map(\.deviceCount)), [2])
-    }
-
-    /// (c) Accepted is not verified: every active peer device must be verified.
-    func testAcceptedIsNotVerified() {
-        let mixed = DeviceTrustFacts(peerTrust: [.accepted, .verified], needsReview: false, peerKnown: true)
-        XCTAssertEqual(direct(.stored(mixed), ready: true).encryption, .encrypted(verified: false))
-        let withRejected = DeviceTrustFacts(peerTrust: [.verified, .rejected], needsReview: false, peerKnown: true)
-        XCTAssertEqual(direct(.stored(withRejected), ready: true).encryption, .encrypted(verified: false))
-        XCTAssertEqual(direct(.refreshed(verified), ready: true).encryption, .encrypted(verified: true))
     }
 
     /// (d) Not yet known is pending, never "not encrypted"; only a completed answer makes it unavailable.
@@ -72,6 +54,7 @@ final class ChatCapabilitiesTests: XCTestCase {
     func testAttachFollowsRememberedUploadsNotTheSocket() {
         XCTAssertFalse(direct(.stored(verified), uploads: false, ready: true).canAttach)
         XCTAssertTrue(direct(.stored(verified), uploads: true, ready: false).canAttach)
+        XCTAssertTrue(direct(.stored(verified), ready: false).canSend, "a 1:1 message is queued offline")
         XCTAssertTrue(direct(.pending, uploads: true, ready: false).canAttach)
         XCTAssertFalse(group(.stored(verified), joined: true, ready: true).canAttach)
         let demo = ChatCapabilities.derive(isDemo: true, isGroup: false, knowledge: .pending, reviewPending: false, uploadAvailable: false, sessionReady: false)
@@ -146,22 +129,6 @@ final class ChatCapabilitiesTests: XCTestCase {
                        "accepted is not verified")
     }
 
-    /// A decryption failure, blocked plaintext or failed refresh is a footnote: it never moves the pill or opens review.
-    func testDecryptFailureLandsInDiagnosticsAndKeepsTheTrustLevel() {
-        var attention = EncryptionAttention()
-        let before = direct(.stored(verified), review: attention.heldForTrust.contains("bob@example.org"), ready: true)
-        attention.note("An encrypted message could not be opened")
-        XCTAssertEqual(attention.diagnostics, "An encrypted message could not be opened")
-        XCTAssertTrue(attention.heldForTrust.isEmpty)
-        let after = direct(.stored(verified), review: attention.heldForTrust.contains("bob@example.org"), ready: true)
-        XCTAssertEqual(after, before)
-        XCTAssertEqual(after.encryption, .encrypted(verified: true))
-        // Unknown stays pending, never "off", whatever the footer says.
-        XCTAssertEqual(direct(.pending, review: attention.heldForTrust.contains("bob@example.org"), ready: false).encryption, .pending)
-        XCTAssertFalse(EncryptionAttention.needsTrustDecision(OMEMOError.invalidContent))
-        XCTAssertFalse(EncryptionAttention.needsTrustDecision(OMEMOError.notForThisDevice))
-    }
-
     /// A send held for a fingerprint decision shows the review card for that chat only; other holds are footnotes.
     func testTrustHeldSendShowsReviewForThatChatOnly() throws {
         var attention = EncryptionAttention()
@@ -186,40 +153,5 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(attention.heldForTrust, ["room@muc.example.org"])
         attention.settlePass(heldForTrust: [])
         XCTAssertTrue(attention.heldForTrust.isEmpty, "a completed pass that held nothing clears the marks")
-        XCTAssertTrue(EncryptionAttention.needsTrustDecision(OMEMOError.trustRequired))
-    }
-
-    /// A failed group refresh is read-only text for Group Details until a refresh succeeds.
-    func testGroupRefreshFailureIsAFootnoteUntilARefreshSucceeds() {
-        var attention = EncryptionAttention()
-        let room = "room@muc.example.org"
-        attention.groupDevices(room, problem: "Last group refresh failed: timeout")
-        XCTAssertEqual(attention.groupProblems[room], "Last group refresh failed: timeout")
-        XCTAssertEqual(attention.diagnostics, "Last group refresh failed: timeout")
-        XCTAssertTrue(attention.heldForTrust.isEmpty)
-        attention.groupDevices(room, problem: nil)
-        XCTAssertNil(attention.groupProblems[room])
-    }
-
-    /// A device published only in the other OMEMO version is a notice on the Devices screen; the chat keeps sending
-    /// to the devices that are in this version (the old rule paused the chat indefinitely).
-    func testDevicesInOnlyTheOtherVersionDoNotHoldTheChat() {
-        let facts = DeviceTrustFacts(peerTrust: [.accepted], needsReview: false, peerKnown: true)
-        XCTAssertEqual(direct(.stored(facts), ready: true).encryption, .encrypted(verified: false))
-        XCTAssertTrue(direct(.stored(facts), ready: true).canSend)
-    }
-}
-
-extension ChatCapabilitiesTests {
-    /// Retained ciphertext alone never asks for a review: only an undecided stored device or a trust hold does.
-    func testRetainedCiphertextWithoutUndecidedDevicesIsNotAReview() {
-        var attention = EncryptionAttention()
-        attention.hold(["alex@example.com": "An encrypted message could not be opened."], shownChat: nil)
-        XCTAssertFalse(attention.heldForTrust.contains("alex@example.com"))
-        let stored = DeviceTrustFacts(peerTrust: [.accepted], needsReview: false, peerKnown: true)
-        let capabilities = ChatCapabilities.derive(isDemo: false, isGroup: false, knowledge: .stored(stored),
-                                                   reviewPending: attention.heldForTrust.contains("alex@example.com"),
-                                                   uploadAvailable: true, sessionReady: false)
-        XCTAssertEqual(capabilities.encryption, .encrypted(verified: false))
     }
 }

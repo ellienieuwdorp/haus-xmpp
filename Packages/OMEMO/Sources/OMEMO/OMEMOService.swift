@@ -664,14 +664,10 @@ public actor OMEMOService {
         }
     }
 
-    public func outgoingReactionEnvelope(account: String, updateID: String) async throws -> XMPPOMEMOEnvelope {
-        try await outgoingUpdateEnvelope(account: account, updateID: updateID)
-    }
-
     /// The sealed envelope of a message-scoped update (reaction, receipt, marker, retraction, correction),
     /// re-validated: its target must still resolve to the message it was queued against and every
     /// recipient device must still be trusted.
-    public func outgoingUpdateEnvelope(account: String, updateID: String) async throws -> XMPPOMEMOEnvelope {
+    func outgoingUpdateEnvelope(account: String, updateID: String) async throws -> XMPPOMEMOEnvelope {
         guard let wire = try await store.updateWire(accountID: account, updateID: updateID),
               let update = try await store.update(accountID: account, updateID: updateID),
               let targetWireID = update.targetWireID, let targetMessageID = update.targetMessageID else { throw OMEMOError.unavailable }
@@ -817,10 +813,6 @@ public actor OMEMOService {
             if try await store.applyDisplayedSync(accountID: account, chatID: item.chat, stanzaID: item.stanzaID, by: item.by) { moved = true }
         }
         return moved
-    }
-
-    public func reactions(account: String, chatID: String, messageID: String) async throws -> [AuthenticatedReaction] {
-        try await store.reactions(accountID: account, chatID: chatID, messageID: messageID)
     }
 
     public func outgoingEnvelope(account: String, messageID: String) async throws -> XMPPOMEMOEnvelope {
@@ -1314,8 +1306,6 @@ public actor OMEMOService {
     }
     /// A failed write may have left anything behind in memory; the next `load` reads the row again.
     func forgetState(_ account: String) { stateCache[account] = nil }
-    /// The revision of the cached decoded state, if any (for tests that pin cache invalidation).
-    func cachedStateRevision(_ account: String) -> Int? { stateCache[account]?.revision }
     private func remember(_ state: AccountEncryptionState, revision: Int, account: String) {
         // An interleaved load may already hold a newer revision; keep whichever was read later in revision order.
         if let cached = stateCache[account], cached.revision > revision { return }

@@ -56,7 +56,7 @@ import XMPPProtocol
     func testSettledRevocationStillOwesTheDisable() throws {
         let push = try PushSubscription.generate(serviceJID: PushService.serviceJID)
         var registered = PushRegistrationState(accountID: "alice@example.org", configuration: push, journal: PushRegistrationJournal())
-        let register = try registered.journal.stageRegistration(deviceToken: "abcd")
+        let register = try registered.journal.stageFreshRegistration(deviceToken: "abcd")
         XCTAssertTrue(registered.journal.abandonPending(register))
         var state = try XCTUnwrap(PushRegistrationState.turningOff(accountID: "alice@example.org", saved: registered, enabled: push))
         XCTAssertEqual(state.journal.pending?.revision, 2)

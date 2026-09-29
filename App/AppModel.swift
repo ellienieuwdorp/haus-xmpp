@@ -1891,7 +1891,7 @@ final class AppModel {
               !ProcessInfo.processInfo.arguments.contains("--inspect-notification"), let store else { return }
         // A tap never prompts for another account, creates a chat or changes endpoints.
         guard let account = authorizedNotificationAccount(),
-              let message = try? await destination.resolve(accountID: account, active: true, store: store),
+              let message = try? await destination.resolve(accountID: account, store: store),
               authorizedNotificationAccount() == account else { return }
         notificationRoute = NotificationChatRoute(accountID: account, chatID: message.chatID)
     }
@@ -2737,7 +2737,7 @@ extension AppModel: NotificationActionEnvironment {
 
     func resolveNotificationMessage(_ destination: NotificationDestination, account: String) async -> StoredMessage? {
         guard let store else { return nil }
-        return try? await destination.resolve(accountID: account, active: true, store: store)
+        return try? await destination.resolve(accountID: account, store: store)
     }
 
     func beginNotificationAction(account: String, chatID: String, budget: NotificationActionBudget) async -> Bool {

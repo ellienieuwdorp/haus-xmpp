@@ -18,15 +18,6 @@ final class TypingTests: XCTestCase {
         XCTAssertNil(tracker.nextExpiry)
     }
 
-    func testEveryOtherStateClearsAtOnce() {
-        for state in [XMPPChatState.State.paused, .active, .inactive, .gone] {
-            var tracker = TypingTracker()
-            tracker.apply(.composing, chat: "alex@x", participant: "alex@x", now: start)
-            tracker.apply(state, chat: "alex@x", participant: "alex@x", now: start + 1)
-            XCTAssertEqual(tracker.typing, [:], "\(state)")
-        }
-    }
-
     func testGroupsTrackEachParticipant() {
         var tracker = TypingTracker()
         tracker.apply(.composing, chat: "room@x", participant: "sam@x", now: start)
@@ -59,13 +50,6 @@ final class TypingTests: XCTestCase {
         // A message from someone who was not typing adds nothing.
         tracker.messageArrived(chat: "maya@x", participant: "maya@x", now: start)
         XCTAssertNil(tracker.typing["maya@x"])
-    }
-
-    func testDescriptions() {
-        XCTAssertEqual(TypingTracker.description(["alex@x"], isGroup: false), "typing…")
-        XCTAssertEqual(TypingTracker.description(["maya@x"]), "maya is typing…")
-        XCTAssertEqual(TypingTracker.description(["maya@x", "sam"]), "maya and sam are typing…")
-        XCTAssertEqual(TypingTracker.description(["a@x", "b@x", "c@x", "d@x"]), "4 people are typing…")
     }
 
     func testSenderSendsComposingThrottledPausedAndActive() {

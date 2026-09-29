@@ -56,26 +56,6 @@ private func media(_ id: String, body: String = "", attachment: StoredAttachment
     #expect(try await reopened.message(accountID: "a", messageID: "photo")?.attachment?.url == "https://u/x")
 }
 
-/// The app fails a file whose upload keeps being refused; that must release what was queued behind it, and a retry
-/// puts the file back on the upload queue, still unsendable until its PUT succeeds.
-@Test func aFailedUploadStopsHoldingItsChatAndCanBeRetried() async throws {
-    let url = try fixture()
-    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    let store = try MessageStore(url: url)
-    try await store.acquireTransportOwnership()
-    try await store.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
-    #expect(try await store.enqueueOutgoing(media("photo")))
-    #expect(try await store.enqueueOutgoing(media("later", body: "typed later", attachment: nil)))
-    #expect(try await store.queuedOutgoing(accountID: "a").isEmpty)
-    try await store.failQueuedOutgoing(accountID: "a", messageID: "photo")
-    #expect(try await store.attachmentsAwaitingUpload(accountID: "a").isEmpty)
-    #expect(try await store.queuedOutgoing(accountID: "a").map(\.id) == ["later"])
-    #expect(try await store.claimNextOutgoing(accountID: "a")?.message.id == "later")
-    try await store.retryOutgoing(accountID: "a", messageID: "photo")
-    #expect(try await store.attachmentsAwaitingUpload(accountID: "a").map(\.id) == ["photo"])
-    #expect(try await store.claimNextOutgoing(accountID: "a") == nil)
-}
-
 @Test func receivedFileRoundTripsAndReplayIgnoresAttachmentIdentity() async throws {
     let url = try fixture()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

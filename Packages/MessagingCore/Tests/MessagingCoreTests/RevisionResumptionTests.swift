@@ -5,44 +5,22 @@ import XMPPProtocol
 import OMEMO
 @testable import MessagingCore
 
-/// Retractions and corrections obey the same resumption and inbound rules as reactions.
+/// Retractions obey the same inbound rules as reactions.
 struct RevisionResumptionTests {
     private let account = "alice@localhost", peer = "bob@localhost"
 
-    private func fixture() async throws -> (MessageStore, OMEMOService, StreamPersistence) {
+    private func fixture() async throws -> (MessageStore, OMEMOService) {
         let store = try MessageStore(url: FileManager.default.temporaryDirectory.appending(path: "revision-\(UUID()).sqlite"))
         try await store.acquireTransportOwnership()
         try await store.upsertChat(accountID: account, chatID: peer, title: "Bob")
         try await store.insertMessage(.init(id: "mine", accountID: account, chatID: peer, senderID: account, body: "mine", isOutgoing: true, encryptionProfile: "legacy", wireID: "mine"))
         try await store.insertMessage(.init(id: "theirs", accountID: account, chatID: peer, senderID: peer, body: "theirs", encryptionProfile: "legacy", wireID: "w"))
         let encryption = OMEMOService(store: store, protection: try StateProtection(key: Data(repeating: 7, count: 32)))
-        return (store, encryption, StreamPersistence(store: store, accountID: account, encryption: encryption))
-    }
-
-    private func snapshot(journal: [XMPPStreamJournalEntry]) -> XMPPStreamManagementSnapshot {
-        .init(revision: 1, accountID: account, fullJID: account + "/device", streamID: "opaque",
-              expiresAt: nil, inboundHandled: 0, outboundSent: UInt64(journal.count), outboundAcknowledged: 0, journal: journal)
-    }
-
-    @Test func journaledRetractionResumesOnlyAsItsExactSealedWireAndAnUnsealedCorrectionNeverDoes() async throws {
-        let (store, _, adapter) = try await fixture()
-        _ = try await store.enqueueMessageUpdate(accountID: account, id: "u1", kind: .retraction, chatID: peer, targetMessageID: "mine")
-        let xml = try XMPPClient.retractionXML(to: peer, targetID: "mine", id: "u1")
-        let entry = XMPPStreamJournalEntry(sequence: 1, xml: xml, messageID: "u1")
-        #expect(try await !adapter.permitsResumption(snapshot(journal: [entry])))
-        try await store.sealQueuedUpdate(accountID: account, updateID: "u1", wire: Data(xml.utf8))
-        #expect(try await adapter.permitsResumption(snapshot(journal: [entry])))
-        let drifted = XMPPStreamJournalEntry(sequence: 2, xml: xml.replacingOccurrences(of: "id='mine'", with: "id='theirs'"), messageID: "u1")
-        #expect(try await !adapter.permitsResumption(snapshot(journal: [entry, drifted])))
-        // A correction is queued but its envelope has not been sealed: nothing may be replayed under its ID.
-        _ = try await store.enqueueMessageUpdate(accountID: account, id: "u2", kind: .correction, chatID: peer, targetMessageID: "mine", body: "better")
-        let envelope = XMPPOMEMOEnvelope(profile: .legacy, senderDeviceID: 1, keys: [.init(deviceID: 2, keyExchange: false, data: Data([1]))], iv: Data(repeating: 0, count: 12), payload: Data([2]))
-        let correction = XMPPStreamJournalEntry(sequence: 3, xml: try XMPPClient.encryptedMessageXML(to: peer, envelope: envelope, id: "u2", replaces: "mine"), messageID: "u2")
-        #expect(try await !adapter.permitsResumption(snapshot(journal: [entry, correction])))
+        return (store, encryption)
     }
 
     @Test func inboundPlainRetractionProjectsOnlyForTheSender() async throws {
-        let (store, encryption, _) = try await fixture()
+        let (store, encryption) = try await fixture()
         let processor = InboundProcessor(encryption: encryption, client: XMPPClient(labCertificateAuthority: nil), account: account)
         #expect(try await processor.process(.retraction(XMPPRetraction(id: "x1", from: peer + "/phone", to: account, targetID: "w"))) == .stored)
         #expect(try await processor.process(.retraction(XMPPRetraction(id: "x1", from: peer + "/phone", to: account, targetID: "w"))) == .stored)

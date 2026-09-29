@@ -128,7 +128,7 @@ private func update(_ id: String = "reaction", reactions: [String] = ["👍"]) -
         revision += 1
     }
     let requested: Set<String> = ["target", "second", "untrusted", "missing"]
-    let bulk = try await store.reactionsForChat(accountID: "self", chatID: "peer", messageIDs: requested)
+    let bulk = try await store.eventsForChat(accountID: "self", chatID: "peer", messageIDs: requested).mapValues { $0.compactMap(AuthenticatedReaction.init) }
     #expect(bulk["target"] == (try await store.reactions(accountID: "self", chatID: "peer", messageID: "target")))
     #expect(bulk["target"]?.count == 2)
     #expect(bulk["target"]?.first(where: { $0.actorID == "peer" })?.reactions == [])
@@ -136,16 +136,16 @@ private func update(_ id: String = "reaction", reactions: [String] = ["👍"]) -
     #expect(bulk["second"]?.first?.reactions == ["🔥"])
     // A unique peer-supplied ID projects the peer's unencrypted reaction; unknown targets never do.
     #expect(bulk["untrusted"]?.first?.reactions == ["👍"] && bulk["missing"] == nil)
-    #expect(try await store.reactionsForChat(accountID: "other", chatID: "peer", messageIDs: requested).isEmpty)
-    #expect(try await store.reactionsForChat(accountID: "self", chatID: "other", messageIDs: requested).isEmpty)
-    #expect(try await store.reactionsForChat(accountID: "self", chatID: "peer", messageIDs: []).isEmpty)
+    #expect(try await store.eventsForChat(accountID: "other", chatID: "peer", messageIDs: requested).isEmpty)
+    #expect(try await store.eventsForChat(accountID: "self", chatID: "other", messageIDs: requested).isEmpty)
+    #expect(try await store.eventsForChat(accountID: "self", chatID: "peer", messageIDs: []).isEmpty)
     // Not in requested page, but still makes the authenticated origin association ambiguous.
     try await target(store, id: "off-page-collision", actor: "self")
-    let collision = try await store.reactionsForChat(accountID: "self", chatID: "peer", messageIDs: requested)
+    let collision = try await store.eventsForChat(accountID: "self", chatID: "peer", messageIDs: requested)
     #expect(collision["target"] == nil)
-    #expect(collision["second"]?.first?.reactions == ["🔥"])
+    #expect(collision["second"]?.compactMap(AuthenticatedReaction.init).first?.reactions == ["🔥"])
     await #expect(throws: MessageStoreError.invalidValue) {
-        try await store.reactionsForChat(accountID: "self", chatID: "peer", messageIDs: Set((0...1000).map(String.init)))
+        try await store.eventsForChat(accountID: "self", chatID: "peer", messageIDs: Set((0...1000).map(String.init)))
     }
 }
 
@@ -166,7 +166,7 @@ private func update(_ id: String = "reaction", reactions: [String] = ["👍"]) -
     try await store.recordReaction(accountID: "self", reaction: .init(id: "r1", chatID: "peer", actorID: "peer", targetWireID: "mine", reactions: ["👍"], updatedAt: now))
     try await store.recordReaction(accountID: "self", reaction: .init(id: "r2", chatID: "peer", actorID: "peer", targetWireID: "theirs-origin", reactions: ["❤️"], updatedAt: now))
     try await store.recordReaction(accountID: "self", reaction: .init(id: "r1", chatID: "peer", actorID: "peer", targetWireID: "mine", reactions: ["🔥"], updatedAt: now)) // replay keeps first
-    let projected = try await store.reactionsForChat(accountID: "self", chatID: "peer", messageIDs: ["mine", "theirs"])
+    let projected = try await store.eventsForChat(accountID: "self", chatID: "peer", messageIDs: ["mine", "theirs"]).mapValues { $0.compactMap(AuthenticatedReaction.init) }
     #expect(projected["mine"]?.map(\.reactions) == [["👍"]])
     #expect(projected["theirs"]?.map(\.reactions) == [["❤️"]])
     #expect(try await store.reactions(accountID: "self", chatID: "peer", messageID: "mine").first?.reactions == ["👍"])
@@ -182,7 +182,7 @@ private func update(_ id: String = "reaction", reactions: [String] = ["👍"]) -
     let claim = try #require(await store.claimNextUpdate(accountID: "self", updateIDs: ["q1"]))
     #expect(try await store.finishUpdateSubmission(accountID: "self", updateID: "q1", attemptID: claim.attemptID))
     #expect(try await store.reactionUpdate(accountID: "self", updateID: "q1")?.transportState == .unconfirmed)
-    #expect(try await store.reactionsForChat(accountID: "self", chatID: "peer", messageIDs: ["mine"])["mine"]?.map(\.actorID) == ["peer", "self"])
+    #expect(try await store.eventsForChat(accountID: "self", chatID: "peer", messageIDs: ["mine"])["mine"]?.map(\.actorID) == ["peer", "self"])
     // A stranger's actor ID never records.
     await #expect(throws: MessageStoreError.invalidValue) {
         try await store.recordReaction(accountID: "self", reaction: .init(id: "r3", chatID: "peer", actorID: "other", targetWireID: "mine", reactions: ["👍"], updatedAt: now))

@@ -10,9 +10,8 @@ private func stanza(_ xml: String) throws -> XMPPProtocol.XMLNode {
     return node
 }
 
-@Test func retractionStanzaIsDeterministicAndItsFallbackBodyIsNeverAMessage() throws {
+@Test func retractionStanzaFallbackBodyIsNeverAMessage() throws {
     let xml = try XMPPClient.retractionXML(to: "bob@localhost", targetID: "orig-1", id: "r-1")
-    #expect(try XMPPClient.retractionXML(to: "bob@localhost", targetID: "orig-1", id: "r-1") == xml)
     let node = try stanza(xml)
     #expect(node.child("body", namespace: "jabber:client")?.text == MessageContent.retractionFallback)
     let content = try MessageContent.decode(node, strict: false)

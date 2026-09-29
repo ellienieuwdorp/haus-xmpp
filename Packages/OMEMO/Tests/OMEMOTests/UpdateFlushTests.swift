@@ -2,8 +2,7 @@ import Foundation
 import Testing
 import MessageStore
 import XMPPProtocol
-import OMEMO
-@testable import MessagingCore
+@testable import OMEMO
 
 /// The one update drain (`OMEMOService.flushUpdates`) keeps the outbox contract of the message drain:
 /// a preflight failure releases the claim before any socket use, an uncertain write is never replayed.
