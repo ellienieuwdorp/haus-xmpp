@@ -5,18 +5,20 @@ import XMPPProtocol
 
 /// Loaded from protected local account storage, never from an untrusted push payload.
 public struct BackgroundAccount: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
-    public let host: String
-    public let port: UInt16
+    /// The endpoint the app last connected through; discovery runs only if it fails and the route allows it.
+    public let route: XMPPRoute
     public let domain: String
     public let username: String
     public let password: String
+    /// PLAIN is refused once the account has authenticated with SCRAM.
+    public let requiresSCRAM: Bool
     public let labCertificateAuthority: Data?
     public var accountID: String { username + "@" + domain }
 
-    public init(host: String, port: UInt16 = 5223, domain: String, username: String,
-                password: String, labCertificateAuthority: Data? = nil) {
-        self.host = host; self.port = port; self.domain = domain
-        self.username = username; self.password = password
+    public init(route: XMPPRoute, domain: String, username: String, password: String, requiresSCRAM: Bool = false,
+                labCertificateAuthority: Data? = nil) {
+        self.route = route; self.domain = domain
+        self.username = username; self.password = password; self.requiresSCRAM = requiresSCRAM
         self.labCertificateAuthority = labCertificateAuthority
     }
     public var description: String { "BackgroundAccount(<redacted>)" }
@@ -64,8 +66,8 @@ public struct BackgroundSynchronizer: Sendable {
             let deadline = ContinuousClock.now + timeBudget - waited
             let caughtUp = CatchUpMark()
             try await runBackgroundWork(timeBudget: timeBudget - waited, operation: {
-                try await client.connect(host: account.host, port: account.port, domain: account.domain,
-                                         username: account.username, password: account.password)
+                try await client.connect(route: account.route, domain: account.domain, username: account.username,
+                                         password: account.password, requireSCRAM: account.requiresSCRAM)
                 try Task.checkCancellation()
                 // No identity initialization, trust acceptance, queued-message preparation or
                 // outbox drain. Resumption may replay only previously authorized exact bytes.

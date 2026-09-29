@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import MessageStore
+import XMPPProtocol
 import Darwin
 @testable import MessagingCore
 
@@ -136,7 +137,7 @@ struct BackgroundSynchronizerTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appending(path: "messages.sqlite")
         let store = try MessageStore(url: url)
-        let account = BackgroundAccount(host: "localhost", domain: "localhost", username: "alice", password: "private")
+        let account = BackgroundAccount(route: .fixed(XMPPEndpoint(host: "localhost", port: 5223, security: .directTLS)), domain: "localhost", username: "alice", password: "private")
         try await store.acquireTransportOwnership()
         await #expect(throws: MessageStoreError.transportOwnedElsewhere) {
             try await BackgroundSynchronizer().synchronize(databaseURL: url, wrappingKey: Data(repeating: 1, count: 32), account: account)
