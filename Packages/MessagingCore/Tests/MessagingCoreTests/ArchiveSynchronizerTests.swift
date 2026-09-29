@@ -412,6 +412,8 @@ struct ArchiveSynchronizerTests {
                 #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "c-" + account)
                 #expect(try await store.archiveCheckpoint(accountID: account, archiveID: room)?.cursor == "c-" + room)
                 #expect(try await store.archiveCheckpoint(accountID: account, archiveID: other)?.cursor == "o1")
+                // A destroyed room refuses the re-anchored query too: nothing shows that history was lost.
+                #expect(try await store.archiveGaps(accountID: account).isEmpty)
             }
         }
     }

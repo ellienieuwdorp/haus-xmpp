@@ -207,13 +207,15 @@ public struct ArchiveSynchronizer: Sendable {
     /// When the server no longer holds the checkpoint's cursor (`item-not-found`: archive expiry removed it, or the
     /// archive was reset), the walk re-anchors once on the same connection: by time at the checkpoint entry's archive
     /// stamp, or, for a checkpoint saved before stamps existed, at the newest page with a new backfill cursor so the
-    /// history in between can still be fetched. Either way the lost cursor is recorded as a possible gap.
+    /// history in between can still be fetched. Either way the lost cursor is recorded as a possible gap, once the
+    /// re-anchored query has shown that the archive itself still answers.
     /// Returns false when a query failed without a page (`endsOnlyThisArchive`): the checkpoint stands for the next connection.
     private func synchronizePages(account: String, room: String?, operations: ArchiveSyncOperations) async throws -> Bool {
         let archive = room ?? account
         var checkpoint = try await store.archiveCheckpoint(accountID: account, archiveID: archive)
         var bound: XMPPArchiveBound = checkpoint.map { .after($0.cursor) } ?? .before(nil)
         var pages = 0, messages = 0, reanchored = false
+        var lostCursor: (cursor: String, since: Date?)?
         while true {
             try Task.checkCancellation()
             // Room fetches revalidate complete membership internally, without joining the room.
@@ -223,14 +225,19 @@ public struct ArchiveSynchronizer: Sendable {
                 if !reanchored, (error as? XMPPIQError) == .stanza(condition: "item-not-found"),
                    case .after(let lost?) = bound, let lostCheckpoint = checkpoint {
                     reanchored = true
+                    lostCursor = (lost, lostCheckpoint.stamp)
                     bound = lostCheckpoint.stamp.map { .since($0.addingTimeInterval(-Self.reanchorMargin)) } ?? .before(nil)
                     Self.log.notice("archive cursor unknown to the server; re-anchoring \(lostCheckpoint.stamp == nil ? "at the newest page" : "by time", privacy: .public)")
-                    try await store.recordArchiveGap(accountID: account, archiveID: archive, cursor: lost, since: lostCheckpoint.stamp)
                     continue
                 }
                 guard await Self.endsOnlyThisArchive(error, room: room, operations: operations) else { throw error }
                 Self.log.error("archive walk incomplete\(room == nil ? "" : " (room)", privacy: .public): \(Self.describe(error), privacy: .public)")
                 return false
+            }
+            // An archive that refuses the re-anchored query too (a destroyed room) has lost nothing we could still fetch.
+            if let lost = lostCursor {
+                try await store.recordArchiveGap(accountID: account, archiveID: archive, cursor: lost.cursor, since: lost.since)
+                lostCursor = nil
             }
             for archived in page.messages {
                 try Task.checkCancellation()
