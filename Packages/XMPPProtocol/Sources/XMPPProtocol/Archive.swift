@@ -37,8 +37,15 @@ public enum XMPPArchiveBound: Sendable, Equatable {
     case after(String?)
     /// Backward from a cursor; nil = the newest page (RSM `<before/>`).
     case before(String?)
+    /// Forward from the first entry archived at or after this time (XEP-0313 §4.1.1 `start` field), without a cursor.
+    case since(Date)
 
-    var cursor: String? { switch self { case .after(let id), .before(let id): id } }
+    var cursor: String? {
+        switch self {
+        case .after(let id), .before(let id): id
+        case .since: nil
+        }
+    }
 }
 
 /// Results are in chronological order in either direction: `messages.first` is the oldest entry.
@@ -70,16 +77,18 @@ struct ArchiveQuery {
     static let resultSetNamespace = "http://jabber.org/protocol/rsm"
 
     /// The MAM query with an RSM set of `limit` items on the requested side of the cursor. An empty `<before/>`
-    /// asks for the last (newest) page (XEP-0059 §2.5, XEP-0313 §4.1).
+    /// asks for the last (newest) page (XEP-0059 §2.5, XEP-0313 §4.1). `.since` filters by time instead of a cursor.
     static func payload(queryID: String, limit: Int, bound: XMPPArchiveBound) -> String {
-        let cursorXML: String
+        var cursorXML = "", filterXML = ""
         switch bound {
-        case .after(nil): cursorXML = ""
+        case .after(nil): break
         case .after(let id?): cursorXML = "<after>\(xmlEscaped(id))</after>"
         case .before(nil): cursorXML = "<before/>"
         case .before(let id?): cursorXML = "<before>\(xmlEscaped(id))</before>"
+        // XEP-0082 UTC, whole seconds (truncated, so never later than asked).
+        case .since(let date): filterXML = "<field var='start'><value>\(wholeTimestamp.string(from: date))</value></field>"
         }
-        return "<query xmlns='\(namespace)' queryid='\(xmlEscaped(queryID))'><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE' type='hidden'><value>\(namespace)</value></field></x><set xmlns='\(resultSetNamespace)'><max>\(limit)</max>\(cursorXML)</set></query>"
+        return "<query xmlns='\(namespace)' queryid='\(xmlEscaped(queryID))'><x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE' type='hidden'><value>\(namespace)</value></field>\(filterXML)</x><set xmlns='\(resultSetNamespace)'><max>\(limit)</max>\(cursorXML)</set></query>"
     }
     static func containsWrapper(_ node: XMLNode) -> Bool {
         node.children.contains { $0.name == "result" && $0.namespace.hasPrefix("urn:xmpp:mam:") }
@@ -188,7 +197,7 @@ struct ArchiveQuery {
     }
 
     // Configured once and then only read: `ISO8601DateFormatter`, like `DateFormatter` since iOS 7, is thread-safe for
-    // parsing, so one shared pair replaces two allocations per archived message. `nonisolated(unsafe)` is needed only
+    // parsing and formatting, so one shared pair replaces two allocations per archived message. `nonisolated(unsafe)` is needed only
     // because the class is not `Sendable` under Swift 6; nothing mutates these after initialization.
     nonisolated(unsafe) private static let fractionalTimestamp: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()

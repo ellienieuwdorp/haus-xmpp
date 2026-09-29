@@ -332,6 +332,10 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     let escaped = ArchiveQuery.payload(queryID: "q", limit: 100, bound: .before("a<b&'c"))
     #expect(escaped.contains("<before>a&lt;b&amp;&apos;c</before>"))
     #expect(!escaped.contains("a<b"))
+    // A time anchor goes in the form, with no RSM cursor.
+    let since = ArchiveQuery.payload(queryID: "q", limit: 50, bound: .since(Date(timeIntervalSince1970: 1_788_256_800.9)))
+    #expect(since.contains("<field var='start'><value>2026-09-01T10:00:00Z</value></field></x>"))
+    #expect(since.contains("<max>50</max></set>") && !since.contains("<after") && !since.contains("<before"))
 }
 
 @Test func archiveFinishValidatesFirstAndLastAgainstReturnedResults() throws {
