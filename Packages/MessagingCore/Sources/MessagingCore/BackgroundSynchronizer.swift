@@ -25,6 +25,8 @@ public struct BackgroundAccount: Sendable, CustomStringConvertible, CustomDebugS
 
 public enum BackgroundSynchronizationError: Error, Sendable, Equatable {
     case identityUnavailable, deadlineExceeded, invalidTimeBudget, connectionEnded
+    /// The server refused or did not answer a query on the account's own archive: the run cannot claim catch-up.
+    case ownArchiveIncomplete
 }
 
 /// An extension performs one bounded catch-up under the same kernel lease as the app.
@@ -69,8 +71,11 @@ public struct BackgroundSynchronizer: Sendable {
                 try Task.checkCancellation()
                 // No identity initialization, trust acceptance, queued-message preparation or
                 // outbox drain. Resumption may replay only previously authorized exact bytes.
-                try await ArchiveSynchronizer(store: store).synchronize(
+                let outcome = try await ArchiveSynchronizer(store: store).synchronize(
                     account: account.accountID, client: client, encryption: encryption)
+                // The own archive holds the direct messages a push is about; without its newest entry the run shows the
+                // fallback, and the next run or the app walks it again. A refused or unreachable room does not fail it.
+                guard outcome.ownArchiveComplete else { throw BackgroundSynchronizationError.ownArchiveIncomplete }
                 await caughtUp.reach()
                 // After catch-up, before the claim: chats read on another device have their pointers moved, which
                 // removes their candidates. Own XEP-0333 markers were applied by the walk and the live consumer.

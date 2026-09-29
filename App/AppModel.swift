@@ -1486,8 +1486,13 @@ final class AppModel {
                 await self.startOutbox()
             },
             catchUp: { progress in
-                try await ArchiveSynchronizer(store: store).synchronize(account: account, client: client, encryption: encryption) {
+                let outcome = try await ArchiveSynchronizer(store: store).synchronize(account: account, client: client, encryption: encryption) {
                     await progress(CatchUpProgress(archive: $0.archive, pages: $0.pages, messages: $0.messages))
+                }
+                // A refused or unanswered archive query keeps the connection; that archive's checkpoint stands and the
+                // next connection walks it again. Not a setup failure, so nothing is shown.
+                if !outcome.isComplete {
+                    Logger(subsystem: "haus.xmpp.ios", category: "sync").notice("catch-up incomplete: own=\(outcome.ownArchiveComplete, privacy: .public) rooms=\(outcome.unfinishedRooms.count, privacy: .public)")
                 }
             },
             retryPending: { try? await encryption.retryPendingIncoming(account: account, transport: client) })
