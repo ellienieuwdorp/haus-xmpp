@@ -84,14 +84,25 @@ public struct BackgroundSynchronizer: Sendable {
                 let fresh = await !client.sessionResumed
                 BackgroundSession.log.notice("background session resumed=\(!fresh, privacy: .public)")
                 async let pushEnabled: Void = fresh ? BackgroundSession.enablePush(account.push, client: client) : ()
+                // Direct messages first: the rejoins start once the own archive is walked (the first room page commits)
+                // or the walk ends, so a long room walk cannot use up their time. Best effort: they never fail the run.
+                let ownArchiveWalked = CatchUpMark()
+                @Sendable func rejoin() async -> Set<String> {
+                    while await !ownArchiveWalked.reached {
+                        guard (try? await Task.sleep(for: .milliseconds(50))) != nil else { return [] }
+                    }
+                    return await BackgroundSession.joinRooms(account: account.accountID, client: client, encryption: encryption,
+                                                             store: store, within: readSyncTimeout(until: deadline))
+                }
+                async let joined = fresh ? rejoin() : []
                 // No identity initialization, trust acceptance, queued-message preparation or
                 // outbox drain. Resumption may replay only previously authorized exact bytes.
                 try await ArchiveSynchronizer(store: store).synchronize(
-                    account: account.accountID, client: client, encryption: encryption)
+                    account: account.accountID, client: client, encryption: encryption,
+                    progress: { if $0.archive != nil { await ownArchiveWalked.reach() } })
+                await ownArchiveWalked.reach()
                 await caughtUp.reach()
                 // Best effort from here: the pull, the rejoins and the enable can no longer fail a run whose walk committed.
-                async let joined = fresh ? BackgroundSession.joinRooms(account: account.accountID, client: client, encryption: encryption,
-                                                                       store: store, within: readSyncTimeout(until: deadline)) : []
                 // After catch-up, before the claim: chats read on another device have their pointers moved, which
                 // removes their candidates. Own XEP-0333 markers were applied by the walk and the live consumer.
                 // Best effort within what is left of the budget: a slow or lost server leaves the run a success.
@@ -138,13 +149,16 @@ public enum BackgroundSession {
         catch { log.notice("push re-enable failed: \(String(describing: type(of: error)), privacy: .public)") }
     }
 
-    /// Joins every stored room (`<history maxstanzas='0'/>`: the room archive walk covers history) so the server routes
-    /// and pushes room traffic to this session again. Concurrent and bounded by `within`; a room that fails or has not
-    /// confirmed the join by the deadline is left to the next app connection. Returns the rooms that confirmed.
+    /// Joins every stored room but `skipping` (`<history maxstanzas='0'/>`: the room archive walk covers history) so the
+    /// server routes and pushes room traffic to this session again. Concurrent and bounded by `within`; a room that
+    /// refuses, fails or has not confirmed the join by the deadline is left to the next app connection. Returns the rooms
+    /// that confirmed.
     @discardableResult
     public static func joinRooms(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore,
-                                 within limit: Duration?) async -> Set<String> {
-        guard let limit, let rooms = try? await encryption.knownGroupRooms(account: account).keys.sorted(), !rooms.isEmpty else { return [] }
+                                 skipping: Set<String> = [], within limit: Duration?) async -> Set<String> {
+        guard let limit, let known = try? await encryption.knownGroupRooms(account: account).keys.sorted() else { return [] }
+        let rooms = known.filter { !skipping.contains($0) }
+        guard !rooms.isEmpty else { return [] }
         let fallback = String(account.prefix { $0 != "@" })
         var nicknames: [String: String] = [:]
         for room in rooms { nicknames[room] = (try? await store.groupNickname(accountID: account, room: room)) ?? fallback }
@@ -155,15 +169,7 @@ public enum BackgroundSession {
             func start(_ group: inout TaskGroup<String?>) {
                 while running < concurrentJoins, let room = pending.popFirst(), let nickname = nicknames[room] {
                     running += 1
-                    group.addTask {
-                        guard (try? await client.joinGroupRoom(room, nickname: nickname)) != nil else { return "" }
-                        // In once the room reflects our own presence (status 110).
-                        while !Task.isCancelled {
-                            if (try? await client.groupRoomSnapshot(room))?.joined == true { return room }
-                            try? await Task.sleep(for: .milliseconds(50))
-                        }
-                        return ""
-                    }
+                    group.addTask { await join(room, nickname: nickname, client: client, within: limit) ? room : "" }
                 }
             }
             start(&group)
@@ -177,6 +183,19 @@ public enum BackgroundSession {
             log.notice("rejoined \(joined.count, privacy: .public) of \(rooms.count, privacy: .public) rooms")
             return joined
         }
+    }
+
+    /// Joins `room` and waits until it confirms (it reflects our own presence with status 110), refuses, or `limit`
+    /// passes. A new connection's room state starts unjoined, even when a resumed session is still in the room.
+    public static func join(_ room: String, nickname: String, client: XMPPClient, within limit: Duration) async -> Bool {
+        let deadline = ContinuousClock.now + limit
+        guard (try? await client.joinGroupRoom(room, nickname: nickname)) != nil else { return false }
+        while !Task.isCancelled, ContinuousClock.now < deadline {
+            if (try? await client.groupRoomSnapshot(room))?.joined == true { return true }
+            if await client.groupRoomRefusedJoin(room) { return false }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return false
     }
 
     static let log = Logger(subsystem: "haus.xmpp.ios", category: "sync")

@@ -41,8 +41,14 @@ private func groupEnvelope() -> XMPPOMEMOEnvelope {
     #expect(!state.members.contains(groupBob)) // Mapping alone does not create membership.
     let unavailable = try groupNode("<presence from='\(groupRoom)/self' type='unavailable'/>")
     GroupChatWire.applyPresence(unavailable, room: groupRoom, account: groupAlice, state: &state)
-    #expect(!state.joined)
+    #expect(!state.joined && !state.joinRefused)
     #expect(state.occupants[groupRoom + "/self"] == nil)
+    // A refused join is told apart from leaving, so a waiting rejoin can give up at once; the next join clears it.
+    let refused = try groupNode("<presence from='\(groupRoom)/self' type='error'><error type='auth'><registration-required xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></presence>")
+    GroupChatWire.applyPresence(refused, room: groupRoom, account: groupAlice, state: &state)
+    #expect(!state.joined && state.joinRefused)
+    state.requestNickname("self")
+    #expect(!state.joinRefused)
 }
 @Test func liveGroupRejectsUnknownNicknameAndConflictingRealJID() throws {
     let xml = try GroupChatWire.outgoing(room: groupRoom, envelope: groupEnvelope(), id: "g1")
