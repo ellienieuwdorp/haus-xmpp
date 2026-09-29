@@ -63,7 +63,7 @@ final class AttachmentTrayUITests: XCTestCase {
         sentAnyway.isInverted = true
         wait(for: [sentAnyway], timeout: 2)
 
-        // The tray outlives the keyboard and a rotation, and is dropped when the chat is left.
+        // The tray outlives the keyboard and a rotation; AttachmentPanelUITests covers leaving the chat.
         let removes = app.buttons.matching(identifier: "removeAttachment")
         composer(in: app).tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
@@ -76,10 +76,6 @@ final class AttachmentTrayUITests: XCTestCase {
             wait(for: [XCTNSPredicateExpectation(predicate: turned, object: nil)], timeout: 5)
             XCTAssertEqual(removes.count, 2)
         }
-        app.buttons["BackButton"].tap()
-        app.staticTexts["Alex"].tap()
-        XCTAssertTrue(app.buttons["attachFile"].waitForExistence(timeout: 5))
-        XCTAssertEqual(removes.count, 0)
     }
 
     @MainActor func testRemovingFromTheTray() throws {

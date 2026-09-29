@@ -51,11 +51,5 @@ final class TypingLabUITests: XCTestCase {
         XCTAssertTrue(echoed.waitForExistence(timeout: 25))
         // The `active` riding on the echo clears the dots with the load that shows it.
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: indicator)], timeout: 5)
-        // Our side: composing, paused after five quiet seconds, then active when the draft empties.
-        // The peer logs each as CHAT_STATE_RECEIVED; this test cannot read that log, so it only drives the composer.
-        composer.tap(); composer.typeText("Still here")
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 6.5))
-        composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Still here".count))
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
     }
 }

@@ -46,11 +46,9 @@ final class LastSeenLabUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 4)
         app.activate()
         XCTAssertTrue(header.waitForExistence(timeout: 10))
-        let settled = Date().addingTimeInterval(15)
-        while Date() < settled {
-            XCTAssertFalse(header.label.contains("Last seen"), "an online contact must not read as gone after a resume: \(header.label)")
-            Thread.sleep(forTimeInterval: 1)
-        }
+        // An online contact must not read as gone after a resume.
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Last seen"), object: header)
+        gone.isInverted = true; wait(for: [gone], timeout: 15)
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Online"), object: header)], timeout: 10)
 
         guard let exitsAfter = env["XMPP_PEER_EXITS_AFTER"].flatMap(TimeInterval.init) else { return }
