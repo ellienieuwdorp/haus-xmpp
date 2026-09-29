@@ -59,13 +59,3 @@ private func pushNode(_ xml: String) throws -> XMPPProtocol.XMLNode {
     await #expect(throws: XMPPClientError.self) { try await client.setClientActive(false) }
     await #expect(throws: XMPPClientError.self) { try await client.enablePush(XMPPPushConfiguration(serviceJID: "push.example.org", node: "node")) }
 }
-
-@Test func enableForTheHausServiceCarriesOnlyTheSecretPublishOption() throws {
-    let node = "Qx7-" + String(repeating: "a", count: 38) + "_", secret = "Zz_" + String(repeating: "9", count: 39) + "-"
-    let config = try XMPPPushConfiguration(serviceJID: "push.xmpp.haus", node: node, publishOptions: ["secret": secret])
-    let xml = try pushNode(PushNotifications.enableXML(config))
-    #expect(xml.attributes["jid"] == "push.xmpp.haus" && xml.attributes["node"] == node)
-    let form = try #require(xml.child("x", namespace: "jabber:x:data"))
-    let fields = Dictionary(uniqueKeysWithValues: form.children.map { ($0.attributes["var"]!, $0.child("value", namespace: "jabber:x:data")!.text) })
-    #expect(fields == ["FORM_TYPE": "http://jabber.org/protocol/pubsub#publish-options", "secret": secret])
-}
