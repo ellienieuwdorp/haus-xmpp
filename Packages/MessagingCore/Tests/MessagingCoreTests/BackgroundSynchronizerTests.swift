@@ -131,6 +131,16 @@ struct BackgroundSynchronizerTests {
         #expect(readSyncTimeout(until: now - .seconds(1), now: now) == nil)
     }
 
+    @Test func backgroundSessionsLookAwaySinceTheAppWasLastInFront() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        #expect(BackgroundSession.availability(sharesLastSeen: true, leftForeground: now - 600, now: now) == .away(since: now - 600))
+        // Never recorded, or a clock that moved backwards: away since now, never since the future.
+        #expect(BackgroundSession.availability(sharesLastSeen: true, leftForeground: nil, now: now) == .away(since: now))
+        #expect(BackgroundSession.availability(sharesLastSeen: true, leftForeground: now + 60, now: now) == .away(since: now))
+        // An account that does not share last seen is still away, without the time.
+        #expect(BackgroundSession.availability(sharesLastSeen: false, leftForeground: now - 600, now: now) == .away(since: nil))
+    }
+
     @Test func refusesBusyStoreAndNeverCreatesMissingIdentity() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "background-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

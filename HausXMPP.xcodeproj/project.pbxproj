@@ -68,6 +68,7 @@
 		98522509C03F0A2E2EC5DDC8 /* PushTokenCallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5E39D1304108242CD5C4E3 /* PushTokenCallbackTests.swift */; };
 		997F9133FEBC082A9CE11584 /* AttachmentDispatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E9D1EA17C8008D91B2D600 /* AttachmentDispatchTests.swift */; };
 		9A4CA15E5D87E4F87ED8EB7A /* CoalescedReload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24971C9AFE6065119E87D945 /* CoalescedReload.swift */; };
+		9ED56F755B682E67E5E1AC20 /* SharedSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECE35FFDB91D6C5604DB273F /* SharedSession.swift */; };
 		9EE6076ADE31F6322AC800C1 /* PushUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AC8B2A7BBFCEA0E69E72232 /* PushUITests.swift */; };
 		9FC332FF4AF38C8957D680FB /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 0C4661ACD1CB92BD1D68625E /* XMPPProtocol */; };
 		A0920557A279DC90E4FEB750 /* PushRegistrationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A804ED5CE56EF792DB11C29 /* PushRegistrationState.swift */; };
@@ -101,6 +102,7 @@
 		DC910FDC979FB743D000181A /* ConversationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79318867472966FE7C1CE331 /* ConversationUITests.swift */; };
 		DCA02E204E43ED4D678791C5 /* OMEMO in Frameworks */ = {isa = PBXBuildFile; productRef = 3E9C53216836835810A07D0D /* OMEMO */; };
 		DCCCCA8B4897042F34684899 /* NotificationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 843FF17A13C02A39A0E7F1F1 /* NotificationActions.swift */; };
+		DE945F171D7F6572525A29B9 /* SharedSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECE35FFDB91D6C5604DB273F /* SharedSession.swift */; };
 		DF8CCB525B41DAB27670D91E /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70D8DDFCEAC226CF360BB9B /* NotificationService.swift */; };
 		E40B06FA5622DF39341E4C90 /* NotificationAccountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C173CF664784D46CDDD2530B /* NotificationAccountTests.swift */; };
 		E5FF332C7F7C8994826D084E /* TypingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F6C87896726C22E2B4737A2 /* TypingUITests.swift */; };
@@ -260,6 +262,7 @@
 		E92B47FBB2381FF8C35F67FC /* ReplyUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyUITests.swift; sourceTree = "<group>"; };
 		EB0603B06B31C83D97163794 /* PushOnboardingLabUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushOnboardingLabUITests.swift; sourceTree = "<group>"; };
 		ECB57CE3D62350BCA14A7C97 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
+		ECE35FFDB91D6C5604DB273F /* SharedSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedSession.swift; sourceTree = "<group>"; };
 		FA7A448E9D7C66724DCB4084 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		FCEBA3C742AE37C79EB4D6E0 /* ConversationTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTimeline.swift; sourceTree = "<group>"; };
 		FD46841CB3F00F5A791CDFEF /* UITestStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestStorage.swift; sourceTree = "<group>"; };
@@ -313,6 +316,7 @@
 				67FBE70E902253A52534F4CA /* NotificationAccessGate.swift */,
 				174D8D2CD8272853B0A9593D /* NotificationAccount.swift */,
 				3A804ED5CE56EF792DB11C29 /* PushRegistrationState.swift */,
+				ECE35FFDB91D6C5604DB273F /* SharedSession.swift */,
 				63BD52830F320F4C99E25EBF /* SharedStorage.swift */,
 			);
 			path = Shared;
@@ -693,6 +697,7 @@
 				106C2F5D77A7AD14FAABBDDC /* RootView.swift in Sources */,
 				CDD30092CA9FE2D8C03A894C /* SessionState.swift in Sources */,
 				32F7F88A717F84963107FCAF /* SettingsView.swift in Sources */,
+				DE945F171D7F6572525A29B9 /* SharedSession.swift in Sources */,
 				F412496B7E47C33C79167A90 /* SharedStorage.swift in Sources */,
 				75903C047102BA2ECDC5E97E /* SignInView.swift in Sources */,
 				364D130D4D94312A5D5DADDE /* Theme.swift in Sources */,
@@ -711,6 +716,7 @@
 				D419C92261C228E906EF7518 /* NotificationAccount.swift in Sources */,
 				DF8CCB525B41DAB27670D91E /* NotificationService.swift in Sources */,
 				6CD66E39F6B66B34D6923F66 /* PushRegistrationState.swift in Sources */,
+				9ED56F755B682E67E5E1AC20 /* SharedSession.swift in Sources */,
 				09056D65DA03B72597428EAA /* SharedStorage.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

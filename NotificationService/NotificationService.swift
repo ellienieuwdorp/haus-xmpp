@@ -92,7 +92,11 @@ private enum ExtensionRun {
             }))
             try await BackgroundSynchronizer().synchronize(databaseURL: root.appending(path: "messages.sqlite"), wrappingKey: key,
                 account: BackgroundAccount(host: account.host, port: account.port, domain: account.domain,
-                                           username: account.username, password: account.password),
+                                           username: account.username, password: account.password,
+                                           resource: SharedSession.resource(accountID: accountID),
+                                           push: PushRegistrationState.sessionSubscription(
+                                               saved: account.push, state: try? PushRegistrationState.load(accountID: accountID)),
+                                           leftForeground: SharedSession.leftForeground()),
                 progress: progress, presentation: { store in
                     // Keep the transport lease through presentation. Preferences cannot change under this lease;
                     // logout authorization is reread after the network work.

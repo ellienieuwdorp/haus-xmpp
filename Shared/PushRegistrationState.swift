@@ -25,6 +25,16 @@ struct PushRegistrationState: Codable, Sendable, Equatable {
         return state
     }
 
+    /// The subscription a session the app did not set up (the extension, a notification action) re-enables after a
+    /// fresh bind: the saved account's, and only while this journal is settled on it. A registration or revocation
+    /// still pending, a disable still owed or a subscription the journal does not know is left to the app, which
+    /// registers with the gateway before it enables.
+    static func sessionSubscription(saved push: XMPPPushConfiguration?, state: Self?) -> XMPPPushConfiguration? {
+        guard let push, let state, state.configuration == push, !state.disablePending,
+              state.journal.pending == nil, state.journal.acknowledgedRevision > 0 else { return nil }
+        return push
+    }
+
     static func load(accountID: String) throws -> Self? {
         var query = query(accountID)
         query[kSecReturnData as String] = true

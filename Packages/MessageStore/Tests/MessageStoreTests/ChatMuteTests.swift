@@ -73,7 +73,10 @@ private func deliver(_ store: MessageStore, _ id: String, chat: String = "peer@e
 @Test func mentionsOnlyGroupQueuesOnlyMessagesThatMentionTheUser() async throws {
     try await withEncryptedStore(account: account) { store, _ in
         try await store.upsertChat(accountID: account, chatID: room, title: "Room")
+        #expect(try await store.groupNickname(accountID: account, room: room) == nil)
         try await store.setGroupNickname(accountID: account, room: room, nickname: "Ellie N")
+        // Kept for the extension's rejoin as well as for mentions.
+        #expect(try await store.groupNickname(accountID: account, room: room) == "Ellie N")
         try await store.setChatNotificationSetting(accountID: account, chatID: room, ChatNotificationSetting(level: .mentions))
         let alice = "alice@example.org"
         #expect(try await !deliver(store, "plain", chat: room, sender: alice, body: "Lunch at noon?", group: true))

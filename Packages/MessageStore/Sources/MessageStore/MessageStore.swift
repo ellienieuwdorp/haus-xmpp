@@ -1113,6 +1113,12 @@ public actor MessageStore {
         }
     }
 
+    /// The nickname `setGroupNickname` kept for `room`; nil for a room joined before the store kept it. The extension
+    /// and notification actions rejoin with it, so the room sees the same occupant the app is.
+    public func groupNickname(accountID: String, room: String) throws -> String? {
+        try connection.query("SELECT room_nickname FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(room)]).first?[0].optionalString
+    }
+
     /// Test seam: the queued candidates' message IDs, oldest first.
     func pendingNotificationMessageIDs(accountID: String) throws -> [String] {
         try connection.query("SELECT message_id FROM notification_candidates WHERE account_id=? ORDER BY sequence", [.text(accountID)]).map { $0[0].string }
