@@ -66,3 +66,20 @@ struct PushRegistrationJournalTests {
         #expect(journal == saved)
     }
 }
+
+struct PushRegistrationJournalAbandonTests {
+    @Test func abandoningARevocationTheGatewayCannotFindKeepsRevisionsMonotonic() throws {
+        var journal = PushRegistrationJournal()
+        let register = try journal.stageRegistration(deviceToken: "aabb")
+        #expect(journal.acknowledge(try XMPPPushRegistrationResult(revision: 1, action: .register), for: register))
+        let revoke = try journal.stageRevocation()
+        let abandoned = journal.abandonPending(revoke)
+        #expect(abandoned && journal.pending == nil && journal.revision == 2)
+        #expect(try journal.stageFreshRegistration(deviceToken: "aabb").revision == 3)
+        // A stale operation cannot clear newer intent.
+        let stale = journal.abandonPending(revoke)
+        #expect(!stale && journal.pending != nil)
+        let restored = try JSONDecoder().decode(PushRegistrationJournal.self, from: JSONEncoder().encode(journal))
+        #expect(restored == journal)
+    }
+}

@@ -51,6 +51,14 @@ public struct PushRegistrationJournal: Codable, Sendable, Equatable, CustomStrin
         return true
     }
 
+    /// Settles `operation` without a gateway result: only for a revocation the gateway answered with item-not-found (it
+    /// holds no such node, so there is nothing left to revoke). The revision stays spent.
+    @discardableResult public mutating func abandonPending(_ operation: XMPPPushRegistrationOperation) -> Bool {
+        guard pending == operation else { return false }
+        acknowledgedRevision = operation.revision; pending = nil
+        return true
+    }
+
     /// Call only with a status result from the authenticated configured component. This
     /// preserves the current local intent after reinstall/conflict; persist before retrying.
     @discardableResult public mutating func rebasePending(after result: XMPPPushRegistrationResult) throws -> XMPPPushRegistrationOperation? {
