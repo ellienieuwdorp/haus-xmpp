@@ -1512,6 +1512,12 @@ final class ServiceTests: XCTestCase {
         do { _ = try await f.b.receive(account: f.bob, message: f.message(envelopes[0], id: "m1", fallbackBody: true), transport: f.bTransport, sentAt: stamp); XCTFail("Trust undecided") }
         catch { expectEqual(error as? OMEMOError, .trustRequired) }
         expectEqual(try await f.bStore.pendingNotifications(accountID: f.bob).candidates.map(\.content), [.pendingEncrypted])
+        // The kept row as a build from before this rule wrote it: without the bubble hint.
+        let kept = try unwrap(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).first)
+        var json = try unwrap(try JSONSerialization.jsonObject(with: kept.wire) as? [String: Any])
+        expectTrue(json.removeValue(forKey: "expectsBubble") != nil)
+        expectTrue(try await f.bStore.replacePendingEncryptedIncomingContext(accountID: f.bob, sender: f.alice, digest: kept.digest,
+            expectedWire: kept.wire, wire: try JSONSerialization.data(withJSONObject: json)))
         let author = try unwrap(try await f.b.overview(account: f.bob, peer: f.alice).devices.first { $0.jid == f.alice && $0.active })
         try await f.b.setTrust(account: f.bob, deviceID: author.id, trust: .rejected)
         let ratchets = try await f.engines(f.bStore, account: f.bob)

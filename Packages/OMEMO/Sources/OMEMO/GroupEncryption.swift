@@ -23,6 +23,19 @@ public struct GroupEncryptionOverview: Sendable {
 struct RetainedGroupEnvelope: Codable {
     let message: XMPPEncryptedGroupMessage
     let sentAt: Date
+    /// False for a row kept before room messages recorded their `<body/>` hint, which then decodes as absent: a retry
+    /// counts such a message as a bubble, as it does an old direct row.
+    private(set) var recordsBubbleHint = true
+
+    init(message: XMPPEncryptedGroupMessage, sentAt: Date) { self.message = message; self.sentAt = sentAt }
+    private enum CodingKeys: String, CodingKey { case message, sentAt }
+    private enum MessageKeys: String, CodingKey { case hasFallbackBody }
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        message = try values.decode(XMPPEncryptedGroupMessage.self, forKey: .message)
+        sentAt = try values.decode(Date.self, forKey: .sentAt)
+        recordsBubbleHint = try values.nestedContainer(keyedBy: MessageKeys.self, forKey: .message).contains(.hasFallbackBody)
+    }
 }
 
 extension OMEMOService {

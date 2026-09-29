@@ -1270,7 +1270,11 @@ public actor OMEMOService {
                         try await awaitTrustDecision(item, account: account)
                         continue
                     }
-                    do { _ = try await receiveGroup(account: account, message: group.message, transport: groupTransport, sentAt: group.sentAt) }
+                    let message = group.recordsBubbleHint ? group.message
+                        : try XMPPEncryptedGroupMessage(id: group.message.id, room: group.message.room, occupant: group.message.occupant,
+                                                        sender: group.message.sender, envelope: group.message.envelope, provenance: group.message.provenance,
+                                                        roomStanzaID: group.message.roomStanzaID, hasFallbackBody: true)
+                    do { _ = try await receiveGroup(account: account, message: message, transport: groupTransport, sentAt: group.sentAt) }
                     catch {
                         if (try? await load(account))?.1.groupRooms[group.message.room] == nil { unresolvedRooms.insert(group.message.room) }
                         throw error
