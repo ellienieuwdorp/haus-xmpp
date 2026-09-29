@@ -59,6 +59,28 @@ struct PushRegistrationState: Codable, Sendable, Equatable {
         } else if status != errSecSuccess { throw NotificationAccount.Failure.unavailable }
     }
 
+    /// Registrations saved before addresses were normalised are keyed by the account as typed (`Ellie@Example.org`),
+    /// so a lookup by the normal spelling would miss a pending revocation or disable. Each moves to the normal key once;
+    /// one already saved there wins.
+    static func normalizeSavedAccounts() {
+        var all = query("")
+        all[kSecAttrAccount as String] = nil
+        all[kSecMatchLimit as String] = kSecMatchLimitAll
+        all[kSecReturnAttributes as String] = true
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(all as CFDictionary, &result) == errSecSuccess, let items = result as? [[String: Any]] else { return }
+        for account in items.compactMap({ $0[kSecAttrAccount as String] as? String }) {
+            guard let normal = JID.normalizedBare(account), normal != account,
+                  let saved = try? load(accountID: account) else { continue }
+            if (try? load(accountID: normal)) == nil {
+                var moved = PushRegistrationState(accountID: normal, configuration: saved.configuration, journal: saved.journal)
+                moved.disablePending = saved.disablePending
+                guard (try? moved.save()) != nil else { continue }
+            }
+            SecItemDelete(query(account) as CFDictionary)
+        }
+    }
+
     private static func query(_ account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: "haus.xmpp.push-registration",

@@ -137,7 +137,8 @@ actor StreamManagement {
             let loaded = try await persistence.load()
             if let loaded {
                 let replayable = loaded.journal.filter { $0.xml != nil }
-                guard loaded.accountID == accountID, OMEMOWire.bareJID(loaded.fullJID) == accountID,
+                // In normal form: a session saved by a build that kept the typed capitals is still this account's.
+                guard let account = OMEMOWire.bareJID(accountID), OMEMOWire.bareJID(loaded.accountID) == account, OMEMOWire.bareJID(loaded.fullJID) == account,
                       loaded.fullJID.contains("/"), loaded.streamID.map(validArchiveID) ?? true, loaded.revision > 0,
                       loaded.outboundSent >= loaded.outboundAcknowledged,
                       loaded.outboundSent - loaded.outboundAcknowledged == UInt64(loaded.journal.count),

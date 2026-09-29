@@ -18,12 +18,16 @@ struct AttachmentFiles {
     let root: URL
 
     init(directory: URL, account: String) {
-        let scope = SHA256.hash(data: Data(account.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
-        root = directory.appending(path: "attachments/\(scope)", directoryHint: .isDirectory)
+        root = Self.root(directory: directory, account: account)
         for sub in ["cache", "staging"] {
             try? FileManager.default.createDirectory(at: root.appending(path: sub), withIntermediateDirectories: true,
                                                      attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
         }
+    }
+
+    static func root(directory: URL, account: String) -> URL {
+        let scope = SHA256.hash(data: Data(account.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+        return directory.appending(path: "attachments/\(scope)", directoryHint: .isDirectory)
     }
 
     func cached(_ attachment: StoredAttachment, messageID: String) -> URL? {

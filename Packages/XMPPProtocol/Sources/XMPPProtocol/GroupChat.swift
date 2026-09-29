@@ -164,7 +164,7 @@ enum GroupChatWire {
         guard query.children.count <= 100 else { throw XMPPGroupError.incompleteMembership }
         return try query.children.map { item in
             guard item.name == "item", item.namespace == admin, item.attributes["affiliation"] == affiliation,
-                  let jid = item.attributes["jid"], let bare = OMEMOWire.bareJID(jid), bare == jid else { throw XMPPGroupError.incompleteMembership }
+                  let jid = item.attributes["jid"], !jid.contains("/"), let bare = OMEMOWire.bareJID(jid) else { throw XMPPGroupError.incompleteMembership }
             return bare
         }
     }
@@ -213,7 +213,7 @@ enum GroupChatWire {
                          hasFallbackBody: !node.children("body", namespace: "jabber:client").isEmpty)
     }
     static func stanzaID(_ node: XMLNode, room: String, archiveID: String? = nil) throws -> String? {
-        let identifiers = node.children.filter { $0.name == "stanza-id" && $0.namespace == "urn:xmpp:sid:0" && $0.attributes["by"] == room }
+        let identifiers = node.children.filter { $0.name == "stanza-id" && $0.namespace == "urn:xmpp:sid:0" && $0.attributes["by"].flatMap(JID.normalized) == room }
         guard identifiers.count <= 1 else { throw XMPPGroupError.invalidMessage }
         let value = identifiers.first?.attributes["id"]
         if let identifier = identifiers.first {

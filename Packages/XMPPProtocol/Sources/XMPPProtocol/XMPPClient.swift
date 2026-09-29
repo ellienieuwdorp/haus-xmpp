@@ -479,7 +479,10 @@ public actor XMPPClient {
             guard node.name == "iq", node.namespace == "jabber:client", node.attributes["id"] == bindID,
                   node.attributes["type"] == "result",
                   let jid = node.child("bind", namespace: "urn:ietf:params:xml:ns:xmpp-bind")?.child("jid", namespace: "urn:ietf:params:xml:ns:xmpp-bind")?.text, !jid.isEmpty else { throw XMPPClientError.bindingFailed }
-            boundJID = jid
+            // The server picks the resource and the canonical spelling, never another account (RFC 6120 §7.7).
+            guard let bound = JID(jid), bound.localpart != nil, bound.resourcepart != nil,
+                  bound.bare == JID.normalizedBare(username + "@" + domain) else { throw XMPPIdentityError.boundAccountMismatch }
+            boundJID = bound.full
             if smOffered, streamManagement != nil {
                 phase = .enablingSM
                 // No `max`: the server's default applies (Prosody ignores the attribute; others cap it anyway).
@@ -507,7 +510,7 @@ public actor XMPPClient {
                 guard node.name == "resumed", let snapshot = resumeSnapshot,
                       node.attributes["previd"] == snapshot.streamID,
                       let h = Self.smCount(node.attributes["h"]), let streamManagement else { throw XMPPClientError.unexpectedProtocol }
-                boundJID = snapshot.fullJID
+                boundJID = JID.normalized(snapshot.fullJID) ?? snapshot.fullJID
                 let replay = try await streamManagement.acknowledge(h, resumed: true)
                 try emit(.streamAcknowledged)
                 guard try await streamManagement.permitsReplay() else { throw XMPPStreamManagementError.invalidState }
@@ -519,6 +522,8 @@ public actor XMPPClient {
                 try await becomeOnline(token: token, resumed: true)
             }
         case .online:
+            // Parse addresses once: everything below compares `from`/`to` (also forwarded ones) in normal form.
+            let node = JID.normalizingAddresses(node)
             if node.namespace == "urn:xmpp:sm:3" {
                 guard let streamManagement else { throw XMPPClientError.unexpectedProtocol }
                 if node.name == "r" {

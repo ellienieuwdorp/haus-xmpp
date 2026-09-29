@@ -1,17 +1,24 @@
 import Foundation
 
 /// An IQ ID is only a correlation token. The response must also come from the addressed entity.
+/// Addresses are compared in normal form (`JID`): a server answers for `Bob@Example.org` as `bob@example.org`.
 struct IQReplyScope: Sendable {
     let recipient: String?
     let accountBareJID: String
     let accountFullJID: String
     let serverDomain: String
 
+    init(recipient: String?, accountBareJID: String, accountFullJID: String, serverDomain: String) {
+        func normal(_ value: String) -> String { JID.normalized(value) ?? value }
+        self.recipient = recipient.map(normal); self.accountBareJID = normal(accountBareJID)
+        self.accountFullJID = normal(accountFullJID); self.serverDomain = normal(serverDomain)
+    }
+
     func accepts(_ node: XMLNode) -> Bool {
         guard node.name == "iq", node.namespace == "jabber:client",
               ["result", "error"].contains(node.attributes["type"] ?? "") else { return false }
-        if let to = node.attributes["to"], to != accountBareJID && to != accountFullJID { return false }
-        let from = node.attributes["from"]
+        if let to = node.attributes["to"].map({ JID.normalized($0) ?? $0 }), to != accountBareJID && to != accountFullJID { return false }
+        let from = node.attributes["from"].map { JID.normalized($0) ?? $0 }
         if let recipient, recipient != accountBareJID && recipient != serverDomain {
             // No bare/full widening: a different resource is not the entity we queried.
             return from == recipient

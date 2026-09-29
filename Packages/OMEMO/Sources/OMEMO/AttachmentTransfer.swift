@@ -36,9 +36,10 @@ extension OMEMOService {
         return try protection.seal((iv ?? Data()) + (key ?? Data()), account: account)
     }
 
-    /// Nil means the file was shared without encryption; callers may still download it.
-    public nonisolated func openAttachmentSecret(account: String, secret: Data) throws -> (key: Data, iv: Data)? {
-        let material = try protection.open(secret, account: account)
+    /// Nil means the file was shared without encryption; callers may still download it. `sealedAs` is the stored
+    /// attachment's `sealedAccount`.
+    public nonisolated func openAttachmentSecret(account: String, secret: Data, sealedAs: String? = nil) throws -> (key: Data, iv: Data)? {
+        let material = try protection.open(secret, account: account, sealedAs: sealedAs)
         if material.isEmpty { return nil }
         guard material.count == 44 else { throw OMEMOError.invalidContent }
         return (Data(material.suffix(32)), Data(material.prefix(12)))
@@ -47,7 +48,7 @@ extension OMEMOService {
     /// The wire form of a stored attachment, for the outgoing envelope.
     nonisolated func fileSharing(for attachment: StoredAttachment, account: String) throws -> MessageContent.FileSharing {
         guard attachment.uploadState == .uploaded, let url = attachment.url, let hash = Data(hex: attachment.hash), hash.count == 32 else { throw OMEMOError.unavailable }
-        let secret = try openAttachmentSecret(account: account, secret: attachment.secret)
+        let secret = try openAttachmentSecret(account: account, secret: attachment.secret, sealedAs: attachment.sealedAccount)
         return MessageContent.FileSharing(name: attachment.name, mediaType: attachment.mediaType, size: attachment.size, width: attachment.width, height: attachment.height,
                                           hash: hash, url: url, key: secret?.key, iv: secret?.iv, cipherHash: attachment.cipherHash.flatMap { Data(hex: $0) })
     }

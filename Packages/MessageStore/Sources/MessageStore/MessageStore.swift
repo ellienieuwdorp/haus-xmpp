@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 22 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 23 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -339,7 +339,12 @@ public actor MessageStore {
                     )
                     """)
             }
-            try connection.execute("PRAGMA user_version = 22")
+            // v23: stored addresses in normal form; merges chats that differ only in spelling. `AddressMigration` checks
+            // each table and column exists and is idempotent, so it is safe in any merge order. A rewrite it had to roll
+            // back leaves the version below 23, so a later open tries again instead of stranding the typed spelling.
+            try AddressMigration.addSealedAccountColumns(connection)
+            let addressesMigrated = try version >= 23 || AddressMigration.run(connection)
+            try connection.execute("PRAGMA user_version = \(addressesMigrated ? 23 : 22)")
         }
     }
 
@@ -932,9 +937,14 @@ public actor MessageStore {
     }
 
     public func encryptionState(accountID: String) throws -> EncryptionState? {
-        guard let row = try connection.query("SELECT revision,snapshot FROM encryption_state WHERE account_id=?", [.text(accountID)]).first else { return nil }
+        guard let row = try connection.query("SELECT revision,snapshot,sealed_account FROM encryption_state WHERE account_id=?", [.text(accountID)]).first else { return nil }
         guard let data = row[1].data, !data.isEmpty else { throw MessageStoreError.invalidValue }
-        return EncryptionState(revision: row[0].integer, data: data)
+        return EncryptionState(revision: row[0].integer, data: data, sealedAccount: row[2].optionalString)
+    }
+
+    /// Every account with saved encryption state, in the spelling its row is keyed by.
+    public func encryptionStateAccountIDs() throws -> [String] {
+        try connection.query("SELECT account_id FROM encryption_state").map { $0[0].string }
     }
 
     /// A failed comparison or any persistence error rolls back the whole operation. The caller
@@ -971,7 +981,7 @@ public actor MessageStore {
         guard current == expectedRevision, (current ?? 0) < Int.max else { throw MessageStoreError.invalidTransition }
         try connection.execute("""
             INSERT INTO encryption_state(account_id,revision,snapshot) VALUES(?,?,?)
-            ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision,snapshot=excluded.snapshot
+            ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision,snapshot=excluded.snapshot,sealed_account=NULL
             """, [.text(accountID), .integer((current ?? 0) + 1), .blob(data)])
     }
 
@@ -2304,7 +2314,7 @@ public actor MessageStore {
     // ponytail: one extra lookup per message row (bounded by the 1000-row page); join when it shows in traces.
     private func decodeRow(_ row: [Value]) throws -> StoredMessage {
         var message = try Self.decode(row)
-        if let attachment = try connection.query("SELECT name,media_type,size,width,height,hash,cipher_hash,secret,url,upload_state,task_id FROM attachments WHERE account_id=? AND message_id=?",
+        if let attachment = try connection.query("SELECT name,media_type,size,width,height,hash,cipher_hash,secret,url,upload_state,task_id,sealed_account FROM attachments WHERE account_id=? AND message_id=?",
                                                  [.text(message.accountID), .text(message.id)]).first {
             func integer(_ value: Value) -> Int? { if case .integer(let number) = value { return number }; return nil }
             func text(_ value: Value) -> String? { if case .text(let string) = value { return string }; return nil }
@@ -2312,6 +2322,7 @@ public actor MessageStore {
                                                   width: integer(attachment[3]), height: integer(attachment[4]), hash: attachment[5].string,
                                                   cipherHash: text(attachment[6]), secret: attachment[7].data ?? Data(), url: text(attachment[8]),
                                                   uploadState: text(attachment[9]).flatMap(StoredAttachment.UploadState.init(rawValue:)), uploadTaskID: integer(attachment[10]))
+            message.attachment?.sealedAccount = text(attachment[11])
         }
         return message
     }
@@ -2336,7 +2347,7 @@ public actor MessageStore {
     }
 }
 
-private enum Value {
+enum Value {
     case text(String), integer(Int), real(Double), blob(Data), null
     var data: Data? { if case let .blob(value) = self { return value }; return nil }
     var string: String { if case let .text(value) = self { return value }; return "" }
@@ -2358,8 +2369,8 @@ private enum Value {
 }
 
 /// Owned exclusively by its MessageStore actor after initialization.
-private final class Connection: @unchecked Sendable {
-    private var handle: OpaquePointer?
+final class Connection: @unchecked Sendable {
+    private(set) var handle: OpaquePointer?
     var isOpen: Bool { handle != nil }
     init(url: URL) throws {
         let result = sqlite3_open_v2(url.path, &handle, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)

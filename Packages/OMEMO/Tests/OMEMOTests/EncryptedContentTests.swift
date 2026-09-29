@@ -31,6 +31,8 @@ final class EncryptedContentTests: XCTestCase {
         assertRejected(envelope(affixes: "<from/><to jid='bob@localhost'/>"))
         assertRejected(envelope(affixes: "<from jid='alice@localhost'/><to/>"))
         XCTAssertEqual(try decode(envelope(affixes: "<from jid='alice@localhost/laptop'/><to jid='bob@localhost/phone'/>" )).body, "Hello")
+        // Another client may spell the addresses as its user typed them; they name the same accounts.
+        XCTAssertEqual(try decode(envelope(affixes: "<from jid='Alice@LocalHost/laptop'/><to jid='BOB@localhost'/>")).body, "Hello")
         XCTAssertEqual(try decode(envelope(affixes: "")).body, "Hello", "Direct-message profile permits missing from/to affixes")
     }
 

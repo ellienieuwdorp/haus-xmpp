@@ -42,11 +42,11 @@ public enum DisplayedSync {
     /// One `<item/>` of the node, from an IQ result (pubsub namespace) or an event (pubsub#event namespace).
     /// Anything unexpected makes the item unusable (nil), never a guess.
     static func parseItem(_ item: XMLNode, namespace container: String) -> XMPPDisplayedItem? {
-        guard item.name == "item", item.namespace == container, let chat = item.attributes["id"], validJID(chat),
+        guard item.name == "item", item.namespace == container, let chat = item.attributes["id"].flatMap(JID.normalized), validJID(chat),
               item.children.count == 1, item.children[0].name == "displayed", item.children[0].namespace == namespace else { return nil }
         let displayed = item.children[0]
         let identifiers = displayed.children.filter { $0.name == "stanza-id" && $0.namespace == stanzaIDNamespace }
-        guard identifiers.count == 1, let id = identifiers[0].attributes["id"], let by = identifiers[0].attributes["by"],
+        guard identifiers.count == 1, let id = identifiers[0].attributes["id"], let by = identifiers[0].attributes["by"].flatMap(JID.normalized),
               identifiers[0].children.isEmpty else { return nil }
         let parsed = XMPPDisplayedItem(chat: chat, stanzaID: id, by: by)
         return valid(parsed) ? parsed : nil
@@ -74,7 +74,7 @@ public enum DisplayedSync {
     /// `by` is the account's bare JID counts (the server strips client-supplied ones with that `by`); none or more
     /// than one is nil.
     static func ownStanzaID(_ message: XMLNode, accountBareJID: String) -> String? {
-        let identifiers = message.children.filter { $0.name == "stanza-id" && $0.namespace == stanzaIDNamespace && $0.attributes["by"] == accountBareJID }
+        let identifiers = message.children.filter { $0.name == "stanza-id" && $0.namespace == stanzaIDNamespace && $0.attributes["by"].flatMap(JID.normalized) == accountBareJID }
         guard identifiers.count == 1, let id = identifiers[0].attributes["id"], identifiers[0].children.isEmpty,
               OMEMOWire.validStanzaID(id) else { return nil }
         return id

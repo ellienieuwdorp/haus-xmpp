@@ -242,6 +242,7 @@ final class AppModel {
     init() {
         // The saved account is known before storage opens, so the first frame already carries the account avatar
         // and the Chats stack is not rebuilt (its identity is the account) once `prepare()` reads the same value.
+        AccountIdentityMigration.migratePreferences(preferences)
         accountID = preferences.string(forKey: "lastAccount") ?? ""
         NotificationActionCenter.shared.handler = { [weak self] request, budget in
             await self?.performNotificationAction(request, budget: budget) ?? .rejected
@@ -291,6 +292,8 @@ final class AppModel {
         do {
             let directory = try await SharedStorage.directory(testSessionID: testSessionID, migrate: true)
             storageRoot = directory
+            AccountIdentityMigration.moveFiles(directory: directory, defaults: preferences)
+            if testSessionID == nil { PushRegistrationState.normalizeSavedAccounts() }
             store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
             storageDirectory = directory
             let uploader = AttachmentUploader(scope: testSessionID ?? "primary")
@@ -413,8 +416,9 @@ final class AppModel {
     /// `address` is a lab username or a full `name@domain`; `host` optionally overrides the server (direct TLS on 5223).
     func connect(username address: String, password: String, host serverHost: String? = nil, savedEndpoint: NotificationAccount? = nil) async -> Bool {
         let parts = address.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "@", maxSplits: 1).map(String.init)
-        let username = parts.first ?? ""
-        let requestedDomain = savedEndpoint?.domain ?? (parts.count == 2 ? parts[1].lowercased() : DevelopmentEndpoint.domain)
+        // One spelling for the account from here on (RFC 7622 normal form): the bound JID, every key and comparison.
+        let username = parts.first.flatMap(JID.normalizedLocalpart) ?? ""
+        let requestedDomain = savedEndpoint?.domain ?? (parts.count == 2 ? JID.normalizedDomainpart(parts[1]) ?? "" : DevelopmentEndpoint.domain)
         let localPattern = parts.count == 2 ? #"^[^@/\s]{1,64}$"# : #"^[a-z0-9][a-z0-9._-]{0,63}$"#
         let domainPattern = #"^(localhost|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+)$"#
         guard foreground, !quiescing, !session.isConnecting else { return false }
@@ -494,7 +498,8 @@ final class AppModel {
             guard generation == token else { await connection.disconnect(); return false }
             let message = Self.failureMessage(for: error)
             session = .offline(reason: message)
-            if Self.isAuthenticationFailure(error) {
+            // A server that signs in another account is not retried either: the entered address needs a look.
+            if Self.isAuthenticationFailure(error) || error is XMPPIdentityError {
                 authenticationRejected = true
                 signInRequested = true
             }
@@ -518,6 +523,7 @@ final class AppModel {
         case XMPPClientError.timedOut: "The server did not respond."
         case MessageStoreError.transportOwnedElsewhere: "Another process is still using this account’s storage. Try again in a moment."
         case is CancellationError: "Connection cancelled."
+        case XMPPIdentityError.boundAccountMismatch: "The server signed in a different account than the one entered."
         default: "Could not reach the server."
         }
     }
@@ -1159,7 +1165,7 @@ final class AppModel {
             Task { [weak self] in
                 defer { self?.downloading.remove(message.id) }
                 do {
-                    let secret = try encryption.openAttachmentSecret(account: account, secret: attachment.secret)
+                    let secret = try encryption.openAttachmentSecret(account: account, secret: attachment.secret, sealedAs: attachment.sealedAccount)
                     let bytes = try await AttachmentDownloader.fetch(attachment, secret: secret)
                     let destination = files.cacheURL(attachment, messageID: message.id)
                     try files.write(bytes, to: destination)
@@ -1443,36 +1449,38 @@ final class AppModel {
         return isConnected && encryptionReady && groupChats[chatID]?.joined == true
     }
 
-    func joinGroup(room: String, nickname: String) async -> Bool {
+    /// The room's chat ID (its address in normal form), or nil with `error` set.
+    func joinGroup(room: String, nickname: String) async -> String? {
         guard hasTransportOwnership, foreground, !quiescing, isConnected, encryptionReady,
-              let client, let encryption, let store else { error = "Connect before joining a group."; return false }
-        let room = room.trimmingCharacters(in: .whitespacesAndNewlines)
+              let client, let encryption, let store else { error = "Connect before joining a group."; return nil }
+        // In normal form, the spelling the room's presence and messages arrive with; not a valid room address fails below.
+        let room = JID(room.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.localpart != nil && $0.resourcepart == nil ? $0.bare : nil } ?? ""
         let nickname = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
         let domain = accountDomain
         let roomAllowed = isLabAccount ? room.hasSuffix("@rooms." + domain) : (room.contains("@") && !room.hasPrefix("@") && !room.hasSuffix("@"))
         guard roomAllowed, !room.contains("/"), !room.contains(where: { $0.isWhitespace }),
-              !nickname.isEmpty else { error = isLabAccount ? "Enter a group address at rooms.\(domain) and a nickname." : "Enter a group address such as room@conference.example.org and a nickname."; return false }
+              !nickname.isEmpty else { error = isLabAccount ? "Enter a group address at rooms.\(domain) and a nickname." : "Enter a group address such as room@conference.example.org and a nickname."; return nil }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         let account = accountID, token = generation
         do {
             let overview = try await encryption.refreshGroupDevices(account: account, room: room, transport: client)
-            guard generation == token, foreground, !quiescing else { return false }
+            guard generation == token, foreground, !quiescing else { return nil }
             groupChats[room] = GroupChatState(members: overview.room.members, devices: overview.devices)
             _ = try await client.joinGroupRoom(room, nickname: nickname)
             let confirmed = try await client.groupRoomSnapshot(room)
-            guard generation == token, foreground, !quiescing else { return false }
+            guard generation == token, foreground, !quiescing else { return nil }
             preferences.set(nickname, forKey: "groupNickname.\(account).\(room)")
             groupChats[room]?.joined = confirmed?.joined == true
             try await store.upsertChat(accountID: account, chatID: room, title: String(room.prefix { $0 != "@" }))
             // On the device only, where a commit (app or extension) can tell a mention of this nickname.
             try await store.setGroupNickname(accountID: account, room: room, nickname: nickname)
-            guard generation == token else { return false }
+            guard generation == token else { return nil }
             await refresh()
-            return true
+            return room
         } catch {
             if generation == token { self.error = groupFailure(error) }
-            return false
+            return nil
         }
     }
 
@@ -1699,22 +1707,24 @@ final class AppModel {
         }
     }
 
-    func createChat(_ recipient: String) async -> Bool {
-        let recipient = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !accountID.isEmpty, recipient.contains("@"), !recipient.contains("/"),
-              !recipient.contains(where: { $0.isWhitespace }), let store else {
+    /// The chat's ID (the address in normal form), or nil with `error` set.
+    func createChat(_ recipient: String) async -> String? {
+        // `Bob@Example.org` is the chat the server's `bob@example.org` replies land in.
+        let address = JID(recipient.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !accountID.isEmpty, let address, address.localpart != nil, address.resourcepart == nil, let store else {
             error = "Enter a contact address such as bob@localhost."
-            return false
+            return nil
         }
+        let recipient = address.bare
         guard isDemo || !isLabAccount || recipient.hasSuffix("@" + accountDomain) else {
             error = "Lab accounts only message other accounts on the same lab server."
-            return false
+            return nil
         }
         do {
             try await store.upsertChat(accountID: accountID, chatID: recipient, title: recipient)
             await refresh()
-            return true
-        } catch { self.error = "Could not create conversation."; return false }
+            return recipient
+        } catch { self.error = "Could not create conversation."; return nil }
     }
 
     func send(_ body: String, to chatID: String, replyingTo source: ChatMessage? = nil) async -> Bool {
