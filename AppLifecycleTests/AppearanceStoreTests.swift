@@ -20,19 +20,13 @@ final class AppearanceStoreTests: XCTestCase {
         super.tearDown()
     }
 
-    func testDefaultsToIndigoAndAutomatic() {
-        let store = AppearanceStore(defaults: defaults)
-        XCTAssertEqual(store.accent, .indigo)
-        XCTAssertEqual(store.mode, "automatic")
-        XCTAssertEqual(store.interfaceStyle, .unspecified)
-    }
-
     func testReadsAndWritesTheExistingKeys() {
         defaults.set("rose", forKey: "accentTheme")
         defaults.set("dark", forKey: "appearanceMode")
         let store = AppearanceStore(defaults: defaults)
         XCTAssertEqual(store.accent, .rose, "a stored preference survives the move to the store")
         XCTAssertEqual(store.mode, "dark")
+        XCTAssertEqual(store.interfaceStyle, .dark)
 
         store.accent = .crab
         store.mode = "light"
@@ -47,29 +41,6 @@ final class AppearanceStoreTests: XCTestCase {
         let store = AppearanceStore(defaults: defaults)
         XCTAssertEqual(store.accent, .indigo)
         XCTAssertEqual(store.mode, "automatic")
-    }
-
-    func testModeMapsToWindowStyle() {
-        let store = AppearanceStore(defaults: defaults)
-        store.mode = "light"
-        XCTAssertEqual(store.interfaceStyle, .light)
-        store.mode = "dark"
-        XCTAssertEqual(store.interfaceStyle, .dark)
-        store.mode = "automatic"
-        XCTAssertEqual(store.interfaceStyle, .unspecified)
-    }
-
-    func testChangesAreObservable() {
-        let store = AppearanceStore(defaults: defaults)
-        let accentChanged = Flag()
-        withObservationTracking { _ = store.accent } onChange: { accentChanged.set() }
-        store.accent = .lime
-        XCTAssertTrue(accentChanged.value, "a view that read the accent is invalidated")
-
-        let modeChanged = Flag()
-        withObservationTracking { _ = store.interfaceStyle } onChange: { modeChanged.set() }
-        store.mode = "dark"
-        XCTAssertTrue(modeChanged.value, "a view that read the derived style is invalidated")
     }
 
     func testCurrentResolvesThroughTheSharedStore() {

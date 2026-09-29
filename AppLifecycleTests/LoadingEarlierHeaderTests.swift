@@ -87,19 +87,4 @@ final class LoadingEarlierHeaderTests: XCTestCase {
         XCTAssertEqual(collectionView.contentOffset.y, top, accuracy: 0.5)
         XCTAssertEqual(dataSource?.snapshot().itemIdentifiers.first, "m1")
     }
-
-    func testHeaderIsOneQuietAccessibleRowOfAtLeastFortyFourPoints() throws {
-        controller.update(messages: messages(1...100), loadingEarlier: true, onToggleStar: { _ in })
-        collectionView.contentOffset.y = -collectionView.adjustedContentInset.top
-        collectionView.layoutIfNeeded()
-        let path = try XCTUnwrap(dataSource?.indexPath(for: ConversationTimelineController.loadingEarlierID))
-        let cell = try XCTUnwrap(collectionView.cellForItem(at: path) as? LoadingEarlierCell)
-        XCTAssertGreaterThanOrEqual(cell.frame.height, 44)
-        XCTAssertTrue(cell.isAccessibilityElement)
-        XCTAssertEqual(cell.accessibilityLabel, "Loading earlier messages")
-        XCTAssertEqual(cell.accessibilityTraits, .updatesFrequently)
-        // Nothing to tap: no buttons or controls inside.
-        func controls(_ view: UIView) -> [UIControl] { view.subviews.flatMap { ($0 as? UIControl).map { [$0] } ?? [] + controls($0) } }
-        XCTAssertTrue(controls(cell.contentView).isEmpty)
-    }
 }

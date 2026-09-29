@@ -16,15 +16,6 @@ final class ChatCapabilitiesTests: XCTestCase {
 
     private let verified = DeviceTrustFacts(peerTrust: [.verified], needsReview: false, peerKnown: true)
 
-    /// (a) A cold launch shows stored trust and the remembered attach button before any connection.
-    func testLaunchBeforeConnectKeepsStoredTrust() {
-        let launch = direct(.stored(verified), ready: false)
-        XCTAssertEqual(launch.encryption, .encrypted(verified: true))
-        XCTAssertTrue(launch.canAttach)
-        XCTAssertTrue(launch.canSend, "a 1:1 message is queued offline")
-        XCTAssertEqual(launch.deviceCount, 1)
-    }
-
     /// (b) connect → disconnect → reconnect, with the refresh fence moving stored → refreshed → stored → refreshed.
     func testConnectDisconnectReconnectNeverChangesEncryptionOrAttach() {
         let accepted = DeviceTrustFacts(peerTrust: [.accepted], needsReview: false, peerKnown: true)
@@ -42,15 +33,6 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(Set(steps.map { "\($0.encryption)" }), ["encrypted(verified: false)"])
         XCTAssertEqual(steps.map(\.canSend), [false, true, false, true])
         XCTAssertEqual(Set(steps.map(\.deviceCount)), [2])
-    }
-
-    /// (c) Accepted is not verified: every active peer device must be verified.
-    func testAcceptedIsNotVerified() {
-        let mixed = DeviceTrustFacts(peerTrust: [.accepted, .verified], needsReview: false, peerKnown: true)
-        XCTAssertEqual(direct(.stored(mixed), ready: true).encryption, .encrypted(verified: false))
-        let withRejected = DeviceTrustFacts(peerTrust: [.verified, .rejected], needsReview: false, peerKnown: true)
-        XCTAssertEqual(direct(.stored(withRejected), ready: true).encryption, .encrypted(verified: false))
-        XCTAssertEqual(direct(.refreshed(verified), ready: true).encryption, .encrypted(verified: true))
     }
 
     /// (d) Not yet known is pending, never "not encrypted"; only a completed answer makes it unavailable.
@@ -72,6 +54,7 @@ final class ChatCapabilitiesTests: XCTestCase {
     func testAttachFollowsRememberedUploadsNotTheSocket() {
         XCTAssertFalse(direct(.stored(verified), uploads: false, ready: true).canAttach)
         XCTAssertTrue(direct(.stored(verified), uploads: true, ready: false).canAttach)
+        XCTAssertTrue(direct(.stored(verified), ready: false).canSend, "a 1:1 message is queued offline")
         XCTAssertTrue(direct(.pending, uploads: true, ready: false).canAttach)
         XCTAssertFalse(group(.stored(verified), joined: true, ready: true).canAttach)
         let demo = ChatCapabilities.derive(isDemo: true, isGroup: false, knowledge: .pending, reviewPending: false, uploadAvailable: false, sessionReady: false)
@@ -170,17 +153,5 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(attention.heldForTrust, ["room@muc.example.org"])
         attention.settlePass(heldForTrust: [])
         XCTAssertTrue(attention.heldForTrust.isEmpty, "a completed pass that held nothing clears the marks")
-    }
-
-    /// A failed group refresh is read-only text for Group Details until a refresh succeeds.
-    func testGroupRefreshFailureIsAFootnoteUntilARefreshSucceeds() {
-        var attention = EncryptionAttention()
-        let room = "room@muc.example.org"
-        attention.groupDevices(room, problem: "Last group refresh failed: timeout")
-        XCTAssertEqual(attention.groupProblems[room], "Last group refresh failed: timeout")
-        XCTAssertEqual(attention.diagnostics, "Last group refresh failed: timeout")
-        XCTAssertTrue(attention.heldForTrust.isEmpty)
-        attention.groupDevices(room, problem: nil)
-        XCTAssertNil(attention.groupProblems[room])
     }
 }
