@@ -259,8 +259,8 @@ struct DeviceFingerprintSheet: View {
                 } footer: {
                     Text(device.active
                          ? (allowsMaintenance && device.jid == model.accountID
-                            ? "Blocked devices are left out of new messages. Removing an old device takes it off your account’s advertised devices; sign out on it first, or it may advertise itself again."
-                            : "Blocked devices are left out of new messages.")
+                            ? "Blocked devices are left out of new messages, and what they send is never opened. Removing an old device takes it off your account’s advertised devices; sign out on it first, or it may advertise itself again."
+                            : "Blocked devices are left out of new messages, and what they send is never opened.")
                          : "No longer advertised. Its fingerprint is read-only.")
                 }
             }

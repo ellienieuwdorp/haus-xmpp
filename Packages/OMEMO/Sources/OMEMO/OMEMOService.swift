@@ -911,7 +911,8 @@ public actor OMEMOService {
         // B. This ciphertext's retained row only (a primary-key lookup), then the validated-archive context correction.
         let previous = try await store.pendingEncryptedIncoming(accountID: account, sender: sender, digest: digest)
         var retained = try previous.map { try JSONDecoder().decode(RetainedEnvelope.self, from: $0.wire) }
-            ?? RetainedEnvelope(from: message.from, to: message.to, envelope: message.envelope, provenance: message.provenance, sentAt: sentAt ?? Date(), replaces: message.replaces)
+            ?? RetainedEnvelope(from: message.from, to: message.to, envelope: message.envelope, provenance: message.provenance, sentAt: sentAt ?? Date(),
+                                replaces: message.replaces, expectsBubble: Self.expectsBubble(message))
         if let previous, let sentAt, retained.sentAt != sentAt {
             // The cipher digest identifies the addressed key/payload. Require the entire
             // envelope and conversation context too before changing durable metadata.
@@ -931,7 +932,7 @@ public actor OMEMOService {
                 throw OMEMOError.invalidContent
             }
             retained = RetainedEnvelope(from: retained.from, to: retained.to, envelope: retained.envelope,
-                                        provenance: retained.provenance, sentAt: sentAt, replaces: retained.replaces)
+                                        provenance: retained.provenance, sentAt: sentAt, replaces: retained.replaces, expectsBubble: retained.expectsBubble)
             guard try await store.replacePendingEncryptedIncomingContext(accountID: account, sender: sender, digest: digest,
                     expectedWire: previous.wire, wire: JSONEncoder().encode(retained)) else { throw OMEMOError.concurrentChange }
         }
@@ -941,6 +942,11 @@ public actor OMEMOService {
         let profile = message.envelope.profile
         let known = initialState.devices.last {
             $0.jid == sender && $0.profile == profile && $0.deviceID == message.envelope.senderDeviceID
+        }
+        // A device the user blocked: nothing to review, retry or alert. Its ciphertext is never opened, and a retained
+        // copy (an earlier arrival, or a row from before this rule) leaves the table with the final outcome.
+        if known?.trust == .rejected {
+            return try await recordRejectedDevice(account: account, message: message, sender: sender, digest: digest, sentAt: retained.sentAt)
         }
         // The pending row only has to carry ciphertext across a long wait (trust decision, key fetch, offline). A known
         // sender device whose trust permits decryption needs none: until `receive` returns, the stream token is not
@@ -953,21 +959,26 @@ public actor OMEMOService {
         // receipt or retraction, must not ask the user to review a message.
         let alert = sender == account || !Self.expectsBubble(message) ? nil
             : PendingNotificationContext(chatID: sender, sentAt: retained.sentAt ?? Date())
-        if previous == nil, !retentionSkipped {
-            try await store.retainEncryptedIncoming(accountID: account, sender: sender, digest: digest, wire: JSONEncoder().encode(retained),
-                                                    reason: known == nil ? .keysPending : .trustPending, notification: alert)
-        }
         let context = retained
-        /// Keeps the ciphertext for a later retry with `reason`: retains it now when C skipped that, else relabels the row.
-        func hold(_ reason: PendingEncryptedReason) async throws {
-            if retentionSkipped {
-                try await store.retainEncryptedIncoming(accountID: account, sender: sender, digest: digest, wire: JSONEncoder().encode(context), reason: reason,
-                                                        notification: alert)
-            } else {
-                try await store.classifyPendingEncryptedIncoming(accountID: account, sender: sender, digest: digest, reason: reason)
-            }
-        }
         let peer = sender == account ? bare(message.to ?? account) : sender
+        // Past a retention limit the store records this instead of a row, in the same transaction: a quiet placeholder
+        // for a would-be bubble, else the consumed replay identity. Either is final, so `receive` then returns false.
+        let overflow = RetentionOverflow(chatID: peer, placeholder: Self.expectsBubble(message)
+            ? placeholder(for: message, account: account, reason: .retentionLimit, sentAt: retained.sentAt, key: .ciphertext(sender: sender, digest: digest)) : nil)
+        func retain(_ reason: PendingEncryptedReason, notification: PendingNotificationContext?) async throws -> Bool {
+            try await store.retainEncryptedIncoming(accountID: account, sender: sender, digest: digest, wire: JSONEncoder().encode(context),
+                                                    reason: reason, notification: notification, overflow: overflow)
+        }
+        if previous == nil, !retentionSkipped {
+            guard try await retain(known == nil ? .keysPending : .trustPending, notification: alert) else { return false }
+        }
+        /// Keeps the ciphertext for a later retry with `reason`: retains it now when C skipped that, else relabels the row.
+        /// False when a limit gave it its final outcome instead.
+        func hold(_ reason: PendingEncryptedReason) async throws -> Bool {
+            if retentionSkipped { return try await retain(reason, notification: alert) }
+            try await store.classifyPendingEncryptedIncoming(accountID: account, sender: sender, digest: digest, reason: reason)
+            return true
+        }
         if known == nil {
             // Only the sending device's list and bundle: its owner's other devices and the other profile are the
             // sending path's business. If this throws (offline), the row is already `keysPending`.
@@ -983,11 +994,15 @@ public actor OMEMOService {
             guard local.deviceID == localID else { throw OMEMOError.stateUnavailable }
             guard let device = state.devices.last(where: { $0.jid == sender && $0.profile == profile && $0.deviceID == message.envelope.senderDeviceID }) else {
                 // The refresh completed (or was not needed) and the sender device is still unknown: wait for its device list.
-                try await hold(.keysPending)
+                guard try await hold(.keysPending) else { return false }
                 throw OMEMOError.trustRequired
             }
+            // The refresh found a key the user had blocked under this device ID.
+            if device.trust == .rejected {
+                return try await recordRejectedDevice(account: account, message: message, sender: sender, digest: digest, sentAt: retained.sentAt)
+            }
             guard device.trust.permitsEncryption else {
-                try await hold(.trustPending)
+                guard try await hold(.trustPending) else { return false }
                 throw OMEMOError.trustRequired
             }
             let address = DeviceAddress(jid: sender, deviceID: device.deviceID)
@@ -1087,12 +1102,11 @@ public actor OMEMOService {
             // content the store refuses, a sending time awaiting an archive stamp): keep the ciphertext now, with the
             // reason the pre-skip path gave it, so a failure that repeats on redelivery cannot wedge the archive walk.
             // When that write fails too, nothing is durable: `hasDurableIncomingDisposition` is false and the caller
-            // tears the stream down, as for any storage failure.
+            // tears the stream down, as for any storage failure. Past a limit the overflow is the final outcome.
             if retentionSkipped, !Self.leavesDurableOutcome(failure) {
-                do {
-                    try await store.retainEncryptedIncoming(accountID: account, sender: sender, digest: digest, wire: JSONEncoder().encode(context),
-                                                            reason: .trustPending)
-                } catch { throw failure }
+                let kept: Bool
+                do { kept = try await retain(.trustPending, notification: nil) } catch { throw failure }
+                if !kept { return false }
             }
             throw failure
         }
@@ -1167,6 +1181,19 @@ public actor OMEMOService {
                                  isOutgoing: outgoing, sentAt: sentAt ?? Date(), reason: reason, key: key)
     }
 
+    /// The final outcome for ciphertext from a device the user blocked: a quiet `rejectedDevice` placeholder when it would
+    /// have been a bubble, else only the consumed replay identity. Nothing is decrypted, no alert is queued, and a retained
+    /// copy leaves the table (with its review candidate) in the same transaction. Returns false: nothing new to show.
+    private func recordRejectedDevice(account: String, message: XMPPEncryptedMessage, sender: String, digest: String, sentAt: Date?) async throws -> Bool {
+        if Self.expectsBubble(message) {
+            try await store.recordUnreadableMessage(placeholder(for: message, account: account, reason: .rejectedDevice, sentAt: sentAt,
+                                                                key: .ciphertext(sender: sender, digest: digest)))
+        } else {
+            try await store.consumeUndecryptableIncoming(accountID: account, sender: sender, digest: digest)
+        }
+        return false
+    }
+
     /// Records the durable `decryptFailed` outcome for ciphertext this device will never read. Works whether or not a
     /// pending row exists (the DELETE inside the store is then a no-op). A key transport (no payload) was never a
     /// bubble, so only its replay identity is consumed. Returns true when a placeholder row marks the message.
@@ -1217,7 +1244,8 @@ public actor OMEMOService {
 
     /// Retries retained ciphertext. `reasons` narrows the work to what the triggering event can unblock: a trust decision
     /// retries `trustPending`, a device list retries `keysPending` from its owner, a connection retries both.
-    /// A row that now fails permanently becomes a placeholder and leaves the table, so it is never retried again.
+    /// A row that now fails permanently becomes a placeholder and leaves the table, so it is never retried again; so does
+    /// a row whose sender device the user has blocked since (or before an upgrade that stopped retaining those).
     public func retryPendingIncoming(account: String, transport: any OMEMOTransport,
                                      reasons: Set<PendingEncryptedReason> = [.trustPending, .keysPending],
                                      sender: String? = nil) async throws {
@@ -1236,7 +1264,7 @@ public actor OMEMOService {
                         if unresolvedRooms.contains(group.message.room) { continue }
                     } else if let device = state.devices.last(where: { $0.jid == group.message.sender && $0.profile == .modern
                                                                        && $0.deviceID == group.message.envelope.senderDeviceID }),
-                              !device.trust.permitsEncryption {
+                              device.trust == .undecided {
                         try await awaitTrustDecision(item, account: account)
                         continue
                     }
@@ -1251,11 +1279,15 @@ public actor OMEMOService {
                 let (_, state) = try await load(account)
                 if let device = state.devices.last(where: { $0.jid == item.sender && $0.profile == value.envelope.profile
                                                             && $0.deviceID == value.envelope.senderDeviceID }),
-                   !device.trust.permitsEncryption {
+                   device.trust == .undecided {
                     try await awaitTrustDecision(item, account: account)
                     continue
                 }
-                _ = try await receive(account: account, message: XMPPEncryptedMessage(id: item.digest, from: value.from, to: value.to, originID: nil, envelope: value.envelope, provenance: value.provenance, replaces: value.replaces), transport: transport, sentAt: value.sentAt)
+                // A row written before the bubble hint was kept counts as a bubble, so a blocked device's retained message
+                // still leaves a placeholder rather than vanishing.
+                _ = try await receive(account: account, message: XMPPEncryptedMessage(id: item.digest, from: value.from, to: value.to, originID: nil, envelope: value.envelope, provenance: value.provenance,
+                                                                                      hasFallbackBody: value.expectsBubble ?? true, replaces: value.replaces),
+                                      transport: transport, sentAt: value.sentAt)
             } catch {
                 if error is CancellationError { throw error }
                 if firstFailure == nil { firstFailure = error }
@@ -1364,6 +1396,8 @@ private struct RetainedEnvelope: Codable {
     let sentAt: Date?
     /// Outer legacy correction reference, kept with the ciphertext so a trust retry still applies it.
     var replaces: String? = nil
+    /// `expectsBubble` of the arriving stanza, whose outer hints are not otherwise kept. Nil in rows written before it was.
+    var expectsBubble: Bool? = nil
 }
 
 struct PreparedEnvelope: Codable {
