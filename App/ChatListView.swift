@@ -308,13 +308,11 @@ private struct ChatRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(chat.displayTitle).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                    Spacer(minLength: 8)
+                    // Follows the name rather than leading the time, whose width changes from row to row.
                     if chat.notification.isMuted() {
-                        Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.secondary).accessibilityHidden(true)
+                        Text(Image(systemName: "bell.slash.fill")).font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
                     }
-                    if chat.isPinned {
-                        Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary).accessibilityHidden(true)
-                    }
+                    Spacer(minLength: 8)
                     if let timeLabel {
                         Text(timeLabel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).layoutPriority(1)
                     }
@@ -333,7 +331,13 @@ private struct ChatRow: View {
                             }
                         }
                         .animation(.easeInOut(duration: 0.2), value: typing)
-                    if chat.unreadCount > 0 { UnreadPill(count: chat.unreadCount) }
+                    // One trailing slot under the time: the unread count, else the pin, so both stay right-aligned
+                    // down the list. An unread pinned row still sits in the pinned group at the top.
+                    if chat.unreadCount > 0 {
+                        UnreadPill(count: chat.unreadCount)
+                    } else if chat.isPinned {
+                        Text(Image(systemName: "pin.fill")).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+                    }
                 }
             }
         }
