@@ -30,7 +30,7 @@ struct GroupJoinView: View {
                 joining = true
                 Task {
                     let address = room.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if await model.joinGroup(room: address, nickname: nickname) { joined(address) }
+                    if let chat = await model.joinGroup(room: address, nickname: nickname) { joined(chat) }
                     joining = false
                 }
             } label: {

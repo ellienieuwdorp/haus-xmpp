@@ -27,7 +27,7 @@ struct NotificationAccount: Codable, Sendable, Equatable {
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = item as? Data else { throw Failure.unavailable }
-        let value = try JSONDecoder().decode(Self.self, from: data)
+        let value = try JSONDecoder().decode(Self.self, from: normalizingIdentity(data))
         guard value.accountID == value.username + "@" + value.domain, value.port > 0,
               !value.host.isEmpty, !value.password.isEmpty else { throw Failure.unavailable }
         return value
@@ -56,6 +56,19 @@ struct NotificationAccount: Codable, Sendable, Equatable {
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw Failure.credentialsRemain(backgroundDisabled: disabled)
         }
+    }
+
+    /// A record saved before addresses were normalised may name the account as typed (`Ellie@Example.org`). It is read
+    /// in normal form, the account's spelling everywhere else; the next successful sign-in saves it that way. Rewritten
+    /// in the JSON so every other field is carried over untouched.
+    static func normalizingIdentity(_ data: Data) throws -> Data {
+        guard var object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let username = object["username"] as? String, let domain = object["domain"] as? String,
+              let local = JID.normalizedLocalpart(username), let host = JID.normalizedDomainpart(domain),
+              local != username || host != domain || object["accountID"] as? String != local + "@" + host else { return data }
+        guard object["accountID"] as? String == username + "@" + domain else { return data }
+        object["username"] = local; object["domain"] = host; object["accountID"] = local + "@" + host
+        return try JSONSerialization.data(withJSONObject: object)
     }
 
     private static var keychainQuery: [String: Any] {

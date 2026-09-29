@@ -174,7 +174,7 @@ struct ChatListView: View {
     private var startChatRow: some View {
         Button {
             let address = recipientTerm
-            Task { if await model.createChat(address) { openFromSheet(address) } }
+            Task { if let chat = await model.createChat(address) { openFromSheet(chat) } }
         } label: {
             Label {
                 Text("Start chat with \(recipientTerm)").foregroundStyle(.primary).lineLimit(1)
