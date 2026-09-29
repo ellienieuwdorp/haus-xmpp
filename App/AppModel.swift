@@ -236,6 +236,8 @@ final class AppModel {
         guard let testSessionID else { return .standard }
         return UserDefaults(suiteName: "haus.xmpp.uitest." + testSessionID) ?? .standard
     }()
+    /// Where the resource and the last foreground time live: the App Group, which the extension reads too.
+    @ObservationIgnored private lazy var sessionDefaults: UserDefaults? = testSessionID == nil ? SharedSession.groupDefaults : preferences
 
     init() {
         // The saved account is known before storage opens, so the first frame already carries the account avatar
@@ -473,6 +475,7 @@ final class AppModel {
             try await store.recoverInterruptedSubmissions(accountID: account)
             guard generation == token else { return false }
             try await connection.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
+            try await connection.configureResource(SharedSession.resource(accountID: account, defaults: sessionDefaults))
             guard generation == token else { return false }
             try await connection.connect(host: endpoint.host, port: endpoint.port, domain: endpoint.domain, username: username, password: password)
             guard generation == token, accountID == endpoint.accountID,
@@ -649,10 +652,22 @@ final class AppModel {
                 await self.refresh()
             } else {
                 let task = UIApplication.shared.beginBackgroundTask(withName: "Finish encrypted synchronization")
+                // The session hibernates (up to days with push): it must read as away, not "Online", until it resumes.
+                if let client = self.client, self.isConnected { try? await client.setAvailability(self.awayAvailability) }
                 await self.quiesceTransport()
                 if task != .invalid { UIApplication.shared.endBackgroundTask(task) }
             }
         }
+    }
+
+    /// The scene left the foreground: from now on background sessions report this as the last time the user was here.
+    func leftForeground() {
+        SharedSession.recordLeftForeground(defaults: sessionDefaults)
+    }
+
+    /// How a session this app runs away from the foreground (going to the background, a notification action) presents.
+    private var awayAvailability: XMPPAvailability {
+        BackgroundSession.availability(sharesLastSeen: accountPreferences.lastSeen, leftForeground: SharedSession.leftForeground(defaults: sessionDefaults))
     }
 
     private func quiesceTransport() async {
@@ -1200,11 +1215,12 @@ final class AppModel {
                 firstMessageLogged = false
                 liveStoredLogged = false
                 catchUpByArchive = [:]
-                Self.syncLog.notice("online")
+                let resumed = await client?.sessionResumed ?? false
+                Self.syncLog.notice("online resumed=\(resumed, privacy: .public)")
                 // The client answers XEP-0012 queries to our full address only while the account shares last seen.
                 await client?.setSharesLastActivity(accountPreferences.lastSeen)
                 // A resumed session gets no probe answers: keep who was available on the previous stream.
-                lastSeenTracker.beginConnection(resumed: await client?.sessionResumed ?? false)
+                lastSeenTracker.beginConnection(resumed: resumed)
                 syncOpenChatLastSeen()
                 guard generation == token else { return }
                 guard let encryption, let client, let store else { return }
@@ -2692,6 +2708,8 @@ final class AppModel {
     /// Bound and past `initialize`, as the app's `.ready`: only then is anything sealed or sent.
     var ready = false
     var joinedRooms: Set<String> = []
+    /// After a fresh bind: the push re-enable and room rejoins, running alongside the reply; teardown waits for it.
+    var restoration: Task<Void, Never>?
 
     init(account: String, isForeground: Bool, budget: NotificationActionBudget) {
         self.account = account; self.isForeground = isForeground; self.budget = budget
@@ -2774,6 +2792,9 @@ extension AppModel: NotificationActionEnvironment {
             try await store.recoverInterruptedSubmissions(accountID: account)
             let client = XMPPClient(labCertificateAuthority: DevelopmentEndpoint.certificateAuthority)
             try await client.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
+            try await client.configureResource(SharedSession.resource(accountID: account, defaults: sessionDefaults))
+            // The user is not in front: the action's session must not make them look online.
+            try await client.setAvailability(awayAvailability)
             session.client = client
             // From here an abort closes this client; one that came before it was set is honoured here.
             guard !session.isOver else { throw CancellationError() }
@@ -2787,15 +2808,35 @@ extension AppModel: NotificationActionEnvironment {
             }
             try await client.connect(host: credentials.host, port: credentials.port, domain: credentials.domain,
                                      username: credentials.username, password: credentials.password)
+            let resumed = await client.sessionResumed
+            Self.syncLog.notice("notification action online resumed=\(resumed, privacy: .public)")
             guard !session.isOver else { throw CancellationError() }
             // As before `.ready`: an identity mismatch fails closed before anything can be sealed.
             try await encryption.initialize(account: account, transport: client)
             if isGroup(chatID) {
                 let nickname = preferences.string(forKey: "groupNickname.\(account).\(chatID)") ?? String(account.prefix { $0 != "@" })
-                if let snapshot = try? await client.joinGroupRoom(chatID, nickname: nickname), snapshot.joined { session.joinedRooms.insert(chatID) }
+                // The reply's room must confirm the join first: the drain sends only to joined rooms.
+                if await BackgroundSession.join(chatID, nickname: nickname, client: client,
+                                                within: session.budget.remaining(at: .now, atMost: .seconds(3))) {
+                    session.joinedRooms.insert(chatID)
+                }
             }
             guard !session.isOver else { throw CancellationError() }
             session.ready = true
+            // A fresh bind replaced the session the app left hibernating, with its push registration and room
+            // occupancy: restore both, as the extension does, or pushes for this account stop. Alongside the reply,
+            // which does not wait for them; `endNotificationAction` does, within the budget.
+            if !resumed {
+                let push = pushWanted ? PushRegistrationState.sessionSubscription(saved: credentials.push,
+                                                                                   state: try? PushRegistrationState.load(accountID: account)) : nil
+                let limit = session.budget.remaining(at: .now, atMost: .seconds(5))
+                session.restoration = Task {
+                    async let enabled: Void = BackgroundSession.enablePush(push, client: client)
+                    await BackgroundSession.joinRooms(account: account, client: client, encryption: encryption, store: store,
+                                                      skipping: [chatID], within: limit)
+                    await enabled
+                }
+            }
         } catch {
             Self.syncLog.notice("notification action offline: \(ConnectionSetup.detail(error), privacy: .public)")
         }
@@ -2934,6 +2975,7 @@ extension AppModel: NotificationActionEnvironment {
         // `actionSession` stays set until the lease is back, so an expiring background task sees that it is held.
         guard let session = actionSession else { return }
         session.watchdog?.cancel()
+        await session.restoration?.value
         if let client = session.client { await client.disconnectAndWait() }
         session.consumer?.cancel()
         await session.consumer?.value
