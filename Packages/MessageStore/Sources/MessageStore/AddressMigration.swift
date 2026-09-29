@@ -116,6 +116,8 @@ enum AddressMigration {
         // One statement renames every row whose normal spelling is free; the rows left collide with a normal twin.
         var assignments = columns.map { "\($0)=jid_normal(\($0))" }
         if sealed.contains(table) { assignments.append("sealed_account=COALESCE(sealed_account,account_id)") }
+        // A chat started by typing an address is titled with it; the title follows the address (SET reads old values).
+        if table == "chats" { assignments.append("title=CASE WHEN title=id THEN jid_normal(id) ELSE title END") }
         try connection.execute("UPDATE OR IGNORE \(table) SET \(assignments.joined(separator: ",")) WHERE \(pending)")
         switch duplicate {
         case .keep: return

@@ -81,7 +81,7 @@ struct MigrationTests {
                 try await old.insertMessage(StoredMessage(id: "archived", accountID: owner, chatID: "bob@example.org", senderID: "bob@example.org",
                                                           body: owner, sentAt: sentAt, isOutgoing: false))
             }
-            try await old.upsertChat(accountID: typed, chatID: "Carol@Example.org", title: "Carol")
+            try await old.upsertChat(accountID: typed, chatID: "Carol@Example.org", title: "Carol@Example.org")
             try await old.insertMessage(StoredMessage(id: "only-typed", accountID: typed, chatID: "Carol@Example.org", senderID: typed,
                                                       body: "hello", sentAt: sentAt, isOutgoing: true))
             try await old.close()
@@ -94,6 +94,8 @@ struct MigrationTests {
             #expect(try await store.messages(accountID: account, chatID: "bob@example.org").map(\.body) == [account])
             #expect(try await store.messages(accountID: typed, chatID: "bob@example.org").map(\.body) == [typed])
             #expect(try await store.messages(accountID: account, chatID: "carol@example.org").map(\.id) == ["only-typed"])
+            // Titled with the address it was started with, which follows the chat into normal form.
+            #expect(try await store.chats(accountID: account).first { $0.id == "carol@example.org" }?.title == "carol@example.org")
             try await store.close()
         }
     }
