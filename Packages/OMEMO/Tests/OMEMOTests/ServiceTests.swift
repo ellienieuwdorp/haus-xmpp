@@ -200,6 +200,26 @@ final class ServiceFixture {
     }
 }
 
+extension ServiceFixture {
+    /// Alice's second device, leased and initialized. Every active device of Alice and Bob is accepted on Alice's two
+    /// devices (her own included, for her own carbons) and on Bob's.
+    func addSecondAliceDevice() async throws -> (store: MessageStore, service: OMEMOService) {
+        let store = try openStore("alice-second.sqlite")
+        try await store.acquireTransportOwnership()
+        let service = OMEMOService(store: store, protection: protection)
+        try await service.initialize(account: alice, transport: aTransport)
+        // The test server keeps one list per owner: the first device re-advertises itself beside the second.
+        try await a.maintainLocalAdvertisement(account: alice, profile: .modern, transport: aTransport)
+        for (owner, account, peer, transport) in [(service, alice, bob, aTransport), (service, alice, alice, aTransport),
+                                                  (a, alice, bob, aTransport), (a, alice, alice, aTransport), (b, bob, alice, bTransport)] {
+            for device in try await owner.refreshDevices(account: account, peer: peer, profile: .modern, transport: transport).devices where device.active {
+                try await owner.setTrust(account: account, deviceID: device.id, trust: .accepted)
+            }
+        }
+        return (store, service)
+    }
+}
+
 @MainActor
 final class ServiceTests: XCTestCase {
     /// A device that publishes keys only in the other OMEMO version is left out of the envelope and reported, never a
