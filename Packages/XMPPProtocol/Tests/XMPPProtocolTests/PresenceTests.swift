@@ -124,3 +124,15 @@ private func presence(_ xml: String, rooms: Set<String> = []) throws -> XMPPEven
     #expect(PresenceWire.inlineResponse(try stanza("<iq type='get' id='p1' from='example.test'><ping xmlns='urn:xmpp:ping'/></iq>"), accountFullJID: full, sharesLastActivity: false)
             == "<iq type='result' id='p1' to='example.test'/>")
 }
+
+@Test func awayPresenceAnnouncesTheLastForegroundTimeAsIdle() throws {
+    // Whole seconds: the stamp carries no fractional part.
+    let since = Date(timeIntervalSince1970: 1_790_000_000)
+    let away = XMPPClient.presenceXML(.away(since: since)).replacingOccurrences(of: "<presence>", with: "<presence from='alex@example.test/phone'>")
+    #expect(try presence(away) == .contactPresence(.init(contact: "alex@example.test", resource: "phone", available: true, idleSince: since)))
+    // Without a timestamp (last seen not shared) and in front, the presence carries no idle element.
+    for availability in [XMPPAvailability.away(since: nil), .active] {
+        #expect(!XMPPClient.presenceXML(availability).contains("idle"))
+        #expect(XMPPClient.presenceXML(availability).contains("http://jabber.org/protocol/caps"))
+    }
+}

@@ -46,7 +46,10 @@ public struct XMPPStreamManagementSnapshot: Codable, Sendable, Equatable {
     public var accountID: String
     public var fullJID: String
     public var streamID: String?
+    /// The last contact plus `resumeTimeoutSeconds`: where the server's advertised window ends. Resumption is still
+    /// attempted after it (`StreamManagement.attemptsResume`).
     public var expiresAt: Date?
+    /// The server's `<enabled max='…'/>`, capped at `StreamManagement.maxResumeTimeout`; nil when it named none.
     public var resumeTimeoutSeconds: UInt32?
     public var inboundHandled: UInt64
     public var outboundSent: UInt64
@@ -105,6 +108,14 @@ actor StreamManagement {
     static let maxReplayableBytes = 4_194_304
     static let inboundWindow: UInt64 = 2_000
     static let handledFlushInterval: UInt64 = 64
+    /// Sanity cap on the server's `<enabled max='…'/>` (XEP-0198 sets no bound): a week, far beyond any default
+    /// (Prosody 600 s, ejabberd 300 s), so a garbled or absurd value cannot keep a dead session looking alive.
+    static let maxResumeTimeout: UInt32 = 604_800
+    /// How long after the last contact a resume is still attempted, whatever the server advertised. The advertised
+    /// `max` is a floor, not the real lifetime: Prosody's mod_cloud_notify keeps a push-enabled session hibernating up
+    /// to 72 h (`push_max_hibernation_timeout`) while answering `max='600'`. A refused resume costs one round trip and
+    /// falls through to a fresh bind; a skipped one costs the session's push registration and room occupancy.
+    static let resumeAttemptWindow: TimeInterval = 259_200
 
     let persistence: any XMPPStreamManagementPersistence
     private let gate = XMPPAsyncGate()
@@ -138,20 +149,33 @@ actor StreamManagement {
             received = loaded?.inboundHandled ?? 0
             handledContiguous = loaded?.inboundHandled ?? 0
             let candidate: XMPPStreamManagementSnapshot?
-            if let loaded, loaded.streamID != nil, loaded.expiresAt.map({ $0 > Date() }) ?? true,
+            if let loaded, Self.attemptsResume(loaded, now: Date()),
                try await persistence.permitsResumption(loaded) { candidate = loaded } else { candidate = nil }
             await gate.leave()
             return candidate
         } catch { await gate.leave(); throw error }
     }
 
-    func enable(accountID: String, fullJID: String, streamID: String?, expiresAt: Date?, resumeTimeoutSeconds: UInt32? = nil) async throws {
+    /// Whether a saved session is worth a `<resume/>`. `expiresAt` is the last contact plus the server's advertised
+    /// timeout, so the last contact is recoverable from it; the attempt window runs from there for the longer of that
+    /// timeout and `resumeAttemptWindow`. A snapshot without a recorded timeout is always tried: the server decides.
+    static func attemptsResume(_ snapshot: XMPPStreamManagementSnapshot, now: Date) -> Bool {
+        guard snapshot.streamID != nil else { return false }
+        guard let expiresAt = snapshot.expiresAt, let timeout = snapshot.resumeTimeoutSeconds else { return true }
+        let lastContact = expiresAt.addingTimeInterval(-TimeInterval(timeout))
+        return now < lastContact.addingTimeInterval(max(TimeInterval(timeout), resumeAttemptWindow))
+    }
+
+    /// `resumeTimeoutSeconds` is the server's advertised `max` (capped by the caller); every later commit measures
+    /// `expiresAt` from its own time, so it tracks the last contact rather than the last server acknowledgement.
+    func enable(accountID: String, fullJID: String, streamID: String?, resumeTimeoutSeconds: UInt32? = nil) async throws {
         await gate.enter()
         do {
             guard (snapshot?.revision ?? 0) < Int.max else { throw XMPPStreamManagementError.invalidState }
             var next = XMPPStreamManagementSnapshot(revision: 1, accountID: accountID, fullJID: fullJID, streamID: streamID,
-                                                   expiresAt: expiresAt, inboundHandled: 0, outboundSent: 0, outboundAcknowledged: 0, journal: [])
+                                                   expiresAt: nil, inboundHandled: 0, outboundSent: 0, outboundAcknowledged: 0, journal: [])
             next.resumeTimeoutSeconds = resumeTimeoutSeconds
+            next.expiresAt = resumeTimeoutSeconds.map { Date().addingTimeInterval(TimeInterval($0)) }
             next.revision = (snapshot?.revision ?? 0) + 1
             try await persistence.save(next, expectedRevision: snapshot?.revision, acknowledgedMessageIDs: [])
             snapshot = next; received = 0; handledContiguous = 0; completed = []; active = true; session = UUID()
@@ -207,9 +231,6 @@ actor StreamManagement {
                     XMPPStreamJournalEntry(sequence: base + UInt64(offset) + 1, kind: entry.kind, xml: entry.xml, messageID: entry.messageID)
                 }
                 next.outboundSent = base + UInt64(next.journal.count)
-            }
-            if let timeout = next.resumeTimeoutSeconds {
-                next.expiresAt = Date().addingTimeInterval(Double(timeout))
             }
             next.inboundHandled = handledContiguous
             try await commit(next, acknowledged: ids)
@@ -269,6 +290,21 @@ actor StreamManagement {
         } catch { await gate.leave(); throw error }
     }
 
+    /// A deliberate disconnect: persists the handled count and the time of this last contact in one commit, even
+    /// when the counter did not move, and returns the persisted count to advertise in a final `<a/>`.
+    func detach() async throws -> UInt32 {
+        await gate.enter()
+        do {
+            if active, var next = snapshot {
+                next.inboundHandled = handledContiguous
+                try await commit(next)
+            }
+            let persisted = persistedHandledCount()
+            await gate.leave()
+            return persisted
+        } catch { await gate.leave(); throw error }
+    }
+
     func permitsReplay() async throws -> Bool {
         guard let snapshot else { return false }
         return try await persistence.permitsResumption(snapshot)
@@ -290,6 +326,8 @@ actor StreamManagement {
     private func commit(_ value: XMPPStreamManagementSnapshot, acknowledged: [String] = []) async throws {
         guard (snapshot?.revision ?? 0) < Int.max else { throw XMPPStreamManagementError.invalidState }
         var next = value; next.revision = (snapshot?.revision ?? 0) + 1
+        // Every commit is contact with the server (a stanza sent or handled, an acknowledgement, a detach).
+        if let timeout = next.resumeTimeoutSeconds { next.expiresAt = Date().addingTimeInterval(TimeInterval(timeout)) }
         try await persistence.save(next, expectedRevision: snapshot?.revision, acknowledgedMessageIDs: acknowledged)
         snapshot = next
     }
