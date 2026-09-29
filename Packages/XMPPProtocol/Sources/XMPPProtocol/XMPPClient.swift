@@ -128,12 +128,12 @@ public actor XMPPClient {
     /// Every inbound `<message/>` yields two events (content and barrier), and stream management already
     /// ends the stream at 2,000 received-but-unhandled stanzas, so for message traffic that ceiling binds
     /// first. Overflow still ends the connection (`eventConsumerTooSlow`); nothing dropped is acknowledged.
-    public static let eventBufferLimit = 4096
+    static let eventBufferLimit = 4096
     /// The default reply deadline for a request.
-    public static let iqTimeout: Duration = .seconds(15)
+    static let iqTimeout: Duration = .seconds(15)
     /// A MAM `<fin/>` arrives only after every result of the page was streamed: 100 results of a few KiB
     /// take tens of seconds on a slow link. Still within one liveness interval, so a dead query stays bounded.
-    public static let archiveQueryTimeout: Duration = .seconds(60)
+    static let archiveQueryTimeout: Duration = .seconds(60)
     private var generation = UUID()
     private var phase: Phase = .idle
     private var framer = XMLStreamFramer()

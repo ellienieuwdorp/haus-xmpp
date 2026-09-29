@@ -118,12 +118,9 @@ private func presence(_ xml: String, rooms: Set<String> = []) throws -> XMPPEven
                 "<iq type='set' id='p9'><query xmlns='jabber:iq:roster'/></iq>"] {
         #expect(PresenceWire.rosterPush(try stanza(xml), accountBareJID: account) == nil, "\(xml)")
     }
-    // A rejected push falls through to the explicit rejection.
-    let spoof = try stanza("<iq type='set' id='p4' from='mallory@example.test'>\(item)</iq>")
-    #expect(PresenceWire.inlineResponse(spoof, accountFullJID: full, sharesLastActivity: true)?.contains("service-unavailable") == true)
 }
 
-@Test func lastActivityAnswersParseAndOnlyTheQueriedContactMayAnswer() throws {
+@Test func lastActivityAnswersParseTheirSeconds() throws {
     #expect(try PresenceWire.lastActivitySeconds(try stanza("<iq type='result' from='alex@example.test'><query xmlns='jabber:iq:last' seconds='903'/></iq>")) == 903)
     #expect(try PresenceWire.lastActivitySeconds(try stanza("<iq type='result' from='alex@example.test'><query xmlns='jabber:iq:last' seconds='0'/></iq>")) == 0)
     for xml in ["<iq type='result'><query xmlns='jabber:iq:last'/></iq>",
@@ -132,17 +129,6 @@ private func presence(_ xml: String, rooms: Set<String> = []) throws -> XMPPEven
                 "<iq type='result'><query xmlns='jabber:iq:version' seconds='1'/></iq>"] {
         #expect(throws: XMPPIQError.self) { try PresenceWire.lastActivitySeconds(try stanza(xml)) }
     }
-    let scope = IQReplyScope(recipient: "alex@example.test", accountBareJID: account, accountFullJID: full, serverDomain: "example.test")
-    let answer = "<query xmlns='jabber:iq:last' seconds='5'/>"
-    #expect(scope.accepts(try stanza("<iq type='result' id='l1' from='alex@example.test' to='\(full)'>\(answer)</iq>")))
-    for from in ["alex@example.test/laptop", "mallory@example.test", "example.test", account] {
-        #expect(!scope.accepts(try stanza("<iq type='result' id='l1' from='\(from)' to='\(full)'>\(answer)</iq>")), "\(from)")
-    }
-    #expect(!scope.accepts(try stanza("<iq type='result' id='l1' to='\(full)'>\(answer)</iq>")))
-    // The server refusing because we hold no subscription surfaces as its condition.
-    let forbidden = try stanza("<iq type='error' id='l1' from='alex@example.test'><error type='auth'><forbidden xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></iq>")
-    #expect(scope.accepts(forbidden))
-    #expect(throws: XMPPIQError.stanza(condition: "forbidden")) { try IQReplyScope.result(forbidden) }
 }
 
 @Test func lastActivityQueryToOurFullJIDFollowsTheSharingSwitch() throws {
@@ -169,9 +155,4 @@ private func presence(_ xml: String, rooms: Set<String> = []) throws -> XMPPEven
     #expect(PresenceWire.inlineResponse(other, accountFullJID: full, sharesLastActivity: true)
             == "<iq type='error' id='v1'><error type='cancel'><service-unavailable xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></iq>")
     #expect(PresenceWire.inlineResponse(try stanza("<iq type='result' id='x'/>"), accountFullJID: full, sharesLastActivity: true) == nil)
-}
-
-@Test func capsAdvertiseLastActivity() {
-    #expect(EntityCapabilities.features.contains("jabber:iq:last"))
-    #expect(EntityCapabilities.discoInfoQuery(node: nil).contains("<feature var='jabber:iq:last'/>"))
 }

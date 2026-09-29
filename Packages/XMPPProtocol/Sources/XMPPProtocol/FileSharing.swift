@@ -31,8 +31,6 @@ extension MessageContent {
             self.hash = hash; self.url = url; self.key = key; self.iv = iv; self.cipherHash = cipherHash
         }
 
-        public var isEncrypted: Bool { key != nil }
-
         /// The legacy (XEP-0454) form a body carries: the https URL with IV and key in the fragment.
         public var aesgcmURL: String? {
             guard let key, let iv, let https = URL(string: url), https.scheme == "https", let host = https.host else { return nil }

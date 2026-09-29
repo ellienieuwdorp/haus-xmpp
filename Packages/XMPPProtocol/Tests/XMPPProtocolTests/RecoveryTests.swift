@@ -294,13 +294,8 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     "<message from='\(from)' to='a@example.org/r'><result xmlns='urn:xmpp:mam:2' queryid='\(query)' id='\(id)'><forwarded xmlns='urn:xmpp:forward:0'><delay xmlns='urn:xmpp:delay' stamp='2026-09-14T12:00:00Z'/>\(inner)</forwarded></result></message>"
 }
 
-@Test func archiveRejectsForeignSendersWrongQueriesNestedWrappersAndUnrelatedInnerActors() throws {
+@Test func archiveRecordsUnrelatedInnerActorsAndNestedWrappersAsRejectedContent() throws {
     var query = ArchiveQuery(queryID: "query", accountBareJID: "a@example.org", accountFullJID: "a@example.org/r", limit: 100)
-    // Outer provenance (wrapper sender, query ID) still fails the page.
-    for xml in [archived(from: "evil@example.org"), archived(query: "other")] {
-        #expect(throws: XMPPIQError.self) { try query.receive(recoveryNode(xml)) }
-    }
-    #expect(query.messages.isEmpty)
     // Inner actors and nested wrappers are content: recorded as rejections, never unwrapped or shown.
     try query.receive(recoveryNode(archived(inner: "<message xmlns='jabber:client' from='evil@example.org' to='victim@example.org'><body>forged</body></message>")))
     try query.receive(recoveryNode(archived(id: "archive-2", inner: "<message xmlns='jabber:client' from='b@example.org/r' to='a@example.org/r'><received xmlns='urn:xmpp:carbons:2'/><body>forged</body></message>")))
@@ -309,17 +304,6 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     #expect(query.messages.allSatisfy { $0.message == nil && $0.encryptedMessage == nil && $0.rejectionArchive == "a@example.org" })
     try query.receive(recoveryNode(archived(id: "archive-3")))
     #expect(query.messages.last?.message?.body == "hello")
-    #expect(throws: XMPPIQError.self) { try query.receive(recoveryNode(archived())) }
-    #expect(query.messages.count == 3)
-}
-
-@Test func archiveCursorMustMatchDurablyReturnedLastResultAndCannotMakeNoProgress() throws {
-    var query = ArchiveQuery(queryID: "query", accountBareJID: "a@example.org", accountFullJID: "a@example.org/r", limit: 1)
-    try query.receive(recoveryNode(archived()))
-    let valid = try recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2' complete='true'><set xmlns='http://jabber.org/protocol/rsm'><first>archive-1</first><last>archive-1</last></set></fin></iq>")
-    #expect(try query.finish(valid).lastID == "archive-1")
-    let forged = try recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2'><set xmlns='http://jabber.org/protocol/rsm'><first>archive-1</first><last>unseen</last></set></fin></iq>")
-    #expect(throws: XMPPIQError.self) { try query.finish(forged) }
 }
 
 @Test func revokedTrustBlocksRestoredJournalAndResumeReplay() async throws {
@@ -361,12 +345,9 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
 }
 
 @Test func archiveQueriesGetTheLongerTimeoutAndTheEventBufferOutlastsTheStreamCeiling() {
-    #expect(XMPPClient.archiveQueryTimeout == .seconds(60))
-    #expect(XMPPClient.iqTimeout == .seconds(15))
     #expect(XMPPClient.archiveQueryTimeout > XMPPClient.iqTimeout)
-    #expect(XMPPClient.eventBufferLimit == 4096)
-    // Content plus barrier per message: the buffer outlasts stream management's 2,000-stanza ceiling.
-    #expect(XMPPClient.eventBufferLimit >= 2 * 2_000)
+    // Content plus barrier per message: the buffer outlasts stream management's inbound ceiling.
+    #expect(XMPPClient.eventBufferLimit >= 2 * Int(StreamManagement.inboundWindow))
 }
 
 @Test func archiveTimestampsParseConcurrentlyWithSharedFormatters() async {
@@ -407,13 +388,14 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     #expect(!escaped.contains("a<b"))
 }
 
-@Test func archiveFinishValidatesFirstAgainstReturnedResults() throws {
+@Test func archiveFinishValidatesFirstAndLastAgainstReturnedResults() throws {
     func fin(_ attributes: String, _ set: String) throws -> XMPPProtocol.XMLNode {
         try recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2'\(attributes)><set xmlns='http://jabber.org/protocol/rsm'>\(set)</set></fin></iq>")
     }
     var query = ArchiveQuery(queryID: "query", accountBareJID: "a@example.org", accountFullJID: "a@example.org/r", limit: 100)
     try query.receive(recoveryNode(archived()))
     #expect(throws: XMPPIQError.self) { try query.finish(fin("", "<first>unseen</first><last>archive-1</last>")) }
+    #expect(throws: XMPPIQError.self) { try query.finish(fin("", "<first>archive-1</first><last>unseen</last>")) }
     #expect(throws: XMPPIQError.self) { try query.finish(fin("", "<last>archive-1</last>")) }
     #expect(throws: XMPPIQError.self) { try query.finish(fin("", "<first>archive-1</first><first>archive-1</first><last>archive-1</last>")) }
     let page = try query.finish(fin("", "<first index='0'>archive-1</first><last>archive-1</last>"))

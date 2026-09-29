@@ -162,23 +162,6 @@ private func groupEnvelope() -> XMPPOMEMOEnvelope {
     #expect(!legacy.hasFallbackBody && legacy.envelope == archivedWithBody.envelope)
 }
 
-@Test func groupRefreshDecisionUsesTheCacheUntilPresenceChanges() throws {
-    let members = [groupAlice, groupBob]
-    var state = GroupRoomState()
-    #expect(state.refreshDecision == .readTwice)
-    state.markValidated(members)
-    #expect(state.refreshDecision == .cached)
-    let occupant = try groupNode("<presence from='\(groupRoom)/bob'><x xmlns='\(GroupChatWire.user)'><item affiliation='member' jid='\(groupBob)'/></x></presence>")
-    GroupChatWire.applyPresence(occupant, room: groupRoom, account: groupAlice, state: &state)
-    #expect(state.refreshDecision == .readOnceExpecting(members))
-    state.markValidated(members)
-    #expect(state.refreshDecision == .cached)
-    state.requestNickname("n")
-    #expect(state.refreshDecision == .readOnceExpecting(members))
-    let empty = GroupRoomState(members: [], revision: 4, validatedRevision: 4)
-    #expect(empty.refreshDecision == .readTwice)
-}
-
 @Test func sendsAndKeyDistributionReadMembershipEvenWithoutPresenceChanges() throws {
     // Adding or removing a member who is not in the room sends no presence (XEP-0045 §9.3, §9.4), so an
     // unchanged revision must still cost one read on every path except archive paging.
@@ -189,9 +172,19 @@ private func groupEnvelope() -> XMPPOMEMOEnvelope {
     state.markValidated(members)
     #expect(state.refreshDecision(reusingValidation: false) == .readOnceExpecting(members))
     #expect(state.refreshDecision(reusingValidation: true) == .cached)
+    // Occupant presence and our own nickname change both invalidate the cache for archive paging too.
+    let occupant = try groupNode("<presence from='\(groupRoom)/bob'><x xmlns='\(GroupChatWire.user)'><item affiliation='member' jid='\(groupBob)'/></x></presence>")
+    GroupChatWire.applyPresence(occupant, room: groupRoom, account: groupAlice, state: &state)
+    #expect(state.refreshDecision(reusingValidation: true) == .readOnceExpecting(members))
+    state.markValidated(members)
+    #expect(state.refreshDecision(reusingValidation: true) == .cached)
     state.requestNickname("n")
     #expect(state.refreshDecision(reusingValidation: false) == .readOnceExpecting(members))
     #expect(state.refreshDecision(reusingValidation: true) == .readOnceExpecting(members))
+    // An empty validated membership is never trusted as a cache.
+    let empty = GroupRoomState(members: [], revision: 4, validatedRevision: 4)
+    #expect(empty.refreshDecision(reusingValidation: true) == .readTwice)
+    #expect(empty.refreshDecision(reusingValidation: false) == .readTwice)
 }
 
 @Test func aRefreshThatMustReadNeverJoinsOneThatMayAnswerFromTheCache() {

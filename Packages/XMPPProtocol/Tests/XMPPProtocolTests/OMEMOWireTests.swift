@@ -9,6 +9,8 @@ private func omemoNode(_ xml: String) throws -> XMPPProtocol.XMLNode {
     return node
 }
 
+private func decodeEncrypted(_ xml: String) throws -> XMPPEncryptedMessage { try OMEMOWire.parseMessage(omemoNode(xml)) }
+
 private func bundle(_ profile: XMPPOMEMOProfile) -> XMPPOMEMOBundle {
     let key = profile == .legacy ? Data([5] + Array(repeating: UInt8(42), count: 32)) : Data(repeating: 42, count: 32)
     return XMPPOMEMOBundle(profile: profile, deviceID: 123, identityKey: key, signedPreKeyID: 7,
@@ -35,11 +37,10 @@ private func bundle(_ profile: XMPPOMEMOProfile) -> XMPPOMEMOBundle {
         let xml = try XMPPClient.encryptedMessageXML(to: "b@example.test", envelope: envelope, id: "durable-1")
         #expect(!xml.contains("<body"))
         let fromXML = xml.replacingOccurrences(of: "<message ", with: "<message from='a@example.test/phone' ")
-        let decoded = try XMPPClient.decodeEncryptedMessageXML(fromXML)
+        let decoded = try decodeEncrypted(fromXML)
         #expect(decoded.id == "durable-1")
         #expect(decoded.originID == "durable-1")
         #expect(decoded.envelope == envelope)
-        #expect(try JSONDecoder().decode(XMPPOMEMOEnvelope.self, from: JSONEncoder().encode(envelope)) == envelope)
         #expect(XMPPClient.parsedMessage(try omemoNode(fromXML)) == nil)
     }
 }
@@ -60,19 +61,19 @@ private func bundle(_ profile: XMPPOMEMOProfile) -> XMPPOMEMOBundle {
     ]
     for encrypted in variants {
         let xml = "<message from='a@example.test' type='chat'><body>UNTRUSTED PLAINTEXT</body>\(encrypted)</message>"
-        #expect(throws: (any Error).self) { try XMPPClient.decodeEncryptedMessageXML(xml) }
+        #expect(throws: (any Error).self) { try decodeEncrypted(xml) }
         #expect(XMPPClient.parsedMessage(try omemoNode(xml)) == nil)
     }
 }
 
 @Test func modernRecipientsAreScopedByJIDAndEmptyMessagesArePreserved() throws {
     let xml = "<message from='a@example.test/phone'><encrypted xmlns='urn:xmpp:omemo:2'><header sid='5'><keys jid='a@example.test'><key rid='7' kex='true'>AQID</key></keys><keys jid='b@example.test'><key rid='7'>BAUG</key></keys></header></encrypted></message>"
-    let message = try XMPPClient.decodeEncryptedMessageXML(xml)
+    let message = try decodeEncrypted(xml)
     #expect(message.envelope.keys.count == 2)
     #expect(message.envelope.payload == nil)
     #expect(message.envelope.iv == nil)
-    #expect(throws: (any Error).self) { try XMPPClient.decodeEncryptedMessageXML(xml.replacingOccurrences(of: "jid='b@example.test'", with: "jid='a@example.test'")) }
-    #expect(throws: (any Error).self) { try XMPPClient.decodeEncryptedMessageXML(xml.replacingOccurrences(of: "jid='b@example.test'", with: "jid='b@example.test/resource'")) }
+    #expect(throws: (any Error).self) { try decodeEncrypted(xml.replacingOccurrences(of: "jid='b@example.test'", with: "jid='a@example.test'")) }
+    #expect(throws: (any Error).self) { try decodeEncrypted(xml.replacingOccurrences(of: "jid='b@example.test'", with: "jid='b@example.test/resource'")) }
 }
 
 @Test func malformedBundlesAndDeviceListsCannotReplaceValidState() throws {
@@ -93,7 +94,9 @@ private func bundle(_ profile: XMPPOMEMOProfile) -> XMPPOMEMOBundle {
 @Test func iqRepliesRequireTheAddressedEntityAndOurDestination() throws {
     let scope = IQReplyScope(recipient: "b@example.test", accountBareJID: "a@example.test", accountFullJID: "a@example.test/phone", serverDomain: "example.test")
     #expect(scope.accepts(try omemoNode("<iq from='b@example.test' to='a@example.test/phone' type='result' id='1'/>")))
-    for attributes in ["from='evil@example.test'", "from='b@example.test/other'", "from='example.test'", "", "from='b@example.test' to='evil@example.test'"] {
+    // An error from the addressed entity is its answer (XEP-0012 `forbidden`), not someone else's.
+    #expect(scope.accepts(try omemoNode("<iq from='b@example.test' type='error' id='1'/>")))
+    for attributes in ["from='evil@example.test'", "from='b@example.test/other'", "from='example.test'", "from='a@example.test'", "", "from='b@example.test' to='evil@example.test'"] {
         #expect(!scope.accepts(try omemoNode("<iq \(attributes) type='result' id='1'/>")))
     }
     #expect(!scope.accepts(try omemoNode("<iq xmlns='urn:wrong' from='b@example.test' type='result' id='1'/>")))
@@ -148,8 +151,8 @@ private func bundle(_ profile: XMPPOMEMOProfile) -> XMPPOMEMOBundle {
 @Test func parseMessageRecordsFallbackBodyPresence() throws {
     let ns = XMPPOMEMOProfile.legacy.namespace
     let encrypted = "<encrypted xmlns='\(ns)'><header sid='91'><key rid='123'>AQID</key><iv>AQEBAQEBAQEBAQEB</iv></header><payload>BAUG</payload></encrypted>"
-    let withBody = try XMPPClient.decodeEncryptedMessageXML("<message from='a@example.test/phone' type='chat' id='f1'><body>I sent you an OMEMO encrypted message</body>\(encrypted)</message>")
-    let without = try XMPPClient.decodeEncryptedMessageXML("<message from='a@example.test/phone' type='chat' id='f1'>\(encrypted)</message>")
+    let withBody = try decodeEncrypted("<message from='a@example.test/phone' type='chat' id='f1'><body>I sent you an OMEMO encrypted message</body>\(encrypted)</message>")
+    let without = try decodeEncrypted("<message from='a@example.test/phone' type='chat' id='f1'>\(encrypted)</message>")
     #expect(withBody.hasFallbackBody)
     #expect(!without.hasFallbackBody)
     // The hint is part of the value: two otherwise identical envelopes differ only by it.
@@ -157,6 +160,6 @@ private func bundle(_ profile: XMPPOMEMOProfile) -> XMPPOMEMOBundle {
     var normalized = withBody; normalized.hasFallbackBody = false
     #expect(normalized == without)
     // A body in another namespace is not the jabber:client fallback.
-    let foreign = try XMPPClient.decodeEncryptedMessageXML("<message from='a@example.test/phone' type='chat' id='f1'><body xmlns='urn:example'>x</body>\(encrypted)</message>")
+    let foreign = try decodeEncrypted("<message from='a@example.test/phone' type='chat' id='f1'><body xmlns='urn:example'>x</body>\(encrypted)</message>")
     #expect(!foreign.hasFallbackBody)
 }

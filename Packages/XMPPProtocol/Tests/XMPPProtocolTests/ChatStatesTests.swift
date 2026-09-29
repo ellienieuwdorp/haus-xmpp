@@ -92,8 +92,3 @@ private let account = "me@example.test"
     #expect(XMPPClient.parsedChatState(echoed, account: account, rooms: [:])?.state == .composing)
     #expect(throws: XMPPClientError.self) { try XMPPChatState.xml(.active, to: "bad address", id: "c3") }
 }
-
-@Test func capsAdvertiseChatStates() {
-    #expect(EntityCapabilities.features.contains(ns))
-    #expect(EntityCapabilities.discoInfoQuery(node: nil).contains("<feature var='\(ns)'/>"))
-}

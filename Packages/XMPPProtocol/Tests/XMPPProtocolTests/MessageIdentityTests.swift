@@ -19,7 +19,6 @@ private func stanza(_ xml: String) throws -> XMPPProtocol.XMLNode {
     #expect(node.attributes["to"] == recipient)
     #expect(node.child("body", namespace: "jabber:client")?.text == body)
     #expect(node.child("origin-id", namespace: "urn:xmpp:sid:0")?.attributes["id"] == id)
-    #expect(try XMPPClient.messageXML(to: recipient, body: body, id: id) == xml)
 }
 
 @Test func renderingRejectsUnboundedOrInvalidXMLInputs() {

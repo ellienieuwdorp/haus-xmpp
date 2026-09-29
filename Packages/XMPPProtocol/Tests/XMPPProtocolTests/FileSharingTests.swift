@@ -29,7 +29,6 @@ private func sharing(encrypted: Bool = true) -> MessageContent.FileSharing {
     let plain = try MessageContent.decode(try parse(try MessageContent(body: "", fileSharing: sharing(encrypted: false)).xml()), strict: true)
     #expect(plain.body.isEmpty)
     #expect(plain.fileSharing == sharing(encrypted: false))
-    #expect(plain.fileSharing?.isEncrypted == false)
     // A foreign sender that put only the URL in the body without declaring a fallback still yields a clean caption.
     let foreign = try parse("<body xmlns='jabber:client'>https://uploads.localhost:5281/abc/beach.jpg</body>" + (try sharing(encrypted: false).xml()))
     #expect(try MessageContent.decode(foreign, strict: true).body.isEmpty)
