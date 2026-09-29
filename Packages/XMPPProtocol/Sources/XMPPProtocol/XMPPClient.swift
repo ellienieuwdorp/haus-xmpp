@@ -172,6 +172,9 @@ public actor XMPPClient {
     /// A candidate must reach TLS stream features within this; the whole login within `loginTimeout` of its start.
     static let candidateTimeout: Duration = .seconds(10)
     static let loginTimeout: Duration = .seconds(20)
+    /// No DNS query or further candidate starts after this; a candidate's own time is cut to what is left.
+    static let connectTimeout: Duration = .seconds(30)
+    static let discoveryTimeout: Duration = .seconds(5)
     private var bindID = ""
     private var boundJID = ""
     private struct IQRequest {
@@ -251,11 +254,16 @@ public actor XMPPClient {
                 }
                 var tried = Set<XMPPEndpoint>()
                 var failure: Error?
+                let giveUp = ContinuousClock.now + Self.connectTimeout
                 while true {
+                    let remaining = giveUp - .now
+                    guard remaining > .zero else { failure = failure ?? XMPPClientError.timedOut; break }
                     if candidates.isEmpty {
                         guard !discovered else { break }
                         discovered = true
-                        let resolved = await EndpointDiscovery.resolve(domain: domain)
+                        let resolved = await EndpointDiscovery.resolve(domain: domain, timeout: min(Self.discoveryTimeout, remaining))
+                        // Cancellation cuts the queries short; never dial what they left behind.
+                        try Task.checkCancellation()
                         guard generation == token else { throw XMPPClientError.connectionClosed }
                         if resolved.isEmpty { failure = XMPPClientError.serviceNotOffered }
                         candidates = resolved.filter { !tried.contains($0) }
@@ -264,7 +272,7 @@ public actor XMPPClient {
                     let endpoint = candidates.removeFirst()
                     tried.insert(endpoint)
                     do {
-                        try await connect(to: endpoint, token: token)
+                        try await connect(to: endpoint, token: token, within: min(Self.candidateTimeout, remaining))
                         return XMPPConnectedSession(endpoint: endpoint, authenticatedWithSCRAM: authenticatedWithSCRAM)
                     } catch let skipped as CandidateFailure {
                         guard generation == token else { throw XMPPClientError.connectionClosed }
@@ -283,7 +291,7 @@ public actor XMPPClient {
     }
 
     /// One candidate, from TCP to online. A failure before commitment throws `CandidateFailure`.
-    private func connect(to endpoint: XMPPEndpoint, token: UUID) async throws {
+    private func connect(to endpoint: XMPPEndpoint, token: UUID, within candidateTimeout: Duration) async throws {
         guard let port = NWEndpoint.Port(rawValue: endpoint.port), port.rawValue > 0 else { throw CandidateFailure(error: XMPPClientError.invalidConfiguration) }
         framer = XMLStreamFramer(); phase = .features; committed = false; abandonedError = nil
         let attemptID = UUID()
@@ -294,9 +302,9 @@ public actor XMPPClient {
         connection = conn
         deadline?.cancel()
         deadline = Task { [weak self] in
-            do { try await Task.sleep(for: Self.candidateTimeout) } catch { return }
+            do { try await Task.sleep(for: candidateTimeout) } catch { return }
             guard await self?.candidateDeadline(token, attempt: attemptID) == true else { return }
-            do { try await Task.sleep(for: Self.loginTimeout - Self.candidateTimeout) } catch { return }
+            do { try await Task.sleep(for: Self.loginTimeout - candidateTimeout) } catch { return }
             await self?.timeout(token)
         }
         do {

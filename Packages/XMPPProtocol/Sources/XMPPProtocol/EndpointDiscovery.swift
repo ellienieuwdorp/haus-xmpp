@@ -115,7 +115,7 @@ enum EndpointDiscovery {
     }
 
     /// Both SRV types, concurrently, each bounded by `timeout`.
-    static func resolve(domain: String, timeout: Duration = .seconds(5)) async -> [XMPPEndpoint] {
+    static func resolve(domain: String, timeout: Duration) async -> [XMPPEndpoint] {
         async let direct = lookup("_xmpps-client._tcp." + domain, timeout: timeout)
         async let starttls = lookup("_xmpp-client._tcp." + domain, timeout: timeout)
         let (directTLS, startTLS) = await (direct, starttls)
@@ -123,10 +123,12 @@ enum EndpointDiscovery {
         return candidates(domain: domain, directTLS: directTLS, startTLS: startTLS, using: &random)
     }
 
+    /// Cancellation ends the query at once with nothing usable, so a caller's budget bounds discovery too.
     static func lookup(_ name: String, timeout: Duration) async -> SRVLookup {
-        await withCheckedContinuation { continuation in
-            SRVQuery(name: name, timeout: timeout) { continuation.resume(returning: $0) }.start()
-        }
+        let query = SRVQuery(name: name, timeout: timeout)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in query.start { continuation.resume(returning: $0) } }
+        } onCancel: { query.cancel() }
     }
 }
 
@@ -140,13 +142,17 @@ private final class SRVQuery: @unchecked Sendable {
     private var reference: DNSServiceRef?
     private var records: [SRVRecord] = []
     private var retained: Unmanaged<SRVQuery>?
+    private var cancelled = false
 
-    init(name: String, timeout: Duration, completion: @escaping (SRVLookup) -> Void) {
-        self.name = name; self.timeout = timeout; self.completion = completion
+    init(name: String, timeout: Duration) {
+        self.name = name; self.timeout = timeout
     }
 
-    func start() {
+    func start(completion: @escaping (SRVLookup) -> Void) {
         queue.async { [self] in
+            self.completion = completion
+            // A cancellation that arrived first ends the query before it is sent.
+            guard !cancelled else { finish(); return }
             let context = Unmanaged.passRetained(self)
             retained = context
             var ref: DNSServiceRef?
@@ -166,6 +172,13 @@ private final class SRVQuery: @unchecked Sendable {
         }
     }
 
+    func cancel() {
+        queue.async { [self] in
+            cancelled = true
+            finish()
+        }
+    }
+
     private func received(flags: DNSServiceFlags, error: DNSServiceErrorType, type: UInt16, data: Data?) {
         guard completion != nil else { return }
         if error != kDNSServiceErr_NoError { finish(); return }
@@ -179,7 +192,7 @@ private final class SRVQuery: @unchecked Sendable {
         guard let completion else { return }
         self.completion = nil
         if let reference { DNSServiceRefDeallocate(reference); self.reference = nil }
-        let result = SRVLookup(records)
+        let result = cancelled ? .none : SRVLookup(records)
         retained?.release(); retained = nil
         completion(result)
     }

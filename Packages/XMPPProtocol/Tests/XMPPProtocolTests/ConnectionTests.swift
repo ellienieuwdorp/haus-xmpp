@@ -226,3 +226,19 @@ private func discoveryMovesPastADeadRememberedEndpoint(_ dead: DeadEndpoint) asy
     #expect(sent.contains("to='\(zone.domain)'") && !sent.contains("secret"))
     if dead == .silent { #expect(String(decoding: silent.received, as: UTF8.self).contains("<stream:stream")) }
 }
+
+/// Discovery ends with the caller's cancellation, not with the DNS timeout: the notification extension's budget
+/// covers it. A `.local` name nobody answers makes the query wait for its full timeout otherwise.
+@Test func cancellingDuringDiscoveryReturnsPromptly() async throws {
+    let zone = LocalSRVZone()
+    let client = XMPPClient()
+    let clock = ContinuousClock()
+    let started = clock.now
+    let attempt = Task {
+        try await client.connect(route: .discover(preferred: nil), domain: zone.domain, username: "alice", password: "secret-password")
+    }
+    try await Task.sleep(for: .milliseconds(300))
+    attempt.cancel()
+    await #expect(throws: (any Error).self) { try await attempt.value }
+    #expect(clock.now - started < .seconds(2))
+}
