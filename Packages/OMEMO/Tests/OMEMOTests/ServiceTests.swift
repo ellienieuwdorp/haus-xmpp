@@ -1406,6 +1406,11 @@ final class ServiceTests: XCTestCase {
     func testRefusedCommitAfterSkippedRetentionKeepsTheCiphertextForRetry() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.legacy)
+        // Bob never wrote to Alice, and the account already holds as many rows as strangers may: this copy waits for a
+        // retry, not a review, so only the account ceiling bounds it.
+        for index in 0..<MessageStore.pendingLimits.strangerCeiling {
+            try await f.bStore.retainEncryptedIncoming(accountID: f.bob, sender: f.bob, digest: "filler-\(index)", wire: Data([1]))
+        }
         let outgoing = try await f.queue()
         try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
         let envelope = try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id)
@@ -1416,11 +1421,11 @@ final class ServiceTests: XCTestCase {
         do { _ = try await f.b.receive(account: f.bob, message: oversized, transport: f.bTransport); XCTFail("Store accepted an oversized reference") }
         catch { expectEqual(error as? MessageStoreError, .invalidValue) }
         expectTrue(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: oversized))
-        expectEqual(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).map(\.reason), [.trustPending])
+        expectEqual(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob, sender: f.alice).map(\.reason), [.trustPending])
         expectTrue(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).isEmpty)
-        try await f.b.retryPendingIncoming(account: f.bob, transport: f.bTransport)
+        try await f.b.retryPendingIncoming(account: f.bob, transport: f.bTransport, sender: f.alice)
         expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).map(\.body), [outgoing.body])
-        expectTrue(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).isEmpty)
+        expectTrue(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob, sender: f.alice).isEmpty)
     }
 
     func testStateCacheFollowsAnotherServicesRevision() async throws {

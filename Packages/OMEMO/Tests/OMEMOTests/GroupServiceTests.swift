@@ -284,6 +284,30 @@ private struct GroupTransport: OMEMOGroupTransport {
         XCTAssertTrue(alerts.isEmpty)
     }
 
+    /// An approved member's room message kept only while the room is read waits for that read, not for a review: however
+    /// many rows strangers already hold, only the account ceiling bounds it, so it still decrypts in a room Bob only reads.
+    func testApprovedMemberStillDecryptsOnceStrangersFillTheirShare() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let room = RoomFixture(), roomID = "private@conference.localhost"
+        let at = GroupTransport(base: f.aTransport, room: room), bt = GroupTransport(base: f.bTransport, room: room)
+        for index in 0..<MessageStore.pendingLimits.strangerCeiling {
+            try await f.bStore.retainEncryptedIncoming(accountID: f.bob, sender: f.bob, digest: "filler-\(index)", wire: Data([1]))
+        }
+        let outgoing = StoredMessage(id: "group-one", accountID: f.alice, chatID: roomID, senderID: f.alice, body: "Read the room first", isOutgoing: true)
+        try await f.aStore.upsertChat(accountID: f.alice, chatID: roomID, title: "Private group")
+        _ = try await f.aStore.enqueueOutgoing(outgoing)
+        try await f.a.prepareGroupMessage(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
+        let prepared = try await f.a.outgoingGroupEnvelope(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
+        let incoming = try XMPPEncryptedGroupMessage(id: outgoing.id, room: roomID, occupant: roomID + "/alice", sender: f.alice,
+                                                     envelope: prepared.envelope, hasFallbackBody: true)
+        let inserted = try await f.b.receiveGroup(account: f.bob, message: incoming, transport: bt)
+        XCTAssertTrue(inserted)
+        let rows = try await f.bStore.messages(accountID: f.bob, chatID: roomID)
+        XCTAssertEqual(rows.map(\.body), [outgoing.body])
+        XCTAssertEqual(rows.map(\.unreadableReason), [nil])
+    }
+
     /// Carol's second installation joins a room Bob already knows and sends before Bob has seen that device.
     private func carolSecondDeviceMessage(_ f: ServiceFixture, room: RoomFixture, roomID: String, carol: String,
                                           provenance: XMPPGroupProvenance = .liveOccupant) async throws -> (XMPPEncryptedGroupMessage, String) {

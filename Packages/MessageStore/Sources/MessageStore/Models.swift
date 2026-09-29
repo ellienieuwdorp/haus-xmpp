@@ -230,12 +230,18 @@ public struct RetentionOverflow: Sendable, Equatable {
     /// The `.retentionLimit` placeholder for ciphertext that would have been a bubble. Nil consumes the replay identity
     /// without a row (a key transport, reaction or receipt).
     public let placeholder: UnreadableMessage?
-    public init(chatID: String, placeholder: UnreadableMessage?) { self.chatID = chatID; self.placeholder = placeholder }
+    /// The sender device is one the user approved: the row waits for a retry (a room read, a transient failure), not for
+    /// a review, so only the account ceiling bounds it.
+    public let senderApproved: Bool
+    public init(chatID: String, placeholder: UnreadableMessage?, senderApproved: Bool = false) {
+        self.chatID = chatID; self.placeholder = placeholder; self.senderApproved = senderApproved
+    }
 }
 
 /// How much ciphertext `pending_encrypted_inbox` keeps for review, per account. A sender is known when it is the account
-/// itself, when the account wrote in the conversation or in a direct chat with it, or when a message of theirs was ever
-/// authenticated here (so some device of theirs was approved). Everyone else is a stranger. The roster is not a signal:
+/// itself, when the account wrote in the conversation or in a direct chat with it, or when a message of theirs was
+/// authenticated in their direct chat or in this room (so some device of theirs was approved). Everyone else is a
+/// stranger. A row from an approved device (`RetentionOverflow.senderApproved`) meets only `perAccount`. The roster is not a signal:
 /// it lives in memory for one connection and the notification extension never loads it.
 public struct PendingRetentionLimits: Sendable, Equatable {
     /// Rows one known sender may hold (all its devices together).

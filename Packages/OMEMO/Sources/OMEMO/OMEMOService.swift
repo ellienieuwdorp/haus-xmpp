@@ -963,11 +963,13 @@ public actor OMEMOService {
         let peer = sender == account ? bare(message.to ?? account) : sender
         // Past a retention limit the store records this instead of a row, in the same transaction: a quiet placeholder
         // for a would-be bubble, else the consumed replay identity. Either is final, so `receive` then returns false.
-        let overflow = RetentionOverflow(chatID: peer, placeholder: Self.expectsBubble(message)
-            ? placeholder(for: message, account: account, reason: .retentionLimit, sentAt: retained.sentAt, key: .ciphertext(sender: sender, digest: digest)) : nil)
-        func retain(_ reason: PendingEncryptedReason, notification: PendingNotificationContext?) async throws -> Bool {
+        // `approved` marks a copy kept from an approved device, which only the account ceiling bounds.
+        let overflowPlaceholder = Self.expectsBubble(message)
+            ? placeholder(for: message, account: account, reason: .retentionLimit, sentAt: retained.sentAt, key: .ciphertext(sender: sender, digest: digest)) : nil
+        func retain(_ reason: PendingEncryptedReason, notification: PendingNotificationContext?, approved: Bool = false) async throws -> Bool {
             try await store.retainEncryptedIncoming(accountID: account, sender: sender, digest: digest, wire: JSONEncoder().encode(context),
-                                                    reason: reason, notification: notification, overflow: overflow)
+                                                    reason: reason, notification: notification,
+                                                    overflow: RetentionOverflow(chatID: peer, placeholder: overflowPlaceholder, senderApproved: approved))
         }
         if previous == nil, !retentionSkipped {
             guard try await retain(known == nil ? .keysPending : .trustPending, notification: alert) else { return false }
@@ -1105,7 +1107,7 @@ public actor OMEMOService {
             // tears the stream down, as for any storage failure. Past a limit the overflow is the final outcome.
             if retentionSkipped, !Self.leavesDurableOutcome(failure) {
                 let kept: Bool
-                do { kept = try await retain(.trustPending, notification: nil) } catch { throw failure }
+                do { kept = try await retain(.trustPending, notification: nil, approved: true) } catch { throw failure }
                 if !kept { return false }
             }
             throw failure

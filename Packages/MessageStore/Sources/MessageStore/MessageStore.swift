@@ -762,7 +762,7 @@ public actor MessageStore {
         return try connection.transaction {
             if try hasEncryptedIncoming(accountID: accountID, sender: sender, digest: digest) { return true }
             if try !connection.query("SELECT 1 FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?", [.text(accountID), .text(sender), .text(digest)]).isEmpty { return true }
-            guard try admitsPending(accountID: accountID, sender: sender, chatID: chatID) else {
+            guard try admitsPending(accountID: accountID, sender: sender, chatID: chatID, approved: overflow?.senderApproved ?? false) else {
                 if let placeholder = overflow?.placeholder {
                     _ = try insertUnreadableInTransaction(placeholder)
                 } else {
@@ -780,19 +780,21 @@ public actor MessageStore {
     }
 
     /// Whether one more row from `sender` fits `pendingLimits`: two primary-key range counts, and the known-sender lookup
-    /// only when a stranger's limit would bind.
-    private func admitsPending(accountID: String, sender: String, chatID: String) throws -> Bool {
+    /// only when a stranger's limit would bind. An approved sender device's row answers to the account ceiling alone.
+    private func admitsPending(accountID: String, sender: String, chatID: String, approved: Bool) throws -> Bool {
         let limits = Self.pendingLimits
         let total = try connection.query("SELECT COUNT(*) FROM pending_encrypted_inbox WHERE account_id=?", [.text(accountID)]).first![0].integer
+        if approved { return total < limits.perAccount }
         let held = try connection.query("SELECT COUNT(*) FROM pending_encrypted_inbox WHERE account_id=? AND sender=?", [.text(accountID), .text(sender)]).first![0].integer
         guard total < limits.perAccount, held < limits.perKnownSender else { return false }
         guard held >= limits.perStranger || total >= limits.strangerCeiling else { return true }
         if sender == accountID { return true }
-        // The account wrote in this conversation or to the sender directly, or a message of theirs was authenticated
-        // (a placeholder never counts). Both are prefixes of the timeline index.
+        // The account wrote in this conversation or to the sender directly, or a message of theirs was authenticated in
+        // their direct chat or, decrypted, in this room (a placeholder never counts). All are prefixes of the timeline index.
         return try !connection.query("""
             SELECT 1 FROM messages WHERE account_id=?1 AND ((chat_id IN (?2,?3) AND outgoing=1)
-                OR (chat_id=?3 AND sender_id=?3 AND outgoing=0 AND unreadable_reason IS NULL)) LIMIT 1
+                OR (chat_id=?3 AND sender_id=?3 AND outgoing=0 AND unreadable_reason IS NULL)
+                OR (chat_id=?2 AND sender_id=?3 AND outgoing=0 AND unreadable_reason IS NULL AND encryption_profile='modern')) LIMIT 1
             """, [.text(accountID), .text(chatID), .text(sender)]).isEmpty
     }
 

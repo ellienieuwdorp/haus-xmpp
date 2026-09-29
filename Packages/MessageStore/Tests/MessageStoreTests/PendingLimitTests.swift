@@ -19,45 +19,53 @@ private func limitStore() async throws -> (MessageStore, URL) {
     return (store, directory)
 }
 
-private func overflow(_ sender: String, _ digest: String, chat: String? = nil, bubble: Bool = true) -> RetentionOverflow {
+private func overflow(_ sender: String, _ digest: String, chat: String? = nil, bubble: Bool = true, approved: Bool = false) -> RetentionOverflow {
     let chatID = chat ?? sender
     return RetentionOverflow(chatID: chatID, placeholder: bubble ? UnreadableMessage(accountID: account, chatID: chatID, senderID: sender, isOutgoing: sender == account,
-        sentAt: Date(timeIntervalSince1970: 1_000), reason: .retentionLimit, key: .ciphertext(sender: sender, digest: digest)) : nil)
+        sentAt: Date(timeIntervalSince1970: 1_000), reason: .retentionLimit, key: .ciphertext(sender: sender, digest: digest)) : nil, senderApproved: approved)
 }
 
-/// Offers `count` new ciphertexts from `sender` in `chat`, each waiting for review with an alert; returns how many were kept.
-private func offer(_ store: MessageStore, _ sender: String, count: Int, chat: String? = nil, tag: String = "") async throws -> Int {
+/// Offers `count` new ciphertexts from `sender` in `chat`, each waiting for review with an alert (or, `approved`, for a
+/// retry of an approved device's copy); returns how many were kept.
+private func offer(_ store: MessageStore, _ sender: String, count: Int, chat: String? = nil, tag: String = "", approved: Bool = false) async throws -> Int {
     var kept = 0
     for index in 0..<count {
         let digest = "\(sender)-\(tag)\(index)"
         if try await store.retainEncryptedIncoming(accountID: account, sender: sender, digest: digest, wire: Data([1]),
                                                    notification: PendingNotificationContext(chatID: chat ?? sender, sentAt: Date(timeIntervalSince1970: 1_000)),
-                                                   overflow: overflow(sender, digest, chat: chat)) { kept += 1 }
+                                                   overflow: overflow(sender, digest, chat: chat, approved: approved)) { kept += 1 }
     }
     return kept
 }
 
 /// Only durable evidence that the account knows the sender lifts the stranger quota: the account itself, a conversation or
-/// direct chat the account wrote in, or an authenticated message from the sender. A placeholder from them is no evidence.
+/// direct chat the account wrote in, or an authenticated message from the sender in their direct chat or (decrypted) in
+/// the room. A placeholder or a plaintext room line from them is no evidence. An approved device's copy, waiting for a
+/// retry rather than a review, is not held to a stranger's quota at all.
 @Test func strangerQuotaAppliesUntilTheAccountKnowsTheSender() async throws {
     let room = "room@conference.localhost"
-    let cases: [(sender: String, chat: String?, known: Bool, setUp: @Sendable (MessageStore, String) async throws -> Void)] = [
-        ("stranger@localhost", nil, false, { _, _ in }),
-        (account, "bob@localhost", true, { _, _ in }),
-        ("wrote@localhost", nil, true, { store, sender in
+    let cases: [(sender: String, chat: String?, approved: Bool, known: Bool, setUp: @Sendable (MessageStore, String) async throws -> Void)] = [
+        ("stranger@localhost", nil, false, false, { _, _ in }),
+        (account, "bob@localhost", false, true, { _, _ in }),
+        ("wrote@localhost", nil, false, true, { store, sender in
             try await write(store, StoredMessage(id: "out", accountID: account, chatID: sender, senderID: account, body: "Hi", isOutgoing: true)) }),
-        ("member@localhost", room, true, { store, _ in
+        ("member@localhost", room, false, true, { store, _ in
             try await write(store, StoredMessage(id: "out", accountID: account, chatID: room, senderID: account, body: "Hi all", isOutgoing: true)) }),
-        ("approved@localhost", nil, true, { store, sender in
+        ("approved@localhost", nil, false, true, { store, sender in
             try await write(store, StoredMessage(id: "in", accountID: account, chatID: sender, senderID: sender, body: "Hello", encryptionProfile: "modern")) }),
-        ("unreadable@localhost", nil, false, { store, sender in
+        ("read-member@localhost", room, false, true, { store, sender in
+            try await write(store, StoredMessage(id: "in", accountID: account, chatID: room, senderID: sender, body: "Hello room", encryptionProfile: "modern")) }),
+        ("plain-member@localhost", room, false, false, { store, sender in
+            try await write(store, StoredMessage(id: "in", accountID: account, chatID: room, senderID: sender, body: "Plain hello")) }),
+        ("unreadable@localhost", nil, false, false, { store, sender in
             _ = try await store.recordUnreadableMessage(UnreadableMessage(accountID: account, chatID: sender, senderID: sender, isOutgoing: false,
                 sentAt: Date(timeIntervalSince1970: 1), reason: .notForThisDevice, key: .archive(archive: account, id: "a1"))) }),
+        ("retrying@localhost", room, true, true, { _, _ in }),
     ]
     for entry in cases {
         let (store, directory) = try await limitStore()
         try await entry.setUp(store, entry.sender)
-        let kept = try await offer(store, entry.sender, count: limits.perStranger + 1, chat: entry.chat)
+        let kept = try await offer(store, entry.sender, count: limits.perStranger + 1, chat: entry.chat, approved: entry.approved)
         #expect(kept == limits.perStranger + (entry.known ? 1 : 0), "\(entry.sender)")
         try await store.close(); try FileManager.default.removeItem(at: directory)
     }
@@ -95,6 +103,9 @@ private func offer(_ store: MessageStore, _ sender: String, count: Int, chat: St
     #expect(try await !store.retainEncryptedIncoming(accountID: account, sender: sender, digest: "update", wire: Data([1]),
                                                      overflow: overflow(sender, "update", bubble: false)))
     try await expectFinal(sender, "update", placeholder: false)
+    // An approved device's copy meets the account ceiling too.
+    #expect(try await offer(store, "retrying@localhost", count: 1, approved: true) == 0)
+    try await expectFinal("retrying@localhost", "retrying@localhost-0", placeholder: true)
     #expect(try await store.pendingEncryptedIncoming(accountID: account).count == limits.perAccount)
     // Nothing refused alerted: every candidate is a kept row's review alert.
     let alerts = try await store.pendingNotifications(accountID: account, perChat: 64, total: 64).candidates

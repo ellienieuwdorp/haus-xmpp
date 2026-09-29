@@ -189,16 +189,18 @@ extension OMEMOService {
             : PendingNotificationContext(chatID: message.room, sentAt: retained.sentAt)
         let context = retained
         // Past a retention limit the store records this instead, in the same transaction (see `receiveLocked`).
-        let overflow = RetentionOverflow(chatID: message.room, placeholder: Self.expectsBubble(message)
+        let overflowPlaceholder = Self.expectsBubble(message)
             ? groupPlaceholder(for: message, account: account, reason: .retentionLimit, sentAt: retained.sentAt,
-                               key: .ciphertext(sender: message.sender, digest: digest)) : nil)
-        func retain(_ reason: PendingEncryptedReason, notification: PendingNotificationContext?) async throws -> Bool {
+                               key: .ciphertext(sender: message.sender, digest: digest)) : nil
+        func retain(_ reason: PendingEncryptedReason, notification: PendingNotificationContext?, approved: Bool = false) async throws -> Bool {
             try await store.retainEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, wire: JSONEncoder().encode(context),
-                                                    reason: reason, notification: notification, overflow: overflow)
+                                                    reason: reason, notification: notification,
+                                                    overflow: RetentionOverflow(chatID: message.room, placeholder: overflowPlaceholder, senderApproved: approved))
         }
         if pending == nil, !retentionSkipped {
-            guard try await retain(known != nil ? .trustPending : .keysPending,
-                                   notification: known?.trust.permitsEncryption == true ? nil : alert) else { return false }
+            // An approved device's copy waits only for the room read: the account ceiling alone bounds it.
+            let approved = known?.trust.permitsEncryption == true
+            guard try await retain(known != nil ? .trustPending : .keysPending, notification: approved ? nil : alert, approved: approved) else { return false }
         }
         /// False when a limit gave the ciphertext its final outcome instead of keeping it.
         func hold(_ reason: PendingEncryptedReason) async throws -> Bool {
@@ -303,7 +305,7 @@ extension OMEMOService {
             // unless storage itself fails, in which case the caller must not acknowledge the stanza.
             if retentionSkipped, !Self.leavesDurableOutcome(failure) {
                 let kept: Bool
-                do { kept = try await retain(.trustPending, notification: nil) } catch { throw failure }
+                do { kept = try await retain(.trustPending, notification: nil, approved: true) } catch { throw failure }
                 if !kept { return false }
             }
             throw failure
