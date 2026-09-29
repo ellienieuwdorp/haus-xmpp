@@ -77,6 +77,8 @@ public struct StoredAttachment: Sendable, Equatable, Codable {
     /// Nil for received files. A queued message is not sendable until this is `uploaded`.
     public var uploadState: UploadState?
     public var uploadTaskID: Int?
+    /// The account spelling `secret` was sealed under when that differs from the row's key (v23 address migration).
+    public var sealedAccount: String?
 
     public init(name: String, mediaType: String, size: Int, width: Int? = nil, height: Int? = nil, hash: String, cipherHash: String? = nil,
                 secret: Data, url: String? = nil, uploadState: UploadState? = nil, uploadTaskID: Int? = nil) {
@@ -173,6 +175,9 @@ public struct MessageReply: Codable, Sendable, Equatable {
 public struct EncryptionState: Sendable, Equatable {
     public let revision: Int
     public let data: Data
+    /// The account spelling `data` was sealed under when that differs from the row's key: set by the v23 address
+    /// migration for state saved under the typed spelling, cleared by the next save.
+    public var sealedAccount: String? = nil
 }
 
 public struct PendingEncryptedMessage: Sendable {

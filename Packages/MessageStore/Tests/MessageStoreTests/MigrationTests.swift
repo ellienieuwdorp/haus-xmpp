@@ -61,12 +61,64 @@ struct MigrationTests {
         #expect(Set(messages.map(\.senderID)) == [account, "bob@example.org"])
         // The pointer from the chat started by hand (at m120) is later than the other's (m60).
         #expect(try await store.unreadCounts(accountID: account)["bob@example.org"] ?? 0 == 0)
-        #expect(try await store.encryptionState(accountID: account)?.data == Data([1, 2, 3]))
+        // Sealed with the typed spelling as associated data: the reader is told which spelling to open it with.
+        #expect(try await store.encryptionState(accountID: account) == EncryptionState(revision: 1, data: Data([1, 2, 3]), sealedAccount: typed))
         // A collision keeps both identities: the normal spelling's is untouched, the other stays where it was.
         #expect(try await store.encryptionState(accountID: "other@example.org")?.data == Data([5]))
         #expect(try await store.encryptionState(accountID: "Other@Example.org")?.data == Data([4]))
         #expect(try await store.chats(accountID: typed).isEmpty)
         try await store.close()
+    }
+
+    /// Both spellings of one account hold the same archived message (signed in once as typed, once lowercase), and
+    /// the file already has a foreign-key violation unrelated to addresses. Neither blocks the rewrite: the normal
+    /// copy is reachable, the typed copy stays intact with its chat, and the store is stamped v23.
+    @Test func collidingMessagesAndUnrelatedViolationsDoNotBlockTheRewrite() async throws {
+        try await withEncryptedStore(account: "ellie@example.org") { old, url in
+            let typed = "Ellie@Example.org", account = "ellie@example.org", sentAt = Date(timeIntervalSince1970: 1_700_000_000)
+            for owner in [typed, account] {
+                try await old.upsertChat(accountID: owner, chatID: "bob@example.org", title: "Bob")
+                try await old.insertMessage(StoredMessage(id: "archived", accountID: owner, chatID: "bob@example.org", senderID: "bob@example.org",
+                                                          body: owner, sentAt: sentAt, isOutgoing: false))
+            }
+            try await old.upsertChat(accountID: typed, chatID: "Carol@Example.org", title: "Carol")
+            try await old.insertMessage(StoredMessage(id: "only-typed", accountID: typed, chatID: "Carol@Example.org", senderID: typed,
+                                                      body: "hello", sentAt: sentAt, isOutgoing: true))
+            try await old.close()
+            #expect(sqliteExecute(url: url, sql: """
+                PRAGMA foreign_keys=OFF; INSERT INTO outbox(account_id,message_id,state) VALUES('carol@example.org','orphan','queued');
+                PRAGMA user_version=21;
+                """))
+            let store = try MessageStore(url: url)
+            #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["23"]])
+            #expect(try await store.messages(accountID: account, chatID: "bob@example.org").map(\.body) == [account])
+            #expect(try await store.messages(accountID: typed, chatID: "bob@example.org").map(\.body) == [typed])
+            #expect(try await store.messages(accountID: account, chatID: "carol@example.org").map(\.id) == ["only-typed"])
+            try await store.close()
+        }
+    }
+
+    /// A rewrite that would leave a row pointing at nothing is rolled back whole. The store still opens, keeps every
+    /// row where it was, and stays below v23 so a later build tries again rather than stranding the typed spelling.
+    @Test func aRewriteThatBreaksAForeignKeyIsRolledBackAndRetried() async throws {
+        try await withEncryptedStore(account: "Ellie@Example.org", chats: [("bob@example.org", "Bob")]) { old, url in
+            let typed = "Ellie@Example.org"
+            try await old.insertMessage(StoredMessage(id: "m1", accountID: typed, chatID: "bob@example.org", senderID: typed,
+                                                      body: "hi", sentAt: Date(timeIntervalSince1970: 1_700_000_000), isOutgoing: true))
+            try await old.close()
+            // An outbox row under the normal spelling with no message: the typed one cannot move onto it, and stays
+            // pointing at a message that did move.
+            #expect(sqliteExecute(url: url, sql: """
+                INSERT INTO outbox(account_id,message_id,state) VALUES('Ellie@Example.org','m1','queued');
+                PRAGMA foreign_keys=OFF; INSERT INTO outbox(account_id,message_id,state) VALUES('ellie@example.org','m1','queued');
+                PRAGMA user_version=21;
+                """))
+            let store = try MessageStore(url: url)
+            #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["21"]])
+            #expect(try await store.messages(accountID: typed, chatID: "bob@example.org").map(\.id) == ["m1"])
+            #expect(try await store.encryptionState(accountID: typed)?.data == Data([0]))
+            try await store.close()
+        }
     }
 
     @Test func migrationClosesSQLiteAndHoldsLockAcrossRename() async throws {
