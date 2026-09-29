@@ -1157,12 +1157,6 @@ public actor MessageStore {
     }
     private static func senderOnly(_ kind: MessageEventKind) -> Bool { kind == .retraction || kind == .correction }
 
-    public func reactionsForChat(accountID: String, chatID: String,
-                                 messageIDs: Set<String>) throws -> [String: [AuthenticatedReaction]] {
-        try eventsForChat(accountID: accountID, chatID: chatID, messageIDs: messageIDs)
-            .compactMapValues { events in let reactions = events.compactMap(AuthenticatedReaction.init); return reactions.isEmpty ? nil : reactions }
-    }
-
     /// One bounded query for a displayed timeline: every kind, latest per actor. Ambiguity is
     /// checked against the entire conversation, including colliding message IDs outside the page.
     public func eventsForChat(accountID: String, chatID: String,

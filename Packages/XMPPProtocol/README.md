@@ -47,7 +47,7 @@ Separate negotiation and stanza processing into independently testable state mac
 
 ## OMEMO wire contract
 
-`XMPPOMEMOProfile` supports the deployed legacy `eu.siacs.conversations.axolotl` profile and modern `urn:xmpp:omemo:2`. The typed bundle/envelope/key models are `Codable` for durable ciphertext storage. `encryptedMessageXML(to:envelope:id:)` is a pure bounded encoder; `decodeEncryptedMessageXML(_:)` applies the transport's XML limits to one complete stanza. No user body, quote, or reply metadata appears outside the ciphertext.
+`XMPPOMEMOProfile` supports the deployed legacy `eu.siacs.conversations.axolotl` profile and modern `urn:xmpp:omemo:2`. The typed bundle/envelope/key models are `Codable` for durable ciphertext storage. `encryptedMessageXML(to:envelope:id:)` is a pure bounded encoder. No user body, quote, or reply metadata appears outside the ciphertext.
 
 `fetchOMEMODevices(for:profile:)` returns an empty list only for an exact `item-not-found` stanza error. Authentication failures, forbidden nodes, malformed content and timeouts propagate. Fetches validate response origin, item/node association, namespaces, duplicate devices/prekeys, key lengths, base64 and limits. Publication uses open access and modern multi-item bundle nodes; an existing node configuration conflict is reconfigured and retried once. Callers must merge and recheck their own device list, validate bundle signatures, and apply fingerprint-scoped trust.
 
