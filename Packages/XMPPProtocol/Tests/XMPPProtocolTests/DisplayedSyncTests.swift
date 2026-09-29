@@ -50,6 +50,9 @@ private func item(_ chat: String, id: String, by: String) -> String {
     ]
     let event = try node("<message from='\(account)' to='\(account)/balcony' type='headline'><event xmlns='http://jabber.org/protocol/pubsub#event'><items node='urn:xmpp:mds:displayed:0'>\(shapes.joined())\(good)</items></event></message>")
     #expect(DisplayedSync.event(event, accountBareJID: account) == [XMPPDisplayedItem(chat: "romeo@montegue.lit", stanzaID: "a", by: account)])
+    // Another client may publish the chat and archive as typed: they are read in normal form, so they match our keys.
+    let typed = try node("<message from='\(account)' to='\(account)/balcony' type='headline'><event xmlns='http://jabber.org/protocol/pubsub#event'><items node='urn:xmpp:mds:displayed:0'>\(item("Romeo@Montegue.LIT", id: "b", by: "Juliet@Capulet.lit"))</items></event></message>")
+    #expect(DisplayedSync.event(typed, accountBareJID: account) == [XMPPDisplayedItem(chat: "romeo@montegue.lit", stanzaID: "b", by: account)])
 }
 
 @Test func onlyOurOwnBareJIDMayNotifyDisplayedState() throws {

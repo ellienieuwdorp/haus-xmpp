@@ -181,7 +181,7 @@ public struct MessageContent: Sendable, Equatable {
         // A malformed fallback never discards message text: the body stays verbatim without a reply.
         if references.count == 1, fallbacks.count == 1,
            let id = references[0].attributes["id"], validIdentifier(id),
-           let author = references[0].attributes["to"], validAddress(author),
+           let author = references[0].attributes["to"].map({ JID.normalized($0) ?? $0 }), validAddress(author),
            fallbacks[0].children("body", namespace: "urn:xmpp:fallback:0").count == 1 {
             let range = fallbacks[0].children("body", namespace: "urn:xmpp:fallback:0")[0]
             let scalars = Array(body.unicodeScalars)

@@ -288,6 +288,17 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     await #expect(throws: XMPPStreamManagementError.self) { try await sm.restore(accountID: "other@example.org") }
 }
 
+/// A build that kept the typed capitals saved `Ellie@Example.org` beside the server's `ellie@example.org/r`; that
+/// session must still resume, for the typed and the normal spelling alike, and never for another account.
+@Test func restoreComparesTheAccountInNormalForm() async throws {
+    let store = SnapshotStore()
+    await store.seed(.init(revision: 1, accountID: "Ellie@Example.org", fullJID: "ellie@example.org/r", streamID: "resume", expiresAt: nil,
+                           inboundHandled: 3, outboundSent: 0, outboundAcknowledged: 0, journal: []))
+    #expect(try await StreamManagement(store).restore(accountID: "ellie@example.org")?.streamID == "resume")
+    #expect(try await StreamManagement(store).restore(accountID: "ELLIE@example.org")?.inboundHandled == 3)
+    await #expect(throws: XMPPStreamManagementError.self) { try await StreamManagement(store).restore(accountID: "ellie2@example.org") }
+}
+
 @Test func outgoingReplayDecoderCannotSubstituteSenderOrAcceptPlaintext() throws {
     let envelope = XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: 1,
                                      keys: [.init(recipientJID: "b@example.org", deviceID: 2, keyExchange: false, data: Data([1]))], payload: Data([2]))

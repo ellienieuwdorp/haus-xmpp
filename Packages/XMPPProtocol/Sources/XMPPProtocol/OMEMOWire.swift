@@ -100,14 +100,8 @@ enum OMEMOWire {
               let result = UInt32(text), validID(result) else { throw XMPPIQError.malformedResponse }
         return result
     }
-    static func bareJID(_ jid: String) -> String? {
-        guard !jid.isEmpty, jid.utf8.count <= 3_071, !jid.contains(where: { $0.isWhitespace || $0.isNewline }),
-              jid.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7f && $0.value != 0xfffe && $0.value != 0xffff }) else { return nil }
-        let bare = String(jid.prefix { $0 != "/" })
-        let pieces = bare.split(separator: "@", omittingEmptySubsequences: false)
-        guard pieces.count == 2, !pieces[0].isEmpty, !pieces[1].isEmpty else { return nil }
-        return bare
-    }
+    /// The normal-form bare JID of a user or room address (`JID`); `bareJID(x) == x` means x is already one.
+    static func bareJID(_ jid: String) -> String? { JID.normalizedBare(jid) }
     static func singleton(_ parent: XMLNode, _ name: String, _ namespace: String) throws -> XMLNode {
         let matches = parent.children.filter { $0.name == name && $0.namespace == namespace }
         guard matches.count == 1 else { throw XMPPIQError.malformedResponse }
@@ -242,7 +236,7 @@ enum OMEMOWire {
         } else {
             var groups: Set<String> = []
             for group in header.children {
-                guard group.name == "keys", group.namespace == ns, let jid = group.attributes["jid"], bareJID(jid) == jid,
+                guard group.name == "keys", group.namespace == ns, let raw = group.attributes["jid"], !raw.contains("/"), let jid = bareJID(raw),
                       groups.insert(jid).inserted, !group.children.isEmpty,
                       keys.count + group.children.count <= maximumKeys else { throw XMPPIQError.malformedResponse }
                 for child in group.children { keys.append(try parseKey(child, jid: jid)) }
