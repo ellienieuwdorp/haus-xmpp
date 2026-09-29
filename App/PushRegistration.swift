@@ -27,14 +27,20 @@ final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificatio
     static func request() async throws -> Data {
         guard try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) else { throw Failure.denied }
         // Register on every launch/request: APNs tokens may change. Never infer a token size.
-        return try await withCheckedThrowingContinuation { continuation in
-            let id = UUID()
-            shared.waiters[id] = continuation
-            UIApplication.shared.registerForRemoteNotifications()
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(15))
-                shared.waiters.removeValue(forKey: id)?.resume(throwing: Failure.unavailable)
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                shared.waiters[id] = continuation
+                UIApplication.shared.registerForRemoteNotifications()
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(15))
+                    shared.waiters.removeValue(forKey: id)?.resume(throwing: Failure.unavailable)
+                }
             }
+        } onCancel: {
+            // Sign-out joins a push setup: it must not wait out the APNs timeout. Runs after the waiter was added,
+            // since both hop to the main actor in order.
+            Task { @MainActor in shared.waiters.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
         }
     }
 

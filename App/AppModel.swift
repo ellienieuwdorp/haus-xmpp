@@ -104,6 +104,9 @@ final class AppModel {
     private(set) var pushWanted = true
     /// Bumped by every turn on/off in Settings, so a setup still in flight cannot enable what was just turned off.
     @ObservationIgnored private var pushIntent = 0
+    /// The push setup after sign-in or a Settings tap (`reconcilePush`), off the sign-in path. Each one waits for the
+    /// previous, so two never generate or register at once; resetSession cancels it and forgetAccount joins it.
+    @ObservationIgnored private var pushTask: Task<Void, Never>?
     private(set) var notificationRoute: NotificationChatRoute?
     /// A push onto the Chats stack asked for by a view that owns no navigation path (a bubble's
     /// "Encryption details" action). RootView appends it and clears it.
@@ -474,8 +477,9 @@ final class AppModel {
             catch {
                 self.error = "Connected, but the password could not be saved. You will be asked for it on the next launch."
             }
-            // `.online` was emitted before `connect` returned, so this runs alongside the setup task.
-            await reconcilePush(client: connection, session: endpoint, token: token, interactive: manual)
+            // `.online` was emitted before `connect` returned, so this runs alongside the setup task. Not awaited: the
+            // sign-in sheet closes now, and the permission prompt, APNs and the gateway round trips follow on their own.
+            startPushSetup(client: connection, session: endpoint, token: token, interactive: manual)
             return true
         } catch {
             guard generation == token else { await connection.disconnect(); return false }
@@ -566,7 +570,7 @@ final class AppModel {
         generation = UUID() // Invalidate pending permission/registration before removing credentials.
         let token = generation
         let account = accountID
-        let push = testSessionID == nil ? sessionAccount?.push ?? (try? PushRegistrationState.load(accountID: account))?.configuration : nil
+        let enabled = testSessionID == nil ? sessionAccount?.push : nil
         let connection = client
         var localFailure: String?
         if testSessionID == nil {
@@ -585,28 +589,24 @@ final class AppModel {
         }
         sessionAccount = nil
         pushStatus = .off
-        do {
-            if testSessionID == nil, var state = try PushRegistrationState.load(accountID: account) {
-                try state.journal.stageRevocation()
-                try state.save()
-            } else if let push {
-                var state = PushRegistrationState(accountID: account, configuration: push, journal: PushRegistrationJournal())
-                try state.journal.stageRevocation()
-                try state.save()
-            }
-        } catch { self.error = "Signed out locally, but remote notification cleanup still needs attention." }
-        if let push, let connection, isConnected {
+        // A setup in flight stops at its next generation check; wait for it so its register or enable cannot land
+        // after this revocation and disable. Sign-out cannot happen while the permission prompt is on screen.
+        pushTask?.cancel()
+        await pushTask?.value
+        var turnedOff: PushRegistrationState?
+        if testSessionID == nil {
+            do {
+                turnedOff = try PushRegistrationState.turningOff(accountID: account, saved: try PushRegistrationState.load(accountID: account),
+                                                                 enabled: enabled)
+                try turnedOff?.save()
+            } catch { self.error = "Signed out locally, but remote notification cleanup still needs attention." }
+        }
+        if turnedOff != nil, let connection, isConnected, generation == token {
             activeEncryptionOperations += 1
             defer { activeEncryptionOperations -= 1 }
-            do {
-                try await sendPendingPushRegistration(client: connection, account: account, token: token)
-            }
+            do { try await settlePushCleanup(client: connection, account: account, token: token) }
             catch {
-                if generation == token { self.error = "Could not disable the server push subscription. Background access has been removed from this phone." }
-            }
-            if generation == token {
-                do { try await connection.disablePush(serviceJID: push.serviceJID, node: push.node) }
-                catch { self.error = "Signed out locally. Remote notification cleanup could not be confirmed." }
+                if generation == token { self.error = "Signed out locally. Remote notification cleanup could not be confirmed." }
             }
         }
         guard generation == token else { return }
@@ -706,21 +706,21 @@ final class AppModel {
         pushIntent += 1
         if pushStatus != .on { pushStatus = .settingUp }
         let token = generation
-        if await Self.notificationAuthorization() == .notDetermined {
-            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
-            refreshNotificationPermission()
-            guard generation == token else { return }
-        }
         guard let client, let session = sessionAccount, isConnected else {
-            // The next connection finishes the setup; permission is settled by now, so it needs no prompt.
-            pushStatus = .settingUp
+            // The next connection finishes the setup; asked now, permission needs no prompt then.
+            if await Self.notificationAuthorization() == .notDetermined {
+                _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+                refreshNotificationPermission()
+            }
+            if generation == token, pushWanted { pushStatus = .settingUp }
             return
         }
-        await reconcilePush(client: client, session: session, token: token, interactive: true)
+        startPushSetup(client: client, session: session, token: token, interactive: true)
+        await pushTask?.value
     }
 
-    /// Settings: turn push off. Revokes the gateway registration and disables it at the account server; offline, the
-    /// revocation waits in the journal for the next connection.
+    /// Settings: turn push off. Revokes the gateway registration and disables it at the account server; offline, or
+    /// on a failure, both wait in the saved registration state for the next connection.
     func disableNotifications() async {
         guard !accountID.isEmpty, testSessionID == nil, !isDemo else { return }
         let account = accountID
@@ -729,48 +729,73 @@ final class AppModel {
         pushStatus = .off
         let token = generation
         do {
-            guard var state = try PushRegistrationState.load(accountID: account) else { return }
-            try state.journal.stageRevocation()
+            let enabled = sessionAccount?.accountID == account ? sessionAccount?.push : nil
+            guard let state = try PushRegistrationState.turningOff(accountID: account, saved: try PushRegistrationState.load(accountID: account),
+                                                                   enabled: enabled) else { return }
             try state.save()
             if let session = sessionAccount, session.accountID == account, session.push != nil {
+                // The extension's guard declines from now on.
                 let saved = session.replacingPush(nil)
                 try saved.save()
                 sessionAccount = saved
             }
-            guard let client, isConnected, hasTransportOwnership, foreground, !quiescing else { return }
+            guard let client, isConnected, hasTransportOwnership, foreground, !quiescing, generation == token else { return }
             activeEncryptionOperations += 1
             defer { activeEncryptionOperations -= 1 }
-            try await settlePendingRevocation(client: client, account: account, state: state, token: token)
+            try await settlePushCleanup(client: client, account: account, token: token)
         } catch {
             if generation == token, accountID == account { Self.syncLog.error("push revocation will retry on reconnect") }
         }
     }
 
-    /// Runs after every authenticated connection: sends a stored revocation, then (unless push is turned off) makes
-    /// sure this installation is registered with the gateway and enabled at the account server. `interactive` is true
-    /// for a manual sign-in or a tap in Settings, the only moments that may show the permission prompt.
+    /// Queues `reconcilePush` behind any setup still running (a reconnect during the permission prompt waits for the
+    /// answer, then sets up without asking again).
+    private func startPushSetup(client: XMPPClient, session: NotificationAccount, token: UUID, interactive: Bool) {
+        let previous = pushTask
+        pushTask = Task { [weak self] in
+            await previous?.value
+            guard let self, self.generation == token, !Task.isCancelled else { return }
+            await self.reconcilePush(client: client, session: session, token: token, interactive: interactive)
+        }
+    }
+
+    /// Runs after every authenticated connection: finishes a stored revocation and disable, then (unless push is turned
+    /// off) makes sure this installation is registered with the gateway and enabled at the account server.
+    /// `interactive` is true for a manual sign-in or a tap in Settings, the only moments that may show the permission
+    /// prompt. Only the transport work counts as an encryption operation, so a background transition never waits for
+    /// a prompt the user has not answered, nor for APNs.
     private func reconcilePush(client: XMPPClient, session: NotificationAccount, token: UUID, interactive: Bool) async {
         guard testSessionID == nil, !isDemo, hasTransportOwnership, foreground, !quiescing, generation == token else { return }
         let account = session.accountID, intent = pushIntent
-        activeEncryptionOperations += 1
-        defer { activeEncryptionOperations -= 1 }
         do {
-            if let state = try PushRegistrationState.load(accountID: account), state.journal.pending?.action == .revoke {
-                try await settlePendingRevocation(client: client, account: account, state: state, token: token)
-                guard generation == token else { return }
+            let supported: Bool
+            do {
+                activeEncryptionOperations += 1
+                defer { activeEncryptionOperations -= 1 }
+                try await settlePushCleanup(client: client, account: account, token: token)
+                guard generation == token, pushIntent == intent else { return }
+                guard pushWanted else { pushStatus = .off; return }
+                supported = try await client.supportsPushNotifications()
             }
-            guard pushWanted else { pushStatus = .off; return }
-            guard try await client.supportsPushNotifications() else { pushStatus = .unsupported; return }
-            guard generation == token else { return }
-            if let stop = PushStatus.gate(for: await Self.notificationAuthorization(), interactive: interactive) {
-                if generation == token { pushStatus = stop }
-                return
+            guard generation == token, pushIntent == intent else { return }
+            guard supported else { pushStatus = .unsupported; return }
+            var authorization = await Self.notificationAuthorization()
+            if authorization == .notDetermined, interactive {
+                // Asks on the first sign-in only (a reconnect at launch never prompts).
+                if pushStatus != .on { pushStatus = .settingUp }
+                _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+                refreshNotificationPermission()
+                authorization = await Self.notificationAuthorization()
             }
+            guard generation == token, pushIntent == intent else { return }
+            if let stop = PushStatus.gate(for: authorization, interactive: false) { pushStatus = stop; return }
             if pushStatus != .on { pushStatus = .settingUp }
-            // Asks on the first sign-in (the gate let only an interactive setup through while undetermined).
             let deviceToken = try await PushRegistration.request()
             refreshNotificationPermission()
-            guard generation == token, pushIntent == intent, foreground, !quiescing, accountID == account else { return }
+            guard generation == token, pushIntent == intent, pushWanted, foreground, !quiescing, hasTransportOwnership,
+                  accountID == account else { return }
+            activeEncryptionOperations += 1
+            defer { activeEncryptionOperations -= 1 }
             let push = try await currentSubscription(client: client, account: account, token: token)
             guard generation == token, pushIntent == intent, var latest = sessionAccount, latest.accountID == account else { return }
             if latest.push != push {
@@ -788,7 +813,7 @@ final class AppModel {
             writePushDiagnostics(push: push, deviceToken: deviceToken)
         } catch {
             guard generation == token, pushIntent == intent else { return }
-            pushStatus = PushStatus.after(error)
+            pushStatus = PushStatus.settled(after: error, wanted: pushWanted)
             Self.syncLog.error("push setup stopped: \(String(describing: self.pushStatus), privacy: .public)")
         }
     }
@@ -816,7 +841,8 @@ final class AppModel {
     }
 
     /// Best effort at the old gateway; at the account server only a transport failure stops the migration (the next
-    /// connection repeats it). A server that answers with an error holds no such registration.
+    /// connection repeats it, since the old subscription stays saved until the new one replaces it). A server that
+    /// answers with an error holds no such registration.
     private func retire(_ old: XMPPPushConfiguration, client: XMPPClient, account: String, journal: PushRegistrationJournal?,
                         token: UUID) async throws {
         if var journal, journal.acknowledgedRevision > 0 || journal.pending != nil {
@@ -826,7 +852,8 @@ final class AppModel {
         }
         guard generation == token else { throw CancellationError() }
         do { try await client.disablePush(serviceJID: old.serviceJID, node: old.node) }
-        catch XMPPIQError.stanza { }
+        catch where PushCleanup.disableSettles(error) { }
+        guard generation == token else { throw CancellationError() }
         if var session = sessionAccount, session.accountID == account, session.push == old {
             session = session.replacingPush(nil)
             try session.save()
@@ -834,25 +861,40 @@ final class AppModel {
         }
     }
 
-    /// Sends a stored revocation and disables the node at the account server. A gateway that no longer knows the node
-    /// (item-not-found or forbidden), or a retired service that is gone, leaves nothing to revoke.
-    private func settlePendingRevocation(client: XMPPClient, account: String, state: PushRegistrationState, token: UUID) async throws {
-        do {
-            try await sendPendingPushRegistration(client: client, account: account, token: token)
-        } catch {
-            let retired = state.configuration.serviceJID.lowercased() != PushService.serviceJID
-            // The gateway answers a node it does not hold (or not for us) the same way as bad credentials; a retry
-            // can never succeed, and nothing of ours is left there to revoke.
-            let gone = [XMPPIQError.stanza(condition: "item-not-found"), .stanza(condition: "forbidden")].contains(error as? XMPPIQError)
-            guard generation == token, gone || (retired && !(error is CancellationError)) else { throw error }
-            guard var latest = try PushRegistrationState.load(accountID: account), latest.configuration == state.configuration,
-                  let pending = latest.journal.pending, pending.action == .revoke else { throw CancellationError() }
-            latest.journal.abandonPending(pending)
-            try latest.save()
+    /// Finishes a turned-off subscription: sends its stored revocation to the gateway, then disables it at the account
+    /// server. Each step is stored separately and cleared only when confirmed (or when `PushCleanup` says nothing is
+    /// left), so a failure of either leaves it for the next connection, whether or not push is wanted.
+    private func settlePushCleanup(client: XMPPClient, account: String, token: UUID) async throws {
+        guard let state = try PushRegistrationState.load(accountID: account) else { return }
+        var failure: (any Error)?
+        if state.journal.pending?.action == .revoke {
+            do {
+                try await sendPendingPushRegistration(client: client, account: account, token: token)
+            } catch {
+                let retired = state.configuration.serviceJID.lowercased() != PushService.serviceJID
+                if generation == token, PushCleanup.revocationSettles(error, retired: retired),
+                   var latest = try PushRegistrationState.load(accountID: account), latest.configuration == state.configuration,
+                   let pending = latest.journal.pending, pending.action == .revoke {
+                    latest.journal.abandonPending(pending)
+                    try latest.save()
+                } else { failure = error }
+            }
         }
         guard generation == token else { throw CancellationError() }
-        do { try await client.disablePush(serviceJID: state.configuration.serviceJID, node: state.configuration.node) }
-        catch XMPPIQError.stanza { }
+        // The disable goes ahead even when the revocation must be retried: it is what stops the account server publishing.
+        if state.disablePending {
+            do {
+                do { try await client.disablePush(serviceJID: state.configuration.serviceJID, node: state.configuration.node) }
+                catch where PushCleanup.disableSettles(error) { }
+                guard generation == token else { throw CancellationError() }
+                if var latest = try PushRegistrationState.load(accountID: account), latest.configuration == state.configuration,
+                   latest.disablePending {
+                    latest.disablePending = false
+                    try latest.save()
+                }
+            } catch { failure = failure ?? error }
+        }
+        if let failure { throw failure }
     }
 
     private func setPushWanted(_ wanted: Bool, account: String) {
@@ -885,7 +927,9 @@ final class AppModel {
 
     private func receivePushToken(_ deviceToken: Data) async {
         guard testSessionID == nil, pushWanted, let session = sessionAccount, let push = session.push else { return }
-        let token = generation
+        let token = generation, intent = pushIntent
+        // A turn-off in Settings during this refresh wins: nothing below may enable or report on it.
+        func current() -> Bool { generation == token && pushIntent == intent && pushWanted }
         do {
             // A callback while offline still becomes durable work for this account's next
             // authenticated connection. Logout clears sessionAccount before any suspension.
@@ -894,11 +938,11 @@ final class AppModel {
             activeEncryptionOperations += 1
             defer { activeEncryptionOperations -= 1 }
             try await sendPendingPushRegistration(client: client, account: session.accountID, token: token)
-            guard generation == token else { return }
+            guard current() else { return }
             try await client.enablePush(push)
-            if generation == token { pushStatus = .on }
+            if current() { pushStatus = .on }
         } catch {
-            if generation == token { pushStatus = PushStatus.after(error) }
+            if current() { pushStatus = PushStatus.after(error) }
         }
     }
 
@@ -1112,6 +1156,9 @@ final class AppModel {
         drainTask?.cancel()
         // Cancelled, not cleared: connect() and quiesceTransport() join the handle.
         setupTask?.cancel()
+        // Its transport work counts as an encryption operation, which quiesceTransport waits for; a permission prompt
+        // still on screen does not, so nothing here waits for it.
+        pushTask?.cancel()
         catchUp = nil
         // Cancelled, not cleared, like the setup task: a new connection's walk must never meet an old backfill.
         backfillTask?.cancel()

@@ -26,6 +26,11 @@ final class PushOnboardingLabUITests: XCTestCase {
         app.buttons["Connect"].tap()
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"]
         XCTAssertTrue(allow.waitForExistence(timeout: 25), "The first sign-in asks for notification permission")
+        // Push setup runs after the sign-in returns: the sheet closes while the prompt is still up, not after the
+        // gateway answered.
+        let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.buttons["Connect"])
+        XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 5), .completed, "The sign-in sheet must not wait for the permission prompt")
+        XCTAssertTrue(allow.exists)
         allow.tap()
 
         let push = app.switches["pushNotifications"]

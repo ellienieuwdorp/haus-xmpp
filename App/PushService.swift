@@ -64,12 +64,42 @@ enum PushStatus: Equatable {
         }
     }
 
+    /// What Settings shows after a push setup or cleanup failed. Turned off, it stays "Off": a stored revocation or
+    /// disable retries silently on the next connection, and an error under an Off switch would contradict it.
+    static func settled(after error: any Error, wanted: Bool) -> PushStatus {
+        wanted ? after(error) : .off
+    }
+
     /// A failed setup, in the words Settings uses.
     static func after(_ error: any Error) -> PushStatus {
         switch error {
         case XMPPNotificationError.pushUnavailable: .unsupported
         case PushRegistration.Failure.denied: .notAllowed
         default: .unreachable
+        }
+    }
+}
+
+/// When a turned-off subscription counts as gone. Anything else keeps the work stored for the next connection.
+enum PushCleanup {
+    /// The gateway answers a node it does not hold (or not for this account) like bad credentials: a retry can never
+    /// succeed and nothing of ours is left there. A retired service (the staging gateway) is only asked as a courtesy:
+    /// any error answer or silence settles it, because the account server's disable, kept separately, is what stops
+    /// publishes. A lost connection or a cancelled request never settles a revocation.
+    static func revocationSettles(_ error: any Error, retired: Bool) -> Bool {
+        if let stanza = error as? XMPPIQError, case .stanza(let condition) = stanza {
+            return retired || condition == "item-not-found" || condition == "forbidden"
+        }
+        return retired && (error as? XMPPClientError) == .timedOut
+    }
+
+    /// The account server answered, or no longer offers push at all: it holds no registration to disable. Transport
+    /// failures keep the disable pending.
+    static func disableSettles(_ error: any Error) -> Bool {
+        switch error {
+        case XMPPIQError.stanza: true
+        case XMPPNotificationError.pushUnavailable: true
+        default: false
         }
     }
 }
