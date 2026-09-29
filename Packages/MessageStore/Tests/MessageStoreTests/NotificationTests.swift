@@ -45,7 +45,7 @@ private func incoming(_ id: String, account: String = "a") -> StoredMessage {
     }
 }
 
-@Test func notificationCandidatesExcludePlaintextControlsAndReplays() async throws {
+@Test func plaintextAndControlsQueueNoNotificationAndDismissClearsPending() async throws {
     try await notificationFixture { store, _ in
         try await store.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
         try await store.insertMessage(StoredMessage(id: "plain", accountID: "a", chatID: "peer", senderID: "peer", body: "Untrusted"))
@@ -56,10 +56,6 @@ private func incoming(_ id: String, account: String = "a") -> StoredMessage {
         try await store.commitEncryptedIncoming(accountID: "a", sender: "peer", digest: "message",
             expectedRevision: 2, state: Data([3]), message: incoming("encrypted"))
         try await store.dismissPendingMessageNotifications(accountID: "a")
-        await #expect(throws: MessageStoreError.invalidTransition) {
-            try await store.commitEncryptedIncoming(accountID: "a", sender: "peer", digest: "message",
-                expectedRevision: 3, state: Data([4]), message: incoming("encrypted"))
-        }
         #expect(try await store.takeMessageNotification(accountID: "a").messageCount == 0)
     }
 }

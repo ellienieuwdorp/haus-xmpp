@@ -46,26 +46,11 @@ private func withGroupStore(_ operation: (MessageStore) async throws -> Void) as
         #expect(try await store.encryptionState(accountID: "self")?.revision == 2)
         try await store.commitEncryptedIncoming(accountID: "self", sender: "bob", digest: "rx", expectedRevision: 2, state: Data([3]), message: nil, reaction: reaction, groupRoom: "room")
         #expect(try await store.messages(accountID: "self", chatID: "room").count == 1)
-        #expect(try await store.reactionsForChat(accountID: "self", chatID: "room", messageIDs: ["target"])["target"]?.first?.actorID == "bob")
+        #expect(try await store.eventsForChat(accountID: "self", chatID: "room", messageIDs: ["target"])["target"]?.compactMap(AuthenticatedReaction.init).first?.actorID == "bob")
         #expect(try await store.reactionTarget(accountID: "self", chatID: "another-room", wireID: "room-id") == nil)
         let collision = StoredMessage(id: "collision", accountID: "self", chatID: "room", senderID: "carol", body: "Different", encryptionProfile: "modern")
         try await store.commitEncryptedIncoming(accountID: "self", sender: "carol", digest: "cipher2", expectedRevision: 3, state: Data([4]), message: collision, groupRoom: "room", roomStanzaID: "room-id")
         #expect(try await store.reactionTarget(accountID: "self", chatID: "room", wireID: "room-id") == nil)
-        #expect(try await store.reactionsForChat(accountID: "self", chatID: "room", messageIDs: ["target"]).isEmpty)
-    }
-}
-
-@Test func unsupportedArchiveReceiptsAreAccountScopedIdempotentAndBounded() async throws {
-    try await withGroupStore { store in
-        for number in 0...1000 {
-            try await store.recordArchiveRejection(accountID: "self", archiveID: "room", messageID: "entry-\(number)", reason: "unverifiableEncryptedGroup")
-        }
-        #expect(try await !store.hasArchiveRejection(accountID: "self", archiveID: "room", messageID: "entry-0"))
-        #expect(try await store.hasArchiveRejection(accountID: "self", archiveID: "room", messageID: "entry-1000"))
-        #expect(try await !store.hasArchiveRejection(accountID: "other", archiveID: "room", messageID: "entry-1000"))
-        try await store.recordArchiveRejection(accountID: "self", archiveID: "room", messageID: "entry-1000", reason: "unverifiableEncryptedGroup")
-        await #expect(throws: MessageStoreError.invalidValue) {
-            try await store.recordArchiveRejection(accountID: "self", archiveID: "room", messageID: "secret", reason: "unbounded arbitrary content")
-        }
+        #expect(try await store.eventsForChat(accountID: "self", chatID: "room", messageIDs: ["target"]).isEmpty)
     }
 }

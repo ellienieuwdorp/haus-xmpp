@@ -675,12 +675,6 @@ public actor MessageStore {
         }
     }
 
-    /// True when the placeholder row exists. `message(accountID:messageID:)` also works; this skips the attachment lookup.
-    public func hasUnreadableMessage(accountID: String, id: String) throws -> Bool {
-        try !connection.query("SELECT 1 FROM messages WHERE account_id=? AND id=? AND encryption_profile=?",
-                              [.text(accountID), .text(id), .text(Self.unreadableProfile)]).isEmpty
-    }
-
     static let unreadableProfile = "unreadable"
     static let unreadableIDPrefix = "unreadable-"
 
