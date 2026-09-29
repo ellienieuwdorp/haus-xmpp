@@ -7,7 +7,8 @@ final class EncryptionUITests: XCTestCase {
         let peer = lab.peer
         let app = lab.launch()
         app.connectToLab()
-        let input = app.startChat(with: peer)
+        // Typed with capitals: the echo, from the server's lowercase spelling, must land in this same chat.
+        let input = app.startChat(with: peer.uppercased())
         let marker = "Encrypted coffee ☕ \(UUID().uuidString.prefix(6))"
         input.tap(); input.typeText(marker)
         app.buttons["sendMessage"].tap()
