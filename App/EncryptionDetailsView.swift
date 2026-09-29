@@ -14,10 +14,19 @@ struct EncryptionDetailsView: View {
                 if overview.hasIncompatibleDevices {
                     Section { Label(otherVersionNotice(overview), systemImage: "info.circle").font(.subheadline) }
                 }
+                let waiting = overview.devices.filter { $0.profile != overview.profile }
+                if !waiting.isEmpty {
+                    // Incoming messages decrypt in the version they were sent in; this device's are held until it is reviewed.
+                    Section {
+                        devices(waiting, owner: chatID, identifier: "waitingDevice")
+                    } header: { Text("Messages waiting · \(waiting[0].profile.label)") } footer: {
+                        Text("Approve to read what \(waiting.contains { $0.jid != model.accountID } ? name : "your other device") sent with \(waiting[0].profile.label). You keep sending with \(overview.profile.label).")
+                    }
+                }
                 Section {
-                    devices(overview.devices.filter { $0.jid == chatID && $0.jid != model.accountID }, owner: chatID)
+                    devices(overview.devices.filter { $0.jid == chatID && $0.jid != model.accountID && $0.profile == overview.profile }, owner: chatID)
                 } header: { Text("\(name)’s devices") } footer: { Text("Approve each device before your messages reach it.") }
-                Section("Your other devices") { devices(overview.devices.filter { $0.jid == model.accountID }, owner: model.accountID) }
+                Section("Your other devices") { devices(overview.devices.filter { $0.jid == model.accountID && $0.profile == overview.profile }, owner: model.accountID) }
                 Section {
                     VStack(alignment: .leading, spacing: 6) {
                         LabeledContent("Device", value: String(overview.localDeviceID))
@@ -26,8 +35,8 @@ struct EncryptionDetailsView: View {
                     Picker("Encryption version", selection: Binding(get: { overview.profile }, set: { profile in
                         Task { await model.loadEncryptionDetails(for: chatID, profile: profile) }
                     })) {
-                        Text("OMEMO · compatible").tag(XMPPOMEMOProfile.legacy)
-                        Text("OMEMO 2").tag(XMPPOMEMOProfile.modern)
+                        Text(XMPPOMEMOProfile.legacy.label).tag(XMPPOMEMOProfile.legacy)
+                        Text(XMPPOMEMOProfile.modern.label).tag(XMPPOMEMOProfile.modern)
                     }
                     .disabled(!model.session.isReady)
                 } header: { Text("This iPhone") } footer: {
@@ -83,17 +92,23 @@ struct EncryptionDetailsView: View {
         return "No encryption devices are published for this address in this version. Try the other encryption version below, or ask them to open their app so it publishes keys. Nothing is ever sent unencrypted."
     }
 
-    @ViewBuilder private func devices(_ devices: [EncryptionDevice], owner: String) -> some View {
+    /// `identifier` prefixes each row's accessibility identifier; a device ID can appear once per version.
+    @ViewBuilder private func devices(_ devices: [EncryptionDevice], owner: String, identifier: String = "encryptionDevice") -> some View {
         if devices.isEmpty { Text(emptyExplanation(for: owner)).foregroundStyle(.secondary) }
         ForEach(devices) { device in
             Button { selectedDevice = device } label: { DeviceRow(device: device) }
                 .buttonStyle(.plain)
-                .accessibilityIdentifier("encryptionDevice.\(device.deviceID)")
+                .accessibilityIdentifier("\(identifier).\(device.deviceID)")
         }
     }
 }
 
 // MARK: - Shared device presentation (also used by GroupDetailsView)
+
+extension XMPPOMEMOProfile {
+    /// The version's name wherever a person chooses or reads it.
+    var label: String { self == .legacy ? "OMEMO · compatible" : "OMEMO 2" }
+}
 
 struct DeviceBadge {
     let text: String
@@ -250,7 +265,8 @@ struct DeviceFingerprintSheet: View {
                 }
             }
             .navigationTitle("Device \(String(device.deviceID))")
-            .navigationSubtitle(device.jid)
+            // A device ID can publish in both versions, each with its own fingerprint encoding: name the one being compared.
+            .navigationSubtitle("\(device.jid) · \(device.profile.label)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { dismiss() }.labelStyle(.iconOnly) } }
             .confirmationDialog("Repair this encryption session?", isPresented: $confirmingRepair, titleVisibility: .visible) {

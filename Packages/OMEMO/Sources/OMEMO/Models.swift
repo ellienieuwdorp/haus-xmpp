@@ -26,6 +26,8 @@ public struct EncryptionOverview: Sendable {
     public let profile: XMPPOMEMOProfile
     public let localDeviceID: UInt32
     public let localFingerprint: String
+    /// The selected version's devices of both owners (the recipients of new messages), followed by any device of the
+    /// other version whose retained incoming ciphertext for this chat waits on its trust decision.
     public let devices: [EncryptionDevice]
     /// Some device of either owner is published only in the other OMEMO version. Informational: those devices are
     /// simply not recipients in this version; sending goes ahead to the devices that are.
@@ -39,7 +41,10 @@ public struct EncryptionOverview: Sendable {
     /// A device refresh for this peer has completed on this account at some point, so an empty or unusable device
     /// list is a stored answer rather than "not fetched yet". Derived from stored state; no schema change.
     public var isPeerKnown = false
-    public var needsTrust: Bool { devices.contains { $0.active && $0.trust == .undecided } }
+    /// Sending waits: a device of the selected version needs a fingerprint decision.
+    public var needsTrust: Bool { devices.contains { $0.profile == profile && $0.active && $0.trust == .undecided } }
+    /// Reading waits: messages sent in the other version are held until one of these devices is decided.
+    public var needsIncomingReview: Bool { devices.contains { $0.profile != profile && $0.active && $0.trust == .undecided } }
 }
 
 public enum OMEMOError: Error, Equatable, Sendable, LocalizedError {

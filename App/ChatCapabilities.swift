@@ -20,7 +20,9 @@ struct DeviceTrustFacts: Equatable {
     }
 
     init(_ overview: EncryptionOverview, peer: String) {
-        self.init(peerTrust: overview.devices.filter { $0.jid == peer && $0.active }.map(\.trust), needsReview: overview.needsTrust,
+        // Only the sending version's devices decide the pill; a device held for reading in the other one is reviewed
+        // from its own card, and never makes the chat read as encrypted to a peer it cannot send to.
+        self.init(peerTrust: overview.devices.filter { $0.jid == peer && $0.active && $0.profile == overview.profile }.map(\.trust), needsReview: overview.needsTrust,
                   peerKnown: overview.isPeerKnown)
     }
 

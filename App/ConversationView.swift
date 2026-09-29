@@ -404,6 +404,7 @@ struct ConversationView: View {
         // Search and the starred filter read the loaded messages, so they need the whole window rather than the newest page.
         .onChange(of: showingSearch || starredOnly) { _, filtering in if filtering { Task { await model.loadOlderMessages(all: true) } } }
         .onChange(of: model.encryptionNeedsReview) { reviewDismissed = false }
+        .onChange(of: model.encryptionIncomingReview) { reviewDismissed = false }
         .onChange(of: model.encryptionStatus) { reviewDismissed = false }
         .photosPicker(isPresented: $showingPhotoPicker, selection: $photoItems, maxSelectionCount: max(1, ComposerState.trayLimit - composerState.tray.count),
                       selectionBehavior: .ordered, matching: .any(of: [.images, .videos]))
@@ -436,7 +437,7 @@ struct ConversationView: View {
             .tint(Color(uiColor: AccentTheme.current.tint))
     }
 
-    private var showsReview: Bool { !model.isDemo && model.encryptionNeedsReview && !reviewDismissed }
+    private var showsReview: Bool { !model.isDemo && (model.encryptionNeedsReview || model.encryptionIncomingReview) && !reviewDismissed }
     /// Which banners are up; a change animates them in or out.
     private var bannerState: [Bool] { [showingSearch, starredOnly, showsReview] }
     /// Banners slide down from under the bar as they fade in; Reduce Motion keeps only the fade.
@@ -492,9 +493,16 @@ struct ConversationView: View {
                     .font(.system(size: 18, weight: .semibold)).foregroundStyle(.orange)
                     .frame(width: 36, height: 36).background(.orange.opacity(0.15), in: Circle())
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(isGroup ? "Devices need review" : "\(title) added a new device").font(.subheadline.weight(.semibold))
-                    Text("Check its fingerprint before sending. Until then, nothing you write here leaves this iPhone.")
-                        .font(.footnote).foregroundStyle(.secondary)
+                    if model.encryptionNeedsReview {
+                        Text(isGroup ? "Devices need review" : "\(title) added a new device").font(.subheadline.weight(.semibold))
+                        Text("Check its fingerprint before sending. Until then, nothing you write here leaves this iPhone.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else {
+                        // Only reading waits: the messages came from a device in the version this chat does not send with.
+                        Text("Messages waiting for review").font(.subheadline.weight(.semibold))
+                        Text("They come from a device you haven’t reviewed yet. Check its fingerprint to read them.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
             }
             HStack(spacing: 8) {

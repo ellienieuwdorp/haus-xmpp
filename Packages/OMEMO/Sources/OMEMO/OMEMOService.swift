@@ -136,7 +136,8 @@ public actor OMEMOService {
         if updateSelection, !(probedEmpty && !peerAdvertises) { state.profiles[peer] = profile }
         if updateSelection { state.incompatiblePeers[peer] = incompatible }
         try await save(state, revision: revision, account: account)
-        var result = try overview(state, account: account, peer: peer, profileOverride: profile, incompatibleOverride: incompatible)
+        var result = try overview(state, account: account, peer: peer, profileOverride: profile, incompatibleOverride: incompatible,
+                                  waiting: try await waitingDevices(state, account: account, peer: peer, sending: profile))
         result.unavailableDevices = unavailable
         result.advertisedDevices = advertised
         result.otherVersionOnlyDevices = otherVersionOnly
@@ -190,19 +191,44 @@ public actor OMEMOService {
 
     public func overview(account: String, peer: String) async throws -> EncryptionOverview {
         let (_, state) = try await load(account)
-        return try overview(state, account: account, peer: peer)
+        return try overview(state, account: account, peer: peer,
+                            waiting: try await waitingDevices(state, account: account, peer: peer, sending: state.profiles[peer] ?? .legacy))
     }
 
-    private func overview(_ state: AccountEncryptionState, account: String, peer: String, profileOverride: XMPPOMEMOProfile? = nil, incompatibleOverride: Bool? = nil) throws -> EncryptionOverview {
+    private func overview(_ state: AccountEncryptionState, account: String, peer: String, profileOverride: XMPPOMEMOProfile? = nil,
+                          incompatibleOverride: Bool? = nil, waiting: [EncryptionDevice]) throws -> EncryptionOverview {
         let profile = profileOverride ?? state.profiles[peer] ?? .legacy
         let local = try engine(state, profile)
         var result = EncryptionOverview(profile: profile, localDeviceID: local.deviceID,
                                         localFingerprint: try OMEMOEngine.fingerprintBytes(for: local.identityKey, profile: profile.crypto).map { String(format: "%02x", $0) }.joined(),
-                                        devices: state.devices.filter { $0.profile == profile && ($0.jid == peer || $0.jid == account) },
+                                        devices: state.devices.filter { $0.profile == profile && ($0.jid == peer || $0.jid == account) } + waiting,
                                         hasIncompatibleDevices: incompatibleOverride ?? state.incompatiblePeers[peer] ?? false)
         // Every completed selecting refresh records the incompatibility answer, even an empty one; devices and a
         // pinned version are also only ever stored by a completed refresh.
         result.isPeerKnown = state.incompatiblePeers[peer] != nil || state.profiles[peer] != nil || state.devices.contains { $0.jid == peer }
+        return result
+    }
+
+    /// Devices of the version this chat does not send with whose retained ciphertext for it waits on their trust
+    /// decision. Incoming messages decrypt in the version they were sent in, whatever the chat sends with, so an OMEMO 2
+    /// device held for review must be reviewable from a chat that sends legacy OMEMO (and the reverse); listing only
+    /// the sending version's devices left no way to release those messages. Read from the retained envelopes, never
+    /// from content; own-device sends count for the chat they were addressed to.
+    private func waitingDevices(_ state: AccountEncryptionState, account: String, peer: String,
+                                sending profile: XMPPOMEMOProfile) async throws -> [EncryptionDevice] {
+        var result: [EncryptionDevice] = []
+        for sender in Set([peer, account]).sorted() {
+            for item in try await store.pendingEncryptedIncoming(accountID: account, sender: sender) {
+                // Group envelopes have their own shape and never decode here.
+                guard let retained = try? JSONDecoder().decode(RetainedEnvelope.self, from: item.wire),
+                      retained.envelope.profile != profile,
+                      sender == peer || retained.to.map(bare) == peer,
+                      let device = state.devices.last(where: { $0.jid == sender && $0.profile == retained.envelope.profile
+                                                               && $0.deviceID == retained.envelope.senderDeviceID }),
+                      !device.trust.permitsEncryption, !result.contains(where: { $0.id == device.id }) else { continue }
+                result.append(device)
+            }
+        }
         return result
     }
 

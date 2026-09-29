@@ -685,6 +685,37 @@ final class ServiceTests: XCTestCase {
         expectTrue(try await f.b.receive(account: f.bob, message: f.message(retained), transport: f.bTransport))
     }
 
+    /// Observed on a phone (2026-09-29): a chat that sends with legacy OMEMO received OMEMO 2 messages from a device it
+    /// had never reviewed. The ciphertext was retained, but the chat's device list showed only legacy devices, so no
+    /// approval could release it. The device holding the messages must be on the chat's review surface, and approving
+    /// it there decrypts them without changing the version the chat sends with.
+    func testOtherVersionDeviceHoldingIncomingMessagesIsOfferedForReviewAndReleasesThem() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.legacy)
+        // Alice now sends with OMEMO 2; Bob's chat with her stays on the legacy version.
+        for device in try await f.a.refreshDevices(account: f.alice, peer: f.bob, profile: .modern, transport: f.aTransport).devices where device.active {
+            try await f.a.setTrust(account: f.alice, deviceID: device.id, trust: .accepted)
+        }
+        let outgoing = try await f.queue("Sent with OMEMO 2")
+        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
+        let envelope = try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id)
+        expectEqual(envelope.profile, .modern)
+        do { _ = try await f.b.receive(account: f.bob, message: f.message(envelope, fallbackBody: true), transport: f.bTransport); XCTFail("A new device needs a decision") }
+        catch { expectEqual(error as? OMEMOError, .trustRequired) }
+        expectEqual(try await f.b.pendingConversations(account: f.bob), [f.alice: 1])
+
+        let overview = try await f.b.overview(account: f.bob, peer: f.alice)
+        expectEqual(overview.profile, .legacy)
+        let waiting = try unwrap(overview.devices.first { $0.jid == f.alice && $0.profile == .modern })
+        expectEqual(waiting.deviceID, envelope.senderDeviceID)
+        expectEqual(waiting.trust, .undecided)
+        try await f.b.setTrust(account: f.bob, deviceID: waiting.id, trust: .accepted)
+        try await f.b.retryPendingIncoming(account: f.bob, transport: f.bTransport, reasons: [.trustPending])
+        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).map(\.body), [outgoing.body])
+        expectTrue(try await f.b.pendingConversations(account: f.bob).isEmpty)
+        expectEqual(try await f.b.overview(account: f.bob, peer: f.alice).profile, .legacy)
+    }
+
     func testTrustedInboundDecryptsOfflineAndRetriesBundlePublicationAfterRestart() async throws {
         for profile in [XMPPOMEMOProfile.legacy, .modern] {
             let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
