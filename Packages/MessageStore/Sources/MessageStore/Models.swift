@@ -211,6 +211,42 @@ public enum UnreadableReason: String, Sendable, Equatable, CaseIterable {
     case malformedContent
     /// A trusted sender device's ciphertext failed ratchet decrypt, payload authentication or content decoding.
     case decryptFailed
+    /// The sender device is one the user blocked: its ciphertext is never opened and never kept for review.
+    case rejectedDevice
+    /// Not kept for review because its sender, or the account, already had as much ciphertext waiting as
+    /// `MessageStore.pendingLimits` allows.
+    case retentionLimit
+
+    /// Whether an incoming placeholder may alert (plan D5). A blocked device was the user's own decision, and a limit is
+    /// reached only by a sender whose earlier waiting messages already alerted, or by a flood: both stay quiet.
+    public var alerts: Bool { self != .rejectedDevice && self != .retentionLimit }
+}
+
+/// What `MessageStore.retainEncryptedIncoming` records instead of a pending row when a retention limit leaves no room.
+public struct RetentionOverflow: Sendable, Equatable {
+    /// The conversation the ciphertext belongs to (the direct peer, or the room): whether the account took part in it
+    /// decides whether the sender counts as known.
+    public let chatID: String
+    /// The `.retentionLimit` placeholder for ciphertext that would have been a bubble. Nil consumes the replay identity
+    /// without a row (a key transport, reaction or receipt).
+    public let placeholder: UnreadableMessage?
+    public init(chatID: String, placeholder: UnreadableMessage?) { self.chatID = chatID; self.placeholder = placeholder }
+}
+
+/// How much ciphertext `pending_encrypted_inbox` keeps for review, per account. A sender is known when it is the account
+/// itself, when the account wrote in the conversation or in a direct chat with it, or when a message of theirs was ever
+/// authenticated here (so some device of theirs was approved). Everyone else is a stranger. The roster is not a signal:
+/// it lives in memory for one connection and the notification extension never loads it.
+public struct PendingRetentionLimits: Sendable, Equatable {
+    /// Rows one known sender may hold (all its devices together).
+    public let perKnownSender: Int
+    /// Rows one stranger may hold.
+    public let perStranger: Int
+    /// A stranger's ciphertext is kept only while the account holds fewer rows than this, so strangers together can
+    /// never take the room known contacts need.
+    public let strangerCeiling: Int
+    /// Rows the account may hold at all.
+    public let perAccount: Int
 }
 
 /// Why a retained ciphertext is still in `pending_encrypted_inbox`.

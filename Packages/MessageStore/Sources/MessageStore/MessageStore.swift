@@ -734,23 +734,66 @@ public actor MessageStore {
         }
     }
 
+    /// See `PendingRetentionLimits`. The account ceiling keeps the earlier bound (and the retry pass's cost) at 1,000 rows.
+    /// 250 per known sender lets four contacts' unreviewed devices back up for days at once; 20 per stranger covers a
+    /// first-contact burst; strangers stop at 200 rows in all, which leaves at least 800 for known contacts.
+    public static let pendingLimits = PendingRetentionLimits(perKnownSender: 250, perStranger: 20, strangerCeiling: 200, perAccount: 1_000)
+
     /// Keeps ciphertext that may still decrypt later. An existing row keeps its reason: classification is explicit.
     /// `notification` names the chat of an incoming message that is waiting for trust or keys: the new row then also
     /// becomes a notification candidate (plan D5), which is removed with the row when it commits or is converted.
+    /// A new row beyond `pendingLimits` is not kept: `overflow` is recorded in the same transaction instead (its quiet
+    /// placeholder, or only the consumed replay identity), so a full table still yields a durable final outcome and the
+    /// stream and archive walk keep moving. Without `overflow` the conversation is taken to be the sender's direct chat
+    /// and the identity is consumed. Returns false exactly when a limit applied the overflow.
+    @discardableResult
     public func retainEncryptedIncoming(accountID: String, sender: String, digest: String, wire: Data,
                                         reason: PendingEncryptedReason = .trustPending,
-                                        notification: PendingNotificationContext? = nil) throws {
+                                        notification: PendingNotificationContext? = nil,
+                                        overflow: RetentionOverflow? = nil) throws -> Bool {
         guard !accountID.isEmpty, !sender.isEmpty, !digest.isEmpty, !wire.isEmpty, wire.count <= 1_048_576 else { throw MessageStoreError.invalidValue }
-        try connection.transaction {
-            if try hasEncryptedIncoming(accountID: accountID, sender: sender, digest: digest) { return }
-            if try !connection.query("SELECT 1 FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?", [.text(accountID), .text(sender), .text(digest)]).isEmpty { return }
-            guard try connection.query("SELECT COUNT(*) FROM pending_encrypted_inbox WHERE account_id=?", [.text(accountID)]).first![0].integer < 1000 else { throw MessageStoreError.invalidValue }
+        let chatID = overflow?.chatID ?? sender
+        guard !chatID.isEmpty, chatID.utf8.count <= 3071 else { throw MessageStoreError.invalidValue }
+        if let placeholder = overflow?.placeholder {
+            try Self.validate(placeholder)
+            guard placeholder.accountID == accountID, placeholder.reason == .retentionLimit,
+                  placeholder.key == .ciphertext(sender: sender, digest: digest) else { throw MessageStoreError.invalidValue }
+        }
+        return try connection.transaction {
+            if try hasEncryptedIncoming(accountID: accountID, sender: sender, digest: digest) { return true }
+            if try !connection.query("SELECT 1 FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?", [.text(accountID), .text(sender), .text(digest)]).isEmpty { return true }
+            guard try admitsPending(accountID: accountID, sender: sender, chatID: chatID) else {
+                if let placeholder = overflow?.placeholder {
+                    _ = try insertUnreadableInTransaction(placeholder)
+                } else {
+                    try connection.execute("INSERT OR IGNORE INTO encrypted_inbox(account_id,sender,digest) VALUES(?,?,?)", [.text(accountID), .text(sender), .text(digest)])
+                }
+                return false
+            }
             try connection.execute("INSERT INTO pending_encrypted_inbox(account_id,sender,digest,wire,reason) VALUES(?,?,?,?,?)", [.text(accountID), .text(sender), .text(digest), .blob(wire), .text(reason.rawValue)])
             if let notification, try queuesPendingNotification(accountID: accountID, sender: sender, digest: digest, context: notification) {
                 try connection.execute("INSERT OR IGNORE INTO pending_notification_candidates(account_id,sender,digest,chat_id,sent_at) VALUES(?,?,?,?,?)",
                                        [.text(accountID), .text(sender), .text(digest), .text(notification.chatID), .real(notification.sentAt.timeIntervalSince1970)])
             }
+            return true
         }
+    }
+
+    /// Whether one more row from `sender` fits `pendingLimits`: two primary-key range counts, and the known-sender lookup
+    /// only when a stranger's limit would bind.
+    private func admitsPending(accountID: String, sender: String, chatID: String) throws -> Bool {
+        let limits = Self.pendingLimits
+        let total = try connection.query("SELECT COUNT(*) FROM pending_encrypted_inbox WHERE account_id=?", [.text(accountID)]).first![0].integer
+        let held = try connection.query("SELECT COUNT(*) FROM pending_encrypted_inbox WHERE account_id=? AND sender=?", [.text(accountID), .text(sender)]).first![0].integer
+        guard total < limits.perAccount, held < limits.perKnownSender else { return false }
+        guard held >= limits.perStranger || total >= limits.strangerCeiling else { return true }
+        if sender == accountID { return true }
+        // The account wrote in this conversation or to the sender directly, or a message of theirs was authenticated
+        // (a placeholder never counts). Both are prefixes of the timeline index.
+        return try !connection.query("""
+            SELECT 1 FROM messages WHERE account_id=?1 AND ((chat_id IN (?2,?3) AND outgoing=1)
+                OR (chat_id=?3 AND sender_id=?3 AND outgoing=0 AND unreadable_reason IS NULL)) LIMIT 1
+            """, [.text(accountID), .text(chatID), .text(sender)]).isEmpty
     }
 
     /// Retained ciphertext has no message row, so the shared notification rules see a stand-in with the conversation,
@@ -777,10 +820,11 @@ public actor MessageStore {
         }
     }
 
-    /// The keys of every retained ciphertext row (at most 1000 per account), without wires. Notification cleanup keeps a
-    /// delivered review notification (plan D5) only while its ciphertext is still retained here.
+    /// The keys of every retained ciphertext row (at most `pendingLimits.perAccount`), without wires. Notification cleanup
+    /// keeps a delivered review notification (plan D5) only while its ciphertext is still retained here.
     public func retainedEncryptedIncomingKeys(accountID: String) throws -> [NotificationCandidateKey] {
-        try connection.query("SELECT sender,digest FROM pending_encrypted_inbox WHERE account_id=? ORDER BY rowid LIMIT 1000", [.text(accountID)])
+        try connection.query("SELECT sender,digest FROM pending_encrypted_inbox WHERE account_id=? ORDER BY rowid LIMIT ?",
+                             [.text(accountID), .integer(Self.pendingLimits.perAccount)])
             .map { .pending(sender: $0[0].string, digest: $0[1].string) }
     }
 
@@ -789,14 +833,16 @@ public actor MessageStore {
     /// and removes the pending row. Returns true when the row was inserted now. Does not require transport ownership
     /// (the extension's archive walk and the app's live path both call it, exactly like `commitEncryptedIncoming`).
     /// The row is never plaintext, never authenticated and never an event target. An incoming placeholder from someone
-    /// else is a notification candidate (plan D5: "Sent a message this device can't read"); an own-device one never is.
+    /// else is a notification candidate (plan D5: "Sent a message this device can't read") when its reason `alerts`; an
+    /// own-device one never is.
     @discardableResult public func recordUnreadableMessage(_ placeholder: UnreadableMessage) throws -> Bool {
         try Self.validate(placeholder)
         return try connection.transaction { try insertUnreadableInTransaction(placeholder) }
     }
 
     /// Consumes the replay identity of ciphertext that failed permanently but was never a message bubble (a key transport
-    /// from a trusted device whose session no longer decrypts): no row, no session change, the pending copy is removed.
+    /// from a trusted device whose session no longer decrypts, or any non-bubble from a blocked device): no row, no session
+    /// change, the pending copy (and its review candidate) is removed.
     public func consumeUndecryptableIncoming(accountID: String, sender: String, digest: String) throws {
         guard !accountID.isEmpty, !sender.isEmpty, !digest.isEmpty, digest.utf8.count <= 128 else { throw MessageStoreError.invalidValue }
         try connection.transaction {
@@ -836,7 +882,7 @@ public actor MessageStore {
                   .real(placeholder.sentAt.timeIntervalSince1970), .integer(placeholder.isOutgoing ? 1 : 0),
                   .text(Self.unreadableProfile), .text(placeholder.reason.rawValue)])
         let inserted = try connection.query("SELECT changes()").first?[0].integer == 1
-        if inserted, !placeholder.isOutgoing, let row = try message(accountID: placeholder.accountID, messageID: placeholder.id),
+        if inserted, !placeholder.isOutgoing, placeholder.reason.alerts, let row = try message(accountID: placeholder.accountID, messageID: placeholder.id),
            try queuesNotification(accountID: placeholder.accountID, message: row) {
             try connection.execute("INSERT OR IGNORE INTO notification_candidates(account_id,message_id) VALUES(?,?)", [account, .text(placeholder.id)])
         }
