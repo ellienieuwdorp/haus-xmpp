@@ -122,3 +122,37 @@ private func execute(_ url: URL, _ sql: String) -> Bool {
     #expect(try await store.archiveCheckpoint(accountID: "a@x", archiveID: "b@x") == nil)
     try await store.close()
 }
+
+@Test func schemaTwentyTwoKeepsV21CheckpointsAndRecordsEachLostCursorOnce() async throws {
+    let url = try backfillStoreURL()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let v21 = try MessageStore(url: url)
+    try await v21.acquireTransportOwnership()
+    try await v21.saveArchiveCheckpoint(accountID: "a@x", archiveID: "a@x", expectedRevision: nil, cursor: "c1")
+    try await v21.close()
+    #expect(execute(url, "ALTER TABLE archive_checkpoints DROP COLUMN stamp; DROP TABLE archive_gaps; PRAGMA user_version=21;"))
+
+    let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
+    // A checkpoint from before stamps existed has none: a lost cursor then restarts at the newest page.
+    #expect(try await store.archiveCheckpoint(accountID: "a@x", archiveID: "a@x") == ArchiveCheckpoint(revision: 1, cursor: "c1", stamp: nil))
+    let stamp = Date(timeIntervalSince1970: 1_788_256_800.25)
+    try await store.saveArchiveCheckpoint(accountID: "a@x", archiveID: "a@x", expectedRevision: 1, cursor: "c2", stamp: stamp)
+    #expect(try await store.archiveCheckpoint(accountID: "a@x", archiveID: "a@x") == ArchiveCheckpoint(revision: 2, cursor: "c2", stamp: stamp))
+    // Replacing a lost checkpoint with a newest page is revision-checked like any checkpoint write.
+    await #expect(throws: MessageStoreError.invalidTransition) {
+        try await store.saveNewestArchivePage(accountID: "a@x", archiveID: "a@x", cursor: "n2", oldestID: "n1", complete: false, replacing: 1)
+    }
+    #expect(try await store.saveNewestArchivePage(accountID: "a@x", archiveID: "a@x", cursor: "n2", oldestID: "n1", complete: false, replacing: 2) == 3)
+    #expect(try await store.archiveCheckpoint(accountID: "a@x", archiveID: "a@x") == ArchiveCheckpoint(revision: 3, cursor: "n2", stamp: nil))
+
+    // A cursor that stays lost across connections is one gap, not one per connection.
+    let first = Date(timeIntervalSince1970: 1_800_000_000)
+    try await store.recordArchiveGap(accountID: "a@x", archiveID: "a@x", cursor: "c2", since: stamp, detectedAt: first)
+    try await store.recordArchiveGap(accountID: "a@x", archiveID: "a@x", cursor: "c2", since: stamp, detectedAt: first.addingTimeInterval(60))
+    try await store.recordArchiveGap(accountID: "a@x", archiveID: "room@rooms.x", cursor: "r1", since: nil, detectedAt: first.addingTimeInterval(120))
+    #expect(try await store.archiveGaps(accountID: "a@x") == [ArchiveGap(archiveID: "a@x", since: stamp, detectedAt: first),
+                                                            ArchiveGap(archiveID: "room@rooms.x", since: nil, detectedAt: first.addingTimeInterval(120))])
+    try await store.close()
+    #expect(rows(url, "PRAGMA user_version") == [["22"]])
+}

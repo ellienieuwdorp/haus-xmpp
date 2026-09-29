@@ -5,7 +5,7 @@ import Testing
 @testable import MessageStore
 
 /// The schema this build writes. A schema bump changes this one literal.
-private let currentSchemaVersion: Int32 = 21
+private let currentSchemaVersion: Int32 = 22
 
 struct MigrationTests {
     @Test func openingStampsTheCurrentSchemaAndRefusesANewerOne() async throws {
