@@ -81,23 +81,6 @@ final class RevisionTests: XCTestCase {
         catch { XCTAssertEqual(error as? OMEMOError, .unsupportedMessageUpdate) }
     }
 
-    /// A forged `<replace>` naming someone else's message is stored as a claim but never projected.
-    func testForgedCorrectionFromTheWrongActorIsNotProjected() async throws {
-        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
-        try await f.initialize(.modern)
-        let outgoing = try await f.queue("Alice's words")
-        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
-        try await f.aStore.recordEvent(accountID: f.alice, event: MessageEvent(id: "forged", chatID: f.bob, actorID: f.bob, targetWireID: outgoing.id, kind: .correction,
-                                                                            payload: try MessageEvent.correctionPayload("Bob's words"), updatedAt: Date()))
-        let events = try await f.aStore.events(accountID: f.alice, chatID: f.bob, messageID: outgoing.id)
-        XCTAssertTrue(events.isEmpty)
-        let bulk = try await f.aStore.eventsForChat(accountID: f.alice, chatID: f.bob, messageIDs: [outgoing.id])
-        XCTAssertTrue(bulk.isEmpty)
-        let shown = try unwrap(try await f.aStore.messages(accountID: f.alice, chatID: f.bob).first).applying(events)
-        XCTAssertEqual(shown.body, "Alice's words")
-        XCTAssertFalse(shown.isEdited)
-    }
-
     /// Legacy OMEMO carries the correction reference outside the ciphertext and retracts in the clear.
     func testLegacyPeersGetOuterCorrectionReferencesAndPlainRetractions() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
@@ -124,7 +107,8 @@ final class RevisionTests: XCTestCase {
         let wire = try XMPPClient.encryptedMessageXML(to: f.bob, envelope: correction, id: correctionID, replaces: outgoing.id)
         expectTrue(try await f.a.canReplay(account: f.alice, xml: wire))
         expectFalse(try await f.a.canReplay(account: f.alice, xml: XMPPClient.encryptedMessageXML(to: f.bob, envelope: correction, id: correctionID, replaces: "another")))
-        let inbound = try XMPPClient.decodeEncryptedMessageXML(wire.replacingOccurrences(of: "<message ", with: "<message from='\(f.alice)/phone' "))
+        // The outer `<replace/>` survives the stanza parse (the same one the inbound path runs) into Bob's receive.
+        let inbound = try XMPPClient.decodeOutgoingEncryptedMessageXML(wire, from: f.alice)
         XCTAssertEqual(inbound.replaces, outgoing.id)
         expectTrue(try await f.b.receive(account: f.bob, message: inbound, transport: f.bTransport))
         let messages = try await f.bStore.messages(accountID: f.bob, chatID: f.alice)

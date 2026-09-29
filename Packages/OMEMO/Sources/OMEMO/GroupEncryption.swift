@@ -357,7 +357,7 @@ extension OMEMOService {
         try await store.sealQueuedUpdate(accountID: account, updateID: update.id, expectedRevision: revision,
             state: encode(state, account: account), wire: JSONEncoder().encode(saved))
     }
-    public func outgoingGroupReactionEnvelope(account: String, updateID: String, room: String, transport: any OMEMOGroupTransport) async throws -> PreparedGroupMessage {
+    func outgoingGroupReactionEnvelope(account: String, updateID: String, room: String, transport: any OMEMOGroupTransport) async throws -> PreparedGroupMessage {
         try await gate.run {
             try await self.prepareGroupReactionLocked(account: account, updateID: updateID, room: room, transport: transport)
             guard let wire = try await self.store.updateWire(accountID: account, updateID: updateID) else { throw OMEMOError.unavailable }

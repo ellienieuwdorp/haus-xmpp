@@ -138,10 +138,8 @@ final class EncryptedContentTests: XCTestCase {
         }
     }
 
-    func testReactionParserIgnoresDuplicateEmojiButRejectsAmbiguousContainers() throws {
-        let result = try decode(envelope("<reactions xmlns='urn:xmpp:reactions:0' id='target'><reaction>👍</reaction><reaction>👍</reaction><reaction>ordinary text</reaction><reaction>❤️</reaction></reactions>"))
-        XCTAssertEqual(result.reaction?.reactions, ["❤️", "👍"].sorted())
-        assertRejected(envelope("<reactions xmlns='urn:xmpp:reactions:0' id='target'/><reactions xmlns='urn:xmpp:reactions:0' id='other'/>"))
+    /// Duplicate-emoji folding and the two-container case are pinned against the plain path in ContentCodecParityTests.
+    func testReactionParserRejectsMalformedContainersAndEncoderRejectsNonEmoji() throws {
         assertRejected(envelope("<reactions xmlns='urn:xmpp:reactions:0'/>"))
         assertRejected(envelope("<reactions xmlns='urn:xmpp:reactions:0' id=''><reaction>👍</reaction></reactions>"))
         assertRejected(envelope("<reactions xmlns='urn:xmpp:reactions:0' id='target'><reaction><nested>👍</nested></reaction></reactions>"))

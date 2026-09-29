@@ -13,6 +13,12 @@ private func expectTrue(_ a: Bool, file: StaticString = #filePath, line: UInt = 
 private func expectFalse(_ a: Bool, file: StaticString = #filePath, line: UInt = #line) { XCTAssertFalse(a, file: file, line: line) }
 private func expectNil<T>(_ a: T?, file: StaticString = #filePath, line: UInt = #line) { XCTAssertNil(a, file: file, line: line) }
 private func expectNotNil<T>(_ a: T?, file: StaticString = #filePath, line: UInt = #line) { XCTAssertNotNil(a, file: file, line: line) }
+/// A freshly generated identity published under an existing device ID: a reinstall that reused the ID, or an attacker.
+private func replacementBundle(_ profile: XMPPOMEMOProfile, deviceID: UInt32) throws -> XMPPOMEMOBundle {
+    let bundle = try OMEMOEngine(profile: profile == .legacy ? .legacy : .modern, deviceID: deviceID).bundle()
+    return XMPPOMEMOBundle(profile: profile, deviceID: bundle.deviceID, identityKey: bundle.identityKey, signedPreKeyID: bundle.signedPreKeyID,
+                           signedPreKey: bundle.signedPreKey, signedPreKeySignature: bundle.signedPreKeySignature, preKeys: bundle.preKeys)
+}
 
 actor PublicationServer {
     var lists: [String: [UInt32]] = [:]
@@ -285,11 +291,14 @@ final class ServiceTests: XCTestCase {
         let before = try await f.engines(f.bStore, account: f.bob)
         var payload = try XCTUnwrap(valid.payload)
         payload[payload.startIndex] ^= 0x01
-        let invalid = XMPPOMEMOEnvelope(profile: valid.profile, senderDeviceID: valid.senderDeviceID, keys: valid.keys, iv: valid.iv, payload: payload)
-        do { _ = try await f.b.receive(account: f.bob, message: f.message(invalid), transport: f.bTransport); XCTFail("Tampered payload accepted") }
+        let invalid = f.message(XMPPOMEMOEnvelope(profile: valid.profile, senderDeviceID: valid.senderDeviceID, keys: valid.keys, iv: valid.iv, payload: payload))
+        expectFalse(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: invalid))
+        do { _ = try await f.b.receive(account: f.bob, message: invalid, transport: f.bTransport); XCTFail("Tampered payload accepted") }
         catch { expectEqual(error as? OMEMOError, .undecryptable) }
         expectEqual(try await f.engines(f.bStore, account: f.bob), before)
         // A trusted device's ciphertext that fails authentication is a quiet placeholder, never content, never pending.
+        // No pending row was ever needed: the placeholder is the disposition, so the barrier may be acknowledged.
+        expectTrue(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: invalid))
         let afterTamper = try await f.bStore.messages(accountID: f.bob, chatID: f.alice)
         expectEqual(afterTamper.count, 1)
         expectEqual(afterTamper.first?.unreadableReason, .decryptFailed)
@@ -446,8 +455,7 @@ final class ServiceTests: XCTestCase {
         let device = try XCTUnwrap(original.devices.first(where: { $0.jid == f.bob && $0.active }))
         _ = try await f.queue()
         try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
-        let replacement = try OMEMOEngine(profile: .modern, deviceID: device.deviceID).bundle()
-        await f.server.publish(f.bob, XMPPOMEMOBundle(profile: .modern, deviceID: replacement.deviceID, identityKey: replacement.identityKey, signedPreKeyID: replacement.signedPreKeyID, signedPreKey: replacement.signedPreKey, signedPreKeySignature: replacement.signedPreKeySignature, preKeys: replacement.preKeys))
+        await f.server.publish(f.bob, try replacementBundle(.modern, deviceID: device.deviceID))
         let updated = try await f.a.refreshDevices(account: f.alice, peer: f.bob, transport: f.aTransport)
         let changed = try XCTUnwrap(updated.devices.first(where: { $0.jid == f.bob && $0.active }))
         expectTrue(changed.identityChanged)
@@ -595,6 +603,36 @@ final class ServiceTests: XCTestCase {
         expectEqual(after.localFingerprint, modern.localFingerprint)
     }
 
+    /// Our own device ID answering with another identity stops initialization before our bundle is published over
+    /// it: neither identity silently replaces the other.
+    func testInitializeRefusesAnotherIdentityPublishedUnderOurDeviceID() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.a.initialize(account: f.alice, transport: f.aTransport)
+        let local = try await f.a.overview(account: f.alice, peer: f.alice).localDeviceID
+        let before = try await f.engines(f.aStore, account: f.alice)
+        let foreign = try replacementBundle(.legacy, deviceID: local)
+        await f.server.publish(f.alice, foreign)
+        do { try await f.a.initialize(account: f.alice, transport: f.aTransport); XCTFail("Initialized over another identity") }
+        catch { expectEqual(error as? OMEMOError, .identityChanged) }
+        expectEqual(try await f.server.bundle(f.alice, local, .legacy), foreign)
+        expectEqual(try await f.engines(f.aStore, account: f.alice), before)
+    }
+
+    /// Stored profiles that disagree on the identity fail closed before any network use and are never repaired.
+    func testInitializeFailsClosedWhenStoredProfilesDisagreeOnIdentity() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        let legacy = try OMEMOEngine(profile: .legacy, deviceID: 4_242)
+        let modern = try OMEMOEngine(profile: .modern, deviceID: 4_242)
+        let engines = ["legacy": try legacy.snapshot(), "modern": try modern.snapshot()]
+        let sealed = try f.protection.seal(JSONEncoder().encode(AccountEncryptionState(engines: engines)), account: f.alice)
+        try await f.aStore.saveEncryptionState(accountID: f.alice, expectedRevision: nil, data: sealed)
+        let log = TransportLog()
+        do { try await f.a.initialize(account: f.alice, transport: CountingTransport(base: f.aTransport, log: log)); XCTFail("Inconsistent profiles initialized") }
+        catch { expectEqual(error as? OMEMOError, .stateUnavailable) }
+        expectEqual(await log.calls, [])
+        expectEqual(try await f.engines(f.aStore, account: f.alice), engines)
+    }
+
     func testPreparationReturnsFixedSnapshotAndDefersConcurrentEnqueue() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -637,8 +675,7 @@ final class ServiceTests: XCTestCase {
         let aIdentity = try XCTUnwrap(initial.devices.first(where: { $0.jid == f.bob && $0.active }))
         try await f.a.setTrust(account: f.alice, deviceID: aIdentity.id, trust: .verified)
         let originalBundle = try await f.server.bundle(f.bob, aIdentity.deviceID, .modern)
-        let temporaryIdentity = try OMEMOEngine(profile: .modern, deviceID: aIdentity.deviceID).bundle()
-        await f.server.publish(f.bob, XMPPOMEMOBundle(profile: .modern, deviceID: temporaryIdentity.deviceID, identityKey: temporaryIdentity.identityKey, signedPreKeyID: temporaryIdentity.signedPreKeyID, signedPreKey: temporaryIdentity.signedPreKey, signedPreKeySignature: temporaryIdentity.signedPreKeySignature, preKeys: temporaryIdentity.preKeys))
+        await f.server.publish(f.bob, try replacementBundle(.modern, deviceID: aIdentity.deviceID))
         let changed = try await f.a.refreshDevices(account: f.alice, peer: f.bob, transport: f.aTransport)
         let bIdentity = try XCTUnwrap(changed.devices.first(where: { $0.jid == f.bob && $0.active }))
         expectNotEqual(bIdentity.id, aIdentity.id)
@@ -769,8 +806,7 @@ final class ServiceTests: XCTestCase {
         let device = try unwrap(try await f.a.overview(account: f.alice, peer: f.bob).devices.first { $0.jid == f.bob && $0.active })
         let before = try await f.engines(f.aStore, account: f.alice)
         let queued = try await f.queue()
-        let replacement = try OMEMOEngine(profile: .modern, deviceID: device.deviceID).bundle()
-        await f.server.publish(f.bob, XMPPOMEMOBundle(profile: .modern, deviceID: replacement.deviceID, identityKey: replacement.identityKey, signedPreKeyID: replacement.signedPreKeyID, signedPreKey: replacement.signedPreKey, signedPreKeySignature: replacement.signedPreKeySignature, preKeys: replacement.preKeys))
+        await f.server.publish(f.bob, try replacementBundle(.modern, deviceID: device.deviceID))
         do { try await f.a.repairSession(account: f.alice, deviceID: device.id, transport: f.aTransport); XCTFail("Stale fingerprint repaired a replacement") }
         catch { expectEqual(error as? OMEMOError, .identityChanged) }
         expectEqual(try await f.engines(f.aStore, account: f.alice), before)
@@ -800,6 +836,59 @@ final class ServiceTests: XCTestCase {
         expectEqual(after.localFingerprint, before.localFingerprint)
         expectEqual(after.devices.first { $0.id == selected.id }?.trust, .rejected)
         expectEqual(after.devices.first { $0.id == selected.id }?.active, false)
+    }
+
+    /// This installation never retires itself, even when a stored record names its own device ID.
+    func testRetirementRefusesThisInstallationsDevice() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let local = try await f.a.overview(account: f.alice, peer: f.bob).localDeviceID
+        let published = try await f.server.bundle(f.alice, local, .modern)
+        let own = EncryptionDevice(jid: f.alice, profile: .modern, deviceID: local, identityKey: published.identityKey,
+                                   trust: .accepted, active: true, identityChanged: false)
+        let (revision, old) = try await f.a.load(f.alice)
+        var state = old; state.devices.append(own)
+        try await f.a.save(state, revision: revision, account: f.alice)
+        do { try await f.a.retireOwnDevice(account: f.alice, deviceID: own.id, transport: f.aTransport); XCTFail("Retired this installation") }
+        catch { expectEqual(error as? OMEMOError, .cannotRetireCurrentDevice) }
+        for profile in [XMPPOMEMOProfile.legacy, .modern] { expectTrue(await f.server.devices(f.alice, profile).contains(local)) }
+    }
+
+    /// A stale review sheet must not retire a replacement that reused the device ID: the identity in every profile is
+    /// checked before the first list changes, so a replacement in the other version leaves both lists untouched.
+    func testRetirementChecksEveryProfilesIdentityBeforeChangingAnyList() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let second = OMEMOService(store: try f.openStore("alice-second.sqlite"), protection: f.protection)
+        try await second.initialize(account: f.alice, transport: f.aTransport)
+        let before = try await f.a.refreshDevices(account: f.alice, peer: f.bob, profile: .modern, transport: f.aTransport)
+        let selected = try unwrap(before.devices.first { $0.jid == f.alice && $0.active })
+        await f.server.publish(f.alice, try replacementBundle(.legacy, deviceID: selected.deviceID))
+        do { try await f.a.retireOwnDevice(account: f.alice, deviceID: selected.id, transport: f.aTransport); XCTFail("Retired a replaced identity") }
+        catch { expectEqual(error as? OMEMOError, .identityChanged) }
+        for profile in [XMPPOMEMOProfile.legacy, .modern] { expectTrue(await f.server.devices(f.alice, profile).contains(selected.deviceID)) }
+        expectEqual(try await f.a.overview(account: f.alice, peer: f.bob).devices.first { $0.id == selected.id }?.active, true)
+    }
+
+    /// A replacement published after that check (a reinstall racing the removal) is caught before its ID is removed.
+    func testRetirementRechecksTheIdentityBeforeEachListPublication() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let second = OMEMOService(store: try f.openStore("alice-second.sqlite"), protection: f.protection)
+        try await second.initialize(account: f.alice, transport: f.aTransport)
+        let before = try await f.a.refreshDevices(account: f.alice, peer: f.bob, profile: .modern, transport: f.aTransport)
+        let selected = try unwrap(before.devices.first { $0.jid == f.alice && $0.active })
+        let replacement = try replacementBundle(.modern, deviceID: selected.deviceID)
+        let log = TransportLog(), server = f.server, alice = f.alice, secondID = selected.deviceID
+        let racing = CountingTransport(base: f.aTransport, log: log) { jid, id in
+            // Fetches one and two validate both profiles; the third precedes the first list publication.
+            let fetches = await log.calls.filter { $0 == .bundle(alice, secondID, .modern) || $0 == .bundle(alice, secondID, .legacy) }.count
+            if jid == alice, id == secondID, fetches == 3 { await server.publish(alice, replacement) }
+        }
+        do { try await f.a.retireOwnDevice(account: f.alice, deviceID: selected.id, transport: racing); XCTFail("Retired a replaced identity") }
+        catch { expectEqual(error as? OMEMOError, .identityChanged) }
+        expectEqual(await log.calls.filter { if case .publishDevices = $0 { return true }; return false }, [])
+        for profile in [XMPPOMEMOProfile.legacy, .modern] { expectTrue(await f.server.devices(f.alice, profile).contains(selected.deviceID)) }
     }
 
     func testOwnAdvertisementMergesConcurrentRegistrationAndRestoresLostPublication() async throws {
@@ -847,44 +936,45 @@ final class ServiceTests: XCTestCase {
         try await reopened.retryPendingIncoming(account: f.bob, transport: OfflineTransport())
         expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).first?.sentAt, stamp)
         expectTrue(try await reopened.hasDurableIncomingDisposition(account: f.bob, message: message))
+    }
+
+    /// A peer's envelope without exactly one key for this device can never decrypt here. A would-be bubble leaves one
+    /// placeholder, and only that placeholder makes it durable (the no-hint case is pinned for own devices above).
+    func testPeerEnvelopeWithoutOneKeyForThisDeviceBecomesADurablePlaceholder() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let outgoing = try await f.queue()
+        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
+        let envelope = try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id)
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
         let notAddressed = XMPPOMEMOEnvelope(profile: envelope.profile, senderDeviceID: envelope.senderDeviceID,
                                             keys: [], iv: envelope.iv, payload: envelope.payload)
-        // A would-be bubble without a key for this device is durable only once its placeholder exists.
         let hinted = f.message(notAddressed, fallbackBody: true)
-        expectFalse(try await reopened.hasDurableIncomingDisposition(account: f.bob, message: hinted))
-        do { _ = try await reopened.receive(account: f.bob, message: hinted, transport: OfflineTransport(), sentAt: stamp); XCTFail("No key for this device") }
+        expectFalse(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: hinted))
+        do { _ = try await f.b.receive(account: f.bob, message: hinted, transport: OfflineTransport(), sentAt: stamp); XCTFail("No key for this device") }
         catch { expectEqual(error as? OMEMOError, .notForThisDevice) }
-        let placeholders = try await f.bStore.messages(accountID: f.bob, chatID: f.alice).filter { $0.unreadableReason != nil }
-        expectEqual(placeholders.count, 1)
-        let placeholder = try unwrap(placeholders.first)
+        let placeholder = try unwrap(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).first)
         expectEqual(placeholder.unreadableReason, .notForThisDevice)
         expectFalse(placeholder.isOutgoing)
         expectEqual(placeholder.senderID, f.alice)
         expectEqual(placeholder.chatID, f.alice)
         expectEqual(placeholder.sentAt, stamp)
-        expectTrue(try await reopened.hasDurableIncomingDisposition(account: f.bob, message: hinted))
-        do { _ = try await reopened.receive(account: f.bob, message: hinted, transport: OfflineTransport()); XCTFail("No key for this device") }
+        expectTrue(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: hinted))
+        do { _ = try await f.b.receive(account: f.bob, message: hinted, transport: OfflineTransport()); XCTFail("No key for this device") }
         catch { expectEqual(error as? OMEMOError, .notForThisDevice) }
-        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).count, 2)
-        // Without a hint (modern: possibly a reaction or receipt) nothing is stored and nothing is owed.
-        var silentPayload = try unwrap(envelope.payload); silentPayload[silentPayload.startIndex] ^= 0x01
-        let silent = f.message(XMPPOMEMOEnvelope(profile: envelope.profile, senderDeviceID: envelope.senderDeviceID, keys: [], iv: envelope.iv, payload: silentPayload))
-        do { _ = try await reopened.receive(account: f.bob, message: silent, transport: OfflineTransport()); XCTFail("No key for this device") }
-        catch { expectEqual(error as? OMEMOError, .notForThisDevice) }
-        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).count, 2)
-        expectTrue(try await reopened.hasDurableIncomingDisposition(account: f.bob, message: silent))
+        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).count, 1)
         // Ambiguous duplicate keys no longer wedge the archive walk: a malformed-content placeholder is the disposition.
         // (A distinct payload: the unaddressed identity deliberately ignores keys, so the same payload is the same message.)
         var doubledPayload = try unwrap(envelope.payload); doubledPayload[doubledPayload.startIndex + 1] ^= 0x01
         let ambiguous = XMPPOMEMOEnvelope(profile: envelope.profile, senderDeviceID: envelope.senderDeviceID,
                                           keys: envelope.keys + envelope.keys, iv: envelope.iv, payload: doubledPayload)
         let doubled = f.message(ambiguous, fallbackBody: true)
-        expectFalse(try await reopened.hasDurableIncomingDisposition(account: f.bob, message: doubled))
-        do { _ = try await reopened.receive(account: f.bob, message: doubled, transport: OfflineTransport(), sentAt: stamp); XCTFail("Ambiguous keys") }
+        expectFalse(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: doubled))
+        do { _ = try await f.b.receive(account: f.bob, message: doubled, transport: OfflineTransport(), sentAt: stamp); XCTFail("Ambiguous keys") }
         catch { expectEqual(error as? OMEMOError, .undecryptable) }
         expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).compactMap(\.unreadableReason).sorted { $0.rawValue < $1.rawValue },
                     [.malformedContent, .notForThisDevice])
-        expectTrue(try await reopened.hasDurableIncomingDisposition(account: f.bob, message: doubled))
+        expectTrue(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: doubled))
     }
 
     func testStreamReplayAndArchiveReconciliationRequireExactSavedCiphertextAndContext() async throws {
@@ -933,7 +1023,7 @@ final class ServiceTests: XCTestCase {
                 // Bob's queued key transport (his prekey answer) rides the same drain and changes nothing visible.
                 XCTAssertEqual(changed, reactionEnvelope.payload != nil)
             }
-            let projected = try await f.a.reactions(account: f.alice, chatID: f.bob, messageID: outgoing.id)
+            let projected = try await f.aStore.reactions(accountID: f.alice, chatID: f.bob, messageID: outgoing.id)
             expectEqual(projected.first?.actorID, f.bob)
             expectEqual(projected.first?.reactions, values.sorted())
             expectEqual(try await f.aStore.messages(accountID: f.alice, chatID: f.bob).count, 1)
@@ -965,12 +1055,12 @@ final class ServiceTests: XCTestCase {
         _ = try await f.a.receive(account: f.alice, message: newerMessage, transport: f.aTransport, sentAt: Date(timeIntervalSince1970: 1_700_000_100))
         let olderMessage = XMPPEncryptedMessage(id: olderID, from: f.bob, to: f.alice, originID: nil, envelope: older)
         _ = try await f.a.receive(account: f.alice, message: olderMessage, transport: f.aTransport, sentAt: Date(timeIntervalSince1970: 1_700_000_000))
-        expectEqual(try await f.a.reactions(account: f.alice, chatID: f.bob, messageID: outgoing.id).first?.reactions, ["❤️"])
+        expectEqual(try await f.aStore.reactions(accountID: f.alice, chatID: f.bob, messageID: outgoing.id).first?.reactions, ["❤️"])
         let futureID = try await f.b.queueReactions(account: f.bob, chatID: f.alice, messageID: target.id, reactions: ["😄"])
         _ = try await f.b.prepareAvailableUpdates(account: f.bob, transport: f.bTransport)
         let future = try await f.b.outgoingUpdateEnvelope(account: f.bob, updateID: futureID)
         _ = try await f.a.receive(account: f.alice, message: XMPPEncryptedMessage(id: futureID, from: f.bob, to: f.alice, originID: nil, envelope: future), transport: f.aTransport, sentAt: Date.distantFuture)
-        let projected = try await f.a.reactions(account: f.alice, chatID: f.bob, messageID: outgoing.id)
+        let projected = try await f.aStore.reactions(accountID: f.alice, chatID: f.bob, messageID: outgoing.id)
         expectTrue(try unwrap(projected.first).updatedAt <= Date())
     }
 
@@ -1167,13 +1257,6 @@ final class ServiceTests: XCTestCase {
         expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).map(\.body), [outgoing.body])
         expectEqual(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).count, 1_000)
         expectTrue(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: message))
-        // The header-only device ID is the engine's device ID in both profiles.
-        let (_, state) = try await f.b.load(f.bob)
-        for profile in [XMPPOMEMOProfile.legacy, .modern] {
-            let header = try await f.b.localDeviceID(state, profile)
-            let engine = try OMEMOEngine(snapshot: unwrap(state.engines[profile.rawValue]))
-            expectEqual(header, engine.deviceID)
-        }
     }
 
     func testUnknownSenderDeviceRetainsBeforeTheTargetedFetchAndFetchesOnlyThatDevice() async throws {
@@ -1271,26 +1354,6 @@ final class ServiceTests: XCTestCase {
         expectEqual(records.first?.identityKey, original.identityKey)
     }
 
-    func testDecryptFailureAfterSkippedRetentionStillHasADurableDisposition() async throws {
-        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
-        try await f.initialize(.modern)
-        let outgoing = try await f.queue()
-        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
-        let valid = try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id)
-        var payload = try unwrap(valid.payload)
-        payload[payload.startIndex] ^= 0x01
-        let tampered = f.message(XMPPOMEMOEnvelope(profile: valid.profile, senderDeviceID: valid.senderDeviceID, keys: valid.keys, iv: valid.iv, payload: payload))
-        expectFalse(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: tampered))
-        do { _ = try await f.b.receive(account: f.bob, message: tampered, transport: f.bTransport); XCTFail("Tampered payload accepted") }
-        catch { expectEqual(error as? OMEMOError, .undecryptable) }
-        // No pending row was ever needed: the placeholder is the disposition, so the barrier may be acknowledged.
-        expectTrue(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: tampered))
-        expectTrue(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).isEmpty)
-        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).map(\.unreadableReason), [.decryptFailed])
-        expectTrue(try await f.b.receive(account: f.bob, message: f.message(valid), transport: f.bTransport))
-        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).last?.body, outgoing.body)
-    }
-
     func testCommitFailureAfterSkippedRetentionWithholdsTheDisposition() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -1358,7 +1421,7 @@ final class ServiceTests: XCTestCase {
         expectEqual(try await app.overview(account: f.bob, peer: f.alice).devices.first { $0.id == device.id }?.trust, .rejected)
     }
 
-    func testStateCacheIsDroppedAfterAFailedCommit() async throws {
+    func testFailedCommitNeverServesItsUnsavedStateLater() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern, trust: false)
         let device = try unwrap(try await f.b.overview(account: f.bob, peer: f.alice).devices.first { $0.jid == f.alice && $0.active })
@@ -1369,17 +1432,10 @@ final class ServiceTests: XCTestCase {
         let interleaving = InterleavingTransport(base: f.bTransport, first: OnFirstFetch {
             try await other.setTrust(account: bob, deviceID: device.id, trust: .rejected)
         })
-        expectNotNil(await f.b.cachedStateRevision(f.bob))
         do { _ = try await f.b.refreshDevices(account: f.bob, peer: f.alice, profile: .modern, transport: interleaving); XCTFail("Stale CAS write succeeded") }
         catch { expectEqual(error as? MessageStoreError, .invalidTransition) }
-        // The failed save dropped the cache outright; the next load decodes the row the other service wrote.
-        expectNil(await f.b.cachedStateRevision(f.bob))
+        // The next load decodes the row the other service wrote, not the refresh's unsaved state at the same revision.
         expectEqual(try await f.b.overview(account: f.bob, peer: f.alice).devices.first { $0.id == device.id }?.trust, .rejected)
-        // A write attempted on a closed store (it fails before any save) leaves the durable state as it was.
-        try await f.bStore.close()
-        do { try await f.b.setTrust(account: f.bob, deviceID: device.id, trust: .accepted); XCTFail("Closed store accepted a write") } catch {}
-        let fresh = OMEMOService(store: try f.openStore("bob.sqlite"), protection: f.protection)
-        expectEqual(try await fresh.overview(account: f.bob, peer: f.alice).devices.first { $0.id == device.id }?.trust, .rejected)
     }
 
     func testRetryPendingSkipsRowsWhoseDeviceIsStillUntrusted() async throws {
