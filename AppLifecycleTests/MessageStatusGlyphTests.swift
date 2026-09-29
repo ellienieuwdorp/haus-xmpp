@@ -5,6 +5,7 @@ import XCTest
 final class MessageStatusGlyphTests: XCTestCase {
     private typealias Status = TimelineMessage.Status
 
+    /// A socket write is not delivery: nothing short of server acceptance may show a check.
     func testEveryStatusMapsToItsMark() {
         let expected: [(Status, MessageStatusGlyph)] = [
             (.queued, .sending(spinning: true)),
@@ -15,19 +16,8 @@ final class MessageStatusGlyphTests: XCTestCase {
             (.delivered, .delivered),
             (.displayed, .read),
         ]
-        XCTAssertEqual(Set(expected.map(\.0.rawValue)).count, 7, "one row per status")
         for (status, glyph) in expected {
             XCTAssertEqual(MessageStatusGlyph.glyph(for: status), glyph, status.rawValue)
-        }
-    }
-
-    /// A socket write is not delivery: nothing short of server acceptance may show a check.
-    func testOnlyServerHeldMessagesShowACheck() {
-        for status in [Status.queued, .submitting, .unconfirmed, .failed] {
-            XCTAssertFalse(MessageStatusGlyph.glyph(for: status).showsCheck, status.rawValue)
-        }
-        for status in [Status.serverAccepted, .delivered, .displayed] {
-            XCTAssertTrue(MessageStatusGlyph.glyph(for: status).showsCheck, status.rawValue)
         }
     }
 

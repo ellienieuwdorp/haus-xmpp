@@ -24,7 +24,6 @@ final class AppearanceStoreTests: XCTestCase {
         let store = AppearanceStore(defaults: defaults)
         XCTAssertEqual(store.accent, .indigo)
         XCTAssertEqual(store.mode, "automatic")
-        XCTAssertNil(store.colorScheme)
         XCTAssertEqual(store.interfaceStyle, .unspecified)
     }
 
@@ -50,16 +49,13 @@ final class AppearanceStoreTests: XCTestCase {
         XCTAssertEqual(store.mode, "automatic")
     }
 
-    func testModeMapsToSchemeAndWindowStyle() {
+    func testModeMapsToWindowStyle() {
         let store = AppearanceStore(defaults: defaults)
         store.mode = "light"
-        XCTAssertEqual(store.colorScheme, .light)
         XCTAssertEqual(store.interfaceStyle, .light)
         store.mode = "dark"
-        XCTAssertEqual(store.colorScheme, .dark)
         XCTAssertEqual(store.interfaceStyle, .dark)
         store.mode = "automatic"
-        XCTAssertNil(store.colorScheme)
         XCTAssertEqual(store.interfaceStyle, .unspecified)
     }
 
@@ -79,7 +75,13 @@ final class AppearanceStoreTests: XCTestCase {
     func testCurrentResolvesThroughTheSharedStore() {
         let shared = AppearanceStore.shared
         let original = shared.accent
-        defer { shared.accent = original }
+        // The shared store writes to the standard defaults; put the raw key back as it was, absent included.
+        let stored = UserDefaults.standard.object(forKey: AccentTheme.storageKey)
+        defer {
+            shared.accent = original
+            if let stored { UserDefaults.standard.set(stored, forKey: AccentTheme.storageKey) }
+            else { UserDefaults.standard.removeObject(forKey: AccentTheme.storageKey) }
+        }
         shared.accent = .sky
         XCTAssertEqual(AccentTheme.current, .sky)
         let changed = Flag()

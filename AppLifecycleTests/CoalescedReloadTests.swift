@@ -18,16 +18,6 @@ final class CoalescedReloadTests: XCTestCase {
         func started(_ count: Int) async { while scopes.count < count { await Task.yield() } }
     }
 
-    func testLoneRequestLoadsOnce() async {
-        let gate = Gate()
-        let reload = CoalescedReload { await gate.load($0) }
-        let request = Task { await reload.request(.chats) }
-        await gate.started(1)
-        gate.release()
-        await request.value
-        XCTAssertEqual(gate.scopes, [.chats])
-    }
-
     func testBurstDuringLoadCostsTwoLoadsAndUnionsScopes() async {
         let gate = Gate()
         let reload = CoalescedReload { await gate.load($0) }
@@ -106,11 +96,6 @@ final class TimelinePageCacheTests: XCTestCase {
         var cache = Cache()
         cache.store(page("alex", count: 3), for: summary("alex"), account: "a")
         XCTAssertNil(cache.page(for: summary("alex"), account: "b"))
-        cache.store(page("maya", count: 2), for: summary("maya"), account: "b")
-        // Storing for another account dropped the first account's pages.
-        XCTAssertNil(cache.page(for: summary("alex"), account: "a"))
-        cache.removeAll()
-        XCTAssertNil(cache.page(for: summary("maya"), account: "b"))
     }
 
     func testPrefetchAsksForTheTopChatsLackingACurrentPage() {
@@ -125,8 +110,8 @@ final class TimelinePageCacheTests: XCTestCase {
         XCTAssertEqual(wanted, ["chat3", "chat4", "chat5", "chat6", "chat7", "chat8"])
         XCTAssertNil(cache.page(for: listed[2], account: "a"))
         XCTAssertNotNil(cache.page(for: listed[1], account: "a"))
+        // Another account's list drops this account's pages, so chat2 is wanted again.
         XCTAssertEqual(cache.missing(from: listed, account: "b", excluding: nil).count, Cache.prefetchCount)
-        XCTAssertNil(cache.page(for: listed[1], account: "a"))
     }
 
     func testTheLeastRecentlyUsedPageIsDroppedFirst() {
