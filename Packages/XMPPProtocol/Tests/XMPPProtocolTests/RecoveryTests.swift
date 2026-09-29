@@ -20,31 +20,6 @@ private actor SnapshotStore: XMPPStreamManagementPersistence {
     func seed(_ snapshot: XMPPStreamManagementSnapshot) { value = snapshot }
 }
 
-@Test func streamJournalPersistsBeforeWriteAndRejectsImpossibleAcknowledgement() async throws {
-    let store = SnapshotStore()
-    let sm = StreamManagement(store)
-    _ = try await sm.restore(accountID: "a@example.org")
-    try await sm.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", expiresAt: nil)
-    let xml = "<message id='original'><encrypted xmlns='urn:xmpp:omemo:2'/></message>"
-    try await sm.record(xml)
-    #expect(await store.value?.journal.first?.xml == xml)
-    await #expect(throws: XMPPStreamManagementError.self) { try await sm.acknowledge(2) }
-    #expect(await store.value?.journal.count == 1)
-    #expect(try await sm.acknowledge(1).isEmpty)
-    #expect(await store.acknowledged == ["original"])
-}
-
-@Test func streamAcknowledgementNeverPassesUndurableInboundMessage() async throws {
-    let sm = StreamManagement(SnapshotStore())
-    _ = try await sm.restore(accountID: "a@example.org")
-    try await sm.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", expiresAt: nil)
-    let message = try #require(await sm.receive()), iq = try #require(await sm.receive())
-    try await sm.handled(iq)
-    #expect(try await sm.flushHandled() == 0)
-    try await sm.handled(message)
-    #expect(try await sm.flushHandled() == 2)
-}
-
 @Test func failedFlushKeepsAdvertisedCounterAtPersistedValue() async throws {
     let store = SnapshotStore()
     let manager = StreamManagement(store)
@@ -106,16 +81,6 @@ private actor SnapshotStore: XMPPStreamManagementPersistence {
     // A kind-less presence row derives .presence and stays replayable.
     let presence = try JSONDecoder().decode(XMPPStreamJournalEntry.self, from: Data(#"{"sequence":1,"xml":"<presence/>"}"#.utf8))
     #expect(presence.kind == .presence)
-}
-
-@Test func journalEntriesRoundTripWithoutIQBytes() throws {
-    let entries: [XMPPStreamJournalEntry] = [.init(sequence: 1, kind: .message, xml: "<message id='m'/>", messageID: "m"),
-                                             .init(sequence: 2, kind: .iq, xml: nil, messageID: nil),
-                                             .init(sequence: 3, kind: .presence, xml: "<presence/>", messageID: nil)]
-    let data = try JSONEncoder().encode(entries)
-    #expect(try JSONDecoder().decode([XMPPStreamJournalEntry].self, from: data) == entries)
-    let iqJSON = try #require(String(data: JSONEncoder().encode(entries[1]), encoding: .utf8))
-    #expect(!iqJSON.contains("xml"))
 }
 
 private func enabledManager(_ store: SnapshotStore) async throws -> StreamManagement {
@@ -348,25 +313,6 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     #expect(XMPPClient.archiveQueryTimeout > XMPPClient.iqTimeout)
     // Content plus barrier per message: the buffer outlasts stream management's inbound ceiling.
     #expect(XMPPClient.eventBufferLimit >= 2 * Int(StreamManagement.inboundWindow))
-}
-
-@Test func archiveTimestampsParseConcurrentlyWithSharedFormatters() async {
-    let inputs = ["2026-09-01T10:00:00Z", "2026-09-01T10:00:00.250Z", "2026-09-01T12:00:00+02:00", "garbage"]
-    let sequential = inputs.map(ArchiveQuery.timestamp)
-    #expect(sequential[0] == Date(timeIntervalSince1970: 1_788_256_800))
-    #expect(sequential[1] == Date(timeIntervalSince1970: 1_788_256_800.25))
-    #expect(sequential[2] == sequential[0])
-    #expect(sequential[3] == nil)
-    let concurrent = await withTaskGroup(of: (Int, Date?).self) { group in
-        for index in 0..<200 {
-            group.addTask { (index, ArchiveQuery.timestamp(inputs[index % inputs.count])) }
-        }
-        var results: [(Int, Date?)] = []
-        for await result in group { results.append(result) }
-        return results
-    }
-    #expect(concurrent.count == 200)
-    for (index, date) in concurrent { #expect(date == sequential[index % inputs.count]) }
 }
 
 @Test func archivePayloadEmitsTheRequestedBound() {

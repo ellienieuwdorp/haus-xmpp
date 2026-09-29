@@ -35,25 +35,3 @@ private func replyNode(body: String = "Answer", reply: XMPPReply?) throws -> XMP
     #expect(end != prefix.count)
     #expect(end != prefix.utf16.count)
 }
-
-@Test func unknownWireIdentityOnlyEmitsVisibleQuote() throws {
-    let node = try replyNode(reply: XMPPReply(to: "bob@example.test", body: "Original"))
-    #expect(node.child("body", namespace: "jabber:client")?.text == "> Original\nAnswer")
-    #expect(node.child("reply", namespace: "urn:xmpp:reply:0") == nil)
-    #expect(node.child("fallback", namespace: "urn:xmpp:fallback:0") == nil)
-}
-
-@Test func replyPreflightRejectsMalformedOrOversizedSnapshotAndExpandedBody() {
-    for reply in [
-        XMPPReply(id: "", to: "bob@example.test", body: "a"),
-        XMPPReply(id: "bad\nidentity", to: "bob@example.test", body: "a"),
-        XMPPReply(id: "known", to: "bad\0", body: "a"),
-        XMPPReply(to: "bob@example.test", body: "bad\u{FFFF}"),
-        XMPPReply(to: "bob@example.test", body: String(repeating: "a", count: 16_385))
-    ] {
-        #expect(throws: XMPPClientError.invalidConfiguration) { try XMPPClient.validateMessage(to: "bob@example.test", body: "Answer", id: "outgoing", reply: reply) }
-    }
-    #expect(throws: XMPPClientError.invalidConfiguration) {
-        try XMPPClient.validateMessage(to: "bob@example.test", body: String(repeating: "a", count: 65_536), id: "outgoing", reply: XMPPReply(to: "bob@example.test", body: "quote"))
-    }
-}

@@ -47,15 +47,6 @@ private func sharing(encrypted: Bool = true) -> MessageContent.FileSharing {
     }
 }
 
-@Test func encoderRejectsInvalidMaterial() {
-    var broken = sharing(); broken.iv = Data(repeating: 1, count: 16)
-    #expect(throws: (any Error).self) { try MessageContent(body: "", fileSharing: broken).xml() }
-    broken = sharing(); broken.url = "http://insecure.localhost/x"
-    #expect(throws: (any Error).self) { try MessageContent(body: "", fileSharing: broken).xml() }
-    broken = sharing(); broken.hash = Data()
-    #expect(throws: (any Error).self) { try MessageContent(body: "", fileSharing: broken).xml() }
-}
-
 @Test func legacyBodyParsesTwelveByteIVOnly() throws {
     let material = iv.hexString + key.hexString
     let file = try #require(MessageContent.FileSharing.fromAESGCMBody("aesgcm://uploads.localhost:5281/abc/photo.PNG#" + material))

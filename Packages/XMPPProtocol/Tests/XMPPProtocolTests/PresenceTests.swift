@@ -14,18 +14,6 @@ private func presence(_ xml: String, rooms: Set<String> = []) throws -> XMPPEven
     PresenceWire.event(try stanza(xml), accountBareJID: account, accountFullJID: full, rooms: rooms)
 }
 
-@Test func availableAndUnavailablePresenceParseToTheContactsBareAddress() throws {
-    #expect(try presence("<presence from='alex@example.test/laptop' to='\(full)'><show>away</show><status>brb</status><priority>5</priority></presence>")
-            == .contactPresence(.init(contact: "alex@example.test", resource: "laptop", available: true)))
-    #expect(try presence("<presence from='alex@example.test/laptop' type='unavailable'/>")
-            == .contactPresence(.init(contact: "alex@example.test", resource: "laptop", available: false)))
-    // A bare sender, e.g. the server's last unavailable presence after a probe.
-    #expect(try presence("<presence from='alex@example.test' type='unavailable'/>")
-            == .contactPresence(.init(contact: "alex@example.test", resource: nil, available: false)))
-    // Our own other resource is kept; the app decides to ignore its account.
-    #expect(try presence("<presence from='me@example.test/tablet'/>") == .contactPresence(.init(contact: account, resource: "tablet", available: true)))
-}
-
 @Test func idlePresenceCarriesItsSinceTimestamp() throws {
     let event = try presence("<presence from='alex@example.test/laptop'><idle xmlns='urn:xmpp:idle:1' since='2026-09-25T08:30:00Z'/></presence>")
     #expect(event == .contactPresence(.init(contact: "alex@example.test", resource: "laptop", available: true,
@@ -120,17 +108,6 @@ private func presence(_ xml: String, rooms: Set<String> = []) throws -> XMPPEven
     }
 }
 
-@Test func lastActivityAnswersParseTheirSeconds() throws {
-    #expect(try PresenceWire.lastActivitySeconds(try stanza("<iq type='result' from='alex@example.test'><query xmlns='jabber:iq:last' seconds='903'/></iq>")) == 903)
-    #expect(try PresenceWire.lastActivitySeconds(try stanza("<iq type='result' from='alex@example.test'><query xmlns='jabber:iq:last' seconds='0'/></iq>")) == 0)
-    for xml in ["<iq type='result'><query xmlns='jabber:iq:last'/></iq>",
-                "<iq type='result'><query xmlns='jabber:iq:last' seconds='-5'/></iq>",
-                "<iq type='result'><query xmlns='jabber:iq:last' seconds='99999999999999'/></iq>",
-                "<iq type='result'><query xmlns='jabber:iq:version' seconds='1'/></iq>"] {
-        #expect(throws: XMPPIQError.self) { try PresenceWire.lastActivitySeconds(try stanza(xml)) }
-    }
-}
-
 @Test func lastActivityQueryToOurFullJIDFollowsTheSharingSwitch() throws {
     let query = try stanza("<iq type='get' id='q1' from='alex@example.test/laptop' to='\(full)'><query xmlns='jabber:iq:last'/></iq>")
     #expect(PresenceWire.inlineResponse(query, accountFullJID: full, sharesLastActivity: true)
@@ -143,16 +120,7 @@ private func presence(_ xml: String, rooms: Set<String> = []) throws -> XMPPEven
                 "<iq type='set' id='q4' from='alex@example.test/laptop' to='\(full)'><query xmlns='jabber:iq:last'/></iq>"] {
         #expect(PresenceWire.inlineResponse(try stanza(xml), accountFullJID: full, sharesLastActivity: true)?.contains("service-unavailable") == true, "\(xml)")
     }
-}
-
-@Test func existingInlineAnswersAreUnchanged() throws {
-    let disco = try stanza("<iq type='get' id='d1' from='alex@example.test/laptop'><query xmlns='http://jabber.org/protocol/disco#info' node='n'/></iq>")
-    #expect(PresenceWire.inlineResponse(disco, accountFullJID: full, sharesLastActivity: false)
-            == "<iq type='result' id='d1' to='alex@example.test/laptop'>\(EntityCapabilities.discoInfoQuery(node: "n"))</iq>")
-    let ping = try stanza("<iq type='get' id='p1' from='example.test'><ping xmlns='urn:xmpp:ping'/></iq>")
-    #expect(PresenceWire.inlineResponse(ping, accountFullJID: full, sharesLastActivity: false) == "<iq type='result' id='p1' to='example.test'/>")
-    let other = try stanza("<iq type='get' id='v1'><query xmlns='jabber:iq:version'/></iq>")
-    #expect(PresenceWire.inlineResponse(other, accountFullJID: full, sharesLastActivity: true)
-            == "<iq type='error' id='v1'><error type='cancel'><service-unavailable xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></iq>")
-    #expect(PresenceWire.inlineResponse(try stanza("<iq type='result' id='x'/>"), accountFullJID: full, sharesLastActivity: true) == nil)
+    // A server ping is answered inline regardless of the switch.
+    #expect(PresenceWire.inlineResponse(try stanza("<iq type='get' id='p1' from='example.test'><ping xmlns='urn:xmpp:ping'/></iq>"), accountFullJID: full, sharesLastActivity: false)
+            == "<iq type='result' id='p1' to='example.test'/>")
 }

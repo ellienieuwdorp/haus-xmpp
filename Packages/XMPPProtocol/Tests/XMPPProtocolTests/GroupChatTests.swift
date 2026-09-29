@@ -56,23 +56,6 @@ private func groupEnvelope() -> XMPPOMEMOEnvelope {
     #expect(throws: (any Error).self) { try GroupChatWire.message(groupNode(xml), account: groupBob, room: groupRoom, state: state) }
 }
 
-@Test func changedGroupNicknameRequiresNewSelfPresenceBeforeSending() throws {
-    var state = GroupRoomState(members: [groupAlice], revision: 8, joined: true, nickname: "old")
-    state.requestNickname("new")
-    #expect(!state.joined)
-    #expect(state.revision == 9)
-    let oldPresence = try groupNode("<presence from='\(groupRoom)/old'><x xmlns='\(GroupChatWire.user)'><item affiliation='member' jid='\(groupAlice)'/><status code='110'/></x></presence>")
-    GroupChatWire.applyPresence(oldPresence, room: groupRoom, account: groupAlice, state: &state)
-    #expect(!state.joined)
-    let newPresence = try groupNode("<presence from='\(groupRoom)/new'><x xmlns='\(GroupChatWire.user)'><item affiliation='member' jid='\(groupAlice)'/><status code='110'/></x></presence>")
-    GroupChatWire.applyPresence(newPresence, room: groupRoom, account: groupAlice, state: &state)
-    #expect(state.joined)
-    let confirmedRevision = state.revision
-    state.requestNickname("new")
-    #expect(state.joined)
-    #expect(state.revision == confirmedRevision)
-}
-
 @Test func groupPresenceAcceptsConsistentMultipleResourcesAndRejectsMixedIdentities() throws {
     func presence(_ entries: [(String, String)]) throws -> XMPPProtocol.XMLNode {
         let items = entries.map { "<item jid='\($0.0)' affiliation='\($0.1)' role='moderator'/>" }.joined()

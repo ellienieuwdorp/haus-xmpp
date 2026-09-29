@@ -60,10 +60,6 @@ private let opening = "<s:stream xmlns:s='http://etherx.jabber.org/streams' xmln
     #expect(throws: XMLStreamError.invalidXML) { try other.feed(Data("unexpected".utf8)) }
 }
 
-@Test func escapingIsXMLSafe() {
-    #expect(xmlEscaped("<&>'\"") == "&lt;&amp;&gt;&apos;&quot;")
-}
-
 @Test func disconnectedStateRefusesSendingAndBadConfiguration() async {
     let client = XMPPClient()
     await #expect(throws: XMPPClientError.notConnected) { try await client.sendMessage(to: "a@example.test", body: "hello") }

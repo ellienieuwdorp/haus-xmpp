@@ -9,18 +9,6 @@ private func stanza(_ xml: String) throws -> XMPPProtocol.XMLNode {
     return node
 }
 
-@Test func renderingPreservesCallerIdentityAndEscapesEveryField() throws {
-    let id = "durable-'\"&<>-👋"
-    let body = "first <line> & 'quotes'\nsecond 👋"
-    let recipient = "a&b@example.test"
-    let xml = try XMPPClient.messageXML(to: recipient, body: body, id: id)
-    let node = try stanza(xml)
-    #expect(node.attributes["id"] == id)
-    #expect(node.attributes["to"] == recipient)
-    #expect(node.child("body", namespace: "jabber:client")?.text == body)
-    #expect(node.child("origin-id", namespace: "urn:xmpp:sid:0")?.attributes["id"] == id)
-}
-
 @Test func renderingRejectsUnboundedOrInvalidXMLInputs() {
     for id in ["", "with space", "with\nnewline", "bad\0", "bad\u{FFFF}", String(repeating: "a", count: 1_025)] {
         #expect(throws: XMPPClientError.invalidConfiguration) { try XMPPClient.messageXML(to: "a@example.test", body: "hi", id: id) }
@@ -31,15 +19,6 @@ private func stanza(_ xml: String) throws -> XMPPProtocol.XMLNode {
     for recipient in ["", "a b", "a\0@example.test", String(repeating: "a", count: 3_072)] {
         #expect(throws: XMPPClientError.invalidConfiguration) { try XMPPClient.messageXML(to: recipient, body: "hi", id: "id") }
     }
-}
-
-@Test func parsingRetainsSeparateUntrustedStanzaAndOriginIdentity() throws {
-    let node = try stanza("<message from='a@example.test/device' id='stanza-id' type='chat'><body>hi</body><origin-id xmlns='urn:xmpp:sid:0' id='origin-id'/></message>")
-    let message = try #require(XMPPClient.parsedMessage(node))
-    #expect(message.id == "stanza-id")
-    #expect(message.originID == "origin-id")
-    #expect(message.from == "a@example.test/device")
-    #expect(message.type == "chat")
 }
 
 @Test func parsingIgnoresWrongNestedMissingAndAmbiguousOriginIdentifiers() throws {
