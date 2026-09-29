@@ -143,6 +143,12 @@ final class AppModel {
     var encryptionStatus: String { encryptionOverviewChatID.map { trustSummary(for: $0).subtitle } ?? "" }
     /// The open chat needs a fingerprint decision: stored undecided devices, retained ciphertext, or a send held for trust.
     var encryptionNeedsReview: Bool { encryptionOverviewChatID.map { chatCapabilities($0).encryption == .needsReview } ?? false }
+    /// The open chat holds messages sent in the other OMEMO version from a device waiting for a fingerprint decision.
+    /// Sending is not affected, so this only asks for a review; it never pauses the composer.
+    var encryptionIncomingReview: Bool {
+        guard let chat = encryptionOverviewChatID, !isGroup(chat) else { return false }
+        return encryptionOverview(for: chat)?.needsIncomingReview ?? false
+    }
     @ObservationIgnored private var encryption: OMEMOService?
     var isDemo: Bool { accountID == "preview.local" }
 
@@ -1971,10 +1977,11 @@ final class AppModel {
                 let name = owner == account ? "you" : AppModel.displayName(for: owner, title: nil)
                 let advertised = overview.advertisedDevices[owner] ?? 0
                 let missing = overview.unavailableDevices[owner] ?? 0
-                let active = overview.devices.filter { $0.jid == owner && $0.active && !(owner == account && $0.deviceID == overview.localDeviceID) }.count
+                let active = overview.devices.filter { $0.jid == owner && $0.active && $0.profile == overview.profile
+                    && !(owner == account && $0.deviceID == overview.localDeviceID) }.count
                 return "\(name): \(advertised) advertised, \(active) usable" + (missing > 0 ? ", \(missing) without keys" : "")
             }.joined(separator: " · ")
-            let note = "Last refresh (\(overview.profile == .legacy ? "OMEMO · compatible" : "OMEMO 2")): \(summary)"
+            let note = "Last refresh (\(overview.profile.label)): \(summary)"
             refreshFence[chatID] = (token, note)
             encryptionAttention.note(note)
             Logger(subsystem: "haus.xmpp.ios", category: "encryption").info("Device refresh: \(summary, privacy: .public)")
@@ -2032,6 +2039,8 @@ final class AppModel {
                 // A trust decision can only unblock rows that waited for trust; keys-pending rows wait for device lists.
                 try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.trustPending])
                 guard generation == token else { return }
+                // Released messages leave the retained rows: the other version's waiting devices go with them.
+                if !isGroup(chatID) { await loadEncryptionDetails(for: chatID, refreshFromServer: false) }
                 await flushEncryptionControls(account: account, client: client)
                 await refresh()
                 startOutbox()
