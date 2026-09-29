@@ -53,7 +53,7 @@ private func successWithoutTheServerSignatureIsAFailedLogin(_ serverFinal: Strin
 ])
 private func rejectsUnsafeServerFirstMessages(_ serverFirst: String) throws {
     var sasl = try Vector.sha1.negotiation()
-    #expect(throws: XMPPClientError.authenticationUnavailable) { try sasl.respond(to: data(serverFirst)) }
+    #expect(throws: XMPPClientError.unexpectedProtocol) { try sasl.respond(to: data(serverFirst)) }
 }
 
 @Test func choosesTheStrongestMechanismAndRefusesADowngrade() throws {

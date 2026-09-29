@@ -129,16 +129,17 @@ struct SCRAM {
     }
 
     private mutating func clientFinal(serverFirst data: Data) throws -> Data {
-        // r= first (a leading m= is reserved and must fail), then s= and i=; later extensions are ignored.
-        guard let serverFirst = String(data: data, encoding: .utf8) else { throw XMPPClientError.authenticationUnavailable }
+        // r= first (a leading m= is reserved and must fail), then s= and i=; later extensions are ignored. A violation
+        // is the server's fault, not a missing mechanism or a wrong password: nothing is sent and the login fails.
+        guard let serverFirst = String(data: data, encoding: .utf8) else { throw XMPPClientError.unexpectedProtocol }
         let attributes = serverFirst.split(separator: ",", omittingEmptySubsequences: false)
         guard attributes.count >= 3, attributes[0].hasPrefix("r="), attributes[1].hasPrefix("s="), attributes[2].hasPrefix("i=") else {
-            throw XMPPClientError.authenticationUnavailable
+            throw XMPPClientError.unexpectedProtocol
         }
         let combinedNonce = String(attributes[0].dropFirst(2))
         guard combinedNonce.hasPrefix(nonce), combinedNonce.count > nonce.count,
               let salt = Data(base64Encoded: String(attributes[1].dropFirst(2))), !salt.isEmpty,
-              let count = Int(attributes[2].dropFirst(2)), Self.iterations.contains(count) else { throw XMPPClientError.authenticationUnavailable }
+              let count = Int(attributes[2].dropFirst(2)), Self.iterations.contains(count) else { throw XMPPClientError.unexpectedProtocol }
         let salted = try saltedPassword(salt: salt, iterations: count)
         password = ""
         let withoutProof = "c=biws,r=\(combinedNonce)" // biws = base64("n,,")

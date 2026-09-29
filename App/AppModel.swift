@@ -520,6 +520,7 @@ final class AppModel {
         case XMPPClientError.authenticationRetryable: "The server could not check the password right now."
         case XMPPClientError.encryptionUnavailable: "The server did not offer an encrypted connection."
         case XMPPClientError.serviceNotOffered: "This domain does not offer XMPP service."
+        case XMPPClientError.unexpectedProtocol: "The server sent a reply this app cannot accept."
         case XMPPClientError.timedOut: "The server did not respond."
         case MessageStoreError.transportOwnedElsewhere: "Another process is still using this account’s storage. Try again in a moment."
         case is CancellationError: "Connection cancelled."
