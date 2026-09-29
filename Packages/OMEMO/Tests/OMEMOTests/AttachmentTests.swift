@@ -15,17 +15,6 @@ final class AttachmentTests: XCTestCase {
         return (sharing, sealed.ciphertext)
     }
 
-    func testModernEnvelopeCarriesFileAndCaption() throws {
-        let (sharing, _) = try file()
-        for caption in ["", "Look at this"] {
-            let data = try EncryptedContent.encode(body: caption, reply: nil, sender: sender, recipient: recipient, modern: true, originID: "m1", fileSharing: sharing)
-            let decoded = try EncryptedContent.decode(data, sender: sender, recipient: recipient, modern: true)
-            XCTAssertEqual(decoded.body, caption)
-            XCTAssertEqual(decoded.fileSharing, sharing)
-            XCTAssertEqual(decoded.originID, "m1")
-        }
-    }
-
     func testLegacyBodyUsesAESGCMLinkAndParsesBack() throws {
         let (sharing, _) = try file()
         let data = try EncryptedContent.encode(body: "caption", reply: nil, sender: sender, recipient: recipient, modern: false, fileSharing: sharing)

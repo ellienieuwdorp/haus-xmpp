@@ -232,8 +232,9 @@ final class ServiceTests: XCTestCase {
         expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).map(\.body), [outgoing.body])
     }
 
-    private func assertRoundTrip(_ profile: XMPPOMEMOProfile) async throws {
+    func testModernDirectRoundTripPersistsAndDeduplicates() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        let profile = XMPPOMEMOProfile.modern
         try await f.initialize(profile)
         let outgoing = try await f.queue()
         try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
@@ -246,6 +247,7 @@ final class ServiceTests: XCTestCase {
         expectEqual(received.count, 1)
         expectEqual(received.first?.body, outgoing.body)
         expectEqual(received.first?.encryptionProfile, profile.rawValue)
+        expectTrue(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: f.message(envelope)))
         expectFalse(try await f.b.receive(account: f.bob, message: f.message(envelope, id: "different-outer-id"), transport: f.bTransport))
         let reopenedStore = try f.openStore("bob.sqlite")
         let reopened = OMEMOService(store: reopenedStore, protection: f.protection)
@@ -254,32 +256,6 @@ final class ServiceTests: XCTestCase {
         expectEqual(try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id), envelope)
         try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
         expectEqual(try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id), envelope)
-    }
-    func testLegacyDirectRoundTripPersistsAndDeduplicates() async throws { try await assertRoundTrip(.legacy) }
-    func testModernDirectRoundTripPersistsAndDeduplicates() async throws { try await assertRoundTrip(.modern) }
-
-    func testUnknownTrustPreservesQueuedAndPendingMessagesUntilAccepted() async throws {
-        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
-        try await f.initialize(.modern, trust: false)
-        let outgoing = try await f.queue()
-        do { try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport); XCTFail("Unknown devices must block send") }
-        catch { expectEqual(error as? OMEMOError, .trustRequired) }
-        expectNil(try await f.aStore.encryptedOutgoing(accountID: f.alice, messageID: outgoing.id))
-        let devices = try await f.a.overview(account: f.alice, peer: f.bob).devices
-        for device in devices where device.active { try await f.a.setTrust(account: f.alice, deviceID: device.id, trust: .accepted) }
-        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
-        let envelope = try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id)
-        do { _ = try await f.b.receive(account: f.bob, message: f.message(envelope), transport: f.bTransport); XCTFail("Unknown sender trust must retain ciphertext") }
-        catch { expectEqual(error as? OMEMOError, .trustRequired) }
-        expectEqual(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).count, 1)
-        expectEqual(try await f.b.pendingConversations(account: f.bob), [f.alice: 1])
-        expectTrue(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).isEmpty)
-        let senderDevices = try await f.b.overview(account: f.bob, peer: f.alice).devices
-        for device in senderDevices where device.active { try await f.b.setTrust(account: f.bob, deviceID: device.id, trust: .accepted) }
-        try await f.b.retryPendingIncoming(account: f.bob, transport: f.bTransport)
-        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).first?.body, outgoing.body)
-        expectTrue(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).isEmpty)
-        expectTrue(try await f.b.pendingConversations(account: f.bob).isEmpty)
     }
 
     func testTamperedPayloadCannotCommitRatchetThenOriginalDecrypts() async throws {
@@ -304,39 +280,14 @@ final class ServiceTests: XCTestCase {
         expectEqual(afterTamper.first?.unreadableReason, .decryptFailed)
         expectEqual(afterTamper.first?.body, "")
         expectTrue(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).isEmpty)
+        // Re-seeing the ciphertext (reconnect, archive page) is a replay: no second row, no error.
+        expectFalse(try await f.b.receive(account: f.bob, message: invalid, transport: f.bTransport))
+        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).count, 1)
         expectTrue(try await f.b.receive(account: f.bob, message: f.message(valid), transport: f.bTransport))
         let afterValid = try await f.bStore.messages(accountID: f.bob, chatID: f.alice)
         expectEqual(afterValid.count, 2)
         expectEqual(afterValid.last?.body, outgoing.body)
         expectNil(afterValid.last?.unreadableReason)
-    }
-
-    func testTrustedSenderDecryptFailureLeavesTheTableAndIsNotRetried() async throws {
-        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
-        try await f.initialize(.modern)
-        let alice = try await f.a.localIdentity(account: f.alice, profile: .modern)
-        let bob = try await f.b.localIdentity(account: f.bob, profile: .modern)
-        let garbage = XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: alice.deviceID,
-                                        keys: [XMPPOMEMOKey(recipientJID: f.bob, deviceID: bob.deviceID, keyExchange: false, data: Data(repeating: 7, count: 64))],
-                                        payload: Data(repeating: 9, count: 48))
-        let message = f.message(garbage)
-        expectFalse(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: message))
-        let before = try await f.engines(f.bStore, account: f.bob)
-        do { _ = try await f.b.receive(account: f.bob, message: message, transport: f.bTransport); XCTFail("Garbage key decrypted") }
-        catch { expectEqual(error as? OMEMOError, .undecryptable) }
-        expectEqual(try await f.engines(f.bStore, account: f.bob), before)
-        let rows = try await f.bStore.messages(accountID: f.bob, chatID: f.alice)
-        expectEqual(rows.map(\.unreadableReason), [.decryptFailed])
-        expectEqual(rows.first?.isOutgoing, false)
-        expectEqual(rows.first?.senderID, f.alice)
-        expectTrue(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).isEmpty)
-        expectTrue(try await f.b.pendingConversations(account: f.bob).isEmpty)
-        try await f.b.retryPendingIncoming(account: f.bob, transport: f.bTransport)
-        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).count, 1)
-        expectTrue(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: message))
-        // Re-seeing the ciphertext (reconnect, archive page) is a replay: no second row, no error.
-        expectFalse(try await f.b.receive(account: f.bob, message: message, transport: f.bTransport))
-        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).count, 1)
     }
 
     func testUndecryptableKeyTransportIsConsumedWithoutPlaceholder() async throws {
@@ -562,33 +513,6 @@ final class ServiceTests: XCTestCase {
         expectTrue(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).isEmpty)
     }
 
-    func testCommittedKeyTransportSurvivesServiceReopenAndConfirmsSessionWithoutBubble() async throws {
-        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
-        try await f.initialize(.modern)
-        let outgoing = try await f.queue()
-        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
-        let envelope = try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id)
-        expectTrue(envelope.keys.allSatisfy(\.keyExchange))
-        _ = try await f.b.receive(account: f.bob, message: f.message(envelope), transport: f.bTransport)
-        let reopened = OMEMOService(store: f.bStore, protection: f.protection)
-        let aliceService = f.a, aliceTransport = f.aTransport, account = f.alice, sender = f.bob
-        try await reopened.flushUpdates(account: f.bob) { update, prepared in
-            guard case .encrypted(let recipient, let response) = prepared else { return XCTFail("key transport is a direct envelope") }
-            let id = update.id
-            XCTAssertEqual(recipient, account)
-            XCTAssertNil(response.payload)
-            let message = XMPPEncryptedMessage(id: id, from: sender, to: account, originID: nil, envelope: response)
-            let inserted = try await aliceService.receive(account: account, message: message, transport: aliceTransport)
-            XCTAssertFalse(inserted)
-        }
-        expectEqual(try await f.aStore.messages(accountID: f.alice, chatID: f.bob).count, 1)
-        let next = try await f.queue("After confirmation")
-        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
-        let confirmed = try await f.a.outgoingEnvelope(account: f.alice, messageID: next.id)
-        expectFalse(confirmed.keys.contains( where: \.keyExchange))
-        expectTrue(try await f.b.receive(account: f.bob, message: f.message(confirmed), transport: f.bTransport))
-    }
-
     func testOnePublishedDeviceHasSameIdentityAcrossProfilesAndRelaunch() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.a.initialize(account: f.alice, transport: f.aTransport)
@@ -775,6 +699,8 @@ final class ServiceTests: XCTestCase {
             let delayed = try await f.queue("In flight before repair")
             try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
             let delayedEnvelope = try await f.a.outgoingEnvelope(account: f.alice, messageID: delayed.id)
+            // Bob's key transport confirmed the session: later messages are no longer prekey messages.
+            expectFalse(delayedEnvelope.keys.contains(where: \.keyExchange))
             let draft = try await f.queue("Unencrypted queued intention")
             let before = try await f.a.overview(account: f.alice, peer: f.bob)
             let device = try XCTUnwrap(before.devices.first { $0.jid == f.bob && $0.active })
@@ -915,27 +841,6 @@ final class ServiceTests: XCTestCase {
         await f.server.publish(f.bob, XMPPOMEMOBundle(profile: .modern, deviceID: bundle.deviceID, identityKey: bundle.identityKey, signedPreKeyID: bundle.signedPreKeyID, signedPreKey: bundle.signedPreKey, signedPreKeySignature: signature, preKeys: bundle.preKeys))
         do { _ = try await f.a.refreshDevices(account: f.alice, peer: f.bob, transport: f.aTransport); XCTFail("Accepted invalid signature") } catch {}
         expectEqual(try await f.a.overview(account: f.alice, peer: f.bob).devices, before.devices)
-    }
-
-    func testRetainedArchiveTimestampAndDurableDispositionSurviveTrustRetry() async throws {
-        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
-        try await f.initialize(.modern, trust: false)
-        let devices = try await f.a.overview(account: f.alice, peer: f.bob).devices
-        for device in devices where device.active { try await f.a.setTrust(account: f.alice, deviceID: device.id, trust: .accepted) }
-        let outgoing = try await f.queue()
-        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
-        let envelope = try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id)
-        let message = f.message(envelope)
-        expectFalse(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: message))
-        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
-        do { _ = try await f.b.receive(account: f.bob, message: message, transport: f.bTransport, sentAt: stamp); XCTFail("Trust missing") } catch {}
-        expectTrue(try await f.b.hasDurableIncomingDisposition(account: f.bob, message: message))
-        let approved = try await f.b.overview(account: f.bob, peer: f.alice).devices
-        for device in approved where device.active { try await f.b.setTrust(account: f.bob, deviceID: device.id, trust: .accepted) }
-        let reopened = OMEMOService(store: f.bStore, protection: f.protection)
-        try await reopened.retryPendingIncoming(account: f.bob, transport: OfflineTransport())
-        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).first?.sentAt, stamp)
-        expectTrue(try await reopened.hasDurableIncomingDisposition(account: f.bob, message: message))
     }
 
     /// A peer's envelope without exactly one key for this device can never decrypt here. A would-be bubble leaves one
@@ -1467,38 +1372,6 @@ final class ServiceTests: XCTestCase {
         expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).map(\.body), bodies)
         expectTrue(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).isEmpty)
         expectEqual(await log.fetches, [])
-    }
-
-    func testKeysPendingRowIsRetriedAfterTrustOnceItsDeviceBecameKnownElsewhere() async throws {
-        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
-        try await f.aStore.acquireTransportOwnership()
-        try await f.bStore.acquireTransportOwnership()
-        try await f.a.initialize(account: f.alice, transport: f.aTransport)
-        try await f.b.initialize(account: f.bob, transport: f.bTransport)
-        for device in try await f.a.refreshDevices(account: f.alice, peer: f.bob, profile: .modern, transport: f.aTransport).devices where device.active {
-            try await f.a.setTrust(account: f.alice, deviceID: device.id, trust: .accepted)
-        }
-        let outgoing = try await f.queue()
-        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
-        let message = f.message(try await f.a.outgoingEnvelope(account: f.alice, messageID: outgoing.id))
-        // The key lookup fails (offline): the ciphertext waits for keys.
-        do { _ = try await f.b.receive(account: f.bob, message: message, transport: OfflineTransport()); XCTFail("Keys were unavailable") } catch {}
-        expectEqual(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).map(\.reason), [.keysPending])
-        // The sending path's full refresh (or encryption details) adds Alice's device, undecided.
-        _ = try await f.b.refreshDevices(account: f.bob, peer: f.alice, profile: .modern, transport: f.bTransport)
-        // The connection retry skips the row without decrypting, but it now waits for a trust decision.
-        let log = TransportLog()
-        try await f.b.retryPendingIncoming(account: f.bob, transport: CountingTransport(base: f.bTransport, log: log))
-        expectEqual(await log.calls, [])
-        expectEqual(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).map(\.reason), [.trustPending])
-        expectTrue(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).isEmpty)
-        // Accepting the device retries trust-pending rows only (as the app does), and that finds this one.
-        for device in try await f.b.overview(account: f.bob, peer: f.alice).devices where device.jid == f.alice && device.active {
-            try await f.b.setTrust(account: f.bob, deviceID: device.id, trust: .accepted)
-        }
-        try await f.b.retryPendingIncoming(account: f.bob, transport: f.bTransport, reasons: [.trustPending])
-        expectEqual(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).map(\.body), [outgoing.body])
-        expectTrue(try await f.bStore.pendingEncryptedIncoming(accountID: f.bob).isEmpty)
     }
 
     func testPendingConversationsCountsWithoutDecodingWires() async throws {

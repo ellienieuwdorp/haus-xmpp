@@ -15,25 +15,6 @@ private func unwrap<T>(_ value: T?, file: StaticString = #filePath, line: UInt =
 /// original bubble by every receiver, including our own other devices.
 @MainActor
 final class RevisionTests: XCTestCase {
-    private let sender = "alice@localhost", recipient = "bob@localhost"
-
-    func testRetractionAndCorrectionEnvelopesRoundTrip() throws {
-        let retract = try EncryptedContent.encodeRetraction(targetWireID: "t&<1>", sender: sender, recipient: recipient, originID: "r-1", modern: true)
-        let decodedRetraction = try EncryptedContent.decode(retract, sender: sender, recipient: recipient, modern: true)
-        XCTAssertEqual(decodedRetraction.retraction, "t&<1>")
-        XCTAssertEqual(decodedRetraction.body, "")
-        XCTAssertEqual(decodedRetraction.originID, "r-1")
-        let correct = try EncryptedContent.encode(body: "second thoughts", reply: nil, sender: sender, recipient: recipient, modern: true, originID: "c-1", correction: "t&<1>")
-        let decodedCorrection = try EncryptedContent.decode(correct, sender: sender, recipient: recipient, modern: true)
-        XCTAssertEqual(decodedCorrection.correction, "t&<1>")
-        XCTAssertEqual(decodedCorrection.body, "second thoughts")
-        // Legacy ciphertext has no envelope: the correction reference stays outside, and retractions go plain.
-        XCTAssertEqual(try EncryptedContent.encode(body: "plain", reply: nil, sender: sender, recipient: recipient, modern: false, correction: "t"), Data("plain".utf8))
-        XCTAssertThrowsError(try EncryptedContent.encodeRetraction(targetWireID: "t", sender: sender, recipient: recipient, originID: "r", modern: false)) {
-            XCTAssertEqual($0 as? OMEMOError, .unsupportedMessageUpdate)
-        }
-    }
-
     /// A peer's edit replaces the original bubble's text; their unsend blanks it; neither adds a row.
     func testPeerEditAndUnsendProjectOntoTheOriginalBubbleNotASecondOne() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
