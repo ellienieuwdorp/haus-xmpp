@@ -9,7 +9,7 @@ import XMPPProtocol
     static func run() async throws {
         let env = ProcessInfo.processInfo.environment
         guard let domain = env["HAUS_LAB_DOMAIN"], let user = env["HAUS_LAB_USERNAME"], let password = env["HAUS_LAB_PASSWORD"] else {
-            print("Required environment: HAUS_LAB_DOMAIN, HAUS_LAB_USERNAME, HAUS_LAB_PASSWORD; optional HAUS_LAB_HOST, HAUS_LAB_PORT, HAUS_LAB_CA_DER, HAUS_LAB_TO, HAUS_LAB_BODY. Lab plaintext only.")
+            print("Required environment: HAUS_LAB_DOMAIN, HAUS_LAB_USERNAME, HAUS_LAB_PASSWORD; optional HAUS_LAB_HOST, HAUS_LAB_PORT, HAUS_LAB_SECURITY (starttls), HAUS_LAB_CA_DER, HAUS_LAB_TO, HAUS_LAB_BODY. Lab plaintext only.")
             return
         }
         let ca = try env["HAUS_LAB_CA_DER"].map { try Data(contentsOf: URL(fileURLWithPath: $0)) }
@@ -17,7 +17,10 @@ import XMPPProtocol
         let recovery = LabRecoveryPersistence()
         if env["HAUS_LAB_RECOVERY_SMOKE"] == "1" || env["HAUS_LAB_PUSH_SMOKE"] == "1" { try await client.configureStreamManagement(persistence: recovery) }
         let timeout = Task { try await Task.sleep(for: .seconds(30)); await client.disconnectAndWait() }
-        try await client.connect(host: env["HAUS_LAB_HOST"] ?? domain, port: UInt16(env["HAUS_LAB_PORT"] ?? "5223") ?? 5223, domain: domain, username: user, password: password)
+        let security: XMPPTransportSecurity = env["HAUS_LAB_SECURITY"] == "starttls" ? .startTLS : .directTLS
+        let session = try await client.connect(host: env["HAUS_LAB_HOST"] ?? domain, port: UInt16(env["HAUS_LAB_PORT"] ?? "") ?? security.defaultPort,
+                                               security: security, domain: domain, username: user, password: password)
+        print("Connected over \(session.endpoint.security) to port \(session.endpoint.port); SCRAM: \(session.authenticatedWithSCRAM)")
         if env["HAUS_LAB_PUSH_GATEWAY_SMOKE"] == "1" {
             try await verifyGatewayOnboarding(client: client, service: env["HAUS_LAB_PUSH_SERVICE"] ?? "push.localhost")
             timeout.cancel(); await client.disconnectAndWait(); return
