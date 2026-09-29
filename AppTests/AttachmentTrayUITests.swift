@@ -4,7 +4,13 @@ extension XCUIApplication {
     /// The attachment panel asks for the photo library on its first open; the rail needs full access.
     @MainActor func allowPhotoAccessIfAsked() {
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow Full Access"]
-        if allow.waitForExistence(timeout: 2) { allow.tap() }
+        // The prompt comes once per install; after that the rail's first photo shows instead. Stop at whichever is first:
+        // a fixed wait for a prompt that no longer comes cost every later open its whole timeout. The deadline is generous
+        // because a prompt that shows after it is dismissed by the next tap, which denies the rail for the whole run.
+        let railPhoto = descendants(matching: .any).matching(identifier: "recentPhoto-0").firstMatch
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline, !allow.exists, !railPhoto.exists { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1)) }
+        if allow.exists { allow.tap() }
     }
 }
 
