@@ -335,6 +335,11 @@ public struct ArchiveSynchronizer: Sendable {
                 Self.log.error("backfill refused: archive query already active")
                 return .stopped
             } catch {
+                // An unanswered query carries no page either, unless the connection itself was lost (`endsOnlyThisArchive`).
+                if case XMPPClientError.timedOut = error, await operations.isOnline() {
+                    Self.log.error("backfill query unanswered")
+                    return .stopped
+                }
                 await operations.disconnect(); throw error
             }
             do {

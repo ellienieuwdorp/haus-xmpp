@@ -37,7 +37,8 @@ struct BackfillTests {
                             refresh: (@Sendable (String) async throws -> Void)? = nil,
                             process: (@Sendable (XMPPArchiveMessage) async throws -> Void)? = nil,
                             acknowledge: (@Sendable ([XMPPInboundToken]) async throws -> Void)? = nil,
-                            progress: (@Sendable (ArchiveSyncProgress) async -> Void)? = nil) -> ArchiveSyncOperations {
+                            progress: (@Sendable (ArchiveSyncProgress) async -> Void)? = nil,
+                            online: Bool = true) -> ArchiveSyncOperations {
         ArchiveSyncOperations(
             knownRooms: { Issue.record("backfill never lists rooms"); return [] },
             refreshRoom: { room in
@@ -57,7 +58,8 @@ struct BackfillTests {
                 await trace.record("ack:" + tokens.map { String($0.sequence) }.joined(separator: ","))
             },
             disconnect: { await trace.record("disconnect") },
-            progress: { await progress?($0) })
+            progress: { await progress?($0) },
+            isOnline: { online })
     }
 
     private func cursor(_ store: MessageStore, _ archive: String? = nil) async throws -> ArchiveBackfillCursor? {
@@ -222,6 +224,25 @@ struct BackfillTests {
             let ops = operations(trace: trace, fetch: { _, _ in throw XMPPClientError.invalidConfiguration })
             #expect(try await ArchiveSynchronizer(store: store).backfill(account: account, archive: nil, pageBudget: 5, operations: ops) == .stopped)
             #expect(await trace.events == ["fetch:before(n1)"])
+        }
+    }
+
+    /// Backfill runs on a live connection after catch-up: a query the server never answers must not tear it down. The
+    /// same error from a lost connection still ends the run.
+    @Test func anUnansweredQueryStopsWithoutDisconnectingALiveConnection() async throws {
+        try await fixture { store async throws in
+            let trace = BackfillTrace()
+            let ops = operations(trace: trace, fetch: { _, _ in throw XMPPClientError.timedOut })
+            #expect(try await ArchiveSynchronizer(store: store).backfill(account: account, archive: nil, pageBudget: 5, operations: ops) == .stopped)
+            #expect(await trace.events == ["fetch:before(n1)"])
+
+            let lost = BackfillTrace()
+            let offline = operations(trace: lost, fetch: { _, _ in throw XMPPClientError.timedOut }, online: false)
+            await #expect(throws: XMPPClientError.timedOut) {
+                try await ArchiveSynchronizer(store: store).backfill(account: account, archive: nil, pageBudget: 5, operations: offline)
+            }
+            #expect(await lost.events == ["fetch:before(n1)", "disconnect"])
+            #expect(try await cursor(store)?.oldestID == "n1")
         }
     }
 
