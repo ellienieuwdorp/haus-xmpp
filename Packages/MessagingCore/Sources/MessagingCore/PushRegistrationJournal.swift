@@ -51,8 +51,8 @@ public struct PushRegistrationJournal: Codable, Sendable, Equatable, CustomStrin
         return true
     }
 
-    /// Settles `operation` without a gateway result: only for a revocation the gateway answered with item-not-found (it
-    /// holds no such node, so there is nothing left to revoke). The revision stays spent.
+    /// Settles `operation` without a gateway result: only for a revocation the gateway refused because it holds no such
+    /// node for this account (item-not-found or forbidden), so nothing is left to revoke. The revision stays spent.
     @discardableResult public mutating func abandonPending(_ operation: XMPPPushRegistrationOperation) -> Bool {
         guard pending == operation else { return false }
         acknowledgedRevision = operation.revision; pending = nil

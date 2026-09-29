@@ -835,13 +835,16 @@ final class AppModel {
     }
 
     /// Sends a stored revocation and disables the node at the account server. A gateway that no longer knows the node
-    /// (item-not-found), or a retired service that is gone, leaves nothing to revoke.
+    /// (item-not-found or forbidden), or a retired service that is gone, leaves nothing to revoke.
     private func settlePendingRevocation(client: XMPPClient, account: String, state: PushRegistrationState, token: UUID) async throws {
         do {
             try await sendPendingPushRegistration(client: client, account: account, token: token)
         } catch {
             let retired = state.configuration.serviceJID.lowercased() != PushService.serviceJID
-            guard generation == token, error as? XMPPIQError == .stanza(condition: "item-not-found") || (retired && !(error is CancellationError)) else { throw error }
+            // The gateway answers a node it does not hold (or not for us) the same way as bad credentials; a retry
+            // can never succeed, and nothing of ours is left there to revoke.
+            let gone = [XMPPIQError.stanza(condition: "item-not-found"), .stanza(condition: "forbidden")].contains(error as? XMPPIQError)
+            guard generation == token, gone || (retired && !(error is CancellationError)) else { throw error }
             guard var latest = try PushRegistrationState.load(accountID: account), latest.configuration == state.configuration,
                   let pending = latest.journal.pending, pending.action == .revoke else { throw CancellationError() }
             latest.journal.abandonPending(pending)
