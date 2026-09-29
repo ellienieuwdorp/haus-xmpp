@@ -595,6 +595,10 @@ public actor XMPPClient {
         }
     }
 
+    /// False once the stream has ended. A query that failed with `timedOut` while this is still true hit its own
+    /// deadline; after a lost connection (liveness probe) every pending query fails with that same error.
+    public var isOnline: Bool { phase == .online }
+
     private static func smCount(_ value: String?) -> UInt32? {
         guard let value, !value.isEmpty, value.utf8.allSatisfy({ (48...57).contains($0) }) else { return nil }
         return UInt32(value)

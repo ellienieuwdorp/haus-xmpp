@@ -312,6 +312,20 @@ public struct StreamManagementState: Sendable, Equatable {
 public struct ArchiveCheckpoint: Sendable, Equatable {
     public let revision: Int
     public let cursor: String
+    /// The archive `<delay stamp>` of the entry `cursor` names: where a forward walk restarts by time when the server
+    /// no longer holds the cursor. nil for checkpoints saved before schema 22.
+    public let stamp: Date?
+    public init(revision: Int, cursor: String, stamp: Date? = nil) { self.revision = revision; self.cursor = cursor; self.stamp = stamp }
+}
+
+/// A forward cursor the server no longer held (XEP-0313 `item-not-found`), recorded once per lost cursor. Entries
+/// between `since` (the lost entry's archive time, when known) and the first entry fetched after it may have
+/// expired from the server before this device fetched them; messages received live in that time are unaffected.
+public struct ArchiveGap: Sendable, Equatable {
+    public let archiveID: String
+    public let since: Date?
+    public let detectedAt: Date
+    public init(archiveID: String, since: Date?, detectedAt: Date) { self.archiveID = archiveID; self.since = since; self.detectedAt = detectedAt }
 }
 
 /// The backward cursor of one archive's history backfill (newest-first sync).

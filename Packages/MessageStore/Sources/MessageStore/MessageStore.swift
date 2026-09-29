@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 21 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 22 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -326,7 +326,20 @@ public actor MessageStore {
                     FOREIGN KEY(account_id,target_message_id) REFERENCES messages(account_id,id) ON DELETE CASCADE
                 )
                 """)
-            try connection.execute("PRAGMA user_version = 21")
+            // v22: the archive time of each checkpoint's entry, so a walk whose cursor the server no longer holds restarts by
+            // time (XEP-0313 `start`), and one row per lost cursor. Column and table checks keep it idempotent in any merge order.
+            if version < 22, try connection.query("SELECT 1 FROM pragma_table_info('archive_checkpoints') WHERE name='stamp'").isEmpty {
+                try connection.execute("ALTER TABLE archive_checkpoints ADD COLUMN stamp REAL")
+            }
+            if version < 22 {
+                try connection.execute("""
+                    CREATE TABLE IF NOT EXISTS archive_gaps (
+                        account_id TEXT NOT NULL, archive_id TEXT NOT NULL, cursor TEXT NOT NULL, since REAL, detected_at REAL NOT NULL,
+                        PRIMARY KEY(account_id, archive_id, cursor)
+                    )
+                    """)
+            }
+            try connection.execute("PRAGMA user_version = 22")
         }
     }
 
@@ -1573,14 +1586,15 @@ public actor MessageStore {
     }
 
     public func archiveCheckpoint(accountID: String, archiveID: String) throws -> ArchiveCheckpoint? {
-        guard let row = try connection.query("SELECT revision,cursor FROM archive_checkpoints WHERE account_id=? AND archive_id=?", [.text(accountID), .text(archiveID)]).first else { return nil }
-        return ArchiveCheckpoint(revision: row[0].integer, cursor: row[1].string)
+        guard let row = try connection.query("SELECT revision,cursor,stamp FROM archive_checkpoints WHERE account_id=? AND archive_id=?", [.text(accountID), .text(archiveID)]).first else { return nil }
+        return ArchiveCheckpoint(revision: row[0].integer, cursor: row[1].string, stamp: row[2].optionalDate)
     }
 
     /// Advance only after all page results have committed to durable inbox/message storage. CAS
     /// prevents a late page from another synchronization run from overwriting newer progress.
+    /// `stamp` is the archive time of the entry `cursor` names (`ArchiveCheckpoint.stamp`).
     @discardableResult public func saveArchiveCheckpoint(accountID: String, archiveID: String,
-                                                         expectedRevision: Int?, cursor: String) throws -> Int {
+                                                         expectedRevision: Int?, cursor: String, stamp: Date? = nil) throws -> Int {
         try requireTransportOwnership()
         guard !accountID.isEmpty, !archiveID.isEmpty, !cursor.isEmpty, cursor.utf8.count <= 4096 else { throw MessageStoreError.invalidValue }
         return try connection.transaction {
@@ -1588,10 +1602,26 @@ public actor MessageStore {
             guard current == expectedRevision, (current ?? 0) < Int.max else { throw MessageStoreError.invalidTransition }
             let next = (current ?? 0) + 1
             try connection.execute("""
-                INSERT INTO archive_checkpoints(account_id,archive_id,revision,cursor) VALUES(?,?,?,?)
-                ON CONFLICT(account_id,archive_id) DO UPDATE SET revision=excluded.revision,cursor=excluded.cursor
-                """, [.text(accountID), .text(archiveID), .integer(next), .text(cursor)])
+                INSERT INTO archive_checkpoints(account_id,archive_id,revision,cursor,stamp) VALUES(?,?,?,?,?)
+                ON CONFLICT(account_id,archive_id) DO UPDATE SET revision=excluded.revision,cursor=excluded.cursor,stamp=excluded.stamp
+                """, [.text(accountID), .text(archiveID), .integer(next), .text(cursor), stamp.map { .real($0.timeIntervalSince1970) } ?? .null])
             return next
+        }
+    }
+
+    /// Records that the server no longer held `cursor`, once per lost cursor (see `ArchiveGap`).
+    public func recordArchiveGap(accountID: String, archiveID: String, cursor: String, since: Date?, detectedAt: Date = Date()) throws {
+        try requireTransportOwnership()
+        guard !accountID.isEmpty, !archiveID.isEmpty, !cursor.isEmpty, cursor.utf8.count <= 4096 else { throw MessageStoreError.invalidValue }
+        try connection.execute("INSERT OR IGNORE INTO archive_gaps(account_id,archive_id,cursor,since,detected_at) VALUES(?,?,?,?,?)",
+                               [.text(accountID), .text(archiveID), .text(cursor), since.map { .real($0.timeIntervalSince1970) } ?? .null,
+                                .real(detectedAt.timeIntervalSince1970)])
+    }
+
+    /// Every recorded gap of the account, oldest detection first.
+    public func archiveGaps(accountID: String) throws -> [ArchiveGap] {
+        try connection.query("SELECT archive_id,since,detected_at FROM archive_gaps WHERE account_id=? ORDER BY detected_at,archive_id", [.text(accountID)]).map {
+            ArchiveGap(archiveID: $0[0].string, since: $0[1].optionalDate, detectedAt: Date(timeIntervalSince1970: $0[2].double))
         }
     }
 
@@ -1622,31 +1652,37 @@ public actor MessageStore {
 
     /// The first page of a newest-first sync: the archive's first forward checkpoint and its backfill cursor commit in
     /// one transaction, so an interruption can never leave one without the other. Requires that the archive has no
-    /// checkpoint yet. A backfill row that is already there (an interrupted first sync of an earlier build) is replaced:
-    /// paging back from this newer page walks through whatever lies between, and reprocessing an entry is idempotent,
-    /// whereas keeping the older cursor would leave the entries between the two pages unfetched by either walk.
+    /// checkpoint yet, or, with `replacing`, that its checkpoint is at that revision: a walk whose cursor the server no
+    /// longer holds and whose checkpoint has no `stamp` restarts from the newest page. A backfill row that is already
+    /// there (an interrupted first sync of an earlier build, or history behind the lost cursor) is replaced: paging back
+    /// from this newer page walks through whatever lies between, and reprocessing an entry is idempotent, whereas keeping
+    /// the older cursor would leave the entries between the two pages unfetched by either walk.
     /// Returns the new checkpoint revision.
+    /// `stamp` is the archive time of the entry `cursor` names (`ArchiveCheckpoint.stamp`).
     /// `historyThrough` is the newest archive timestamp in the page: the archive's read baseline (see `read_baselines`).
-    @discardableResult public func saveNewestArchivePage(accountID: String, archiveID: String, cursor: String,
-                                                         oldestID: String, complete: Bool, historyThrough: Date? = nil) throws -> Int {
+    @discardableResult public func saveNewestArchivePage(accountID: String, archiveID: String, cursor: String, stamp: Date? = nil,
+                                                         oldestID: String, complete: Bool, historyThrough: Date? = nil,
+                                                         replacing expectedRevision: Int? = nil) throws -> Int {
         try requireTransportOwnership()
         guard !accountID.isEmpty, !archiveID.isEmpty, !cursor.isEmpty, cursor.utf8.count <= 4096,
               !oldestID.isEmpty, oldestID.utf8.count <= 4096 else { throw MessageStoreError.invalidValue }
         return try connection.transaction {
             let key: [Value] = [.text(accountID), .text(archiveID)]
-            guard try connection.query("SELECT 1 FROM archive_checkpoints WHERE account_id=? AND archive_id=?", key).isEmpty else {
-                throw MessageStoreError.invalidTransition
-            }
+            let current = try connection.query("SELECT revision FROM archive_checkpoints WHERE account_id=? AND archive_id=?", key).first?[0].integer
+            guard current == expectedRevision, (current ?? 0) < Int.max else { throw MessageStoreError.invalidTransition }
             let backfill = try connection.query("SELECT revision FROM archive_backfill WHERE account_id=? AND archive_id=?", key).first?[0].integer
             guard (backfill ?? 0) < Int.max else { throw MessageStoreError.invalidTransition }
             try connection.execute("""
                 INSERT INTO archive_backfill(account_id,archive_id,revision,oldest_id,complete) VALUES(?,?,?,?,?)
                 ON CONFLICT(account_id,archive_id) DO UPDATE SET revision=excluded.revision,oldest_id=excluded.oldest_id,complete=excluded.complete
                 """, key + [.integer((backfill ?? 0) + 1), .text(oldestID), .integer(complete ? 1 : 0)])
-            try connection.execute("INSERT INTO archive_checkpoints(account_id,archive_id,revision,cursor) VALUES(?,?,?,?)",
-                                   key + [.integer(1), .text(cursor)])
+            let next = (current ?? 0) + 1
+            try connection.execute("""
+                INSERT INTO archive_checkpoints(account_id,archive_id,revision,cursor,stamp) VALUES(?,?,?,?,?)
+                ON CONFLICT(account_id,archive_id) DO UPDATE SET revision=excluded.revision,cursor=excluded.cursor,stamp=excluded.stamp
+                """, key + [.integer(next), .text(cursor), stamp.map { .real($0.timeIntervalSince1970) } ?? .null])
             if let historyThrough { try recordReadBaseline(accountID: accountID, archiveID: archiveID, sentAt: historyThrough) }
-            return 1
+            return next
         }
     }
 
@@ -2304,6 +2340,14 @@ private enum Value {
         if case let .real(value) = self { return value }
         if case let .integer(value) = self { return Double(value) }
         return 0
+    }
+    /// A nullable REAL column holding seconds since 1970.
+    var optionalDate: Date? {
+        switch self {
+        case .real(let seconds): Date(timeIntervalSince1970: seconds)
+        case .integer(let seconds): Date(timeIntervalSince1970: TimeInterval(seconds))
+        default: nil
+        }
     }
 }
 

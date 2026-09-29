@@ -332,6 +332,10 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     let escaped = ArchiveQuery.payload(queryID: "q", limit: 100, bound: .before("a<b&'c"))
     #expect(escaped.contains("<before>a&lt;b&amp;&apos;c</before>"))
     #expect(!escaped.contains("a<b"))
+    // A time anchor goes in the form, with no RSM cursor.
+    let since = ArchiveQuery.payload(queryID: "q", limit: 50, bound: .since(Date(timeIntervalSince1970: 1_788_256_800.9)))
+    #expect(since.contains("<field var='start'><value>2026-09-01T10:00:00Z</value></field></x>"))
+    #expect(since.contains("<max>50</max></set>") && !since.contains("<after") && !since.contains("<before"))
 }
 
 @Test func archiveFinishValidatesFirstAndLastAgainstReturnedResults() throws {
@@ -356,6 +360,13 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     let empty = ArchiveQuery(queryID: "query", accountBareJID: "a@example.org", accountFullJID: "a@example.org/r", limit: 100)
     let emptyPage = try empty.finish(fin(" complete='true'", ""))
     #expect(emptyPage.firstID == nil && emptyPage.lastID == nil && emptyPage.messages.isEmpty && emptyPage.complete)
-    #expect(throws: XMPPIQError.self) { try empty.finish(fin("", "")) }
     #expect(throws: XMPPIQError.self) { try empty.finish(fin(" complete='true'", "<first>archive-1</first>")) }
+    // ejabberd: an empty page claiming more, or without any `<set/>`, ends the walk instead of failing it.
+    for shape in try [fin("", ""), fin(" complete='false'", ""),
+                  recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2' complete='false'/></iq>")] {
+        let quirk = try empty.finish(shape)
+        #expect(quirk.complete && quirk.messages.isEmpty && quirk.firstID == nil && quirk.lastID == nil)
+    }
+    // A page with results still needs its bounds.
+    #expect(throws: XMPPIQError.self) { try query.finish(recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2' complete='true'/></iq>")) }
 }
