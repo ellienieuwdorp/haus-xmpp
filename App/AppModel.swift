@@ -1152,7 +1152,7 @@ final class AppModel {
             Task { [weak self] in
                 defer { self?.downloading.remove(message.id) }
                 do {
-                    let secret = try encryption.openAttachmentSecret(account: account, secret: attachment.secret)
+                    let secret = try encryption.openAttachmentSecret(account: account, secret: attachment.secret, sealedAs: attachment.sealedAccount)
                     let bytes = try await AttachmentDownloader.fetch(attachment, secret: secret)
                     let destination = files.cacheURL(attachment, messageID: message.id)
                     try files.write(bytes, to: destination)

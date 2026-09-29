@@ -34,6 +34,9 @@ public actor OMEMOService {
 
     private func initializeLocked(account: String, transport: any OMEMOTransport) async throws {
         if try await store.encryptionState(accountID: account) == nil {
+            // State kept under another spelling of this account (a store whose address rewrite could not complete) is
+            // this account's identity: never create a second one beside it.
+            guard try await !store.encryptionStateAccountIDs().contains(where: { bare($0) == bare(account) }) else { throw OMEMOError.stateUnavailable }
             let deviceID = try OMEMOEngine.randomDeviceID()
             let legacy = try OMEMOEngine(profile: .legacy, deviceID: deviceID)
             let modern = try OMEMOEngine(profile: .modern, sharingIdentityWith: legacy)
@@ -1285,7 +1288,7 @@ public actor OMEMOService {
             throw OMEMOError.unavailable
         }
         do {
-            let state = try JSONDecoder().decode(AccountEncryptionState.self, from: protection.open(row.data, account: account))
+            let state = try JSONDecoder().decode(AccountEncryptionState.self, from: protection.open(row.data, account: account, sealedAs: row.sealedAccount))
             guard state.format == 1 else { throw OMEMOError.stateUnavailable }
             remember(state, revision: row.revision, account: account)
             return (row.revision, state)
