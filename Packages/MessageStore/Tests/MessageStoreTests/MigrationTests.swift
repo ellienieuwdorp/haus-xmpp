@@ -116,7 +116,8 @@ struct MigrationTests {
                 PRAGMA user_version=21;
                 """))
             let store = try MessageStore(url: url)
-            #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["21"]])
+            // The rewrite is rolled back; the v22 migration before it stands.
+            #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["22"]])
             #expect(try await store.messages(accountID: typed, chatID: "bob@example.org").map(\.id) == ["m1"])
             #expect(try await store.encryptionState(accountID: typed)?.data == Data([0]))
             try await store.close()

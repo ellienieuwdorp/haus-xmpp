@@ -82,8 +82,7 @@ struct ArchiveCursorLabTests {
         try await store.close()
 
         // The extension's run: throws on a disconnect before catch-up, on an incomplete own archive, or on the deadline.
-        try await BackgroundSynchronizer().synchronize(databaseURL: url, wrappingKey: key, account: BackgroundAccount(
-            host: "127.0.0.1", port: 5223, domain: "localhost", username: String(account.split(separator: "@")[0]),
+        try await BackgroundSynchronizer().synchronize(databaseURL: url, wrappingKey: key, account: BackgroundAccount(route: .fixed(XMPPEndpoint(host: "127.0.0.1", port: 5223, security: .directTLS)), domain: "localhost", username: String(account.split(separator: "@")[0]),
             password: own.password, labCertificateAuthority: ca))
 
         let after = try MessageStore(url: url)

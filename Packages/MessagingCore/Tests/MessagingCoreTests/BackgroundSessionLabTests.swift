@@ -82,7 +82,7 @@ struct BackgroundSessionLabTests {
         // A push arrives and the extension cannot resume (its store holds no session): it binds fresh.
         try await BackgroundSynchronizer().synchronize(
             databaseURL: url, wrappingKey: key,
-            account: BackgroundAccount(host: "localhost", port: 5223, domain: parts[1], username: parts[0], password: account.password,
+            account: BackgroundAccount(route: .fixed(XMPPEndpoint(host: "localhost", port: 5223, security: .directTLS)), domain: parts[1], username: parts[0], password: account.password,
                                        labCertificateAuthority: authority, resource: resource, push: push,
                                        leftForeground: Date().addingTimeInterval(-600)))
         // One session for the account: the extension's, under the installation's resource, replacing the app's rather
