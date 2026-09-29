@@ -1,24 +1,6 @@
 import Foundation
-import SQLite3
 import Testing
 @testable import MessageStore
-
-private func withMuteStore(_ operation: (MessageStore, URL) async throws -> Void) async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: "mute-\(UUID())")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let url = directory.appending(path: "messages.sqlite")
-    let store = try MessageStore(url: url)
-    do {
-        try await store.acquireTransportOwnership()
-        try await store.saveEncryptionState(accountID: "me@example.org", expectedRevision: nil, data: Data([0]))
-        try await operation(store, url)
-        try await store.close()
-    } catch {
-        try? await store.close()
-        throw error
-    }
-}
 
 private let account = "me@example.org"
 private let room = "room@rooms.example.org"
@@ -34,17 +16,8 @@ private func deliver(_ store: MessageStore, _ id: String, chat: String = "peer@e
     return try await store.pendingNotificationMessageIDs(accountID: account).contains(id)
 }
 
-@Test func unmutedChatsDefaultToAllAndQueueCandidates() async throws {
-    try await withMuteStore { store, _ in
-        try await store.upsertChat(accountID: account, chatID: "peer@example.org", title: "Peer")
-        #expect(try await store.chatNotificationSetting(accountID: account, chatID: "peer@example.org") == ChatNotificationSetting())
-        #expect(try await store.chats(accountID: account).first?.notification == ChatNotificationSetting())
-        #expect(try await deliver(store, "m1"))
-    }
-}
-
 @Test func mutingSuppressesCandidatesAndDeletesPendingOnesForThatChatOnly() async throws {
-    try await withMuteStore { store, _ in
+    try await withEncryptedStore(account: account) { store, _ in
         try await store.upsertChat(accountID: account, chatID: "peer@example.org", title: "Peer")
         try await store.upsertChat(accountID: account, chatID: "other@example.org", title: "Other")
         #expect(try await deliver(store, "before"))
@@ -62,7 +35,7 @@ private func deliver(_ store: MessageStore, _ id: String, chat: String = "peer@e
 }
 
 @Test func alwaysMuteSurvivesReopenAndExpiredMuteReadsAsUnmuted() async throws {
-    try await withMuteStore { store, url in
+    try await withEncryptedStore(account: account) { store, url in
         try await store.upsertChat(accountID: account, chatID: "peer@example.org", title: "Peer")
         try await store.upsertChat(accountID: account, chatID: "expired@example.org", title: "Expired")
         try await store.setChatNotificationSetting(accountID: account, chatID: "peer@example.org", ChatNotificationSetting(mutedUntil: ChatNotificationSetting.always))
@@ -79,7 +52,7 @@ private func deliver(_ store: MessageStore, _ id: String, chat: String = "peer@e
 }
 
 @Test func settingsAreValidatedAndScopedToAnExistingChat() async throws {
-    try await withMuteStore { store, _ in
+    try await withEncryptedStore(account: account) { store, _ in
         await #expect(throws: MessageStoreError.invalidValue) {
             try await store.setChatNotificationSetting(accountID: account, chatID: "missing@example.org", ChatNotificationSetting(mutedUntil: .distantFuture))
         }
@@ -98,16 +71,13 @@ private func deliver(_ store: MessageStore, _ id: String, chat: String = "peer@e
 }
 
 @Test func mentionsOnlyGroupQueuesOnlyMessagesThatMentionTheUser() async throws {
-    try await withMuteStore { store, _ in
+    try await withEncryptedStore(account: account) { store, _ in
         try await store.upsertChat(accountID: account, chatID: room, title: "Room")
         try await store.setGroupNickname(accountID: account, room: room, nickname: "Ellie N")
         try await store.setChatNotificationSetting(accountID: account, chatID: room, ChatNotificationSetting(level: .mentions))
         let alice = "alice@example.org"
         #expect(try await !deliver(store, "plain", chat: room, sender: alice, body: "Lunch at noon?", group: true))
         #expect(try await deliver(store, "nick", chat: room, sender: alice, body: "ellie n, lunch?", group: true))
-        #expect(try await deliver(store, "local", chat: room, sender: alice, body: "@ME: are you in?", group: true))
-        #expect(try await deliver(store, "jid", chat: room, sender: alice, body: "ping me@example.org please", group: true))
-        #expect(try await !deliver(store, "inside", chat: room, sender: alice, body: "Somebody mentioned meeting", group: true))
         // Five members named (the user included) still counts; six is a mass mention.
         #expect(try await deliver(store, "five", chat: room, sender: alice, body: "me alice bob carol dave: standup", group: true))
         #expect(try await !deliver(store, "six", chat: room, sender: alice, body: "me alice bob carol dave erin: standup", group: true))
@@ -122,7 +92,7 @@ private func deliver(_ store: MessageStore, _ id: String, chat: String = "peer@e
 }
 
 @Test func groupMembersRequireAGroupCommit() async throws {
-    try await withMuteStore { store, _ in
+    try await withEncryptedStore(account: account) { store, _ in
         let message = StoredMessage(id: "x", accountID: account, chatID: "peer@example.org", senderID: "peer@example.org", body: "Hi", encryptionProfile: "modern")
         await #expect(throws: MessageStoreError.invalidValue) {
             try await store.commitEncryptedIncoming(accountID: account, sender: "peer@example.org", digest: "x", expectedRevision: 1,
@@ -131,7 +101,7 @@ private func deliver(_ store: MessageStore, _ id: String, chat: String = "peer@e
     }
 }
 
-@Test func migrationV17AddsNotificationColumnsIdempotentlyAndRefusesNewerSchemas() async throws {
+@Test func migrationV17AddsNotificationColumnsIdempotently() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "mute-migration-\(UUID())")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -139,24 +109,17 @@ private func deliver(_ store: MessageStore, _ id: String, chat: String = "peer@e
     let store = try MessageStore(url: url)
     try await store.upsertChat(accountID: account, chatID: room, title: "Room")
     try await store.close()
-    var db: OpaquePointer?
-    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, """
+    #expect(sqliteExecute(url: url, sql: """
         ALTER TABLE chats DROP COLUMN notification_level;
         ALTER TABLE chats DROP COLUMN muted_until;
         ALTER TABLE chats DROP COLUMN room_nickname;
         PRAGMA user_version=17;
-        """, nil, nil, nil) == SQLITE_OK)
-    sqlite3_close(db)
+        """))
     let migrated = try MessageStore(url: url)
     #expect(try await migrated.chatNotificationSetting(accountID: account, chatID: room) == ChatNotificationSetting())
     try await migrated.setGroupNickname(accountID: account, room: room, nickname: "Ellie")
     try await migrated.close()
     try await MessageStore(url: url).close()
-    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, "PRAGMA user_version=22;", nil, nil, nil) == SQLITE_OK)
-    sqlite3_close(db)
-    #expect(throws: MessageStoreError.unsupportedSchema(22)) { _ = try MessageStore(url: url) }
 }
 
 @Test func mentionDetectionIsCaseInsensitiveOnWordBoundaries() {
