@@ -12,25 +12,37 @@ enum AccountIdentityMigration {
 
     private static func normal(_ address: String) -> String { JID.normalizedBare(address) ?? address }
 
-    /// Renames account-keyed preferences and `lastAccount`; returns the old spellings it found, for `moveFiles`.
+    /// Old spellings whose folders still have to move. Saved before the preferences that name them are rewritten, so
+    /// a launch that ends before storage opens still moves them on the next one.
+    static let pendingFolderMovesKey = "identityFolderMoves"
+
+    /// Renames account-keyed preferences and `lastAccount`; returns the old spellings it found. Their folders are
+    /// queued for `moveFiles`.
     @discardableResult
     static func migratePreferences(_ defaults: UserDefaults) -> Set<String> {
         var spellings = Set<String>()
-        if let last = defaults.string(forKey: "lastAccount"), normal(last) != last {
-            spellings.insert(last)
-            defaults.set(normal(last), forKey: "lastAccount")
+        let keys = defaults.dictionaryRepresentation().keys
+        if let last = defaults.string(forKey: "lastAccount"), normal(last) != last { spellings.insert(last) }
+        for key in keys {
+            for prefix in accountKeyPrefixes where key.hasPrefix(prefix) {
+                let account = String(key.dropFirst(prefix.count))
+                if normal(account) != account { spellings.insert(account) }
+            }
         }
+        if !spellings.isEmpty {
+            let queued = Set(defaults.stringArray(forKey: pendingFolderMovesKey) ?? [])
+            defaults.set(Array(queued.union(spellings)).sorted(), forKey: pendingFolderMovesKey)
+        }
+        if let last = defaults.string(forKey: "lastAccount"), normal(last) != last { defaults.set(normal(last), forKey: "lastAccount") }
         func move(_ key: String, to target: String) {
             guard key != target else { return }
             if defaults.object(forKey: target) == nil { defaults.set(defaults.object(forKey: key), forKey: target) }
             defaults.removeObject(forKey: key)
         }
-        let keys = defaults.dictionaryRepresentation().keys
         for key in keys {
             for prefix in accountKeyPrefixes where key.hasPrefix(prefix) {
                 let account = String(key.dropFirst(prefix.count))
                 guard normal(account) != account else { continue }
-                spellings.insert(account)
                 move(key, to: prefix + normal(account))
             }
         }
@@ -45,12 +57,13 @@ enum AccountIdentityMigration {
         return spellings
     }
 
-    /// Moves the attachment cache and staging folders and the avatar folder of each old spelling.
-    static func moveFiles(directory: URL, spellings: Set<String>) {
-        for account in spellings where normal(account) != account {
+    /// Moves the attachment cache and staging folders and the avatar folder of each queued old spelling.
+    static func moveFiles(directory: URL, defaults: UserDefaults) {
+        for account in defaults.stringArray(forKey: pendingFolderMovesKey) ?? [] where normal(account) != account {
             merge(AttachmentFiles.root(directory: directory, account: account), into: AttachmentFiles.root(directory: directory, account: normal(account)))
             merge(AvatarStore.directory(root: directory, account: account), into: AvatarStore.directory(root: directory, account: normal(account)))
         }
+        defaults.removeObject(forKey: pendingFolderMovesKey)
     }
 
     /// Moves `source` to `target`, or, when `target` exists, each item it lacks (recursing into shared folders).

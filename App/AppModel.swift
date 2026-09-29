@@ -232,8 +232,6 @@ final class AppModel {
         return nil
         #endif
     }()
-    /// Account addresses `AccountIdentityMigration` found in their typed spelling; their folders move once storage opens.
-    @ObservationIgnored private var legacyAccountSpellings = Set<String>()
     @ObservationIgnored private lazy var preferences: UserDefaults = {
         guard let testSessionID else { return .standard }
         return UserDefaults(suiteName: "haus.xmpp.uitest." + testSessionID) ?? .standard
@@ -242,7 +240,7 @@ final class AppModel {
     init() {
         // The saved account is known before storage opens, so the first frame already carries the account avatar
         // and the Chats stack is not rebuilt (its identity is the account) once `prepare()` reads the same value.
-        legacyAccountSpellings = AccountIdentityMigration.migratePreferences(preferences)
+        AccountIdentityMigration.migratePreferences(preferences)
         accountID = preferences.string(forKey: "lastAccount") ?? ""
         NotificationActionCenter.shared.handler = { [weak self] request, budget in
             await self?.performNotificationAction(request, budget: budget) ?? .rejected
@@ -292,7 +290,7 @@ final class AppModel {
         do {
             let directory = try await SharedStorage.directory(testSessionID: testSessionID, migrate: true)
             storageRoot = directory
-            AccountIdentityMigration.moveFiles(directory: directory, spellings: legacyAccountSpellings)
+            AccountIdentityMigration.moveFiles(directory: directory, defaults: preferences)
             if testSessionID == nil { PushRegistrationState.normalizeSavedAccounts() }
             store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
             storageDirectory = directory

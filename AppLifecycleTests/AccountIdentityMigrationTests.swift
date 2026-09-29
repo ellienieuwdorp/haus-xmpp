@@ -19,8 +19,7 @@ import MessagingCore
         defaults.set(["jid": "upload.example.org"], forKey: "uploadService." + typed)
         defaults.set("Ellie", forKey: "groupNickname.\(typed).Team@Rooms.Example.org")
 
-        let spellings = AccountIdentityMigration.migratePreferences(defaults)
-        XCTAssertEqual(spellings, [typed])
+        XCTAssertEqual(AccountIdentityMigration.migratePreferences(defaults), [typed])
         XCTAssertEqual(defaults.string(forKey: "lastAccount"), account)
         XCTAssertTrue(defaults.bool(forKey: "pushOff." + account))
         XCTAssertEqual(defaults.string(forKey: "avatar." + account), "new-hash", "the normal spelling's value wins")
@@ -37,7 +36,8 @@ import MessagingCore
         try FileManager.default.createDirectory(at: avatar.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data([2]).write(to: avatar)
         _ = AttachmentFiles(directory: directory, account: account) // the normal folder may already exist
-        AccountIdentityMigration.moveFiles(directory: directory, spellings: spellings)
+        // The folders move on a later launch than the preference rewrite (this one ended before storage opened).
+        AccountIdentityMigration.moveFiles(directory: directory, defaults: defaults)
         XCTAssertEqual(try Data(contentsOf: AttachmentFiles(directory: directory, account: account).stagingURL(messageID: "pending-upload")), Data([1]))
         XCTAssertEqual(try Data(contentsOf: AvatarStore.directory(root: directory, account: account).appending(path: "abc")), Data([2]))
     }
