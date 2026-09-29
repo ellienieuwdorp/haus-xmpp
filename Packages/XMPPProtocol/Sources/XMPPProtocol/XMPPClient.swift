@@ -169,8 +169,6 @@ public actor XMPPClient {
     private var announced: XMPPAvailability?
     /// Counts emitted events, so the reader can tell whether a stanza produced any.
     private var emittedEvents: UInt64 = 0
-    /// Set by `disconnectAndWait` for its farewell; cleared by `finish`.
-    private var detaching = false
     private struct IQRequest {
         let scope: IQReplyScope
         let continuation: CheckedContinuation<XMLNode, Error>
@@ -277,9 +275,6 @@ public actor XMPPClient {
         // handled since its last `<r/>` as unacknowledged, and Prosody's mod_cloud_notify pushes for that queue
         // when the session starts hibernating. Bounded: a stuck write ends the connection instead.
         if phase == .online, smOffered, streamManagement != nil {
-            // The owner has usually stopped consuming events by now; what still arrives is left unacknowledged
-            // (a message) or needs nothing (presence, IQ results), so a finished event stream must not end the stream.
-            detaching = true
             // One round trip first: what the server sent before its answer (our own presence reflected, a room's
             // join answer) has then been read and, where it needs nothing durable, counted.
             _ = try? await requestIQ(type: "get", to: nil, payload: "<ping xmlns='urn:xmpp:ping'/>", timeout: Self.farewellRoundTripLimit)
@@ -1155,7 +1150,9 @@ public actor XMPPClient {
         switch continuation.yield(event) {
         case .enqueued: break
         case .dropped: throw XMPPClientError.eventConsumerTooSlow
-        case .terminated: if !detaching { throw XMPPClientError.eventConsumerTooSlow }
+        // Online, a finished stream means the owner stopped consuming on its way to `disconnectAndWait`, possibly
+        // before it: the connection stays for the farewell. A message's barrier then never counts it as handled.
+        case .terminated: if phase != .online { throw XMPPClientError.eventConsumerTooSlow }
         @unknown default: throw XMPPClientError.eventConsumerTooSlow
         }
     }
@@ -1177,7 +1174,7 @@ public actor XMPPClient {
         reader?.cancel()
         deadline?.cancel(); deadline = nil
         liveness?.cancel(); liveness = nil
-        password = ""; phase = .idle; csiOffered = false; bindRetried = false; detaching = false
+        password = ""; phase = .idle; csiOffered = false; bindRetried = false
         if case .dropped = continuation.yield(.state(.disconnected(reason))) { continuation.finish() }
     }
     private func write(_ xml: String, groupSnapshot: XMPPGroupRoomSnapshot? = nil) async throws {

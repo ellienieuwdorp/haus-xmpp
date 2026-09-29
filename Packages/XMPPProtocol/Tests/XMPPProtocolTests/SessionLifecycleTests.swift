@@ -91,4 +91,33 @@ struct SessionLifecycleTests {
         await server.stop()
         return written
     }
+
+    /// The app's quiesce and the extension's stop cancel their event consumer before `disconnectAndWait`. What arrives
+    /// in between must not end the connection, or the final `<a/>` is lost and the server pushes for its queue again.
+    @Test func finalAcknowledgementSurvivesTheOwnerStoppingItsConsumerFirst() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: Persistence(nil))
+        let consumer = Task { for await _ in client.events {} }
+        async let online: Void = server.connect(client)
+        try await server.authenticate()
+        let bind = try await server.next()
+        try await server.send("<iq type='result' id='\(bind.attributes["id"] ?? "")'><bind xmlns='\(Self.bindNamespace)'><jid>alice@localhost/r</jid></bind></iq>")
+        #expect(try await server.next().name == "enable")
+        try await server.send("<enabled xmlns='urn:xmpp:sm:3' id='s2' resume='true'/>")
+        #expect(try await server.next().name == "presence")
+        try await online
+        consumer.cancel()
+        await consumer.value
+        // A contact's presence needs nothing durable and counts; the message was never consumed and does not.
+        try await server.send("<presence from='bob@localhost/phone'/>"
+            + "<message from='bob@localhost/phone' to='alice@localhost/r' type='chat' id='m1'><body>hi</body></message>"
+            + "<r xmlns='urn:xmpp:sm:3'/>")
+        #expect(try await server.next().attributes["h"] == "1")
+        async let closed: Void = client.disconnectAndWait()
+        let written = try await server.remainder()
+        await closed
+        #expect(written.last?.name == "a" && written.last?.attributes["h"] == "1")
+        await server.stop()
+    }
 }
