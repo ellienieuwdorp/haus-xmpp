@@ -17,6 +17,23 @@ Use a simulator no other session drives. The attachment suites need an iOS 26.5 
 
 `-parallel-testing-enabled YES -parallel-testing-worker-count 3` gives each worker a fresh clone of the simulator and splits the suite by class. Each clone boots every simulator daemon, so only use it while no other simulators are booted. On 2026-09-29, with four other simulators running, the load average passed 800 and two clones stalled. There is no measurement yet from an idle machine.
 
+## Lab suites
+
+The lab suites share `LabFixture` (skip unless exported, launch on an isolated store) and the steps in `LabUITestSupport.swift`: `connectToLab`, `startChat(with:)`, `selectModernOMEMO` and `acceptPendingDevices`. Give each suite a fresh fixture, because an account collects stale OMEMO devices across runs:
+
+```bash
+work/push-gateway-venv/bin/python infra/local/create_group_fixture.py work/lab/<suite> --runner-environment work/lab/<suite>/runner.json
+```
+
+Start the peer that suite needs from `Packages/OMEMO/Scripts/Interop` with `--credentials work/lab/<suite>/peer.json --state work/lab/<suite>/peer-state.json --ca work/lab/<suite>/ca.crt`, and wait for its ready line. Which peer:
+
+- `peer.py --echo` for Encryption, Outbox, Receipt and Last Seen.
+- `peer.py --echo --profile modern` for Reaction and the peer half of Revision.
+- `peer.py --echo --typing` for the notification lab, also exporting `TEST_RUNNER_XMPP_NOTIFICATION_ACTION_LAB=1`.
+- `group_peer.py --room <room>` for Group.
+
+Then `export` every runner key with a `TEST_RUNNER_` prefix. Add `TEST_RUNNER_HAUS_LAB_CA_DER`, the base64 DER of `ca.crt`. Run the suite with `test-without-building`. A variable set only as a prefix on the `xcodebuild` command did not reach the runner.
+
 ## Where the time goes
 
 Every gesture waits for the app to go idle. A tap costs one to two seconds. A fling costs three to four, because XCTest waits for the list to stop coasting. To see a run's per-step timeline:
