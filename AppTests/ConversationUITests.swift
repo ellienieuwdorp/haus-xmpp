@@ -134,20 +134,4 @@ final class ConversationUITests: XCTestCase {
         return last
     }
 
-    /// Sending always returns to the newest message, even from far up in history.
-    @MainActor func testSendingFromHistoryReturnsToTheNewestMessage() throws {
-        let app = openLongChat()
-        XCTAssertTrue(bubble(250, in: app).waitForExistence(timeout: 5))
-        let timeline = app.collectionViews["conversation.timeline"]
-        for _ in 0..<3 { timeline.swipeDown(velocity: .fast) }
-        XCTAssertFalse(bubble(250, in: app).isHittable)
-        let input = composer(in: app)
-        input.tap()
-        input.typeText("Back to the bottom")
-        app.buttons["sendMessage"].tap()
-        let sent = app.textViews.containing(NSPredicate(format: "value == %@", "Back to the bottom")).firstMatch
-        XCTAssertTrue(sent.waitForExistence(timeout: 5))
-        XCTAssertTrue(sent.isHittable)
-    }
-
 }

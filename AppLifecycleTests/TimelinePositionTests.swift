@@ -2,9 +2,10 @@ import UIKit
 import XCTest
 @testable import HausXMPP
 
-/// The loading-earlier cell above the oldest message: it appears and leaves without moving the reader.
+/// Where the reader stays across timeline updates: the loading-earlier cell above the oldest message appears and leaves
+/// without moving them, and only their own send pulls them back from history.
 @MainActor
-final class LoadingEarlierHeaderTests: XCTestCase {
+final class TimelinePositionTests: XCTestCase {
     private var window: UIWindow!
     private var controller: ConversationTimelineController!
 
@@ -40,6 +41,25 @@ final class LoadingEarlierHeaderTests: XCTestCase {
     private func distance(of id: String) throws -> CGFloat {
         let path = try XCTUnwrap(dataSource?.indexPath(for: id))
         return try XCTUnwrap(collectionView.layoutAttributesForItem(at: path)).frame.minY - collectionView.contentOffset.y
+    }
+
+    func testOnlyAnOwnSendReturnsFromHistoryToTheNewestMessage() throws {
+        var shown = messages(1...100)
+        controller.update(messages: shown, onToggleStar: { _ in })
+        collectionView.contentOffset.y = 300
+        collectionView.layoutIfNeeded()
+        let before = try readerPosition()
+
+        // A peer's message arriving while the reader is up in history leaves them where they are.
+        shown.append(TimelineMessage(id: "incoming", body: "From the peer", isOutgoing: false, isStarred: false))
+        controller.update(messages: shown, onToggleStar: { _ in })
+        XCTAssertEqual(try distance(of: before.id), before.distance, accuracy: 0.5)
+
+        shown.append(TimelineMessage(id: "sent", body: "Back to the bottom", isOutgoing: true, isStarred: false))
+        controller.update(messages: shown, onToggleStar: { _ in })
+        collectionView.layoutIfNeeded()
+        let sent = try XCTUnwrap(dataSource?.indexPath(for: "sent"))
+        XCTAssertTrue(collectionView.indexPathsForVisibleItems.contains(sent), "sending returns to the newest message")
     }
 
     func testHeaderComesAndGoesAboveTheOldestMessageWithoutMovingTheReader() throws {
