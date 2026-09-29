@@ -416,6 +416,25 @@ struct ArchiveSynchronizerTests {
         }
     }
 
+    /// A lost connection fails the pending query with `timedOut`, like the query's own deadline. With the connection
+    /// gone, the walk must not report a finished catch-up for the app to build on.
+    @Test func aTimeoutFromALostConnectionEndsTheWholeWalk() async throws {
+        try await fixture { store async throws in
+            _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: account, expectedRevision: nil, cursor: "c1", stamp: Date(timeIntervalSince1970: 50))
+            let trace = Trace()
+            let operations = ArchiveSyncOperations(knownRooms: { [room] }, refreshRoom: { _ in },
+                fetchPage: { _, selected in
+                    await trace.record("fetch:\(selected ?? account)")
+                    throw XMPPClientError.timedOut
+                },
+                process: { _ in }, acknowledge: { _ in }, disconnect: { await trace.record("disconnect") }, progress: { _ in },
+                isOnline: { false })
+            await #expect(throws: XMPPClientError.timedOut) { try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations) }
+            #expect(await trace.events == ["fetch:\(account)", "disconnect"])
+            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "c1")
+        }
+    }
+
     @Test func aRefusedFirstPageCommitDisconnectsWithoutAcknowledging() async throws {
         try await fixture { store async throws in
             // The checkpoint already exists for this archive (a concurrent first sync won): the newest-page write is refused

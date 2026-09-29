@@ -83,7 +83,8 @@ public struct ArchiveSynchronizer: Sendable {
                 try? await client.requestAcknowledgement()
             },
             disconnect: { await client.disconnect() },
-            progress: { await progress?($0) }
+            progress: { await progress?($0) },
+            isOnline: { await client.isOnline }
         )
     }
 
@@ -149,10 +150,11 @@ public struct ArchiveSynchronizer: Sendable {
     /// A query that failed without a page leaves nothing outstanding: the client closes the stream itself when a failure
     /// follows part of a page (and then throws `connectionClosed`), so these errors keep the connection and only end
     /// this archive's walk. A timeout's late results are acknowledged and dropped by the client; the next query has
-    /// its own query id.
-    private static func endsOnlyThisArchive(_ error: any Error, room: String?) -> Bool {
+    /// its own query id. A lost connection fails pending queries with `timedOut` too: that one ends the whole walk.
+    private static func endsOnlyThisArchive(_ error: any Error, room: String?, operations: ArchiveSyncOperations) async -> Bool {
         switch error {
-        case XMPPIQError.stanza, XMPPClientError.timedOut: true
+        case XMPPIQError.stanza: true
+        case XMPPClientError.timedOut: await operations.isOnline()
         // A removed or unsupported room must not disable unrelated direct messages.
         case is XMPPGroupError: room != nil
         default: false
@@ -179,7 +181,8 @@ public struct ArchiveSynchronizer: Sendable {
                 try Task.checkCancellation()
                 do {
                     try await operations.refreshRoom(room)
-                } catch where Self.endsOnlyThisArchive(error, room: room) {
+                } catch {
+                    guard await Self.endsOnlyThisArchive(error, room: room, operations: operations) else { throw error }
                     // Its room checkpoint stays untouched.
                     Self.log.notice("room skipped before its archive walk: \(Self.describe(error), privacy: .public)")
                     unfinishedRooms.append(room)
@@ -216,14 +219,16 @@ public struct ArchiveSynchronizer: Sendable {
             // Room fetches revalidate complete membership internally, without joining the room.
             let page: XMPPArchivePage
             do { page = try await operations.fetchPage(bound, room) }
-            catch XMPPIQError.stanza(let condition) where condition == "item-not-found" && !reanchored {
-                guard case .after(let lost?) = bound, let lostCheckpoint = checkpoint else { return false }
-                reanchored = true
-                bound = lostCheckpoint.stamp.map { .since($0.addingTimeInterval(-Self.reanchorMargin)) } ?? .before(nil)
-                Self.log.notice("archive cursor unknown to the server; re-anchoring \(lostCheckpoint.stamp == nil ? "at the newest page" : "by time", privacy: .public)")
-                try await store.recordArchiveGap(accountID: account, archiveID: archive, cursor: lost, since: lostCheckpoint.stamp)
-                continue
-            } catch where Self.endsOnlyThisArchive(error, room: room) {
+            catch {
+                if !reanchored, (error as? XMPPIQError) == .stanza(condition: "item-not-found"),
+                   case .after(let lost?) = bound, let lostCheckpoint = checkpoint {
+                    reanchored = true
+                    bound = lostCheckpoint.stamp.map { .since($0.addingTimeInterval(-Self.reanchorMargin)) } ?? .before(nil)
+                    Self.log.notice("archive cursor unknown to the server; re-anchoring \(lostCheckpoint.stamp == nil ? "at the newest page" : "by time", privacy: .public)")
+                    try await store.recordArchiveGap(accountID: account, archiveID: archive, cursor: lost, since: lostCheckpoint.stamp)
+                    continue
+                }
+                guard await Self.endsOnlyThisArchive(error, room: room, operations: operations) else { throw error }
                 Self.log.error("archive walk incomplete\(room == nil ? "" : " (room)", privacy: .public): \(Self.describe(error), privacy: .public)")
                 return false
             }
@@ -361,4 +366,6 @@ struct ArchiveSyncOperations: Sendable {
     let acknowledge: @Sendable ([XMPPInboundToken]) async throws -> Void
     let disconnect: @Sendable () async -> Void
     let progress: @Sendable (ArchiveSyncProgress) async -> Void
+    /// Whether the connection is still up after a failed query (`endsOnlyThisArchive`).
+    var isOnline: @Sendable () async -> Bool = { true }
 }
