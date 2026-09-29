@@ -40,6 +40,7 @@ struct SignInView: View {
     }
     private var route: String {
         let name = { (security: XMPPTransportSecurity) in security == .directTLS ? "Direct TLS" : "STARTTLS" }
+        if !serverHost.isEmpty, serverPort == nil { return "Port must be a number from 1 to 65535." }
         if let manualServer { return "\(manualServer.host):\(manualServer.port) · \(name(manualServer.security))" }
         if isLab { return "\(domain == "localhost" ? DevelopmentEndpoint.host : domain):5223 · Direct TLS" }
         return "\(domain) · Server found automatically"
@@ -111,8 +112,6 @@ struct SignInView: View {
                             }
                         }
                     }
-                } footer: {
-                    Text("Only needed when the server cannot be found automatically.")
                 }
                 Section {
                     VStack(spacing: 16) {
