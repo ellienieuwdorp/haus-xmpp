@@ -2703,6 +2703,8 @@ final class AppModel {
     /// Bound and past `initialize`, as the app's `.ready`: only then is anything sealed or sent.
     var ready = false
     var joinedRooms: Set<String> = []
+    /// After a fresh bind: the push re-enable and room rejoins, running alongside the reply; teardown waits for it.
+    var restoration: Task<Void, Never>?
 
     init(account: String, isForeground: Bool, budget: NotificationActionBudget) {
         self.account = account; self.isForeground = isForeground; self.budget = budget
@@ -2806,24 +2808,30 @@ extension AppModel: NotificationActionEnvironment {
             guard !session.isOver else { throw CancellationError() }
             // As before `.ready`: an identity mismatch fails closed before anything can be sealed.
             try await encryption.initialize(account: account, transport: client)
-            // A fresh bind replaced the session the app left hibernating, with its push registration and room
-            // occupancy: restore both, as the extension does, or pushes for this account stop.
-            var sentJoins: Set<String> = []
-            if !resumed {
-                let push = pushWanted ? PushRegistrationState.sessionSubscription(saved: credentials.push,
-                                                                                   state: try? PushRegistrationState.load(accountID: account)) : nil
-                await BackgroundSession.enablePush(push, client: client)
-                sentJoins = await BackgroundSession.joinRooms(account: account, client: client, encryption: encryption, store: store,
-                                                              within: session.budget.remaining(at: .now, atMost: .seconds(5)))
-            }
             if isGroup(chatID) {
                 let nickname = preferences.string(forKey: "groupNickname.\(account).\(chatID)") ?? String(account.prefix { $0 != "@" })
-                let snapshot = sentJoins.contains(chatID) ? try? await client.groupRoomSnapshot(chatID)
-                    : try? await client.joinGroupRoom(chatID, nickname: nickname)
-                if snapshot?.joined == true { session.joinedRooms.insert(chatID) }
+                // The reply's room must confirm the join first: the drain sends only to joined rooms.
+                if await BackgroundSession.join(chatID, nickname: nickname, client: client,
+                                                within: session.budget.remaining(at: .now, atMost: .seconds(3))) {
+                    session.joinedRooms.insert(chatID)
+                }
             }
             guard !session.isOver else { throw CancellationError() }
             session.ready = true
+            // A fresh bind replaced the session the app left hibernating, with its push registration and room
+            // occupancy: restore both, as the extension does, or pushes for this account stop. Alongside the reply,
+            // which does not wait for them; `endNotificationAction` does, within the budget.
+            if !resumed {
+                let push = pushWanted ? PushRegistrationState.sessionSubscription(saved: credentials.push,
+                                                                                   state: try? PushRegistrationState.load(accountID: account)) : nil
+                let limit = session.budget.remaining(at: .now, atMost: .seconds(5))
+                session.restoration = Task {
+                    async let enabled: Void = BackgroundSession.enablePush(push, client: client)
+                    await BackgroundSession.joinRooms(account: account, client: client, encryption: encryption, store: store,
+                                                      skipping: [chatID], within: limit)
+                    await enabled
+                }
+            }
         } catch {
             Self.syncLog.notice("notification action offline: \(ConnectionSetup.detail(error), privacy: .public)")
         }
@@ -2962,6 +2970,7 @@ extension AppModel: NotificationActionEnvironment {
         // `actionSession` stays set until the lease is back, so an expiring background task sees that it is held.
         guard let session = actionSession else { return }
         session.watchdog?.cancel()
+        await session.restoration?.value
         if let client = session.client { await client.disconnectAndWait() }
         session.consumer?.cancel()
         await session.consumer?.value
