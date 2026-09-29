@@ -9,9 +9,9 @@ import XMPPProtocol
 ///   HAUS_LAB_BACKGROUND_ACCOUNT  credential JSON ({"jid", "password"}) of a disposable lab account
 ///   HAUS_LAB_BACKGROUND_ROOM     a members-only, non-anonymous room on rooms.localhost the account is a member of
 ///   HAUS_LAB_CA                  the lab CA (PEM)
-/// The run leaves its session hibernating, so the server side can be inspected afterwards:
-///   prosodyctl shell c2s show <jid> "jid smacks smacks_queue csi push_identifier"
-///   prosodyctl shell muc occupants <room>
+///   HAUS_LAB_PROSODY_CONTAINER   the lab's Prosody container (default haus-xmpp-lab-prosody-1), whose shell reports
+///                                the server's sessions and occupants
+/// The run leaves its session hibernating, so it can also be inspected by hand afterwards.
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["HAUS_LAB_BACKGROUND_ACCOUNT"] != nil), .serialized)
 struct BackgroundSessionLabTests {
     private struct Credentials: Decodable { let jid: String; let password: String }
@@ -27,6 +27,18 @@ struct BackgroundSessionLabTests {
 
     private let env = ProcessInfo.processInfo.environment
 
+    /// `prosodyctl shell` in the lab container: the server's own view, which no client can query.
+    private func prosody(_ arguments: String...) throws -> [Substring] {
+        let process = Process(), output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["docker", "exec", env["HAUS_LAB_PROSODY_CONTAINER"] ?? "haus-xmpp-lab-prosody-1", "prosodyctl", "shell"] + arguments
+        process.standardOutput = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self).split(separator: "\n")
+    }
+
     @Test func freshBindFromTheExtensionReplacesTheSessionAndRestoresPushAndRooms() async throws {
         let account = try JSONDecoder().decode(Credentials.self, from: Data(contentsOf: URL(fileURLWithPath: try #require(env["HAUS_LAB_BACKGROUND_ACCOUNT"]))))
         let room = try #require(env["HAUS_LAB_BACKGROUND_ROOM"])
@@ -39,6 +51,9 @@ struct BackgroundSessionLabTests {
         func connect(_ client: XMPPClient) async throws {
             try await client.connect(host: "localhost", port: 5223, domain: parts[1], username: parts[0], password: account.password)
         }
+
+        // No session left from an earlier run: the count below is this installation's alone.
+        _ = try prosody("c2s", "close", account.jid)
 
         // The extension's store: an identity and the room, as the app leaves them. Set up without stream management,
         // so this connection ends with its socket instead of hibernating.
@@ -70,6 +85,14 @@ struct BackgroundSessionLabTests {
             account: BackgroundAccount(host: "localhost", port: 5223, domain: parts[1], username: parts[0], password: account.password,
                                        labCertificateAuthority: authority, resource: resource, push: push,
                                        leftForeground: Date().addingTimeInterval(-600)))
-        print("BACKGROUND_SESSION \(account.jid)/\(resource)")
+        // One session for the account: the extension's, under the installation's resource, replacing the app's rather
+        // than joining it, hibernating with nothing unacknowledged, push enabled on it, and the account in the room.
+        let sessions = try prosody("c2s", "show", account.jid, "jid smacks smacks_queue push_identifier").filter { $0.hasPrefix(account.jid + "/") }
+        #expect(sessions.count == 1)
+        let columns = try #require(sessions.first).split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+        #expect(columns == [account.jid + "/" + resource, "hibernating", "0", columns[3]])
+        #expect(columns[3].hasPrefix("push.localhost<"))
+        let occupants = try prosody("muc", "occupants", room).filter { $0.contains("| " + account.jid + " ") }
+        #expect(occupants.count == 1)
     }
 }
