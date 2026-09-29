@@ -3,15 +3,10 @@ import XCTest
 final class GroupUITests: XCTestCase {
     @MainActor func testJoinReviewEncryptedGroupAndReaction() throws {
         continueAfterFailure = false
-        let environment = ProcessInfo.processInfo.environment
-        guard let user = environment["HAUS_LAB_USERNAME"], let password = environment["HAUS_LAB_PASSWORD"],
-              let room = environment["XMPP_GROUP_ROOM"] else { throw XCTSkip("Requires disposable local encrypted group fixture") }
-        let app = XCUIApplication()
-        app.launchArguments = ["-lab-ui-test"]
-        app.launchEnvironment = ["HAUS_LAB_USERNAME": user, "HAUS_LAB_PASSWORD": password]
-        app.isolateMessageStorage()
-        app.launch()
-        connect(app)
+        let lab = try LabFixture(requiring: ["XMPP_GROUP_ROOM"], orSkip: "Requires disposable local encrypted group fixture")
+        let room = lab["XMPP_GROUP_ROOM"]!
+        let app = lab.launch()
+        app.connectToLab()
         app.returnToChats(); app.buttons["newConversation"].tap()
         XCTAssertTrue(app.buttons["newGroup"].waitForExistence(timeout: 5)); app.buttons["newGroup"].tap()
         XCTAssertTrue(app.textFields["groupAddress"].waitForExistence(timeout: 5))
@@ -31,29 +26,12 @@ final class GroupUITests: XCTestCase {
         app.openEncryptionDetails()
         XCTAssertTrue(app.navigationBars["Group details"].waitForExistence(timeout: 10))
         capture(app, "Group members awaiting device review")
-        let devices = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "groupDevice."))
-        XCTAssertTrue(devices.firstMatch.waitForExistence(timeout: 10))
-        var emptyReviewScreens = 0
-        for _ in 0..<40 {
-            let pending = devices.matching(NSPredicate(format: "label CONTAINS %@", "Review required")).firstMatch
-            if !pending.exists {
-                emptyReviewScreens += 1
-                if emptyReviewScreens == 3 { break }
-                app.swipeUp()
-                continue
-            }
-            emptyReviewScreens = 0
-            pending.tap()
-            XCTAssertTrue(app.buttons["Accept without verifying"].waitForExistence(timeout: 5))
-            capture(app, "Group fingerprint review")
-            app.buttons["Accept without verifying"].tap()
-            XCTAssertTrue(app.navigationBars["Group details"].waitForExistence(timeout: 15))
-        }
+        app.acceptPendingDevices(group: true) { capture(app, "Group fingerprint review") }
         app.closeEncryptionDetails()
         let echoed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: bubbles)
         wait(for: [echoed], timeout: 35)
         capture(app, "Authenticated group conversation")
-        let incoming = bubbles.matching(NSPredicate(format: "label BEGINSWITH %@", environment["XMPP_OMEMO_PEER"] ?? "omemo-")).firstMatch
+        let incoming = bubbles.matching(NSPredicate(format: "label BEGINSWITH %@", lab["XMPP_OMEMO_PEER"] ?? "omemo-")).firstMatch
         XCTAssertTrue(incoming.exists, "Group bubble identifies its authenticated real sender")
         incoming.press(forDuration: 1)
         let reaction = app.buttons["👍"]
@@ -63,7 +41,7 @@ final class GroupUITests: XCTestCase {
         capture(app, "Encrypted group reactions")
         XCTAssertEqual(bubbles.count, 2, "Reactions must not create extra chat messages")
         app.terminate(); app.launch()
-        connect(app)
+        app.connectToLab()
         app.returnToChats()
         let restored = app.buttons["chat.\(room)"]
         XCTAssertTrue(restored.waitForExistence(timeout: 10)); restored.tap()
@@ -75,17 +53,6 @@ final class GroupUITests: XCTestCase {
         let resumedBubbles = app.textViews.containing(NSPredicate(format: "value == %@", resumedMarker))
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: resumedBubbles)], timeout: 30)
         capture(app, "Restored group membership and history")
-    }
-
-    @MainActor private func connect(_ app: XCUIApplication) {
-        app.buttons["Settings"].tap(); app.buttons["Connect to local lab"].tap()
-        let consent = app.switches["labConsent"]
-        XCTAssertTrue(consent.waitForExistence(timeout: 5))
-        consent.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        app.buttons["Connect"].tap()
-        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"]
-        if allow.waitForExistence(timeout: 2) { allow.tap() }
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected")).firstMatch.waitForExistence(timeout: 30))
     }
 
     @MainActor private func capture(_ app: XCUIApplication, _ name: String) {

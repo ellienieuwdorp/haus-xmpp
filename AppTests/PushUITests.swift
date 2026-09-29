@@ -101,22 +101,9 @@ final class PushUITests: XCTestCase {
         XCTAssertTrue(queued.waitForExistence(timeout: 5), "Send must durably enqueue before fingerprint review")
         app.openEncryptionDetails()
         XCTAssertTrue(app.navigationBars["Devices & Encryption"].waitForExistence(timeout: 5))
-        let devices = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "encryptionDevice."))
-        XCTAssertTrue(devices.firstMatch.waitForExistence(timeout: 20))
         // Approval goes through the displayed fingerprint UI for generated fixture devices.
         // Already approved devices on a repeat staging run need no second acceptance.
-        for _ in 0..<20 {
-            let pending = devices.matching(NSPredicate(format: "label CONTAINS %@", "Review required")).firstMatch
-            if !pending.exists { break }
-            for _ in 0..<5 { if pending.isHittable { break }; app.swipeUp() }
-            XCTAssertTrue(pending.isHittable)
-            pending.tap()
-            let accept = app.buttons["Accept without verifying"]
-            XCTAssertTrue(accept.waitForExistence(timeout: 5))
-            accept.tap()
-            XCTAssertTrue(app.navigationBars["Devices & Encryption"].waitForExistence(timeout: 5))
-        }
-        XCTAssertFalse(devices.matching(NSPredicate(format: "label CONTAINS %@", "Review required")).firstMatch.exists)
+        app.acceptPendingDevices()
         app.closeEncryptionDetails()
         let bubbles = app.textViews.containing(NSPredicate(format: "value == %@", marker))
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: bubbles)], timeout: 40)
