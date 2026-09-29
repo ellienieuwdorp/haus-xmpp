@@ -2,6 +2,10 @@ import Foundation
 
 public enum XMPPPushRegistrationAction: String, Codable, Sendable { case register, revoke }
 
+/// The APNs environment the device token belongs to. A development-signed build receives sandbox tokens, an App Store or
+/// TestFlight build production tokens; the gateway must send to the matching APNs host.
+public enum XMPPPushEnvironment: String, Codable, Sendable { case sandbox, production }
+
 /// Persist before transmission. A revision must never be reused for another operation.
 public struct XMPPPushRegistrationOperation: Codable, Sendable, Equatable, CustomStringConvertible, CustomDebugStringConvertible {
     public static let maximumRevision: UInt64 = 9_007_199_254_740_991
@@ -61,8 +65,10 @@ enum PushRegistrationWire {
         return "node='\(xmlEscaped(configuration.node))' secret='\(xmlEscaped(secret))'"
     }
 
-    static func operationXML(_ operation: XMPPPushRegistrationOperation, configuration: XMPPPushConfiguration) throws -> String {
-        let token = operation.deviceToken.map { " token='\($0)'" } ?? ""
+    /// Only a registration names its environment: it travels with the token it describes.
+    static func operationXML(_ operation: XMPPPushRegistrationOperation, configuration: XMPPPushConfiguration,
+                             environment: XMPPPushEnvironment) throws -> String {
+        let token = operation.deviceToken.map { " token='\($0)' environment='\(environment.rawValue)'" } ?? ""
         return "<\(operation.action.rawValue) xmlns='\(namespace)' \(try credentials(configuration)) revision='\(operation.revision)'\(token)/>"
     }
 
@@ -87,8 +93,10 @@ enum PushRegistrationWire {
 }
 
 extension XMPPClient {
-    public func updatePushRegistration(_ operation: XMPPPushRegistrationOperation, configuration: XMPPPushConfiguration) async throws -> XMPPPushRegistrationResult {
-        let payload = try PushRegistrationWire.operationXML(operation, configuration: configuration)
+    /// A register for a node the gateway does not know creates it, owned by this account's bare JID.
+    public func updatePushRegistration(_ operation: XMPPPushRegistrationOperation, configuration: XMPPPushConfiguration,
+                                       environment: XMPPPushEnvironment) async throws -> XMPPPushRegistrationResult {
+        let payload = try PushRegistrationWire.operationXML(operation, configuration: configuration, environment: environment)
         let response = try await requestIQ(type: "set", to: configuration.serviceJID, payload: payload)
         let result = try PushRegistrationWire.result(response)
         guard result.revision == operation.revision, result.action == operation.action else { throw XMPPIQError.malformedResponse }
