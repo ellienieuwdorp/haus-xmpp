@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import XMPPProtocol
 
 @main struct Lab {
@@ -17,6 +18,10 @@ import XMPPProtocol
         if env["HAUS_LAB_RECOVERY_SMOKE"] == "1" || env["HAUS_LAB_PUSH_SMOKE"] == "1" { try await client.configureStreamManagement(persistence: recovery) }
         let timeout = Task { try await Task.sleep(for: .seconds(30)); await client.disconnectAndWait() }
         try await client.connect(host: env["HAUS_LAB_HOST"] ?? domain, port: UInt16(env["HAUS_LAB_PORT"] ?? "5223") ?? 5223, domain: domain, username: user, password: password)
+        if env["HAUS_LAB_PUSH_GATEWAY_SMOKE"] == "1" {
+            try await verifyGatewayOnboarding(client: client, service: env["HAUS_LAB_PUSH_SERVICE"] ?? "push.localhost")
+            timeout.cancel(); await client.disconnectAndWait(); return
+        }
         if env["HAUS_LAB_PUSH_SMOKE"] == "1" {
             try await verifyPush(client: client, persistence: recovery)
             timeout.cancel(); await client.disconnectAndWait(); return
@@ -86,6 +91,34 @@ import XMPPProtocol
         try await client.enablePush(config)
         try await client.disablePush(serviceJID: config.serviceJID, node: config.node)
         print("PUSH_REGISTRATION_AND_CSI_VERIFIED")
+    }
+
+    /// The app's onboarding against a gateway component (infra/local/push-lab): self-service register of a freshly
+    /// generated node, the environment attribute, then the XEP-0357 enable. Synthetic token; nothing reaches APNs.
+    private static func verifyGatewayOnboarding(client: XMPPClient, service: String) async throws {
+        guard try await client.supportsPushNotifications() else { throw XMPPNotificationError.pushUnavailable }
+        func credential() throws -> String {
+            var bytes = [UInt8](repeating: 0, count: 32)
+            guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { throw XMPPNotificationError.invalidConfiguration }
+            return Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        }
+        let config = try XMPPPushConfiguration(serviceJID: service, node: credential(), publishOptions: ["secret": credential()])
+        let token = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+        let register = try XMPPPushRegistrationOperation(action: .register, revision: 1, deviceToken: token)
+        _ = try await client.updatePushRegistration(register, configuration: config, environment: .sandbox)
+        guard try await client.pushRegistrationStatus(configuration: config) == XMPPPushRegistrationResult(revision: 1, action: .register) else {
+            throw XMPPClientError.unexpectedProtocol
+        }
+        print("PUSH_NODE_REGISTERED")
+        // A gateway without production credentials must refuse a production token rather than accept it silently.
+        let production = try XMPPPushRegistrationOperation(action: .register, revision: 2, deviceToken: token)
+        do {
+            _ = try await client.updatePushRegistration(production, configuration: config, environment: .production)
+            print("PRODUCTION_ACCEPTED")
+        } catch XMPPIQError.stanza(condition: "not-acceptable") { print("PRODUCTION_REFUSED") }
+        try await client.enablePush(config)
+        print("PUSH_ENABLED_AT_ACCOUNT_SERVER")
     }
 
     private static func verifyRecovery(client: XMPPClient, persistence: LabRecoveryPersistence, env: [String: String]) async throws {

@@ -18,6 +18,7 @@
 		0F55C869FC6866CDDBC5CB73 /* EncryptionKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68FF6093D4D7789019FDED79 /* EncryptionKeychain.swift */; };
 		106C2F5D77A7AD14FAABBDDC /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 721516AB2DE102AB78AB3630 /* RootView.swift */; };
 		168D51EB76C9739379CE3E18 /* DevelopmentEndpoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF786E9F6E5DBCFDF1AD1942 /* DevelopmentEndpoint.swift */; };
+		179229871776D4F1408E3684 /* PushOnboardingLabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB0603B06B31C83D97163794 /* PushOnboardingLabUITests.swift */; };
 		18AA62DDFE6CB52388CD6626 /* AttachmentTrayUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BF9C3A91E2A2B0A58EBE071 /* AttachmentTrayUITests.swift */; };
 		1B108C8F8375888A0F07EFBA /* LoadingEarlierHeaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DB0A9D51DDFD741DD8C77AC /* LoadingEarlierHeaderTests.swift */; };
 		1C72888FC2E46A6675F5C432 /* ConnectionSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0025C0DF5307FD02F11B55 /* ConnectionSetupTests.swift */; };
@@ -258,6 +259,7 @@
 		E7E9F16915706C304AAE9D42 /* OutboxDrain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutboxDrain.swift; sourceTree = "<group>"; };
 		E92B47FBB2381FF8C35F67FC /* ReplyUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyUITests.swift; sourceTree = "<group>"; };
 		E940D874460B96243A4EC3DA /* LastSeenUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LastSeenUITests.swift; sourceTree = "<group>"; };
+		EB0603B06B31C83D97163794 /* PushOnboardingLabUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushOnboardingLabUITests.swift; sourceTree = "<group>"; };
 		ECB57CE3D62350BCA14A7C97 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		F560FCE9BA40CDC77D94730C /* TypingLabUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingLabUITests.swift; sourceTree = "<group>"; };
 		FA7A448E9D7C66724DCB4084 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
@@ -457,6 +459,7 @@
 				9C8D5B118A7A8265703C0701 /* OrganizationUITests.swift */,
 				95271CA1D981A3BB07F06A3C /* OutboxUITests.swift */,
 				27BC97417DDD10121F5DD5AC /* PolishUITests.swift */,
+				EB0603B06B31C83D97163794 /* PushOnboardingLabUITests.swift */,
 				2AC8B2A7BBFCEA0E69E72232 /* PushUITests.swift */,
 				C54E2339C1602A48D70E197E /* ReactionUITests.swift */,
 				198B61EF24F8F532830EF75A /* ReceiptUITests.swift */,
@@ -724,6 +727,7 @@
 				6964A48D8B3885B4336A2F5E /* OrganizationUITests.swift in Sources */,
 				F40B2D7649A8D5F218621045 /* OutboxUITests.swift in Sources */,
 				1D84656566A3B9EEABC6A133 /* PolishUITests.swift in Sources */,
+				179229871776D4F1408E3684 /* PushOnboardingLabUITests.swift in Sources */,
 				9EE6076ADE31F6322AC800C1 /* PushUITests.swift in Sources */,
 				08BE9F110EA7558C05048773 /* ReactionUITests.swift in Sources */,
 				CA1473BDCD93F12D49215EAD /* ReceiptUITests.swift in Sources */,
