@@ -1,3 +1,4 @@
+import dnssd
 import Foundation
 import Network
 import Testing
@@ -55,16 +56,16 @@ private func plan(_ directTLS: SRVLookup, _ startTLS: SRVLookup) -> [XMPPEndpoin
 }
 
 /// A plaintext server on loopback that answers the client's stream header and `<starttls/>` as scripted, and
-/// records every byte the client sends.
+/// records every byte the client sends. Without `features` it never answers. A TLS ClientHello ends the connection.
 private final class PlaintextServer: @unchecked Sendable {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "test.plaintext-server")
     private let lock = NSLock()
     private var bytes = Data()
-    private let features: String
+    private let features: String?
     private let starttlsReply: String
 
-    init(features: String, starttlsReply: String = "") throws {
+    init(features: String?, starttlsReply: String = "") throws {
         self.features = features; self.starttlsReply = starttlsReply
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
@@ -93,6 +94,9 @@ private final class PlaintextServer: @unchecked Sendable {
             let all = lock.withLock { bytes.append(data); return bytes }
             let text = String(decoding: all, as: UTF8.self)
             var header = answeredHeader, starttls = answeredStartTLS
+            // TLS this server cannot speak (direct TLS, or after our reply to <starttls/>): hang up.
+            if !header, data.first == 0x16 { connection.cancel(); return }
+            guard let features else { receive(connection, answeredHeader: true, answeredStartTLS: true); return }
             if !header, text.contains("<stream:stream") {
                 header = true
                 connection.send(content: Data(("<stream:stream xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams' from='example.test' id='1' version='1.0'>" + features).utf8), completion: .idempotent)
@@ -151,4 +155,74 @@ private func startTLSHandsOverToTLSOnlyOnACleanProceed(_ reply: String, _ handsh
     let afterStartTLS = sent.suffix(from: try #require(sent.range(of: Data("<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>".utf8))).upperBound)
     #expect((afterStartTLS.first == 0x16) == handshakes)
     #expect((afterStartTLS.range(of: Data("example.test".utf8)) != nil) == handshakes)
+}
+
+/// XEP-0368: the direct TLS ClientHello asks for ALPN `xmpp-client` and names the account domain.
+@Test func directTLSOffersTheXMPPClientProtocol() async throws {
+    let server = try PlaintextServer(features: nil)
+    let port = try await server.start()
+    defer { server.stop() }
+    await #expect(throws: (any Error).self) {
+        try await XMPPClient().connect(host: "127.0.0.1", port: port, domain: "example.test", username: "alice", password: "secret-password")
+    }
+    let hello = server.received
+    #expect(hello.first == 0x16)
+    #expect(hello.range(of: Data("xmpp-client".utf8)) != nil && hello.range(of: Data("example.test".utf8)) != nil)
+}
+
+/// SRV records on this machine only (multicast DNS, never on the network): the real resolver path without a public
+/// zone. Each test gets its own `.local` domain; records vanish when the registration ends.
+private final class LocalSRVZone: @unchecked Sendable {
+    let domain = "haus-test-\(UUID().uuidString.prefix(8).lowercased()).local"
+    private var connection: DNSServiceRef?
+    private var records: [OpaquePointer?] = []
+
+    /// `target` "." declares the service not offered.
+    func register(_ service: String, target: String, port: UInt16) throws {
+        if connection == nil {
+            guard DNSServiceCreateConnection(&connection) == kDNSServiceErr_NoError else { throw POSIXError(.EIO) }
+        }
+        var rdata: [UInt8] = [0, 0, 0, 0, UInt8(port >> 8), UInt8(port & 0xFF)]
+        for label in target.split(separator: ".") { rdata += [UInt8(label.utf8.count)] + Array(label.utf8) }
+        rdata.append(0)
+        var record: OpaquePointer?
+        let status = rdata.withUnsafeBytes { bytes in
+            DNSServiceRegisterRecord(connection, &record, DNSServiceFlags(kDNSServiceFlagsShared), UInt32(kDNSServiceInterfaceIndexLocalOnly),
+                                     "\(service)._tcp.\(domain)", UInt16(kDNSServiceType_SRV), UInt16(kDNSServiceClass_IN),
+                                     UInt16(rdata.count), bytes.baseAddress, 60, { _, _, _, _, _ in }, nil)
+        }
+        // The registration is complete once the call returns; the callback only reports later conflicts.
+        guard status == kDNSServiceErr_NoError else { throw POSIXError(.EIO) }
+        records.append(record)
+    }
+
+    deinit { if let connection { DNSServiceRefDeallocate(connection) } }
+}
+
+private enum DeadEndpoint { case refused, silent }
+
+/// RFC 6120 §3.2: a remembered endpoint that no longer answers is skipped for what SRV now says, and the error is
+/// the last candidate's. The silent case waits out the per-candidate timeout.
+@Test(arguments: [DeadEndpoint.refused, .silent])
+private func discoveryMovesPastADeadRememberedEndpoint(_ dead: DeadEndpoint) async throws {
+    let current = try PlaintextServer(features: "<stream:features>\(sasl)</stream:features>")
+    let currentPort = try await current.start()
+    defer { current.stop() }
+    let silent = try PlaintextServer(features: nil)
+    let deadPort = try await silent.start()
+    defer { silent.stop() }
+    if dead == .refused { silent.stop() }
+    let zone = LocalSRVZone()
+    try zone.register("_xmpp-client", target: "localhost", port: currentPort)
+    try zone.register("_xmpps-client", target: ".", port: 0)
+    let client = XMPPClient()
+    // `current` offers no STARTTLS, so reaching it ends in `encryptionUnavailable`; the dead endpoint's own error
+    // (refused or timed out) would mean the loop stopped early.
+    await #expect(throws: XMPPClientError.encryptionUnavailable) {
+        try await client.connect(route: .discover(preferred: XMPPEndpoint(host: "127.0.0.1", port: deadPort, security: .startTLS)),
+                                 domain: zone.domain, username: "alice", password: "secret-password")
+    }
+    let sent = String(decoding: current.received, as: UTF8.self)
+    #expect(sent.contains("to='\(zone.domain)'") && !sent.contains("secret"))
+    if dead == .silent { #expect(String(decoding: silent.received, as: UTF8.self).contains("<stream:stream")) }
 }
