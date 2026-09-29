@@ -112,3 +112,18 @@ private func offer(_ store: MessageStore, _ sender: String, count: Int, chat: St
     #expect(!alerts.contains { if case .unreadable = $0.content { true } else { false } })
     try await store.close()
 }
+
+/// A quiet outcome stays quiet in the chat list too: a blocked device's or an over-limit placeholder never counts as
+/// unread (so never raises the app badge), while a placeholder that alerts still does.
+@Test func quietPlaceholdersDoNotCountAsUnread() async throws {
+    let (store, directory) = try await limitStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let peer = "peer@localhost"
+    for (index, reason) in UnreadableReason.allCases.enumerated() {
+        _ = try await store.recordUnreadableMessage(UnreadableMessage(accountID: account, chatID: peer, senderID: peer, isOutgoing: false,
+            sentAt: Date(timeIntervalSince1970: 1_000 + Double(index)), reason: reason, key: .ciphertext(sender: peer, digest: "d\(index)")))
+    }
+    // Not for this device, unsupported, malformed and failed decrypt; not blocked device or retention limit.
+    #expect(try await store.unreadCounts(accountID: account) == [peer: 4])
+    try await store.close()
+}

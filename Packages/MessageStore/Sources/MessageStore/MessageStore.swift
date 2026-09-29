@@ -1777,11 +1777,13 @@ public actor MessageStore {
 
     /// Incoming messages after each chat's read pointer and newer than its archive's history baseline, by chat; chats
     /// with none are absent. A chat never read counts every incoming message since this device joined. One index range
-    /// per chat.
+    /// per chat. Placeholders whose reason never `alerts` (a blocked device, a retention limit) are left out, so neither
+    /// can raise the chat's count or the app badge.
     public func unreadCounts(accountID: String) throws -> [String: Int] {
+        let quiet = UnreadableReason.allCases.filter { !$0.alerts }.map { "'\($0.rawValue)'" }.joined(separator: ",")
         let rows = try connection.query("""
             SELECT c.id,(SELECT COUNT(*) FROM messages m WHERE m.account_id=?1 AND m.chat_id=c.id AND m.outgoing=0 AND m.sender_id<>?1
-                         AND \(Self.unreadCondition))
+                         AND COALESCE(m.unreadable_reason,'') NOT IN (\(quiet)) AND \(Self.unreadCondition))
             FROM chats c LEFT JOIN chat_read_state r ON r.account_id=c.account_id AND r.chat_id=c.id
             LEFT JOIN read_baselines bc ON bc.account_id=c.account_id AND bc.archive_id=c.id
             LEFT JOIN read_baselines ba ON ba.account_id=c.account_id AND ba.archive_id=c.account_id
