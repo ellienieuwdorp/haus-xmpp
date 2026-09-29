@@ -32,6 +32,18 @@ struct StreamPersistenceTests {
         #expect(try await adapter.load()?.revision == 1)
     }
 
+    /// A session saved while the account kept its typed capitals loads, resumes and saves again once the account is
+    /// named in normal form; the address migration already moved its row to the normal key.
+    @Test func sessionSavedUnderTheTypedSpellingStillBelongsToTheAccount() async throws {
+        let (store, adapter) = try await fixture()
+        let typed = snapshot(account: "Alice@LocalHost")
+        _ = try await store.saveStreamManagement(accountID: "alice@localhost", expectedRevision: nil, data: JSONEncoder().encode(typed))
+        #expect(try await adapter.load() == typed)
+        #expect(try await adapter.permitsResumption(typed))
+        try await adapter.save(snapshot(revision: 2, account: "Alice@LocalHost"), expectedRevision: 1, acknowledgedMessageIDs: [])
+        #expect(try await adapter.load()?.revision == 2)
+    }
+
     @Test func corruptInnerRevisionFailsClosed() async throws {
         let (store, adapter) = try await fixture()
         _ = try await store.saveStreamManagement(accountID: "alice@localhost", expectedRevision: nil,
