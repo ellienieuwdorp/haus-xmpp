@@ -16,7 +16,7 @@ public actor MessageStore {
         try connection.execute("PRAGMA synchronous = FULL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 21 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= 23 else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -326,7 +326,10 @@ public actor MessageStore {
                     FOREIGN KEY(account_id,target_message_id) REFERENCES messages(account_id,id) ON DELETE CASCADE
                 )
                 """)
-            try connection.execute("PRAGMA user_version = 21")
+            // v23: stored addresses in normal form; merges chats that differ only in spelling. `AddressMigration` checks
+            // each table and column exists and is idempotent, so it is safe in any merge order.
+            if version < 23 { try AddressMigration.run(connection) }
+            try connection.execute("PRAGMA user_version = 23")
         }
     }
 
@@ -2244,7 +2247,7 @@ public actor MessageStore {
     }
 }
 
-private enum Value {
+enum Value {
     case text(String), integer(Int), real(Double), blob(Data), null
     var data: Data? { if case let .blob(value) = self { return value }; return nil }
     var string: String { if case let .text(value) = self { return value }; return "" }
@@ -2258,7 +2261,7 @@ private enum Value {
 }
 
 /// Owned exclusively by its MessageStore actor after initialization.
-private final class Connection: @unchecked Sendable {
+final class Connection: @unchecked Sendable {
     private var handle: OpaquePointer?
     var isOpen: Bool { handle != nil }
     init(url: URL) throws {
