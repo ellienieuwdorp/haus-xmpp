@@ -77,7 +77,11 @@ final class AppModel {
     @ObservationIgnored private var storageRoot: URL?
     private(set) var accountID = "" {
         didSet {
-            if accountID != oldValue { timelinePages.removeAll() }
+            if accountID != oldValue {
+                timelinePages.removeAll()
+                pushWanted = accountID.isEmpty || !preferences.bool(forKey: "pushOff." + accountID)
+                pushStatus = .off
+            }
             ForegroundNotificationState.shared.accountID = isDemo ? "" : accountID
         }
     }
@@ -95,7 +99,11 @@ final class AppModel {
     private(set) var isSending = false
     private(set) var receivedCount = 0
     var error: String?
-    private(set) var notificationStatus = "Not enabled"
+    private(set) var pushStatus = PushStatus.off
+    /// False once push was turned off in Settings for this account (kept per account, on this installation).
+    private(set) var pushWanted = true
+    /// Bumped by every turn on/off in Settings, so a setup still in flight cannot enable what was just turned off.
+    @ObservationIgnored private var pushIntent = 0
     private(set) var notificationRoute: NotificationChatRoute?
     /// A push onto the Chats stack asked for by a view that owns no navigation path (a bubble's
     /// "Encryption details" action). RootView appends it and clears it.
@@ -288,14 +296,14 @@ final class AppModel {
             if ProcessInfo.processInfo.arguments.contains("-demo") { await loadDemo() }
             else {
                 if let store, try await NotificationDiagnostics.exportIfRequested(store: store, directory: directory) {
-                    notificationStatus = "Inspection complete"
+                    pushStatus = .inspected
                     return
                 }
                 await refresh()
                 if let openChatID { await loadEncryptionDetails(for: openChatID, refreshFromServer: false) }
                 if testSessionID == nil, let saved = try NotificationAccount.load() {
                     sessionAccount = saved
-                    if saved.push != nil { notificationStatus = "Configured for staging" }
+                    if saved.push != nil { pushStatus = .on }
                     reconcile()
                 }
             }
@@ -464,11 +472,10 @@ final class AppModel {
             // saved credentials, so the next launch and every reconnect can sign in unattended.
             do { try endpoint.save() }
             catch {
-                notificationStatus = "Needs attention"
                 self.error = "Connected, but the password could not be saved. You will be asked for it on the next launch."
             }
             // `.online` was emitted before `connect` returned, so this runs alongside the setup task.
-            await refreshPushRegistration(client: connection, session: endpoint, token: token)
+            await reconcilePush(client: connection, session: endpoint, token: token, interactive: manual)
             return true
         } catch {
             guard generation == token else { await connection.disconnect(); return false }
@@ -577,7 +584,7 @@ final class AppModel {
             await CommunicationHistory.deleteAll()
         }
         sessionAccount = nil
-        notificationStatus = "Not enabled"
+        pushStatus = .off
         do {
             if testSessionID == nil, var state = try PushRegistrationState.load(accountID: account) {
                 try state.journal.stageRevocation()
@@ -604,7 +611,7 @@ final class AppModel {
         }
         guard generation == token else { return }
         await quiesceTransport()
-        if let localFailure { notificationStatus = "Needs attention"; self.error = localFailure }
+        if let localFailure { self.error = localFailure }
     }
 
     /// Re-entering credentials does not revoke an existing server subscription. Keep its
@@ -692,59 +699,176 @@ final class AppModel {
         }
     }
 
+    /// Settings: turn push on (again), or retry a failed setup. Asks for notification permission if it was never asked.
     func enableNotifications() async {
-        guard hasTransportOwnership, foreground, !quiescing else { return }
-        activeEncryptionOperations += 1
-        defer { activeEncryptionOperations -= 1 }
-        guard let client, isConnected, encryptionReady, let session = sessionAccount,
-              testSessionID == nil, session.domain == "staging.example.net" else {
-            error = "Notification testing requires a connected staging account."
+        guard !accountID.isEmpty, testSessionID == nil, !isDemo else { return }
+        setPushWanted(true, account: accountID)
+        pushIntent += 1
+        if pushStatus != .on { pushStatus = .settingUp }
+        let token = generation
+        if await Self.notificationAuthorization() == .notDetermined {
+            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+            refreshNotificationPermission()
+            guard generation == token else { return }
+        }
+        guard let client, let session = sessionAccount, isConnected else {
+            // The next connection finishes the setup; permission is settled by now, so it needs no prompt.
+            pushStatus = .settingUp
             return
         }
+        await reconcilePush(client: client, session: session, token: token, interactive: true)
+    }
+
+    /// Settings: turn push off. Revokes the gateway registration and disables it at the account server; offline, the
+    /// revocation waits in the journal for the next connection.
+    func disableNotifications() async {
+        guard !accountID.isEmpty, testSessionID == nil, !isDemo else { return }
+        let account = accountID
+        setPushWanted(false, account: account)
+        pushIntent += 1
+        pushStatus = .off
         let token = generation
         do {
-            let deviceToken = try await PushRegistration.request()
-            guard generation == token else { return }
-            let push: XMPPPushConfiguration
-            if let configured = session.push { push = configured }
-            else if let saved = try PushRegistrationState.load(accountID: session.accountID) { push = saved.configuration }
-            else {
-                #if DEBUG
-                let environment = ProcessInfo.processInfo.environment
-                guard let node = environment["XMPP_PUSH_NODE"], let secret = environment["XMPP_PUSH_SECRET"] else {
-                    throw XMPPNotificationError.invalidConfiguration
-                }
-                push = try XMPPPushConfiguration(serviceJID: "push.staging.example.net", node: node, publishOptions: ["secret": secret])
-                #else
-                throw XMPPNotificationError.invalidConfiguration
-                #endif
+            guard var state = try PushRegistrationState.load(accountID: account) else { return }
+            try state.journal.stageRevocation()
+            try state.save()
+            if let session = sessionAccount, session.accountID == account, session.push != nil {
+                let saved = session.replacingPush(nil)
+                try saved.save()
+                sessionAccount = saved
             }
-            let saved = NotificationAccount(accountID: session.accountID, host: session.host, port: session.port,
-                domain: session.domain, username: session.username, password: session.password, push: push)
-            // Save before enabling: an immediately arriving push can safely find its account.
-            try saved.save()
-            sessionAccount = saved
-            try stagePushToken(deviceToken, account: session.accountID, configuration: push)
-            try await sendPendingPushRegistration(client: client, account: session.accountID, token: token)
-            guard generation == token else { return }
-            try await client.enablePush(push)
-            guard generation == token else { return }
-            notificationStatus = "Enabled for staging"
-            #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("-push-diagnostics") {
-                let directory = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-                let data = try JSONEncoder().encode(["node": push.node, "device_token": deviceToken.map { String(format: "%02x", $0) }.joined()])
-                try data.write(to: directory.appending(path: "push-registration.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-                var privateFile = directory.appending(path: "push-registration.json")
-                var values = URLResourceValues(); values.isExcludedFromBackup = true
-                try privateFile.setResourceValues(values)
-            }
-            #endif
+            guard let client, isConnected, hasTransportOwnership, foreground, !quiescing else { return }
+            activeEncryptionOperations += 1
+            defer { activeEncryptionOperations -= 1 }
+            try await settlePendingRevocation(client: client, account: account, state: state, token: token)
         } catch {
-            guard generation == token else { return }
-            notificationStatus = "Needs attention"
-            self.error = "Notifications could not be enabled. Check notification permission and staging gateway configuration."
+            if generation == token, accountID == account { Self.syncLog.error("push revocation will retry on reconnect") }
         }
+    }
+
+    /// Runs after every authenticated connection: sends a stored revocation, then (unless push is turned off) makes
+    /// sure this installation is registered with the gateway and enabled at the account server. `interactive` is true
+    /// for a manual sign-in or a tap in Settings, the only moments that may show the permission prompt.
+    private func reconcilePush(client: XMPPClient, session: NotificationAccount, token: UUID, interactive: Bool) async {
+        guard testSessionID == nil, !isDemo, hasTransportOwnership, foreground, !quiescing, generation == token else { return }
+        let account = session.accountID, intent = pushIntent
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
+        do {
+            if let state = try PushRegistrationState.load(accountID: account), state.journal.pending?.action == .revoke {
+                try await settlePendingRevocation(client: client, account: account, state: state, token: token)
+                guard generation == token else { return }
+            }
+            guard pushWanted else { pushStatus = .off; return }
+            guard try await client.supportsPushNotifications() else { pushStatus = .unsupported; return }
+            guard generation == token else { return }
+            if let stop = PushStatus.gate(for: await Self.notificationAuthorization(), interactive: interactive) {
+                if generation == token { pushStatus = stop }
+                return
+            }
+            if pushStatus != .on { pushStatus = .settingUp }
+            // Asks on the first sign-in (the gate let only an interactive setup through while undetermined).
+            let deviceToken = try await PushRegistration.request()
+            refreshNotificationPermission()
+            guard generation == token, pushIntent == intent, foreground, !quiescing, accountID == account else { return }
+            let push = try await currentSubscription(client: client, account: account, token: token)
+            guard generation == token, pushIntent == intent, var latest = sessionAccount, latest.accountID == account else { return }
+            if latest.push != push {
+                latest = latest.replacingPush(push)
+                // Save before enabling: an immediately arriving push can safely find its account.
+                try latest.save()
+                sessionAccount = latest
+            }
+            try stagePushToken(deviceToken, account: account, configuration: push)
+            try await sendPendingPushRegistration(client: client, account: account, token: token)
+            guard generation == token, pushIntent == intent else { return }
+            try await client.enablePush(push)
+            guard generation == token, pushIntent == intent else { return }
+            pushStatus = .on
+            writePushDiagnostics(push: push, deviceToken: deviceToken)
+        } catch {
+            guard generation == token, pushIntent == intent else { return }
+            pushStatus = PushStatus.after(error)
+            Self.syncLog.error("push setup stopped: \(String(describing: self.pushStatus), privacy: .public)")
+        }
+    }
+
+    /// This installation's subscription at the current push service. The first setup generates one; a subscription
+    /// saved at another service (the retired staging gateway) is disabled at the account server before a new one
+    /// replaces it, so the two are never enabled together.
+    private func currentSubscription(client: XMPPClient, account: String, token: UUID) async throws -> XMPPPushConfiguration {
+        let service = PushService.serviceJID
+        let saved = try PushRegistrationState.load(accountID: account)
+        // A subscription enabled before the registration journal existed lives only in the saved account.
+        let enabled = saved?.configuration ?? (sessionAccount?.accountID == account ? sessionAccount?.push : nil)
+        switch PushSubscription.plan(saved: enabled, serviceJID: service) {
+        case .keep(let push):
+            return push
+        case .replace(let old):
+            try await retire(old, client: client, account: account, journal: saved?.journal, token: token)
+            fallthrough
+        case .create:
+            guard generation == token else { throw CancellationError() }
+            let push = try PushSubscription.generate(serviceJID: service)
+            try PushRegistrationState(accountID: account, configuration: push, journal: PushRegistrationJournal()).save()
+            return push
+        }
+    }
+
+    /// Best effort at the old gateway; at the account server only a transport failure stops the migration (the next
+    /// connection repeats it). A server that answers with an error holds no such registration.
+    private func retire(_ old: XMPPPushConfiguration, client: XMPPClient, account: String, journal: PushRegistrationJournal?,
+                        token: UUID) async throws {
+        if var journal, journal.acknowledgedRevision > 0 || journal.pending != nil {
+            if let revoke = try? journal.stageRevocation() {
+                _ = try? await client.updatePushRegistration(revoke, configuration: old, environment: PushService.environment ?? .sandbox)
+            }
+        }
+        guard generation == token else { throw CancellationError() }
+        do { try await client.disablePush(serviceJID: old.serviceJID, node: old.node) }
+        catch XMPPIQError.stanza { }
+        if var session = sessionAccount, session.accountID == account, session.push == old {
+            session = session.replacingPush(nil)
+            try session.save()
+            sessionAccount = session
+        }
+    }
+
+    /// Sends a stored revocation and disables the node at the account server. A gateway that no longer knows the node
+    /// (item-not-found), or a retired service that is gone, leaves nothing to revoke.
+    private func settlePendingRevocation(client: XMPPClient, account: String, state: PushRegistrationState, token: UUID) async throws {
+        do {
+            try await sendPendingPushRegistration(client: client, account: account, token: token)
+        } catch {
+            let retired = state.configuration.serviceJID.lowercased() != PushService.serviceJID
+            guard generation == token, error as? XMPPIQError == .stanza(condition: "item-not-found") || (retired && !(error is CancellationError)) else { throw error }
+            guard var latest = try PushRegistrationState.load(accountID: account), latest.configuration == state.configuration,
+                  let pending = latest.journal.pending, pending.action == .revoke else { throw CancellationError() }
+            latest.journal.abandonPending(pending)
+            try latest.save()
+        }
+        guard generation == token else { throw CancellationError() }
+        do { try await client.disablePush(serviceJID: state.configuration.serviceJID, node: state.configuration.node) }
+        catch XMPPIQError.stanza { }
+    }
+
+    private func setPushWanted(_ wanted: Bool, account: String) {
+        if wanted { preferences.removeObject(forKey: "pushOff." + account) } else { preferences.set(true, forKey: "pushOff." + account) }
+        if account == accountID { pushWanted = wanted }
+    }
+
+    private func writePushDiagnostics(push: XMPPPushConfiguration, deviceToken: Data) {
+        #if DEBUG
+        guard ProcessInfo.processInfo.arguments.contains("-push-diagnostics") else { return }
+        do {
+            let directory = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            let data = try JSONEncoder().encode(["node": push.node, "device_token": deviceToken.map { String(format: "%02x", $0) }.joined()])
+            try data.write(to: directory.appending(path: "push-registration.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            var privateFile = directory.appending(path: "push-registration.json")
+            var values = URLResourceValues(); values.isExcludedFromBackup = true
+            try privateFile.setResourceValues(values)
+        } catch {}
+        #endif
     }
 
     private func stagePushToken(_ token: Data, account: String, configuration: XMPPPushConfiguration) throws {
@@ -757,7 +881,7 @@ final class AppModel {
     }
 
     private func receivePushToken(_ deviceToken: Data) async {
-        guard testSessionID == nil, let session = sessionAccount, let push = session.push else { return }
+        guard testSessionID == nil, pushWanted, let session = sessionAccount, let push = session.push else { return }
         let token = generation
         do {
             // A callback while offline still becomes durable work for this account's next
@@ -769,18 +893,19 @@ final class AppModel {
             try await sendPendingPushRegistration(client: client, account: session.accountID, token: token)
             guard generation == token else { return }
             try await client.enablePush(push)
-            if generation == token { notificationStatus = "Enabled for staging" }
+            if generation == token { pushStatus = .on }
         } catch {
-            if generation == token { notificationStatus = "Will retry on reconnect" }
+            if generation == token { pushStatus = PushStatus.after(error) }
         }
     }
 
     private func sendPendingPushRegistration(client: XMPPClient, account: String, token: UUID) async throws {
+        guard let environment = PushService.environment else { throw XMPPNotificationError.invalidConfiguration }
         for attempt in 0..<2 {
             guard generation == token, accountID == account else { throw CancellationError() }
             guard let state = try PushRegistrationState.load(accountID: account), let operation = state.journal.pending else { return }
             do {
-                let result = try await client.updatePushRegistration(operation, configuration: state.configuration)
+                let result = try await client.updatePushRegistration(operation, configuration: state.configuration, environment: environment)
                 guard generation == token, accountID == account else { throw CancellationError() }
                 guard var latest = try PushRegistrationState.load(accountID: account), latest.configuration == state.configuration else { throw CancellationError() }
                 guard latest.journal.acknowledge(result, for: operation) else { throw CancellationError() }
@@ -794,34 +919,6 @@ final class AppModel {
                 try latest.journal.rebasePending(after: remote)
                 try latest.save()
             }
-        }
-    }
-
-    private func refreshPushRegistration(client: XMPPClient, session: NotificationAccount, token: UUID) async {
-        guard testSessionID == nil, hasTransportOwnership, foreground, !quiescing, generation == token else { return }
-        activeEncryptionOperations += 1
-        defer { activeEncryptionOperations -= 1 }
-        do {
-            if let state = try PushRegistrationState.load(accountID: session.accountID), state.journal.pending?.action == .revoke {
-                try await sendPendingPushRegistration(client: client, account: session.accountID, token: token)
-                guard generation == token else { return }
-                try await client.disablePush(serviceJID: state.configuration.serviceJID, node: state.configuration.node)
-                return
-            }
-            guard let push = session.push else { return }
-            guard let deviceToken = try await PushRegistration.refreshIfAuthorized() else {
-                notificationStatus = "Permission needed"
-                return
-            }
-            guard generation == token, foreground, !quiescing else { return }
-            try stagePushToken(deviceToken, account: session.accountID, configuration: push)
-            try await sendPendingPushRegistration(client: client, account: session.accountID, token: token)
-            guard generation == token else { return }
-            try await client.enablePush(push)
-            guard generation == token else { return }
-            notificationStatus = "Enabled for staging"
-        } catch {
-            if generation == token { notificationStatus = "Will retry on reconnect" }
         }
     }
 
@@ -2836,7 +2933,10 @@ extension AppModel: NotificationActionEnvironment {
             }
             #endif
             let status = await Self.notificationAuthorization()
-            self?.mayPostNotifications = [.authorized, .provisional, .ephemeral].contains(status)
+            guard let self else { return }
+            self.mayPostNotifications = [.authorized, .provisional, .ephemeral].contains(status)
+            // Turned off in iOS Settings while away; turning it back on is picked up by the next connection.
+            if status == .denied, [.on, .settingUp].contains(self.pushStatus) { self.pushStatus = .notAllowed }
         }
     }
 

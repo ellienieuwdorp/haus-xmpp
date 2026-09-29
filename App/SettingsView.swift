@@ -4,6 +4,7 @@ struct SettingsView: View {
     @Bindable var model: AppModel
     @Binding var showingConnection: Bool
     @Environment(\.appearance) private var appearance
+    @Environment(\.openURL) private var openURL
     @State private var confirmingSignOut = false
 
     private var accent: AccentTheme { appearance.accent }
@@ -19,12 +20,13 @@ struct SettingsView: View {
         }
     }
 
-    /// Staging accounts only (push needs the staging gateway); DEBUG's notification harness shows it for captures.
+    /// Every signed-in account (the sample conversations have none); DEBUG's notification harness shows it signed out
+    /// too, for captures.
     private var showsNotificationSettings: Bool {
         #if DEBUG
         if NotificationHarness.isRequested { return true }
         #endif
-        return model.accountID.hasSuffix("@staging.example.net")
+        return !model.accountID.isEmpty && !model.isDemo
     }
 
     var body: some View {
@@ -41,12 +43,33 @@ struct SettingsView: View {
             }
             if showsNotificationSettings {
                 Section {
-                    LabeledContent("Status", value: model.notificationStatus)
-                    Button { Task { await model.enableNotifications() } } label: {
-                        Label { Text("Enable notifications") } icon: { SettingsIconTile(systemName: "bell.fill", color: .red) }
+                    // On while push is on or being set up; a status that reads "Off" shows it off.
+                    Toggle(isOn: Binding(get: { model.pushWanted && ![.off, .notAllowed].contains(model.pushStatus) },
+                        set: { on in Task { if on { await model.enableNotifications() } else { await model.disableNotifications() } } })) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Push notifications")
+                                Text(model.pushStatus.text).font(.footnote).foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("pushStatus")
+                            }
+                        } icon: { SettingsIconTile(systemName: "bell.fill", color: .red) }
                     }
-                    .disabled(!model.session.isReady)
-                    .accessibilityIdentifier("enableNotifications")
+                    .accessibilityIdentifier("pushNotifications")
+                    if model.pushWanted {
+                        switch model.pushStatus {
+                        case .unreachable, .unsupported:
+                            Button("Try Again") { Task { await model.enableNotifications() } }
+                                .disabled(!model.session.isReady)
+                                .accessibilityIdentifier("retryPushNotifications")
+                        case .notAllowed:
+                            Button("Open iOS Settings") {
+                                if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
+                            }
+                            .accessibilityIdentifier("openNotificationSettings")
+                        default:
+                            EmptyView()
+                        }
+                    }
                     Toggle("Message previews", isOn: Binding(get: { model.notificationPreviewsEnabled },
                         set: { enabled in Task { await model.setNotificationPreviews(enabled) } }))
                         .accessibilityIdentifier("notificationPreviews")

@@ -24,7 +24,9 @@ final class PushUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 10))
         app.buttons["Settings"].tap()
-        XCTAssertTrue(app.staticTexts["Status, Inspection complete"].waitForExistence(timeout: 15))
+        let push = app.switches["pushNotifications"]
+        XCTAssertTrue(push.waitForExistence(timeout: 15))
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Inspection complete"), object: push)], timeout: 15)
         XCUIDevice.shared.press(.home)
         XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10) || app.state == .runningBackgroundSuspended)
         #endif
@@ -39,9 +41,10 @@ final class PushUITests: XCTestCase {
         guard environment["XMPP_PUSH_DEVICE_TEST"] == "1" else {
             throw XCTSkip("Set XMPP_PUSH_DEVICE_TEST=1 only for a disposable physical staging push run")
         }
-        let required = ["HAUS_LAB_USERNAME", "HAUS_LAB_PASSWORD", "XMPP_PUSH_NODE", "XMPP_PUSH_SECRET", "XMPP_OMEMO_PEER"]
+        // The app generates its own node and secret and registers them with push.xmpp.haus after sign-in.
+        let required = ["HAUS_LAB_USERNAME", "HAUS_LAB_PASSWORD", "XMPP_OMEMO_PEER"]
         guard required.allSatisfy({ !(environment[$0] ?? "").isEmpty }) else {
-            throw XCTSkip("Requires generated staging account and push subscription environment")
+            throw XCTSkip("Requires generated staging account environment")
         }
         let app = XCUIApplication()
         app.launchArguments = ["-lab-ui-test", "-staging", "-push-diagnostics"]
@@ -60,15 +63,11 @@ final class PushUITests: XCTestCase {
         connect.tap()
         allowSystemPermissionIfPresent()
 
-        let enable = app.buttons["enableNotifications"]
-        XCTAssertTrue(enable.waitForExistence(timeout: 25), "Staging account must connect and dismiss its sheet")
-        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: enable)], timeout: 30)
-        enable.tap()
+        // Sign-in asks for notification permission and then enables push by itself.
         allowSystemPermissionIfPresent()
-        // The physical failure's AX hierarchy exposes SwiftUI LabeledContent as one row:
-        // `Status, Enabled for staging`, not a standalone value StaticText.
-        XCTAssertTrue(app.staticTexts["Status, Enabled for staging"].waitForExistence(timeout: 25),
-                      "APNs registration and server push IQ must both succeed")
+        let push = app.switches["pushNotifications"]
+        XCTAssertTrue(push.waitForExistence(timeout: 25), "Staging account must connect and dismiss its sheet")
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label ENDSWITH %@", ", On"), object: push)], timeout: 40)
 
         // App-only screenshot stays in the private xcresult. Never capture SpringBoard,
         // print environment values, or attach push-registration.json to the test report.

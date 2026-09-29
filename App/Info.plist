@@ -20,6 +20,8 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>HausPushEnvironment</key>
+	<string>$(HAUS_PUSH_ENVIRONMENT)</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Take a photo or video to send.</string>
 	<key>NSMicrophoneUsageDescription</key>

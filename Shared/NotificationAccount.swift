@@ -13,6 +13,11 @@ struct NotificationAccount: Codable, Sendable, Equatable {
     let password: String
     let push: XMPPPushConfiguration?
 
+    /// The same credentials with another (or no) push subscription.
+    func replacingPush(_ push: XMPPPushConfiguration?) -> Self {
+        NotificationAccount(accountID: accountID, host: host, port: port, domain: domain, username: username, password: password, push: push)
+    }
+
     static func load() throws -> Self? {
         guard try !NotificationAccessGate.isDisabled(at: NotificationAccessGate.location()) else { return nil }
         var query = keychainQuery

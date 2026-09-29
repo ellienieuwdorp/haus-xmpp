@@ -36,6 +36,8 @@ targets:
         PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
         # Communication notifications: the app declares the intent it donates through the extension.
         NSUserActivityTypes: [INSendMessageIntent]
+        # APNs environment the push gateway sends this build's tokens to (see HAUS_PUSH_ENVIRONMENT below).
+        HausPushEnvironment: $(HAUS_PUSH_ENVIRONMENT)
     dependencies:
       - package: XMPPProtocol
       - package: MessageStore
@@ -61,6 +63,14 @@ targets:
         SUPPORTS_MACCATALYST: NO
         MARKETING_VERSION: '0.1.0'
         CURRENT_PROJECT_VERSION: '1'
+      # Debug is development-signed (App/App.entitlements says aps-environment development) and receives sandbox
+      # tokens. Release is what gets archived for TestFlight/App Store, where distribution signing makes the
+      # entitlement production. A Release build installed with development signing would still get sandbox tokens.
+      configs:
+        Debug:
+          HAUS_PUSH_ENVIRONMENT: sandbox
+        Release:
+          HAUS_PUSH_ENVIRONMENT: production
   XMPPNotificationService:
     type: app-extension
     platform: iOS
