@@ -105,7 +105,7 @@ final class NotificationActionLabUITests: XCTestCase {
     @MainActor private func backgroundReply(_ app: XCUIApplication, springboard: XCUIApplication, peer: String, marker: String) {
         // Background, then Reply from Notification Center: the app handles it without coming to the front.
         XCUIDevice.shared.press(.home)
-        XCTAssertTrue(app.wait(for: .runningBackgroundSuspended, timeout: 30) || app.state == .runningBackground)
+        XCTAssertTrue(app.waitForBackground())
         springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.002))
             .press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.75)))
         let listed = springboard.buttons.matching(NSPredicate(format: "identifier == 'ListCell' AND label CONTAINS %@", marker)).firstMatch

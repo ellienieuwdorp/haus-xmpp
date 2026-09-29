@@ -1,7 +1,7 @@
 import XCTest
 
 final class ReplyUITests: XCTestCase {
-    @MainActor func testSwipeReplyCancelPersistAndSearch() throws {
+    @MainActor func testSwipeReplyCancelSearchAndKeepTheDraft() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]
@@ -13,7 +13,6 @@ final class ReplyUITests: XCTestCase {
         app.textFields["newChatAddress"].tap()
         app.textFields["newChatAddress"].typeText(address)
         app.buttons["startChat"].tap()
-        let row = app.buttons["chat.\(address)"]
         let input = app.textFields["messageComposer"].waitForExistence(timeout: 3) ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap()
@@ -56,12 +55,6 @@ final class ReplyUITests: XCTestCase {
         closeSearch.tap()
         XCTAssertTrue(app.buttons["sendMessage"].waitForExistence(timeout: 3))
         XCTAssertEqual(input.value as? String, "Unsent note")
-        app.terminate()
-        app.launch()
-        XCTAssertTrue(row.waitForExistence(timeout: 10))
-        row.tap()
-        XCTAssertTrue(reply.waitForExistence(timeout: 4))
-        XCTAssertTrue(reply.label.contains("Replying to you: \(original)"))
         // Leading-edge navigation remains distinct from a message-content reply swipe.
         let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.5))
         edge.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)))

@@ -36,6 +36,15 @@ extension XCUIApplication {
 nonisolated(unsafe) let serverHeldLabel = NSPredicate(format: "label CONTAINS 'Sent' OR label CONTAINS 'Delivered' OR label CONTAINS 'Read'")
 
 extension XCUIApplication {
+    /// Out of the foreground, whether still running or already suspended. Waiting for one exact state runs out its
+    /// whole timeout whenever the app lands in the other.
+    func waitForBackground(timeout: TimeInterval = 10) -> Bool {
+        let background = NSPredicate { object, _ in
+            [.runningBackground, .runningBackgroundSuspended].contains((object as? XCUIApplication)?.state)
+        }
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: background, object: self)], timeout: timeout) == .completed
+    }
+
     /// The root is always Chats; close the Settings sheet or pop a conversation to get back to it.
     func returnToChats() {
         if navigationBars["Settings"].exists, buttons["Done"].exists { buttons["Done"].tap(); return }

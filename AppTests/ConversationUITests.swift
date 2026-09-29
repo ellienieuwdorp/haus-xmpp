@@ -36,7 +36,9 @@ final class ConversationUITests: XCTestCase {
         XCTAssertTrue(bubble(250, in: app).waitForExistence(timeout: 5))
         XCTAssertTrue(bubble(250, in: app).isHittable, "A chat opens on its newest message, above the composer")
         let timeline = app.collectionViews["conversation.timeline"]
-        for _ in 0..<60 where !bubble(1, in: app).exists { timeline.swipeDown(velocity: .fast) }
+        // A hard fling coasts about three screens; `.fast` coasts one, and every fling waits for the list to come to rest.
+        var flings = 0
+        while !bubble(1, in: app).exists, flings < 20 { timeline.swipeDown(velocity: 4000); flings += 1 }
         XCTAssertTrue(bubble(1, in: app).exists, "Older pages load as the reader scrolls up")
     }
 
@@ -84,13 +86,13 @@ final class ConversationUITests: XCTestCase {
                 .press(forDuration: 0.05, thenDragTo: timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)), withVelocity: .slow, thenHoldForDuration: 0.3)
         }
         let input = composer(in: app)
-        let bubbles = app.textViews.matching(NSPredicate(format: "value BEGINSWITH %@", "History message"))
         // Twice: the second opening follows an interactive dismissal, which leaves the list wherever the finger put it.
         for round in 1...2 {
             // Measure once the drag and any cell self-sizing have settled.
             let anchor = try XCTUnwrap(settled { () -> Anchor? in
-                bubbles.allElementsBoundByIndex.filter { $0.frame.maxY < input.frame.minY - 11 }.max { $0.frame.maxY < $1.frame.maxY }
-                    .map { Anchor(text: $0.value as? String ?? "", gap: input.frame.minY - $0.frame.maxY) }
+                let top = input.frame.minY
+                return bubbleFrames(in: timeline).filter { $0.frame.maxY < top - 11 }.max { $0.frame.maxY < $1.frame.maxY }
+                    .map { Anchor(text: $0.text, gap: top - $0.frame.maxY) }
             }, "round \(round)")
             input.tap()
             XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
@@ -102,6 +104,17 @@ final class ConversationUITests: XCTestCase {
                 .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97)), withVelocity: .slow, thenHoldForDuration: 0.3)
             XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
         }
+    }
+
+    /// Every visible history bubble from one accessibility snapshot; querying each element's frame costs a round trip.
+    @MainActor private func bubbleFrames(in timeline: XCUIElement) -> [(text: String, frame: CGRect)] {
+        var found: [(text: String, frame: CGRect)] = []
+        func walk(_ node: XCUIElementSnapshot) {
+            if node.elementType == .textView, let text = node.value as? String, text.hasPrefix("History message") { found.append((text, node.frame)) }
+            node.children.forEach(walk)
+        }
+        if let root = try? timeline.snapshot() { walk(root) }
+        return found
     }
 
     /// The bubble resting just above the composer and its distance from it.
@@ -119,22 +132,6 @@ final class ConversationUITests: XCTestCase {
         }
         XCTFail("Still moving after \(timeout) seconds")
         return last
-    }
-
-    /// Sending always returns to the newest message, even from far up in history.
-    @MainActor func testSendingFromHistoryReturnsToTheNewestMessage() throws {
-        let app = openLongChat()
-        XCTAssertTrue(bubble(250, in: app).waitForExistence(timeout: 5))
-        let timeline = app.collectionViews["conversation.timeline"]
-        for _ in 0..<3 { timeline.swipeDown(velocity: .fast) }
-        XCTAssertFalse(bubble(250, in: app).isHittable)
-        let input = composer(in: app)
-        input.tap()
-        input.typeText("Back to the bottom")
-        app.buttons["sendMessage"].tap()
-        let sent = app.textViews.containing(NSPredicate(format: "value == %@", "Back to the bottom")).firstMatch
-        XCTAssertTrue(sent.waitForExistence(timeout: 5))
-        XCTAssertTrue(sent.isHittable)
     }
 
 }

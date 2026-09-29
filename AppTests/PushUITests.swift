@@ -28,7 +28,7 @@ final class PushUITests: XCTestCase {
         XCTAssertTrue(push.waitForExistence(timeout: 15))
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Inspection complete"), object: push)], timeout: 15)
         XCUIDevice.shared.press(.home)
-        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10) || app.state == .runningBackgroundSuspended)
+        XCTAssertTrue(app.waitForBackground())
         #endif
     }
 
@@ -77,7 +77,7 @@ final class PushUITests: XCTestCase {
         add(attachment)
         establishEncryptedRoundTrip(app, peer: environment["XMPP_OMEMO_PEER"]!)
         XCUIDevice.shared.press(.home)
-        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10) || app.state == .runningBackgroundSuspended,
+        XCTAssertTrue(app.waitForBackground(),
                       "App must enter the background so its scene releases transport ownership")
         // The orchestrator now sends synthetic encrypted traffic and verifies actual APNs/NSE
         // output separately. Registration alone is not evidence of notification delivery.
