@@ -1,4 +1,5 @@
 import SwiftUI
+import XMPPProtocol
 
 struct SignInView: View {
     @Bindable var model: AppModel
@@ -6,6 +7,8 @@ struct SignInView: View {
     @State private var address = ""
     @State private var password = ""
     @State private var server = ""
+    @State private var port = ""
+    @State private var security = XMPPTransportSecurity.startTLS
     @State private var consent = false
     @State private var showingAdvanced = false
 
@@ -25,12 +28,25 @@ struct SignInView: View {
     }
     /// A bare username, or an address on a lab domain, keeps the disposable-account safeguard.
     private var isLab: Bool { AppModel.labDomains.contains(domain) }
-    private var host: String {
-        if isLab { return domain == "localhost" ? DevelopmentEndpoint.host : domain }
-        let override = server.trimmingCharacters(in: .whitespacesAndNewlines)
-        return override.isEmpty ? domain : override.lowercased()
+    private var serverHost: String { server.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+    private var serverPort: UInt16? {
+        let text = port.trimmingCharacters(in: .whitespaces)
+        return text.isEmpty ? security.defaultPort : UInt16(text).flatMap { $0 > 0 ? $0 : nil }
     }
-    private var canConnect: Bool { (!isLab || consent) && !address.isEmpty && !password.isEmpty && !model.session.isConnecting }
+    /// A server entered by hand is the only endpoint tried; nil lets the app find the domain's server.
+    private var manualServer: XMPPEndpoint? {
+        guard !serverHost.isEmpty, let serverPort else { return nil }
+        return XMPPEndpoint(host: serverHost, port: serverPort, security: security)
+    }
+    private var route: String {
+        let name = { (security: XMPPTransportSecurity) in security == .directTLS ? "Direct TLS" : "STARTTLS" }
+        if let manualServer { return "\(manualServer.host):\(manualServer.port) · \(name(manualServer.security))" }
+        if isLab { return "\(domain == "localhost" ? DevelopmentEndpoint.host : domain):5223 · Direct TLS" }
+        return "\(domain) · Server found automatically"
+    }
+    private var canConnect: Bool {
+        (!isLab || consent) && !address.isEmpty && !password.isEmpty && !model.session.isConnecting && (serverHost.isEmpty || serverPort != nil)
+    }
 
     var body: some View {
         NavigationStack {
@@ -68,27 +84,41 @@ struct SignInView: View {
                             .accessibilityIdentifier("labConsent")
                     }
                 } footer: {
-                    Text("\(host):5223 · Direct TLS")
+                    Text(route)
                 }
-                if !isLab {
-                    Section {
-                        DisclosureGroup("Advanced", isExpanded: $showingAdvanced) {
-                            row("Server") {
-                                TextField(domain, text: $server)
-                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                                    .keyboardType(.URL)
-                                    .accessibilityIdentifier("serverHost")
+                Section {
+                    DisclosureGroup("Advanced", isExpanded: $showingAdvanced) {
+                        row("Server") {
+                            TextField("Automatic", text: $server)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .keyboardType(.URL)
+                                .accessibilityIdentifier("serverHost")
+                        }
+                        if !serverHost.isEmpty {
+                            row("Security") {
+                                Picker("Security", selection: $security) {
+                                    Text("STARTTLS").tag(XMPPTransportSecurity.startTLS)
+                                    Text("Direct TLS").tag(XMPPTransportSecurity.directTLS)
+                                }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
+                                .accessibilityIdentifier("serverSecurity")
+                            }
+                            row("Port") {
+                                TextField(String(security.defaultPort), text: $port)
+                                    .keyboardType(.numberPad)
+                                    .accessibilityIdentifier("serverPort")
                             }
                         }
-                    } footer: {
-                        Text("Only needed when the server’s host differs from the address domain.")
                     }
+                } footer: {
+                    Text("Only needed when the server cannot be found automatically.")
                 }
                 Section {
                     VStack(spacing: 16) {
                         Button {
                             Task {
-                                if await model.connect(username: address, password: password, host: server) {
+                                if await model.connect(username: address, password: password, server: manualServer) {
                                     password = ""
                                     dismiss()
                                 }
