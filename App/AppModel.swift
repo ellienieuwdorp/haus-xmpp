@@ -1708,7 +1708,7 @@ final class AppModel {
         do {
             guard let authorization = try NotificationAccount.load(), authorization.push != nil,
                   authorization.accountID == account, sessionAccount?.accountID == account,
-                  let message = try await destination.resolve(accountID: account, active: true, store: store),
+                  let message = try await destination.resolve(accountID: account, store: store),
                   accountID == account, sessionAccount?.accountID == account,
                   try NotificationAccount.load() == authorization else { return }
             notificationRoute = NotificationChatRoute(accountID: account, chatID: message.chatID)

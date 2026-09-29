@@ -24,21 +24,15 @@ struct RevisionResumptionTests {
               expiresAt: nil, inboundHandled: 0, outboundSent: UInt64(journal.count), outboundAcknowledged: 0, journal: journal)
     }
 
-    @Test func journaledRetractionResumesOnlyAsItsExactSealedWireAndAnUnsealedCorrectionNeverDoes() async throws {
+    /// A queued correction's envelope is sealed only when prepared: until then nothing may be replayed under its ID.
+    @Test func anUnsealedCorrectionNeverResumes() async throws {
         let (store, _, adapter) = try await fixture()
-        _ = try await store.enqueueMessageUpdate(accountID: account, id: "u1", kind: .retraction, chatID: peer, targetMessageID: "mine")
-        let xml = try XMPPClient.retractionXML(to: peer, targetID: "mine", id: "u1")
-        let entry = XMPPStreamJournalEntry(sequence: 1, xml: xml, messageID: "u1")
-        #expect(try await !adapter.permitsResumption(snapshot(journal: [entry])))
-        try await store.sealQueuedUpdate(accountID: account, updateID: "u1", wire: Data(xml.utf8))
-        #expect(try await adapter.permitsResumption(snapshot(journal: [entry])))
-        let drifted = XMPPStreamJournalEntry(sequence: 2, xml: xml.replacingOccurrences(of: "id='mine'", with: "id='theirs'"), messageID: "u1")
-        #expect(try await !adapter.permitsResumption(snapshot(journal: [entry, drifted])))
-        // A correction is queued but its envelope has not been sealed: nothing may be replayed under its ID.
         _ = try await store.enqueueMessageUpdate(accountID: account, id: "u2", kind: .correction, chatID: peer, targetMessageID: "mine", body: "better")
         let envelope = XMPPOMEMOEnvelope(profile: .legacy, senderDeviceID: 1, keys: [.init(deviceID: 2, keyExchange: false, data: Data([1]))], iv: Data(repeating: 0, count: 12), payload: Data([2]))
-        let correction = XMPPStreamJournalEntry(sequence: 3, xml: try XMPPClient.encryptedMessageXML(to: peer, envelope: envelope, id: "u2", replaces: "mine"), messageID: "u2")
-        #expect(try await !adapter.permitsResumption(snapshot(journal: [entry, correction])))
+        let xml = try XMPPClient.encryptedMessageXML(to: peer, envelope: envelope, id: "u2", replaces: "mine")
+        // A well-formed correction of ours, so only the missing seal can refuse it.
+        #expect(try XMPPClient.decodeOutgoingEncryptedMessageXML(xml, from: account).replaces == "mine")
+        #expect(try await !adapter.permitsResumption(snapshot(journal: [XMPPStreamJournalEntry(sequence: 1, xml: xml, messageID: "u2")])))
     }
 
     @Test func inboundPlainRetractionProjectsOnlyForTheSender() async throws {

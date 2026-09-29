@@ -45,7 +45,8 @@ import Testing
 }
 
 @Test func notificationPreviewNeverShowsPlaceholderText() {
-    let placeholder = StoredMessage(id: "unreadable-x", accountID: "a", chatID: "peer", senderID: "peer", body: "", encryptionProfile: "unreadable",
+    // Text on the row must not leak through: the placeholder reason alone decides the body.
+    let placeholder = StoredMessage(id: "unreadable-x", accountID: "a", chatID: "peer", senderID: "peer", body: "Placeholder text", encryptionProfile: "unreadable",
                                     unreadableReason: .decryptFailed)
     let preview = NotificationPreview(MessageNotification(latest: placeholder, chatTitle: "Bob", messageCount: 1, conversationCount: 1, previewsEnabled: true))
     #expect(preview.body == "New message")

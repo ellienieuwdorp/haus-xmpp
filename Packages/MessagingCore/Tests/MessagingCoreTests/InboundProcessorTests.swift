@@ -19,33 +19,22 @@ struct InboundProcessorTests {
         return (store, InboundProcessor(encryption: encryption, client: client, account: account))
     }
 
-    /// The app and the extension no longer have their own inbound switches: the same events
-    /// through the same processor leave the same projection, whichever loop drove them.
-    @Test func appAndExtensionPathsProjectIdenticalState() async throws {
+    /// The extension's loop hands every event to the shared processor and ends only on disconnect.
+    @Test func backgroundEventsFeedTheProcessorAndEndOnDisconnect() async throws {
         let xml = try XMPPClient.reactionXML(to: peer, targetID: "w", reactions: ["👍"], id: "r1")
         let reaction = try #require(XMPPClient.decodeOutgoingReactionXML(xml, from: account))
-
-        let (appStore, appProcessor) = try await fixture()
-        #expect(try await appProcessor.process(.reaction(reaction)) == .stored)
-        #expect(try await appProcessor.process(.groupPresence(room: "room@localhost")) == .ignored)
-        #expect(try await appProcessor.process(.reaction(reaction)) == .stored) // replay is idempotent
-
-        let (extensionStore, extensionProcessor) = try await fixture()
+        let (store, processor) = try await fixture()
         let (events, continuation) = AsyncStream<XMPPEvent>.makeStream()
         continuation.yield(.reaction(reaction))
         continuation.yield(.groupPresence(room: "room@localhost"))
-        continuation.yield(.reaction(reaction))
+        continuation.yield(.reaction(reaction)) // replay is idempotent
         continuation.yield(.state(.disconnected(nil)))
         await #expect(throws: BackgroundSynchronizationError.connectionEnded) {
-            try await consumeBackgroundEvents(events, processor: extensionProcessor)
+            try await consumeBackgroundEvents(events, processor: processor)
         }
-
-        // Arrival time is the only field that legitimately differs between two runs.
-        let fromApp = try await appStore.reactionsForChat(accountID: account, chatID: peer, messageIDs: ["t"]).mapValues { $0.map { [$0.id, $0.actorID, $0.targetWireID] + $0.reactions } }
-        let fromExtension = try await extensionStore.reactionsForChat(accountID: account, chatID: peer, messageIDs: ["t"]).mapValues { $0.map { [$0.id, $0.actorID, $0.targetWireID] + $0.reactions } }
-        #expect(fromApp == fromExtension)
-        #expect(fromApp == ["t": [["r1", account, "w", "👍"]]])
-        #expect(try await appStore.events(accountID: account, chatID: peer, messageID: "t").map(\.kind) == [.reaction])
+        let projected = try await store.eventsForChat(accountID: account, chatID: peer, messageIDs: ["t"]).mapValues { $0.compactMap(AuthenticatedReaction.init).map { [$0.id, $0.actorID, $0.targetWireID] + $0.reactions } }
+        #expect(projected == ["t": [["r1", account, "w", "👍"]]])
+        #expect(try await store.events(accountID: account, chatID: peer, messageID: "t").map(\.kind) == [.reaction])
     }
 
     /// A plain receipt from the peer projects onto our own message; one for the peer's own message is refused.
@@ -103,15 +92,38 @@ struct InboundProcessorTests {
         #expect(try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: 1))) == .acknowledged)
     }
 
-    /// A stanza without a durable disposition withholds the next barrier and ends the stream.
+    private func addressedCiphertext(_ encryption: OMEMOService) async throws -> [XMPPEvent] {
+        let (direct, group) = try await unknownSenderEnvelopes(account: account, encryption: encryption)
+        let room = "room@conference.localhost"
+        return [.encryptedMessage(XMPPEncryptedMessage(id: "k1", from: peer + "/x", to: account, originID: nil, envelope: direct)),
+                .encryptedGroupMessage(try XMPPEncryptedGroupMessage(id: "k2", room: room, occupant: room + "/bob", sender: peer, envelope: group))]
+    }
+
+    /// Ciphertext that cannot be decrypted yet (the sender's keys are unreachable offline) is retained for later keys or
+    /// trust. That is a durable disposition, so the barrier stays acknowledgeable.
+    @Test func retainedCiphertextKeepsTheBarrierAcknowledgeable() async throws {
+        let (store, encryption, processor) = try await initializedFixture()
+        for (sequence, event) in try await addressedCiphertext(encryption).enumerated() {
+            let outcome = try await processor.process(event)
+            guard case .retained = outcome else { Issue.record("\(event): \(outcome)"); continue }
+            #expect(try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: UInt64(sequence + 1)))) == .acknowledged)
+        }
+        #expect(try await store.pendingEncryptedIncoming(accountID: account).count == 2)
+    }
+
+    /// A stanza without a durable disposition (a plain update not saved, ciphertext neither decrypted nor retained)
+    /// withholds the next barrier and ends the stream.
     @Test func undisposedInboundRefusesTheBarrier() async throws {
-        let (store, processor) = try await fixture()
-        try await store.close() // persistence now fails outright
         let xml = try XMPPClient.reactionXML(to: peer, targetID: "w", reactions: ["👍"], id: "r2")
         let reaction = try #require(XMPPClient.decodeOutgoingReactionXML(xml, from: account))
-        await #expect(throws: (any Error).self) { try await processor.process(.reaction(reaction)) }
-        await #expect(throws: InboundProcessor.Failure.unsavedInbound) {
-            try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: 1)))
+        for index in 0..<3 {
+            let (store, encryption, processor) = try await initializedFixture()
+            let event = index == 0 ? XMPPEvent.reaction(reaction) : try await addressedCiphertext(encryption)[index - 1]
+            try await store.close() // persistence now fails outright
+            await #expect(throws: (any Error).self) { try await processor.process(event) }
+            await #expect(throws: InboundProcessor.Failure.unsavedInbound) {
+                try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: 1)))
+            }
         }
     }
 }

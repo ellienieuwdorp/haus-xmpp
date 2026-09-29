@@ -62,7 +62,6 @@ struct ArchiveSynchronizerTests {
             #expect(await trace.events == ["fetch:\(account):before(nil)", "durable:own", "ack:1", "fetch:\(account):after(own)", "refresh:\(room)",
                 "fetch:\(room):after(older-room)", "durable:room-first", "ack:2", "fetch:\(room):after(room-first)", "durable:room-last", "ack:3"])
             #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "own")
-            #expect(try await store.archiveCheckpoint(accountID: "bob@localhost", archiveID: room) == nil)
         }
     }
 
@@ -124,7 +123,7 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    @Test func rejectedGroupContentIsDurableBeforeCursorAndCannotInventArchiveOwner() async throws {
+    @Test func rejectedGroupContentIsRecordedWithoutAPlaceholderAndCannotInventArchiveOwner() async throws {
         try await fixture { store async throws in
             let sync = ArchiveSynchronizer(store: store)
             var rejected = XMPPArchiveMessage(archiveID: "rejected", timestamp: Date(), message: nil, encryptedMessage: nil)
@@ -133,12 +132,11 @@ struct ArchiveSynchronizerTests {
             rejected.rejectionArchive = account
             #expect(try await sync.persistRejectedContent(account: account, archived: rejected))
             #expect(try await store.hasArchiveRejection(accountID: account, archiveID: account, messageID: "rejected"))
-            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account) == nil)
             #expect(try await store.messages(accountID: account, chatID: room).isEmpty)
         }
     }
 
-    @Test func rejectedDirectContentWritesRejectionAndPlaceholderBeforeCursor() async throws {
+    @Test func rejectedDirectContentWritesRejectionAndPlaceholder() async throws {
         try await fixture { store async throws in
             let sync = ArchiveSynchronizer(store: store)
             let bob = "bob@localhost", stamp = Date(timeIntervalSince1970: 1_788_256_800)
@@ -155,7 +153,6 @@ struct ArchiveSynchronizerTests {
             #expect(row.sentAt == stamp && row.unreadableReason == .malformedContent && row.senderID == bob && !row.isOutgoing)
             #expect(row.body.isEmpty && row.encryptionProfile == "unreadable" && row.wireID == nil)
             #expect(try await store.hasArchiveRejection(accountID: account, archiveID: account, messageID: "m4"))
-            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account) == nil)
             // A repeated page is idempotent.
             #expect(try await sync.persistRejectedContent(account: account, archived: malformed))
             #expect(try await store.messages(accountID: account, chatID: bob).count == 1)
@@ -180,7 +177,7 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    @Test func excludedArchiveEntryIsDurableWithoutADispositionQuery() async throws {
+    @Test func excludedArchiveEntryKeepsTheArchiveTimestampAndIsIdempotent() async throws {
         try await fixture { store async throws in
             let encryption = OMEMOService(store: store, protection: try StateProtection(key: Data(repeating: 7, count: 32)))
             try await encryption.initialize(account: account, transport: NullTransport(account: account))
@@ -197,7 +194,33 @@ struct ArchiveSynchronizerTests {
             try await sync.process(account: account, archived: archived, encryption: encryption, transport: client)
             #expect(try await store.messages(accountID: account, chatID: "bob@localhost").count == 1)
             #expect(try await store.pendingEncryptedIncoming(accountID: account).isEmpty)
-            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account) == nil)
+        }
+    }
+
+    /// An entry this device cannot decrypt yet has been processed once its ciphertext is retained, so its page may
+    /// advance. One with no durable outcome fails the page.
+    @Test func undecryptedArchiveEntryPassesOnlyWhenItsCiphertextIsRetained() async throws {
+        try await fixture { store async throws in
+            let encryption = OMEMOService(store: store, protection: try StateProtection(key: Data(repeating: 7, count: 32)))
+            try await encryption.initialize(account: account, transport: NullTransport(account: account))
+            let (direct, group) = try await unknownSenderEnvelopes(account: account, encryption: encryption)
+            let stamp = Date(timeIntervalSince1970: 1_788_256_800), bob = "bob@localhost"
+            var roomEntry = XMPPArchiveMessage(archiveID: "a2", timestamp: stamp, message: nil, encryptedMessage: nil)
+            roomEntry.encryptedGroupMessage = try XMPPEncryptedGroupMessage(id: "k2", room: room, occupant: room + "/bob", sender: bob, envelope: group, provenance: .roomArchive)
+            let directEntry = XMPPArchiveMessage(archiveID: "a1", timestamp: stamp, message: nil,
+                encryptedMessage: XMPPEncryptedMessage(id: "k1", from: bob + "/x", to: account, originID: nil, envelope: direct, provenance: .receivedCarbon))
+            let sync = ArchiveSynchronizer(store: store)
+            let client = XMPPClient(labCertificateAuthority: nil)
+            for entry in [directEntry, roomEntry] {
+                try await sync.process(account: account, archived: entry, encryption: encryption, transport: client)
+            }
+            #expect(try await store.pendingEncryptedIncoming(accountID: account).count == 2)
+            // Addressed to another account: nothing is retained for it.
+            let misaddressed = XMPPArchiveMessage(archiveID: "a3", timestamp: stamp, message: nil,
+                encryptedMessage: XMPPEncryptedMessage(id: "k3", from: bob + "/x", to: "mallory@localhost", originID: nil, envelope: direct, provenance: .receivedCarbon))
+            await #expect(throws: OMEMOError.self) {
+                try await sync.process(account: account, archived: misaddressed, encryption: encryption, transport: client)
+            }
         }
     }
 
@@ -337,7 +360,6 @@ struct ArchiveSynchronizerTests {
                 process: { _ in }, acknowledge: { _ in }, disconnect: {}, progress: { _ in })
             try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
             #expect(await bounds.values == [.after("c1"), .after("c2"), .after("r1")])
-            #expect(await bounds.values.allSatisfy { if case .after = $0 { true } else { false } })
             // A pre-v16 archive gets no backfill row, so backfill treats it as walked from its start.
             #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: account) == nil)
             #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: room) == nil)
@@ -365,25 +387,11 @@ struct ArchiveSynchronizerTests {
         }
     }
 
-    @Test func firstSyncReplacesAnOrphanedBackfillCursorSoNoGapRemains() async throws {
-        try await fixture { store async throws in
-            // A backfill row without a checkpoint: an earlier build's first sync saved [old..x] and died before its
-            // checkpoint. Entries between x and the new newest page would be reached by neither walk if "old" stayed.
-            _ = try await store.saveArchiveBackfillCursor(accountID: account, archiveID: account, expectedRevision: nil, oldestID: "old", complete: false)
-            let operations = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in },
-                fetchPage: { bound, _ in bound == .before(nil) ? page(["n1", "n2"], sequence: 1, complete: false) : emptyPage },
-                process: { _ in }, acknowledge: { _ in }, disconnect: {}, progress: { _ in })
-            try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
-            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "n2")
-            // Backfill pages back from the new page's oldest entry, through the gap and the earlier page (idempotent).
-            #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: account) == ArchiveBackfillCursor(revision: 2, oldestID: "n1", complete: false))
-        }
-    }
-
-    @Test func aFailedFirstPageCommitLeavesNeitherCursor() async throws {
+    @Test func aRefusedFirstPageCommitDisconnectsWithoutAcknowledging() async throws {
         try await fixture { store async throws in
             // The checkpoint already exists for this archive (a concurrent first sync won): the newest-page write is refused
-            // as a whole, so no backfill row is written behind it.
+            // (`saveNewestArchivePage` owns what it leaves behind), so the page's tokens stay unhandled and the stream ends.
+            let trace = Trace()
             let operations = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in },
                 fetchPage: { bound, _ in
                     if bound == .before(nil) {
@@ -392,12 +400,11 @@ struct ArchiveSynchronizerTests {
                     }
                     return emptyPage
                 },
-                process: { _ in }, acknowledge: { _ in Issue.record("no acknowledgement after a refused commit") }, disconnect: {}, progress: { _ in })
+                process: { _ in }, acknowledge: { _ in await trace.record("ack") }, disconnect: { await trace.record("disconnect") }, progress: { _ in })
             await #expect(throws: MessageStoreError.invalidTransition) {
                 try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
             }
-            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "c1")
-            #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: account) == nil)
+            #expect(await trace.events == ["disconnect"])
         }
     }
 }
