@@ -413,8 +413,9 @@ final class AppModel {
     var accountDomain: String { accountID.split(separator: "@", maxSplits: 1).last.map(String.init) ?? DevelopmentEndpoint.domain }
     var isLabAccount: Bool { Self.labDomains.contains(accountDomain) }
 
-    /// `address` is a lab username or a full `name@domain`; `host` optionally overrides the server (direct TLS on 5223).
-    func connect(username address: String, password: String, host serverHost: String? = nil, savedEndpoint: NotificationAccount? = nil) async -> Bool {
+    /// `address` is a lab username or a full `name@domain`. Without `server` the domain's SRV records choose the endpoint
+    /// (lab domains keep their direct-TLS endpoint on 5223); with one, only that endpoint is used.
+    func connect(username address: String, password: String, server: XMPPEndpoint? = nil, savedEndpoint: NotificationAccount? = nil) async -> Bool {
         let parts = address.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "@", maxSplits: 1).map(String.init)
         // One spelling for the account from here on (RFC 7622 normal form): the bound JID, every key and comparison.
         let username = parts.first.flatMap(JID.normalizedLocalpart) ?? ""
@@ -429,10 +430,8 @@ final class AppModel {
         }
         let manual = savedEndpoint == nil
         if manual { userWantsOffline = false; authenticationRejected = false; reconnectAttempt = 0 }
-        let host: String
-        if let savedEndpoint { host = savedEndpoint.host }
-        else if Self.labDomains.contains(requestedDomain) { host = requestedDomain == "localhost" ? DevelopmentEndpoint.host : requestedDomain }
-        else { host = (serverHost ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased().isEmpty ? requestedDomain : serverHost!.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let fixedEndpoint = server ?? (Self.labDomains.contains(requestedDomain)
+            ? XMPPEndpoint(host: requestedDomain == "localhost" ? DevelopmentEndpoint.host : requestedDomain, port: 5223, security: .directTLS) : nil)
         if let sessionAccount, sessionAccount.accountID != username + "@" + requestedDomain {
             await forgetAccount()
             guard foreground, !quiescing else { return false }
@@ -446,9 +445,10 @@ final class AppModel {
         let connection = XMPPClient(labCertificateAuthority: DevelopmentEndpoint.certificateAuthority)
         client = connection
         // Assign account before consuming events; scoped refresh rejects stale results.
-        let endpoint = savedEndpoint ?? Self.retainingPushSubscription(previous: sessionAccount, replacement: NotificationAccount(accountID: username + "@" + requestedDomain,
-            host: host, port: 5223, domain: requestedDomain,
-            username: username, password: password, push: nil))
+        // A discovered endpoint is unknown until the first connection succeeds; the record is saved only after that.
+        let endpoint = savedEndpoint ?? Self.retainingSavedState(previous: sessionAccount, replacement: NotificationAccount(accountID: username + "@" + requestedDomain,
+            host: fixedEndpoint?.host ?? "", port: fixedEndpoint?.port ?? 0, security: fixedEndpoint?.security ?? .directTLS,
+            discoversEndpoint: fixedEndpoint == nil, domain: requestedDomain, username: username, password: password, push: nil))
         let account = endpoint.accountID
         sessionAccount = endpoint
         selectAccount(account)
@@ -481,18 +481,21 @@ final class AppModel {
             try await connection.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
             try await connection.configureResource(SharedSession.resource(accountID: account, defaults: sessionDefaults))
             guard generation == token else { return false }
-            try await connection.connect(host: endpoint.host, port: endpoint.port, domain: endpoint.domain, username: username, password: password)
-            guard generation == token, accountID == endpoint.accountID,
-                  sessionAccount?.accountID == endpoint.accountID else { await connection.disconnect(); return false }
-            // Authentication has succeeded. Only now may a manually entered password replace
-            // saved credentials, so the next launch and every reconnect can sign in unattended.
-            do { try endpoint.save() }
+            let connectedSession = try await connection.connect(route: endpoint.route, domain: endpoint.domain, username: username,
+                                                                password: password, requireSCRAM: endpoint.requiresSCRAM)
+            guard generation == token, accountID == endpoint.accountID, let current = sessionAccount,
+                  current.accountID == endpoint.accountID else { await connection.disconnect(); return false }
+            // Authentication has succeeded. Only now may a manually entered password replace saved credentials, so the
+            // next launch and every reconnect can sign in unattended, first through the endpoint that just worked.
+            let connected = current.connected(connectedSession)
+            sessionAccount = connected
+            do { try connected.save() }
             catch {
                 self.error = "Connected, but the password could not be saved. You will be asked for it on the next launch."
             }
             // `.online` was emitted before `connect` returned, so this runs alongside the setup task. Not awaited: the
             // sign-in sheet closes now, and the permission prompt, APNs and the gateway round trips follow on their own.
-            startPushSetup(client: connection, session: endpoint, token: token, interactive: manual)
+            startPushSetup(client: connection, session: connected, token: token, interactive: manual)
             return true
         } catch {
             guard generation == token else { await connection.disconnect(); return false }
@@ -511,7 +514,7 @@ final class AppModel {
 
     nonisolated static func isAuthenticationFailure(_ error: any Error) -> Bool {
         switch error as? XMPPClientError {
-        case .authenticationFailed, .authenticationUnavailable: true
+        case .authenticationFailed, .authenticationUnavailable, .authenticationDowngrade: true
         default: false
         }
     }
@@ -519,7 +522,13 @@ final class AppModel {
     nonisolated static func failureMessage(for error: any Error) -> String {
         switch error {
         case XMPPClientError.authenticationFailed: "The password was not accepted."
-        case XMPPClientError.authenticationUnavailable: "The server does not offer password sign-in over TLS."
+        case XMPPClientError.authenticationUnavailable: "The server does not offer a sign-in method this app supports."
+        case XMPPClientError.authenticationDowngrade:
+            "The server no longer offers SCRAM sign-in, which this account used before, so the password was not sent. Sign out and in again only if the server’s operator made this change."
+        case XMPPClientError.authenticationRetryable: "The server could not check the password right now."
+        case XMPPClientError.encryptionUnavailable: "The server did not offer an encrypted connection."
+        case XMPPClientError.serviceNotOffered: "This domain does not offer XMPP service."
+        case XMPPClientError.unexpectedProtocol: "The server sent a reply this app cannot accept."
         case XMPPClientError.timedOut: "The server did not respond."
         case MessageStoreError.transportOwnedElsewhere: "Another process is still using this account’s storage. Try again in a moment."
         case is CancellationError: "Connection cancelled."
@@ -629,14 +638,18 @@ final class AppModel {
         if let localFailure { self.error = localFailure }
     }
 
-    /// Re-entering credentials does not revoke an existing server subscription. Keep its
-    /// identity available for background handoff and explicit logout, but never cross accounts.
-    static func retainingPushSubscription(previous: NotificationAccount?, replacement: NotificationAccount) -> NotificationAccount {
-        guard replacement.push == nil, let previous, let push = previous.push,
-              previous.accountID == replacement.accountID, previous.domain == replacement.domain,
+    /// Re-entering credentials for the same account does not revoke an existing server subscription: its identity stays
+    /// available for background handoff and explicit logout. Nor does it lift the SCRAM pin, so a server that drops SCRAM
+    /// cannot get PLAIN by making the user type the password again; only signing out does. A discovered endpoint that
+    /// worked stays the first to try. Nothing crosses accounts.
+    static func retainingSavedState(previous: NotificationAccount?, replacement: NotificationAccount) -> NotificationAccount {
+        guard let previous, previous.accountID == replacement.accountID, previous.domain == replacement.domain,
               previous.username == replacement.username else { return replacement }
-        return NotificationAccount(accountID: replacement.accountID, host: replacement.host, port: replacement.port,
-            domain: replacement.domain, username: replacement.username, password: replacement.password, push: push)
+        let keepEndpoint = replacement.discoversEndpoint && previous.discoversEndpoint && !previous.host.isEmpty
+        let endpoint = keepEndpoint ? previous : replacement
+        return NotificationAccount(accountID: replacement.accountID, host: endpoint.host, port: endpoint.port, security: endpoint.security,
+            discoversEndpoint: replacement.discoversEndpoint, requiresSCRAM: previous.requiresSCRAM || replacement.requiresSCRAM,
+            domain: replacement.domain, username: replacement.username, password: replacement.password, push: replacement.push ?? previous.push)
     }
 
     /// Serialize scene transitions; never release the lease with a suspended writer alive.
@@ -2816,8 +2829,8 @@ extension AppModel: NotificationActionEnvironment {
                     _ = try? await processor.process(event)
                 }
             }
-            try await client.connect(host: credentials.host, port: credentials.port, domain: credentials.domain,
-                                     username: credentials.username, password: credentials.password)
+            try await client.connect(route: credentials.route, domain: credentials.domain, username: credentials.username,
+                                     password: credentials.password, requireSCRAM: credentials.requiresSCRAM)
             let resumed = await client.sessionResumed
             Self.syncLog.notice("notification action online resumed=\(resumed, privacy: .public)")
             guard !session.isOver else { throw CancellationError() }

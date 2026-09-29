@@ -91,8 +91,8 @@ private enum ExtensionRun {
                 AvatarStore.notificationImageData(root: root, account: accountID, hash: hash)
             }))
             try await BackgroundSynchronizer().synchronize(databaseURL: root.appending(path: "messages.sqlite"), wrappingKey: key,
-                account: BackgroundAccount(host: account.host, port: account.port, domain: account.domain,
-                                           username: account.username, password: account.password,
+                account: BackgroundAccount(route: account.route, domain: account.domain, username: account.username,
+                                           password: account.password, requiresSCRAM: account.requiresSCRAM,
                                            resource: SharedSession.resource(accountID: accountID),
                                            push: PushRegistrationState.sessionSubscription(
                                                saved: account.push, state: try? PushRegistrationState.load(accountID: accountID)),
