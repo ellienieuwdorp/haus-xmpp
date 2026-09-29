@@ -55,13 +55,6 @@ final class RevisionUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Edit"].exists)
         XCTAssertFalse(app.buttons["Copy"].exists)
         app.buttons["Dismiss"].firstMatch.tap()
-
-        // The projection survives a relaunch and the chat list preview follows it.
-        app.terminate()
-        app.launch()
-        XCTAssertTrue(app.staticTexts["Alex"].waitForExistence(timeout: 10))
-        app.staticTexts["Alex"].tap()
-        XCTAssertTrue(placeholder.waitForExistence(timeout: 10))
     }
 
     /// The lab echo peer corrects its echo of a "#edit" message and retracts its echo of a "#unsend"

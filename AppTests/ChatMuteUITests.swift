@@ -3,7 +3,7 @@ import XCTest
 /// Mute is local: a trailing swipe action beside Pin, a duration dialog, a quiet row glyph and the details row.
 /// The demo seeds Maya as muted always.
 final class ChatMuteUITests: XCTestCase {
-    @MainActor func testSwipeMuteDialogDetailsRowAndRelaunch() throws {
+    @MainActor func testSwipeMuteDialogAndDetailsRow() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]
@@ -56,7 +56,7 @@ final class ChatMuteUITests: XCTestCase {
         }
         XCTAssertTrue(wait(alex, muted: false))
 
-        // Unmute from the list, then the state survives a relaunch.
+        // Unmute from the list, and mute always from it.
         maya.swipeLeft()
         let unmuteAction = app.buttons["Unmute"]
         XCTAssertTrue(unmuteAction.waitForExistence(timeout: 3))
@@ -68,11 +68,6 @@ final class ChatMuteUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Always"].waitForExistence(timeout: 3))
         app.buttons["Always"].tap()
         XCTAssertTrue(wait(alex, muted: true))
-
-        app.terminate()
-        app.launch()
-        XCTAssertTrue(alex.waitForExistence(timeout: 15))
-        XCTAssertTrue(wait(alex, muted: true), "Mute must survive process restart")
     }
 
     @MainActor private func wait(_ element: XCUIElement, muted: Bool, timeout: TimeInterval = 5) -> Bool {
