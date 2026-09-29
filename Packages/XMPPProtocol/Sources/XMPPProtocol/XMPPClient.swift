@@ -163,6 +163,8 @@ public actor XMPPClient {
     /// A bind the server refused (for example a resource conflict) is retried once with a server-assigned resource.
     private var bindRetried = false
     private var availability = XMPPAvailability.active
+    /// Counts emitted events, so the reader can tell whether a stanza produced any.
+    private var emittedEvents: UInt64 = 0
     private struct IQRequest {
         let scope: IQReplyScope
         let continuation: CheckedContinuation<XMLNode, Error>
@@ -547,6 +549,7 @@ public actor XMPPClient {
                       let event = PresenceWire.event(node, accountBareJID: account, accountFullJID: boundJID, rooms: Set(groupRooms.keys)) {
                 try emit(event)
             }
+            let emittedBefore = emittedEvents
             if node.name == "message", node.namespace == "jabber:client" {
                 if Carbons.containsWrapper(node) {
                     // Malformed or foreign wrappers are discarded as a whole; their outer body
@@ -570,7 +573,10 @@ public actor XMPPClient {
                 }
             }
             if let inbound {
-                if node.name == "message" { try emit(.streamManagementBarrier(inbound)) }
+                // A message that produced events is handled once the consumer made them durable. One that produced
+                // none (a room subject, a message from an unknown room) owes nothing: it counts at once, so a final
+                // `<a/>` can cover it; contiguity still keeps h below any earlier stanza the consumer holds.
+                if node.name == "message", emittedEvents != emittedBefore { try emit(.streamManagementBarrier(inbound)) }
                 else { try await streamManagement?.handled(inbound) }
             }
         case .idle: throw XMPPClientError.unexpectedProtocol
@@ -594,7 +600,7 @@ public actor XMPPClient {
         "haus-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16).lowercased()
     }
 
-    static func validResource(_ resource: String) -> Bool {
+    public static func validResource(_ resource: String) -> Bool {
         (1...64).contains(resource.utf8.count) && resource.utf8.allSatisfy {
             (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 46 || $0 == 95
         }
@@ -1124,6 +1130,7 @@ public actor XMPPClient {
 
     private func streamOpening() -> String { "<stream:stream to='\(xmlEscaped(domain))' xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams' version='1.0'>" }
     private func emit(_ event: XMPPEvent) throws {
+        emittedEvents &+= 1
         switch continuation.yield(event) {
         case .enqueued: break
         case .dropped, .terminated: throw XMPPClientError.eventConsumerTooSlow
