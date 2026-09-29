@@ -30,18 +30,7 @@ final class ReactionNotificationServiceTests: XCTestCase {
     private func setup() async throws -> Setup {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
-        let secondStore = try f.openStore("alice-second.sqlite")
-        try await secondStore.acquireTransportOwnership()
-        let second = OMEMOService(store: secondStore, protection: f.protection)
-        try await second.initialize(account: f.alice, transport: f.aTransport)
-        try await f.a.maintainLocalAdvertisement(account: f.alice, profile: .modern, transport: f.aTransport)
-        for (service, account, peer, transport) in [(second, f.alice, f.bob, f.aTransport), (second, f.alice, f.alice, f.aTransport),
-                                                    (f.a, f.alice, f.bob, f.aTransport), (f.a, f.alice, f.alice, f.aTransport),
-                                                    (f.b, f.bob, f.alice, f.bTransport)] {
-            for device in try await service.refreshDevices(account: account, peer: peer, profile: .modern, transport: transport).devices where device.active {
-                try await service.setTrust(account: account, deviceID: device.id, trust: .accepted)
-            }
-        }
+        let (secondStore, second) = try await f.addSecondAliceDevice()
         // Alice → Bob, with the sent carbon reaching her second device.
         let queued = try await f.queue("Lunch at noon?")
         try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)

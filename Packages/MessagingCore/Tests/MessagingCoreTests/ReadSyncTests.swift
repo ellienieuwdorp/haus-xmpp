@@ -32,14 +32,14 @@ struct ReadSyncTests {
         #expect(try await !sync.pull(account: account, encryption: encryption, fetch: { throw XMPPClientError.connectionClosed }))
         await #expect(throws: CancellationError.self) { try await sync.pull(account: account, encryption: encryption, fetch: { throw CancellationError() }) }
         #expect(try await !sync.pull(account: account, encryption: encryption, fetch: { [XMPPDisplayedItem(chat: "bob@localhost", stanzaID: "unknown", by: "alice@localhost")] }))
-        #expect(try await store.takeMessageNotification(accountID: account).messageCount == 2)
+        #expect(try await store.pendingNotifications(accountID: account).claimed.count == 2)
         try await store.commitEncryptedIncoming(accountID: account, sender: peer, digest: "m3", expectedRevision: 3, state: Data([3]),
             message: StoredMessage(id: "m3", accountID: account, chatID: peer, senderID: peer, body: "Synthetic", sentAt: Date(timeIntervalSince1970: 1_800_000_010),
                                    encryptionProfile: "modern", wireID: "m3"), archiveStanzaID: "s-m3")
         #expect(try await sync.pull(account: account, encryption: encryption, fetch: { [XMPPDisplayedItem(chat: "bob@localhost", stanzaID: "s-m3", by: "alice@localhost")] }))
         #expect(try await store.readPointer(accountID: account, chatID: peer)?.messageID == "m3")
         // Read on another device before this run's claim: nothing is left to alert.
-        #expect(try await store.takeMessageNotification(accountID: account).messageCount == 0)
+        #expect(try await store.pendingNotifications(accountID: account).claimed.count == 0)
     }
 
     @Test func pushPublishesLocalReadsOnceAndKeepsFailuresPending() async throws {

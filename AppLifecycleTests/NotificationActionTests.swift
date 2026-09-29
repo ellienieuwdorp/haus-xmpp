@@ -89,33 +89,27 @@ import MessagingCore
         XCTAssertTrue(environment.reported.isEmpty)
     }
 
-    func testReplyReadsFirstThenQueuesThroughTheOutboxAndClearsAStaleFailure() async throws {
-        let environment = FakeActionEnvironment(accounts: [account], message: incoming)
-        let outcome = await NotificationActionHandler.perform(try request(.reply("On my way")), budget: budget, in: environment)
-        XCTAssertEqual(outcome, .replySent)
-        XCTAssertEqual(environment.steps, ["authorize", "resolve", "authorize", "begin", "read", "clear", "authorize", "enqueue", "deliver", "report", "end"])
-        XCTAssertEqual(environment.enqueued, ["On my way"])
-        XCTAssertEqual(environment.reported, [false])
-    }
-
-    func testAHeldReplyStaysQueuedAndTheUserIsTold() async throws {
-        let environment = FakeActionEnvironment(accounts: [account], message: incoming)
-        environment.delivery = .held
-        let outcome = await NotificationActionHandler.perform(try request(.reply("Hi")), budget: budget, in: environment)
-        XCTAssertEqual(outcome, .replyHeld)
-        XCTAssertEqual(environment.enqueued, ["Hi"], "the reply is saved exactly once and never re-sent another way")
-        XCTAssertEqual(environment.reported, [true])
-        XCTAssertEqual(environment.steps.last, "end")
-    }
-
-    func testAReplyThatCannotBeSavedIsReported() async throws {
-        let environment = FakeActionEnvironment(accounts: [account], message: incoming)
-        environment.enqueueFails = true
-        let outcome = await NotificationActionHandler.perform(try request(.reply("Hi")), budget: budget, in: environment)
-        XCTAssertEqual(outcome, .replyFailed)
-        XCTAssertEqual(environment.reported, [true])
-        XCTAssertFalse(environment.steps.contains("deliver"))
-        XCTAssertEqual(environment.steps.last, "end")
+    /// Every reply outcome but a sent one is reported to the user, and the reply is saved at most once, never re-sent
+    /// another way. The reply reads the chat first and clears a stale failure notice.
+    func testReplyOutcomesAreReportedAndTheReplyIsSavedAtMostOnce() async throws {
+        let sent = ["authorize", "resolve", "authorize", "begin", "read", "clear", "authorize", "enqueue", "deliver", "report", "end"]
+        let rows: [(String, (FakeActionEnvironment) -> Void, NotificationActionOutcome, enqueued: [String], reported: [Bool], steps: [String])] = [
+            ("sent", { _ in }, .replySent, ["On my way"], [false], sent),
+            ("held: stays queued and the user is told", { $0.delivery = .held }, .replyHeld, ["On my way"], [true], sent),
+            ("cannot be saved: reported, never delivered", { $0.enqueueFails = true }, .replyFailed, [], [true],
+             ["authorize", "resolve", "authorize", "begin", "read", "clear", "authorize", "enqueue", "report", "end"]),
+            ("no storage: nothing touched, still reported", { $0.begins = false }, .unavailable, [], [true],
+             ["authorize", "resolve", "authorize", "begin", "report"]),
+        ]
+        for (name, configure, outcome, enqueued, reported, steps) in rows {
+            let environment = FakeActionEnvironment(accounts: [account], message: incoming)
+            configure(environment)
+            let result = await NotificationActionHandler.perform(try request(.reply("On my way")), budget: budget, in: environment)
+            XCTAssertEqual(result, outcome, name)
+            XCTAssertEqual(environment.enqueued, enqueued, name)
+            XCTAssertEqual(environment.reported, reported, name)
+            XCTAssertEqual(environment.steps, steps, name)
+        }
     }
 
     func testAFailedReadDoesNotStopTheReply() async throws {
@@ -130,23 +124,9 @@ import MessagingCore
         XCTAssertEqual(outcome2, .unavailable)
     }
 
-    func testNoStorageTouchesNothingAndReportsAReply() async throws {
-        let environment = FakeActionEnvironment(accounts: [account], message: incoming)
-        environment.begins = false
-        let outcome3 = await NotificationActionHandler.perform(try request(.reply("Hi")), budget: budget, in: environment)
-        XCTAssertEqual(outcome3, .unavailable)
-        XCTAssertEqual(environment.steps, ["authorize", "resolve", "authorize", "begin", "report"])
-        XCTAssertEqual(environment.reported, [true])
-    }
-
     // MARK: Destination resolution and rejection
 
-    func testSignedOutAnotherAccountOrAnUnknownMessageIsRejectedBeforeAnythingIsTouched() async throws {
-        let signedOut = FakeActionEnvironment(accounts: [nil], message: incoming)
-        let outcome4 = await NotificationActionHandler.perform(try request(.reply("Hi")), budget: budget, in: signedOut)
-        XCTAssertEqual(outcome4, .rejected)
-        XCTAssertEqual(signedOut.steps, ["authorize"])
-
+    func testAnotherAccountOrAnUnknownMessageIsRejectedBeforeAnythingIsTouched() async throws {
         // A notification issued for another account never resolves under the current one.
         let otherAccount = FakeActionEnvironment(accounts: [account], message: incoming)
         let outcome5 = await NotificationActionHandler.perform(try request(.markRead, account: "mallory@example.org"), budget: budget, in: otherAccount)
@@ -232,48 +212,33 @@ import MessagingCore
     }
 
     /// Expiry while the action holds the lease: the connection is closed but the task is left to expire, so the
-    /// system terminates the process (which frees the kernel lock) instead of suspending a lease owner.
-    func testExpiryNeverEndsTheTaskWhileTheLeaseIsHeld() async throws {
-        let time = FakeBackgroundTime()
-        let center = NotificationActionCenter(time: time, reportRejectedReply: {})
-        let lease = LeaseState()
-        center.abort = { lease.aborts += 1; return lease.held }
-        let (gate, open) = AsyncStream<Void>.makeStream()
-        center.handler = { _, _ in
-            for await _ in gate { break }
-            return .markedRead
+    /// system terminates the process (which frees the kernel lock) instead of suspending a lease owner. Without the
+    /// lease the task ends at expiry. Either way it ends exactly once.
+    func testExpiryEndsTheTaskOnlyWithoutTheLease() async throws {
+        for held in [true, false] {
+            let time = FakeBackgroundTime()
+            let center = NotificationActionCenter(time: time, reportRejectedReply: {})
+            let lease = LeaseState()
+            lease.held = held
+            center.abort = { lease.aborts += 1; return lease.held }
+            let (gate, open) = AsyncStream<Void>.makeStream()
+            center.handler = { _, _ in
+                for await _ in gate { break }
+                return .markedRead
+            }
+            let markRead = try request(.markRead)
+            let running = Task { await center.perform(markRead) }
+            while !time.log.contains("task-begin") { await Task.yield() }
+            try await Task.sleep(for: .milliseconds(50))
+            time.expire()
+            XCTAssertEqual(lease.aborts, 1, "lease held: \(held)")
+            XCTAssertEqual(time.log, held ? ["task-begin", "expire"] : ["task-begin", "expire", "task-end"],
+                           held ? "not ended over a held lease" : "ended at expiry without the lease")
+            lease.held = false
+            open.yield()
+            _ = await running.value
+            XCTAssertEqual(time.log, ["task-begin", "expire", "task-end"], "ended exactly once (lease held: \(held))")
         }
-        let markRead = try request(.markRead)
-        let running = Task { await center.perform(markRead) }
-        while !time.log.contains("task-begin") { await Task.yield() }
-        try await Task.sleep(for: .milliseconds(50))
-        time.expire()
-        XCTAssertEqual(lease.aborts, 1)
-        XCTAssertEqual(time.log, ["task-begin", "expire"], "not ended over a held lease")
-        lease.held = false
-        open.yield()
-        _ = await running.value
-        XCTAssertEqual(time.log, ["task-begin", "expire", "task-end"])
-    }
-
-    func testExpiryWithoutTheLeaseEndsTheTaskOnce() async throws {
-        let time = FakeBackgroundTime()
-        let center = NotificationActionCenter(time: time, reportRejectedReply: {})
-        center.abort = { false }
-        let (gate, open) = AsyncStream<Void>.makeStream()
-        center.handler = { _, _ in
-            for await _ in gate { break }
-            return .markedRead
-        }
-        let markRead = try request(.markRead)
-        let running = Task { await center.perform(markRead) }
-        while !time.log.contains("task-begin") { await Task.yield() }
-        try await Task.sleep(for: .milliseconds(50))
-        time.expire()
-        XCTAssertEqual(time.log, ["task-begin", "expire", "task-end"])
-        open.yield()
-        _ = await running.value
-        XCTAssertEqual(time.log.filter { $0 == "task-end" }.count, 1)
     }
 
     // MARK: Rejected replies
@@ -305,18 +270,6 @@ import MessagingCore
         let unhandled = await noModel.perform(try request(.reply("Hi")), waitingForHandler: .milliseconds(100))
         XCTAssertEqual(unhandled, .rejected)
         XCTAssertEqual(notices, 2)
-    }
-
-    func testTheRejectedReplyNoticeShowsInFrontOfTheAppAndNamesNothing() {
-        let notice = ForegroundPresentation.Request(identifier: NotificationActionCopy.replyRejectedIdentifier, isRemote: false,
-                                                    categoryIdentifier: NotificationIdentity.noticeCategory, threadIdentifier: "",
-                                                    playsSound: true, accountScope: nil)
-        XCTAssertEqual(ForegroundPresentation.options(for: notice, accountID: account, openChatID: "bob@example.org"), [.banner, .list, .sound])
-        XCTAssertEqual(ForegroundPresentation.options(for: notice, accountID: "", openChatID: nil), [.banner, .list, .sound], "also when signed out")
-        var remote = notice
-        remote.isRemote = true
-        XCTAssertEqual(ForegroundPresentation.options(for: remote, accountID: account, openChatID: nil), [])
-        XCTAssertFalse(NotificationActionCopy.replyRejected.contains("Open the chat"))
     }
 
     // MARK: Parsing the response
@@ -387,32 +340,35 @@ import MessagingCore
                                               accountScope: NotificationDestination(accountID: owner, messageID: UUID().uuidString)?.accountScope)
     }
 
-    func testTheOpenChatNeverBannersAndOtherChatsDo() {
-        let options = { (request: ForegroundPresentation.Request, open: String?) in
-            ForegroundPresentation.options(for: request, accountID: self.account, openChatID: open)
-        }
-        XCTAssertEqual(options(banner(chat: "bob@example.org"), "bob@example.org"), [])
-        XCTAssertEqual(options(banner(chat: "carol@example.org"), "bob@example.org"), [.banner, .list, .sound])
-        XCTAssertEqual(options(banner(chat: "carol@example.org"), nil), [.banner, .list, .sound], "on the chat list every chat banners")
-        XCTAssertEqual(options(banner(chat: "carol@example.org", sound: false), nil), [.banner, .list])
-        // A review or failed-reply notice for another chat shows too; it is still about that chat.
-        XCTAssertEqual(options(banner(chat: "carol@example.org", category: NotificationIdentity.noticeCategory), nil), [.banner, .list, .sound])
-        // A reaction to one of our messages in another chat is posted in front of the app too (plan D8); never in the open chat.
-        XCTAssertEqual(options(banner(chat: "carol@example.org", category: NotificationIdentity.reactionCategory), "bob@example.org"), [.banner, .list, .sound])
-        XCTAssertEqual(options(banner(chat: "bob@example.org", category: NotificationIdentity.reactionCategory), "bob@example.org"), [])
-    }
-
-    func testRemoteFallbackAndForeignRequestsStayHidden() {
-        let options = { (request: ForegroundPresentation.Request) in
-            ForegroundPresentation.options(for: request, accountID: self.account, openChatID: nil)
-        }
-        XCTAssertEqual(options(banner(chat: "carol@example.org", remote: true)), [], "the gateway placeholder and the extension's remote content")
-        XCTAssertEqual(options(banner(chat: "carol@example.org", category: NotificationIdentity.fallbackCategory)), [])
-        XCTAssertEqual(options(banner(chat: "carol@example.org", category: "")), [])
-        XCTAssertEqual(options(banner(chat: "carol@example.org", account: "mallory@example.org")), [])
-        var unscoped = banner(chat: "carol@example.org")
+    func testForegroundPresentationShowsOnlyThisAccountsOtherChatsAndTheRejectedReplyNotice() {
+        let all: UNNotificationPresentationOptions = [.banner, .list, .sound], carol = "carol@example.org", bob = "bob@example.org"
+        let notice = ForegroundPresentation.Request(identifier: NotificationActionCopy.replyRejectedIdentifier, isRemote: false,
+                                                    categoryIdentifier: NotificationIdentity.noticeCategory, threadIdentifier: "",
+                                                    playsSound: true, accountScope: nil)
+        var remoteNotice = notice, unscoped = banner(chat: carol)
+        remoteNotice.isRemote = true
         unscoped.accountScope = nil
-        XCTAssertEqual(options(unscoped), [])
-        XCTAssertEqual(ForegroundPresentation.options(for: banner(chat: "carol@example.org"), accountID: "", openChatID: nil), [], "signed out")
+        let rows: [(ForegroundPresentation.Request, String, String?, UNNotificationPresentationOptions, String)] = [
+            (notice, account, bob, all, "the rejected-reply notice names nothing and shows in front of the app"),
+            (notice, "", nil, all, "the rejected-reply notice shows also when signed out"),
+            (remoteNotice, account, nil, [], "a remote request with the notice's identifier stays hidden"),
+            (banner(chat: bob), account, bob, [], "the open chat never banners"),
+            (banner(chat: carol), account, bob, all, "another chat banners"),
+            (banner(chat: carol), account, nil, all, "on the chat list every chat banners"),
+            (banner(chat: carol, sound: false), account, nil, [.banner, .list], "without sound"),
+            (banner(chat: carol, category: NotificationIdentity.noticeCategory), account, nil, all, "a review or failed-reply notice is about its chat"),
+            (banner(chat: carol, category: NotificationIdentity.reactionCategory), account, bob, all, "a reaction in another chat (plan D8)"),
+            (banner(chat: bob, category: NotificationIdentity.reactionCategory), account, bob, [], "never a reaction in the open chat"),
+            (banner(chat: carol, remote: true), account, nil, [], "the gateway placeholder and the extension's remote content"),
+            (banner(chat: carol, category: NotificationIdentity.fallbackCategory), account, nil, [], "the fallback"),
+            (banner(chat: carol, category: ""), account, nil, [], "no category"),
+            (banner(chat: carol, account: "mallory@example.org"), account, nil, [], "another account's request"),
+            (unscoped, account, nil, [], "a request without an account scope"),
+            (banner(chat: carol), "", nil, [], "signed out"),
+        ]
+        for (request, accountID, openChatID, expected, message) in rows {
+            XCTAssertEqual(ForegroundPresentation.options(for: request, accountID: accountID, openChatID: openChatID), expected, message)
+        }
+        XCTAssertFalse(NotificationActionCopy.replyRejected.contains("Open the chat"))
     }
 }

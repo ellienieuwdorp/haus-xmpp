@@ -123,7 +123,7 @@ struct ReadSyncLabTests {
         let freshEncryption = OMEMOService(store: fresh, protection: try StateProtection(key: Data(repeating: 9, count: 32)))
         #expect(try await ReadSync(store: fresh).pull(account: account, client: client, encryption: freshEncryption))
         #expect(try await fresh.readPointer(accountID: account, chatID: contact)?.messageID == "lab-3")
-        #expect(try await fresh.takeMessageNotification(accountID: account).messageCount == 0)
+        #expect(try await fresh.pendingNotifications(accountID: account).claimed.count == 0)
         try await fresh.close()
         await client.disconnectAndWait()
         try await store.close()

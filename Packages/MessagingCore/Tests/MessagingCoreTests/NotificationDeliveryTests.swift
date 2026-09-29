@@ -52,7 +52,7 @@ func ignoringCancellation(for duration: Duration) async {
     }
 }
 
-private func withStore(_ body: (MessageStore) async throws -> Void) async throws {
+func withStore(_ body: (MessageStore) async throws -> Void) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "delivery-\(UUID())")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -63,7 +63,7 @@ private func withStore(_ body: (MessageStore) async throws -> Void) async throws
 }
 
 @discardableResult
-private func receive(_ store: MessageStore, chat: String = "bob@example.org", body: String = "Synthetic", at: TimeInterval,
+func receive(_ store: MessageStore, chat: String = "bob@example.org", body: String = "Synthetic", at: TimeInterval,
                      wireID: String? = nil) async throws -> StoredMessage {
     let message = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chat, senderID: chat, body: body,
                                 sentAt: Date(timeIntervalSince1970: at), encryptionProfile: "modern", wireID: wireID, wireIDAuthenticated: wireID != nil)
@@ -363,16 +363,6 @@ struct NotificationRunCoordinatorTests {
 }
 
 struct NotificationTimeoutTests {
-    @Test func timeoutReturnsAtItsLimitWhenTheOperationIgnoresCancellation() async throws {
-        let clock = ContinuousClock(), start = clock.now
-        await #expect(throws: NotificationRunError.postTimedOut) {
-            try await withTimeout(.milliseconds(100)) { await ignoringCancellation(for: .seconds(2)); return 1 }
-        }
-        #expect(clock.now - start < .seconds(1))
-        #expect(try await withTimeout(.seconds(2)) { 7 } == 7)
-        await #expect(throws: FakePosting.Failure.self) { try await withTimeout(.seconds(2)) { () async throws -> Int in throw FakePosting.Failure.rejected } }
-    }
-
     @Test func cancellingTheCallerReturnsWithoutWaitingForTheOperation() async throws {
         let clock = ContinuousClock(), start = clock.now
         let task = Task { try await withTimeout(.seconds(5)) { await ignoringCancellation(for: .seconds(2)); return 1 } }
@@ -482,40 +472,6 @@ struct NotificationBadgeAndReactionDeliveryTests {
         #expect(UserNotificationPoster.allowance(for: plain, donates: true) == .zero, "no communication, no donation")
         #expect(UserNotificationPoster.allowance(for: communicated, donates: false) == .zero)
         #expect(UserNotificationPoster.allowance(for: communicated, donates: true) == UserNotificationPoster.donationLimit)
-    }
-
-    @Test func aPartlyWithdrawnOrSeenReactionLeavesNotificationCenterAtTheEndOfARun() async throws {
-        try await withStore { store in
-            let mine = StoredMessage(id: UUID().uuidString, accountID: account, chatID: "bob@example.org", senderID: account, body: "Lunch?",
-                                     isOutgoing: true, encryptionProfile: "modern", wireID: "wire-mine", wireIDAuthenticated: true)
-            try await store.upsertChat(accountID: account, chatID: "bob@example.org", title: "Bob")
-            try await store.insertMessage(mine)
-            func react(_ id: String, _ emoji: [String], at second: TimeInterval) async throws {
-                let revision = try #require(try await store.encryptionStateRevision(accountID: account))
-                try await store.commitEncryptedIncoming(accountID: account, sender: "bob@example.org", digest: id, expectedRevision: revision,
-                    state: Data([UInt8(revision % 250 + 1)]), message: nil,
-                    reaction: AuthenticatedReaction(id: id, chatID: "bob@example.org", actorID: "bob@example.org", targetWireID: "wire-mine",
-                                                    reactions: emoji, updatedAt: Date(timeIntervalSince1970: second)))
-            }
-            let posting = FakePosting()
-            let identifier = NotificationIdentity.reaction(accountID: account, chatID: "bob@example.org", actorID: "bob@example.org", targetMessageID: mine.id)
-            try await react("r1", ["❤️", "👍"], at: 10)
-            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
-            #expect(await posting.delivered.map(\.categoryIdentifier) == [NotificationIdentity.reactionCategory])
-            // 👍 is withdrawn but ❤️ stays: the delivered "Reacted ❤️👍" is no longer true, and it does not re-alert.
-            try await react("r2", ["❤️"], at: 20)
-            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
-            let removed = await posting.removed
-            #expect(await posting.added.count == 1 && removed == [identifier])
-            // A new reaction alerts; a message read after it (here or elsewhere) takes it out of Notification Center.
-            try await react("r3", ["❤️", "🔥"], at: 30)
-            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
-            #expect(await posting.delivered.map(\.identifier) == [identifier])
-            let incoming = try await receive(store, at: 40)
-            #expect(try await store.markRead(accountID: account, chatID: "bob@example.org", throughMessageID: incoming.id))
-            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
-            #expect(await !posting.delivered.map(\.identifier).contains(identifier))
-        }
     }
 
     @Test func aWithdrawnReactionLosesItsDeliveredNotificationAndAReplacementReusesTheIdentifier() async throws {

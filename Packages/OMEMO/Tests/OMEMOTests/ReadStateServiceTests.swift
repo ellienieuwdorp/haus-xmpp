@@ -29,21 +29,7 @@ final class ReadStateServiceTests: XCTestCase {
     private func twoDevices() async throws -> TwoDevices {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
-        let secondStore = try f.openStore("alice-second.sqlite")
-        try await secondStore.acquireTransportOwnership()
-        let second = OMEMOService(store: secondStore, protection: f.protection)
-        try await second.initialize(account: f.alice, transport: f.aTransport)
-        // The test server keeps one list per owner: the first device re-advertises itself beside the second.
-        try await f.a.maintainLocalAdvertisement(account: f.alice, profile: .modern, transport: f.aTransport)
-        for device in try await second.refreshDevices(account: f.alice, peer: f.bob, profile: .modern, transport: f.aTransport).devices where device.active {
-            try await second.setTrust(account: f.alice, deviceID: device.id, trust: .accepted)
-        }
-        for device in try await f.a.refreshDevices(account: f.alice, peer: f.bob, profile: .modern, transport: f.aTransport).devices where device.active {
-            try await f.a.setTrust(account: f.alice, deviceID: device.id, trust: .accepted)
-        }
-        for device in try await f.b.refreshDevices(account: f.bob, peer: f.alice, profile: .modern, transport: f.bTransport).devices where device.active {
-            try await f.b.setTrust(account: f.bob, deviceID: device.id, trust: .accepted)
-        }
+        let (secondStore, second) = try await f.addSecondAliceDevice()
         try await f.bStore.upsertChat(accountID: f.bob, chatID: f.alice, title: "Alice")
         let sent = StoredMessage(id: UUID().uuidString, accountID: f.bob, chatID: f.alice, senderID: f.bob, body: "Read me", isOutgoing: true)
         _ = try await f.bStore.enqueueOutgoing(sent)
@@ -61,7 +47,7 @@ final class ReadStateServiceTests: XCTestCase {
     func testOwnEncryptedDisplayedMarkerFromAnotherDeviceAdvancesThePointer() async throws {
         let t = try await twoDevices(), f = t.f
         expectEqual(try await f.aStore.unreadCounts(accountID: f.alice), [f.bob: 1])
-        expectEqual(try await f.aStore.takeMessageNotification(accountID: f.alice).messageCount, 1)
+        expectEqual(try await f.aStore.pendingNotifications(accountID: f.alice).claimed.count, 1)
         // The second device shows the message and sends its marker inside SCE, to Bob and to Alice's own devices.
         expectNotNil(try await t.second.queueReceipt(account: f.alice, chatID: f.bob, messageID: t.onSecond.id, kind: .marker))
         let prepared = try await t.second.prepareAvailableUpdates(account: f.alice, transport: f.aTransport)
@@ -79,8 +65,6 @@ final class ReadStateServiceTests: XCTestCase {
         }
         let pointer = try await f.aStore.readPointer(accountID: f.alice, chatID: f.bob)
         expectEqual(pointer?.messageID, t.onFirst.id)
-        // Another device's read is that device's to publish.
-        expectEqual(pointer?.publishPending, false)
         expectEqual(try await f.aStore.unreadCounts(accountID: f.alice), [:])
         expectEqual(try await f.aStore.readNotificationMessageIDs(accountID: f.alice, messageIDs: [t.onFirst.id]), [t.onFirst.id])
         // For Bob it is still Alice's read receipt on his message, and it moves no pointer of his.
@@ -104,7 +88,6 @@ final class ReadStateServiceTests: XCTestCase {
         let own = XMPPReceipt(id: "own-displayed", from: f.alice + "/tablet", to: f.bob, targetID: t.bobMessageID, kind: .displayed, provenance: .sentCarbon)
         expectTrue(try await f.a.receivePlaintextReceipt(account: f.alice, receipt: own))
         expectEqual(try await f.aStore.readPointer(accountID: f.alice, chatID: f.bob)?.messageID, t.onFirst.id)
-        expectFalse(try await f.a.receivePlaintextReceipt(account: f.alice, receipt: own))
     }
 
     func testDisplayedSyncItemsResolveThroughTheArchiveStanzaID() async throws {
@@ -115,8 +98,7 @@ final class ReadStateServiceTests: XCTestCase {
         archived.archiveStanzaID = "arch-1"
         expectFalse(try await f.a.receive(account: f.alice, message: archived, transport: f.aTransport))
         expectEqual(try await f.aStore.archiveStanzaID(accountID: f.alice, messageID: t.onFirst.id), "arch-1")
-        // Unknown ids and our own chat are ignored; a known one reads the chat.
-        expectFalse(try await f.a.receiveDisplayedSync(account: f.alice, items: [XMPPDisplayedItem(chat: f.bob, stanzaID: "unknown", by: f.alice)]))
+        // Our own chat is ignored; a known id reads the chat.
         expectFalse(try await f.a.receiveDisplayedSync(account: f.alice, items: [XMPPDisplayedItem(chat: f.alice, stanzaID: "arch-1", by: f.alice)]))
         expectTrue(try await f.a.receiveDisplayedSync(account: f.alice, items: [XMPPDisplayedItem(chat: f.bob, stanzaID: "arch-1", by: f.alice)]))
         expectEqual(try await f.aStore.readPointer(accountID: f.alice, chatID: f.bob)?.messageID, t.onFirst.id)

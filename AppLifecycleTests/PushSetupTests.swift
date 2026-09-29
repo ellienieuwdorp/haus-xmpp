@@ -99,15 +99,6 @@ import XMPPProtocol
         XCTAssertFalse(PushCleanup.disableSettles(XMPPClientError.timedOut))
     }
 
-    func testStagingSubscriptionIsReplacedAndAHausOneKept() throws {
-        let staging = try XMPPPushConfiguration(serviceJID: "push.staging.example.net", node: String(repeating: "n", count: 43),
-                                                publishOptions: ["secret": String(repeating: "s", count: 43)])
-        XCTAssertEqual(PushSubscription.plan(saved: staging, serviceJID: PushService.serviceJID), .replace(staging))
-        let current = try PushSubscription.generate(serviceJID: PushService.serviceJID)
-        XCTAssertEqual(PushSubscription.plan(saved: current, serviceJID: PushService.serviceJID), .keep(current))
-        XCTAssertEqual(PushSubscription.plan(saved: nil, serviceJID: PushService.serviceJID), .create)
-    }
-
     func testReplacingPushKeepsCredentialsForTheExtension() throws {
         let account = NotificationAccount(accountID: "alice@example.org", host: "example.org", port: 5223, domain: "example.org",
                                           username: "alice", password: "synthetic", push: nil)

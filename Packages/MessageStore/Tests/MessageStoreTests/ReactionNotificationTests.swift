@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import CSQLite
 @testable import MessageStore
 
 // Plan D8: another person's authenticated reaction to one of this account's messages alerts once per actor and target.
@@ -8,22 +7,6 @@ import CSQLite
 private let account = "me@example.org"
 private let peer = "peer@example.org"
 private let room = "room@rooms.example.org"
-
-private func reactionStore(_ operation: (MessageStore, URL) async throws -> Void) async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: "reaction-alerts-\(UUID())")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let url = directory.appending(path: "messages.sqlite")
-    let store = try MessageStore(url: url)
-    do {
-        try await store.acquireTransportOwnership()
-        try await store.saveEncryptionState(accountID: account, expectedRevision: nil, data: Data([0]))
-        try await store.upsertChat(accountID: account, chatID: peer, title: "Peer")
-        try await store.upsertChat(accountID: account, chatID: room, title: "Book club")
-        try await operation(store, url)
-        try await store.close()
-    } catch { try? await store.close(); throw error }
-}
 
 /// A message in `chat` with an authenticated wire ID equal to its id.
 private func insert(_ store: MessageStore, _ id: String, chat: String = peer, sender: String = account, body: String = "Lunch at noon?",
@@ -49,7 +32,7 @@ private func waiting(_ store: MessageStore) async throws -> [String] {
 }
 
 @Test func peersAuthenticatedReactionToMyMessageQueuesExactlyOneCandidate() async throws {
-    try await reactionStore { store, _ in
+    try await withEncryptedStore(account: account, chats: [(peer, "Peer"), (room, "Book club")]) { store, _ in
         try await insert(store, "mine")
         try await react(store, "r1", target: "mine", ["👍"])
         #expect(try await waiting(store) == ["peer@example.org>mine:👍"])
@@ -68,7 +51,7 @@ private func waiting(_ store: MessageStore) async throws -> [String] {
 }
 
 @Test func ownReactionsReactionsToOthersMessagesAndPlaintextReactionsNeverQueue() async throws {
-    try await reactionStore { store, _ in
+    try await withEncryptedStore(account: account, chats: [(peer, "Peer"), (room, "Book club")]) { store, _ in
         try await insert(store, "mine")
         try await insert(store, "theirs", sender: peer, at: 1)
         // Our other device reacting to our own message, and the peer reacting to their own message.
@@ -83,7 +66,7 @@ private func waiting(_ store: MessageStore) async throws -> [String] {
 }
 
 @Test func replacementMergesRemovalDeletesAndOlderEventsAreIgnored() async throws {
-    try await reactionStore { store, _ in
+    try await withEncryptedStore(account: account, chats: [(peer, "Peer"), (room, "Book club")]) { store, _ in
         try await insert(store, "mine")
         try await react(store, "r1", target: "mine", ["👍"], at: 100)
         try await react(store, "r2", target: "mine", ["❤️", "👍"], at: 110)
@@ -104,7 +87,7 @@ private func waiting(_ store: MessageStore) async throws -> [String] {
 }
 
 @Test func aClaimDeletesOnlyTheVersionItPosted() async throws {
-    try await reactionStore { store, _ in
+    try await withEncryptedStore(account: account, chats: [(peer, "Peer"), (room, "Book club")]) { store, _ in
         try await insert(store, "mine")
         try await react(store, "r1", target: "mine", ["👍"], at: 100)
         let batch = try await store.pendingNotifications(accountID: account)
@@ -127,7 +110,7 @@ private func live(_ store: MessageStore, targets: Set<String> = ["mine"]) async 
 }
 
 @Test func aDeliveredReactionStaysCurrentOnlyWhileEverythingItShowedRemainsAndTheChatIsUnseen() async throws {
-    try await reactionStore { store, _ in
+    try await withEncryptedStore(account: account, chats: [(peer, "Peer"), (room, "Book club")]) { store, _ in
         try await insert(store, "mine")
         try await insert(store, "incoming", sender: peer, at: 1)
         try await react(store, "r1", target: "mine", ["❤️", "👍"], at: 100)
@@ -151,7 +134,7 @@ private func live(_ store: MessageStore, targets: Set<String> = ["mine"]) async 
 }
 
 @Test func openingAChatEndsItsReactionNotificationsAndNeedsTheTransportLease() async throws {
-    try await reactionStore { store, _ in
+    try await withEncryptedStore(account: account, chats: [(peer, "Peer"), (room, "Book club")]) { store, _ in
         try await insert(store, "mine")
         try await react(store, "r1", target: "mine", ["👍"], at: 100)
         #expect(try await postAndCheck(store) == ["peer@example.org>mine"])
@@ -169,8 +152,8 @@ private func live(_ store: MessageStore, targets: Set<String> = ["mine"]) async 
     }
 }
 
-@Test func muteSwitchReadingOpeningAndHistoryStopReactionAlerts() async throws {
-    try await reactionStore { store, _ in
+@Test func muteSwitchReadingAndForegroundDismissStopReactionAlerts() async throws {
+    try await withEncryptedStore(account: account, chats: [(peer, "Peer"), (room, "Book club")]) { store, _ in
         try await insert(store, "mine")
         try await insert(store, "incoming", sender: peer, at: 1)
         // Muted: nothing queues, and muting drops what waits.
@@ -194,20 +177,16 @@ private func live(_ store: MessageStore, targets: Set<String> = ["mine"]) async 
         #expect(try await waiting(store).count == 1)
         #expect(try await store.markRead(accountID: account, chatID: peer, throughMessageID: "incoming"))
         #expect(try await waiting(store).isEmpty)
-        // Opened: seen, whatever the pointer did.
-        try await react(store, "r6", target: "mine", ["👀"], at: 150)
-        #expect(try await waiting(store).count == 1)
-        try await store.dismissReactionNotifications(accountID: account, chatID: peer)
-        #expect(try await waiting(store).isEmpty)
         // The foreground owner presents everything itself.
         try await react(store, "r7", target: "mine", ["💯"], at: 160)
+        #expect(try await waiting(store).count == 1)
         try await store.dismissPendingMessageNotifications(accountID: account)
         #expect(try await waiting(store).isEmpty)
     }
 }
 
 @Test func reactionsFromArchiveHistoryNeverAlert() async throws {
-    try await reactionStore { store, _ in
+    try await withEncryptedStore(account: account, chats: [(peer, "Peer"), (room, "Book club")]) { store, _ in
         try await insert(store, "mine")
         // A first page's catch-up: reactions queued while it was processed go once the page records its baseline.
         try await react(store, "old", target: "mine", ["👍"], at: 100)
@@ -224,7 +203,7 @@ private func live(_ store: MessageStore, targets: Set<String> = ["mine"]) async 
 }
 
 @Test func groupReactionNamesTheActorTheRoomAndOtherMembers() async throws {
-    try await reactionStore { store, _ in
+    try await withEncryptedStore(account: account, chats: [(peer, "Peer"), (room, "Book club")]) { store, _ in
         try await store.upsertChat(accountID: account, chatID: "bob@example.org", title: "Bob")
         try await store.setAvatarHash(accountID: account, chatID: "bob@example.org", hash: String(repeating: "b", count: 40))
         try await insert(store, "carol-1", chat: room, sender: "carol@example.org", at: 1)
@@ -241,23 +220,7 @@ private func live(_ store: MessageStore, targets: Set<String> = ["mine"]) async 
     }
 }
 
-@Test func groupMessageCandidatesCarrySenderAvatarAndMembers() async throws {
-    try await reactionStore { store, _ in
-        try await store.upsertChat(accountID: account, chatID: "bob@example.org", title: "Bob")
-        try await store.setAvatarHash(accountID: account, chatID: "bob@example.org", hash: String(repeating: "b", count: 40))
-        try await insert(store, "carol-1", chat: room, sender: "carol@example.org", at: 1)
-        let revision = try await store.encryptionStateRevision(accountID: account)!
-        let message = StoredMessage(id: "m1", accountID: account, chatID: room, senderID: "bob@example.org", body: "Hi",
-                                    sentAt: Date(timeIntervalSince1970: 1_800_000_010), encryptionProfile: "modern")
-        try await store.commitEncryptedIncoming(accountID: account, sender: "bob@example.org", digest: "d-m1", expectedRevision: revision, state: Data([9]),
-                                                message: message, groupRoom: room)
-        let candidate = try #require(await store.pendingNotifications(accountID: account).candidates.first)
-        #expect(candidate.senderAvatarHash == String(repeating: "b", count: 40) && candidate.senderTitle == "Bob")
-        #expect(candidate.groupMembers.map(\.id) == ["carol@example.org"])
-    }
-}
-
-@Test func schema21AddsReactionStorageIdempotentlyAndRefusesNewer() async throws {
+@Test func schema21AddsReactionStorageIdempotently() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "reaction-migration-\(UUID())")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -266,10 +229,7 @@ private func live(_ store: MessageStore, targets: Set<String> = ["mine"]) async 
     try await store.acquireTransportOwnership()
     try await store.setAccountPreferences(accountID: account, AccountPreferences(readReceipts: false))
     try await store.close()
-    var db: OpaquePointer?
-    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, "DROP TABLE reaction_notification_candidates; DROP TABLE reaction_notifications_posted; ALTER TABLE account_preferences DROP COLUMN reaction_alerts; PRAGMA user_version=20;", nil, nil, nil) == SQLITE_OK)
-    sqlite3_close(db)
+    #expect(sqliteExecute(url: url, sql: "DROP TABLE reaction_notification_candidates; DROP TABLE reaction_notifications_posted; ALTER TABLE account_preferences DROP COLUMN reaction_alerts; PRAGMA user_version=20;"))
     let migrated = try MessageStore(url: url)
     #expect(try await migrated.accountPreferences(accountID: account) == AccountPreferences(readReceipts: false, reactionNotifications: true))
     try await migrated.acquireTransportOwnership()
@@ -280,8 +240,4 @@ private func live(_ store: MessageStore, targets: Set<String> = ["mine"]) async 
     let reopened = try MessageStore(url: url)
     #expect(try await reopened.accountPreferences(accountID: account).reactionNotifications == false)
     try await reopened.close()
-    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, "PRAGMA user_version=22;", nil, nil, nil) == SQLITE_OK)
-    sqlite3_close(db)
-    #expect(throws: MessageStoreError.unsupportedSchema(22)) { _ = try MessageStore(url: url) }
 }

@@ -180,13 +180,18 @@ private func message(_ id: String, chat: String, sender: String? = nil, at: Time
     try await notificationFixture { store, _ in
         try await store.upsertChat(accountID: "a", chatID: "room@rooms", title: "Book club")
         try await store.upsertChat(accountID: "a", chatID: "bob@x", title: "Bob")
+        try await store.setAvatarHash(accountID: "a", chatID: "bob@x", hash: String(repeating: "b", count: 40))
+        try await store.insertMessage(message("c0", chat: "room@rooms", sender: "carol@x", at: 0.5))
         try await commit(store, message("g1", chat: "room@rooms", sender: "bob@x", at: 1), groupRoom: "room@rooms")
         try await commit(store, message("g2", chat: "room@rooms", sender: "bob@x", at: 2, body: "Fixed"), groupRoom: "room@rooms", correction: true)
         let batch = try await store.pendingNotifications(accountID: "a")
         #expect(batch.candidates.map(\.key) == [.message("g1")])
         #expect(batch.candidates[0].isGroup && batch.candidates[0].chatTitle == "Book club" && batch.candidates[0].senderTitle == "Bob")
-        // The correction is still stored as its own row: that projection gap is recorded, not hidden.
-        #expect(try await store.messages(accountID: "a", chatID: "room@rooms").count == 2)
+        // The sender's avatar and the room's other recent speakers name the conversation's participants.
+        #expect(batch.candidates[0].senderAvatarHash == String(repeating: "b", count: 40))
+        #expect(batch.candidates[0].groupMembers.map(\.id) == ["carol@x"])
+        // The correction is still stored as its own row (beside Carol's and g1): that projection gap is recorded, not hidden.
+        #expect(try await store.messages(accountID: "a", chatID: "room@rooms").count == 3)
     }
 }
 
