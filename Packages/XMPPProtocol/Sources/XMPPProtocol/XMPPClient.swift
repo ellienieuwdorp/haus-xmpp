@@ -124,6 +124,10 @@ public enum XMPPClientError: Error, Sendable {
 public struct XMPPConnectedSession: Sendable, Equatable {
     public let endpoint: XMPPEndpoint
     public let authenticatedWithSCRAM: Bool
+
+    public init(endpoint: XMPPEndpoint, authenticatedWithSCRAM: Bool) {
+        self.endpoint = endpoint; self.authenticatedWithSCRAM = authenticatedWithSCRAM
+    }
 }
 
 /// Direct TLS or mandatory STARTTLS, reached through SRV discovery or a fixed endpoint, with SCRAM or PLAIN over SASL1,
