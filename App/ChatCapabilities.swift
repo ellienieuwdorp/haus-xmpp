@@ -113,12 +113,6 @@ struct EncryptionAttention: Equatable {
     /// The last failed device read or refresh per group, until a refresh succeeds.
     private(set) var groupProblems: [String: String] = [:]
 
-    /// The two OMEMO answers that ask the user to decide on a fingerprint. Everything else is a diagnostic.
-    static func needsTrustDecision(_ error: any Error) -> Bool {
-        guard let error = error as? OMEMOError else { return false }
-        return error == .trustRequired || error == .identityChanged
-    }
-
     /// The outbox reports held chats as their user-facing reason, so a trust hold is recognised by that text.
     static func needsTrustDecision(issue: String) -> Bool {
         [OMEMOError.trustRequired, .identityChanged].contains { $0.errorDescription == issue }

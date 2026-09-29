@@ -121,27 +121,8 @@ final class EncryptedContentTests: XCTestCase {
         XCTAssertEqual(result.reply?.body, quote)
     }
 
-    func testModernReactionSetsRoundTripPrivatelyAndClearWithoutBody() throws {
-        for values in [["❤️", "👍🏽", "👩🏽‍💻"], []] {
-            let data = try EncryptedContent.encodeReaction(targetWireID: "target&<id>", reactions: values,
-                                                           sender: sender, recipient: recipient, originID: "update-id", modern: true)
-            let result = try EncryptedContent.decode(data, sender: sender, recipient: recipient, modern: true)
-            XCTAssertEqual(result.body, "")
-            XCTAssertEqual(result.originID, "update-id")
-            XCTAssertEqual(result.reaction?.targetWireID, "target&<id>")
-            XCTAssertEqual(result.reaction?.reactions, Array(Set(values)).sorted())
-            XCTAssertNil(result.timestamp)
-        }
-        XCTAssertThrowsError(try EncryptedContent.encodeReaction(targetWireID: "target", reactions: ["👍"],
-                                                                  sender: sender, recipient: recipient, originID: "update", modern: false)) {
-            XCTAssertEqual($0 as? OMEMOError, .unsupportedEncryptedReactions)
-        }
-    }
-
-    func testReactionParserIgnoresDuplicateEmojiButRejectsAmbiguousContainers() throws {
-        let result = try decode(envelope("<reactions xmlns='urn:xmpp:reactions:0' id='target'><reaction>👍</reaction><reaction>👍</reaction><reaction>ordinary text</reaction><reaction>❤️</reaction></reactions>"))
-        XCTAssertEqual(result.reaction?.reactions, ["❤️", "👍"].sorted())
-        assertRejected(envelope("<reactions xmlns='urn:xmpp:reactions:0' id='target'/><reactions xmlns='urn:xmpp:reactions:0' id='other'/>"))
+    /// Duplicate-emoji folding and the two-container case are pinned against the plain path in ContentCodecParityTests.
+    func testReactionParserRejectsMalformedContainersAndEncoderRejectsNonEmoji() throws {
         assertRejected(envelope("<reactions xmlns='urn:xmpp:reactions:0'/>"))
         assertRejected(envelope("<reactions xmlns='urn:xmpp:reactions:0' id=''><reaction>👍</reaction></reactions>"))
         assertRejected(envelope("<reactions xmlns='urn:xmpp:reactions:0' id='target'><reaction><nested>👍</nested></reaction></reactions>"))

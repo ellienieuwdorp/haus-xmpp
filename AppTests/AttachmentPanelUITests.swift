@@ -81,6 +81,7 @@ final class AttachmentPanelUITests: XCTestCase {
         wait(for: [XCTNSPredicateExpectation(predicate: two, object: nil)], timeout: 15)
         XCTAssertEqual(first.value as? String, "Selected, 1 of 2")
         XCTAssertEqual(second.value as? String, "Selected, 2 of 2")
+        XCTAssertEqual(removes.element(boundBy: 1).label, "Remove Photo, 2 of 2", "VoiceOver can tell the removes apart")
         XCTAssertTrue(app.buttons["sendMessage"].isEnabled, "Photos alone can be sent")
 
         // A second tap takes the photo back out and the other one becomes the first.
@@ -131,48 +132,5 @@ final class AttachmentPanelUITests: XCTestCase {
         XCTAssertEqual(attach.label, "Add attachment")
         XCTAssertFalse(app.buttons["attachPhotos"].exists)
         XCTAssertFalse(app.buttons["removeAttachment"].exists)
-    }
-
-    /// The limited-library picker takes the panel's responder away and UIKit hands it back when the picker closes;
-    /// the button, Send and every other close must still see the panel as open.
-    @MainActor func testLimitedPickerLeavesThePanelAndButtonInStep() throws {
-        let app = XCUIApplication()
-        app.resetAuthorizationStatus(for: .photos)
-        // The other tests expect to be asked for full access again.
-        addTeardownBlock { @MainActor in XCUIApplication().resetAuthorizationStatus(for: .photos) }
-        let attach = openAlex().buttons["attachFile"]
-        let open = NSPredicate { _, _ in attach.label == "Close attachments" }
-        let centre = CGVector(dx: 0.5, dy: 0.5)
-
-        attach.tap()
-        let limit = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Limit Access…"]
-        XCTAssertTrue(limit.waitForExistence(timeout: 5))
-        limit.tap()
-        // The picker runs out of process: its elements are visible but report not hittable, so tap their centres.
-        let grid = app.images.matching(identifier: "PXGGridLayout-Info")
-        XCTAssertTrue(grid.firstMatch.waitForExistence(timeout: 10), "The limited-library picker")
-        // A tap while the sheet is still rising selects nothing.
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 1.5))
-        grid.element(boundBy: 0).coordinate(withNormalizedOffset: centre).tap()
-        app.buttons["Done"].coordinate(withNormalizedOffset: centre).tap()
-        XCTAssertTrue(app.buttons["managePhotoAccess"].waitForExistence(timeout: 10), "The panel is back, limited")
-        wait(for: [XCTNSPredicateExpectation(predicate: open, object: nil)], timeout: 5)
-
-        // Select More Photos… from Manage does the same round trip.
-        app.buttons["managePhotoAccess"].tap()
-        app.buttons["Select More Photos…"].tap()
-        XCTAssertTrue(grid.firstMatch.waitForExistence(timeout: 10))
-        app.buttons["Done"].coordinate(withNormalizedOffset: centre).tap()
-        XCTAssertTrue(app.buttons["managePhotoAccess"].waitForExistence(timeout: 10))
-        wait(for: [XCTNSPredicateExpectation(predicate: open, object: nil)], timeout: 5)
-
-        // Send closes the panel it still owns.
-        let first = photo(0, in: app)
-        XCTAssertTrue(first.waitForExistence(timeout: 5))
-        first.tap()
-        XCTAssertTrue(app.buttons["removeAttachment"].waitForExistence(timeout: 15))
-        app.buttons["sendMessage"].tap()
-        XCTAssertTrue(app.buttons["attachPhotos"].waitForNonExistence(timeout: 5), "Send put the panel away")
-        XCTAssertEqual(attach.label, "Add attachment")
     }
 }

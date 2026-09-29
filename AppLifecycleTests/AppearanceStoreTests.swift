@@ -20,20 +20,13 @@ final class AppearanceStoreTests: XCTestCase {
         super.tearDown()
     }
 
-    func testDefaultsToIndigoAndAutomatic() {
-        let store = AppearanceStore(defaults: defaults)
-        XCTAssertEqual(store.accent, .indigo)
-        XCTAssertEqual(store.mode, "automatic")
-        XCTAssertNil(store.colorScheme)
-        XCTAssertEqual(store.interfaceStyle, .unspecified)
-    }
-
     func testReadsAndWritesTheExistingKeys() {
         defaults.set("rose", forKey: "accentTheme")
         defaults.set("dark", forKey: "appearanceMode")
         let store = AppearanceStore(defaults: defaults)
         XCTAssertEqual(store.accent, .rose, "a stored preference survives the move to the store")
         XCTAssertEqual(store.mode, "dark")
+        XCTAssertEqual(store.interfaceStyle, .dark)
 
         store.accent = .crab
         store.mode = "light"
@@ -50,36 +43,16 @@ final class AppearanceStoreTests: XCTestCase {
         XCTAssertEqual(store.mode, "automatic")
     }
 
-    func testModeMapsToSchemeAndWindowStyle() {
-        let store = AppearanceStore(defaults: defaults)
-        store.mode = "light"
-        XCTAssertEqual(store.colorScheme, .light)
-        XCTAssertEqual(store.interfaceStyle, .light)
-        store.mode = "dark"
-        XCTAssertEqual(store.colorScheme, .dark)
-        XCTAssertEqual(store.interfaceStyle, .dark)
-        store.mode = "automatic"
-        XCTAssertNil(store.colorScheme)
-        XCTAssertEqual(store.interfaceStyle, .unspecified)
-    }
-
-    func testChangesAreObservable() {
-        let store = AppearanceStore(defaults: defaults)
-        let accentChanged = Flag()
-        withObservationTracking { _ = store.accent } onChange: { accentChanged.set() }
-        store.accent = .lime
-        XCTAssertTrue(accentChanged.value, "a view that read the accent is invalidated")
-
-        let modeChanged = Flag()
-        withObservationTracking { _ = store.interfaceStyle } onChange: { modeChanged.set() }
-        store.mode = "dark"
-        XCTAssertTrue(modeChanged.value, "a view that read the derived style is invalidated")
-    }
-
     func testCurrentResolvesThroughTheSharedStore() {
         let shared = AppearanceStore.shared
         let original = shared.accent
-        defer { shared.accent = original }
+        // The shared store writes to the standard defaults; put the raw key back as it was, absent included.
+        let stored = UserDefaults.standard.object(forKey: AccentTheme.storageKey)
+        defer {
+            shared.accent = original
+            if let stored { UserDefaults.standard.set(stored, forKey: AccentTheme.storageKey) }
+            else { UserDefaults.standard.removeObject(forKey: AccentTheme.storageKey) }
+        }
         shared.accent = .sky
         XCTAssertEqual(AccentTheme.current, .sky)
         let changed = Flag()

@@ -21,23 +21,19 @@ public struct PushRegistrationJournal: Codable, Sendable, Equatable, CustomStrin
         }
     }
 
-    @discardableResult public mutating func stageRegistration(deviceToken: String) throws -> XMPPPushRegistrationOperation {
-        try stage(action: .register, deviceToken: deviceToken)
-    }
-
     /// A genuine new APNs callback supersedes even an unacknowledged same-token intent.
     /// The gateway might have committed that intent and subsequently invalidated it.
     @discardableResult public mutating func stageFreshRegistration(deviceToken: String) throws -> XMPPPushRegistrationOperation {
-        try stage(action: .register, deviceToken: deviceToken, fresh: true)
+        try stage(action: .register, deviceToken: deviceToken)
     }
 
     @discardableResult public mutating func stageRevocation() throws -> XMPPPushRegistrationOperation {
-        try stage(action: .revoke, deviceToken: nil)
+        // An interrupted revocation reuses exactly its persisted revision.
+        if let pending, pending.action == .revoke { return pending }
+        return try stage(action: .revoke, deviceToken: nil)
     }
 
-    private mutating func stage(action: XMPPPushRegistrationAction, deviceToken: String?, fresh: Bool = false) throws -> XMPPPushRegistrationOperation {
-        // An interrupted transmission reuses exactly its persisted revision and token.
-        if !fresh, let pending, pending.action == action, pending.deviceToken == deviceToken?.lowercased() { return pending }
+    private mutating func stage(action: XMPPPushRegistrationAction, deviceToken: String?) throws -> XMPPPushRegistrationOperation {
         guard revision < XMPPPushRegistrationOperation.maximumRevision else { throw XMPPNotificationError.invalidConfiguration }
         let operation = try XMPPPushRegistrationOperation(action: action, revision: revision + 1, deviceToken: deviceToken)
         revision = operation.revision; pending = operation

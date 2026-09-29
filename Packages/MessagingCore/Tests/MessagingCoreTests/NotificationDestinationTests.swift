@@ -23,7 +23,7 @@ import MessageStore
     #expect(NotificationPreview(MessageNotification(latest: nil, chatTitle: nil, messageCount: 0, conversationCount: 0, previewsEnabled: true)).destination == nil)
 }
 
-@Test func notificationResolutionRejectsInactiveOtherAccountMissingAndUnauthenticatedMessages() async throws {
+@Test func notificationResolutionStaysInItsAccountAndRejectsMissingAndUnauthenticatedMessages() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let store = try MessageStore(url: directory.appending(path: "notification.sqlite"))
@@ -35,16 +35,18 @@ import MessageStore
         try await store.upsertChat(accountID: "other", chatID: "different-peer", title: "Other account")
         try await store.insertMessage(StoredMessage(id: id, accountID: "other", chatID: "different-peer", senderID: "different-peer", body: "Other account same local ID", encryptionProfile: "modern"))
         let target = try #require(NotificationDestination(accountID: "alice", messageID: id))
-        #expect(try await target.resolve(accountID: "alice", active: true, store: store) == message)
-        #expect(try await target.resolve(accountID: "alice", active: false, store: store) == nil)
-        #expect(try await target.resolve(accountID: "other", active: true, store: store) == nil)
+        #expect(try await target.resolve(accountID: "alice", store: store) == message)
+        // The other account holds a valid target under the same local ID: only the account scope keeps it out.
+        #expect(try await target.resolve(accountID: "other", store: store) == nil)
+        let otherTarget = try #require(NotificationDestination(accountID: "other", messageID: id))
+        #expect(try await otherTarget.resolve(accountID: "other", store: store)?.body == "Other account same local ID")
         let missing = try #require(NotificationDestination(accountID: "alice", messageID: UUID().uuidString))
-        #expect(try await missing.resolve(accountID: "alice", active: true, store: store) == nil)
+        #expect(try await missing.resolve(accountID: "alice", store: store) == nil)
         for outgoing in [false, true] {
             let invalidID = UUID().uuidString
             try await store.insertMessage(StoredMessage(id: invalidID, accountID: "alice", chatID: "peer", senderID: outgoing ? "alice" : "peer", body: "Not a notification target", isOutgoing: outgoing, encryptionProfile: outgoing ? "modern" : nil))
             let invalid = try #require(NotificationDestination(accountID: "alice", messageID: invalidID))
-            #expect(try await invalid.resolve(accountID: "alice", active: true, store: store) == nil)
+            #expect(try await invalid.resolve(accountID: "alice", store: store) == nil)
         }
         try await store.close()
         try FileManager.default.removeItem(at: directory)

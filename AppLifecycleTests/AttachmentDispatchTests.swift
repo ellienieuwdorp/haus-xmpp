@@ -22,14 +22,6 @@ import XCTest
         XCTAssertFalse(result.caption)
     }
 
-    func testABlankCaptionIsNotSent() async {
-        var captions = 0
-        let result = await ComposerState.dispatch(["a.jpg"], caption: " \n", sendFile: { _ in true }, sendCaption: { _ in captions += 1; return true })
-        XCTAssertEqual(captions, 0)
-        XCTAssertEqual(result.files, 1)
-        XCTAssertFalse(result.caption)
-    }
-
     func testAnUploadGivesUpAfterItsBudgetAndARetryStartsOver() {
         var budget = UploadFailureBudget()
         for _ in 1..<UploadFailureBudget.limit { XCTAssertFalse(budget.recordFailure("photo")) }

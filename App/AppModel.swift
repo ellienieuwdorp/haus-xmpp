@@ -29,6 +29,9 @@ typealias ChatMessage = StoredMessage
 @MainActor @Observable
 final class AppModel {
     private(set) var chats: [ChatSummary] = []
+    /// The chat list has been read from storage for the current account. Until then the Chats screen shows nothing:
+    /// a cold start of a signed-in account must not flash the "no conversations" state before its rows arrive.
+    private(set) var hasLoadedChats = false
     private(set) var messages: [ChatMessage] = []
     /// The chat whose messages `messages` currently holds; nil while a load is pending.
     private(set) var messagesLoadedFor: String?
@@ -193,6 +196,12 @@ final class AppModel {
         return UserDefaults(suiteName: "haus.xmpp.uitest." + testSessionID) ?? .standard
     }()
 
+    init() {
+        // The saved account is known before storage opens, so the first frame already carries the account avatar
+        // and the Chats stack is not rebuilt (its identity is the account) once `prepare()` reads the same value.
+        accountID = preferences.string(forKey: "lastAccount") ?? ""
+    }
+
     func prepare() async {
         guard !prepared else { return }
         prepared = true
@@ -240,7 +249,10 @@ final class AppModel {
                     reconcile()
                 }
             }
-        } catch { self.error = "Could not open local message storage." }
+        } catch {
+            self.error = "Could not open local message storage."
+            hasLoadedChats = true // nothing more will arrive; show the empty state behind the alert rather than a blank screen
+        }
     }
 
     func loadDemo() async {
@@ -745,6 +757,7 @@ final class AppModel {
         avatars = [:]
         avatarChecked = []
         chats = []
+        hasLoadedChats = account.isEmpty // no account has no stored chats to wait for: sign-out shows its empty state at once
         messages = []
         messageReactions = [:]; messageReceipts = [:]
         attachmentFiles = [:]
@@ -1695,7 +1708,7 @@ final class AppModel {
         do {
             guard let authorization = try NotificationAccount.load(), authorization.push != nil,
                   authorization.accountID == account, sessionAccount?.accountID == account,
-                  let message = try await destination.resolve(accountID: account, active: true, store: store),
+                  let message = try await destination.resolve(accountID: account, store: store),
                   accountID == account, sessionAccount?.accountID == account,
                   try NotificationAccount.load() == authorization else { return }
             notificationRoute = NotificationChatRoute(accountID: account, chatID: message.chatID)
@@ -2340,5 +2353,6 @@ final class AppModel {
         }
         // A reorder (pin, new activity) animates; List only does so inside an explicit transaction.
         withAnimation(summaries.map(\.id) == chats.map(\.id) ? nil : .default) { chats = summaries }
+        hasLoadedChats = true
     }
 }

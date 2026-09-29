@@ -30,12 +30,6 @@ extension XCUIApplication {
             back.tap()
         }
     }
-
-    /// The reaction row is inline in the bubble menu; older builds kept it behind a "React" submenu.
-    func openReactionRow() {
-        let react = buttons["React"]
-        if react.waitForExistence(timeout: 2) { react.tap() }
-    }
 }
 
 /// A sent bubble the server holds: the label climbs from accepted to delivered to read as receipts arrive.

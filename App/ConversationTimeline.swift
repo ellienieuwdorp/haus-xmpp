@@ -130,14 +130,6 @@ enum MessageStatusGlyph: Equatable, Sendable {
         case .displayed: .read
         }
     }
-
-    /// Only a server-held message carries a check.
-    var showsCheck: Bool {
-        switch self {
-        case .sent, .delivered, .read: true
-        case .sending, .failed: false
-        }
-    }
 }
 
 /// Someone is typing: a received-style bubble of dots after the newest message.

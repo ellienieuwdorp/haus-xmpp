@@ -60,20 +60,6 @@ private func encryptedStoreURL() throws -> URL {
     #expect(try await store.encryptionState(accountID: "a")?.revision == 2)
 }
 
-@Test func separateOwnersCannotOverwriteAdvancedState() async throws {
-    let url = try encryptedStoreURL()
-    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    let first = try MessageStore(url: url)
-    let second = try MessageStore(url: url)
-    try await first.saveEncryptionState(accountID: "a", expectedRevision: nil, data: Data([1]))
-    let stale = try #require(await second.encryptionState(accountID: "a"))
-    try await first.saveEncryptionState(accountID: "a", expectedRevision: stale.revision, data: Data([2]))
-    await #expect(throws: MessageStoreError.invalidTransition) {
-        try await second.saveEncryptionState(accountID: "a", expectedRevision: stale.revision, data: Data([3]))
-    }
-    #expect(try await second.encryptionState(accountID: "a")?.data == Data([2]))
-}
-
 @Test func senderClaimsOnlyFinitePreparedSetLeavingNewIntentQueued() async throws {
     let url = try encryptedStoreURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
@@ -140,19 +126,4 @@ private func encryptedStoreURL() throws -> URL {
                                 from: nil, to: nil, provenance: nil),
     ])
     #expect(try await store.pendingEncryptedIncomingSummaries(accountID: "nobody").isEmpty)
-}
-
-@Test func encryptionStateRevisionMatchesTheRow() async throws {
-    let url = try encryptedStoreURL()
-    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    let store = try MessageStore(url: url)
-    #expect(try await store.encryptionStateRevision(accountID: "a") == nil)
-    try await store.saveEncryptionState(accountID: "a", expectedRevision: nil, data: Data([1]))
-    #expect(try await store.encryptionStateRevision(accountID: "a") == 1)
-    try await store.saveEncryptionState(accountID: "a", expectedRevision: 1, data: Data([2]))
-    #expect(try await store.encryptionStateRevision(accountID: "a") == 2)
-    #expect(try await store.encryptionState(accountID: "a")?.revision == 2)
-    try await store.saveEncryptionState(accountID: "b", expectedRevision: nil, data: Data([3]))
-    #expect(try await store.encryptionStateRevision(accountID: "a") == 2)
-    #expect(try await store.encryptionStateRevision(accountID: "b") == 1)
 }

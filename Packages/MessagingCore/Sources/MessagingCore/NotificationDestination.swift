@@ -26,8 +26,8 @@ public struct NotificationDestination: Sendable, Equatable, CustomStringConverti
     public var payload: [String: String] { ["version": "1", "account": accountScope, "message": messageID] }
     public var description: String { "NotificationDestination(<redacted>)" }
 
-    public func resolve(accountID: String, active: Bool, store: MessageStore) async throws -> StoredMessage? {
-        guard active, !accountID.isEmpty, Self.scope(for: accountID) == accountScope,
+    public func resolve(accountID: String, store: MessageStore) async throws -> StoredMessage? {
+        guard !accountID.isEmpty, Self.scope(for: accountID) == accountScope,
               let message = try await store.message(accountID: accountID, messageID: messageID),
               message.accountID == accountID, !message.isOutgoing, message.senderID != accountID,
               ["legacy", "modern"].contains(message.encryptionProfile ?? "") else { return nil }

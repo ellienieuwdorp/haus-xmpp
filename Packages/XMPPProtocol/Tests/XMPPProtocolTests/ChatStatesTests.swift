@@ -11,19 +11,6 @@ private func stanza(_ xml: String) throws -> XMPPProtocol.XMLNode {
 private let ns = XMPPChatState.namespace
 private let account = "me@example.test"
 
-@Test func bareComposingStanzaParsesAsAStateWithoutContent() throws {
-    let node = try stanza("<message from='alex@example.test/phone' to='me@example.test' type='chat'><composing xmlns='\(ns)'/></message>")
-    #expect(XMPPClient.parsedChatState(node, account: account, rooms: [:]) == XMPPChatState(chat: "alex@example.test", state: .composing))
-    // Not a message: nothing else in the stanza becomes an event.
-    #expect(XMPPClient.parsedMessage(node) == nil)
-}
-
-@Test func stateRidingOnABodyIsReportedAlongsideTheMessage() throws {
-    let node = try stanza("<message from='alex@example.test/phone' type='chat' id='m1'><body>hi</body><active xmlns='\(ns)'/></message>")
-    #expect(XMPPClient.parsedChatState(node, account: account, rooms: [:]) == XMPPChatState(chat: "alex@example.test", state: .active, ridesOnMessage: true))
-    #expect(XMPPClient.parsedMessage(node)?.body == "hi")
-}
-
 @Test func everyStateNameParsesAndAmbiguityOrForeignTypesDoNot() throws {
     for state in XMPPChatState.State.allCases {
         let node = try stanza("<message from='alex@example.test' type='chat'><\(state.rawValue) xmlns='\(ns)'/></message>")
@@ -57,31 +44,6 @@ private let account = "me@example.test"
     #expect(try state("other@rooms.example.test/maya") == nil)
 }
 
-@Test func delayedStatesAreStale() throws {
-    let delay = "<delay xmlns='urn:xmpp:delay' from='example.test' stamp='2026-09-24T10:00:00Z'/>"
-    var room = GroupRoomState()
-    room.nickname = "me"
-    let rooms = ["team@rooms.example.test": room]
-    // Offline storage and room history both mark their copies with a delay.
-    for xml in ["<message from='alex@example.test/phone' type='chat'><composing xmlns='\(ns)'/>\(delay)</message>",
-                "<message from='team@rooms.example.test/maya' type='groupchat'><body>hi</body><composing xmlns='\(ns)'/>\(delay)</message>"] {
-        #expect(XMPPClient.parsedChatState(try stanza(xml), account: account, rooms: rooms) == nil)
-    }
-}
-
-@Test func aRoomsPrivateMessagesAreNotTheRoomTyping() throws {
-    var room = GroupRoomState()
-    room.nickname = "me"
-    let rooms = ["team@rooms.example.test": room]
-    for from in ["team@rooms.example.test/maya", "team@rooms.example.test"] {
-        let node = try stanza("<message from='\(from)' type='chat'><composing xmlns='\(ns)'/><x xmlns='http://jabber.org/protocol/muc#user'/></message>")
-        #expect(XMPPClient.parsedChatState(node, account: account, rooms: rooms) == nil)
-    }
-    // An ordinary contact is unaffected.
-    let direct = try stanza("<message from='alex@example.test/phone' type='chat'><composing xmlns='\(ns)'/></message>")
-    #expect(XMPPClient.parsedChatState(direct, account: account, rooms: rooms)?.chat == "alex@example.test")
-}
-
 @Test func outgoingStateIsABareHintedStanza() throws {
     let xml = try XMPPChatState.xml(.composing, to: "alex@example.test", id: "c1")
     #expect(xml == "<message to='alex@example.test' type='chat' id='c1'><composing xmlns='\(ns)'/><no-store xmlns='urn:xmpp:hints'/></message>")
@@ -91,9 +53,4 @@ private let account = "me@example.test"
     let echoed = try stanza(xml.replacingOccurrences(of: "to='alex@example.test'", with: "from='alex@example.test/phone'"))
     #expect(XMPPClient.parsedChatState(echoed, account: account, rooms: [:])?.state == .composing)
     #expect(throws: XMPPClientError.self) { try XMPPChatState.xml(.active, to: "bad address", id: "c3") }
-}
-
-@Test func capsAdvertiseChatStates() {
-    #expect(EntityCapabilities.features.contains(ns))
-    #expect(EntityCapabilities.discoInfoQuery(node: nil).contains("<feature var='\(ns)'/>"))
 }

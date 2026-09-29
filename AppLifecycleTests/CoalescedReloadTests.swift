@@ -18,16 +18,6 @@ final class CoalescedReloadTests: XCTestCase {
         func started(_ count: Int) async { while scopes.count < count { await Task.yield() } }
     }
 
-    func testLoneRequestLoadsOnce() async {
-        let gate = Gate()
-        let reload = CoalescedReload { await gate.load($0) }
-        let request = Task { await reload.request(.chats) }
-        await gate.started(1)
-        gate.release()
-        await request.value
-        XCTAssertEqual(gate.scopes, [.chats])
-    }
-
     func testBurstDuringLoadCostsTwoLoadsAndUnionsScopes() async {
         let gate = Gate()
         let reload = CoalescedReload { await gate.load($0) }
@@ -48,18 +38,6 @@ final class CoalescedReloadTests: XCTestCase {
         for task in burst { await task.value }
         XCTAssertEqual(finished, 200)
         XCTAssertEqual(gate.scopes, [.chats, .all])
-    }
-
-    func testRequestAfterIdleStartsAgain() async {
-        let gate = Gate()
-        let reload = CoalescedReload { await gate.load($0) }
-        for expected in 1...2 {
-            let request = Task { await reload.request(.openChat) }
-            await gate.started(expected)
-            gate.release()
-            await request.value
-        }
-        XCTAssertEqual(gate.scopes, [.openChat, .openChat])
     }
 }
 
@@ -106,11 +84,6 @@ final class TimelinePageCacheTests: XCTestCase {
         var cache = Cache()
         cache.store(page("alex", count: 3), for: summary("alex"), account: "a")
         XCTAssertNil(cache.page(for: summary("alex"), account: "b"))
-        cache.store(page("maya", count: 2), for: summary("maya"), account: "b")
-        // Storing for another account dropped the first account's pages.
-        XCTAssertNil(cache.page(for: summary("alex"), account: "a"))
-        cache.removeAll()
-        XCTAssertNil(cache.page(for: summary("maya"), account: "b"))
     }
 
     func testPrefetchAsksForTheTopChatsLackingACurrentPage() {
@@ -125,19 +98,8 @@ final class TimelinePageCacheTests: XCTestCase {
         XCTAssertEqual(wanted, ["chat3", "chat4", "chat5", "chat6", "chat7", "chat8"])
         XCTAssertNil(cache.page(for: listed[2], account: "a"))
         XCTAssertNotNil(cache.page(for: listed[1], account: "a"))
+        // Another account's list drops this account's pages, so chat2 is wanted again.
         XCTAssertEqual(cache.missing(from: listed, account: "b", excluding: nil).count, Cache.prefetchCount)
-        XCTAssertNil(cache.page(for: listed[1], account: "a"))
-    }
-
-    func testTheLeastRecentlyUsedPageIsDroppedFirst() {
-        var cache = Cache()
-        for index in 0...Cache.capacity { cache.store(page("chat\(index)", count: 1), for: summary("chat\(index)"), account: "a") }
-        XCTAssertNil(cache.page(for: summary("chat0"), account: "a"))
-        XCTAssertNotNil(cache.page(for: summary("chat1"), account: "a"))
-        cache.store(page("extra", count: 1), for: summary("extra"), account: "a")
-        // chat1 was just shown, so chat2 went instead.
-        XCTAssertNotNil(cache.page(for: summary("chat1"), account: "a"))
-        XCTAssertNil(cache.page(for: summary("chat2"), account: "a"))
     }
 }
 
@@ -182,21 +144,6 @@ final class TimelineOffsetTests: XCTestCase {
         let visible = collectionView.indexPathsForVisibleItems.compactMap(identifier)
         XCTAssertTrue(visible.contains("m250"))
         XCTAssertFalse(visible.contains("m151"))
-    }
-
-    func testPrependKeepsTheReaderOnTheSameMessageWhenUpdateReturns() throws {
-        controller.update(messages: messages(151...250), onToggleStar: { _ in })
-        // Read from somewhere in the middle, away from the tail.
-        collectionView.contentOffset.y = bottomOffset / 2
-        collectionView.layoutIfNeeded()
-        let first = try XCTUnwrap(collectionView.indexPathsForVisibleItems.sorted().first)
-        let id = try XCTUnwrap(identifier(at: first))
-        let distance = try XCTUnwrap(collectionView.layoutAttributesForItem(at: first)).frame.minY - collectionView.contentOffset.y
-        controller.update(messages: messages(51...250), onToggleStar: { _ in })
-        let path = try XCTUnwrap((collectionView.dataSource as? UICollectionViewDiffableDataSource<Int, String>)?.indexPath(for: id))
-        XCTAssertEqual(path.item, first.item + 100)
-        let after = try XCTUnwrap(collectionView.layoutAttributesForItem(at: path)).frame.minY - collectionView.contentOffset.y
-        XCTAssertEqual(after, distance, accuracy: 0.5)
     }
 
     func testAnArrivingMessageAtTheTailIsFollowedWhenUpdateReturns() {

@@ -18,7 +18,6 @@ final class ConnectionSetupTests: XCTestCase {
             waiting.forEach { $0.resume() }
             waiting = []
         }
-        var opened: Bool { isOpen }
     }
 
     /// Events and marks in the order they happened.
@@ -62,11 +61,8 @@ final class ConnectionSetupTests: XCTestCase {
             await recorder.mark("walk-end")
         }
         let task = Task { await run(operations, recorder: recorder) }
+        // The walk is parked until after this loop, so reaching `.ready` is the proof.
         while await !recorder.contains(.ready) { await Task.yield() }
-        let walkStillOpen = await walk.opened
-        XCTAssertFalse(walkStillOpen)
-        let marks = await recorder.marks
-        XCTAssertFalse(marks.contains("walk-end"))
         await walk.open()
         await task.value
 

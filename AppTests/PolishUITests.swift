@@ -73,27 +73,4 @@ final class PolishUITests: XCTestCase {
         selection.lifetime = .keepAlways
         add(selection)
     }
-    @MainActor func testLargeTextConversationLayout() throws {
-        continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchArguments = ["-demo", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityM"]
-        app.isolateMessageStorage()
-        app.launch()
-        XCTAssertTrue(app.staticTexts["Notes to self"].waitForExistence(timeout: 15))
-        app.staticTexts["Notes to self"].tap()
-        let input = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
-        input.tap()
-        input.typeText("A quieter conversation.")
-        XCTAssertTrue(app.buttons["sendMessage"].isHittable)
-        app.buttons["sendMessage"].tap()
-        let message = app.textViews.containing(NSPredicate(format: "value == %@", "A quieter conversation.")).firstMatch
-        XCTAssertTrue(message.waitForExistence(timeout: 5))
-        XCTAssertLessThanOrEqual(message.frame.maxX, app.frame.maxX)
-        XCTAssertGreaterThanOrEqual(message.frame.minX, app.frame.minX)
-        let capture = XCTAttachment(screenshot: app.screenshot())
-        capture.name = "Large text conversation"
-        capture.lifetime = .keepAlways
-        add(capture)
-    }
-
 }

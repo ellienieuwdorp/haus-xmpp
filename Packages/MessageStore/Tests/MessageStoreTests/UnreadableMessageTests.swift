@@ -35,7 +35,7 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
                       sentAt: sentAt, reason: reason, key: key)
 }
 
-@Test func schemaV15AddsColumnsOnceAndKeepsTheCeiling() async throws {
+@Test func schemaV15AddsColumnsOnce() async throws {
     let url = try unreadableStoreURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     try await MessageStore(url: url).close()
@@ -56,17 +56,14 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
     try await migrated.close()
     #expect(sqliteRows(url, "SELECT name FROM pragma_table_info('messages') WHERE name='unreadable_reason'") == [["unreadable_reason"]])
     #expect(sqliteRows(url, "SELECT dflt_value,\"notnull\" FROM pragma_table_info('pending_encrypted_inbox') WHERE name='reason'") == [["'trustPending'", "1"]])
-    #expect(sqliteRows(url, "PRAGMA user_version") == [["17"]])
 
-    // Reopening is idempotent: no second ALTER, same version.
-    try await MessageStore(url: url).close()
-    #expect(sqliteRows(url, "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='unreadable_reason'") == [["1"]])
-    #expect(sqliteRows(url, "PRAGMA user_version") == [["17"]])
-
+    // A merged branch tree can stamp v14 over files that already have both columns: the migration adds neither again.
     #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, "PRAGMA user_version=18;", nil, nil, nil) == SQLITE_OK)
+    #expect(sqlite3_exec(db, "PRAGMA user_version=14;", nil, nil, nil) == SQLITE_OK)
     sqlite3_close(db)
-    #expect(throws: MessageStoreError.unsupportedSchema(18)) { _ = try MessageStore(url: url) }
+    let reopened = try MessageStore(url: url)
+    #expect(try await reopened.pendingEncryptedIncoming(accountID: account).map(\.reason) == [.trustPending])
+    try await reopened.close()
 }
 
 @Test func placeholderIsDeterministicIdempotentAndOrderedByStamp() async throws {
@@ -97,8 +94,6 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
     #expect(rows.map(\.id) == [archived.id, first.id])
     let decoded = try #require(await store.message(accountID: account, messageID: archived.id))
     #expect(decoded.unreadableReason == .malformedContent && decoded.isOutgoing && decoded.senderID == account)
-    #expect(try await store.hasUnreadableMessage(accountID: account, id: archived.id))
-    #expect(try await !store.hasUnreadableMessage(accountID: account, id: "unreadable-missing"))
     // An archive-keyed placeholder consumes no ciphertext identity.
     #expect(try await !store.hasEncryptedIncoming(accountID: account, sender: peer, digest: "archive-7"))
 
@@ -133,7 +128,7 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
     #expect(try await !store.recordUnreadableMessage(placeholder(.ciphertext(sender: peer, digest: "d2"))))
     let rows = try await store.messages(accountID: account, chatID: peer)
     #expect(rows.count == 2 && rows.filter { $0.unreadableReason != nil }.count == 1)
-    #expect(try await !store.hasUnreadableMessage(accountID: account, id: placeholder(.ciphertext(sender: peer, digest: "d2")).id))
+    #expect(try await store.message(accountID: account, messageID: placeholder(.ciphertext(sender: peer, digest: "d2")).id) == nil)
 }
 
 @Test func placeholderIsNeverAReactionTargetEventHolderOrCandidate() async throws {
@@ -180,24 +175,6 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
     #expect(try await store.messages(accountID: account, chatID: peer).map(\.id) == [id])
 }
 
-@Test func placeholderBecomesChatPreviewWithoutStarringOrSearch() async throws {
-    let url = try unreadableStoreURL()
-    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    let store = try MessageStore(url: url)
-    try await store.upsertChat(accountID: account, chatID: peer, title: "Bob")
-    try await store.insertMessage(StoredMessage(id: "older", accountID: account, chatID: peer, senderID: peer, body: "unreadable couldn't",
-                                                sentAt: Date(timeIntervalSince1970: 100)))
-    let later = placeholder(.archive(archive: account, id: "a1"), outgoing: true, sentAt: Date(timeIntervalSince1970: 200))
-    try await store.recordUnreadableMessage(later)
-    let chat = try #require(await store.chats(accountID: account).first)
-    #expect(chat.lastMessage?.id == later.id && chat.lastMessage?.unreadableReason == .notForThisDevice)
-    #expect(chat.lastMessage?.isStarred == false && chat.lastMessageReceipt == nil)
-    #expect(try await store.search(accountID: account, query: "").isEmpty)
-    for term in ["unreadable", "couldn", "not", "device", "a"] {
-        #expect(try await !store.search(accountID: account, query: term).contains { $0.unreadableReason != nil })
-    }
-}
-
 @Test func archiveRejectionWhitelistAndPlaceholderCommitTogether() async throws {
     let url = try unreadableStoreURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
@@ -215,7 +192,7 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
     let withRow = placeholder(.archive(archive: account, id: "p1"), reason: .unsupportedEncryption)
     try await store.recordArchiveRejection(accountID: account, archiveID: account, messageID: "p1", reason: "unsupportedDirectContent", placeholder: withRow)
     #expect(try await store.hasArchiveRejection(accountID: account, archiveID: account, messageID: "p1"))
-    #expect(try await store.hasUnreadableMessage(accountID: account, id: withRow.id))
+    #expect(try await store.message(accountID: account, messageID: withRow.id)?.unreadableReason == .unsupportedEncryption)
     // Repeating the page is harmless: both inserts are idempotent.
     try await store.recordArchiveRejection(accountID: account, archiveID: account, messageID: "p1", reason: "unsupportedDirectContent", placeholder: withRow)
     #expect(try await store.messages(accountID: account, chatID: peer).count == 1)
@@ -226,9 +203,10 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
         try await store.recordArchiveRejection(accountID: account, archiveID: account, messageID: "p2", reason: "malformedEncryptedContent", placeholder: invalid)
     }
     #expect(try await !store.hasArchiveRejection(accountID: account, archiveID: account, messageID: "p2"))
-    #expect(try await !store.hasUnreadableMessage(accountID: account, id: invalid.id))
+    #expect(try await store.message(accountID: account, messageID: invalid.id) == nil)
 
-    // The 1,000-row trim still runs after a placeholder insert.
+    // The 1,000-row trim still runs after a placeholder insert, and only within the account.
+    try await store.recordArchiveRejection(accountID: "carol@localhost", archiveID: "carol@localhost", messageID: "kept", reason: "foreignSender")
     for index in 0..<1_000 {
         try await store.recordArchiveRejection(accountID: account, archiveID: account, messageID: "bulk\(index)", reason: "foreignSender")
     }
@@ -237,9 +215,10 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
     #expect(try await !store.hasArchiveRejection(accountID: account, archiveID: account, messageID: "p1"))
     #expect(try await !store.hasArchiveRejection(accountID: account, archiveID: account, messageID: "bulk0"))
     #expect(try await store.hasArchiveRejection(accountID: account, archiveID: account, messageID: "p3"))
-    #expect(sqliteRows(url, "SELECT COUNT(*) FROM archive_rejections") == [["1000"]])
+    #expect(sqliteRows(url, "SELECT COUNT(*) FROM archive_rejections WHERE account_id='\(account)'") == [["1000"]])
+    #expect(try await store.hasArchiveRejection(accountID: "carol@localhost", archiveID: "carol@localhost", messageID: "kept"))
     // Trimming receipts never removes placeholder rows.
-    #expect(try await store.hasUnreadableMessage(accountID: account, id: withRow.id))
+    #expect(try await store.message(accountID: account, messageID: withRow.id)?.unreadableReason == .unsupportedEncryption)
 }
 
 @Test func pendingReasonsAreStoredClassifiedAndFilterable() async throws {

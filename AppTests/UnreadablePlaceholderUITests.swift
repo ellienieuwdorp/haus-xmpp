@@ -27,6 +27,9 @@ final class UnreadablePlaceholderUITests: XCTestCase {
         let incoming = app.textViews.containing(NSPredicate(format: "value == %@", incomingText)).firstMatch
         XCTAssertTrue(own.waitForExistence(timeout: 10))
         XCTAssertTrue(incoming.waitForExistence(timeout: 5))
+        // VoiceOver hears who it is from and why there is no text; a direct chat's peer is "Contact".
+        XCTAssertTrue(incoming.label.hasPrefix("Contact: \(incomingText), not readable on this device"), incoming.label)
+        XCTAssertTrue(own.label.hasPrefix("You: \(ownText), not readable on this device"), own.label)
         // Sides: the own-device send is on the trailing side, the unreadable incoming one on the leading side.
         XCTAssertGreaterThan(own.frame.midX, incoming.frame.midX)
         XCTAssertLessThan(own.frame.maxY, incoming.frame.minY + 1)
@@ -41,7 +44,7 @@ final class UnreadablePlaceholderUITests: XCTestCase {
         capture(app, "Placeholder menu")
         // The action is not tapped here: sample chats have no Encryption Details state.
         app.buttons["Dismiss"].firstMatch.tap()
-        XCTAssertFalse(app.buttons["Encryption details"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["Encryption details"].waitForNonExistence(timeout: 2))
 
         // The composer still works and a new message lands after the placeholders.
         let field = app.textFields["messageComposer"]
@@ -54,20 +57,6 @@ final class UnreadablePlaceholderUITests: XCTestCase {
         let sent = app.textViews.containing(NSPredicate(format: "value == %@", marker)).firstMatch
         XCTAssertTrue(sent.waitForExistence(timeout: 10))
         XCTAssertGreaterThan(sent.frame.minY, incoming.frame.maxY - 1)
-    }
-
-    @MainActor func testPlaceholderBubbleAccessibilityLabelNamesTheReason() throws {
-        continueAfterFailure = false
-        let app = launch()
-        let row = app.buttons["chat.alex@preview.local"]
-        XCTAssertTrue(row.waitForExistence(timeout: 15))
-        row.tap()
-        let incoming = app.textViews.containing(NSPredicate(format: "value == %@", incomingText)).firstMatch
-        XCTAssertTrue(incoming.waitForExistence(timeout: 10))
-        XCTAssertTrue(incoming.label.contains("not readable on this device"), incoming.label)
-        XCTAssertTrue(incoming.label.hasPrefix("Contact: \(incomingText)") || incoming.label.contains(": \(incomingText)"), incoming.label)
-        let own = app.textViews.containing(NSPredicate(format: "value == %@", ownText)).firstMatch
-        XCTAssertTrue(own.label.hasPrefix("You: \(ownText), not readable on this device"), own.label)
     }
 
     @MainActor private func capture(_ app: XCUIApplication, _ name: String) {

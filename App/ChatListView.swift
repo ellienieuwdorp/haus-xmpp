@@ -32,56 +32,58 @@ struct ChatListView: View {
     }
 
     var body: some View {
-        Group {
-            if model.chats.isEmpty {
-                ContentUnavailableView {
-                    Label("No conversations yet", systemImage: "bubble.left.and.bubble.right")
-                } description: {
-                    Text(model.accountID.isEmpty
-                         ? "Connect to the local lab in Settings, or explore sample conversations."
-                         : "Tap the compose button to start a conversation.")
-                } actions: {
-                    if model.accountID.isEmpty {
-                        Button("Explore sample conversations") { Task { await model.loadDemo() } }
-                            .buttonStyle(.borderedProminent)
-                    }
-                }
-            } else {
-                List {
-                    if model.isDemo || model.isLabAccount {
-                        Text(model.isDemo ? "Sample conversations · stored on this device" : "Local development lab")
-                            .font(.footnote).foregroundStyle(.secondary)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 4, trailing: 16))
-                    }
-                    // The row identity includes the pin state, so a pin change is a delete + insert (Signal's
-                    // same-section rule): List animates that as a fade in place, whereas a real move to the top
-                    // starts the row from below the last cell and slides it under its siblings (iOS 26.5 and 27).
-                    ForEach(visibleChats, id: \.listIdentity) { chat in
-                        Button { path.append(.chat(chat.id)) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatars[chat.id], typing: model.typing[chat.id]) }
-                            .buttonStyle(.plain)
-                            .task(id: "\(chat.id)|\(model.session.isReady)") { await model.loadAvatar(for: chat.id) }
-                            .listRowInsets(EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16))
-                            .accessibilityValue(chat.isPinned ? "Pinned" : "")
-                            .accessibilityIdentifier("chat.\(chat.id)")
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button(chat.isPinned ? "Unpin" : "Pin", systemImage: chat.isPinned ? "pin.slash" : "pin") {
-                                    Task {
-                                        // Let the swipe action close first (~0.30 s on 26.5 plus the highlight
-                                        // fade); changing the list in the same turn animates the still-open cell.
-                                        try? await Task.sleep(for: pinCommitDelay)
-                                        await model.togglePin(chat)
-                                    }
-                                }.tint(Color(uiColor: AccentTheme.current.tint))
+        // The list is always the content, with the empty states as overlays: swapping the content view would
+        // crossfade the title bar and toolbar along with it whenever the first rows arrive.
+        List {
+            if model.isDemo || model.isLabAccount, !model.chats.isEmpty {
+                Text(model.isDemo ? "Sample conversations · stored on this device" : "Local development lab")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 4, trailing: 16))
+            }
+            // The row identity includes the pin state, so a pin change is a delete + insert (Signal's
+            // same-section rule): List animates that as a fade in place, whereas a real move to the top
+            // starts the row from below the last cell and slides it under its siblings (iOS 26.5 and 27).
+            ForEach(visibleChats, id: \.listIdentity) { chat in
+                Button { path.append(.chat(chat.id)) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatars[chat.id], typing: model.typing[chat.id]) }
+                    .buttonStyle(.plain)
+                    .task(id: "\(chat.id)|\(model.session.isReady)") { await model.loadAvatar(for: chat.id) }
+                    .listRowInsets(EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16))
+                    .accessibilityValue(chat.isPinned ? "Pinned" : "")
+                    .accessibilityIdentifier("chat.\(chat.id)")
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(chat.isPinned ? "Unpin" : "Pin", systemImage: chat.isPinned ? "pin.slash" : "pin") {
+                            Task {
+                                // Let the swipe action close first (~0.30 s on 26.5 plus the highlight
+                                // fade); changing the list in the same turn animates the still-open cell.
+                                try? await Task.sleep(for: pinCommitDelay)
+                                await model.togglePin(chat)
                             }
+                        }.tint(Color(uiColor: AccentTheme.current.tint))
+                    }
+            }
+        }
+        .listStyle(.plain)
+        .overlay {
+            if model.chats.isEmpty {
+                // Until storage has been read (a cold start) the list stays quiet: a signed-in launch must not
+                // flash "no conversations" a moment before its rows arrive.
+                if model.hasLoadedChats {
+                    ContentUnavailableView {
+                        Label("No conversations yet", systemImage: "bubble.left.and.bubble.right")
+                    } description: {
+                        Text(model.accountID.isEmpty
+                             ? "Connect to the local lab in Settings, or explore sample conversations."
+                             : "Tap the compose button to start a conversation.")
+                    } actions: {
+                        if model.accountID.isEmpty {
+                            Button("Explore sample conversations") { Task { await model.loadDemo() } }
+                                .buttonStyle(.borderedProminent)
+                        }
                     }
                 }
-                .listStyle(.plain)
-                .overlay {
-                    if visibleChats.isEmpty {
-                        ContentUnavailableView.search(text: searchTerm)
-                    }
-                }
+            } else if visibleChats.isEmpty {
+                ContentUnavailableView.search(text: searchTerm)
             }
         }
         .navigationTitle("Chats")

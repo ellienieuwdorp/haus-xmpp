@@ -287,25 +287,3 @@ private func seedDecoyAccountB(_ store: MessageStore) async throws -> [String: C
         #expect(try await store.chats(accountID: "nobody").isEmpty)
     }
 }
-
-@Test func chatsFollowsNewMessagesAndEventsAfterTheFirstLoad() async throws {
-    try await withChatListStore { store in
-        try await store.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
-        try await store.insertMessage(message("m-1", "peer", body: "Hi", sentAt: 10, outgoing: true, wireID: "w-1"))
-        try await store.recordReceipt(accountID: "a", event: receipt("rc-1", "peer", target: "w-1", kind: .displayed, at: 11))
-        #expect(try await store.chats(accountID: "a").first?.lastMessageReceipt == .displayed)
-        // A newer message owns the preview; the old receipt no longer applies.
-        try await store.insertMessage(message("m-2", "peer", body: "Again", sentAt: 20, outgoing: true, wireID: "w-2"))
-        var chat = try #require(try await store.chats(accountID: "a").first)
-        #expect(chat.lastMessage?.id == "m-2" && chat.lastMessageReceipt == nil)
-        try await store.recordReceipt(accountID: "a", event: receipt("rc-2", "peer", target: "w-2", kind: .delivered, at: 21))
-        try await store.enqueueMessageUpdate(accountID: "a", id: "fix", kind: .correction, chatID: "peer", targetMessageID: "m-2", body: "Again!", createdAt: at(22))
-        chat = try #require(try await store.chats(accountID: "a").first)
-        #expect(chat.lastMessage?.body == "Again!" && chat.lastMessage?.isEdited == true && chat.lastMessageReceipt == .delivered)
-        // An incoming reply takes over: receipts are only for our own messages.
-        try await store.insertMessage(message("m-3", "peer", body: "Yes", sentAt: 30, wireID: "w-3"))
-        chat = try #require(try await store.chats(accountID: "a").first)
-        #expect(chat.lastMessage?.id == "m-3" && chat.lastMessageReceipt == nil && chat.lastMessage?.isEdited == false)
-        #expect(try await store.chats(accountID: "a") == (try await legacyChats(store, accountID: "a", seeds: ["peer": ChatSeed(title: "Peer")])))
-    }
-}

@@ -84,13 +84,4 @@ extension XMPPClient {
         var attributes = original.attributes; attributes["from"] = account
         return parsedReceipt(XMLNode(name: original.name, namespace: original.namespace, attributes: attributes, text: original.text, children: original.children))
     }
-
-    /// Standalone parser for a complete stanza. Includes the same size, depth and namespace limits as the transport.
-    public nonisolated static func decodeEncryptedMessageXML(_ xml: String) throws -> XMPPEncryptedMessage {
-        var parser = XMLStreamFramer()
-        let frames = try parser.feed(Data(("<stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client'>" + xml + "</stream:stream>").utf8))
-        let elements = frames.compactMap { frame -> XMLNode? in if case .element(let node) = frame { node } else { nil } }
-        guard elements.count == 1 else { throw XMPPIQError.malformedResponse }
-        return try OMEMOWire.parseMessage(elements[0])
-    }
 }

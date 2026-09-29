@@ -12,7 +12,6 @@ import UIKit
     var accent: AccentTheme { didSet { defaults.set(accent.rawValue, forKey: AccentTheme.storageKey) } }
     /// One of `modes`; "automatic" follows the system.
     var mode: String { didSet { defaults.set(mode, forKey: AppearanceView.modeKey) } }
-    var colorScheme: ColorScheme? { AppearanceView.colorScheme(for: mode) }
     var interfaceStyle: UIUserInterfaceStyle {
         switch mode { case "light": .light; case "dark": .dark; default: .unspecified }
     }

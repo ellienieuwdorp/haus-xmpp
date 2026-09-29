@@ -675,12 +675,6 @@ public actor MessageStore {
         }
     }
 
-    /// True when the placeholder row exists. `message(accountID:messageID:)` also works; this skips the attachment lookup.
-    public func hasUnreadableMessage(accountID: String, id: String) throws -> Bool {
-        try !connection.query("SELECT 1 FROM messages WHERE account_id=? AND id=? AND encryption_profile=?",
-                              [.text(accountID), .text(id), .text(Self.unreadableProfile)]).isEmpty
-    }
-
     static let unreadableProfile = "unreadable"
     static let unreadableIDPrefix = "unreadable-"
 
@@ -1162,12 +1156,6 @@ public actor MessageStore {
         return result.sorted { ($0.actorID, $0.kind.rawValue) < ($1.actorID, $1.kind.rawValue) }
     }
     private static func senderOnly(_ kind: MessageEventKind) -> Bool { kind == .retraction || kind == .correction }
-
-    public func reactionsForChat(accountID: String, chatID: String,
-                                 messageIDs: Set<String>) throws -> [String: [AuthenticatedReaction]] {
-        try eventsForChat(accountID: accountID, chatID: chatID, messageIDs: messageIDs)
-            .compactMapValues { events in let reactions = events.compactMap(AuthenticatedReaction.init); return reactions.isEmpty ? nil : reactions }
-    }
 
     /// One bounded query for a displayed timeline: every kind, latest per actor. Ambiguity is
     /// checked against the entire conversation, including colliding message IDs outside the page.

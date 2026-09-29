@@ -26,11 +26,6 @@ final class AttachmentTrayUITests: XCTestCase {
         return field.exists ? field : app.textViews["messageComposer"]
     }
 
-    /// Photo bubbles in the timeline; the small receipt glyphs are images too, so size tells them apart.
-    private func photoBubbles(in app: XCUIApplication) -> [XCUIElement] {
-        app.collectionViews["conversation.timeline"].images.allElementsBoundByIndex.filter { $0.frame.height > 60 }
-    }
-
     @MainActor private func pickPhotos(_ count: Int, in app: XCUIApplication) {
         let attach = app.buttons["attachFile"]
         XCTAssertTrue(attach.waitForExistence(timeout: 5))
@@ -48,54 +43,6 @@ final class AttachmentTrayUITests: XCTestCase {
         let removes = app.buttons.matching(identifier: "removeAttachment")
         let filled = NSPredicate { _, _ in removes.count == count }
         wait(for: [XCTNSPredicateExpectation(predicate: filled, object: nil)], timeout: 15)
-    }
-
-    @MainActor func testPickingFillsTheTrayAndSendsNothing() throws {
-        let app = openAlex()
-        XCTAssertTrue(app.collectionViews["conversation.timeline"].waitForExistence(timeout: 5))
-        let before = photoBubbles(in: app).count
-        pickPhotos(2, in: app)
-        XCTAssertEqual(app.buttons.matching(identifier: "removeAttachment").count, 2)
-        XCTAssertTrue(app.staticTexts["2 attachments"].exists)
-        XCTAssertEqual(composer(in: app).placeholderValue, "Add a caption…")
-        XCTAssertTrue(app.buttons["sendMessage"].isEnabled, "Files alone can be sent")
-        let sentAnyway = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.photoBubbles(in: app).count != before }, object: nil)
-        sentAnyway.isInverted = true
-        wait(for: [sentAnyway], timeout: 2)
-
-        // The tray outlives the keyboard and a rotation, and is dropped when the chat is left.
-        let removes = app.buttons.matching(identifier: "removeAttachment")
-        composer(in: app).tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        app.collectionViews["conversation.timeline"].swipeDown()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
-        for (orientation, landscape) in [(UIDeviceOrientation.landscapeLeft, true), (.portrait, false)] {
-            XCUIDevice.shared.orientation = orientation
-            let window = app.windows.firstMatch
-            let turned = NSPredicate { _, _ in (window.frame.width > window.frame.height) == landscape }
-            wait(for: [XCTNSPredicateExpectation(predicate: turned, object: nil)], timeout: 5)
-            XCTAssertEqual(removes.count, 2)
-        }
-        app.buttons["BackButton"].tap()
-        app.staticTexts["Alex"].tap()
-        XCTAssertTrue(app.buttons["attachFile"].waitForExistence(timeout: 5))
-        XCTAssertEqual(removes.count, 0)
-    }
-
-    @MainActor func testRemovingFromTheTray() throws {
-        let app = openAlex()
-        pickPhotos(2, in: app)
-        let removes = app.buttons.matching(identifier: "removeAttachment")
-        XCTAssertGreaterThanOrEqual(removes.firstMatch.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(removes.firstMatch.frame.height, 44)
-        XCTAssertEqual(removes.element(boundBy: 1).label, "Remove Photo, 2 of 2", "VoiceOver can tell the removes apart")
-        removes.firstMatch.tap()
-        XCTAssertEqual(removes.count, 1)
-        XCTAssertFalse(app.staticTexts["2 attachments"].exists)
-        removes.firstMatch.tap()
-        XCTAssertTrue(removes.firstMatch.waitForNonExistence(timeout: 3))
-        XCTAssertEqual(composer(in: app).placeholderValue, "Message")
-        XCTAssertFalse(app.buttons["sendMessage"].isEnabled)
     }
 
     /// Two photos and a caption become three messages: each photo on its own, the caption last and on its own.

@@ -26,3 +26,14 @@ struct NullTransport: OMEMOTransport {
     func publishOMEMODevices(_ devices: [UInt32], profile: XMPPOMEMOProfile) async throws { await published.setDevices(devices, profile) }
     func publishOMEMOBundle(_ bundle: XMPPOMEMOBundle) async throws { await published.setBundle(bundle) }
 }
+
+/// A direct (legacy) and a group (modern) envelope, each with the one key for this device, from a sender device the
+/// account does not know. Without a server the sender's keys cannot be fetched, so both can only be retained.
+func unknownSenderEnvelopes(account: String, encryption: OMEMOService) async throws -> (direct: XMPPOMEMOEnvelope, group: XMPPOMEMOEnvelope) {
+    let legacy = try await encryption.localIdentity(account: account, profile: .legacy)
+    let modern = try await encryption.localIdentity(account: account, profile: .modern)
+    return (XMPPOMEMOEnvelope(profile: .legacy, senderDeviceID: 4242, keys: [XMPPOMEMOKey(deviceID: legacy.deviceID, keyExchange: true, data: Data([9]))],
+                              iv: Data(repeating: 1, count: 12), payload: Data([1, 2, 3])),
+            XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: 4242,
+                              keys: [XMPPOMEMOKey(recipientJID: account, deviceID: modern.deviceID, keyExchange: true, data: Data([9]))], payload: Data([4, 5, 6])))
+}

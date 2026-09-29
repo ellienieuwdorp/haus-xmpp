@@ -4,35 +4,25 @@ import XMPPProtocol
 @testable import MessagingCore
 
 struct PushRegistrationJournalTests {
-    @Test func freshSameTokenAfterLostReceiptAndProviderInvalidationAdvancesRevision() throws {
+    @Test func interruptedIntentsPersistExactlyAndARepeatedRevocationKeepsItsRevision() throws {
         var journal = PushRegistrationJournal()
-        let committedButUnacknowledged = try journal.stageFreshRegistration(deviceToken: "aabb")
-        // Gateway committed revision1, its response was lost, then APNs rejected the token.
-        // Ordinary replay must remain revision1, but a genuine APNs callback must not.
-        #expect(try journal.stageRegistration(deviceToken: "aabb") == committedButUnacknowledged)
-        let refreshed = try journal.stageFreshRegistration(deviceToken: "AABB")
-        #expect(refreshed.revision == 2 && refreshed.deviceToken == committedButUnacknowledged.deviceToken)
-        #expect(!journal.acknowledge(try XMPPPushRegistrationResult(revision: 1, action: .register), for: committedButUnacknowledged))
-        #expect(journal.pending == refreshed)
-        #expect(journal.acknowledge(try XMPPPushRegistrationResult(revision: 2, action: .register), for: refreshed))
-    }
-
-    @Test func interruptedRegistrationPersistsExactlyAndRetryDoesNotAdvance() throws {
-        var journal = PushRegistrationJournal()
-        let first = try journal.stageRegistration(deviceToken: "AABB")
+        let registration = try journal.stageFreshRegistration(deviceToken: "AABB")
         var restored = try JSONDecoder().decode(PushRegistrationJournal.self, from: JSONEncoder().encode(journal))
-        #expect(restored.pending == first)
-        #expect(try restored.stageRegistration(deviceToken: "aabb") == first)
-        #expect(restored.revision == 1)
-        #expect(restored.acknowledge(try XMPPPushRegistrationResult(revision: 1, action: .register), for: first))
-        // A fresh APNs registration may legitimately return the same token after invalidation.
-        #expect(try restored.stageRegistration(deviceToken: "aabb").revision == 2)
+        #expect(restored == journal && restored.pending == registration)
+        let revoke = try restored.stageRevocation()
+        restored = try JSONDecoder().decode(PushRegistrationJournal.self, from: JSONEncoder().encode(restored))
+        // Signing out again after an interrupted transmission resends the persisted intent, not a new revision.
+        #expect(try restored.stageRevocation() == revoke)
+        #expect(restored.revision == 2)
+        #expect(restored.acknowledge(try XMPPPushRegistrationResult(revision: 2, action: .revoke), for: revoke))
+        // An acknowledged revocation is finished: the next sign-out is a new intent.
+        #expect(try restored.stageRevocation().revision == 3)
     }
 
     @Test func lateEnableAndRotationRepliesCannotEraseRevocation() throws {
         var journal = PushRegistrationJournal()
-        let first = try journal.stageRegistration(deviceToken: "aabb")
-        let rotated = try journal.stageRegistration(deviceToken: "ccdd")
+        let first = try journal.stageFreshRegistration(deviceToken: "aabb")
+        let rotated = try journal.stageFreshRegistration(deviceToken: "ccdd")
         let revoke = try journal.stageRevocation()
         #expect(!journal.acknowledge(try XMPPPushRegistrationResult(revision: first.revision, action: .register), for: first))
         #expect(!journal.acknowledge(try XMPPPushRegistrationResult(revision: rotated.revision, action: .register), for: rotated))
@@ -43,7 +33,7 @@ struct PushRegistrationJournalTests {
 
     @Test func conflictRecoveryPreservesLatestIntentAndRejectsOldReply() throws {
         var journal = PushRegistrationJournal()
-        let original = try journal.stageRegistration(deviceToken: "aabb")
+        let original = try journal.stageFreshRegistration(deviceToken: "aabb")
         _ = try journal.stageRevocation()
         let updated = try journal.rebasePending(after: XMPPPushRegistrationResult(revision: 50, action: .register))
         let rebased = try #require(updated)
@@ -58,7 +48,7 @@ struct PushRegistrationJournalTests {
         var journal = PushRegistrationJournal()
         _ = try journal.stageRevocation()
         let saved = journal
-        #expect(throws: XMPPNotificationError.self) { try journal.stageRegistration(deviceToken: "not-hex") }
+        #expect(throws: XMPPNotificationError.self) { try journal.stageFreshRegistration(deviceToken: "not-hex") }
         #expect(journal == saved)
         #expect(throws: XMPPNotificationError.self) {
             try journal.rebasePending(after: XMPPPushRegistrationResult(revision: XMPPPushRegistrationOperation.maximumRevision, action: .register))

@@ -24,7 +24,7 @@ public struct BackgroundAccount: Sendable, CustomStringConvertible, CustomDebugS
 }
 
 public enum BackgroundSynchronizationError: Error, Sendable, Equatable {
-    case identityUnavailable, deadlineExceeded, invalidTimeBudget, connectionEnded
+    case identityUnavailable, deadlineExceeded, connectionEnded
 }
 
 /// An extension performs one bounded catch-up under the same kernel lease as the app.
@@ -34,11 +34,7 @@ public struct BackgroundSynchronizer: Sendable {
     public init() {}
 
     @discardableResult public func synchronize(databaseURL: URL, wrappingKey: Data, account: BackgroundAccount,
-                            timeBudget: Duration = .seconds(20),
                             presentation: (@Sendable (MessageNotification) throws -> Void)? = nil) async throws -> MessageNotification {
-        guard timeBudget > .zero, timeBudget <= .seconds(25) else {
-            throw BackgroundSynchronizationError.invalidTimeBudget
-        }
         try Task.checkCancellation()
         guard FileManager.default.fileExists(atPath: databaseURL.path) else {
             throw BackgroundSynchronizationError.identityUnavailable
@@ -55,7 +51,7 @@ public struct BackgroundSynchronizer: Sendable {
             try await client.configureStreamManagement(persistence: StreamPersistence(
                 store: store, accountID: account.accountID, encryption: encryption))
             try await store.recoverInterruptedSubmissions(accountID: account.accountID)
-            try await runBackgroundWork(timeBudget: timeBudget, operation: {
+            try await runBackgroundWork(timeBudget: .seconds(20), operation: {
                 try await client.connect(host: account.host, port: account.port, domain: account.domain,
                                          username: account.username, password: account.password)
                 try Task.checkCancellation()

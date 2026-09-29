@@ -192,26 +192,16 @@ func rotationPreservesDelayedPreKeyMessagesButExpiresOldSecrets(profile: CryptoP
   #expect(try AttachmentCrypto.open(AttachmentCrypto.seal(Data())).isEmpty)
 }
 
-@Test func modernAndLegacyPublicRepresentationsHaveSameFingerprint() throws {
-  let modern = try OMEMOEngine(profile: .modern, deviceID: 555, preKeyCount: 1)
-  let snapshot = try JSONSerialization.jsonObject(with: modern.snapshot()) as! [String: Any]
-  let records = snapshot["records"] as! [String: String]
-  let legacyRepresentation = Data(base64Encoded: records["identity.public"]!)!
-  #expect(
-    try OMEMOEngine.fingerprintBytes(for: modern.identityKey, profile: .modern)
-      == Data(legacyRepresentation.dropFirst()))
-  #expect(
-    try OMEMOEngine.fingerprintBytes(for: legacyRepresentation, profile: .legacy)
-      == Data(legacyRepresentation.dropFirst()))
-}
-
 @Test func sharedPhysicalIdentityKeepsProfileSessionsAndPrekeysSeparate() throws {
   let legacy = try OMEMOEngine(profile: .legacy, deviceID: 555, preKeyCount: 3)
   let modern = try OMEMOEngine(profile: .modern, sharingIdentityWith: legacy, preKeyCount: 3)
   #expect(modern.deviceID == legacy.deviceID)
-  #expect(
-    try OMEMOEngine.fingerprintBytes(for: legacy.identityKey, profile: .legacy)
-      == OMEMOEngine.fingerprintBytes(for: modern.identityKey, profile: .modern))
+  // Both publish the same physical identity in different encodings (33-byte Curve25519, 32-byte Ed25519);
+  // either fingerprint is the raw 32-byte Curve25519 key, so one device reads the same in both versions.
+  let curve = Data(try legacy.identityKey.dropFirst())
+  #expect(try modern.identityKey != curve)
+  #expect(try OMEMOEngine.fingerprintBytes(for: legacy.identityKey, profile: .legacy) == curve)
+  #expect(try OMEMOEngine.fingerprintBytes(for: modern.identityKey, profile: .modern) == curve)
   #expect(try Data(legacy.bundle().signedPreKey.dropFirst()) != modern.bundle().signedPreKey)
   #expect(try Data(legacy.bundle().preKeys[1]!.dropFirst()) != modern.bundle().preKeys[1]!)
   let reopened = try OMEMOEngine(snapshot: modern.snapshot())

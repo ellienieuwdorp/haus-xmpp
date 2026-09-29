@@ -35,33 +35,11 @@ private func outgoing(_ id: String, account: String = "a", time: Double = 100, b
     #expect(try await !store.enqueueOutgoing(outgoing("first", time: 200)))
     #expect(try await store.claimNextOutgoing(accountID: "a")?.message.id == "second")
     #expect(try await store.claimNextOutgoing(accountID: "a") == nil)
-    #expect(try await store.claimNextOutgoing(accountID: "b")?.message.accountID == "b")
-}
-
-@Test func processRecoveryPreservesQueueAndNeverReplaysUncertainSend() async throws {
-    let url = try fixture()
-    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    var store: MessageStore? = try MessageStore(url: url)
-    try await store!.acquireTransportOwnership()
-    try await store!.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
-    for id in ["crashed", "queued"] { try await store!.enqueueOutgoing(outgoing(id)) }
-    let interrupted = try #require(await store!.claimNextOutgoing(accountID: "a"))
-    store = nil
-    let reopened = try MessageStore(url: url)
-    try await reopened.acquireTransportOwnership()
-    try await reopened.recoverInterruptedSubmissions(accountID: "a")
-    #expect(try await reopened.messages(accountID: "a", chatID: "peer").first { $0.id == "crashed" }?.transportState == .unconfirmed)
-    #expect(try await reopened.claimNextOutgoing(accountID: "a")?.message.id == "queued")
-    #expect(try await reopened.claimNextOutgoing(accountID: "a") == nil)
-    #expect(try await !reopened.finishOutgoingSubmission(interrupted))
-    try await reopened.retryOutgoing(accountID: "a", messageID: "crashed")
-    let retry = try #require(await reopened.claimNextOutgoing(accountID: "a"))
-    #expect(retry.message.id == interrupted.message.id)
-    #expect(retry.attemptID != interrupted.attemptID)
-    #expect(try await !reopened.releaseUnsentSubmission(interrupted))
-    #expect(try await reopened.finishOutgoingSubmission(retry))
-    #expect(try await !reopened.finishOutgoingSubmission(retry))
-    #expect(try await reopened.claimNextOutgoing(accountID: "a") == nil)
+    let other = try #require(await store.claimNextOutgoing(accountID: "b"))
+    #expect(other.message.accountID == "b" && !other.message.isStarred)
+    await #expect(throws: MessageStoreError.invalidValue) {
+        try await store.enqueueOutgoing(outgoing("oversized", body: String(repeating: "x", count: 65_537)))
+    }
 }
 
 @Test func invalidTransitionsAndExplicitRecoveryAreAccountScoped() async throws {
@@ -79,6 +57,7 @@ private func outgoing(_ id: String, account: String = "a", time: Double = 100, b
     await #expect(throws: MessageStoreError.invalidTransition) { try await store.failQueuedOutgoing(accountID: "a", messageID: "1") }
     try await store.recoverInterruptedSubmissions(accountID: "a")
     #expect(try await store.messages(accountID: "a", chatID: "peer").first?.transportState == .unconfirmed)
+    #expect(try await store.claimNextOutgoing(accountID: "a") == nil) // an uncertain send is never replayed on its own
     #expect(try await store.messages(accountID: "b", chatID: "peer").first?.transportState == .submitting)
     #expect(try await !store.finishOutgoingSubmission(a))
     try await store.retryOutgoing(accountID: "a", messageID: "1")
@@ -131,23 +110,4 @@ private func outgoing(_ id: String, account: String = "a", time: Double = 100, b
     await #expect(throws: MessageStoreError.invalidTransition) { try await store.enqueueOutgoing(outgoing("legacy")) }
     try await store.enqueueOutgoing(outgoing("new"))
     #expect(try await store.claimNextOutgoing(accountID: "a")?.message.id == "new")
-}
-
-@Test func concurrentClaimsHaveDistinctWorkAndInvalidBodiesAreRejected() async throws {
-    let url = try fixture()
-    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    let store = try MessageStore(url: url)
-    try await store.acquireTransportOwnership()
-    try await store.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
-    for body in ["", String(repeating: "x", count: 65_537)] {
-        await #expect(throws: MessageStoreError.invalidValue) { try await store.enqueueOutgoing(outgoing("invalid", body: body)) }
-    }
-    #expect(try await store.messages(accountID: "a", chatID: "peer").isEmpty)
-    try await store.enqueueOutgoing(outgoing("one"))
-    try await store.enqueueOutgoing(outgoing("two"))
-    async let first = store.claimNextOutgoing(accountID: "a")
-    async let second = store.claimNextOutgoing(accountID: "a")
-    let claims = try await [first, second].compactMap { $0 }
-    #expect(Set(claims.map { $0.message.id }) == ["one", "two"])
-    #expect(Set(claims.map(\.attemptID)).count == 2)
 }

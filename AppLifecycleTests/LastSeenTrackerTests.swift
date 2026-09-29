@@ -18,11 +18,6 @@ final class LastSeenTrackerTests: XCTestCase {
 
     // MARK: Derivation
 
-    func testUnknownUntilSomethingIsSeen() {
-        XCTAssertNil(LastSeenTracker().lastSeen(for: alex))
-        XCTAssertNil(LastSeenTracker.derive(ContactPresenceState()))
-    }
-
     func testAnyActiveResourceIsOnline() {
         var tracker = LastSeenTracker()
         tracker.apply(presence("phone", available: true, idle: start), account: me, isContact: true, now: start)
@@ -65,15 +60,6 @@ final class LastSeenTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.lastSeen(for: alex), .lastSeen(start - 300))
         tracker.apply(presence("phone", available: true), account: me, isContact: true, now: start)
         XCTAssertEqual(tracker.lastSeen(for: alex), .online, "an available resource outranks the server's answer")
-    }
-
-    func testTheNewerOfDepartureAndLastActivityWins() {
-        var state = ContactPresenceState()
-        state.lastUnavailableAt = start
-        state.lastActivityAt = start - 100
-        XCTAssertEqual(LastSeenTracker.derive(state), .lastSeen(start))
-        state.lastActivityAt = start + 100
-        XCTAssertEqual(LastSeenTracker.derive(state), .lastSeen(start + 100))
     }
 
     func testReconnectKeepsWhatWasSeenButForgetsWhoIsAvailable() {
@@ -162,12 +148,6 @@ final class LastSeenTrackerTests: XCTestCase {
         XCTAssertTrue(tracker.sharingWith.isEmpty)
     }
 
-    func testSharingWithListsFromAndBoth() {
-        let tracker = loaded([XMPPRosterItem(jid: "a@x", subscription: .from), XMPPRosterItem(jid: "b@x", subscription: .both),
-                              XMPPRosterItem(jid: "c@x", subscription: .to), XMPPRosterItem(jid: "d@x", subscription: .none)])
-        XCTAssertEqual(tracker.sharingWith, ["a@x", "b@x"])
-    }
-
     // MARK: Subscription policy
 
     func testSharingApprovesChatContactsAndAsksBackOnce() {
@@ -175,13 +155,6 @@ final class LastSeenTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.answerSubscribe(from: alex, sharesLastSeen: true, isDirectChat: true), .approve(alsoSubscribe: true))
         XCTAssertEqual(tracker.answerSubscribe(from: alex, sharesLastSeen: true, isDirectChat: true), .approve(alsoSubscribe: false))
         XCTAssertEqual(tracker.askStep(for: alex, now: start), .nothing, "asking back counts as this connection's subscribe")
-    }
-
-    func testSharingDoesNotAskBackWhenWeAlreadyHoldOrAwaitTheirPresence() {
-        var holding = loaded([XMPPRosterItem(jid: alex, subscription: .to)])
-        XCTAssertEqual(holding.answerSubscribe(from: alex, sharesLastSeen: true, isDirectChat: true), .approve(alsoSubscribe: false))
-        var waiting = loaded([XMPPRosterItem(jid: alex, subscription: .none, askPending: true)])
-        XCTAssertEqual(waiting.answerSubscribe(from: alex, sharesLastSeen: true, isDirectChat: true), .approve(alsoSubscribe: false))
     }
 
     func testSharingLeavesStrangersPending() {

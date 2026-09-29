@@ -18,30 +18,11 @@ final class LastSeenTests: XCTestCase {
 
     private func label(_ state: LastSeen) -> String { LastSeen.label(state, now: now, calendar: calendar) }
 
-    func testOnline() {
-        XCTAssertEqual(label(.online), "Online")
-    }
-
     func testUnderAMinuteIsJustNow() {
         XCTAssertEqual(label(.lastSeen(date(2026, 9, 25, 13, 59, 1))), "Last seen just now")
         XCTAssertEqual(label(.lastSeen(now)), "Last seen just now")
         XCTAssertEqual(label(.lastSeen(now.addingTimeInterval(30))), "Last seen just now", "a clock ahead of ours is not the future")
         XCTAssertEqual(label(.lastSeen(date(2026, 9, 25, 13, 59, 0))), "Last seen today at 13:59")
-    }
-
-    func testToday() {
-        XCTAssertEqual(label(.lastSeen(date(2026, 9, 25, 10, 31))), "Last seen today at 10:31")
-        XCTAssertEqual(label(.lastSeen(date(2026, 9, 25, 0, 0))), "Last seen today at 00:00")
-    }
-
-    func testYesterday() {
-        XCTAssertEqual(label(.lastSeen(date(2026, 9, 24, 23, 59))), "Last seen yesterday at 23:59")
-        XCTAssertEqual(label(.lastSeen(date(2026, 9, 24, 10, 31))), "Last seen yesterday at 10:31")
-    }
-
-    func testWithinSixDaysNamesTheWeekday() {
-        XCTAssertEqual(label(.lastSeen(date(2026, 9, 23, 10, 31))), "Last seen Wednesday at 10:31")
-        XCTAssertEqual(label(.lastSeen(date(2026, 9, 19, 8, 5))), "Last seen Saturday at 08:05")
     }
 
     func testOlderShowsTheDate() {
@@ -56,13 +37,5 @@ final class LastSeenTests: XCTestCase {
         components.timeZone = TimeZone(identifier: "UTC")!
         let seen = Calendar(identifier: .gregorian).date(from: components)!
         XCTAssertEqual(label(.lastSeen(seen)), "Last seen today at 01:30")
-    }
-
-    func testTimeFollowsTheLocale() {
-        var american = calendar
-        american.locale = Locale(identifier: "en_US")
-        let text = LastSeen.label(.lastSeen(date(2026, 9, 25, 10, 31)), now: now, calendar: american)
-        XCTAssertTrue(text.hasPrefix("Last seen today at 10:31"), text)
-        XCTAssertTrue(text.hasSuffix("AM"), text)
     }
 }

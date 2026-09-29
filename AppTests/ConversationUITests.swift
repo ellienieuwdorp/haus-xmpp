@@ -87,22 +87,38 @@ final class ConversationUITests: XCTestCase {
         let bubbles = app.textViews.matching(NSPredicate(format: "value BEGINSWITH %@", "History message"))
         // Twice: the second opening follows an interactive dismissal, which leaves the list wherever the finger put it.
         for round in 1...2 {
-            // Let the drag and any cell self-sizing settle before measuring.
-            sleep(2)
-            let anchor = try XCTUnwrap(bubbles.allElementsBoundByIndex.filter { $0.frame.maxY < input.frame.minY - 11 }.max { $0.frame.maxY < $1.frame.maxY })
-            let text = try XCTUnwrap(anchor.value as? String)
-            let before = input.frame.minY - anchor.frame.maxY
+            // Measure once the drag and any cell self-sizing have settled.
+            let anchor = try XCTUnwrap(settled { () -> Anchor? in
+                bubbles.allElementsBoundByIndex.filter { $0.frame.maxY < input.frame.minY - 11 }.max { $0.frame.maxY < $1.frame.maxY }
+                    .map { Anchor(text: $0.value as? String ?? "", gap: input.frame.minY - $0.frame.maxY) }
+            }, "round \(round)")
             input.tap()
             XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-            sleep(1)
-            let moved = app.textViews.containing(NSPredicate(format: "value == %@", text)).firstMatch
+            let moved = app.textViews.containing(NSPredicate(format: "value == %@", anchor.text)).firstMatch
             XCTAssertTrue(moved.exists, "round \(round)")
-            XCTAssertEqual(input.frame.minY - moved.frame.maxY, before, accuracy: 4, "round \(round)")
+            XCTAssertEqual(settled { input.frame.minY - moved.frame.maxY }, anchor.gap, accuracy: 4, "round \(round)")
             guard round == 1 else { break }
             timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
                 .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97)), withVelocity: .slow, thenHoldForDuration: 0.3)
             XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
         }
+    }
+
+    /// The bubble resting just above the composer and its distance from it.
+    private struct Anchor: Equatable { let text: String; let gap: CGFloat }
+
+    /// Polls `probe` until two readings half a second apart agree: scrolling, the keyboard and cell self-sizing are done.
+    @MainActor private func settled<T: Equatable>(timeout: TimeInterval = 10, _ probe: () -> T) -> T {
+        var last = probe()
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+            let next = probe()
+            if next == last { return next }
+            last = next
+        }
+        XCTFail("Still moving after \(timeout) seconds")
+        return last
     }
 
     /// Sending always returns to the newest message, even from far up in history.
@@ -121,39 +137,4 @@ final class ConversationUITests: XCTestCase {
         XCTAssertTrue(sent.isHittable)
     }
 
-    @MainActor func testComposeSearchAndRelaunch() throws {
-        let app = XCUIApplication()
-        app.launchArguments = ["-demo"]
-        app.isolateMessageStorage()
-        app.launch()
-        let alex = app.staticTexts["Alex"]
-        XCTAssertTrue(alex.waitForExistence(timeout: 15))
-        alex.tap()
-        let composer = app.textFields["messageComposer"]
-        // A multiline SwiftUI TextField is exposed as a text view on some runtimes.
-        let input = composer.exists ? composer : app.textViews["messageComposer"]
-        XCTAssertTrue(input.waitForExistence(timeout: 5))
-        input.tap()
-        let marker = "Smoke \(UUID().uuidString.prefix(8))"
-        input.typeText(marker)
-        let send = app.buttons["sendMessage"]
-        XCTAssertTrue(send.isHittable, "Composer send should stay above keyboard")
-        send.tap()
-        let capture = XCTAttachment(screenshot: app.screenshot())
-        capture.name = "Conversation with keyboard"
-        capture.lifetime = .keepAlways
-        add(capture)
-        app.buttons["Conversation options"].tap()
-        app.buttons["Search messages"].tap()
-        let search = app.searchFields["messageSearch"]
-        XCTAssertTrue(search.waitForExistence(timeout: 3))
-        search.tap()
-        search.typeText(marker)
-        XCTAssertTrue(app.textViews.containing(NSPredicate(format: "value == %@", marker)).firstMatch.waitForExistence(timeout: 5))
-        app.terminate()
-        app.launch()
-        XCTAssertTrue(app.staticTexts["Alex"].waitForExistence(timeout: 10))
-        app.staticTexts["Alex"].tap()
-        XCTAssertTrue(app.textViews.containing(NSPredicate(format: "value == %@", marker)).firstMatch.waitForExistence(timeout: 5))
-    }
 }
