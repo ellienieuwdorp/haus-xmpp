@@ -359,27 +359,30 @@ struct ArchiveSynchronizerTests {
     /// A checkpoint saved before stamps existed restarts at the newest page, and its backfill cursor moves there so
     /// backfill walks back through whatever the server still holds between the lost cursor and that page.
     @Test func anExpiredCursorWithoutAStampRestartsAtTheNewestPage() async throws {
-        try await fixture { store async throws in
-            _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: account, expectedRevision: nil, cursor: "lost")
-            _ = try await store.saveArchiveBackfillCursor(accountID: account, archiveID: account, expectedRevision: nil, oldestID: "first", complete: true)
-            let trace = Trace()
-            let operations = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in },
-                fetchPage: { bound, _ in
-                    await trace.record("fetch:\(describe(bound))")
-                    switch bound {
-                    case .after("lost"): throw XMPPIQError.stanza(condition: "item-not-found")
-                    case .before(nil): return page(["m5", "m6"], sequence: 1, complete: false)
-                    default: return emptyPage
-                    }
-                },
-                process: { _ in }, acknowledge: { _ in }, disconnect: { await trace.record("disconnect") }, progress: { _ in })
-            #expect(try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations).isComplete)
-            #expect(await trace.events == ["fetch:after(lost)", "fetch:before(nil)", "fetch:after(m6)"])
-            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account) ==
-                    ArchiveCheckpoint(revision: 2, cursor: "m6", stamp: Date(timeIntervalSince1970: 100)))
-            #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: account) == ArchiveBackfillCursor(revision: 2, oldestID: "m5", complete: false))
-            #expect(try await ArchiveSynchronizer(store: store).hasPendingBackfill(account: account, archive: nil))
-            #expect(try await store.archiveGaps(accountID: account).map(\.since) == [nil])
+        for archive in [account, room] {
+            try await fixture { store async throws in
+                _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: archive, expectedRevision: nil, cursor: "lost")
+                _ = try await store.saveArchiveBackfillCursor(accountID: account, archiveID: archive, expectedRevision: nil, oldestID: "first", complete: true)
+                let trace = Trace()
+                let operations = ArchiveSyncOperations(knownRooms: { archive == room ? [room] : [] }, refreshRoom: { _ in },
+                    fetchPage: { bound, selected in
+                        guard (selected ?? account) == archive else { return emptyPage }
+                        await trace.record("fetch:\(describe(bound))")
+                        switch bound {
+                        case .after("lost"): throw XMPPIQError.stanza(condition: "item-not-found")
+                        case .before(nil): return page(["m5", "m6"], sequence: 1, complete: false)
+                        default: return emptyPage
+                        }
+                    },
+                    process: { _ in }, acknowledge: { _ in }, disconnect: { await trace.record("disconnect") }, progress: { _ in })
+                #expect(try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations).isComplete)
+                #expect(await trace.events == ["fetch:after(lost)", "fetch:before(nil)", "fetch:after(m6)"])
+                #expect(try await store.archiveCheckpoint(accountID: account, archiveID: archive) ==
+                        ArchiveCheckpoint(revision: 2, cursor: "m6", stamp: Date(timeIntervalSince1970: 100)))
+                #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: archive) == ArchiveBackfillCursor(revision: 2, oldestID: "m5", complete: false))
+                #expect(try await ArchiveSynchronizer(store: store).hasPendingBackfill(account: account, archive: archive == room ? room : nil))
+                #expect(try await store.archiveGaps(accountID: account).map { [$0.archiveID, $0.since.map { "\($0)" }] } == [[archive, nil]])
+            }
         }
     }
 
