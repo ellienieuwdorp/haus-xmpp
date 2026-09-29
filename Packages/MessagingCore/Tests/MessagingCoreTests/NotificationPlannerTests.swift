@@ -172,6 +172,8 @@ private func batch(_ candidates: [NotificationCandidate], previews: Bool = true)
     #expect(message.hasPrefix("m-") && !message.contains("example") && !message.contains("8C1F"))
     #expect(NotificationIdentity.fallback(accountID: "me@example.org") != NotificationIdentity.fallback(accountID: "other@example.org"))
     #expect(!thread.contains("peer"))
+    let failure = NotificationIdentity.replyFailure(accountID: "me@example.org", chatID: "peer@example.org")
+    #expect(failure.hasPrefix("e-") && !failure.contains("peer") && failure != NotificationIdentity.replyFailure(accountID: "me@example.org", chatID: "carol@example.org"))
 }
 
 extension NotificationCandidate {
