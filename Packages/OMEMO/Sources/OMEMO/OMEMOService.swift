@@ -1338,16 +1338,9 @@ public actor OMEMOService {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(envelope)
     }
-    private func boundedBareJID(_ jid: String) -> String? {
-        guard !jid.isEmpty, jid.utf8.count <= 3_071,
-              !jid.contains(where: { $0.isWhitespace || $0.isNewline }),
-              jid.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7f && $0.value != 0xfffe && $0.value != 0xffff }) else { return nil }
-        let value = String(jid.prefix { $0 != "/" })
-        let parts = value.split(separator: "@", omittingEmptySubsequences: false)
-        guard parts.count == 2, parts.allSatisfy({ !$0.isEmpty }) else { return nil }
-        return value
-    }
-    func bare(_ jid: String) -> String { String(jid.split(separator: "/", maxSplits: 1).first ?? "") }
+    private func boundedBareJID(_ jid: String) -> String? { JID.normalizedBare(jid) }
+    /// In normal form (`JID`), so ciphertext retained or saved by a build that kept typed capitals still matches.
+    func bare(_ jid: String) -> String { JID.normalizedBare(jid) ?? String(jid.split(separator: "/", maxSplits: 1).first ?? "") }
 }
 
 /// The two top-level fields of an `OMEMOEngine` snapshot needed to identify it; the rest stays opaque here.

@@ -502,7 +502,7 @@ final class ServiceTests: XCTestCase {
         expectTrue(try await f.b.receive(account: f.bob, message: f.message(envelope), transport: f.bTransport))
         let reordered = XMPPOMEMOEnvelope(profile: envelope.profile, senderDeviceID: envelope.senderDeviceID, keys: envelope.keys.reversed(), iv: envelope.iv, payload: envelope.payload)
         expectFalse(try await f.b.receive(account: f.bob, message: f.message(reordered), transport: f.bTransport))
-        let carbon = XMPPEncryptedMessage(id: "carbon-id", from: f.alice + "/phone", to: f.bob, originID: nil, envelope: envelope, provenance: .sentCarbon)
+        let carbon = XMPPEncryptedMessage(id: "carbon-id", from: "ALICE@localhost/phone", to: "Bob@LocalHost", originID: nil, envelope: envelope, provenance: .sentCarbon)
         expectTrue(try await second.receive(account: f.alice, message: carbon, transport: f.aTransport))
         let copies = try await secondStore.messages(accountID: f.alice, chatID: f.bob)
         expectEqual(copies.first?.body, outgoing.body)
@@ -993,7 +993,8 @@ final class ServiceTests: XCTestCase {
         expectFalse(try await f.a.reconcileArchivedOutgoing(account: f.alice, message: forged))
         let direct = XMPPEncryptedMessage(id: queued.id, from: f.alice, to: f.bob, originID: nil, envelope: envelope)
         expectFalse(try await f.a.reconcileArchivedOutgoing(account: f.alice, message: direct))
-        let archive = XMPPEncryptedMessage(id: queued.id, from: f.alice, to: f.bob, originID: nil, envelope: envelope, provenance: .sentCarbon)
+        // Recognised in normal form: our own copy spelled as the account was typed ("Alice") still reconciles.
+        let archive = XMPPEncryptedMessage(id: queued.id, from: "Alice@LocalHost/phone", to: "Bob@localhost", originID: nil, envelope: envelope, provenance: .sentCarbon)
         expectTrue(try await f.a.reconcileArchivedOutgoing(account: f.alice, message: archive))
         expectEqual(try await f.aStore.message(accountID: f.alice, messageID: queued.id)?.transportState, .serverAccepted)
         let device = try unwrap(try await f.a.overview(account: f.alice, peer: f.bob).devices.first { $0.jid == f.bob && $0.active })
