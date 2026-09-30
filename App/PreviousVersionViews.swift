@@ -1,12 +1,12 @@
 import SwiftUI
 
 /// Replaces the app while the previous version's data is being backed up, could not be backed up, is being restored,
-/// or has been restored. Nothing behind it connects or changes storage.
+/// has been restored, or while this version's kept data goes back. Nothing behind it connects or changes storage.
 struct UpgradeBlockingView: View {
     @Bindable var model: AppModel
     @Environment(\.appearance) private var appearance
     @State private var confirmingWithoutBackup = false
-    @State private var confirmingUpgradeAgain = false
+    @State private var choosing = false
     @State private var working = false
     /// A quick upgrade finishes before this shows, so launches do not flash a progress screen.
     @State private var showsProgress = false
@@ -15,8 +15,11 @@ struct UpgradeBlockingView: View {
         Group {
             switch model.upgradeState {
             case .snapshotFailed(let reason): failed(reason)
-            case .restored(let restored): restoredView(restored)
+            case .restored(let state) where state.previousVersionRan:
+                UpgradeChoiceView(model: model, state: state)
+            case .restored(let state): restoredView(state)
             case .restoring: progress("Restoring the previous version’s data…")
+            case .returning: progress("Putting this version’s data back…")
             case .waitingForLease: progress("Waiting for a notification to finish…")
             default: progress("Backing up before updating…")
             }
@@ -55,16 +58,22 @@ struct UpgradeBlockingView: View {
         }
     }
 
-    private func restoredView(_ restored: PreUpgradeSnapshot.Restored) -> some View {
-        blocking(symbol: "arrow.uturn.backward.circle.fill", tint: Color(appearance.accent.tint), title: "Previous version’s data restored",
-                 body: "Your messages, keys and settings are back as they were on \(restored.takenAt.formatted(date: .abbreviated, time: .shortened)), in the previous version’s format.\n\nInstall the previous version of Haus XMPP now. Until then this version stays offline and leaves the data alone.") {
-            Button { confirmingUpgradeAgain = true } label: { Text("Upgrade again").frame(maxWidth: .infinity, minHeight: 44) }
+    /// The previous version has not opened the restored data yet.
+    private func restoredView(_ state: PreUpgradeSnapshot.RestoredState) -> some View {
+        let taken = state.restored.takenAt.formatted(date: .abbreviated, time: .shortened)
+        let kept = state.thisVersion == nil ? "" : " This version kept its own data, so you can still return to it."
+        return blocking(symbol: "arrow.uturn.backward.circle.fill", tint: Color(appearance.accent.tint), title: "Previous version’s data restored",
+                        body: "Your messages, keys and settings are back as they were on \(taken), in the previous version’s format.\(kept)\n\nInstall the previous version of Haus XMPP now. Until then this version stays offline and leaves the data alone.") {
+            Button { choosing = true } label: { Text("Continue With This Version").frame(maxWidth: .infinity, minHeight: 44) }
                 .accessibilityIdentifier("upgradeAgain")
         }
-        .confirmationDialog("Upgrade again?", isPresented: $confirmingUpgradeAgain, titleVisibility: .visible) {
-            Button("Upgrade again") { run { await model.upgradeAgain() } }
-        } message: {
-            Text("This version takes a fresh backup of the restored data, replacing the old one, and upgrades it again. Messages that arrived since are fetched from the server.")
+        .sheet(isPresented: $choosing) {
+            NavigationStack {
+                UpgradeChoiceView(model: model, state: state)
+                    .background(Color(.systemGroupedBackground))
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { choosing = false } } }
+            }
+            .themedRoot()
         }
     }
 
@@ -91,6 +100,112 @@ struct UpgradeBlockingView: View {
     }
 }
 
+/// Which data to continue with after a restore: this version's kept copy (the default: its messages stay readable
+/// and nothing on the iPhone is dropped) or the restored data, upgraded afresh. Shown in a sheet from the restored
+/// screen, and as the screen itself on the first launch after the previous version used the data.
+struct UpgradeChoiceView: View {
+    @Bindable var model: AppModel
+    let state: PreUpgradeSnapshot.RestoredState
+    @State private var confirmingReturn = false
+    @State private var confirmingUpgrade = false
+    @State private var working = false
+
+    private var ran: Bool { state.previousVersionRan }
+    private var restoredAt: String { state.restored.restoredAt.formatted(date: .abbreviated, time: .shortened) }
+    private var rolledBack: String? { state.rolledBack.isEmpty ? nil : state.rolledBack.formatted(.list(type: .and)) }
+    private var sentThere: String? { state.sentOnPreviousVersion.isEmpty ? nil : state.sentOnPreviousVersion.formatted(.list(type: .and)) }
+    private var upgradeTitle: String { ran ? "Upgrade the Previous Version’s Data" : "Upgrade the Restored Data" }
+
+    private var intro: String {
+        let start = ran ? "The previous version of Haus XMPP used your data after the restore on \(restoredAt)."
+                        : "You restored the previous version’s data on \(restoredAt)."
+        guard state.thisVersion != nil else { return start + " This version’s own data from then is no longer on this iPhone." }
+        return start + " This version kept its own data from that moment. Choose which to continue with."
+    }
+
+    private var returnCaption: String {
+        ran ? "Your messages from this version are readable again; messages received on the previous version are fetched from the server again, some may be unreadable, and what you sent there is not shown."
+            : "Everything is back as it was in this version before the restore, and messages that arrived since are fetched from the server."
+    }
+
+    private var upgradeCaption: String {
+        let start = ran ? "Continues from what the previous version left" : "Continues from the restored data"
+        guard let rolledBack else { return start + ", and this version’s own data is deleted." }
+        return start + "; messages received in \(rolledBack) after your first reply on this version stay unreadable, and this version’s own data is deleted."
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(spacing: 12) {
+                    Image(systemName: "arrow.triangle.branch").font(.system(size: 48)).foregroundStyle(.secondary).accessibilityHidden(true)
+                    Text("Continue With Which Data?").font(.title2.weight(.bold)).accessibilityAddTraits(.isHeader)
+                    Text(intro).foregroundStyle(.secondary)
+                }
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                if state.thisVersion != nil {
+                    option(caption: returnCaption) {
+                        Button { confirmingReturn = true } label: { Text("Return to This Version’s Data").frame(maxWidth: .infinity) }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("returnToThisVersion")
+                    }
+                }
+                option(caption: upgradeCaption) {
+                    Button { confirmingUpgrade = true } label: { Text(upgradeTitle).frame(maxWidth: .infinity) }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("upgradeRestoredData")
+                }
+            }
+            .controlSize(.large)
+            .disabled(working)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 32)
+            .frame(maxWidth: 520)
+            .frame(maxWidth: .infinity)
+        }
+        .confirmationDialog("Return to this version’s data?", isPresented: $confirmingReturn, titleVisibility: .visible) {
+            Button("Return to This Version’s Data") { run { await model.returnToThisVersion() } }
+        } message: {
+            Text(returnConfirmation)
+        }
+        .confirmationDialog(ran ? "Upgrade the previous version’s data?" : "Upgrade the restored data?", isPresented: $confirmingUpgrade, titleVisibility: .visible) {
+            Button("Delete This Version’s Data and Upgrade", role: .destructive) { run { await model.upgradeRestoredData() } }
+        } message: {
+            Text(upgradeConfirmation)
+        }
+    }
+
+    private var returnConfirmation: String {
+        guard ran else { return "Your data returns to how it was in this version on \(restoredAt). The backup of the previous version’s data stays." }
+        var text = "The previous version’s data becomes the backup, so you can still go back to it. Messages received there are fetched from the server again; some may be unreadable, and what you sent there is not shown here."
+        if let sentThere {
+            text += " You sent encrypted messages in \(sentThere) on the previous version: if messages there fail to decrypt, repair the encryption session (chat details, Encryption, the device)."
+        }
+        return text
+    }
+
+    private var upgradeConfirmation: String {
+        var text = state.thisVersion == nil ? "" : "This version’s own data from \(restoredAt) is deleted. "
+        if let rolledBack {
+            text += "In \(rolledBack), messages received after your first reply on this version stay unreadable, and group sessions stay broken. "
+        }
+        return text + "This cannot be undone."
+    }
+
+    private func option(caption: String, @ViewBuilder button: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            button()
+            Text(caption).font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    private func run(_ action: @escaping () async -> Void) {
+        working = true
+        Task { await action(); working = false }
+    }
+}
+
 /// Settings: the snapshot of the previous version's data, what restoring it does, and the two actions.
 struct PreviousVersionBackupView: View {
     @Bindable var model: AppModel
@@ -98,19 +213,21 @@ struct PreviousVersionBackupView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingRestore = false
     @State private var confirmingDelete = false
-    /// Chats whose encryption sessions moved on since the backup; a restore rolls them back.
+    /// Chats where this version sent encrypted messages since the backup; a restore rolls their sessions back.
     @State private var rolledBack: [String] = []
 
     private var taken: String { backup.takenAt.formatted(date: .abbreviated, time: .shortened) }
+    private var rolledBackList: String { rolledBack.formatted(.list(type: .and)) }
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
                     LabeledContent("Taken", value: taken)
-                    LabeledContent("Deleted automatically", value: backup.expiresAt.formatted(date: .abbreviated, time: .omitted))
                 } footer: {
-                    Text("Haus XMPP copied your data before this version upgraded it, so you can go back to the previous version.")
+                    Text(Date() >= backup.suggestDeletionAfter
+                         ? "This backup is more than two weeks old. Delete it if you will not go back to the previous version."
+                         : "Haus XMPP copied your data before this version upgraded it, so you can go back to the previous version. It stays until you delete it.")
                 }
                 Section("Restoring brings back") {
                     Label("Messages, chats and read state as of \(taken)", systemImage: "bubble.left.and.bubble.right")
@@ -118,14 +235,24 @@ struct PreviousVersionBackupView: View {
                     Label("Your account, notification and app settings", systemImage: "gearshape")
                 }
                 Section("It does not bring back") {
-                    Label("Messages sent or received since. The previous version fetches received ones from the server again; some encrypted ones may be unreadable.", systemImage: "clock.arrow.circlepath")
+                    Label("Messages sent or received since. The previous version fetches received ones from the server again.", systemImage: "clock.arrow.circlepath")
                     Label("Changes made in this version since, such as settings or trust decisions", systemImage: "slider.horizontal.3")
-                    Label("Encryption sessions as they moved on here. Where you sent encrypted messages since, your messages and theirs can fail to decrypt until you repair the session in the previous version (chat details, Encryption, the device).", systemImage: "lock.trianglebadge.exclamationmark")
                 }
                 if !rolledBack.isEmpty {
-                    Section("Sent to since the backup") {
+                    Section {
                         ForEach(rolledBack, id: \.self) { Text($0) }
+                    } header: {
+                        Text("Unreadable on the previous version")
+                    } footer: {
+                        Text("You replied in these chats on this version. The previous version cannot decrypt messages received in them after your first reply here, and messages fail in both directions until you repair the session there (chat details, Encryption, the device). Group chats cannot be repaired in the previous version.")
                     }
+                }
+                Section {
+                    Label("This version’s data, with its messages readable, so you can return to it", systemImage: "externaldrive")
+                } header: {
+                    Text("Restoring keeps a copy of")
+                } footer: {
+                    Text("Both copies, including your saved password, stay on this iPhone until you open this version again and delete them. The previous version cannot delete them.")
                 }
                 Section {
                     Button("Restore previous version’s data") { confirmingRestore = true }
@@ -145,9 +272,7 @@ struct PreviousVersionBackupView: View {
                 Task { await model.restorePreviousVersion() }
             }
         } message: {
-            Text(rolledBack.isEmpty
-                 ? "This version goes offline and your data returns to how it was on \(taken). Anything since is removed from this iPhone. Then install the previous version."
-                 : "This version goes offline and your data returns to how it was on \(taken). Anything since is removed from this iPhone. Encrypted sessions in \(rolledBack.count == 1 ? "1 chat" : "\(rolledBack.count) chats") will need repairing. Then install the previous version.")
+            Text(restoreConfirmation)
         }
         .confirmationDialog("Delete backup?", isPresented: $confirmingDelete, titleVisibility: .visible) {
             Button("Delete backup", role: .destructive) {
@@ -157,5 +282,13 @@ struct PreviousVersionBackupView: View {
         } message: {
             Text("You will no longer be able to go back to the previous version on this iPhone.")
         }
+    }
+
+    private var restoreConfirmation: String {
+        var text = "This version goes offline and your data returns to how it was on \(taken). "
+        if !rolledBack.isEmpty {
+            text += "In \(rolledBackList), messages received after your first reply here will be unreadable on the previous version, and group chats cannot be repaired there. "
+        }
+        return text + "This version keeps a copy of its own data. The backups stay on this iPhone until you open this version again and delete them. Then install the previous version."
     }
 }

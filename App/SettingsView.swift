@@ -7,6 +7,7 @@ struct SettingsView: View {
     @Environment(\.openURL) private var openURL
     @State private var confirmingSignOut = false
     @State private var showingBackup = false
+    @State private var confirmingDeleteUnreadable = false
 
     private var accent: AccentTheme { appearance.accent }
     private var localPart: String { model.accountID.split(separator: "@").first.map(String.init) ?? "" }
@@ -124,18 +125,41 @@ struct SettingsView: View {
                 }
             }
             if let backup = model.previousVersionBackup {
+                let old = Date() >= backup.suggestDeletionAfter
                 Section {
                     Button { showingBackup = true } label: {
                         LabeledContent {
-                            Text("Until \(backup.expiresAt.formatted(.dateTime.day().month()))").foregroundStyle(.secondary)
+                            Text(old ? "Over 2 weeks old" : backup.takenAt.formatted(.dateTime.day().month())).foregroundStyle(.secondary)
                         } label: {
                             Label { Text("Previous version backup") } icon: { SettingsIconTile(systemName: "clock.arrow.circlepath", color: .gray) }
                         }
                     }
                     .foregroundStyle(.primary)
                     .accessibilityIdentifier("previousVersionBackupRow")
+                } footer: {
+                    // Asked, never done on a clock reading: the clock can jump.
+                    if old { Text("Delete the backup if you will not go back to the previous version.") }
                 }
                 .sheet(isPresented: $showingBackup) { PreviousVersionBackupView(model: model, backup: backup).themedRoot() }
+            } else if model.previousVersionBackupUnreadable {
+                Section {
+                    Button { confirmingDeleteUnreadable = true } label: {
+                        LabeledContent {
+                            Text("Can’t be read").foregroundStyle(.secondary)
+                        } label: {
+                            Label { Text("Previous version backup") } icon: { SettingsIconTile(systemName: "exclamationmark.triangle.fill", color: .orange) }
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                    .accessibilityIdentifier("previousVersionBackupRow")
+                } footer: {
+                    Text("A backup made before this version is on this iPhone but its description could not be read, so it cannot be restored.")
+                }
+                .confirmationDialog("Delete backup?", isPresented: $confirmingDeleteUnreadable, titleVisibility: .visible) {
+                    Button("Delete backup", role: .destructive) { model.deletePreviousVersionBackup() }
+                } message: {
+                    Text("You will no longer be able to go back to the previous version on this iPhone.")
+                }
             }
             Section {
                 Button("Sign Out", role: .destructive) { confirmingSignOut = true }
@@ -151,8 +175,8 @@ struct SettingsView: View {
                 }
             }
         } message: {
-            if let backup = model.previousVersionBackup {
-                Text("You’ll need your password to sign in again. Messages and keys stay on this iPhone. The backup of the previous version’s data stays too, until you delete it or it expires on \(backup.expiresAt.formatted(date: .abbreviated, time: .omitted)); restoring it would sign you back in as you were then.")
+            if model.previousVersionBackup != nil {
+                Text("You’ll need your password to sign in again. Messages and keys stay on this iPhone. The backup of the previous version’s data stays too, until you delete it; restoring it would sign you back in as you were then.")
             } else {
                 Text("You’ll need your password to sign in again. Messages and keys stay on this iPhone.")
             }

@@ -80,6 +80,10 @@ final class AppModel {
     private(set) var upgradeState: UpgradeState = .none
     /// The snapshot of the previous version's data, while one exists: Settings offers restoring or deleting it.
     private(set) var previousVersionBackup: PreUpgradeSnapshot.Manifest?
+    /// A backup folder is there but its manifest cannot be read: Settings offers only deleting it.
+    private(set) var previousVersionBackupUnreadable = false
+    /// A restore owns the store's lease until it closes the store; a background transition meanwhile must not release it.
+    @ObservationIgnored private var restoringData = false
     @ObservationIgnored private var snapshots: PreUpgradeSnapshot?
     @ObservationIgnored private var openingStorage = false
     private(set) var accountID = "" {
@@ -310,13 +314,16 @@ final class AppModel {
             let directory = try await SharedStorage.directory(testSessionID: testSessionID, migrate: true)
             storageRoot = directory
             let opened: MessageStore
-            if testSessionID == nil, let locations = PreUpgradeSnapshot.Locations.production(messaging: directory) {
+            if testSessionID == nil {
+                // Never opened any other way: a plain open would migrate without the snapshot.
+                guard let locations = PreUpgradeSnapshot.Locations.production(messaging: directory) else { throw CocoaError(.fileReadNoPermission) }
                 let snapshots = PreUpgradeSnapshot(locations: locations)
                 self.snapshots = snapshots
                 if upgradeState != .restoring { upgradeState = .preparing }
+                // Rewrites the previous build's spellings (preferences, folders, push registrations) only once `ready`.
                 let opening = try await snapshots.open(upgradeAllowed: UIApplication.shared.applicationState != .background,
                                                        withoutSnapshot: withoutSnapshot, now: Date())
-                previousVersionBackup = snapshots.manifest
+                readBackupStatus()
                 switch opening {
                 case .ready(let store): opened = store
                 case .restored(let restored): upgradeState = .restored(restored); return
@@ -331,12 +338,11 @@ final class AppModel {
                 }
                 upgradeState = .none
             } else {
+                // A UI test session's own store and preferences: nothing a previous build left.
                 opened = try MessageStore(url: directory.appending(path: "messages.sqlite"))
+                AccountIdentityMigration.migratePreferences(preferences)
+                AccountIdentityMigration.moveFiles(directory: directory, defaults: preferences)
             }
-            // Rewrites the previous build's spellings; only now that its data is copied.
-            AccountIdentityMigration.migratePreferences(preferences)
-            AccountIdentityMigration.moveFiles(directory: directory, defaults: preferences)
-            if testSessionID == nil { PushRegistrationState.normalizeSavedAccounts() }
             store = opened
             storageDirectory = directory
             let uploader = AttachmentUploader(scope: testSessionID ?? "primary")
@@ -726,16 +732,17 @@ final class AppModel {
 
     // MARK: Previous version's data
 
-    /// A launch into the background left an upgrade for the foreground, the lease was busy, or a backup may have
-    /// expired while the app was away.
+    /// A launch into the background left an upgrade for the foreground, or the lease was busy.
     private func returnedToForegroundForUpgrade() {
         if store == nil, upgradeState == .deferred || upgradeState == .waitingForLease {
             Task { await openStorage() }
         }
-        if let snapshots, upgradeState == .none, snapshots.expireIfDue(now: Date()) {
-            Self.syncLog.notice("pre-upgrade snapshot expired and was deleted")
-            previousVersionBackup = nil
-        }
+    }
+
+    private func readBackupStatus() {
+        guard let snapshots else { return }
+        previousVersionBackup = snapshots.manifest
+        previousVersionBackupUnreadable = snapshots.status(.previousVersion) == .unreadable
     }
 
     /// The lease was held by another process (a notification run): try again shortly, never taking it by force.
@@ -761,12 +768,36 @@ final class AppModel {
         await openStorage(withoutSnapshot: true)
     }
 
-    /// Restored screen, after its confirmation: a fresh snapshot of the restored data replaces the old one, then the
-    /// data is upgraded again.
-    func upgradeAgain() async {
+    /// Restored screen, first choice (the default): this version's kept data goes back in place, with its messages
+    /// and encryption sessions; the previous build's data, if it ran, becomes the backup.
+    func returnToThisVersion() async {
+        guard store == nil, case let .restored(state) = upgradeState, let snapshots else { return }
+        upgradeState = .returning
+        do {
+            if try await snapshots.returnToThisVersion(now: Date()) == .busy {
+                upgradeState = .restored(state)
+                self.error = "A notification is being processed. Try again in a moment."
+                return
+            }
+        } catch where !FileManager.default.fileExists(atPath: snapshots.locations.returnJournal.path) {
+            // Nothing was put back.
+            Self.syncLog.error("return refused: \(String(describing: error), privacy: .public)")
+            upgradeState = .restored(snapshots.restoredState())
+            self.error = "This version’s data could not be put back: " + PreUpgradeSnapshot.describe(error)
+            return
+        } catch {
+            // Part way: its journal finishes it on this open or the next launch.
+            Self.syncLog.error("return interrupted: \(String(describing: error), privacy: .public)")
+        }
+        upgradeState = .preparing
+        await openStorage()
+    }
+
+    /// Restored screen, second choice, after its confirmation: this version's kept data is deleted and the restored
+    /// data is upgraded again, after a fresh snapshot of it.
+    func upgradeRestoredData() async {
         guard store == nil, case .restored = upgradeState, let snapshots else { return }
-        do { try snapshots.leaveRestoredState() } catch { self.error = "The previous backup could not be removed. Try again."; return }
-        previousVersionBackup = nil
+        do { try snapshots.upgradeRestoredData() } catch { self.error = "This version’s copy could not be removed. Try again."; return }
         upgradeState = .preparing
         await openStorage()
     }
@@ -781,8 +812,9 @@ final class AppModel {
     /// Settings, after its confirmation.
     func deletePreviousVersionBackup() {
         guard let snapshots else { return }
-        do { try snapshots.delete(); previousVersionBackup = nil }
+        do { try snapshots.delete() }
         catch { self.error = "The backup could not be deleted. Try again." }
+        readBackupStatus()
     }
 
     /// Settings, after its confirmation: puts the previous version's data back and stops. The transport is quiesced
@@ -791,16 +823,22 @@ final class AppModel {
     func restorePreviousVersion() async {
         guard let snapshots, let store, upgradeState == .none, previousVersionBackup != nil else { return }
         upgradeState = .restoring
+        restoringData = true
+        defer { restoringData = false }
+        // Copying this version's data can take a moment; leaving the app meanwhile must not suspend it half way.
+        let background = UIApplication.shared.beginBackgroundTask(withName: "Restore previous version's data")
+        defer { if background != .invalid { UIApplication.shared.endBackgroundTask(background) } }
         reconnectTask?.cancel(); reconnectTask = nil
         await stopTransportWork()
         quiescing = true
-        var leased = hasTransportOwnership
+        var leased = await store.holdsTransportOwnership
         for _ in 0..<40 where !leased {
             do { try await store.acquireTransportOwnership(); leased = true }
             catch MessageStoreError.transportOwnedElsewhere { try? await Task.sleep(for: .milliseconds(250)) }
             catch { break }
         }
         guard leased else {
+            hasTransportOwnership = false
             quiescing = false
             upgradeState = .none
             self.error = "A notification is being processed. Try restoring again in a moment."
@@ -811,11 +849,17 @@ final class AppModel {
             let restored = try await snapshots.restore(store: store, now: Date())
             Self.syncLog.notice("restored the previous version's data taken \(restored.takenAt, privacy: .public)")
             closeStorageAfterRestore()
-            upgradeState = .restored(restored)
+            upgradeState = .restored(snapshots.restoredState())
         } catch where !FileManager.default.fileExists(atPath: snapshots.locations.journal.path) {
             // Nothing changed: the backup did not verify, or the store could not be handed over.
             Self.syncLog.error("restore refused before any change: \(String(describing: error), privacy: .public)")
-            hasTransportOwnership = true
+            // Whatever the lease is now, not what it was: a background transition during the restore left it alone,
+            // and the restore gives it up here if the app is no longer in front.
+            hasTransportOwnership = await store.holdsTransportOwnership
+            if hasTransportOwnership, !foreground {
+                hasTransportOwnership = false
+                try? await store.releaseTransportOwnership()
+            }
             quiescing = false
             upgradeState = .none
             self.error = "The backup could not be restored: " + PreUpgradeSnapshot.describe(error)
@@ -858,6 +902,8 @@ final class AppModel {
 
     private func quiesceTransport() async {
         await stopTransportWork()
+        // A restore holds the lease until it closes the store, and releases it itself if it is refused.
+        guard !restoringData else { return }
         hasTransportOwnership = false
         try? await store?.releaseTransportOwnership()
     }
@@ -3259,5 +3305,7 @@ enum UpgradeState: Equatable {
     /// The snapshot could not be taken, so nothing was migrated.
     case snapshotFailed(String)
     case restoring
-    case restored(PreUpgradeSnapshot.Restored)
+    case restored(PreUpgradeSnapshot.RestoredState)
+    /// Putting this version's kept data back after a restore.
+    case returning
 }
