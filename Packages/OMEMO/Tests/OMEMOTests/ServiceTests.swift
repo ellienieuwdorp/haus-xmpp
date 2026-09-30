@@ -30,6 +30,8 @@ actor PublicationServer {
     }
     func publish(_ jid: String, _ ids: [UInt32], _ profile: XMPPOMEMOProfile) { lists[jid + profile.rawValue] = ids }
     func publish(_ jid: String, _ bundle: XMPPOMEMOBundle) { bundles[jid + bundle.profile.rawValue + String(bundle.deviceID)] = bundle }
+    /// A bundle the server lost or another client deleted; the device list is left alone.
+    func withdraw(_ jid: String, _ id: UInt32, _ profile: XMPPOMEMOProfile) { bundles[jid + profile.rawValue + String(id)] = nil }
 }
 struct TestTransport: OMEMOTransport {
     let account: String
@@ -562,18 +564,82 @@ final class ServiceTests: XCTestCase {
     }
 
     /// Our own device ID answering with another identity stops initialization before our bundle is published over
-    /// it: neither identity silently replaces the other.
+    /// it: neither identity silently replaces the other, in either version (the second one also after the first
+    /// passed its check).
     func testInitializeRefusesAnotherIdentityPublishedUnderOurDeviceID() async throws {
+        for profile in [XMPPOMEMOProfile.legacy, .modern] {
+            let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+            try await f.a.initialize(account: f.alice, transport: f.aTransport)
+            let local = try await f.a.overview(account: f.alice, peer: f.alice).localDeviceID
+            let before = try await f.engines(f.aStore, account: f.alice)
+            let foreign = try replacementBundle(profile, deviceID: local)
+            await f.server.publish(f.alice, foreign)
+            do { try await f.a.initialize(account: f.alice, transport: f.aTransport); XCTFail("Initialized over another \(profile) identity") }
+            catch { expectEqual(error as? OMEMOError, .identityChanged) }
+            expectEqual(try await f.server.bundle(f.alice, local, profile), foreign)
+            expectEqual(try await f.engines(f.aStore, account: f.alice), before)
+        }
+    }
+
+    /// Our device listed in one version without a bundle there (a server that lost PEP data, a bundle deleted by
+    /// another client, or a list that advertised us before the bundle went out) is not yet published: initialization
+    /// publishes the same identity there instead of failing every connection with item-not-found.
+    func testListedOwnDeviceWithoutABundleIsPublishedOnInitialize() async throws {
+        for profile in [XMPPOMEMOProfile.legacy, .modern] {
+            let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+            try await f.a.initialize(account: f.alice, transport: f.aTransport)
+            let local = try await f.a.overview(account: f.alice, peer: f.alice).localDeviceID
+            let published = try await f.server.bundle(f.alice, local, profile)
+            await f.server.withdraw(f.alice, local, profile)
+
+            try await OMEMOService(store: f.aStore, protection: f.protection).initialize(account: f.alice, transport: f.aTransport)
+            expectEqual(try await f.server.bundle(f.alice, local, profile).identityKey, published.identityKey)
+            expectTrue(await f.server.devices(f.alice, profile).contains(local))
+            expectEqual(try await f.a.overview(account: f.alice, peer: f.alice).localDeviceID, local)
+        }
+    }
+
+    /// The own device-list notification arrives while connection setup runs. Before this installation's initialize has
+    /// published a version's bundle, answering it must not list the device there: that list would name a device
+    /// without keys, and initialize would find it listed. Afterwards the same call keeps the device listed.
+    func testOwnListNotificationBeforeInitializeDoesNotAdvertiseAnUnpublishedDevice() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
-        try await f.a.initialize(account: f.alice, transport: f.aTransport)
+        // Encryption state exists, but nothing reached the server (like a build whose PEP replies were dropped).
+        do { try await f.a.initialize(account: f.alice, transport: OfflineTransport()); XCTFail("Initialized offline") } catch {}
         let local = try await f.a.overview(account: f.alice, peer: f.alice).localDeviceID
-        let before = try await f.engines(f.aStore, account: f.alice)
-        let foreign = try replacementBundle(.legacy, deviceID: local)
-        await f.server.publish(f.alice, foreign)
-        do { try await f.a.initialize(account: f.alice, transport: f.aTransport); XCTFail("Initialized over another identity") }
-        catch { expectEqual(error as? OMEMOError, .identityChanged) }
-        expectEqual(try await f.server.bundle(f.alice, local, .legacy), foreign)
-        expectEqual(try await f.engines(f.aStore, account: f.alice), before)
+        let relaunched = OMEMOService(store: f.aStore, protection: f.protection)
+        let log = TransportLog()
+        let transport = CountingTransport(base: f.aTransport, log: log)
+        for profile in [XMPPOMEMOProfile.legacy, .modern] {
+            try await relaunched.maintainLocalAdvertisement(account: f.alice, profile: profile, transport: transport)
+            expectFalse(await f.server.devices(f.alice, profile).contains(local))
+        }
+        expectEqual(await log.calls.filter { if case .publishDevices = $0 { return true }; return false }, [])
+
+        try await relaunched.initialize(account: f.alice, transport: f.aTransport)
+        for profile in [XMPPOMEMOProfile.legacy, .modern] {
+            expectEqual(try await f.server.bundle(f.alice, local, profile).deviceID, local)
+            await f.server.publish(f.alice, [424242], profile)
+            try await relaunched.maintainLocalAdvertisement(account: f.alice, profile: profile, transport: f.aTransport)
+            expectEqual(Set(await f.server.devices(f.alice, profile)), Set([local, 424242]))
+        }
+    }
+
+    /// Only item-not-found means "not published". A timeout, a wait-type or server error, or an unreadable answer for
+    /// our own bundle fails initialization without publishing anything that could overwrite what is there.
+    func testTransientOwnBundleErrorsFailWithoutPublishing() async throws {
+        let failures: [any Error] = [XMPPClientError.timedOut, XMPPIQError.stanza(condition: "resource-constraint"),
+                                     XMPPIQError.stanza(condition: "internal-server-error"), XMPPIQError.malformedResponse]
+        for failure in failures {
+            let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+            try await f.a.initialize(account: f.alice, transport: f.aTransport)
+            let local = try await f.a.overview(account: f.alice, peer: f.alice).localDeviceID
+            let log = TransportLog()
+            let failing = CountingTransport(base: f.aTransport, log: log, beforeBundle: { _, _ in throw failure })
+            do { try await f.a.initialize(account: f.alice, transport: failing); XCTFail("Initialized through \(failure)") }
+            catch { expectEqual(String(describing: error), String(describing: failure)) }
+            expectEqual(await log.calls, [.devices(f.alice, .legacy), .bundle(f.alice, local, .legacy)])
+        }
     }
 
     /// Stored profiles that disagree on the identity fail closed before any network use and are never repaired.

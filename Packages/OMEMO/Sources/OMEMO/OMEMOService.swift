@@ -24,6 +24,9 @@ public actor OMEMOService {
     /// reading the current revision, so a write by another process (the notification extension shares the database)
     /// is always seen. Engines, lookups and anything derived from the clock are never cached.
     private var stateCache: [String: (revision: Int, state: AccountEncryptionState)] = [:]
+    /// Versions whose bundle the latest `initialize` of an account published from this service. Only those may be
+    /// advertised by `maintainLocalAdvertisement`; `initialize` itself advertises each version right after its bundle.
+    private var publishedBundles: [String: Set<XMPPOMEMOProfile>] = [:]
     public init(store: MessageStore, protection: StateProtection) {
         self.store = store; self.protection = protection
     }
@@ -33,6 +36,9 @@ public actor OMEMOService {
     }
 
     private func initializeLocked(account: String, transport: any OMEMOTransport) async throws {
+        // Each pass re-earns advertisement: after a pass that failed before a version's bundle went out again (a
+        // different identity under our ID, a timeout), `maintainLocalAdvertisement` leaves that version alone.
+        publishedBundles[account] = nil
         if try await store.encryptionState(accountID: account) == nil {
             // State kept under another spelling of this account (a store whose address rewrite could not complete) is
             // this account's identity: never create a second one beside it.
@@ -61,10 +67,18 @@ public actor OMEMOService {
             }
             let devices = try validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))
             if devices.contains(engine.deviceID) {
-                let published = try await transport.fetchOMEMOBundle(for: account, deviceID: engine.deviceID, profile: profile)
-                guard published.identityKey == (try engine.identityKey) else { throw OMEMOError.identityChanged }
+                do {
+                    let published = try await transport.fetchOMEMOBundle(for: account, deviceID: engine.deviceID, profile: profile)
+                    guard published.identityKey == (try engine.identityKey) else { throw OMEMOError.identityChanged }
+                } catch XMPPIQError.stanza(condition: "item-not-found") {
+                    // Listed without a bundle (no node, or a shared OMEMO 2 node without our item): nothing sits under
+                    // our ID in this version, so publishing ours below replaces nothing. A server that lost PEP data,
+                    // another client, or an earlier build can leave this state. Any other failure (timeout, wait-type
+                    // or server error, unreadable answer) is not proof of absence and fails the setup unchanged.
+                }
             }
             try await transport.publishOMEMOBundle(wireBundle(try engine.bundle(), profile: profile))
+            publishedBundles[account, default: []].insert(profile)
             // Bundle publication can take long enough for another client to register. Read
             // the latest list again before changing it, then confirm our own inclusion.
             try await maintainLocalAdvertisementLocked(account: account, profile: profile, transport: transport)
@@ -340,8 +354,18 @@ public actor OMEMOService {
 
     /// Call after an own-account PEP update. A racing publication that omitted this device
     /// is repaired by merging into the newest server list, not by replaying a cached list.
+    /// Does nothing for a version whose bundle `initialize` has not published yet: the update can arrive while connection
+    /// setup runs, and listing the device first would name a device without keys. `initialize` reads the newest list
+    /// and advertises the device itself once the bundle is out, and the gate orders the two.
     public func maintainLocalAdvertisement(account: String, profile: XMPPOMEMOProfile, transport: any OMEMOTransport) async throws {
-        try await gate.run { try await self.maintainLocalAdvertisementLocked(account: account, profile: profile, transport: transport) }
+        try await gate.run {
+            guard await self.hasPublishedBundle(account: account, profile: profile) else { return }
+            try await self.maintainLocalAdvertisementLocked(account: account, profile: profile, transport: transport)
+        }
+    }
+
+    private func hasPublishedBundle(account: String, profile: XMPPOMEMOProfile) -> Bool {
+        publishedBundles[account]?.contains(profile) == true
     }
 
     private func maintainLocalAdvertisementLocked(account: String, profile: XMPPOMEMOProfile, transport: any OMEMOTransport) async throws {
