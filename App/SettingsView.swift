@@ -127,7 +127,7 @@ struct SettingsView: View {
                 Section {
                     Button { showingBackup = true } label: {
                         LabeledContent {
-                            Text("Until \(backup.expiresAt.formatted(.dateTime.day().month()))")
+                            Text("Until \(backup.expiresAt.formatted(.dateTime.day().month()))").foregroundStyle(.secondary)
                         } label: {
                             Label { Text("Previous version backup") } icon: { SettingsIconTile(systemName: "clock.arrow.circlepath", color: .gray) }
                         }

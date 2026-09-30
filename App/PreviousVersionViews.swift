@@ -4,6 +4,7 @@ import SwiftUI
 /// or has been restored. Nothing behind it connects or changes storage.
 struct UpgradeBlockingView: View {
     @Bindable var model: AppModel
+    @Environment(\.appearance) private var appearance
     @State private var confirmingWithoutBackup = false
     @State private var confirmingUpgradeAgain = false
     @State private var working = false
@@ -41,10 +42,10 @@ struct UpgradeBlockingView: View {
     private func failed(_ reason: String) -> some View {
         blocking(symbol: "exclamationmark.triangle.fill", tint: .orange, title: "Backup before update failed",
                  body: reason + "\n\nNothing has been changed yet: your data is still in the previous version’s format.") {
-            Button { run { await model.retryUpgrade() } } label: { Text("Try again").frame(maxWidth: .infinity) }
+            Button { run { await model.retryUpgrade() } } label: { Text("Try again").frame(maxWidth: .infinity, minHeight: 44) }
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("upgradeTryAgain")
-            Button("Continue without a backup") { confirmingWithoutBackup = true }
+            Button { confirmingWithoutBackup = true } label: { Text("Continue without a backup").frame(maxWidth: .infinity, minHeight: 44) }
                 .accessibilityIdentifier("upgradeWithoutBackup")
         }
         .confirmationDialog("Continue without a backup?", isPresented: $confirmingWithoutBackup, titleVisibility: .visible) {
@@ -55,9 +56,9 @@ struct UpgradeBlockingView: View {
     }
 
     private func restoredView(_ restored: PreUpgradeSnapshot.Restored) -> some View {
-        blocking(symbol: "arrow.uturn.backward.circle.fill", tint: .accentColor, title: "Previous version’s data restored",
+        blocking(symbol: "arrow.uturn.backward.circle.fill", tint: Color(appearance.accent.tint), title: "Previous version’s data restored",
                  body: "Your messages, keys and settings are back as they were on \(restored.takenAt.formatted(date: .abbreviated, time: .shortened)), in the previous version’s format.\n\nInstall the previous version of Haus XMPP now. Until then this version stays offline and leaves the data alone.") {
-            Button("Upgrade again") { confirmingUpgradeAgain = true }
+            Button { confirmingUpgradeAgain = true } label: { Text("Upgrade again").frame(maxWidth: .infinity, minHeight: 44) }
                 .accessibilityIdentifier("upgradeAgain")
         }
         .confirmationDialog("Upgrade again?", isPresented: $confirmingUpgradeAgain, titleVisibility: .visible) {
@@ -97,6 +98,8 @@ struct PreviousVersionBackupView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingRestore = false
     @State private var confirmingDelete = false
+    /// Chats whose encryption sessions moved on since the backup; a restore rolls them back.
+    @State private var rolledBack: [String] = []
 
     private var taken: String { backup.takenAt.formatted(date: .abbreviated, time: .shortened) }
 
@@ -115,27 +118,36 @@ struct PreviousVersionBackupView: View {
                     Label("Your account, notification and app settings", systemImage: "gearshape")
                 }
                 Section("It does not bring back") {
-                    Label("Messages sent or received since. The previous version fetches them from the server again; some encrypted ones may be unreadable.", systemImage: "clock.arrow.circlepath")
+                    Label("Messages sent or received since. The previous version fetches received ones from the server again; some encrypted ones may be unreadable.", systemImage: "clock.arrow.circlepath")
                     Label("Changes made in this version since, such as settings or trust decisions", systemImage: "slider.horizontal.3")
+                    Label("Encryption sessions as they moved on here. Where you sent encrypted messages since, your messages and theirs can fail to decrypt until you repair the session in the previous version (chat details, Encryption, the device).", systemImage: "lock.trianglebadge.exclamationmark")
+                }
+                if !rolledBack.isEmpty {
+                    Section("Sent to since the backup") {
+                        ForEach(rolledBack, id: \.self) { Text($0) }
+                    }
                 }
                 Section {
-                    Button("Restore previous version's data") { confirmingRestore = true }
+                    Button("Restore previous version’s data") { confirmingRestore = true }
                         .accessibilityIdentifier("restorePreviousVersion")
                     Button("Delete backup", role: .destructive) { confirmingDelete = true }
                         .accessibilityIdentifier("deletePreviousVersionBackup")
                 }
             }
+            .task { rolledBack = await model.chatsWithEncryptedSendsSinceBackup() }
             .navigationTitle("Previous Version Backup")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         .confirmationDialog("Restore previous version’s data?", isPresented: $confirmingRestore, titleVisibility: .visible) {
-            Button("Restore previous version's data", role: .destructive) {
+            Button("Restore previous version’s data", role: .destructive) {
                 dismiss()
                 Task { await model.restorePreviousVersion() }
             }
         } message: {
-            Text("This version goes offline and your data returns to how it was on \(taken). Anything since is removed from this iPhone. Then install the previous version.")
+            Text(rolledBack.isEmpty
+                 ? "This version goes offline and your data returns to how it was on \(taken). Anything since is removed from this iPhone. Then install the previous version."
+                 : "This version goes offline and your data returns to how it was on \(taken). Anything since is removed from this iPhone. Encrypted sessions in \(rolledBack.count == 1 ? "1 chat" : "\(rolledBack.count) chats") will need repairing. Then install the previous version.")
         }
         .confirmationDialog("Delete backup?", isPresented: $confirmingDelete, titleVisibility: .visible) {
             Button("Delete backup", role: .destructive) {

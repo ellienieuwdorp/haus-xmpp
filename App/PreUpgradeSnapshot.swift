@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import MessageStore
+import os
 
 /// A copy of everything the previous build reads, taken by the app before a new build changes any of it, and the way
 /// back: restoring it puts that build's data, preferences and Keychain records back exactly as they were, so the
@@ -112,6 +113,7 @@ struct PreUpgradeSnapshot: Sendable {
     }
 
     let locations: Locations
+    private static let log = Logger(subsystem: "haus.xmpp.ios", category: "upgrade")
 
     var manifest: Manifest? { try? Self.decode(Manifest.self, at: locations.snapshot.appending(path: "snapshot.json")) }
     var restoredState: Restored? { try? Self.decode(Restored.self, at: locations.restored) }
@@ -126,6 +128,7 @@ struct PreUpgradeSnapshot: Sendable {
         if files.fileExists(atPath: locations.journal.path) { return try await finishRestore(now: now) }
         if let restored = restoredState {
             if restored.installation == locations.installation { return .restored(restored) }
+            Self.log.notice("restored data was left by another install; the next upgrade takes a fresh snapshot")
             // Another build was installed since the restore and may have used the data: the snapshot is stale, and
             // the next upgrade takes a fresh one.
             try? files.removeItem(at: locations.restored)
@@ -141,6 +144,7 @@ struct PreUpgradeSnapshot: Sendable {
         let version = store.openedSchemaVersion
         guard version < MessageStore.currentSchemaVersion else { return .ready(store) }
         guard upgradeAllowed else { try await store.close(); return .deferred }
+        Self.log.notice("store at schema \(version, privacy: .public) needs upgrading to \(MessageStore.currentSchemaVersion, privacy: .public)")
         do { try await store.acquireTransportOwnership() }
         catch MessageStoreError.transportOwnedElsewhere { try await store.close(); return .busy }
         if version <= Self.previousReleaseSchema, !withoutSnapshot {
@@ -151,6 +155,7 @@ struct PreUpgradeSnapshot: Sendable {
                 }
                 if manifest == nil { _ = try await take(from: store, now: now) }
             } catch {
+                Self.log.error("pre-upgrade snapshot failed; not migrating: \(String(describing: error), privacy: .public)")
                 discardIncomplete()
                 try? await store.close()
                 return .snapshotFailed(Self.describe(error))
@@ -214,6 +219,7 @@ struct PreUpgradeSnapshot: Sendable {
         try JSONEncoder().encode(manifest).write(to: partial.appending(path: "snapshot.json"),
                                                   options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         try files.moveItem(at: partial, to: locations.snapshot)
+        Self.log.notice("pre-upgrade snapshot taken before migrating: schema \(summary.schemaVersion, privacy: .public), \(summary.rowCounts["messages"] ?? 0, privacy: .public) messages, \(folders.count, privacy: .public) folders, account record \(account != nil, privacy: .public), \(pushed.count, privacy: .public) push registrations")
         return manifest
     }
 
@@ -234,6 +240,7 @@ struct PreUpgradeSnapshot: Sendable {
         try JSONEncoder().encode(["startedAt": now]).write(to: locations.journal, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         let restored = Restored(restoredAt: now, takenAt: manifest.takenAt, installation: locations.installation)
         try await store.closeForMigration { try self.swap(manifest, captured, restored) }
+        Self.log.notice("restored the snapshot taken \(manifest.takenAt, privacy: .public)")
         return restored
     }
 
@@ -246,6 +253,7 @@ struct PreUpgradeSnapshot: Sendable {
         catch MessageStoreError.transportOwnedElsewhere { try await store.close(); return .busy }
         let restored = Restored(restoredAt: now, takenAt: manifest.takenAt, installation: locations.installation)
         try await store.closeForMigration { try self.swap(manifest, captured, restored) }
+        Self.log.notice("finished an interrupted restore from its journal")
         return .restored(restored)
     }
 
@@ -326,6 +334,7 @@ struct PreUpgradeSnapshot: Sendable {
                 throw Failure.missing(file)
             }
             domain.replace(with: contents)
+            domain.defaults.synchronize()
         }
 
         try JSONEncoder().encode(restored).write(to: locations.restored, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])

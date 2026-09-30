@@ -771,6 +771,13 @@ final class AppModel {
         await openStorage()
     }
 
+    /// Chats where this version sent encrypted messages since the backup was taken: their sessions moved on, and a
+    /// restore puts back the older session state the peers no longer match.
+    func chatsWithEncryptedSendsSinceBackup() async -> [String] {
+        guard let store, let backup = previousVersionBackup, !accountID.isEmpty else { return [] }
+        return (try? await store.chatsWithEncryptedSends(accountID: accountID, since: backup.takenAt)) ?? []
+    }
+
     /// Settings, after its confirmation.
     func deletePreviousVersionBackup() {
         guard let snapshots else { return }
