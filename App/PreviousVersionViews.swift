@@ -42,7 +42,7 @@ struct UpgradeBlockingView: View {
     private func failed(_ reason: String) -> some View {
         blocking(symbol: "exclamationmark.triangle.fill", tint: .orange, title: "Backup before update failed",
                  body: reason + "\n\nNothing has been changed yet: your data is still in the previous version’s format.") {
-            Button { run { await model.retryUpgrade() } } label: { Text("Try again").frame(maxWidth: .infinity, minHeight: 44) }
+            Button { run { await model.retryUpgrade() } } label: { Text("Try again").frame(maxWidth: .infinity) }
                 .buttonStyle(.borderedProminent)
                 .accessibilityIdentifier("upgradeTryAgain")
             Button { confirmingWithoutBackup = true } label: { Text("Continue without a backup").frame(maxWidth: .infinity, minHeight: 44) }
