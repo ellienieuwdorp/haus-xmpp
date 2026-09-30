@@ -522,6 +522,8 @@ public actor MessageStore {
                 throw MessageStoreError.snapshotMismatch("journal mode")
             }
             try copy.close()
+            // Nothing has the copy open: sidecars left from its brief WAL phase are empty and not part of it.
+            for suffix in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: destination.path + suffix) }
             try connection.execute("COMMIT")
         } catch { try? connection.execute("ROLLBACK"); throw error }
         try Self.verifySnapshot(at: destination, matches: summary)
@@ -1932,6 +1934,15 @@ public actor MessageStore {
     /// with none are absent. A chat never read counts every incoming message since this device joined. One index range
     /// per chat. Placeholders whose reason never `alerts` (a blocked device, a retention limit) are left out, so neither
     /// can raise the chat's count or the app badge.
+    /// Chats (with their titles) where this account sent an encrypted message at or after `date`: each advanced an
+    /// encryption session that a restore of older data would roll back.
+    public func chatsWithEncryptedSends(accountID: String, since date: Date) throws -> [String] {
+        try connection.query("""
+            SELECT c.title FROM chats c WHERE c.account_id=?1 AND EXISTS (SELECT 1 FROM messages m WHERE m.account_id=?1
+            AND m.chat_id=c.id AND m.outgoing=1 AND m.sent_at>=?2 AND m.encryption_profile IN ('legacy','modern')) ORDER BY c.title
+            """, [.text(accountID), .real(date.timeIntervalSince1970)]).map { $0[0].string }
+    }
+
     public func unreadCounts(accountID: String) throws -> [String: Int] {
         let quiet = UnreadableReason.allCases.filter { !$0.alerts }.map { "'\($0.rawValue)'" }.joined(separator: ",")
         let rows = try connection.query("""

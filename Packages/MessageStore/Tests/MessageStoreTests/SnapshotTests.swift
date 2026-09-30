@@ -60,6 +60,7 @@ struct SnapshotTests {
         #expect(summary.rowCounts["messages"] == 8)
         // The copy is a standalone file with every committed row, the WAL frames included.
         #expect(!FileManager.default.fileExists(atPath: copy.path + "-wal"))
+        #expect(!FileManager.default.fileExists(atPath: copy.path + "-shm"))
         #expect(sqliteRows(url: copy, sql: "PRAGMA journal_mode") == [["delete"]])
         #expect(sqliteRows(url: copy, sql: "SELECT id FROM messages ORDER BY id").flatMap { $0 } ==
                 ["main-0", "main-1", "main-2", "wal-0", "wal-1", "wal-2", "wal-3", "wal-4"])
@@ -139,5 +140,20 @@ struct SnapshotTests {
         let fresh = try MessageStore(url: url, schema: .currentOnly)
         try await fresh.acquireTransportOwnership()
         try await fresh.close()
+    }
+
+    /// What restoring older data would roll back: chats where an encrypted message was sent since the snapshot.
+    @Test func chatsWithEncryptedSendsSinceADate() async throws {
+        try await withEncryptedStore(account: "ellie@example.org", chats: [("a@example.org", "Alice"), ("b@example.org", "Bob"),
+                                                                           ("c@example.org", "Carol"), ("d@example.org", "Dan")]) { store, _ in
+            let since = Date(timeIntervalSince1970: 1_700_000_000)
+            for (chat, outgoing, profile, offset) in [("a@example.org", true, "legacy", 10.0), ("b@example.org", true, nil, 10),
+                                                     ("c@example.org", true, "modern", -10), ("d@example.org", false, "modern", 10)] as [(String, Bool, String?, Double)] {
+                try await store.insertMessage(StoredMessage(id: chat, accountID: "ellie@example.org", chatID: chat,
+                                                            senderID: outgoing ? "ellie@example.org" : chat, body: "x",
+                                                            sentAt: since.addingTimeInterval(offset), isOutgoing: outgoing, encryptionProfile: profile))
+            }
+            #expect(try await store.chatsWithEncryptedSends(accountID: "ellie@example.org", since: since) == ["Alice"])
+        }
     }
 }
