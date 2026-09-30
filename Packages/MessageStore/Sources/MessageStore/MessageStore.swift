@@ -547,6 +547,19 @@ public actor MessageStore {
         }
     }
 
+    /// Whether this store holds the transport lease right now. A caller that gave it up, or never got it, reads false.
+    public var holdsTransportOwnership: Bool { transportOwnership.isHeld }
+
+    /// Switches a database file nobody has open to write-ahead logging, as every build keeps its live store. A copy put
+    /// back at the current schema (which opening does not migrate) would otherwise stay in rollback-journal mode.
+    public static func useWriteAheadLog(at url: URL) throws {
+        let file = try Connection(url: url, create: false)
+        defer { try? file.close() }
+        guard try file.query("PRAGMA journal_mode = WAL").first?.first?.optionalString == "wal" else {
+            throw MessageStoreError.snapshotMismatch("journal mode")
+        }
+    }
+
     /// Stop and join all socket/sender/crypto work before closing. This deterministic lifecycle
     /// boundary must complete before deleting or replacing a database or its SQLite sidecars.
     /// Repeated closes are harmless; later database operations fail with a controlled error.
@@ -1930,19 +1943,32 @@ public actor MessageStore {
             """, [.text(publication.stanzaID), .text(publication.pointerMessageID), .text(accountID), .text(publication.chatID)])
     }
 
+    /// Chats (with their titles) where this account sent an encrypted message at or after `date`: each advanced an
+    /// encryption session that a restore of older data would roll back.
+    public func chatsWithEncryptedSends(accountID: String, since date: Date) throws -> [String] {
+        try Self.chatsWithEncryptedSends(connection, accountID: accountID, since: date)
+    }
+
+    /// The same for a database file nobody has open as a store (a kept copy, or a store an older build wrote): every
+    /// account in it. Only reads; opens nothing that does not exist.
+    public static func chatsWithEncryptedSends(inFileAt url: URL, since date: Date) throws -> [String] {
+        let file = try Connection(url: url, create: false)
+        defer { try? file.close() }
+        return try chatsWithEncryptedSends(file, accountID: nil, since: date)
+    }
+
+    private static func chatsWithEncryptedSends(_ connection: Connection, accountID: String?, since date: Date) throws -> [String] {
+        try connection.query("""
+            SELECT DISTINCT c.title FROM chats c WHERE (?1 IS NULL OR c.account_id=?1) AND EXISTS (SELECT 1 FROM messages m
+            WHERE m.account_id=c.account_id AND m.chat_id=c.id AND m.outgoing=1 AND m.sent_at>=?2
+            AND m.encryption_profile IN ('legacy','modern')) ORDER BY c.title
+            """, [accountID.map(Value.text) ?? .null, .real(date.timeIntervalSince1970)]).map { $0[0].string }
+    }
+
     /// Incoming messages after each chat's read pointer and newer than its archive's history baseline, by chat; chats
     /// with none are absent. A chat never read counts every incoming message since this device joined. One index range
     /// per chat. Placeholders whose reason never `alerts` (a blocked device, a retention limit) are left out, so neither
     /// can raise the chat's count or the app badge.
-    /// Chats (with their titles) where this account sent an encrypted message at or after `date`: each advanced an
-    /// encryption session that a restore of older data would roll back.
-    public func chatsWithEncryptedSends(accountID: String, since date: Date) throws -> [String] {
-        try connection.query("""
-            SELECT c.title FROM chats c WHERE c.account_id=?1 AND EXISTS (SELECT 1 FROM messages m WHERE m.account_id=?1
-            AND m.chat_id=c.id AND m.outgoing=1 AND m.sent_at>=?2 AND m.encryption_profile IN ('legacy','modern')) ORDER BY c.title
-            """, [.text(accountID), .real(date.timeIntervalSince1970)]).map { $0[0].string }
-    }
-
     public func unreadCounts(accountID: String) throws -> [String: Int] {
         let quiet = UnreadableReason.allCases.filter { !$0.alerts }.map { "'\($0.rawValue)'" }.joined(separator: ",")
         let rows = try connection.query("""
