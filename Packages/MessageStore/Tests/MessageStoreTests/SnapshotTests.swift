@@ -8,24 +8,16 @@ import Testing
 struct SnapshotTests {
     private let previousVersion = 21
 
-    /// A store stamped with the previous build's schema, with three messages checkpointed into the main file and
-    /// `walMessages` more committed through a connection that stays open, so they exist only as WAL frames.
-    /// Returns that connection; close it with `sqlite3_close`.
+    /// The previous build's store (a real schema-21 file, `writePreviousReleaseStore`) with its three messages in the
+    /// main file and `walMessages` more committed through a connection that stays open, so they exist only as WAL
+    /// frames. Returns that connection; close it with `sqlite3_close`.
     private func previousBuildStore(at url: URL, walMessages: Int) async throws -> OpaquePointer? {
-        let store = try MessageStore(url: url)
-        try await store.upsertChat(accountID: "ellie@example.org", chatID: "bob@example.org", title: "Bob")
-        for index in 0..<3 {
-            try await store.insertMessage(StoredMessage(id: "main-\(index)", accountID: "ellie@example.org", chatID: "bob@example.org",
-                                                        senderID: "bob@example.org", body: "hi \(index)",
-                                                        sentAt: Date(timeIntervalSince1970: 1_700_000_000 + Double(index)), isOutgoing: false))
-        }
-        try await store.close()
-        #expect(sqliteExecute(url: url, sql: "PRAGMA user_version=\(previousVersion)"))
+        try writePreviousReleaseStore(at: url)
         var writer: OpaquePointer?
         #expect(sqlite3_open(url.path, &writer) == SQLITE_OK)
         #expect(sqlite3_exec(writer, "PRAGMA wal_autocheckpoint=0", nil, nil, nil) == SQLITE_OK)
         for index in 0..<walMessages {
-            let sql = "INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing) VALUES('ellie@example.org','wal-\(index)','bob@example.org','bob@example.org','late',1700000100,0)"
+            let sql = "INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing) VALUES('Ellie@Example.org','wal-\(index)','bob@example.org','bob@example.org','late',1790000100,0)"
             #expect(sqlite3_exec(writer, sql, nil, nil, nil) == SQLITE_OK)
         }
         return writer
@@ -63,7 +55,7 @@ struct SnapshotTests {
         #expect(!FileManager.default.fileExists(atPath: copy.path + "-shm"))
         #expect(sqliteRows(url: copy, sql: "PRAGMA journal_mode") == [["delete"]])
         #expect(sqliteRows(url: copy, sql: "SELECT id FROM messages ORDER BY id").flatMap { $0 } ==
-                ["main-0", "main-1", "main-2", "wal-0", "wal-1", "wal-2", "wal-3", "wal-4"])
+                ["old-0", "old-1", "old-2", "wal-0", "wal-1", "wal-2", "wal-3", "wal-4"])
         #expect(sqliteRows(url: copy, sql: "PRAGMA user_version") == [["\(previousVersion)"]])
         #expect(sqliteRows(url: copy, sql: "PRAGMA integrity_check") == [["ok"]])
         // Reading never checkpointed, migrated or restamped the source: the main file is byte for byte what the old
@@ -84,7 +76,7 @@ struct SnapshotTests {
         try await store.acquireTransportOwnership()
         let summary = try await store.writeSnapshot(to: copy)
         try await store.close()
-        #expect(sqliteExecute(url: copy, sql: "DELETE FROM messages WHERE id='main-0'"))
+        #expect(sqliteExecute(url: copy, sql: "DELETE FROM messages WHERE id='old-0'"))
         #expect(throws: MessageStoreError.snapshotMismatch("row counts differ: messages")) {
             try MessageStore.verifySnapshot(at: copy, matches: summary)
         }
