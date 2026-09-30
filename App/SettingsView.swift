@@ -6,6 +6,7 @@ struct SettingsView: View {
     @Environment(\.appearance) private var appearance
     @Environment(\.openURL) private var openURL
     @State private var confirmingSignOut = false
+    @State private var showingBackup = false
 
     private var accent: AccentTheme { appearance.accent }
     private var localPart: String { model.accountID.split(separator: "@").first.map(String.init) ?? "" }
@@ -122,6 +123,20 @@ struct SettingsView: View {
                     Label { Text("Explore sample conversations") } icon: { SettingsIconTile(systemName: "sparkles", color: .blue) }
                 }
             }
+            if let backup = model.previousVersionBackup {
+                Section {
+                    Button { showingBackup = true } label: {
+                        LabeledContent {
+                            Text("Until \(backup.expiresAt.formatted(.dateTime.day().month()))")
+                        } label: {
+                            Label { Text("Previous version backup") } icon: { SettingsIconTile(systemName: "clock.arrow.circlepath", color: .gray) }
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                    .accessibilityIdentifier("previousVersionBackupRow")
+                }
+                .sheet(isPresented: $showingBackup) { PreviousVersionBackupView(model: model, backup: backup).themedRoot() }
+            }
             Section {
                 Button("Sign Out", role: .destructive) { confirmingSignOut = true }
                     .disabled(model.accountID.isEmpty)
@@ -130,8 +145,17 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .confirmationDialog("Sign out?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
             Button("Sign Out", role: .destructive) { Task { await model.signOut() } }
+            if model.previousVersionBackup != nil {
+                Button("Sign Out and Delete Backup", role: .destructive) {
+                    Task { await model.signOut(); model.deletePreviousVersionBackup() }
+                }
+            }
         } message: {
-            Text("You’ll need your password to sign in again. Messages and keys stay on this iPhone.")
+            if let backup = model.previousVersionBackup {
+                Text("You’ll need your password to sign in again. Messages and keys stay on this iPhone. The backup of the previous version’s data stays too, until you delete it or it expires on \(backup.expiresAt.formatted(date: .abbreviated, time: .omitted)); restoring it would sign you back in as you were then.")
+            } else {
+                Text("You’ll need your password to sign in again. Messages and keys stay on this iPhone.")
+            }
         }
     }
 

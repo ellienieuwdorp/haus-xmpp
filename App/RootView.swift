@@ -13,6 +13,19 @@ struct RootView: View {
     @State private var showingSettings = false
 
     var body: some View {
+        if model.upgradeState == .none {
+            chats
+        } else {
+            UpgradeBlockingView(model: model)
+                .alert("Something needs attention", isPresented: Binding(
+                    get: { model.error != nil }, set: { if !$0 { model.error = nil } }
+                )) {
+                    Button("OK") { model.error = nil }
+                } message: { Text(model.error ?? "") }
+        }
+    }
+
+    private var chats: some View {
         NavigationStack(path: $chatPath) {
             ChatListView(model: model, path: $chatPath, showingConnection: $showingConnection, showingSettings: $showingSettings)
         }
