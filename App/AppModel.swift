@@ -797,11 +797,22 @@ final class AppModel {
     }
 
     /// Restored screen, second choice, after its confirmation: this version's kept data is deleted and the restored
-    /// data is upgraded again, after a fresh snapshot of it.
+    /// data is upgraded again, after a fresh snapshot of it (taken first when the previous version ran on it).
     func upgradeRestoredData() async {
-        guard store == nil, case .restored = upgradeState, let snapshots else { return }
-        do { try snapshots.upgradeRestoredData() } catch { self.error = "This version’s copy could not be removed. Try again."; return }
+        guard store == nil, case let .restored(state) = upgradeState, let snapshots else { return }
         upgradeState = .preparing
+        do {
+            if try await snapshots.upgradeRestoredData(now: Date()) == .busy {
+                upgradeState = .restored(state)
+                self.error = "A notification is being processed. Try again in a moment."
+                return
+            }
+        } catch {
+            Self.syncLog.error("upgrade of the restored data refused: \(String(describing: error), privacy: .public)")
+            upgradeState = .restored(snapshots.restoredState())
+            self.error = "The previous version’s data could not be backed up: " + PreUpgradeSnapshot.describe(error)
+            return
+        }
         await openStorage()
     }
 

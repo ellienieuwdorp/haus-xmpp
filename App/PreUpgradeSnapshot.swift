@@ -441,10 +441,25 @@ struct PreUpgradeSnapshot: Sendable {
     }
 
     /// The restored screen's second choice: this version's kept copy is deleted and the restored data (as the
-    /// previous build may have left it) is upgraded by the next `open`, after a fresh snapshot of it.
-    func upgradeRestoredData() throws {
+    /// previous build may have left it) is upgraded by the next `open`. When the previous build ran on it, its data
+    /// first becomes the new `previousVersion` copy here, whatever the install path says (`open` reuses a copy taken
+    /// by the same install at the same schema), so what that build wrote is in the backup before anything migrates.
+    func upgradeRestoredData(now: Date) async throws -> ChoiceResult {
+        guard FileManager.default.fileExists(atPath: locations.restored.path) else { throw Failure.missing("restored data") }
+        let ran = previousVersionRan((try? Self.decode(Restored.self, at: locations.restored))
+                                     ?? Restored(restoredAt: .distantPast, takenAt: .distantPast, installation: "", database: nil))
+        // An unreadable backup is never replaced here; `open` then stops with "Backup before update failed".
+        if ran, status(.previousVersion) != .unreadable {
+            let store = try MessageStore(url: locations.database, schema: .asIs)
+            do { try await store.acquireTransportOwnership() }
+            catch MessageStoreError.transportOwnedElsewhere { try await store.close(); return .busy }
+            do { _ = try await take(from: store, into: .previousVersion, now: now) }
+            catch { tidy(); try? await store.close(); throw error }
+            try await store.close()
+        }
         try deleteCopy(.thisVersion)
         try Self.removeIfPresent(locations.restored)
+        return .done
     }
 
     // MARK: Putting a copy back

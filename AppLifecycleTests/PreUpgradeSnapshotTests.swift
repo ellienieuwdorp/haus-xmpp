@@ -400,14 +400,16 @@ import XMPPProtocol
     }
 
     /// The other choice: this version's copy is deleted, and what the previous build left is snapshotted afresh and
-    /// upgraded.
+    /// upgraded. The install path is the same as when the first snapshot was taken (iOS need not move the app), so
+    /// only the previous build having run tells that the backup is stale.
     func testUpgradingTheRestoredDataDeletesThisVersionsCopy() async throws {
         let (installation, _, _) = try await restoredInstallation()
         let locations = installation.locations
         let first = try XCTUnwrap(installation.snapshots.manifest)
         runPreviousBuild(on: locations.database)
-        let reinstalled = try installation.reinstalled(as: "/install/C")
-        try reinstalled.snapshots.upgradeRestoredData()
+        let reinstalled = try installation.reinstalled(as: locations.installation)
+        let result = try await reinstalled.snapshots.upgradeRestoredData(now: now.addingTimeInterval(86_400))
+        XCTAssertEqual(result, .done)
         guard case let .ready(store) = try await reinstalled.snapshots.open(upgradeAllowed: true, now: now.addingTimeInterval(86_400)) else {
             return XCTFail("not upgraded")
         }
@@ -419,6 +421,7 @@ import XMPPProtocol
         let fresh = try XCTUnwrap(reinstalled.snapshots.manifest)
         XCTAssertNotEqual(fresh.id, first.id)
         XCTAssertEqual(fresh.database.rowCounts["messages"], 5)
+        XCTAssertEqual(sqliteRows(locations.snapshot.appending(path: "messages.sqlite"), "SELECT count(*) FROM messages WHERE id='old-build-again'"), ["1"])
         XCTAssertEqual(reinstalled.snapshots.status(.thisVersion), .absent)
         XCTAssertFalse(PreUpgradeHold.isHeld(groupRoot: locations.groupRoot))
         XCTAssertEqual(try PreUpgradeSnapshot.keychainAccounts(service: locations.keychain.snapshotService).sorted(),
