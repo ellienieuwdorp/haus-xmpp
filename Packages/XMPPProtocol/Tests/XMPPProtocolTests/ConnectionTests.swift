@@ -39,13 +39,15 @@ private func plan(_ directTLS: SRVLookup, _ startTLS: SRVLookup) -> [XMPPEndpoin
     #expect(SRVLookup([]) == SRVLookup.none)
 }
 
-/// RFC 2782: within a priority, the chance of going first is proportional to weight. Ignoring weights gives 50%.
+/// RFC 2782: within a priority, the chance of going first follows weight. Its draw from 0...sum inclusive gives the
+/// first record one extra point, so weights 1 and 9 put the heavy record first 9/11 of the time (1,636 of 2,000,
+/// standard deviation 17); ignoring weights gives 50%. The bounds are five deviations wide.
 @Test func discoveryHonoursWeights() {
     var heavyFirst = 0
     for _ in 0..<2_000 where plan(.none, .records([srv(0, 1, "light.example.org"), srv(0, 9, "heavy.example.org")])).first?.host == "heavy.example.org" {
         heavyFirst += 1
     }
-    #expect((1_600...1_900).contains(heavyFirst))
+    #expect((1_550...1_725).contains(heavyFirst))
 }
 
 @Test func srvRecordDataParsesTargetsAndRoot() {
