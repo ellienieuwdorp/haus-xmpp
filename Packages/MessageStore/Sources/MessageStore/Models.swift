@@ -143,6 +143,12 @@ public enum MessageStoreError: Error, Equatable, Sendable {
     case transportOwnershipRequired
     case transportOwnedElsewhere
     case closed
+    /// Opened `currentOnly` over a store an older build wrote: only the app migrates it (after its snapshot).
+    case upgradeRequired(Int)
+    /// The database file was replaced (restored or moved) after this store opened it.
+    case replaced
+    /// A snapshot copy did not match its source: integrity, schema or row counts.
+    case snapshotMismatch(String)
 }
 
 /// Local progress and authenticated stream acknowledgement. None proves peer delivery.

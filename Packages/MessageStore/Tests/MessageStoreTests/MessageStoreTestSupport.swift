@@ -1,4 +1,5 @@
 import Foundation
+import Testing
 import CSQLite
 @testable import MessageStore
 
@@ -40,4 +41,12 @@ func sqliteExecute(url: URL, sql: String) -> Bool {
     guard sqlite3_open(url.path, &db) == SQLITE_OK else { return false }
     defer { sqlite3_close(db) }
     return sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK
+}
+
+/// Writes the store the 045ca73 build (schema 21, the build this one replaces) left: its own schema and three synthetic
+/// messages of `Ellie@Example.org` with `bob@example.org`, in write-ahead-log mode as that build always keeps it.
+func writePreviousReleaseStore(at url: URL) throws {
+    let fixture = try #require(Bundle.module.url(forResource: "schema-21", withExtension: "sql", subdirectory: "Fixtures"))
+    #expect(sqliteExecute(url: url, sql: try String(contentsOf: fixture, encoding: .utf8) + "PRAGMA journal_mode=WAL;"))
+    #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["21"]])
 }

@@ -9,6 +9,6 @@ let package = Package(
     targets: [
         .systemLibrary(name: "CSQLite"),
         .target(name: "MessageStore", dependencies: ["CSQLite", "XMPPProtocol"]),
-        .testTarget(name: "MessageStoreTests", dependencies: ["MessageStore"])
+        .testTarget(name: "MessageStoreTests", dependencies: ["MessageStore"], resources: [.copy("Fixtures")])
     ]
 )

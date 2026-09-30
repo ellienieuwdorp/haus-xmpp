@@ -81,6 +81,8 @@ private enum ExtensionRun {
             let root: URL
             do { root = try await SharedStorage.directory(migrate: false) } catch { throw NotificationRunError.protectedDataUnavailable }
             directory = root
+            // A restore of the previous version's data is under way or done: that data is the app's alone.
+            guard !PreUpgradeHold.isHeld(groupRoot: root.deletingLastPathComponent()) else { throw NotificationRunError.upgradePending }
             guard let account = try NotificationAccount.load(), account.push != nil else { throw NotificationRunError.noAccount }
             let key: Data
             do { key = try EncryptionKeychain.load(storageID: "primary", allowCreation: false) }

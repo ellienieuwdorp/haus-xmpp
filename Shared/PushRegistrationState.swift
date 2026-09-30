@@ -35,8 +35,11 @@ struct PushRegistrationState: Codable, Sendable, Equatable {
         return push
     }
 
-    static func load(accountID: String) throws -> Self? {
-        var query = query(accountID)
+    /// The Keychain service registrations live under.
+    static let service = "haus.xmpp.push-registration"
+
+    static func load(accountID: String, service: String = service) throws -> Self? {
+        var query = query(accountID, service: service)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -48,12 +51,12 @@ struct PushRegistrationState: Codable, Sendable, Equatable {
         return value
     }
 
-    func save() throws {
+    func save(service: String = Self.service) throws {
         let attributes: [String: Any] = [kSecValueData as String: try JSONEncoder().encode(self),
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
-        let status = SecItemUpdate(Self.query(accountID) as CFDictionary, attributes as CFDictionary)
+        let status = SecItemUpdate(Self.query(accountID, service: service) as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
-            var item = Self.query(accountID)
+            var item = Self.query(accountID, service: service)
             for (key, value) in attributes { item[key] = value }
             guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw NotificationAccount.Failure.unavailable }
         } else if status != errSecSuccess { throw NotificationAccount.Failure.unavailable }
@@ -62,8 +65,8 @@ struct PushRegistrationState: Codable, Sendable, Equatable {
     /// Registrations saved before addresses were normalised are keyed by the account as typed (`Ellie@Example.org`),
     /// so a lookup by the normal spelling would miss a pending revocation or disable. Each moves to the normal key once;
     /// one already saved there wins.
-    static func normalizeSavedAccounts() {
-        var all = query("")
+    static func normalizeSavedAccounts(service: String = service) {
+        var all = query("", service: service)
         all[kSecAttrAccount as String] = nil
         all[kSecMatchLimit as String] = kSecMatchLimitAll
         all[kSecReturnAttributes as String] = true
@@ -71,19 +74,19 @@ struct PushRegistrationState: Codable, Sendable, Equatable {
         guard SecItemCopyMatching(all as CFDictionary, &result) == errSecSuccess, let items = result as? [[String: Any]] else { return }
         for account in items.compactMap({ $0[kSecAttrAccount as String] as? String }) {
             guard let normal = JID.normalizedBare(account), normal != account,
-                  let saved = try? load(accountID: account) else { continue }
-            if (try? load(accountID: normal)) == nil {
+                  let saved = try? load(accountID: account, service: service) else { continue }
+            if (try? load(accountID: normal, service: service)) == nil {
                 var moved = PushRegistrationState(accountID: normal, configuration: saved.configuration, journal: saved.journal)
                 moved.disablePending = saved.disablePending
-                guard (try? moved.save()) != nil else { continue }
+                guard (try? moved.save(service: service)) != nil else { continue }
             }
-            SecItemDelete(query(account) as CFDictionary)
+            SecItemDelete(query(account, service: service) as CFDictionary)
         }
     }
 
-    private static func query(_ account: String) -> [String: Any] {
+    private static func query(_ account: String, service: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: "haus.xmpp.push-registration",
+         kSecAttrService as String: service,
          kSecAttrAccount as String: account, kSecAttrSynchronizable as String: false]
     }
 }

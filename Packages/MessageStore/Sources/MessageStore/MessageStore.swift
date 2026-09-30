@@ -8,15 +8,59 @@ public actor MessageStore {
     private let connection: Connection
     private let transportOwnership: TransportOwnership
 
-    public init(url: URL) throws {
+    /// The schema this build writes.
+    public static let currentSchemaVersion = 23
+
+    /// How opening treats a file written by an older build.
+    public enum SchemaAccess: Sendable {
+        /// Bring it to the current schema (or create it) while opening.
+        case upgrade
+        /// Refuse an older schema with `upgradeRequired` before writing anything: for processes that must never
+        /// migrate (the notification extension). The file must already exist.
+        case currentOnly
+        /// Open the file as it is and write nothing. The owner takes the transport lease and then either copies it
+        /// (`writeSnapshot`), moves it (`closeForMigration`) or migrates it (`upgradeSchema`). The file must exist.
+        case asIs
+    }
+
+    /// `user_version` when this store was opened, before any migration it ran.
+    public nonisolated let openedSchemaVersion: Int
+    private let url: URL
+    /// The database file this connection opened; a lease is never granted over a file replaced since.
+    private let fileIdentity: FileIdentity
+
+    public init(url: URL) throws { try self.init(url: url, schema: .upgrade) }
+
+    public init(url: URL, schema access: SchemaAccess) throws {
         transportOwnership = try TransportOwnership(url: url)
-        connection = try Connection(url: url)
+        connection = try Connection(url: url, create: access == .upgrade)
+        self.url = url
+        guard let identity = FileIdentity(path: url.path) else { throw MessageStoreError.closed }
+        fileIdentity = identity
         try connection.execute("PRAGMA foreign_keys = ON")
-        try connection.execute("PRAGMA journal_mode = WAL")
         try connection.execute("PRAGMA synchronous = FULL")
+        let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
+        openedSchemaVersion = version
+        guard version <= Self.currentSchemaVersion else { throw MessageStoreError.unsupportedSchema(version) }
+        switch access {
+        case .upgrade: try Self.migrate(connection)
+        case .currentOnly: guard version == Self.currentSchemaVersion else { throw MessageStoreError.upgradeRequired(version) }
+        case .asIs: break
+        }
+    }
+
+    /// Migrates a store opened `asIs` to the current schema. Holding the lease keeps every other process (which opens
+    /// `currentOnly` or waits for the lease) away from the file while it changes.
+    public func upgradeSchema() throws {
+        try requireTransportOwnership()
+        try Self.migrate(connection)
+    }
+
+    private static func migrate(_ connection: Connection) throws {
+        try connection.execute("PRAGMA journal_mode = WAL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 23 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= currentSchemaVersion else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -442,6 +486,78 @@ public actor MessageStore {
     public func acquireTransportOwnership() throws {
         guard connection.isOpen else { throw MessageStoreError.closed }
         try transportOwnership.acquire()
+        // A restore or directory move replaced the file while this connection waited: it must not write into, or
+        // connect for, data nobody will read again.
+        guard FileIdentity(path: url.path) == fileIdentity else {
+            transportOwnership.release()
+            throw MessageStoreError.replaced
+        }
+    }
+
+    /// Copies the database, as one committed state, to a new file at `destination` with SQLite's online backup API:
+    /// page by page through this connection's read transaction, so frames still in the WAL are included and the
+    /// source is only read (no checkpoint, no journal-mode or version change, same page size and layout). The copy
+    /// is then reopened and checked (`verifySnapshot`) against the counts read in that same transaction. Requires the
+    /// lease, so no other process writes meanwhile.
+    public func writeSnapshot(to destination: URL) throws -> StoreSnapshotSummary {
+        try requireTransportOwnership()
+        guard let source = connection.handle else { throw MessageStoreError.closed }
+        for suffix in ["", "-wal", "-shm", "-journal"] { try? FileManager.default.removeItem(atPath: destination.path + suffix) }
+        try connection.execute("BEGIN")
+        let summary: StoreSnapshotSummary
+        do {
+            summary = try StoreSnapshotSummary(connection)
+            let copy = try Connection(url: destination)
+            defer { try? copy.close() }
+            guard let backup = sqlite3_backup_init(copy.handle, "main", source, "main") else {
+                throw copy.error(sqlite3_errcode(copy.handle))
+            }
+            let stepped = sqlite3_backup_step(backup, -1)
+            let finished = sqlite3_backup_finish(backup)
+            guard stepped == SQLITE_DONE else { throw copy.error(stepped) }
+            guard finished == SQLITE_OK else { throw copy.error(finished) }
+            // At rest the copy is one self-contained file in rollback-journal mode, so reading or verifying it leaves
+            // no WAL sidecars that could be mistaken for part of it. Every build switches it back to WAL when it opens.
+            guard try copy.query("PRAGMA journal_mode = DELETE").first?.first?.optionalString == "delete" else {
+                throw MessageStoreError.snapshotMismatch("journal mode")
+            }
+            try copy.close()
+            // Nothing has the copy open: sidecars left from its brief WAL phase are empty and not part of it.
+            for suffix in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: destination.path + suffix) }
+            try connection.execute("COMMIT")
+        } catch { try? connection.execute("ROLLBACK"); throw error }
+        try Self.verifySnapshot(at: destination, matches: summary)
+        return summary
+    }
+
+    /// Checks a copy made by `writeSnapshot` (then or later, before it is restored): `integrity_check` is ok, and the
+    /// schema version and every table's row count equal what was read from the source.
+    public static func verifySnapshot(at url: URL, matches expected: StoreSnapshotSummary) throws {
+        let copy = try Connection(url: url, create: false)
+        defer { try? copy.close() }
+        let integrity = try copy.query("PRAGMA integrity_check").compactMap { $0.first?.optionalString }
+        guard integrity == ["ok"] else { throw MessageStoreError.snapshotMismatch("integrity: " + integrity.prefix(3).joined(separator: "; ")) }
+        let found = try StoreSnapshotSummary(copy)
+        guard found.schemaVersion == expected.schemaVersion else {
+            throw MessageStoreError.snapshotMismatch("schema \(found.schemaVersion) != \(expected.schemaVersion)")
+        }
+        guard found.rowCounts == expected.rowCounts else {
+            let differing = Set(found.rowCounts.keys).union(expected.rowCounts.keys).filter { found.rowCounts[$0] != expected.rowCounts[$0] }
+            throw MessageStoreError.snapshotMismatch("row counts differ: " + differing.sorted().joined(separator: ","))
+        }
+    }
+
+    /// Whether this store holds the transport lease right now. A caller that gave it up, or never got it, reads false.
+    public var holdsTransportOwnership: Bool { transportOwnership.isHeld }
+
+    /// Switches a database file nobody has open to write-ahead logging, as every build keeps its live store. A copy put
+    /// back at the current schema (which opening does not migrate) would otherwise stay in rollback-journal mode.
+    public static func useWriteAheadLog(at url: URL) throws {
+        let file = try Connection(url: url, create: false)
+        defer { try? file.close() }
+        guard try file.query("PRAGMA journal_mode = WAL").first?.first?.optionalString == "wal" else {
+            throw MessageStoreError.snapshotMismatch("journal mode")
+        }
     }
 
     /// Stop and join all socket/sender/crypto work before closing. This deterministic lifecycle
@@ -1827,6 +1943,28 @@ public actor MessageStore {
             """, [.text(publication.stanzaID), .text(publication.pointerMessageID), .text(accountID), .text(publication.chatID)])
     }
 
+    /// Chats (with their titles) where this account sent an encrypted message at or after `date`: each advanced an
+    /// encryption session that a restore of older data would roll back.
+    public func chatsWithEncryptedSends(accountID: String, since date: Date) throws -> [String] {
+        try Self.chatsWithEncryptedSends(connection, accountID: accountID, since: date)
+    }
+
+    /// The same for a database file nobody has open as a store (a kept copy, or a store an older build wrote): every
+    /// account in it. Only reads; opens nothing that does not exist.
+    public static func chatsWithEncryptedSends(inFileAt url: URL, since date: Date) throws -> [String] {
+        let file = try Connection(url: url, create: false)
+        defer { try? file.close() }
+        return try chatsWithEncryptedSends(file, accountID: nil, since: date)
+    }
+
+    private static func chatsWithEncryptedSends(_ connection: Connection, accountID: String?, since date: Date) throws -> [String] {
+        try connection.query("""
+            SELECT DISTINCT c.title FROM chats c WHERE (?1 IS NULL OR c.account_id=?1) AND EXISTS (SELECT 1 FROM messages m
+            WHERE m.account_id=c.account_id AND m.chat_id=c.id AND m.outgoing=1 AND m.sent_at>=?2
+            AND m.encryption_profile IN ('legacy','modern')) ORDER BY c.title
+            """, [accountID.map(Value.text) ?? .null, .real(date.timeIntervalSince1970)]).map { $0[0].string }
+    }
+
     /// Incoming messages after each chat's read pointer and newer than its archive's history baseline, by chat; chats
     /// with none are absent. A chat never read counts every incoming message since this device joined. One index range
     /// per chat. Placeholders whose reason never `alerts` (a blocked device, a retention limit) are left out, so neither
@@ -2372,8 +2510,9 @@ enum Value {
 final class Connection: @unchecked Sendable {
     private(set) var handle: OpaquePointer?
     var isOpen: Bool { handle != nil }
-    init(url: URL) throws {
-        let result = sqlite3_open_v2(url.path, &handle, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)
+    init(url: URL, create: Bool = true) throws {
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX | (create ? SQLITE_OPEN_CREATE : 0)
+        let result = sqlite3_open_v2(url.path, &handle, flags, nil)
         if result != SQLITE_OK {
             let failure = error(result)
             sqlite3_close(handle)
@@ -2462,4 +2601,32 @@ private final class TransportOwnership: @unchecked Sendable {
         if isHeld { _ = flock(descriptor, LOCK_UN); isHeld = false }
     }
     deinit { Darwin.close(descriptor) }
+}
+
+/// Device and inode of a path: which file a connection opened, compared again once the lease is held.
+struct FileIdentity: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+    init?(path: String) {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        device = UInt64(info.st_dev); inode = UInt64(info.st_ino)
+    }
+}
+
+/// What a verified snapshot must match: the schema version and the row count of every table, read in one transaction.
+public struct StoreSnapshotSummary: Codable, Sendable, Equatable {
+    public let schemaVersion: Int
+    public let rowCounts: [String: Int]
+
+    init(_ connection: Connection) throws {
+        schemaVersion = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
+        let tables = try connection.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+            .compactMap { $0.first?.optionalString }
+        var counts: [String: Int] = [:]
+        for table in tables {
+            counts[table] = try connection.query("SELECT count(*) FROM \"\(table.replacingOccurrences(of: "\"", with: "\"\""))\"").first?[0].integer ?? 0
+        }
+        rowCounts = counts
+    }
 }
