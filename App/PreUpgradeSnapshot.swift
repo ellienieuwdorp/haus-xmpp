@@ -541,11 +541,13 @@ struct PreUpgradeSnapshot: Sendable {
 
     // MARK: Deleting
 
-    /// Settings' "Delete backup": both copies, whatever state they are in, and every Keychain copy.
+    /// Settings' "Delete backup": both copies, whatever state they are in, every Keychain copy, and replies saved
+    /// before the upgrade that were never queued.
     func delete() throws {
         for copy in Copy.allCases {
             for folder in [locations.folder(copy), locations.partial(copy), locations.replaced(copy)] { try Self.removeIfPresent(folder) }
         }
+        try Self.removeIfPresent(locations.savedReplies)
         for key in try Self.keychainAccounts(service: locations.keychain.snapshotService) {
             try Self.keychainDelete(service: locations.keychain.snapshotService, account: key)
         }
@@ -596,6 +598,12 @@ struct PreUpgradeSnapshot: Sendable {
 
     // MARK: Replies saved before the upgrade
 
+    /// How long a saved reply may wait for the upgrade. One found later is not sent: a message going out a day or
+    /// more after it was typed, into a conversation that has moved on, would surprise both sides, and the person can
+    /// no longer take it back. It is dropped and a notice says so. A clock that jumped makes this err towards
+    /// dropping, which the notice reports; it never sends something the user did not expect to go.
+    static let savedReplyLifetime: TimeInterval = 24 * 60 * 60
+
     /// A notification reply typed while the upgrade waited for the app to come to the front. Only the notification's
     /// opaque destination and the text; queued in the outbox once the upgrade finished, never sent before.
     struct SavedReply: Codable, Sendable, Equatable {
@@ -633,6 +641,8 @@ struct PreUpgradeSnapshot: Sendable {
         var queued = 0
         /// Another account's, or no longer resolving to one of this account's messages, or refused by the outbox.
         var rejected = 0
+        /// Older than `savedReplyLifetime`: dropped, not sent.
+        var expired = 0
     }
 
     func saveReply(_ reply: SavedReply) throws {
@@ -656,6 +666,7 @@ struct PreUpgradeSnapshot: Sendable {
                 result.rejected += 1; continue
             }
             if (try? await store.message(accountID: account, messageID: reply.id)) != nil { result.queued += 1; continue }
+            guard now.timeIntervalSince(reply.savedAt) <= Self.savedReplyLifetime else { result.expired += 1; continue }
             guard let message = try? await destination.resolve(accountID: account, store: store),
                   (try? await enqueue(NotificationActionHandler.replyMessage(reply.text, id: reply.id, to: message))) != nil else {
                 result.rejected += 1; continue
@@ -664,6 +675,14 @@ struct PreUpgradeSnapshot: Sendable {
         }
         try? Self.removeIfPresent(locations.savedReplies)
         return result
+    }
+
+    /// Sign-out: the replies saved for `account` go with it; any other account's stay.
+    func removeSavedReplies(of account: String) throws {
+        let saved = savedReplies
+        let kept = saved.filter { !(NotificationDestination(payload: $0.destination)?.belongs(to: account) ?? false) }
+        guard kept.count != saved.count else { return }
+        if kept.isEmpty { try Self.removeIfPresent(locations.savedReplies) } else { try writeSavedReplies(kept) }
     }
 
     private func writeSavedReplies(_ replies: [SavedReply]) throws {

@@ -428,7 +428,8 @@ import XMPPProtocol
     // MARK: Replies saved before the upgrade
 
     /// A launch killed after queueing the saved replies but before removing their file queues them again on the next
-    /// launch: each goes into the outbox once, including one saved by a build that gave replies no ID.
+    /// launch: each goes into the outbox once, including one saved by a build that gave replies no ID. A reply older
+    /// than a day is never queued.
     func testASavedReplyIsQueuedOnceWhenTheLaunchIsKilledBeforeItsFileIsRemoved() async throws {
         let installation = try makeInstallation()
         guard case let .ready(store) = try await installation.snapshots.open(upgradeAllowed: true, now: now) else { return XCTFail("not ready") }
@@ -437,6 +438,7 @@ import XMPPProtocol
             // As the previous feature build saved it: no ID.
             ["destination": destination.payload, "text": "Saved without an ID", "savedAt": now.timeIntervalSinceReferenceDate],
             ["id": UUID().uuidString, "destination": destination.payload, "text": "Saved with an ID", "savedAt": now.timeIntervalSinceReferenceDate + 60],
+            ["id": UUID().uuidString, "destination": destination.payload, "text": "Saved two days ago", "savedAt": now.timeIntervalSinceReferenceDate - 2 * 86_400],
         ])
         try FileManager.default.createDirectory(at: installation.locations.directory, withIntermediateDirectories: true)
         try payload.write(to: installation.locations.savedReplies)
@@ -444,17 +446,33 @@ import XMPPProtocol
         let enqueued = Enqueued()
         let snapshots = installation.snapshots, later = now.addingTimeInterval(3_600)
         let first = await snapshots.queueSavedReplies(account: account, store: store, now: later) { try await enqueued.enqueue($0, in: store) }
-        XCTAssertEqual(first, .init(queued: 2, rejected: 0))
+        XCTAssertEqual(first, .init(queued: 2, rejected: 0, expired: 1))
         XCTAssertTrue(installation.snapshots.savedReplies.isEmpty)
         // Killed before the file was removed: the next launch finds it again.
         try payload.write(to: installation.locations.savedReplies)
         let second = await snapshots.queueSavedReplies(account: account, store: store, now: later) { try await enqueued.enqueue($0, in: store) }
-        XCTAssertEqual(second, .init(queued: 2, rejected: 0))
+        XCTAssertEqual(second, .init(queued: 2, rejected: 0, expired: 1))
 
         XCTAssertEqual(enqueued.bodies, ["Saved without an ID", "Saved with an ID"])
         let queued = try await store.queuedOutgoing(accountID: account).map(\.body).sorted()
         XCTAssertEqual(queued, ["Saved with an ID", "Saved without an ID"])
         try await store.close()
+    }
+
+    /// Replies saved before the upgrade never outlive the backup or the account: Delete backup removes them all, and
+    /// signing out removes that account's.
+    func testDeleteBackupAndSignOutRemoveSavedReplies() async throws {
+        let installation = try makeInstallation()
+        let snapshots = installation.snapshots
+        let mine = try XCTUnwrap(NotificationDestination(accountID: account, messageID: UUID().uuidString))
+        let other = try XCTUnwrap(NotificationDestination(accountID: "mallory@example.org", messageID: UUID().uuidString))
+        try snapshots.saveReply(.init(destination: mine.payload, text: "mine", savedAt: now))
+        try snapshots.saveReply(.init(destination: other.payload, text: "other", savedAt: now))
+
+        try snapshots.removeSavedReplies(of: account)
+        XCTAssertEqual(snapshots.savedReplies.map(\.text), ["other"])
+        try snapshots.delete()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: installation.locations.savedReplies.path))
     }
 
     // MARK: Helpers

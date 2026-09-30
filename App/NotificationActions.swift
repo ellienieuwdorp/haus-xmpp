@@ -19,6 +19,8 @@ enum NotificationActionCopy {
     /// A reply typed while this version waited to upgrade the previous version's data: kept, and queued once the app
     /// finished updating in front. Shown under the rejected notice's identifier, which it replaces.
     static let replySavedForUpgrade = "Open Haus XMPP to finish updating; your reply was saved."
+    /// A saved reply found more than a day after it was typed: dropped instead of sent late.
+    static let savedReplyExpired = "A reply you typed before the update was not sent because it is more than a day old."
     /// One content-free notice for every rejected reply; posting again replaces it.
     static let replyRejectedIdentifier = "e-rejected"
 }
@@ -284,6 +286,9 @@ enum NotificationActionHandler {
 
     /// The same notice, for a reply kept until the upgrade.
     static func postSavedReply() async { await postReplyNotice(NotificationActionCopy.replySavedForUpgrade) }
+
+    /// The same notice, for saved replies dropped as too old.
+    static func postExpiredSavedReply() async { await postReplyNotice(NotificationActionCopy.savedReplyExpired) }
 
     private static func postReplyNotice(_ body: String) async {
         let content = UNMutableNotificationContent()

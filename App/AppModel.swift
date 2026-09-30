@@ -627,6 +627,8 @@ final class AppModel {
     func signOut() async {
         let account = accountID
         await forgetAccount()
+        // Replies saved before the upgrade for this account are not sent after it signed out.
+        if !account.isEmpty { try? snapshots?.removeSavedReplies(of: account) }
         uploads.forget(account: account)
         selectAccount("")
         preferences.removeObject(forKey: "lastAccount")
@@ -3006,13 +3008,15 @@ extension AppModel: NotificationActionEnvironment {
     /// After the upgrade, with the account loaded: every reply kept by `saveReplyForUpgrade` goes into the outbox as
     /// the notification action would have queued it (and is sent once the session is ready, trust rules unchanged),
     /// under the ID it was saved with, so a launch killed before the file was removed does not queue it twice. One
-    /// that no longer resolves to this account's message is reported like a rejected reply.
+    /// older than a day is dropped with a notice; one that no longer resolves to this account's message is reported
+    /// like a rejected reply.
     private func queueSavedReplies() async {
         guard let snapshots, let store, !snapshots.savedReplies.isEmpty else { return }
         guard let account = authorizedNotificationAccount() else { return }
         let result = await snapshots.queueSavedReplies(account: account, store: store, now: Date()) { try await self.enqueueReply($0) }
-        Self.syncLog.notice("replies saved before the upgrade: \(result.queued, privacy: .public) queued, \(result.rejected, privacy: .public) rejected")
-        if result.rejected > 0 { await NotificationActionCenter.postRejectedReply() }
+        Self.syncLog.notice("replies saved before the upgrade: \(result.queued, privacy: .public) queued, \(result.rejected, privacy: .public) rejected, \(result.expired, privacy: .public) too old")
+        if result.expired > 0 { await NotificationActionCenter.postExpiredSavedReply() }
+        else if result.rejected > 0 { await NotificationActionCenter.postRejectedReply() }
         startOutbox()
     }
 
