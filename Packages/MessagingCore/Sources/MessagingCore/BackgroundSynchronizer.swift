@@ -58,7 +58,8 @@ public struct BackgroundSynchronizer: Sendable {
         guard FileManager.default.fileExists(atPath: databaseURL.path) else {
             throw BackgroundSynchronizationError.identityUnavailable
         }
-        let store = try MessageStore(url: databaseURL)
+        // Never migrates: a store an older build wrote waits, untouched, for the app to snapshot and upgrade it.
+        let store = try MessageStore(url: databaseURL, schema: .currentOnly)
         do {
             // Busy means wait a bounded time, then defer: never expire another process's lock or reset its attempts.
             progress?.enter(.leaseWait)
