@@ -80,8 +80,12 @@ final class AppModel {
     private(set) var upgradeState: UpgradeState = .none
     /// The snapshot of the previous version's data, while one exists: Settings offers restoring or deleting it.
     private(set) var previousVersionBackup: PreUpgradeSnapshot.Manifest?
-    /// A backup folder is there but its manifest cannot be read: Settings offers only deleting it.
+    /// A backup folder is there but its manifest cannot be read, and no readable backup: Settings offers only
+    /// deleting it.
     private(set) var previousVersionBackupUnreadable = false
+    /// This version's copy kept at an earlier restore is there but cannot be read (the upgrade left it for Delete
+    /// backup). Restoring again replaces it, and says so first.
+    private(set) var keptCopyUnreadable = false
     /// A restore owns the store's lease until it closes the store; a background transition meanwhile must not release it.
     @ObservationIgnored private var restoringData = false
     @ObservationIgnored private var snapshots: PreUpgradeSnapshot?
@@ -745,7 +749,8 @@ final class AppModel {
     private func readBackupStatus() {
         guard let snapshots else { return }
         previousVersionBackup = snapshots.manifest
-        previousVersionBackupUnreadable = snapshots.status(.previousVersion) == .unreadable
+        keptCopyUnreadable = snapshots.status(.thisVersion) == .unreadable
+        previousVersionBackupUnreadable = snapshots.status(.previousVersion) == .unreadable || (previousVersionBackup == nil && keptCopyUnreadable)
     }
 
     /// The lease was held by another process (a notification run): try again shortly, never taking it by force.

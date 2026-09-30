@@ -428,6 +428,29 @@ import XMPPProtocol
                        ["\(fresh.id)|account", "\(fresh.id)|push|\(typed)"])
     }
 
+    /// This version's kept copy cannot be read: the restored state says so instead of calling it gone, and neither
+    /// upgrading the restored data nor the next launch deletes it; only Delete backup does.
+    func testAnUnreadableKeptCopyIsReportedAndOnlyDeleteBackupRemovesIt() async throws {
+        let (installation, _, _) = try await restoredInstallation()
+        let locations = installation.locations
+        let keptDatabase = locations.folder(.thisVersion).appending(path: "messages.sqlite")
+        try Data("{ not a manifest".utf8).write(to: locations.folder(.thisVersion).appending(path: "snapshot.json"))
+        guard case let .restored(state) = try await installation.snapshots.open(upgradeAllowed: true, now: now) else { return XCTFail("reopened") }
+        XCTAssertNil(state.thisVersion)
+        XCTAssertTrue(state.thisVersionUnreadable)
+
+        let result = try await installation.snapshots.upgradeRestoredData(now: now)
+        XCTAssertEqual(result, .done)
+        guard case let .ready(store) = try await installation.snapshots.open(upgradeAllowed: true, now: now) else { return XCTFail("not upgraded") }
+        try await store.close()
+        XCTAssertEqual(installation.snapshots.status(.thisVersion), .unreadable)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: keptDatabase.path))
+
+        try installation.snapshots.delete()
+        XCTAssertEqual(installation.snapshots.status(.thisVersion), .absent)
+        XCTAssertEqual(try PreUpgradeSnapshot.keychainAccounts(service: locations.keychain.snapshotService), [])
+    }
+
     // MARK: Replies saved before the upgrade
 
     /// A launch killed after queueing the saved replies but before removing their file queues them again on the next

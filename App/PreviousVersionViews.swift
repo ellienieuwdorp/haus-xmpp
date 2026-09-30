@@ -61,7 +61,8 @@ struct UpgradeBlockingView: View {
     /// The previous version has not opened the restored data yet.
     private func restoredView(_ state: PreUpgradeSnapshot.RestoredState) -> some View {
         let taken = state.restored.takenAt.formatted(date: .abbreviated, time: .shortened)
-        let kept = state.thisVersion == nil ? "" : " This version kept its own data, so you can still return to it."
+        let kept = state.thisVersion != nil ? " This version kept its own data, so you can still return to it."
+            : state.thisVersionUnreadable ? " This version kept a copy of its own data, but that copy can’t be read, so you cannot return to it." : ""
         return blocking(symbol: "arrow.uturn.backward.circle.fill", tint: Color(appearance.accent.tint), title: "Previous version’s data restored",
                         body: "Your messages, keys and settings are back as they were on \(taken), in the previous version’s format.\(kept)\n\nInstall the previous version of Haus XMPP now. Until then this version stays offline and leaves the data alone.") {
             Button { choosing = true } label: { Text("Continue With This Version").frame(maxWidth: .infinity, minHeight: 44) }
@@ -119,6 +120,9 @@ struct UpgradeChoiceView: View {
     private var intro: String {
         let start = ran ? "The previous version of Haus XMPP used your data after the restore on \(restoredAt)."
                         : "You restored the previous version’s data on \(restoredAt)."
+        if state.thisVersionUnreadable {
+            return start + " This version kept a copy of its own data from then, but it can’t be read, so it cannot be put back. It stays on this iPhone until you delete the backup in Settings."
+        }
         guard state.thisVersion != nil else { return start + " This version’s own data from then is no longer on this iPhone." }
         return start + " This version kept its own data from that moment. Choose which to continue with."
     }
@@ -130,8 +134,9 @@ struct UpgradeChoiceView: View {
 
     private var upgradeCaption: String {
         let start = ran ? "Continues from what the previous version left" : "Continues from the restored data"
-        guard let rolledBack else { return start + ", and this version’s own data is deleted." }
-        return start + "; messages received in \(rolledBack) after your first reply on this version stay unreadable, and this version’s own data is deleted."
+        let deleted = state.thisVersion == nil ? "" : ", and this version’s own data is deleted"
+        guard let rolledBack else { return start + deleted + "." }
+        return start + "; messages received in \(rolledBack) after your first reply on this version stay unreadable" + deleted + "."
     }
 
     var body: some View {
@@ -170,7 +175,7 @@ struct UpgradeChoiceView: View {
             Text(returnConfirmation)
         }
         .confirmationDialog(ran ? "Upgrade the previous version’s data?" : "Upgrade the restored data?", isPresented: $confirmingUpgrade, titleVisibility: .visible) {
-            Button("Delete This Version’s Data and Upgrade", role: .destructive) { run { await model.upgradeRestoredData() } }
+            Button(state.thisVersion == nil ? "Upgrade" : "Delete This Version’s Data and Upgrade", role: .destructive) { run { await model.upgradeRestoredData() } }
         } message: {
             Text(upgradeConfirmation)
         }
@@ -186,7 +191,8 @@ struct UpgradeChoiceView: View {
     }
 
     private var upgradeConfirmation: String {
-        var text = state.thisVersion == nil ? "" : "This version’s own data from \(restoredAt) is deleted. "
+        var text = state.thisVersion != nil ? "This version’s own data from \(restoredAt) is deleted. "
+            : state.thisVersionUnreadable ? "This version’s unreadable copy of its data stays until you delete the backup in Settings. " : ""
         if let rolledBack {
             text += "In \(rolledBack), messages received after your first reply on this version stay unreadable, and group sessions stay broken. "
         }
@@ -252,7 +258,9 @@ struct PreviousVersionBackupView: View {
                 } header: {
                     Text("Restoring keeps a copy of")
                 } footer: {
-                    Text("Both copies, including your saved password, stay on this iPhone until you open this version again and delete them. The previous version cannot delete them.")
+                    Text(model.keptCopyUnreadable
+                         ? "A copy of this version’s data kept at an earlier restore can’t be read; restoring replaces it. Both copies, including your saved password, stay on this iPhone until you open this version again and delete them. The previous version cannot delete them."
+                         : "Both copies, including your saved password, stay on this iPhone until you open this version again and delete them. The previous version cannot delete them.")
                 }
                 Section {
                     Button("Restore previous version’s data") { confirmingRestore = true }
@@ -289,6 +297,7 @@ struct PreviousVersionBackupView: View {
         if !rolledBack.isEmpty {
             text += "In \(rolledBackList), messages received after your first reply here will be unreadable on the previous version, and group chats cannot be repaired there. "
         }
+        if model.keptCopyUnreadable { text += "The unreadable copy of this version’s data from an earlier restore is replaced. " }
         return text + "This version keeps a copy of its own data. The backups stay on this iPhone until you open this version again and delete them. Then install the previous version."
     }
 }

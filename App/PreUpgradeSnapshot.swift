@@ -133,6 +133,9 @@ struct PreUpgradeSnapshot: Sendable {
         let previousVersionRan: Bool
         /// This version's data kept at the restore; nil when it is gone or cannot be read.
         let thisVersion: Manifest?
+        /// The kept copy is there but its manifest cannot be read: it cannot be put back, and only Delete backup
+        /// removes it.
+        let thisVersionUnreadable: Bool
         /// Chats where this version had sent encrypted messages after the backup: the previous version cannot read
         /// what arrived in them after the first of those.
         let rolledBack: [String]
@@ -359,12 +362,14 @@ struct PreUpgradeSnapshot: Sendable {
             ?? Restored(restoredAt: .distantPast, takenAt: .distantPast, installation: "", database: nil)
         let ran = previousVersionRan(restored)
         var kept: Manifest?
-        if case let .complete(manifest) = status(.thisVersion) { kept = manifest }
+        let keptStatus = status(.thisVersion)
+        if case let .complete(manifest) = keptStatus { kept = manifest }
         let rolledBack = kept.flatMap { _ in
             try? MessageStore.chatsWithEncryptedSends(inFileAt: locations.folder(.thisVersion).appending(path: "messages.sqlite"), since: restored.takenAt)
         } ?? []
         let sent = ran ? (try? MessageStore.chatsWithEncryptedSends(inFileAt: locations.database, since: restored.restoredAt)) ?? [] : []
-        return RestoredState(restored: restored, previousVersionRan: ran, thisVersion: kept, rolledBack: rolledBack, sentOnPreviousVersion: sent)
+        return RestoredState(restored: restored, previousVersionRan: ran, thisVersion: kept, thisVersionUnreadable: keptStatus == .unreadable,
+                             rolledBack: rolledBack, sentOnPreviousVersion: sent)
     }
 
     /// True once an older build opened the restored database. The restored file is a rollback-journal copy; the
@@ -444,6 +449,7 @@ struct PreUpgradeSnapshot: Sendable {
     /// previous build may have left it) is upgraded by the next `open`. When the previous build ran on it, its data
     /// first becomes the new `previousVersion` copy here, whatever the install path says (`open` reuses a copy taken
     /// by the same install at the same schema), so what that build wrote is in the backup before anything migrates.
+    /// A kept copy that cannot be read stays: only Delete backup removes it.
     func upgradeRestoredData(now: Date) async throws -> ChoiceResult {
         guard FileManager.default.fileExists(atPath: locations.restored.path) else { throw Failure.missing("restored data") }
         let ran = previousVersionRan((try? Self.decode(Restored.self, at: locations.restored))
@@ -457,7 +463,7 @@ struct PreUpgradeSnapshot: Sendable {
             catch { tidy(); try? await store.close(); throw error }
             try await store.close()
         }
-        try deleteCopy(.thisVersion)
+        if case .complete = status(.thisVersion) { try deleteCopy(.thisVersion) }
         try Self.removeIfPresent(locations.restored)
         return .done
     }
@@ -584,9 +590,10 @@ struct PreUpgradeSnapshot: Sendable {
     }
 
     /// Finishes or discards what a crash left: a copy moved aside whose replacement never arrived is put back, a
-    /// partial copy is removed, and this version's copy is removed when no restore or return is under way or in
-    /// place (a restore that stopped before its journal: the live data is that copy's successor). Keychain copies
-    /// are removed only when they belong to no complete copy and no copy is unreadable.
+    /// partial copy is removed, and this version's complete copy is removed when no restore or return is under way
+    /// or in place (a restore that stopped before its journal: the live data is that copy's successor). An
+    /// unreadable one stays for Delete backup. Keychain copies are removed only when they belong to no complete copy
+    /// and no copy is unreadable.
     func tidy() {
         let files = FileManager.default
         for copy in Copy.allCases {
@@ -597,7 +604,7 @@ struct PreUpgradeSnapshot: Sendable {
             }
             try? Self.removeIfPresent(locations.partial(copy))
         }
-        if status(.thisVersion) != .absent,
+        if case .complete = status(.thisVersion),
            ![locations.restored, locations.journal, locations.returnJournal].contains(where: { files.fileExists(atPath: $0.path) }) {
             Self.log.notice("discarding this version's copy left by a restore that did not start")
             try? Self.removeIfPresent(locations.folder(.thisVersion))

@@ -153,7 +153,7 @@ struct SettingsView: View {
                     .foregroundStyle(.primary)
                     .accessibilityIdentifier("previousVersionBackupRow")
                 } footer: {
-                    Text("A backup made before this version is on this iPhone but its description could not be read, so it cannot be restored.")
+                    Text("A backup is on this iPhone but its description could not be read, so it cannot be restored.")
                 }
                 .confirmationDialog("Delete backup?", isPresented: $confirmingDeleteUnreadable, titleVisibility: .visible) {
                     Button("Delete backup", role: .destructive) { model.deletePreviousVersionBackup() }
