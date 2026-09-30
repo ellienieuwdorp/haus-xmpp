@@ -28,7 +28,9 @@ import XMPPProtocol
             let messaging = root.appending(path: "Messaging", directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: messaging, withIntermediateDirectories: true)
             let scope = keychainID ?? id
-            let names = domains ?? ("haus.xmpp.snapshot-test.\(scope).app", "haus.xmpp.snapshot-test.\(scope).group")
+            // Preference suites named by a path inside the temporary root keep their plists there, so removing the
+            // root removes them (cfprefsd writes a removed suite back when the host app exits).
+            let names = domains ?? (root.appending(path: "app-preferences").path, root.appending(path: "group-preferences").path)
             locations = PreUpgradeSnapshot.Locations(
                 groupRoot: root, messaging: messaging,
                 appDefaults: .init(defaults: UserDefaults(suiteName: names.0)!, name: names.0),
@@ -48,43 +50,16 @@ import XMPPProtocol
 
         func remove() {
             sqlite3_close(walWriter)
-            try? FileManager.default.removeItem(at: root)
-            let preferences = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appending(path: "Preferences")
             for domain in [locations.appDefaults, locations.groupDefaults] {
                 domain.defaults.removePersistentDomain(forName: domain.name)
                 domain.defaults.synchronize()
-                try? FileManager.default.removeItem(at: preferences.appending(path: domain.name + ".plist"))
             }
+            try? FileManager.default.removeItem(at: root)
             let names = locations.keychain
             for service in [names.accountService, names.pushService, names.snapshotService] {
                 SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service] as CFDictionary)
             }
         }
-    }
-
-    /// cfprefsd writes an empty plist back for a removed suite some time after the test removed it, so every test
-    /// class run sweeps its own suites' files (from this run and any earlier one) before, and after until cfprefsd
-    /// has stopped writing them back.
-    @discardableResult
-    private static func removeTestPreferenceFiles() -> Int {
-        let preferences = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appending(path: "Preferences")
-        var removed = 0
-        for name in (try? FileManager.default.contentsOfDirectory(atPath: preferences.path)) ?? []
-        where name.hasPrefix("haus.xmpp.snapshot-test.") && name.hasSuffix(".plist") {
-            if (try? FileManager.default.removeItem(at: preferences.appending(path: name))) != nil { removed += 1 }
-        }
-        return removed
-    }
-
-    override class func setUp() { super.setUp(); removeTestPreferenceFiles() }
-    override class func tearDown() {
-        var quiet = 0
-        for _ in 0..<50 where quiet < 5 {
-            CFPreferencesSynchronize(kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
-            quiet = removeTestPreferenceFiles() == 0 ? quiet + 1 : 0
-            Thread.sleep(forTimeInterval: 0.2)
-        }
-        super.tearDown()
     }
 
     private func makeInstallation(_ installation: String = "/install/A") throws -> Installation {
