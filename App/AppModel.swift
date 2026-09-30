@@ -75,6 +75,13 @@ final class AppModel {
     /// Addresses whose avatar was checked on this session; a PEP notify clears its entry.
     @ObservationIgnored private var avatarChecked: Set<String> = []
     @ObservationIgnored private var storageRoot: URL?
+    /// Where this launch stands with the previous version's data (docs/development/pre-upgrade-snapshot.md). Anything
+    /// but `.none` replaces the app with a blocking screen and keeps storage closed.
+    private(set) var upgradeState: UpgradeState = .none
+    /// The snapshot of the previous version's data, while one exists: Settings offers restoring or deleting it.
+    private(set) var previousVersionBackup: PreUpgradeSnapshot.Manifest?
+    @ObservationIgnored private var snapshots: PreUpgradeSnapshot?
+    @ObservationIgnored private var openingStorage = false
     private(set) var accountID = "" {
         didSet {
             if accountID != oldValue {
@@ -242,8 +249,8 @@ final class AppModel {
     init() {
         // The saved account is known before storage opens, so the first frame already carries the account avatar
         // and the Chats stack is not rebuilt (its identity is the account) once `prepare()` reads the same value.
-        AccountIdentityMigration.migratePreferences(preferences)
-        accountID = preferences.string(forKey: "lastAccount") ?? ""
+        // Read in normal form but not rewritten: preferences change only after the pre-upgrade snapshot (`openStorage`).
+        accountID = preferences.string(forKey: "lastAccount").map { JID.normalizedBare($0) ?? $0 } ?? ""
         NotificationActionCenter.shared.handler = { [weak self] request, budget in
             await self?.performNotificationAction(request, budget: budget) ?? .rejected
         }
@@ -289,12 +296,48 @@ final class AppModel {
             Task { @MainActor in self?.networkBecameReachable() }
         }
         pathMonitor.start(queue: .global(qos: .utility))
+        await openStorage()
+    }
+
+    /// Opens storage and the saved account. Before anything the previous build wrote is migrated or rewritten, the
+    /// snapshot of it is taken; while that is not possible (a launch into the background, the lease held elsewhere, a
+    /// failed snapshot, restored data waiting for the previous build) storage stays closed and nothing connects.
+    private func openStorage(withoutSnapshot: Bool = false) async {
+        guard store == nil, !openingStorage else { return }
+        openingStorage = true
+        defer { openingStorage = false }
         do {
             let directory = try await SharedStorage.directory(testSessionID: testSessionID, migrate: true)
             storageRoot = directory
+            let opened: MessageStore
+            if testSessionID == nil, let locations = PreUpgradeSnapshot.Locations.production(messaging: directory) {
+                let snapshots = PreUpgradeSnapshot(locations: locations)
+                self.snapshots = snapshots
+                if upgradeState != .restoring { upgradeState = .preparing }
+                let opening = try await snapshots.open(upgradeAllowed: UIApplication.shared.applicationState != .background,
+                                                       withoutSnapshot: withoutSnapshot, now: Date())
+                previousVersionBackup = snapshots.manifest
+                switch opening {
+                case .ready(let store): opened = store
+                case .restored(let restored): upgradeState = .restored(restored); return
+                case .busy: upgradeState = .waitingForLease; retryOpeningStorage(); return
+                case .deferred: upgradeState = .deferred; return
+                case .snapshotFailed(let reason):
+                    Self.syncLog.error("pre-upgrade snapshot failed: \(reason, privacy: .public)")
+                    upgradeState = .snapshotFailed(reason); return
+                }
+                if let backup = previousVersionBackup {
+                    Self.syncLog.notice("pre-upgrade snapshot present: taken \(backup.takenAt, privacy: .public) schema \(backup.database.schemaVersion, privacy: .public)")
+                }
+                upgradeState = .none
+            } else {
+                opened = try MessageStore(url: directory.appending(path: "messages.sqlite"))
+            }
+            // Rewrites the previous build's spellings; only now that its data is copied.
+            AccountIdentityMigration.migratePreferences(preferences)
             AccountIdentityMigration.moveFiles(directory: directory, defaults: preferences)
             if testSessionID == nil { PushRegistrationState.normalizeSavedAccounts() }
-            store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
+            store = opened
             storageDirectory = directory
             let uploader = AttachmentUploader(scope: testSessionID ?? "primary")
             uploader.onFinish = { [weak self] taskID, succeeded in Task { @MainActor in await self?.uploadFinished(taskID: taskID, succeeded: succeeded) } }
@@ -322,6 +365,7 @@ final class AppModel {
                 }
             }
         } catch {
+            if upgradeState != .none { upgradeState = .none }
             self.error = "Could not open local message storage."
             hasLoadedChats = true // nothing more will arrive; show the empty state behind the alert rather than a blank screen
         }
@@ -546,7 +590,7 @@ final class AppModel {
 
     /// Desired state: connected whenever the app is in front with an account whose password still works.
     private var wantsConnection: Bool {
-        foreground && !quiescing && !userWantsOffline && !authenticationRejected && sessionAccount != nil && !isDemo
+        foreground && !quiescing && !userWantsOffline && !authenticationRejected && sessionAccount != nil && !isDemo && upgradeState == .none
     }
 
     /// The single place that turns "should be connected" into a `connect()` call. Every input
@@ -664,6 +708,7 @@ final class AppModel {
             guard let self else { return }
             if active {
                 guard self.foreground else { return }
+                self.returnedToForegroundForUpgrade()
                 self.refreshNotificationPermission()
                 self.reconnectAttempt = 0
                 self.reconcile()
@@ -679,8 +724,123 @@ final class AppModel {
         }
     }
 
+    // MARK: Previous version's data
+
+    /// A launch into the background left an upgrade for the foreground, the lease was busy, or a backup may have
+    /// expired while the app was away.
+    private func returnedToForegroundForUpgrade() {
+        if store == nil, upgradeState == .deferred || upgradeState == .waitingForLease {
+            Task { await openStorage() }
+        }
+        if let snapshots, upgradeState == .none, snapshots.expireIfDue(now: Date()) {
+            Self.syncLog.notice("pre-upgrade snapshot expired and was deleted")
+            previousVersionBackup = nil
+        }
+    }
+
+    /// The lease was held by another process (a notification run): try again shortly, never taking it by force.
+    private func retryOpeningStorage() {
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, self.upgradeState == .waitingForLease, self.foreground else { return }
+            await self.openStorage()
+        }
+    }
+
+    /// Blocking screen: "Try again" after a failed snapshot.
+    func retryUpgrade() async {
+        guard store == nil, case .snapshotFailed = upgradeState else { return }
+        upgradeState = .preparing
+        await openStorage()
+    }
+
+    /// Blocking screen, after its confirmation: migrate although the snapshot could not be taken.
+    func upgradeWithoutBackup() async {
+        guard store == nil, case .snapshotFailed = upgradeState else { return }
+        upgradeState = .preparing
+        await openStorage(withoutSnapshot: true)
+    }
+
+    /// Restored screen, after its confirmation: a fresh snapshot of the restored data replaces the old one, then the
+    /// data is upgraded again.
+    func upgradeAgain() async {
+        guard store == nil, case .restored = upgradeState, let snapshots else { return }
+        do { try snapshots.leaveRestoredState() } catch { self.error = "The previous backup could not be removed. Try again."; return }
+        previousVersionBackup = nil
+        upgradeState = .preparing
+        await openStorage()
+    }
+
+    /// Settings, after its confirmation.
+    func deletePreviousVersionBackup() {
+        guard let snapshots else { return }
+        do { try snapshots.delete(); previousVersionBackup = nil }
+        catch { self.error = "The backup could not be deleted. Try again." }
+    }
+
+    /// Settings, after its confirmation: puts the previous version's data back and stops. The transport is quiesced
+    /// as the background transition does it, but the lease is kept (or taken, never by force) so that the store is
+    /// closed and swapped under it. Afterwards nothing reconnects or migrates until the user chooses.
+    func restorePreviousVersion() async {
+        guard let snapshots, let store, upgradeState == .none, previousVersionBackup != nil else { return }
+        upgradeState = .restoring
+        reconnectTask?.cancel(); reconnectTask = nil
+        await stopTransportWork()
+        quiescing = true
+        var leased = hasTransportOwnership
+        for _ in 0..<40 where !leased {
+            do { try await store.acquireTransportOwnership(); leased = true }
+            catch MessageStoreError.transportOwnedElsewhere { try? await Task.sleep(for: .milliseconds(250)) }
+            catch { break }
+        }
+        guard leased else {
+            quiescing = false
+            upgradeState = .none
+            self.error = "A notification is being processed. Try restoring again in a moment."
+            reconcile()
+            return
+        }
+        do {
+            let restored = try await snapshots.restore(store: store, now: Date())
+            Self.syncLog.notice("restored the previous version's data taken \(restored.takenAt, privacy: .public)")
+            closeStorageAfterRestore()
+            upgradeState = .restored(restored)
+        } catch where !FileManager.default.fileExists(atPath: snapshots.locations.journal.path) {
+            // Nothing changed: the backup did not verify, or the store could not be handed over.
+            Self.syncLog.error("restore refused before any change: \(String(describing: error), privacy: .public)")
+            hasTransportOwnership = true
+            quiescing = false
+            upgradeState = .none
+            self.error = "The backup could not be restored: " + PreUpgradeSnapshot.describe(error)
+            reconcile()
+        } catch {
+            // Part way: the journal finishes it, now or on the next launch.
+            Self.syncLog.error("restore interrupted: \(String(describing: error), privacy: .public)")
+            try? await store.close()
+            closeStorageAfterRestore()
+            await openStorage()
+            if self.store == nil, upgradeState == .restoring || upgradeState == .preparing {
+                upgradeState = .snapshotFailed("Restoring did not finish. Quit and reopen Haus XMPP to finish it.")
+            }
+        }
+    }
+
+    private func closeStorageAfterRestore() {
+        generation = UUID()
+        hasTransportOwnership = false
+        sessionAccount = nil
+        pushStatus = .off
+        outboxSender = nil
+        encryption = nil
+        store = nil
+        chats = []
+        messages = []
+    }
+
     /// The scene left the foreground: from now on background sessions report this as the last time the user was here.
     func leftForeground() {
+        // Nothing the previous build left is rewritten, or added to, before its snapshot exists.
+        guard store != nil else { return }
         SharedSession.recordLeftForeground(defaults: sessionDefaults)
     }
 
@@ -690,6 +850,14 @@ final class AppModel {
     }
 
     private func quiesceTransport() async {
+        await stopTransportWork()
+        hasTransportOwnership = false
+        try? await store?.releaseTransportOwnership()
+    }
+
+    /// Everything the background transition stops, without giving up the lease: blocks new transport, crypto and
+    /// setup work, disconnects, and joins every reader, consumer, sender and UI crypto mutation.
+    private func stopTransportWork() async {
         quiescing = true
         defer { quiescing = false }
         let events = eventTask
@@ -709,8 +877,6 @@ final class AppModel {
         while activeEncryptionOperations > 0 || acquiringOwnership {
             try? await Task.sleep(for: .milliseconds(10))
         }
-        hasTransportOwnership = false
-        try? await store?.releaseTransportOwnership()
     }
 
     /// Right after the lease is ours: an extension run that held it may have posted for the chat already on screen
@@ -3072,4 +3238,19 @@ extension AppModel: NotificationActionEnvironment {
     private nonisolated static func notificationAuthorization() async -> UNAuthorizationStatus {
         await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
+}
+
+/// Where a launch stands with the previous version's data. Every state but `none` shows a blocking screen.
+enum UpgradeState: Equatable {
+    case none
+    /// Taking the snapshot and migrating (shown only if it takes a moment).
+    case preparing
+    /// Another process holds the transport lease; retried shortly.
+    case waitingForLease
+    /// Launched into the background with an upgrade due: left for the foreground.
+    case deferred
+    /// The snapshot could not be taken, so nothing was migrated.
+    case snapshotFailed(String)
+    case restoring
+    case restored(PreUpgradeSnapshot.Restored)
 }
