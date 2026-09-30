@@ -16,6 +16,9 @@ enum NotificationActionCopy {
     /// A reply the app could not attribute to the current account (signed out, switched, keychain locked before the
     /// first unlock, message gone): no chat, no account, nothing to route to.
     static let replyRejected = "Couldn't send your reply."
+    /// A reply typed while this version waited to upgrade the previous version's data: kept, and queued once the app
+    /// finished updating in front. Shown under the rejected notice's identifier, which it replaces.
+    static let replySavedForUpgrade = "Open Haus XMPP to finish updating; your reply was saved."
     /// One content-free notice for every rejected reply; posting again replaces it.
     static let replyRejectedIdentifier = "e-rejected"
 }
@@ -86,6 +89,8 @@ enum NotificationActionOutcome: String, Sendable, Equatable {
     case replyHeld
     /// Could not be saved at all; the user was told.
     case replyFailed
+    /// Kept for after the upgrade the app has not run yet (launched into the background); nothing was sent.
+    case replySavedForUpgrade
 }
 
 /// Where a reply stands once the session tried to deliver it.
@@ -268,9 +273,14 @@ enum NotificationActionHandler {
     }
 
     /// The content-free notice of a rejected reply: no title, no chat, no destination; one at a time.
-    static func postRejectedReply() async {
+    static func postRejectedReply() async { await postReplyNotice(NotificationActionCopy.replyRejected) }
+
+    /// The same notice, for a reply kept until the upgrade.
+    static func postSavedReply() async { await postReplyNotice(NotificationActionCopy.replySavedForUpgrade) }
+
+    private static func postReplyNotice(_ body: String) async {
         let content = UNMutableNotificationContent()
-        content.body = NotificationActionCopy.replyRejected
+        content.body = body
         content.categoryIdentifier = NotificationIdentity.noticeCategory
         content.sound = .default
         try? await UNUserNotificationCenter.current().add(UNNotificationRequest(

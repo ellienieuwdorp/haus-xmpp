@@ -13,8 +13,8 @@ import os
 /// Layout, in the App Group container beside `Messaging/`: `PreUpgrade/snapshot/` (the previous version's data) and
 /// `PreUpgrade/post-upgrade/` (this version's data as it was at a restore), each complete once its `snapshot.json` is
 /// written and the folder renamed from `<name>.partial/`; `restore-journal.json` and `return-journal.json` while a
-/// restore or a return runs; `restored.json` while the previous version's data is in place. Secrets stay in the
-/// Keychain as separate copy items.
+/// restore or a return runs; `restored.json` while the previous version's data is in place; `saved-replies.json`
+/// for notification replies typed before the upgrade. Secrets stay in the Keychain as separate copy items.
 struct PreUpgradeSnapshot: Sendable {
     /// The newest schema the build this one replaces can open (it refuses anything above 21). A store at or below it
     /// is copied before migrating; one above it (a migration that stopped part way) holds nothing a previous build
@@ -78,6 +78,7 @@ struct PreUpgradeSnapshot: Sendable {
         var journal: URL { directory.appending(path: PreUpgradeHold.journalName) }
         var returnJournal: URL { directory.appending(path: PreUpgradeHold.returnJournalName) }
         var restored: URL { directory.appending(path: PreUpgradeHold.restoredName) }
+        var savedReplies: URL { directory.appending(path: "saved-replies.json") }
 
         /// The app's own: the App Group container, the standard and shared preferences, the real Keychain services.
         static func production(messaging: URL) -> Locations? {
@@ -591,6 +592,27 @@ struct PreUpgradeSnapshot: Sendable {
             try? Self.keychainDelete(service: locations.keychain.snapshotService, account: key)
         }
     }
+
+    // MARK: Replies saved before the upgrade
+
+    /// A notification reply typed while the upgrade waited for the app to come to the front. Only the notification's
+    /// opaque destination and the text; queued in the outbox once the upgrade finished, never sent before.
+    struct SavedReply: Codable, Sendable, Equatable {
+        let destination: [String: String]
+        let text: String
+        let savedAt: Date
+    }
+
+    func saveReply(_ reply: SavedReply) throws {
+        try Self.createProtectedDirectory(locations.directory)
+        var saved = (try? Self.decode([SavedReply].self, at: locations.savedReplies)) ?? []
+        saved.append(reply)
+        try JSONEncoder().encode(saved).write(to: locations.savedReplies, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    var savedReplies: [SavedReply] { (try? Self.decode([SavedReply].self, at: locations.savedReplies)) ?? [] }
+
+    func removeSavedReplies() { try? Self.removeIfPresent(locations.savedReplies) }
 
     // MARK: Helpers
 

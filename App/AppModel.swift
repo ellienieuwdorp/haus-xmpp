@@ -368,6 +368,7 @@ final class AppModel {
                     sessionAccount = saved
                     if saved.push != nil { pushStatus = .on }
                     reconcile()
+                    await queueSavedReplies()
                 }
             }
         } catch {
@@ -2980,9 +2981,45 @@ extension AppModel: NotificationActionEnvironment {
     /// holds the background task and measured `budget` from the delegate callback, so `prepare()` counts against it.
     func performNotificationAction(_ request: NotificationActionRequest, budget: NotificationActionBudget) async -> NotificationActionOutcome {
         await prepare()
-        let outcome = await NotificationActionHandler.perform(request, budget: budget, in: self)
+        let outcome: NotificationActionOutcome
+        if case let .reply(text) = request.kind, await saveReplyForUpgrade(text, to: request.destination) { outcome = .replySavedForUpgrade }
+        else { outcome = await NotificationActionHandler.perform(request, budget: budget, in: self) }
         Self.syncLog.notice("notification action: \(outcome.rawValue, privacy: .public)")
         return outcome
+    }
+
+    /// A reply on a launch into the background while the previous version's data still waits for its snapshot and
+    /// upgrade (which only run in front): nothing may touch that data yet, so the text is kept and queued by
+    /// `queueSavedReplies` once the upgrade finished. False when there is no upgrade waiting or it could not be kept.
+    private func saveReplyForUpgrade(_ text: String, to destination: NotificationDestination) async -> Bool {
+        guard store == nil, let snapshots else { return false }
+        switch upgradeState {
+        case .deferred, .waitingForLease, .preparing, .snapshotFailed: break
+        default: return false
+        }
+        do { try snapshots.saveReply(.init(destination: destination.payload, text: text, savedAt: Date())) }
+        catch { return false }
+        await NotificationActionCenter.postSavedReply()
+        return true
+    }
+
+    /// After the upgrade, with the account loaded: every reply kept by `saveReplyForUpgrade` goes into the outbox as
+    /// the notification action would have queued it (and is sent once the session is ready, trust rules unchanged).
+    /// One that no longer resolves to this account's message is reported like a rejected reply.
+    private func queueSavedReplies() async {
+        guard let snapshots else { return }
+        let saved = snapshots.savedReplies
+        guard !saved.isEmpty else { return }
+        var failed = false
+        for reply in saved {
+            guard let destination = NotificationDestination(payload: reply.destination), let account = authorizedNotificationAccount(),
+                  destination.belongs(to: account), let message = await resolveNotificationMessage(destination, account: account),
+                  (try? await enqueueNotificationReply(reply.text, to: message)) != nil else { failed = true; continue }
+        }
+        snapshots.removeSavedReplies()
+        Self.syncLog.notice("queued \(saved.count, privacy: .public) replies saved before the upgrade")
+        if failed { await NotificationActionCenter.postRejectedReply() }
+        startOutbox()
     }
 
     /// The system is ending the background time. Closes the action's connection; true while the action holds or is
