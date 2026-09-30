@@ -3004,21 +3004,15 @@ extension AppModel: NotificationActionEnvironment {
     }
 
     /// After the upgrade, with the account loaded: every reply kept by `saveReplyForUpgrade` goes into the outbox as
-    /// the notification action would have queued it (and is sent once the session is ready, trust rules unchanged).
-    /// One that no longer resolves to this account's message is reported like a rejected reply.
+    /// the notification action would have queued it (and is sent once the session is ready, trust rules unchanged),
+    /// under the ID it was saved with, so a launch killed before the file was removed does not queue it twice. One
+    /// that no longer resolves to this account's message is reported like a rejected reply.
     private func queueSavedReplies() async {
-        guard let snapshots else { return }
-        let saved = snapshots.savedReplies
-        guard !saved.isEmpty else { return }
-        var failed = false
-        for reply in saved {
-            guard let destination = NotificationDestination(payload: reply.destination), let account = authorizedNotificationAccount(),
-                  destination.belongs(to: account), let message = await resolveNotificationMessage(destination, account: account),
-                  (try? await enqueueNotificationReply(reply.text, to: message)) != nil else { failed = true; continue }
-        }
-        snapshots.removeSavedReplies()
-        Self.syncLog.notice("queued \(saved.count, privacy: .public) replies saved before the upgrade")
-        if failed { await NotificationActionCenter.postRejectedReply() }
+        guard let snapshots, let store, !snapshots.savedReplies.isEmpty else { return }
+        guard let account = authorizedNotificationAccount() else { return }
+        let result = await snapshots.queueSavedReplies(account: account, store: store, now: Date()) { try await self.enqueueReply($0) }
+        Self.syncLog.notice("replies saved before the upgrade: \(result.queued, privacy: .public) queued, \(result.rejected, privacy: .public) rejected")
+        if result.rejected > 0 { await NotificationActionCenter.postRejectedReply() }
         startOutbox()
     }
 
@@ -3172,16 +3166,19 @@ extension AppModel: NotificationActionEnvironment {
     /// The composer's outbox: one queued, still unencrypted row that only the drain seals. A plain answer in the chat,
     /// as in Messages; not an XEP-0461 reply.
     func enqueueNotificationReply(_ text: String, to message: StoredMessage) async throws -> String {
+        let reply = NotificationActionHandler.replyMessage(text, id: UUID().uuidString, to: message)
+        try await enqueueReply(reply)
+        return reply.id
+    }
+
+    private func enqueueReply(_ reply: StoredMessage) async throws {
         guard let store else { throw MessageStoreError.closed }
-        let account = message.accountID, chatID = message.chatID
+        let chatID = reply.chatID
         guard isGroup(chatID) || !isLabAccount || chatID.hasSuffix("@" + accountDomain) else { throw MessageStoreError.invalidValue }
-        let reply = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chatID, senderID: account, body: text,
-                                  isOutgoing: true, encryptionProfile: "pending")
-        try XMPPClient.validateMessage(to: chatID, body: text, id: reply.id, reply: nil)
+        try XMPPClient.validateMessage(to: chatID, body: reply.body, id: reply.id, reply: nil)
         try await store.enqueueOutgoing(reply)
         await refresh()
         if actionSession?.isForeground == true { startOutbox() }
-        return reply.id
     }
 
     func deliverNotificationReply(_ messageID: String, account: String) async -> ReplyDelivery {

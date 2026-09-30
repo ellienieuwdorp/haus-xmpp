@@ -204,6 +204,13 @@ enum NotificationActionHandler {
         await environment.reportNotificationReply(failed: delivery != .sent, for: message)
         return delivery == .sent ? .replySent : .replyHeld
     }
+
+    /// The outbox row a notification reply becomes: a plain answer in the chat of `message`, queued unencrypted for
+    /// the drain to seal (not an XEP-0461 reply).
+    static func replyMessage(_ text: String, id: String, to message: StoredMessage) -> StoredMessage {
+        StoredMessage(id: id, accountID: message.accountID, chatID: message.chatID, senderID: message.accountID, body: text,
+                      isOutgoing: true, encryptionProfile: "pending")
+    }
 }
 
 /// The system's background time, behind a seam so the center's task handling is testable.

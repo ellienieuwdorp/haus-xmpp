@@ -425,7 +425,57 @@ import XMPPProtocol
                        ["\(fresh.id)|account", "\(fresh.id)|push|\(typed)"])
     }
 
+    // MARK: Replies saved before the upgrade
+
+    /// A launch killed after queueing the saved replies but before removing their file queues them again on the next
+    /// launch: each goes into the outbox once, including one saved by a build that gave replies no ID.
+    func testASavedReplyIsQueuedOnceWhenTheLaunchIsKilledBeforeItsFileIsRemoved() async throws {
+        let installation = try makeInstallation()
+        guard case let .ready(store) = try await installation.snapshots.open(upgradeAllowed: true, now: now) else { return XCTFail("not ready") }
+        let destination = try await receivedMessage(in: store)
+        let payload = try JSONSerialization.data(withJSONObject: [
+            // As the previous feature build saved it: no ID.
+            ["destination": destination.payload, "text": "Saved without an ID", "savedAt": now.timeIntervalSinceReferenceDate],
+            ["id": UUID().uuidString, "destination": destination.payload, "text": "Saved with an ID", "savedAt": now.timeIntervalSinceReferenceDate + 60],
+        ])
+        try FileManager.default.createDirectory(at: installation.locations.directory, withIntermediateDirectories: true)
+        try payload.write(to: installation.locations.savedReplies)
+
+        let enqueued = Enqueued()
+        let snapshots = installation.snapshots, later = now.addingTimeInterval(3_600)
+        let first = await snapshots.queueSavedReplies(account: account, store: store, now: later) { try await enqueued.enqueue($0, in: store) }
+        XCTAssertEqual(first, .init(queued: 2, rejected: 0))
+        XCTAssertTrue(installation.snapshots.savedReplies.isEmpty)
+        // Killed before the file was removed: the next launch finds it again.
+        try payload.write(to: installation.locations.savedReplies)
+        let second = await snapshots.queueSavedReplies(account: account, store: store, now: later) { try await enqueued.enqueue($0, in: store) }
+        XCTAssertEqual(second, .init(queued: 2, rejected: 0))
+
+        XCTAssertEqual(enqueued.bodies, ["Saved without an ID", "Saved with an ID"])
+        let queued = try await store.queuedOutgoing(accountID: account).map(\.body).sorted()
+        XCTAssertEqual(queued, ["Saved with an ID", "Saved without an ID"])
+        try await store.close()
+    }
+
     // MARK: Helpers
+
+    /// The outbox itself, noting what reached it.
+    @MainActor private final class Enqueued {
+        private(set) var bodies: [String] = []
+        func enqueue(_ message: StoredMessage, in store: MessageStore) async throws {
+            bodies.append(message.body)
+            try await store.enqueueOutgoing(message)
+        }
+    }
+
+    /// An incoming encrypted message a notification could name, and that notification's destination.
+    private func receivedMessage(in store: MessageStore) async throws -> NotificationDestination {
+        let id = UUID().uuidString
+        try await store.upsertChat(accountID: account, chatID: "bob@example.org", title: "Bob")
+        try await store.insertMessage(StoredMessage(id: id, accountID: account, chatID: "bob@example.org", senderID: "bob@example.org",
+                                                    body: "Synthetic", sentAt: now, isOutgoing: false, encryptionProfile: "legacy"))
+        return try XCTUnwrap(NotificationDestination(accountID: account, messageID: id))
+    }
 
     private var newAccountRecord: Data { Data("{\"accountID\":\"ellie@example.org\",\"security\":\"directTLS\"}".utf8) }
 

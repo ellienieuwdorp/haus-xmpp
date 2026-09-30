@@ -2,6 +2,7 @@ import Foundation
 import Security
 import CryptoKit
 import MessageStore
+import MessagingCore
 import os
 
 /// A copy of everything the previous build reads, taken by the app before a new build changes any of it, and the way
@@ -598,21 +599,76 @@ struct PreUpgradeSnapshot: Sendable {
     /// A notification reply typed while the upgrade waited for the app to come to the front. Only the notification's
     /// opaque destination and the text; queued in the outbox once the upgrade finished, never sent before.
     struct SavedReply: Codable, Sendable, Equatable {
+        /// The outbox message ID it is queued under, fixed when it is saved: queueing it again (the app was killed
+        /// before the file was removed) finds it already queued and never sends it twice.
+        let id: String
         let destination: [String: String]
         let text: String
         let savedAt: Date
+
+        init(id: String = UUID().uuidString, destination: [String: String], text: String, savedAt: Date) {
+            self.id = id; self.destination = destination; self.text = text; self.savedAt = savedAt
+        }
+
+        /// A reply saved before replies carried an ID gets one derived from its contents, the same on every launch.
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            destination = try container.decode([String: String].self, forKey: .destination)
+            text = try container.decode(String.self, forKey: .text)
+            savedAt = try container.decode(Date.self, forKey: .savedAt)
+            if let id = try container.decodeIfPresent(String.self, forKey: .id) { self.id = id; return }
+            var hash = SHA256()
+            for (key, value) in destination.sorted(by: { $0.key < $1.key }) { hash.update(data: Data("\(key)\u{0}\(value)\u{0}".utf8)) }
+            hash.update(data: Data("\(savedAt.timeIntervalSinceReferenceDate)\u{0}\(text)".utf8))
+            var b = Array(hash.finalize().prefix(16))
+            b[6] = (b[6] & 0x0F) | 0x50 // a name-based UUID's version and variant bits
+            b[8] = (b[8] & 0x3F) | 0x80
+            id = UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15])).uuidString
+        }
+    }
+
+    /// What `queueSavedReplies` did with the replies of one account.
+    struct SavedReplyResult: Sendable, Equatable {
+        /// Queued now, or found already queued by an earlier launch.
+        var queued = 0
+        /// Another account's, or no longer resolving to one of this account's messages, or refused by the outbox.
+        var rejected = 0
     }
 
     func saveReply(_ reply: SavedReply) throws {
         try Self.createProtectedDirectory(locations.directory)
         var saved = (try? Self.decode([SavedReply].self, at: locations.savedReplies)) ?? []
         saved.append(reply)
-        try JSONEncoder().encode(saved).write(to: locations.savedReplies, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try writeSavedReplies(saved)
     }
 
     var savedReplies: [SavedReply] { (try? Self.decode([SavedReply].self, at: locations.savedReplies)) ?? [] }
 
-    func removeSavedReplies() { try? Self.removeIfPresent(locations.savedReplies) }
+    /// Queues every saved reply through `enqueue` (the outbox, trust and encryption rules unchanged) as a reply to
+    /// the message its notification named, under the reply's own ID, then removes the file. A reply whose ID the
+    /// store already holds was queued by a launch killed before the removal and is not queued again. `account` is
+    /// the signed-in account; every other account's reply is rejected.
+    func queueSavedReplies(account: String, store: MessageStore, now: Date,
+                           enqueue: @Sendable (StoredMessage) async throws -> Void) async -> SavedReplyResult {
+        var result = SavedReplyResult()
+        for reply in savedReplies {
+            guard let destination = NotificationDestination(payload: reply.destination), destination.belongs(to: account) else {
+                result.rejected += 1; continue
+            }
+            if (try? await store.message(accountID: account, messageID: reply.id)) != nil { result.queued += 1; continue }
+            guard let message = try? await destination.resolve(accountID: account, store: store),
+                  (try? await enqueue(NotificationActionHandler.replyMessage(reply.text, id: reply.id, to: message))) != nil else {
+                result.rejected += 1; continue
+            }
+            result.queued += 1
+        }
+        try? Self.removeIfPresent(locations.savedReplies)
+        return result
+    }
+
+    private func writeSavedReplies(_ replies: [SavedReply]) throws {
+        try JSONEncoder().encode(replies).write(to: locations.savedReplies, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
 
     // MARK: Helpers
 
