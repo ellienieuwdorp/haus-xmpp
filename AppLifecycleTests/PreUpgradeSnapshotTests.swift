@@ -63,19 +63,27 @@ import XMPPProtocol
     }
 
     /// cfprefsd writes an empty plist back for a removed suite some time after the test removed it, so every test
-    /// class run sweeps its own suites' files (from this run and any earlier one) before and after.
-    private static func removeTestPreferenceFiles() {
+    /// class run sweeps its own suites' files (from this run and any earlier one) before, and after until cfprefsd
+    /// has stopped writing them back.
+    @discardableResult
+    private static func removeTestPreferenceFiles() -> Int {
         let preferences = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appending(path: "Preferences")
+        var removed = 0
         for name in (try? FileManager.default.contentsOfDirectory(atPath: preferences.path)) ?? []
         where name.hasPrefix("haus.xmpp.snapshot-test.") && name.hasSuffix(".plist") {
-            try? FileManager.default.removeItem(at: preferences.appending(path: name))
+            if (try? FileManager.default.removeItem(at: preferences.appending(path: name))) != nil { removed += 1 }
         }
+        return removed
     }
 
     override class func setUp() { super.setUp(); removeTestPreferenceFiles() }
     override class func tearDown() {
-        CFPreferencesSynchronize(kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
-        removeTestPreferenceFiles()
+        var quiet = 0
+        for _ in 0..<50 where quiet < 5 {
+            CFPreferencesSynchronize(kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+            quiet = removeTestPreferenceFiles() == 0 ? quiet + 1 : 0
+            Thread.sleep(forTimeInterval: 0.2)
+        }
         super.tearDown()
     }
 
