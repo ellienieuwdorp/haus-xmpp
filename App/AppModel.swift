@@ -226,8 +226,9 @@ final class AppModel {
     /// and reconnect. Observed: the composer's attach button follows it.
     private var uploadService: XMPPUploadService?
     private var uploads: UploadServiceMemory { UploadServiceMemory(defaults: preferences) }
-    /// True from the start of a connection's setup until its upload discovery settled.
+    /// True from the start of a connection's setup until its upload discovery settled; false when a resume skipped it.
     @ObservationIgnored private var uploadDiscoveryPending = false
+    private var serverProfiles: ServerProfileMemory { ServerProfileMemory(defaults: preferences) }
     private var files: AttachmentFiles? { storageDirectory.map { AttachmentFiles(directory: $0, account: accountID) } }
     @ObservationIgnored private var uploader: AttachmentUploader?
     @ObservationIgnored private var storageDirectory: URL?
@@ -629,6 +630,7 @@ final class AppModel {
         // Replies saved before the upgrade for this account are not sent after it signed out.
         if !account.isEmpty { try? snapshots?.removeSavedReplies(of: account) }
         uploads.forget(account: account)
+        serverProfiles.forget(account: account)
         selectAccount("")
         preferences.removeObject(forKey: "lastAccount")
     }
@@ -1498,7 +1500,7 @@ final class AppModel {
                 setupTask = Task { [weak self] in
                     guard let self else { return }
                     await self.runConnectionSetup(account: account, client: client, encryption: encryption, store: store,
-                                                  identityExists: identityExists, token: token)
+                                                  identityExists: identityExists, resumed: resumed, token: token)
                     if self.generation == token { self.setupTask = nil }
                 }
             case .disconnected(let reason):
@@ -1735,14 +1737,30 @@ final class AppModel {
     /// Builds `ConnectionSetup`'s operations from this model's calls and applies its events under the
     /// generation fence. Every operation runs inside the setup task; none spawns an unstructured task.
     private func runConnectionSetup(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore,
-                                    identityExists: Bool, token: UUID) async {
-        uploadDiscoveryPending = true
+                                    identityExists: Bool, resumed: Bool, token: UUID) async {
+        let profiles = serverProfiles
+        // The stream this connection runs on, as the SM snapshot names it; nil without resumable stream management.
+        let streamID: @Sendable () async -> String? = {
+            try? await StreamPersistence(store: store, accountID: account, encryption: encryption).load()?.streamID
+        }
+        let memory = profiles.memory(account: account, stream: resumed ? await streamID() : nil,
+                                     uploadsFresh: uploads.isFresh(account: account))
+        let setup = ConnectionSetup(identityExists: identityExists, resumed: resumed, memory: memory)
+        if resumed {
+            Self.syncLog.notice("resume reuses features=\(setup.skipsFeatures, privacy: .public) carbons=\(setup.skipsCarbons, privacy: .public) uploads=\(setup.skipsUploads, privacy: .public)")
+        }
+        uploadDiscoveryPending = !setup.skipsUploads
         let operations = ConnectionSetup.Operations(
             features: { [domain = accountDomain] in
-                try await ConnectionSetup.discoverFeatures(server: { try await client.discoveryFeatures(for: domain) },
-                                                           account: { try await client.discoveryFeatures() })
+                let found = try await ConnectionSetup.discoverFeatures(server: { try await client.discoveryFeatures(for: domain) },
+                                                                       account: { try await client.discoveryFeatures() })
+                if found.complete { profiles.discovered(found.features, account: account) }
+                return found.features
             },
-            enableCarbons: { try await client.setCarbonsEnabled() },
+            enableCarbons: {
+                try await client.setCarbonsEnabled()
+                profiles.carbonsEnabled(account: account, stream: await streamID())
+            },
             discoverUploads: { [weak self] in
                 // Optional: a server without XEP-0363 just has no attach button. Only a completed answer changes
                 // what the button remembers; a discovery that throws keeps the last one.
@@ -1769,7 +1787,7 @@ final class AppModel {
                 }
             },
             retryPending: { try? await encryption.retryPendingIncoming(account: account, transport: client) })
-        await ConnectionSetup(identityExists: identityExists).run(operations: operations) { [weak self] event in
+        await setup.run(operations: operations) { [weak self] event in
             await self?.applySetupEvent(event, account: account, client: client, token: token)
         }
     }

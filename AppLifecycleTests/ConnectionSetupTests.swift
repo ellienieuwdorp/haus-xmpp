@@ -48,8 +48,9 @@ final class ConnectionSetupTests: XCTestCase {
             retryPending: { await recorder.mark("retry") })
     }
 
-    private func run(_ operations: ConnectionSetup.Operations, recorder: Recorder, identityExists: Bool = true) async {
-        await ConnectionSetup(identityExists: identityExists).run(operations: operations) { await recorder.record($0) }
+    private func run(_ operations: ConnectionSetup.Operations, recorder: Recorder, identityExists: Bool = true,
+                     resumed: Bool = false, memory: ConnectionSetup.Memory = .init()) async {
+        await ConnectionSetup(identityExists: identityExists, resumed: resumed, memory: memory).run(operations: operations) { await recorder.record($0) }
     }
 
     /// Waits up to five seconds for `event`; false when it never came.
@@ -185,8 +186,10 @@ final class ConnectionSetupTests: XCTestCase {
         var operations = operations(recorder)
         operations.features = {
             await recorder.mark("features")
-            return try await ConnectionSetup.discoverFeatures(server: { [ConnectionSetup.carbonsFeature, "urn:xmpp:ping"] },
-                                                              account: { [ConnectionSetup.archiveFeature] })
+            let found = try await ConnectionSetup.discoverFeatures(server: { [ConnectionSetup.carbonsFeature, "urn:xmpp:ping"] },
+                                                                   account: { [ConnectionSetup.archiveFeature] })
+            XCTAssertTrue(found.complete)
+            return found.features
         }
         await run(operations, recorder: recorder)
         let marks = await recorder.marks
@@ -197,29 +200,32 @@ final class ConnectionSetupTests: XCTestCase {
         XCTAssertEqual(events.last, .settled)
     }
 
-    /// A refused or unanswered account disco no longer fails the connection: setup tries the walk (a refused archive
-    /// query ends only that archive) without carbons.
-    func testAccountFeatureQueryFailingDegradesAndServerQueryFailingOnlyDropsCarbons() async throws {
-        let recorder = Recorder()
-        var refusedOperations = operations(recorder)
-        refusedOperations.features = {
+    /// A refused or unanswered account disco no longer fails the connection: setup goes on with the features it knew,
+    /// or, knowing none, tries the walk (a refused archive query ends only that archive) without carbons.
+    func testAccountFeatureQueryFailingFallsBackToKnownFeaturesAndServerQueryFailingOnlyDropsCarbons() async throws {
+        let refused: @Sendable () async throws -> Set<String> = {
             try await ConnectionSetup.discoverFeatures(server: { [ConnectionSetup.carbonsFeature] },
-                                                       account: { throw XMPPIQError.stanza(condition: "service-unavailable") })
+                                                       account: { throw XMPPIQError.stanza(condition: "service-unavailable") }).features
         }
-        await run(refusedOperations, recorder: recorder)
-        let events = await recorder.events
-        XCTAssertTrue(events.contains(.degraded(step: "server features", detail: "service-unavailable")))
-        XCTAssertTrue(events.contains(.ready))
-        XCTAssertEqual(events.last, .settled)
-        let refusedMarks = await recorder.marks
-        XCTAssertTrue(refusedMarks.contains("walk-end"))
-        XCTAssertFalse(refusedMarks.contains("carbons"))
+        for known in [nil, Set([ConnectionSetup.carbonsFeature, ConnectionSetup.archiveFeature])] {
+            let recorder = Recorder()
+            var operations = operations(recorder)
+            operations.features = refused
+            await run(operations, recorder: recorder, memory: ConnectionSetup.Memory(features: known))
+            let events = await recorder.events
+            XCTAssertTrue(events.contains(.degraded(step: "server features", detail: "service-unavailable")))
+            XCTAssertTrue(events.contains(.ready))
+            XCTAssertEqual(events.last, .settled)
+            let marks = await recorder.marks
+            XCTAssertTrue(marks.contains("walk-end"))
+            XCTAssertEqual(marks.contains("carbons"), known != nil, "carbons only when the known features list them")
+        }
 
         let tolerant = Recorder()
         var tolerantOperations = operations(tolerant)
         tolerantOperations.features = {
             try await ConnectionSetup.discoverFeatures(server: { throw XMPPIQError.stanza(condition: "service-unavailable") },
-                                                       account: { [ConnectionSetup.archiveFeature] })
+                                                       account: { [ConnectionSetup.archiveFeature] }).features
         }
         await run(tolerantOperations, recorder: tolerant)
         let tolerantEvents = await tolerant.events
@@ -284,6 +290,59 @@ final class ConnectionSetupTests: XCTestCase {
         let marks = await recorder.marks
         XCTAssertLessThan(marks.firstIndex(of: "opened") ?? .max, marks.firstIndex(of: "uploads") ?? -1)
         XCTAssertLessThan(marks.firstIndex(of: "uploads") ?? .max, marks.firstIndex(of: "returned") ?? -1)
+    }
+
+    /// A resumed stream skips only what survives it, and only when the memory says so; identity, rejoins and the walk
+    /// always run, and a fresh bind never skips.
+    func testResumeSkipsOnlyWhatSurvivesTheStream() async {
+        let fresh = ConnectionSetup.Memory(features: [ConnectionSetup.carbonsFeature, ConnectionSetup.archiveFeature],
+                                           featuresFresh: true, carbonsOnStream: true, uploadsFresh: true)
+        var stale = fresh
+        stale.featuresFresh = false; stale.carbonsOnStream = false; stale.uploadsFresh = false
+        let always = ["initialize", "rejoin", "walk-end", "retry"]
+        let cases: [(resumed: Bool, memory: ConnectionSetup.Memory, skipped: Set<String>)] = [
+            (true, fresh, ["features", "carbons", "uploads"]),
+            (true, stale, []),
+            (false, fresh, []),
+        ]
+        for (resumed, memory, skipped) in cases {
+            let recorder = Recorder()
+            await run(operations(recorder), recorder: recorder, resumed: resumed, memory: memory)
+            let marks = Set(await recorder.marks)
+            for step in ["features", "carbons", "uploads"] {
+                XCTAssertEqual(marks.contains(step), !skipped.contains(step), "\(step) resumed=\(resumed) fresh=\(memory.featuresFresh)")
+            }
+            XCTAssertTrue(Set(always).isSubset(of: marks))
+            let events = await recorder.events
+            XCTAssertEqual(events.last, .settled)
+        }
+    }
+
+    /// Carbons survive only on the stream they were enabled on: a stream the extension bound in between has another ID.
+    func testServerProfileMemoryTrustsCarbonsOnlyOnTheirStreamAndFeaturesForADay() throws {
+        let suite = "haus.xmpp.tests.profile.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let profiles = ServerProfileMemory(defaults: defaults)
+        let account = "alice@example.org", now = Date()
+        XCTAssertEqual(profiles.memory(account: account, stream: "s1", uploadsFresh: false, now: now), ConnectionSetup.Memory())
+
+        profiles.discovered([ConnectionSetup.archiveFeature], account: account, now: now)
+        profiles.carbonsEnabled(account: account, stream: "s1")
+        let same = profiles.memory(account: account, stream: "s1", uploadsFresh: true, now: now.addingTimeInterval(60))
+        XCTAssertEqual(same, ConnectionSetup.Memory(features: [ConnectionSetup.archiveFeature], featuresFresh: true, carbonsOnStream: true, uploadsFresh: true))
+        XCTAssertFalse(profiles.memory(account: account, stream: "s2", uploadsFresh: false, now: now).carbonsOnStream)
+        XCTAssertFalse(profiles.memory(account: account, stream: nil, uploadsFresh: false, now: now).carbonsOnStream)
+        XCTAssertFalse(profiles.memory(account: "bob@example.org", stream: "s1", uploadsFresh: false, now: now).carbonsOnStream)
+
+        let old = profiles.memory(account: account, stream: "s1", uploadsFresh: false, now: now.addingTimeInterval(ServerProfileMemory.featuresLifetime + 1))
+        XCTAssertEqual(old.features, [ConnectionSetup.archiveFeature], "kept as the fallback for a failed discovery")
+        XCTAssertFalse(old.featuresFresh)
+
+        profiles.carbonsEnabled(account: account, stream: nil)
+        XCTAssertFalse(profiles.memory(account: account, stream: "s1", uploadsFresh: false, now: now).carbonsOnStream)
+        profiles.forget(account: account)
+        XCTAssertNil(profiles.memory(account: account, stream: "s1", uploadsFresh: false, now: now).features)
     }
 
     func testInlineIdentityPathSkipsInitialize() async {

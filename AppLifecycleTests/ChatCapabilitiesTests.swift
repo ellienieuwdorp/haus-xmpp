@@ -75,9 +75,14 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(memory.load(account: account), service, "a relaunch restores it")
         XCTAssertNil(memory.load(account: "bob@example.org"), "per account")
 
-        current = memory.settle(account: account, previous: current, discovery: .failure(XMPPClientError.connectionClosed))
+        XCTAssertTrue(memory.isFresh(account: account))
+        XCTAssertFalse(memory.isFresh(account: account, now: .now.addingTimeInterval(UploadServiceMemory.lifetime + 1)))
+        current = memory.settle(account: account, previous: current, discovery: .failure(XMPPClientError.connectionClosed),
+                                now: .now.addingTimeInterval(UploadServiceMemory.lifetime + 1))
         XCTAssertEqual(current, service, "a thrown discovery keeps the last answer")
         XCTAssertEqual(memory.load(account: account), service)
+        XCTAssertFalse(memory.isFresh(account: account, now: .now.addingTimeInterval(UploadServiceMemory.lifetime + 1)),
+                       "and does not count as a fresh one")
 
         current = memory.settle(account: account, previous: current, discovery: .success(nil))
         XCTAssertNil(current, "a completed answer without uploads is definitive")
@@ -87,6 +92,7 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(memory.load(account: account)?.maximumFileSize, nil)
         memory.forget(account: account)
         XCTAssertNil(memory.load(account: account), "sign-out clears it")
+        XCTAssertFalse(memory.isFresh(account: account))
     }
 
     func testRetainedCiphertextForcesReviewOnlyForThatChat() {

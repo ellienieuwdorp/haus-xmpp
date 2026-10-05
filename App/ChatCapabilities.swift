@@ -149,8 +149,17 @@ struct EncryptionAttention: Equatable {
 /// is there from the first frame after a relaunch or reconnect. Only a completed discovery changes it.
 struct UploadServiceMemory {
     let defaults: UserDefaults
+    /// How long a completed discovery stands for a resumed stream (`ConnectionSetup.Memory.uploadsFresh`).
+    static let lifetime: TimeInterval = 24 * 60 * 60
 
     private static func key(_ account: String) -> String { "uploadService.\(account)" }
+    private static func checkedKey(_ account: String) -> String { "uploadServiceCheckedAt.\(account)" }
+
+    /// A discovery completed within `lifetime`, whatever it found.
+    func isFresh(account: String, now: Date = .now) -> Bool {
+        guard !account.isEmpty, let at = defaults.object(forKey: Self.checkedKey(account)) as? Date else { return false }
+        return at <= now && now.timeIntervalSince(at) < Self.lifetime
+    }
 
     func load(account: String) -> XMPPUploadService? {
         guard !account.isEmpty, let saved = defaults.dictionary(forKey: Self.key(account)),
@@ -160,8 +169,9 @@ struct UploadServiceMemory {
 
     /// A thrown discovery (a dropped stream, a timeout) keeps what was known. A completed one replaces it,
     /// including a completed "none offered", which stands until the next completed answer.
-    func settle(account: String, previous: XMPPUploadService?, discovery: Result<XMPPUploadService?, any Error>) -> XMPPUploadService? {
+    func settle(account: String, previous: XMPPUploadService?, discovery: Result<XMPPUploadService?, any Error>, now: Date = .now) -> XMPPUploadService? {
         guard case .success(let found) = discovery, !account.isEmpty else { return previous }
+        defaults.set(now, forKey: Self.checkedKey(account))
         if let found {
             var saved: [String: Any] = ["jid": found.jid]
             if let limit = found.maximumFileSize { saved["maximumFileSize"] = limit }
@@ -170,7 +180,10 @@ struct UploadServiceMemory {
         return found
     }
 
-    func forget(account: String) { defaults.removeObject(forKey: Self.key(account)) }
+    func forget(account: String) {
+        defaults.removeObject(forKey: Self.key(account))
+        defaults.removeObject(forKey: Self.checkedKey(account))
+    }
 }
 
 extension AppModel {
