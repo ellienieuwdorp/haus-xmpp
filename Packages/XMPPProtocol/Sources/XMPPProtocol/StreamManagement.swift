@@ -4,6 +4,8 @@ import os
 /// One outbound stanza slot. Every journaled stanza consumes a sequence number because the server
 /// counts it in `h`, but only messages and presence keep bytes: an IQ is never replayed on resume.
 public struct XMPPStreamJournalEntry: Codable, Sendable, Equatable {
+    /// `iq` is every slot that is never replayed: IQs, and hint-only `no-store` messages (chat states), which owe
+    /// nothing after a resume. The raw value stays `iq` so a build that predates hints still reads the journal.
     public enum Kind: String, Codable, Sendable { case message, presence, iq }
     public let sequence: UInt64
     public let kind: Kind
@@ -160,7 +162,7 @@ actor StreamManagement {
                 // In normal form: a session saved by a build that kept the typed capitals is still this account's.
                 guard let account = OMEMOWire.bareJID(accountID), OMEMOWire.bareJID(saved.accountID) == account else { throw XMPPStreamManagementError.invalidState }
                 valid = Self.validates(saved, account: account)
-                if !valid { Self.log.error("Saved stream session invalid; binding fresh") }
+                if valid { loaded = Self.withHintSlots(saved) } else { Self.log.error("Saved stream session invalid; binding fresh") }
             }
             snapshot = loaded; active = false; completed = []; session = UUID()
             received = loaded?.inboundHandled ?? 0
@@ -188,6 +190,33 @@ actor StreamManagement {
                saved.journal.allSatisfy({ $0.kind == .iq || $0.xml != nil }),
                replayable.reduce(0, { $0 + ($1.xml?.utf8.count ?? 0) }) <= maxReplayableBytes else { return false }
         return true
+    }
+
+    /// A hint-only `no-store` message (a chat state) as an unreplayed slot. Builds before hint slots journaled chat
+    /// states as messages with an ID, which no replay policy can vouch for: one typing notification refused the resume.
+    private static func withHintSlots(_ saved: XMPPStreamManagementSnapshot) -> XMPPStreamManagementSnapshot {
+        var next = saved
+        next.journal = saved.journal.map { entry in
+            guard entry.kind == .message, let xml = entry.xml, xml.contains(hintsNamespace),
+                  let node = try? stanza(xml), isHintOnly(node) else { return entry }
+            return XMPPStreamJournalEntry(sequence: entry.sequence, kind: .iq, xml: nil, messageID: nil)
+        }
+        return next
+    }
+
+    static let hintsNamespace = "urn:xmpp:hints"
+
+    /// A message the server must not store that carries nothing but chat states and hints: nothing to deliver late.
+    static func isHintOnly(_ node: XMLNode) -> Bool {
+        node.name == "message" && node.children.contains { $0.name == "no-store" && $0.namespace == hintsNamespace }
+            && node.children.allSatisfy { $0.namespace == hintsNamespace || $0.namespace == XMPPChatState.namespace }
+    }
+
+    private static func stanza(_ xml: String) throws -> XMLNode {
+        var parser = XMLStreamFramer()
+        let frames = try parser.feed(Data(("<stream:stream xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams'>" + xml).utf8))
+        guard frames.count == 2, case .element(let node) = frames.last else { throw XMPPStreamManagementError.invalidState }
+        return node
     }
 
     private static let log = Logger(subsystem: "haus.xmpp.ios", category: "xmpp")
@@ -220,15 +249,15 @@ actor StreamManagement {
         } catch { await gate.leave(); throw error }
     }
 
-    /// Journals one outbound stanza before its socket write. IQs occupy a sequence slot without bytes.
+    /// Journals one outbound stanza before its socket write. IQs and hint-only messages occupy a sequence slot
+    /// without bytes or an ID.
     func record(_ xml: String) async throws {
         await gate.enter()
         do {
             guard active, var next = snapshot else { await gate.leave(); return }
-            var parser = XMLStreamFramer()
-            let frames = try parser.feed(Data(("<stream:stream xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams'>" + xml).utf8))
-            guard frames.count == 2, case .element(let node) = frames.last else { throw XMPPStreamManagementError.invalidState }
-            guard node.namespace == "jabber:client", let kind = XMPPStreamJournalEntry.Kind(rawValue: node.name) else { throw XMPPStreamManagementError.invalidState }
+            let node = try Self.stanza(xml)
+            guard node.namespace == "jabber:client", var kind = XMPPStreamJournalEntry.Kind(rawValue: node.name) else { throw XMPPStreamManagementError.invalidState }
+            if Self.isHintOnly(node) { kind = .iq }
             let bytes = kind == .iq ? nil : xml
             guard next.journal.count < Self.maxJournalEntries, next.outboundSent < UInt64.max else { throw XMPPStreamManagementError.journalFull }
             if bytes != nil {

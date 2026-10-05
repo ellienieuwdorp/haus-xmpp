@@ -58,6 +58,26 @@ struct StreamPersistenceTests {
         }
     }
 
+    /// A chat state is a hint, not a message we must deliver: it never asks the replay policy (which can vouch only
+    /// for durable rows) and is never replayed. One typing notification used to turn the next connect into a bind.
+    @Test func chatStatesNeverRefuseResumption() async throws {
+        let (store, adapter) = try await fixture()
+        let state = try XMPPChatState.xml(.composing, to: "bob@localhost", id: "typing")
+        let sm = StreamManagement(adapter)
+        _ = try await sm.restore(accountID: "alice@localhost")
+        try await sm.enable(accountID: "alice@localhost", fullJID: "alice@localhost/device", streamID: "opaque")
+        try await sm.record(state)
+        #expect(try await StreamManagement(adapter).restore(accountID: "alice@localhost") != nil)
+
+        // A session saved before hint slots journaled the same state as a message with an ID.
+        let current = try #require(try await store.streamManagementState(accountID: "alice@localhost")).revision
+        let legacy = snapshot(revision: current + 1, journal: [.init(sequence: 1, xml: state, messageID: "typing")])
+        _ = try await store.saveStreamManagement(accountID: "alice@localhost", expectedRevision: current, data: JSONEncoder().encode(legacy))
+        let resumed = StreamManagement(adapter)
+        #expect(try await resumed.restore(accountID: "alice@localhost") != nil)
+        #expect(try await resumed.acknowledge(0, resumed: true).isEmpty)
+    }
+
     @Test func plaintextAndUnknownCiphertextNeverResume() async throws {
         let (_, adapter) = try await fixture()
         let plain = XMPPStreamJournalEntry(sequence: 1, xml: "<message to='bob@localhost' id='x'><body>clear</body></message>", messageID: "x")
