@@ -247,6 +247,104 @@ private struct GroupTransport: OMEMOGroupTransport {
         XCTAssertEqual(before, after)
     }
 
+    /// In a room, as in a direct chat: a blocked member device's message is a quiet placeholder in the room on arrival, and
+    /// its room message kept for review before the block drains to the same outcome on the next retry.
+    func testBlockedMemberDeviceLeavesQuietRoomPlaceholdersAndNothingPending() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let room = RoomFixture(), roomID = "private@conference.localhost"
+        let at = GroupTransport(base: f.aTransport, room: room), bt = GroupTransport(base: f.bTransport, room: room)
+        try await f.aStore.upsertChat(accountID: f.alice, chatID: roomID, title: "Private group")
+        var messages: [XMPPEncryptedGroupMessage] = []
+        for (index, body) in ["Before the block", "After the block"].enumerated() {
+            let outgoing = StoredMessage(id: "group-\(index)", accountID: f.alice, chatID: roomID, senderID: f.alice, body: body, isOutgoing: true)
+            _ = try await f.aStore.enqueueOutgoing(outgoing)
+            try await f.a.prepareGroupMessage(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
+            let prepared = try await f.a.outgoingGroupEnvelope(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
+            messages.append(try XMPPEncryptedGroupMessage(id: outgoing.id, room: roomID, occupant: roomID + "/alice", sender: f.alice,
+                                                          envelope: prepared.envelope, hasFallbackBody: true))
+        }
+        let bobsView = try await f.b.overview(account: f.bob, peer: f.alice).devices
+        let author = try XCTUnwrap(bobsView.first { $0.jid == f.alice && $0.active })
+        try await f.b.setTrust(account: f.bob, deviceID: author.id, trust: .undecided)
+        do { _ = try await f.b.receiveGroup(account: f.bob, message: messages[0], transport: bt); XCTFail("Trust undecided") }
+        catch { XCTAssertEqual(error as? OMEMOError, .trustRequired) }
+        try await f.b.setTrust(account: f.bob, deviceID: author.id, trust: .rejected)
+        let arrived = try await f.b.receiveGroup(account: f.bob, message: messages[1], transport: bt)
+        XCTAssertFalse(arrived)
+        let durable = try await f.b.hasDurableGroupDisposition(account: f.bob, message: messages[1])
+        XCTAssertTrue(durable)
+        try await f.b.retryPendingIncoming(account: f.bob, transport: bt)
+        let pending = try await f.bStore.pendingEncryptedIncoming(accountID: f.bob)
+        XCTAssertTrue(pending.isEmpty)
+        let rows = try await f.bStore.messages(accountID: f.bob, chatID: roomID)
+        XCTAssertEqual(rows.map(\.unreadableReason), [.rejectedDevice, .rejectedDevice])
+        XCTAssertTrue(rows.allSatisfy { $0.body.isEmpty && $0.senderID == f.alice })
+        let alerts = try await f.bStore.pendingNotifications(accountID: f.bob).candidates
+        XCTAssertTrue(alerts.isEmpty)
+    }
+
+    /// An approved member's room message kept only while the room is read waits for that read, not for a review: however
+    /// many rows strangers already hold, only the account ceiling bounds it, so it still decrypts in a room Bob only reads.
+    func testApprovedMemberStillDecryptsOnceStrangersFillTheirShare() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let room = RoomFixture(), roomID = "private@conference.localhost"
+        let at = GroupTransport(base: f.aTransport, room: room), bt = GroupTransport(base: f.bTransport, room: room)
+        for index in 0..<MessageStore.pendingLimits.strangerCeiling {
+            try await f.bStore.retainEncryptedIncoming(accountID: f.bob, sender: f.bob, digest: "filler-\(index)", wire: Data([1]))
+        }
+        let outgoing = StoredMessage(id: "group-one", accountID: f.alice, chatID: roomID, senderID: f.alice, body: "Read the room first", isOutgoing: true)
+        try await f.aStore.upsertChat(accountID: f.alice, chatID: roomID, title: "Private group")
+        _ = try await f.aStore.enqueueOutgoing(outgoing)
+        try await f.a.prepareGroupMessage(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
+        let prepared = try await f.a.outgoingGroupEnvelope(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
+        let incoming = try XMPPEncryptedGroupMessage(id: outgoing.id, room: roomID, occupant: roomID + "/alice", sender: f.alice,
+                                                     envelope: prepared.envelope, hasFallbackBody: true)
+        let inserted = try await f.b.receiveGroup(account: f.bob, message: incoming, transport: bt)
+        XCTAssertTrue(inserted)
+        let rows = try await f.bStore.messages(accountID: f.bob, chatID: roomID)
+        XCTAssertEqual(rows.map(\.body), [outgoing.body])
+        XCTAssertEqual(rows.map(\.unreadableReason), [nil])
+    }
+
+    /// A room row kept before room messages recorded their `<body/>` hint drains like a direct one once its member device
+    /// is blocked: a quiet placeholder, not a message that silently vanishes.
+    func testBlockedMemberRowKeptBeforeTheBodyHintStillLeavesAPlaceholder() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let room = RoomFixture(), roomID = "private@conference.localhost"
+        let at = GroupTransport(base: f.aTransport, room: room), bt = GroupTransport(base: f.bTransport, room: room)
+        try await f.aStore.upsertChat(accountID: f.alice, chatID: roomID, title: "Private group")
+        let outgoing = StoredMessage(id: "group-old", accountID: f.alice, chatID: roomID, senderID: f.alice, body: "Kept long ago", isOutgoing: true)
+        _ = try await f.aStore.enqueueOutgoing(outgoing)
+        try await f.a.prepareGroupMessage(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
+        let prepared = try await f.a.outgoingGroupEnvelope(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
+        let message = try XMPPEncryptedGroupMessage(id: outgoing.id, room: roomID, occupant: roomID + "/alice", sender: f.alice,
+                                                    envelope: prepared.envelope, hasFallbackBody: true)
+        let bobsView = try await f.b.overview(account: f.bob, peer: f.alice).devices
+        let author = try XCTUnwrap(bobsView.first { $0.jid == f.alice && $0.active })
+        try await f.b.setTrust(account: f.bob, deviceID: author.id, trust: .undecided)
+        do { _ = try await f.b.receiveGroup(account: f.bob, message: message, transport: bt); XCTFail("Trust undecided") }
+        catch { XCTAssertEqual(error as? OMEMOError, .trustRequired) }
+        // Rewrite the kept row as an older build wrote it: no hint in the retained stanza.
+        let retained = try await f.bStore.pendingEncryptedIncoming(accountID: f.bob, sender: f.alice)
+        let kept = try XCTUnwrap(retained.first)
+        var json = try XCTUnwrap(try JSONSerialization.jsonObject(with: kept.wire) as? [String: Any])
+        var stanza = try XCTUnwrap(json["message"] as? [String: Any])
+        stanza["hasFallbackBody"] = nil
+        json["message"] = stanza
+        let replaced = try await f.bStore.replacePendingEncryptedIncomingContext(accountID: f.bob, sender: f.alice, digest: kept.digest,
+            expectedWire: kept.wire, wire: try JSONSerialization.data(withJSONObject: json))
+        XCTAssertTrue(replaced)
+        try await f.b.setTrust(account: f.bob, deviceID: author.id, trust: .rejected)
+        try await f.b.retryPendingIncoming(account: f.bob, transport: bt)
+        let pending = try await f.bStore.pendingEncryptedIncoming(accountID: f.bob)
+        XCTAssertTrue(pending.isEmpty)
+        let rows = try await f.bStore.messages(accountID: f.bob, chatID: roomID)
+        XCTAssertEqual(rows.map(\.unreadableReason), [.rejectedDevice])
+    }
+
     /// Carol's second installation joins a room Bob already knows and sends before Bob has seen that device.
     private func carolSecondDeviceMessage(_ f: ServiceFixture, room: RoomFixture, roomID: String, carol: String,
                                           provenance: XMPPGroupProvenance = .liveOccupant) async throws -> (XMPPEncryptedGroupMessage, String) {

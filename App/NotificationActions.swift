@@ -16,6 +16,11 @@ enum NotificationActionCopy {
     /// A reply the app could not attribute to the current account (signed out, switched, keychain locked before the
     /// first unlock, message gone): no chat, no account, nothing to route to.
     static let replyRejected = "Couldn't send your reply."
+    /// A reply typed while this version waited to upgrade the previous version's data: kept, and queued once the app
+    /// finished updating in front. Shown under the rejected notice's identifier, which it replaces.
+    static let replySavedForUpgrade = "Open Haus XMPP to finish updating; your reply was saved."
+    /// A saved reply found more than a day after it was typed: dropped instead of sent late.
+    static let savedReplyExpired = "A reply you typed before the update was not sent because it is more than a day old."
     /// One content-free notice for every rejected reply; posting again replaces it.
     static let replyRejectedIdentifier = "e-rejected"
 }
@@ -86,6 +91,8 @@ enum NotificationActionOutcome: String, Sendable, Equatable {
     case replyHeld
     /// Could not be saved at all; the user was told.
     case replyFailed
+    /// Kept for after the upgrade the app has not run yet (launched into the background); nothing was sent.
+    case replySavedForUpgrade
 }
 
 /// Where a reply stands once the session tried to deliver it.
@@ -199,6 +206,13 @@ enum NotificationActionHandler {
         await environment.reportNotificationReply(failed: delivery != .sent, for: message)
         return delivery == .sent ? .replySent : .replyHeld
     }
+
+    /// The outbox row a notification reply becomes: a plain answer in the chat of `message`, queued unencrypted for
+    /// the drain to seal (not an XEP-0461 reply).
+    static func replyMessage(_ text: String, id: String, to message: StoredMessage) -> StoredMessage {
+        StoredMessage(id: id, accountID: message.accountID, chatID: message.chatID, senderID: message.accountID, body: text,
+                      isOutgoing: true, encryptionProfile: "pending")
+    }
 }
 
 /// The system's background time, behind a seam so the center's task handling is testable.
@@ -268,9 +282,17 @@ enum NotificationActionHandler {
     }
 
     /// The content-free notice of a rejected reply: no title, no chat, no destination; one at a time.
-    static func postRejectedReply() async {
+    static func postRejectedReply() async { await postReplyNotice(NotificationActionCopy.replyRejected) }
+
+    /// The same notice, for a reply kept until the upgrade.
+    static func postSavedReply() async { await postReplyNotice(NotificationActionCopy.replySavedForUpgrade) }
+
+    /// The same notice, for saved replies dropped as too old.
+    static func postExpiredSavedReply() async { await postReplyNotice(NotificationActionCopy.savedReplyExpired) }
+
+    private static func postReplyNotice(_ body: String) async {
         let content = UNMutableNotificationContent()
-        content.body = NotificationActionCopy.replyRejected
+        content.body = body
         content.categoryIdentifier = NotificationIdentity.noticeCategory
         content.sound = .default
         try? await UNUserNotificationCenter.current().add(UNNotificationRequest(

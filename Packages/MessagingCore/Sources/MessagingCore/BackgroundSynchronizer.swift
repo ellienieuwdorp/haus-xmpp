@@ -1,23 +1,34 @@
 import Foundation
+import os
 import MessageStore
 import OMEMO
 import XMPPProtocol
 
 /// Loaded from protected local account storage, never from an untrusted push payload.
 public struct BackgroundAccount: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
-    public let host: String
-    public let port: UInt16
+    /// The endpoint the app last connected through; discovery runs only if it fails and the route allows it.
+    public let route: XMPPRoute
     public let domain: String
     public let username: String
     public let password: String
+    /// PLAIN is refused once the account has authenticated with SCRAM.
+    public let requiresSCRAM: Bool
     public let labCertificateAuthority: Data?
+    /// This installation's resource for the account; nil keeps a random one for this run.
+    public let resource: String?
+    /// The subscription a fresh session re-enables (`BackgroundSession.enablePush`); nil when push is not settled.
+    public let push: XMPPPushConfiguration?
+    /// The last time the app was in front, announced as XEP-0319 idle when the account shares last seen.
+    public let leftForeground: Date?
     public var accountID: String { username + "@" + domain }
 
-    public init(host: String, port: UInt16 = 5223, domain: String, username: String,
-                password: String, labCertificateAuthority: Data? = nil) {
-        self.host = host; self.port = port; self.domain = domain
-        self.username = username; self.password = password
+    public init(route: XMPPRoute, domain: String, username: String, password: String, requiresSCRAM: Bool = false,
+                labCertificateAuthority: Data? = nil, resource: String? = nil,
+                push: XMPPPushConfiguration? = nil, leftForeground: Date? = nil) {
+        self.route = route; self.domain = domain
+        self.username = username; self.password = password; self.requiresSCRAM = requiresSCRAM
         self.labCertificateAuthority = labCertificateAuthority
+        self.resource = resource; self.push = push; self.leftForeground = leftForeground
     }
     public var description: String { "BackgroundAccount(<redacted>)" }
     public var debugDescription: String { description }
@@ -25,6 +36,8 @@ public struct BackgroundAccount: Sendable, CustomStringConvertible, CustomDebugS
 
 public enum BackgroundSynchronizationError: Error, Sendable, Equatable {
     case identityUnavailable, deadlineExceeded, invalidTimeBudget, connectionEnded
+    /// The server refused or did not answer a query on the account's own archive: the run cannot claim catch-up.
+    case ownArchiveIncomplete
 }
 
 /// An extension performs one bounded catch-up under the same kernel lease as the app.
@@ -45,7 +58,8 @@ public struct BackgroundSynchronizer: Sendable {
         guard FileManager.default.fileExists(atPath: databaseURL.path) else {
             throw BackgroundSynchronizationError.identityUnavailable
         }
-        let store = try MessageStore(url: databaseURL)
+        // Never migrates: a store an older build wrote waits, untouched, for the app to snapshot and upgrade it.
+        let store = try MessageStore(url: databaseURL, schema: .currentOnly)
         do {
             // Busy means wait a bounded time, then defer: never expire another process's lock or reset its attempts.
             progress?.enter(.leaseWait)
@@ -59,25 +73,51 @@ public struct BackgroundSynchronizer: Sendable {
             let client = XMPPClient(labCertificateAuthority: account.labCertificateAuthority)
             try await client.configureStreamManagement(persistence: StreamPersistence(
                 store: store, accountID: account.accountID, encryption: encryption))
+            if let resource = account.resource { try await client.configureResource(resource) }
+            let preferences = try await store.accountPreferences(accountID: account.accountID)
+            try await client.setAvailability(BackgroundSession.availability(sharesLastSeen: preferences.lastSeen,
+                                                                            leftForeground: account.leftForeground))
             try await store.recoverInterruptedSubmissions(accountID: account.accountID)
             // Taken before the timer starts, so it is never later than the real deadline.
             let deadline = ContinuousClock.now + timeBudget - waited
             let caughtUp = CatchUpMark()
             try await runBackgroundWork(timeBudget: timeBudget - waited, operation: {
-                try await client.connect(host: account.host, port: account.port, domain: account.domain,
-                                         username: account.username, password: account.password)
+                try await client.connect(route: account.route, domain: account.domain, username: account.username,
+                                         password: account.password, requireSCRAM: account.requiresSCRAM)
                 try Task.checkCancellation()
+                // A fresh bind replaced the session the server pushed for: it must push again and receive room traffic.
+                let fresh = await !client.sessionResumed
+                BackgroundSession.log.notice("background session resumed=\(!fresh, privacy: .public)")
+                async let pushEnabled: Void = fresh ? BackgroundSession.enablePush(account.push, client: client) : ()
+                // Direct messages first: the rejoins start once the own archive is walked (the first room page commits)
+                // or the walk ends, so a long room walk cannot use up their time. Best effort: they never fail the run.
+                let ownArchiveWalked = CatchUpMark()
+                @Sendable func rejoin() async -> Set<String> {
+                    while await !ownArchiveWalked.reached {
+                        guard (try? await Task.sleep(for: .milliseconds(50))) != nil else { return [] }
+                    }
+                    return await BackgroundSession.joinRooms(account: account.accountID, client: client, encryption: encryption,
+                                                             store: store, within: readSyncTimeout(until: deadline))
+                }
+                async let joined = fresh ? rejoin() : []
                 // No identity initialization, trust acceptance, queued-message preparation or
                 // outbox drain. Resumption may replay only previously authorized exact bytes.
-                try await ArchiveSynchronizer(store: store).synchronize(
-                    account: account.accountID, client: client, encryption: encryption)
+                let outcome = try await ArchiveSynchronizer(store: store).synchronize(
+                    account: account.accountID, client: client, encryption: encryption,
+                    progress: { if $0.archive != nil { await ownArchiveWalked.reach() } })
+                await ownArchiveWalked.reach()
+                // The own archive holds the direct messages a push is about; without its newest entry the run shows the
+                // fallback, and the next run or the app walks it again. A refused or unreachable room does not fail it.
+                guard outcome.ownArchiveComplete else { throw BackgroundSynchronizationError.ownArchiveIncomplete }
                 await caughtUp.reach()
+                // Best effort from here: the pull, the rejoins and the enable can no longer fail a run whose walk committed.
                 // After catch-up, before the claim: chats read on another device have their pointers moved, which
                 // removes their candidates. Own XEP-0333 markers were applied by the walk and the live consumer.
                 // Best effort within what is left of the budget: a slow or lost server leaves the run a success.
                 if let timeout = readSyncTimeout(until: deadline) {
                     try await ReadSync(store: store).pull(account: account.accountID, client: client, encryption: encryption, timeout: timeout)
                 }
+                _ = await (pushEnabled, joined)
             }, consume: {
                 try await consumeUntilDisconnect(after: caughtUp) {
                     try await consumeBackgroundEvents(client.events, processor: InboundProcessor(encryption: encryption, client: client, account: account.accountID))
@@ -94,6 +134,79 @@ public struct BackgroundSynchronizer: Sendable {
             throw error
         }
     }
+}
+
+/// What a session opened away from the foreground (this extension, a notification action) owes the server. After a
+/// fresh bind the new session replaced the one the app set up: that one had push enabled and sat in the rooms.
+public enum BackgroundSession {
+    /// Rooms joined at once; the rest wait for a slot, all inside one deadline.
+    static let concurrentJoins = 8
+
+    /// Away since the app was last in front, without the timestamp for an account that does not share last seen or
+    /// when that time was never recorded. Stable across runs: a changed value is announced to every contact, and a
+    /// value that moved with each run would make every resumed run broadcast presence.
+    public static func availability(sharesLastSeen: Bool, leftForeground: Date?, now: Date = Date()) -> XMPPAvailability {
+        .away(since: sharesLastSeen ? leftForeground.map { min($0, now) } : nil)
+    }
+
+    /// XEP-0357 enable of the saved subscription on the new session. Registration with the gateway stays the app's
+    /// job; this only tells the account server where to push. A failure leaves the next app connection to repair it.
+    public static func enablePush(_ push: XMPPPushConfiguration?, client: XMPPClient) async {
+        guard let push else { return }
+        do { try await client.enablePush(push) }
+        catch { log.notice("push re-enable failed: \(String(describing: type(of: error)), privacy: .public)") }
+    }
+
+    /// Joins every stored room but `skipping` (`<history maxstanzas='0'/>`: the room archive walk covers history) so the
+    /// server routes and pushes room traffic to this session again. Concurrent and bounded by `within`; a room that
+    /// refuses, fails or has not confirmed the join by the deadline is left to the next app connection. Returns the rooms
+    /// that confirmed.
+    @discardableResult
+    public static func joinRooms(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore,
+                                 skipping: Set<String> = [], within limit: Duration?) async -> Set<String> {
+        guard let limit, let known = try? await encryption.knownGroupRooms(account: account).keys.sorted() else { return [] }
+        let rooms = known.filter { !skipping.contains($0) }
+        guard !rooms.isEmpty else { return [] }
+        let fallback = String(account.prefix { $0 != "@" })
+        var nicknames: [String: String] = [:]
+        for room in rooms { nicknames[room] = (try? await store.groupNickname(accountID: account, room: room)) ?? fallback }
+        // Each child answers with its room when joined, "" when it failed, and nil for the deadline.
+        return await withTaskGroup(of: String?.self) { group in
+            group.addTask { try? await Task.sleep(for: limit); return nil }
+            var pending = rooms[...], joined: Set<String> = [], running = 0
+            func start(_ group: inout TaskGroup<String?>) {
+                while running < concurrentJoins, let room = pending.popFirst(), let nickname = nicknames[room] {
+                    running += 1
+                    group.addTask { await join(room, nickname: nickname, client: client, within: limit) ? room : "" }
+                }
+            }
+            start(&group)
+            while running > 0, let result = await group.next() {
+                guard let room = result else { break }
+                running -= 1
+                if !room.isEmpty { joined.insert(room) }
+                start(&group)
+            }
+            group.cancelAll()
+            log.notice("rejoined \(joined.count, privacy: .public) of \(rooms.count, privacy: .public) rooms")
+            return joined
+        }
+    }
+
+    /// Joins `room` and waits until it confirms (it reflects our own presence with status 110), refuses, or `limit`
+    /// passes. A new connection's room state starts unjoined, even when a resumed session is still in the room.
+    public static func join(_ room: String, nickname: String, client: XMPPClient, within limit: Duration) async -> Bool {
+        let deadline = ContinuousClock.now + limit
+        guard (try? await client.joinGroupRoom(room, nickname: nickname)) != nil else { return false }
+        while !Task.isCancelled, ContinuousClock.now < deadline {
+            if (try? await client.groupRoomSnapshot(room))?.joined == true { return true }
+            if await client.groupRoomRefusedJoin(room) { return false }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return false
+    }
+
+    static let log = Logger(subsystem: "haus.xmpp.ios", category: "sync")
 }
 
 /// Set once the archive walk has committed: from then on the run's outcome no longer depends on the connection.

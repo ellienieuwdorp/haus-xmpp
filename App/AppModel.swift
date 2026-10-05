@@ -75,6 +75,21 @@ final class AppModel {
     /// Addresses whose avatar was checked on this session; a PEP notify clears its entry.
     @ObservationIgnored private var avatarChecked: Set<String> = []
     @ObservationIgnored private var storageRoot: URL?
+    /// Where this launch stands with the previous version's data (docs/development/pre-upgrade-snapshot.md). Anything
+    /// but `.none` replaces the app with a blocking screen and keeps storage closed.
+    private(set) var upgradeState: UpgradeState = .none
+    /// The snapshot of the previous version's data, while one exists: Settings offers restoring or deleting it.
+    private(set) var previousVersionBackup: PreUpgradeSnapshot.Manifest?
+    /// A backup folder is there but its manifest cannot be read, and no readable backup: Settings offers only
+    /// deleting it.
+    private(set) var previousVersionBackupUnreadable = false
+    /// This version's copy kept at an earlier restore is there but cannot be read (the upgrade left it for Delete
+    /// backup). Restoring again replaces it, and says so first.
+    private(set) var keptCopyUnreadable = false
+    /// A restore owns the store's lease until it closes the store; a background transition meanwhile must not release it.
+    @ObservationIgnored private var restoringData = false
+    @ObservationIgnored private var snapshots: PreUpgradeSnapshot?
+    @ObservationIgnored private var openingStorage = false
     private(set) var accountID = "" {
         didSet {
             if accountID != oldValue {
@@ -236,11 +251,14 @@ final class AppModel {
         guard let testSessionID else { return .standard }
         return UserDefaults(suiteName: "haus.xmpp.uitest." + testSessionID) ?? .standard
     }()
+    /// Where the resource and the last foreground time live: the App Group, which the extension reads too.
+    @ObservationIgnored private lazy var sessionDefaults: UserDefaults? = testSessionID == nil ? SharedSession.groupDefaults : preferences
 
     init() {
         // The saved account is known before storage opens, so the first frame already carries the account avatar
         // and the Chats stack is not rebuilt (its identity is the account) once `prepare()` reads the same value.
-        accountID = preferences.string(forKey: "lastAccount") ?? ""
+        // Read in normal form but not rewritten: preferences change only after the pre-upgrade snapshot (`openStorage`).
+        accountID = preferences.string(forKey: "lastAccount").map { JID.normalizedBare($0) ?? $0 } ?? ""
         NotificationActionCenter.shared.handler = { [weak self] request, budget in
             await self?.performNotificationAction(request, budget: budget) ?? .rejected
         }
@@ -286,10 +304,50 @@ final class AppModel {
             Task { @MainActor in self?.networkBecameReachable() }
         }
         pathMonitor.start(queue: .global(qos: .utility))
+        await openStorage()
+    }
+
+    /// Opens storage and the saved account. Before anything the previous build wrote is migrated or rewritten, the
+    /// snapshot of it is taken; while that is not possible (a launch into the background, the lease held elsewhere, a
+    /// failed snapshot, restored data waiting for the previous build) storage stays closed and nothing connects.
+    private func openStorage(withoutSnapshot: Bool = false) async {
+        guard store == nil, !openingStorage else { return }
+        openingStorage = true
+        defer { openingStorage = false }
         do {
             let directory = try await SharedStorage.directory(testSessionID: testSessionID, migrate: true)
             storageRoot = directory
-            store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
+            let opened: MessageStore
+            if testSessionID == nil {
+                // Never opened any other way: a plain open would migrate without the snapshot.
+                guard let locations = PreUpgradeSnapshot.Locations.production(messaging: directory) else { throw CocoaError(.fileReadNoPermission) }
+                let snapshots = PreUpgradeSnapshot(locations: locations)
+                self.snapshots = snapshots
+                if upgradeState != .restoring { upgradeState = .preparing }
+                // Rewrites the previous build's spellings (preferences, folders, push registrations) only once `ready`.
+                let opening = try await snapshots.open(upgradeAllowed: UIApplication.shared.applicationState != .background,
+                                                       withoutSnapshot: withoutSnapshot, now: Date())
+                readBackupStatus()
+                switch opening {
+                case .ready(let store): opened = store
+                case .restored(let restored): upgradeState = .restored(restored); return
+                case .busy: upgradeState = .waitingForLease; retryOpeningStorage(); return
+                case .deferred: upgradeState = .deferred; return
+                case .snapshotFailed(let reason):
+                    Self.syncLog.error("pre-upgrade snapshot failed: \(reason, privacy: .public)")
+                    upgradeState = .snapshotFailed(reason); return
+                }
+                if let backup = previousVersionBackup {
+                    Self.syncLog.notice("pre-upgrade snapshot present: taken \(backup.takenAt, privacy: .public) schema \(backup.database.schemaVersion, privacy: .public)")
+                }
+                upgradeState = .none
+            } else {
+                // A UI test session's own store and preferences: nothing a previous build left.
+                opened = try MessageStore(url: directory.appending(path: "messages.sqlite"))
+                AccountIdentityMigration.migratePreferences(preferences)
+                AccountIdentityMigration.moveFiles(directory: directory, defaults: preferences)
+            }
+            store = opened
             storageDirectory = directory
             let uploader = AttachmentUploader(scope: testSessionID ?? "primary")
             uploader.onFinish = { [weak self] taskID, succeeded in Task { @MainActor in await self?.uploadFinished(taskID: taskID, succeeded: succeeded) } }
@@ -314,9 +372,11 @@ final class AppModel {
                     sessionAccount = saved
                     if saved.push != nil { pushStatus = .on }
                     reconcile()
+                    await queueSavedReplies()
                 }
             }
         } catch {
+            if upgradeState != .none { upgradeState = .none }
             self.error = "Could not open local message storage."
             hasLoadedChats = true // nothing more will arrive; show the empty state behind the alert rather than a blank screen
         }
@@ -408,11 +468,13 @@ final class AppModel {
     var accountDomain: String { accountID.split(separator: "@", maxSplits: 1).last.map(String.init) ?? DevelopmentEndpoint.domain }
     var isLabAccount: Bool { Self.labDomains.contains(accountDomain) }
 
-    /// `address` is a lab username or a full `name@domain`; `host` optionally overrides the server (direct TLS on 5223).
-    func connect(username address: String, password: String, host serverHost: String? = nil, savedEndpoint: NotificationAccount? = nil) async -> Bool {
+    /// `address` is a lab username or a full `name@domain`. Without `server` the domain's SRV records choose the endpoint
+    /// (lab domains keep their direct-TLS endpoint on 5223); with one, only that endpoint is used.
+    func connect(username address: String, password: String, server: XMPPEndpoint? = nil, savedEndpoint: NotificationAccount? = nil) async -> Bool {
         let parts = address.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "@", maxSplits: 1).map(String.init)
-        let username = parts.first ?? ""
-        let requestedDomain = savedEndpoint?.domain ?? (parts.count == 2 ? parts[1].lowercased() : DevelopmentEndpoint.domain)
+        // One spelling for the account from here on (RFC 7622 normal form): the bound JID, every key and comparison.
+        let username = parts.first.flatMap(JID.normalizedLocalpart) ?? ""
+        let requestedDomain = savedEndpoint?.domain ?? (parts.count == 2 ? JID.normalizedDomainpart(parts[1]) ?? "" : DevelopmentEndpoint.domain)
         let localPattern = parts.count == 2 ? #"^[^@/\s]{1,64}$"# : #"^[a-z0-9][a-z0-9._-]{0,63}$"#
         let domainPattern = #"^(localhost|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+)$"#
         guard foreground, !quiescing, !session.isConnecting else { return false }
@@ -423,10 +485,8 @@ final class AppModel {
         }
         let manual = savedEndpoint == nil
         if manual { userWantsOffline = false; authenticationRejected = false; reconnectAttempt = 0 }
-        let host: String
-        if let savedEndpoint { host = savedEndpoint.host }
-        else if Self.labDomains.contains(requestedDomain) { host = requestedDomain == "localhost" ? DevelopmentEndpoint.host : requestedDomain }
-        else { host = (serverHost ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased().isEmpty ? requestedDomain : serverHost!.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let fixedEndpoint = server ?? (Self.labDomains.contains(requestedDomain)
+            ? XMPPEndpoint(host: requestedDomain == "localhost" ? DevelopmentEndpoint.host : requestedDomain, port: 5223, security: .directTLS) : nil)
         if let sessionAccount, sessionAccount.accountID != username + "@" + requestedDomain {
             await forgetAccount()
             guard foreground, !quiescing else { return false }
@@ -440,9 +500,10 @@ final class AppModel {
         let connection = XMPPClient(labCertificateAuthority: DevelopmentEndpoint.certificateAuthority)
         client = connection
         // Assign account before consuming events; scoped refresh rejects stale results.
-        let endpoint = savedEndpoint ?? Self.retainingPushSubscription(previous: sessionAccount, replacement: NotificationAccount(accountID: username + "@" + requestedDomain,
-            host: host, port: 5223, domain: requestedDomain,
-            username: username, password: password, push: nil))
+        // A discovered endpoint is unknown until the first connection succeeds; the record is saved only after that.
+        let endpoint = savedEndpoint ?? Self.retainingSavedState(previous: sessionAccount, replacement: NotificationAccount(accountID: username + "@" + requestedDomain,
+            host: fixedEndpoint?.host ?? "", port: fixedEndpoint?.port ?? 0, security: fixedEndpoint?.security ?? .directTLS,
+            discoversEndpoint: fixedEndpoint == nil, domain: requestedDomain, username: username, password: password, push: nil))
         let account = endpoint.accountID
         sessionAccount = endpoint
         selectAccount(account)
@@ -473,25 +534,30 @@ final class AppModel {
             try await store.recoverInterruptedSubmissions(accountID: account)
             guard generation == token else { return false }
             try await connection.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
+            try await connection.configureResource(SharedSession.resource(accountID: account, defaults: sessionDefaults))
             guard generation == token else { return false }
-            try await connection.connect(host: endpoint.host, port: endpoint.port, domain: endpoint.domain, username: username, password: password)
-            guard generation == token, accountID == endpoint.accountID,
-                  sessionAccount?.accountID == endpoint.accountID else { await connection.disconnect(); return false }
-            // Authentication has succeeded. Only now may a manually entered password replace
-            // saved credentials, so the next launch and every reconnect can sign in unattended.
-            do { try endpoint.save() }
+            let connectedSession = try await connection.connect(route: endpoint.route, domain: endpoint.domain, username: username,
+                                                                password: password, requireSCRAM: endpoint.requiresSCRAM)
+            guard generation == token, accountID == endpoint.accountID, let current = sessionAccount,
+                  current.accountID == endpoint.accountID else { await connection.disconnect(); return false }
+            // Authentication has succeeded. Only now may a manually entered password replace saved credentials, so the
+            // next launch and every reconnect can sign in unattended, first through the endpoint that just worked.
+            let connected = current.connected(connectedSession)
+            sessionAccount = connected
+            do { try connected.save() }
             catch {
                 self.error = "Connected, but the password could not be saved. You will be asked for it on the next launch."
             }
             // `.online` was emitted before `connect` returned, so this runs alongside the setup task. Not awaited: the
             // sign-in sheet closes now, and the permission prompt, APNs and the gateway round trips follow on their own.
-            startPushSetup(client: connection, session: endpoint, token: token, interactive: manual)
+            startPushSetup(client: connection, session: connected, token: token, interactive: manual)
             return true
         } catch {
             guard generation == token else { await connection.disconnect(); return false }
             let message = Self.failureMessage(for: error)
             session = .offline(reason: message)
-            if Self.isAuthenticationFailure(error) {
+            // A server that signs in another account is not retried either: the entered address needs a look.
+            if Self.isAuthenticationFailure(error) || error is XMPPIdentityError {
                 authenticationRejected = true
                 signInRequested = true
             }
@@ -503,7 +569,7 @@ final class AppModel {
 
     nonisolated static func isAuthenticationFailure(_ error: any Error) -> Bool {
         switch error as? XMPPClientError {
-        case .authenticationFailed, .authenticationUnavailable: true
+        case .authenticationFailed, .authenticationUnavailable, .authenticationDowngrade: true
         default: false
         }
     }
@@ -511,10 +577,17 @@ final class AppModel {
     nonisolated static func failureMessage(for error: any Error) -> String {
         switch error {
         case XMPPClientError.authenticationFailed: "The password was not accepted."
-        case XMPPClientError.authenticationUnavailable: "The server does not offer password sign-in over TLS."
+        case XMPPClientError.authenticationUnavailable: "The server does not offer a sign-in method this app supports."
+        case XMPPClientError.authenticationDowngrade:
+            "The server no longer offers SCRAM sign-in, which this account used before, so the password was not sent. Sign out and in again only if the server’s operator made this change."
+        case XMPPClientError.authenticationRetryable: "The server could not check the password right now."
+        case XMPPClientError.encryptionUnavailable: "The server did not offer an encrypted connection."
+        case XMPPClientError.serviceNotOffered: "This domain does not offer XMPP service."
+        case XMPPClientError.unexpectedProtocol: "The server sent a reply this app cannot accept."
         case XMPPClientError.timedOut: "The server did not respond."
         case MessageStoreError.transportOwnedElsewhere: "Another process is still using this account’s storage. Try again in a moment."
         case is CancellationError: "Connection cancelled."
+        case XMPPIdentityError.boundAccountMismatch: "The server signed in a different account than the one entered."
         default: "Could not reach the server."
         }
     }
@@ -528,7 +601,7 @@ final class AppModel {
 
     /// Desired state: connected whenever the app is in front with an account whose password still works.
     private var wantsConnection: Bool {
-        foreground && !quiescing && !userWantsOffline && !authenticationRejected && sessionAccount != nil && !isDemo
+        foreground && !quiescing && !userWantsOffline && !authenticationRejected && sessionAccount != nil && !isDemo && upgradeState == .none
     }
 
     /// The single place that turns "should be connected" into a `connect()` call. Every input
@@ -558,6 +631,8 @@ final class AppModel {
     func signOut() async {
         let account = accountID
         await forgetAccount()
+        // Replies saved before the upgrade for this account are not sent after it signed out.
+        if !account.isEmpty { try? snapshots?.removeSavedReplies(of: account) }
         uploads.forget(account: account)
         selectAccount("")
         preferences.removeObject(forKey: "lastAccount")
@@ -620,14 +695,18 @@ final class AppModel {
         if let localFailure { self.error = localFailure }
     }
 
-    /// Re-entering credentials does not revoke an existing server subscription. Keep its
-    /// identity available for background handoff and explicit logout, but never cross accounts.
-    static func retainingPushSubscription(previous: NotificationAccount?, replacement: NotificationAccount) -> NotificationAccount {
-        guard replacement.push == nil, let previous, let push = previous.push,
-              previous.accountID == replacement.accountID, previous.domain == replacement.domain,
+    /// Re-entering credentials for the same account does not revoke an existing server subscription: its identity stays
+    /// available for background handoff and explicit logout. Nor does it lift the SCRAM pin, so a server that drops SCRAM
+    /// cannot get PLAIN by making the user type the password again; only signing out does. A discovered endpoint that
+    /// worked stays the first to try. Nothing crosses accounts.
+    static func retainingSavedState(previous: NotificationAccount?, replacement: NotificationAccount) -> NotificationAccount {
+        guard let previous, previous.accountID == replacement.accountID, previous.domain == replacement.domain,
               previous.username == replacement.username else { return replacement }
-        return NotificationAccount(accountID: replacement.accountID, host: replacement.host, port: replacement.port,
-            domain: replacement.domain, username: replacement.username, password: replacement.password, push: push)
+        let keepEndpoint = replacement.discoversEndpoint && previous.discoversEndpoint && !previous.host.isEmpty
+        let endpoint = keepEndpoint ? previous : replacement
+        return NotificationAccount(accountID: replacement.accountID, host: endpoint.host, port: endpoint.port, security: endpoint.security,
+            discoversEndpoint: replacement.discoversEndpoint, requiresSCRAM: previous.requiresSCRAM || replacement.requiresSCRAM,
+            domain: replacement.domain, username: replacement.username, password: replacement.password, push: replacement.push ?? previous.push)
     }
 
     /// Serialize scene transitions; never release the lease with a suspended writer alive.
@@ -642,6 +721,7 @@ final class AppModel {
             guard let self else { return }
             if active {
                 guard self.foreground else { return }
+                self.returnedToForegroundForUpgrade()
                 self.refreshNotificationPermission()
                 self.reconnectAttempt = 0
                 self.reconcile()
@@ -649,13 +729,207 @@ final class AppModel {
                 await self.refresh()
             } else {
                 let task = UIApplication.shared.beginBackgroundTask(withName: "Finish encrypted synchronization")
+                // The session hibernates (up to days with push): it must read as away, not "Online", until it resumes.
+                if let client = self.client, self.isConnected { try? await client.setAvailability(self.awayAvailability) }
                 await self.quiesceTransport()
                 if task != .invalid { UIApplication.shared.endBackgroundTask(task) }
             }
         }
     }
 
+    // MARK: Previous version's data
+
+    /// A launch into the background left an upgrade for the foreground, or the lease was busy.
+    private func returnedToForegroundForUpgrade() {
+        if store == nil, upgradeState == .deferred || upgradeState == .waitingForLease {
+            Task { await openStorage() }
+        }
+    }
+
+    private func readBackupStatus() {
+        guard let snapshots else { return }
+        previousVersionBackup = snapshots.manifest
+        keptCopyUnreadable = snapshots.status(.thisVersion) == .unreadable
+        previousVersionBackupUnreadable = snapshots.status(.previousVersion) == .unreadable || (previousVersionBackup == nil && keptCopyUnreadable)
+    }
+
+    /// The lease was held by another process (a notification run): try again shortly, never taking it by force.
+    private func retryOpeningStorage() {
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, self.upgradeState == .waitingForLease, self.foreground else { return }
+            await self.openStorage()
+        }
+    }
+
+    /// Blocking screen: "Try again" after a failed snapshot.
+    func retryUpgrade() async {
+        guard store == nil, case .snapshotFailed = upgradeState else { return }
+        upgradeState = .preparing
+        await openStorage()
+    }
+
+    /// Blocking screen, after its confirmation: migrate although the snapshot could not be taken.
+    func upgradeWithoutBackup() async {
+        guard store == nil, case .snapshotFailed = upgradeState else { return }
+        upgradeState = .preparing
+        await openStorage(withoutSnapshot: true)
+    }
+
+    /// Restored screen, first choice (the default): this version's kept data goes back in place, with its messages
+    /// and encryption sessions; the previous build's data, if it ran, becomes the backup.
+    func returnToThisVersion() async {
+        guard store == nil, case let .restored(state) = upgradeState, let snapshots else { return }
+        upgradeState = .returning
+        do {
+            if try await snapshots.returnToThisVersion(now: Date()) == .busy {
+                upgradeState = .restored(state)
+                self.error = "A notification is being processed. Try again in a moment."
+                return
+            }
+        } catch where !FileManager.default.fileExists(atPath: snapshots.locations.returnJournal.path) {
+            // Nothing was put back.
+            Self.syncLog.error("return refused: \(String(describing: error), privacy: .public)")
+            upgradeState = .restored(snapshots.restoredState())
+            self.error = "This version’s data could not be put back: " + PreUpgradeSnapshot.describe(error)
+            return
+        } catch {
+            // Part way: its journal finishes it on this open or the next launch.
+            Self.syncLog.error("return interrupted: \(String(describing: error), privacy: .public)")
+        }
+        upgradeState = .preparing
+        await openStorage()
+    }
+
+    /// Restored screen, second choice, after its confirmation: this version's kept data is deleted and the restored
+    /// data is upgraded again, after a fresh snapshot of it (taken first when the previous version ran on it).
+    func upgradeRestoredData() async {
+        guard store == nil, case let .restored(state) = upgradeState, let snapshots else { return }
+        upgradeState = .preparing
+        do {
+            if try await snapshots.upgradeRestoredData(now: Date()) == .busy {
+                upgradeState = .restored(state)
+                self.error = "A notification is being processed. Try again in a moment."
+                return
+            }
+        } catch {
+            Self.syncLog.error("upgrade of the restored data refused: \(String(describing: error), privacy: .public)")
+            upgradeState = .restored(snapshots.restoredState())
+            self.error = "The previous version’s data could not be backed up: " + PreUpgradeSnapshot.describe(error)
+            return
+        }
+        await openStorage()
+    }
+
+    /// Chats where this version sent encrypted messages since the backup was taken: their sessions moved on, and a
+    /// restore puts back the older session state the peers no longer match.
+    func chatsWithEncryptedSendsSinceBackup() async -> [String] {
+        guard let store, let backup = previousVersionBackup, !accountID.isEmpty else { return [] }
+        return (try? await store.chatsWithEncryptedSends(accountID: accountID, since: backup.takenAt)) ?? []
+    }
+
+    /// Settings, after its confirmation.
+    func deletePreviousVersionBackup() {
+        guard let snapshots else { return }
+        do { try snapshots.delete() }
+        catch { self.error = "The backup could not be deleted. Try again." }
+        readBackupStatus()
+    }
+
+    /// Settings, after its confirmation: puts the previous version's data back and stops. The transport is quiesced
+    /// as the background transition does it, but the lease is kept (or taken, never by force) so that the store is
+    /// closed and swapped under it. Afterwards nothing reconnects or migrates until the user chooses.
+    func restorePreviousVersion() async {
+        guard let snapshots, let store, upgradeState == .none, previousVersionBackup != nil else { return }
+        upgradeState = .restoring
+        restoringData = true
+        defer { restoringData = false }
+        // Copying this version's data can take a moment; leaving the app meanwhile must not suspend it half way.
+        let background = UIApplication.shared.beginBackgroundTask(withName: "Restore previous version's data")
+        defer { if background != .invalid { UIApplication.shared.endBackgroundTask(background) } }
+        reconnectTask?.cancel(); reconnectTask = nil
+        await stopTransportWork()
+        quiescing = true
+        var leased = await store.holdsTransportOwnership
+        for _ in 0..<40 where !leased {
+            do { try await store.acquireTransportOwnership(); leased = true }
+            catch MessageStoreError.transportOwnedElsewhere { try? await Task.sleep(for: .milliseconds(250)) }
+            catch { break }
+        }
+        guard leased else {
+            hasTransportOwnership = false
+            quiescing = false
+            upgradeState = .none
+            self.error = "A notification is being processed. Try restoring again in a moment."
+            reconcile()
+            return
+        }
+        do {
+            let restored = try await snapshots.restore(store: store, now: Date())
+            Self.syncLog.notice("restored the previous version's data taken \(restored.takenAt, privacy: .public)")
+            closeStorageAfterRestore()
+            upgradeState = .restored(snapshots.restoredState())
+        } catch where !FileManager.default.fileExists(atPath: snapshots.locations.journal.path) {
+            // Nothing changed: the backup did not verify, or the store could not be handed over.
+            Self.syncLog.error("restore refused before any change: \(String(describing: error), privacy: .public)")
+            // Whatever the lease is now, not what it was: a background transition during the restore left it alone,
+            // and the restore gives it up here if the app is no longer in front.
+            hasTransportOwnership = await store.holdsTransportOwnership
+            if hasTransportOwnership, !foreground {
+                hasTransportOwnership = false
+                try? await store.releaseTransportOwnership()
+            }
+            quiescing = false
+            upgradeState = .none
+            self.error = "The backup could not be restored: " + PreUpgradeSnapshot.describe(error)
+            reconcile()
+        } catch {
+            // Part way: the journal finishes it, now or on the next launch.
+            Self.syncLog.error("restore interrupted: \(String(describing: error), privacy: .public)")
+            try? await store.close()
+            closeStorageAfterRestore()
+            await openStorage()
+            if self.store == nil, upgradeState == .restoring || upgradeState == .preparing {
+                upgradeState = .snapshotFailed("Restoring did not finish. Quit and reopen Haus XMPP to finish it.")
+            }
+        }
+    }
+
+    private func closeStorageAfterRestore() {
+        generation = UUID()
+        hasTransportOwnership = false
+        sessionAccount = nil
+        pushStatus = .off
+        outboxSender = nil
+        encryption = nil
+        store = nil
+        chats = []
+        messages = []
+    }
+
+    /// The scene left the foreground: from now on background sessions report this as the last time the user was here.
+    func leftForeground() {
+        // Nothing the previous build left is rewritten, or added to, before its snapshot exists.
+        guard store != nil else { return }
+        SharedSession.recordLeftForeground(defaults: sessionDefaults)
+    }
+
+    /// How a session this app runs away from the foreground (going to the background, a notification action) presents.
+    private var awayAvailability: XMPPAvailability {
+        BackgroundSession.availability(sharesLastSeen: accountPreferences.lastSeen, leftForeground: SharedSession.leftForeground(defaults: sessionDefaults))
+    }
+
     private func quiesceTransport() async {
+        await stopTransportWork()
+        // A restore holds the lease until it closes the store, and releases it itself if it is refused.
+        guard !restoringData else { return }
+        hasTransportOwnership = false
+        try? await store?.releaseTransportOwnership()
+    }
+
+    /// Everything the background transition stops, without giving up the lease: blocks new transport, crypto and
+    /// setup work, disconnects, and joins every reader, consumer, sender and UI crypto mutation.
+    private func stopTransportWork() async {
         quiescing = true
         defer { quiescing = false }
         let events = eventTask
@@ -675,8 +949,6 @@ final class AppModel {
         while activeEncryptionOperations > 0 || acquiringOwnership {
             try? await Task.sleep(for: .milliseconds(10))
         }
-        hasTransportOwnership = false
-        try? await store?.releaseTransportOwnership()
     }
 
     /// Right after the lease is ours: an extension run that held it may have posted for the chat already on screen
@@ -1144,7 +1416,7 @@ final class AppModel {
             Task { [weak self] in
                 defer { self?.downloading.remove(message.id) }
                 do {
-                    let secret = try encryption.openAttachmentSecret(account: account, secret: attachment.secret)
+                    let secret = try encryption.openAttachmentSecret(account: account, secret: attachment.secret, sealedAs: attachment.sealedAccount)
                     let bytes = try await AttachmentDownloader.fetch(attachment, secret: secret)
                     let destination = files.cacheURL(attachment, messageID: message.id)
                     try files.write(bytes, to: destination)
@@ -1200,11 +1472,12 @@ final class AppModel {
                 firstMessageLogged = false
                 liveStoredLogged = false
                 catchUpByArchive = [:]
-                Self.syncLog.notice("online")
+                let resumed = await client?.sessionResumed ?? false
+                Self.syncLog.notice("online resumed=\(resumed, privacy: .public)")
                 // The client answers XEP-0012 queries to our full address only while the account shares last seen.
                 await client?.setSharesLastActivity(accountPreferences.lastSeen)
                 // A resumed session gets no probe answers: keep who was available on the previous stream.
-                lastSeenTracker.beginConnection(resumed: await client?.sessionResumed ?? false)
+                lastSeenTracker.beginConnection(resumed: resumed)
                 syncOpenChatLastSeen()
                 guard generation == token else { return }
                 guard let encryption, let client, let store else { return }
@@ -1427,36 +1700,38 @@ final class AppModel {
         return isConnected && encryptionReady && groupChats[chatID]?.joined == true
     }
 
-    func joinGroup(room: String, nickname: String) async -> Bool {
+    /// The room's chat ID (its address in normal form), or nil with `error` set.
+    func joinGroup(room: String, nickname: String) async -> String? {
         guard hasTransportOwnership, foreground, !quiescing, isConnected, encryptionReady,
-              let client, let encryption, let store else { error = "Connect before joining a group."; return false }
-        let room = room.trimmingCharacters(in: .whitespacesAndNewlines)
+              let client, let encryption, let store else { error = "Connect before joining a group."; return nil }
+        // In normal form, the spelling the room's presence and messages arrive with; not a valid room address fails below.
+        let room = JID(room.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.localpart != nil && $0.resourcepart == nil ? $0.bare : nil } ?? ""
         let nickname = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
         let domain = accountDomain
         let roomAllowed = isLabAccount ? room.hasSuffix("@rooms." + domain) : (room.contains("@") && !room.hasPrefix("@") && !room.hasSuffix("@"))
         guard roomAllowed, !room.contains("/"), !room.contains(where: { $0.isWhitespace }),
-              !nickname.isEmpty else { error = isLabAccount ? "Enter a group address at rooms.\(domain) and a nickname." : "Enter a group address such as room@conference.example.org and a nickname."; return false }
+              !nickname.isEmpty else { error = isLabAccount ? "Enter a group address at rooms.\(domain) and a nickname." : "Enter a group address such as room@conference.example.org and a nickname."; return nil }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         let account = accountID, token = generation
         do {
             let overview = try await encryption.refreshGroupDevices(account: account, room: room, transport: client)
-            guard generation == token, foreground, !quiescing else { return false }
+            guard generation == token, foreground, !quiescing else { return nil }
             groupChats[room] = GroupChatState(members: overview.room.members, devices: overview.devices)
             _ = try await client.joinGroupRoom(room, nickname: nickname)
             let confirmed = try await client.groupRoomSnapshot(room)
-            guard generation == token, foreground, !quiescing else { return false }
+            guard generation == token, foreground, !quiescing else { return nil }
             preferences.set(nickname, forKey: "groupNickname.\(account).\(room)")
             groupChats[room]?.joined = confirmed?.joined == true
             try await store.upsertChat(accountID: account, chatID: room, title: String(room.prefix { $0 != "@" }))
             // On the device only, where a commit (app or extension) can tell a mention of this nickname.
             try await store.setGroupNickname(accountID: account, room: room, nickname: nickname)
-            guard generation == token else { return false }
+            guard generation == token else { return nil }
             await refresh()
-            return true
+            return room
         } catch {
             if generation == token { self.error = groupFailure(error) }
-            return false
+            return nil
         }
     }
 
@@ -1486,8 +1761,13 @@ final class AppModel {
                 await self.startOutbox()
             },
             catchUp: { progress in
-                try await ArchiveSynchronizer(store: store).synchronize(account: account, client: client, encryption: encryption) {
+                let outcome = try await ArchiveSynchronizer(store: store).synchronize(account: account, client: client, encryption: encryption) {
                     await progress(CatchUpProgress(archive: $0.archive, pages: $0.pages, messages: $0.messages))
+                }
+                // A refused or unanswered archive query keeps the connection; that archive's checkpoint stands and the
+                // next connection walks it again. Not a setup failure, so nothing is shown.
+                if !outcome.isComplete {
+                    Logger(subsystem: "haus.xmpp.ios", category: "sync").notice("catch-up incomplete: own=\(outcome.ownArchiveComplete, privacy: .public) rooms=\(outcome.unfinishedRooms.count, privacy: .public)")
                 }
             },
             retryPending: { try? await encryption.retryPendingIncoming(account: account, transport: client) })
@@ -1678,22 +1958,24 @@ final class AppModel {
         }
     }
 
-    func createChat(_ recipient: String) async -> Bool {
-        let recipient = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !accountID.isEmpty, recipient.contains("@"), !recipient.contains("/"),
-              !recipient.contains(where: { $0.isWhitespace }), let store else {
+    /// The chat's ID (the address in normal form), or nil with `error` set.
+    func createChat(_ recipient: String) async -> String? {
+        // `Bob@Example.org` is the chat the server's `bob@example.org` replies land in.
+        let address = JID(recipient.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !accountID.isEmpty, let address, address.localpart != nil, address.resourcepart == nil, let store else {
             error = "Enter a contact address such as bob@localhost."
-            return false
+            return nil
         }
+        let recipient = address.bare
         guard isDemo || !isLabAccount || recipient.hasSuffix("@" + accountDomain) else {
             error = "Lab accounts only message other accounts on the same lab server."
-            return false
+            return nil
         }
         do {
             try await store.upsertChat(accountID: accountID, chatID: recipient, title: recipient)
             await refresh()
-            return true
-        } catch { self.error = "Could not create conversation."; return false }
+            return recipient
+        } catch { self.error = "Could not create conversation."; return nil }
     }
 
     func send(_ body: String, to chatID: String, replyingTo source: ChatMessage? = nil) async -> Bool {
@@ -2687,6 +2969,8 @@ final class AppModel {
     /// Bound and past `initialize`, as the app's `.ready`: only then is anything sealed or sent.
     var ready = false
     var joinedRooms: Set<String> = []
+    /// After a fresh bind: the push re-enable and room rejoins, running alongside the reply; teardown waits for it.
+    var restoration: Task<Void, Never>?
 
     init(account: String, isForeground: Bool, budget: NotificationActionBudget) {
         self.account = account; self.isForeground = isForeground; self.budget = budget
@@ -2715,9 +2999,41 @@ extension AppModel: NotificationActionEnvironment {
     /// holds the background task and measured `budget` from the delegate callback, so `prepare()` counts against it.
     func performNotificationAction(_ request: NotificationActionRequest, budget: NotificationActionBudget) async -> NotificationActionOutcome {
         await prepare()
-        let outcome = await NotificationActionHandler.perform(request, budget: budget, in: self)
+        let outcome: NotificationActionOutcome
+        if case let .reply(text) = request.kind, await saveReplyForUpgrade(text, to: request.destination) { outcome = .replySavedForUpgrade }
+        else { outcome = await NotificationActionHandler.perform(request, budget: budget, in: self) }
         Self.syncLog.notice("notification action: \(outcome.rawValue, privacy: .public)")
         return outcome
+    }
+
+    /// A reply on a launch into the background while the previous version's data still waits for its snapshot and
+    /// upgrade (which only run in front): nothing may touch that data yet, so the text is kept and queued by
+    /// `queueSavedReplies` once the upgrade finished. False when there is no upgrade waiting or it could not be kept.
+    private func saveReplyForUpgrade(_ text: String, to destination: NotificationDestination) async -> Bool {
+        guard store == nil, let snapshots else { return false }
+        switch upgradeState {
+        case .deferred, .waitingForLease, .preparing, .snapshotFailed: break
+        default: return false
+        }
+        do { try snapshots.saveReply(.init(destination: destination.payload, text: text, savedAt: Date())) }
+        catch { return false }
+        await NotificationActionCenter.postSavedReply()
+        return true
+    }
+
+    /// After the upgrade, with the account loaded: every reply kept by `saveReplyForUpgrade` goes into the outbox as
+    /// the notification action would have queued it (and is sent once the session is ready, trust rules unchanged),
+    /// under the ID it was saved with, so a launch killed before the file was removed does not queue it twice. One
+    /// older than a day is dropped with a notice; one that no longer resolves to this account's message is reported
+    /// like a rejected reply.
+    private func queueSavedReplies() async {
+        guard let snapshots, let store, !snapshots.savedReplies.isEmpty else { return }
+        guard let account = authorizedNotificationAccount() else { return }
+        let result = await snapshots.queueSavedReplies(account: account, store: store, now: Date()) { try await self.enqueueReply($0) }
+        Self.syncLog.notice("replies saved before the upgrade: \(result.queued, privacy: .public) queued, \(result.rejected, privacy: .public) rejected, \(result.expired, privacy: .public) too old")
+        if result.expired > 0 { await NotificationActionCenter.postExpiredSavedReply() }
+        else if result.rejected > 0 { await NotificationActionCenter.postRejectedReply() }
+        startOutbox()
     }
 
     /// The system is ending the background time. Closes the action's connection; true while the action holds or is
@@ -2769,6 +3085,9 @@ extension AppModel: NotificationActionEnvironment {
             try await store.recoverInterruptedSubmissions(accountID: account)
             let client = XMPPClient(labCertificateAuthority: DevelopmentEndpoint.certificateAuthority)
             try await client.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
+            try await client.configureResource(SharedSession.resource(accountID: account, defaults: sessionDefaults))
+            // The user is not in front: the action's session must not make them look online.
+            try await client.setAvailability(awayAvailability)
             session.client = client
             // From here an abort closes this client; one that came before it was set is honoured here.
             guard !session.isOver else { throw CancellationError() }
@@ -2780,17 +3099,37 @@ extension AppModel: NotificationActionEnvironment {
                     _ = try? await processor.process(event)
                 }
             }
-            try await client.connect(host: credentials.host, port: credentials.port, domain: credentials.domain,
-                                     username: credentials.username, password: credentials.password)
+            try await client.connect(route: credentials.route, domain: credentials.domain, username: credentials.username,
+                                     password: credentials.password, requireSCRAM: credentials.requiresSCRAM)
+            let resumed = await client.sessionResumed
+            Self.syncLog.notice("notification action online resumed=\(resumed, privacy: .public)")
             guard !session.isOver else { throw CancellationError() }
             // As before `.ready`: an identity mismatch fails closed before anything can be sealed.
             try await encryption.initialize(account: account, transport: client)
             if isGroup(chatID) {
                 let nickname = preferences.string(forKey: "groupNickname.\(account).\(chatID)") ?? String(account.prefix { $0 != "@" })
-                if let snapshot = try? await client.joinGroupRoom(chatID, nickname: nickname), snapshot.joined { session.joinedRooms.insert(chatID) }
+                // The reply's room must confirm the join first: the drain sends only to joined rooms.
+                if await BackgroundSession.join(chatID, nickname: nickname, client: client,
+                                                within: session.budget.remaining(at: .now, atMost: .seconds(3))) {
+                    session.joinedRooms.insert(chatID)
+                }
             }
             guard !session.isOver else { throw CancellationError() }
             session.ready = true
+            // A fresh bind replaced the session the app left hibernating, with its push registration and room
+            // occupancy: restore both, as the extension does, or pushes for this account stop. Alongside the reply,
+            // which does not wait for them; `endNotificationAction` does, within the budget.
+            if !resumed {
+                let push = pushWanted ? PushRegistrationState.sessionSubscription(saved: credentials.push,
+                                                                                   state: try? PushRegistrationState.load(accountID: account)) : nil
+                let limit = session.budget.remaining(at: .now, atMost: .seconds(5))
+                session.restoration = Task {
+                    async let enabled: Void = BackgroundSession.enablePush(push, client: client)
+                    await BackgroundSession.joinRooms(account: account, client: client, encryption: encryption, store: store,
+                                                      skipping: [chatID], within: limit)
+                    await enabled
+                }
+            }
         } catch {
             Self.syncLog.notice("notification action offline: \(ConnectionSetup.detail(error), privacy: .public)")
         }
@@ -2847,16 +3186,19 @@ extension AppModel: NotificationActionEnvironment {
     /// The composer's outbox: one queued, still unencrypted row that only the drain seals. A plain answer in the chat,
     /// as in Messages; not an XEP-0461 reply.
     func enqueueNotificationReply(_ text: String, to message: StoredMessage) async throws -> String {
+        let reply = NotificationActionHandler.replyMessage(text, id: UUID().uuidString, to: message)
+        try await enqueueReply(reply)
+        return reply.id
+    }
+
+    private func enqueueReply(_ reply: StoredMessage) async throws {
         guard let store else { throw MessageStoreError.closed }
-        let account = message.accountID, chatID = message.chatID
+        let chatID = reply.chatID
         guard isGroup(chatID) || !isLabAccount || chatID.hasSuffix("@" + accountDomain) else { throw MessageStoreError.invalidValue }
-        let reply = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chatID, senderID: account, body: text,
-                                  isOutgoing: true, encryptionProfile: "pending")
-        try XMPPClient.validateMessage(to: chatID, body: text, id: reply.id, reply: nil)
+        try XMPPClient.validateMessage(to: chatID, body: reply.body, id: reply.id, reply: nil)
         try await store.enqueueOutgoing(reply)
         await refresh()
         if actionSession?.isForeground == true { startOutbox() }
-        return reply.id
     }
 
     func deliverNotificationReply(_ messageID: String, account: String) async -> ReplyDelivery {
@@ -2929,6 +3271,7 @@ extension AppModel: NotificationActionEnvironment {
         // `actionSession` stays set until the lease is back, so an expiring background task sees that it is held.
         guard let session = actionSession else { return }
         session.watchdog?.cancel()
+        await session.restoration?.value
         if let client = session.client { await client.disconnectAndWait() }
         session.consumer?.cancel()
         await session.consumer?.value
@@ -3002,4 +3345,21 @@ extension AppModel: NotificationActionEnvironment {
     private nonisolated static func notificationAuthorization() async -> UNAuthorizationStatus {
         await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
+}
+
+/// Where a launch stands with the previous version's data. Every state but `none` shows a blocking screen.
+enum UpgradeState: Equatable {
+    case none
+    /// Taking the snapshot and migrating (shown only if it takes a moment).
+    case preparing
+    /// Another process holds the transport lease; retried shortly.
+    case waitingForLease
+    /// Launched into the background with an upgrade due: left for the foreground.
+    case deferred
+    /// The snapshot could not be taken, so nothing was migrated.
+    case snapshotFailed(String)
+    case restoring
+    case restored(PreUpgradeSnapshot.RestoredState)
+    /// Putting this version's kept data back after a restore.
+    case returning
 }

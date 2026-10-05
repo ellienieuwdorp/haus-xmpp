@@ -27,7 +27,8 @@ enum SharedStorage {
         let oldDatabase = legacy.appending(path: "messages.sqlite")
         if migrate, manager.fileExists(atPath: oldDatabase.path) {
             guard !manager.fileExists(atPath: destination.path) else { throw Failure.conflictingStores }
-            let old = try MessageStore(url: oldDatabase)
+            // As is: a store an older build left there is moved unchanged; the app snapshots it before migrating.
+            let old = try MessageStore(url: oldDatabase, schema: .asIs)
             do {
                 try await old.acquireTransportOwnership()
                 try await old.closeForMigration {

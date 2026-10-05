@@ -1,7 +1,9 @@
 import Foundation
 import Testing
 import MessageStore
+import XMPPProtocol
 import Darwin
+import SQLite3
 @testable import MessagingCore
 
 private actor BackgroundProbe {
@@ -131,12 +133,23 @@ struct BackgroundSynchronizerTests {
         #expect(readSyncTimeout(until: now - .seconds(1), now: now) == nil)
     }
 
+    @Test func backgroundSessionsLookAwaySinceTheAppWasLastInFront() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        #expect(BackgroundSession.availability(sharesLastSeen: true, leftForeground: now - 600, now: now) == .away(since: now - 600))
+        // A clock that moved backwards: away since now, never since the future.
+        #expect(BackgroundSession.availability(sharesLastSeen: true, leftForeground: now + 60, now: now) == .away(since: now))
+        // Never recorded: no timestamp rather than the time of this run, which would change (and be announced) every run.
+        #expect(BackgroundSession.availability(sharesLastSeen: true, leftForeground: nil, now: now) == .away(since: nil))
+        // An account that does not share last seen is still away, without the time.
+        #expect(BackgroundSession.availability(sharesLastSeen: false, leftForeground: now - 600, now: now) == .away(since: nil))
+    }
+
     @Test func refusesBusyStoreAndNeverCreatesMissingIdentity() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "background-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appending(path: "messages.sqlite")
         let store = try MessageStore(url: url)
-        let account = BackgroundAccount(host: "localhost", domain: "localhost", username: "alice", password: "private")
+        let account = BackgroundAccount(route: .fixed(XMPPEndpoint(host: "localhost", port: 5223, security: .directTLS)), domain: "localhost", username: "alice", password: "private")
         try await store.acquireTransportOwnership()
         await #expect(throws: MessageStoreError.transportOwnedElsewhere) {
             try await BackgroundSynchronizer().synchronize(databaseURL: url, wrappingKey: Data(repeating: 1, count: 32), account: account)
@@ -151,5 +164,34 @@ struct BackgroundSynchronizerTests {
         #expect(!String(reflecting: account).contains("private"))
         try await store.close()
         try FileManager.default.removeItem(at: directory)
+    }
+
+    /// The notification extension's entry point finds a store the previous build wrote: it neither migrates nor
+    /// connects, leaves the file byte for byte as it was, and the run falls back to the generic notification.
+    @Test func neverMigratesAStoreAnOlderBuildWrote() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "background-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "messages.sqlite")
+        let store = try MessageStore(url: url)
+        try await store.acquireTransportOwnership()
+        try await store.saveEncryptionState(accountID: "alice@localhost", expectedRevision: nil, data: Data([0]))
+        try await store.close()
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "PRAGMA user_version=21", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+        let before = try Data(contentsOf: url)
+        let account = BackgroundAccount(route: .fixed(XMPPEndpoint(host: "localhost", port: 5223, security: .directTLS)), domain: "localhost", username: "alice", password: "private")
+        do {
+            try await BackgroundSynchronizer().synchronize(databaseURL: url, wrappingKey: Data(repeating: 1, count: 32), account: account)
+            Issue.record("an older store was synchronized")
+        } catch {
+            #expect(error as? MessageStoreError == .upgradeRequired(21))
+            #expect(NotificationFallbackReason(error) == .upgradePending)
+        }
+        #expect(try Data(contentsOf: url) == before)
+        let wal = (try? Data(contentsOf: URL(filePath: url.path + "-wal"))) ?? Data()
+        #expect(wal.isEmpty)
     }
 }

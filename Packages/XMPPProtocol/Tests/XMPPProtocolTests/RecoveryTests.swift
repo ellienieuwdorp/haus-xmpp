@@ -24,7 +24,7 @@ private actor SnapshotStore: XMPPStreamManagementPersistence {
     let store = SnapshotStore()
     let manager = StreamManagement(store)
     _ = try await manager.restore(accountID: "a@example.org")
-    try await manager.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", expiresAt: nil)
+    try await manager.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume")
     let token = try #require(await manager.receive())
     await store.rejectSaves(true)
     try await manager.handled(token)
@@ -40,7 +40,7 @@ private actor SnapshotStore: XMPPStreamManagementPersistence {
     let store = SnapshotStore()
     let sm = StreamManagement(store)
     _ = try await sm.restore(accountID: "a@example.org")
-    try await sm.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", expiresAt: nil)
+    try await sm.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume")
     try await sm.record("<message id='m'/>")
     try await sm.record("<iq type='get' id='q'><ping xmlns='urn:xmpp:ping'/></iq>")
     try await sm.record("<presence/>")
@@ -86,7 +86,7 @@ private actor SnapshotStore: XMPPStreamManagementPersistence {
 private func enabledManager(_ store: SnapshotStore) async throws -> StreamManagement {
     let sm = StreamManagement(store)
     _ = try await sm.restore(accountID: "a@example.org")
-    try await sm.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", expiresAt: nil)
+    try await sm.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume")
     return sm
 }
 
@@ -249,6 +249,56 @@ private func enabledManager(_ store: SnapshotStore) async throws -> StreamManage
     #expect(await store.acknowledged == ["m1", "m2", "m3"])
 }
 
+@Test func resumeIsAttemptedFromTheLastContactForLongerThanTheAdvertisedWindow() async throws {
+    let now = Date()
+    func snapshot(streamID: String? = "resume", lastContact: TimeInterval?, timeout: UInt32?) -> XMPPStreamManagementSnapshot {
+        .init(revision: 1, accountID: "a@example.org", fullJID: "a@example.org/r", streamID: streamID,
+              expiresAt: lastContact.map { now.addingTimeInterval(-$0 + TimeInterval(timeout ?? 0)) }, inboundHandled: 0,
+              outboundSent: 0, outboundAcknowledged: 0, journal: [], resumeTimeoutSeconds: timeout)
+    }
+    let cases: [(XMPPStreamManagementSnapshot, Bool)] = [
+        // Past the server's advertised 300 s (an old build's snapshot, measured from its last ack): still tried,
+        // because push-enabled sessions hibernate far longer and a refusal only costs a round trip.
+        (snapshot(lastContact: 301, timeout: 300), true),
+        (snapshot(lastContact: 3 * 3_600, timeout: 600), true),
+        // A server advertising more than the attempt window keeps its own.
+        (snapshot(lastContact: 80 * 3_600, timeout: 100 * 3_600), true),
+        (snapshot(lastContact: 73 * 3_600, timeout: 600), false),
+        // No recorded window: the server decides.
+        (snapshot(lastContact: nil, timeout: nil), true),
+        (snapshot(streamID: nil, lastContact: 1, timeout: 600), false),
+    ]
+    for (index, (saved, attempted)) in cases.enumerated() {
+        let store = SnapshotStore()
+        await store.seed(saved)
+        let candidate = try await StreamManagement(store).restore(accountID: "a@example.org")
+        #expect((candidate != nil) == attempted, "case \(index)")
+    }
+}
+
+@Test func deliberateDisconnectRecordsItsTimeAndAdvertisesOnlyWhatIsPersisted() async throws {
+    let store = SnapshotStore()
+    let sm = StreamManagement(store)
+    _ = try await sm.restore(accountID: "a@example.org")
+    try await sm.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", resumeTimeoutSeconds: 600)
+    let enabled = try #require(await store.value?.expiresAt)
+    let token = try #require(await sm.receive())
+    try await sm.handled(token)
+    try await Task.sleep(for: .milliseconds(20))
+    let before = Date()
+    #expect(try await sm.detach() == 1)
+    #expect(await store.value?.inboundHandled == 1)
+    // The window now runs from the disconnect, not from enabling (or the last server acknowledgement).
+    let detached = try #require(await store.value?.expiresAt)
+    #expect(detached > enabled && detached >= before.addingTimeInterval(600))
+    // A failed commit advertises nothing new.
+    let next = try #require(await sm.receive())
+    try await sm.handled(next)
+    await store.rejectSaves(true)
+    await #expect(throws: XMPPStreamManagementError.self) { try await sm.detach() }
+    #expect(await sm.persistedHandledCount() == 1)
+}
+
 func recoveryNode(_ xml: String) throws -> XMPPProtocol.XMLNode {
     var parser = XMLStreamFramer()
     let frames = try parser.feed(Data(("<stream:stream xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams'>" + xml).utf8))
@@ -286,6 +336,17 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     await store.setResumeAllowed(false)
     #expect(try await !sm.permitsReplay())
     await #expect(throws: XMPPStreamManagementError.self) { try await sm.restore(accountID: "other@example.org") }
+}
+
+/// A build that kept the typed capitals saved `Ellie@Example.org` beside the server's `ellie@example.org/r`; that
+/// session must still resume, for the typed and the normal spelling alike, and never for another account.
+@Test func restoreComparesTheAccountInNormalForm() async throws {
+    let store = SnapshotStore()
+    await store.seed(.init(revision: 1, accountID: "Ellie@Example.org", fullJID: "ellie@example.org/r", streamID: "resume", expiresAt: nil,
+                           inboundHandled: 3, outboundSent: 0, outboundAcknowledged: 0, journal: []))
+    #expect(try await StreamManagement(store).restore(accountID: "ellie@example.org")?.streamID == "resume")
+    #expect(try await StreamManagement(store).restore(accountID: "ELLIE@example.org")?.inboundHandled == 3)
+    await #expect(throws: XMPPStreamManagementError.self) { try await StreamManagement(store).restore(accountID: "ellie2@example.org") }
 }
 
 @Test func outgoingReplayDecoderCannotSubstituteSenderOrAcceptPlaintext() throws {
@@ -332,6 +393,10 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     let escaped = ArchiveQuery.payload(queryID: "q", limit: 100, bound: .before("a<b&'c"))
     #expect(escaped.contains("<before>a&lt;b&amp;&apos;c</before>"))
     #expect(!escaped.contains("a<b"))
+    // A time anchor goes in the form, with no RSM cursor.
+    let since = ArchiveQuery.payload(queryID: "q", limit: 50, bound: .since(Date(timeIntervalSince1970: 1_788_256_800.9)))
+    #expect(since.contains("<field var='start'><value>2026-09-01T10:00:00Z</value></field></x>"))
+    #expect(since.contains("<max>50</max></set>") && !since.contains("<after") && !since.contains("<before"))
 }
 
 @Test func archiveFinishValidatesFirstAndLastAgainstReturnedResults() throws {
@@ -356,6 +421,13 @@ func archived(from: String = "a@example.org", query: String = "query", id: Strin
     let empty = ArchiveQuery(queryID: "query", accountBareJID: "a@example.org", accountFullJID: "a@example.org/r", limit: 100)
     let emptyPage = try empty.finish(fin(" complete='true'", ""))
     #expect(emptyPage.firstID == nil && emptyPage.lastID == nil && emptyPage.messages.isEmpty && emptyPage.complete)
-    #expect(throws: XMPPIQError.self) { try empty.finish(fin("", "")) }
     #expect(throws: XMPPIQError.self) { try empty.finish(fin(" complete='true'", "<first>archive-1</first>")) }
+    // ejabberd: an empty page claiming more, or without any `<set/>`, ends the walk instead of failing it.
+    for shape in try [fin("", ""), fin(" complete='false'", ""),
+                  recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2' complete='false'/></iq>")] {
+        let quirk = try empty.finish(shape)
+        #expect(quirk.complete && quirk.messages.isEmpty && quirk.firstID == nil && quirk.lastID == nil)
+    }
+    // A page with results still needs its bounds.
+    #expect(throws: XMPPIQError.self) { try query.finish(recoveryNode("<iq type='result'><fin xmlns='urn:xmpp:mam:2' complete='true'/></iq>")) }
 }

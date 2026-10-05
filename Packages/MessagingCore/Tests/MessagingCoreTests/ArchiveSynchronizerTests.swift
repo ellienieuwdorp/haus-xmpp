@@ -211,6 +211,67 @@ struct ArchiveSynchronizerTests {
         }
     }
 
+    /// However full the retained-ciphertext table is, a message that cannot be kept for review gets a final outcome: the
+    /// live stream still acknowledges it (direct and room), and an archive page holding another one still advances.
+    @Test func everyRetentionLimitKeepsTheStreamAcknowledgingAndTheArchiveMoving() async throws {
+        let bob = "bob@localhost", limits = MessageStore.pendingLimits
+        let everyKnownSender = (0..<(limits.perAccount / limits.perKnownSender)).map { ("known-\($0)@localhost", limits.perKnownSender) }
+        let cases: [(limit: String, fill: [(sender: String, rows: Int)], wroteToBob: Bool)] = [
+            ("stranger quota", [(bob, limits.perStranger)], false),
+            ("known sender quota", [(bob, limits.perKnownSender)], true),
+            ("stranger ceiling", [(account, limits.strangerCeiling)], false),
+            ("account ceiling", everyKnownSender, true),
+        ]
+        for entry in cases {
+            try await fixture { store async throws in
+                for (sender, rows) in entry.fill {
+                    if sender != account, sender != bob || entry.wroteToBob {
+                        try await store.upsertChat(accountID: account, chatID: sender, title: sender)
+                        _ = try await store.insertMessage(StoredMessage(id: "wrote-\(sender)", accountID: account, chatID: sender, senderID: account, body: "Hi", isOutgoing: true))
+                    }
+                    for index in 0..<rows { try await store.retainEncryptedIncoming(accountID: account, sender: sender, digest: "\(sender)-\(index)", wire: Data([1])) }
+                }
+                if entry.wroteToBob, !entry.fill.contains(where: { $0.sender == bob }) {
+                    try await store.upsertChat(accountID: account, chatID: bob, title: bob)
+                    _ = try await store.insertMessage(StoredMessage(id: "wrote-bob", accountID: account, chatID: bob, senderID: account, body: "Hi", isOutgoing: true))
+                }
+                let filled = try await store.pendingEncryptedIncoming(accountID: account).count
+                #expect(filled == entry.fill.reduce(0) { $0 + $1.rows }, "\(entry.limit)")
+                let encryption = OMEMOService(store: store, protection: try StateProtection(key: Data(repeating: 7, count: 32)))
+                try await encryption.initialize(account: account, transport: NullTransport(account: account))
+                let client = XMPPClient(labCertificateAuthority: nil)
+                let processor = InboundProcessor(encryption: encryption, client: client, account: account)
+                let (direct, group) = try await unknownSenderEnvelopes(account: account, encryption: encryption)
+                let live: [XMPPEvent] = [
+                    .encryptedMessage(XMPPEncryptedMessage(id: "live", from: bob + "/x", to: account, originID: nil, envelope: direct)),
+                    .encryptedGroupMessage(try XMPPEncryptedGroupMessage(id: "room", room: room, occupant: room + "/bob", sender: bob, envelope: group, hasFallbackBody: true)),
+                ]
+                for (sequence, event) in live.enumerated() {
+                    _ = try await processor.process(event)
+                    #expect(try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: UInt64(sequence + 1)))) == .acknowledged,
+                            "\(entry.limit)")
+                }
+                let another = XMPPOMEMOEnvelope(profile: direct.profile, senderDeviceID: direct.senderDeviceID, keys: direct.keys, iv: direct.iv, payload: Data([7, 7, 7]))
+                let entryInArchive = XMPPArchiveMessage(archiveID: "a1", timestamp: Date(timeIntervalSince1970: 100), message: nil,
+                    encryptedMessage: XMPPEncryptedMessage(id: "archived", from: bob + "/x", to: account, originID: nil, envelope: another, provenance: .receivedCarbon))
+                let sync = ArchiveSynchronizer(store: store)
+                let operations = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in },
+                    fetchPage: { bound, _ in
+                        bound == .before(nil) ? XMPPArchivePage(messages: [entryInArchive], complete: true, firstID: "a1", lastID: "a1",
+                                                                handledTokens: [.init(session: UUID(), sequence: 3)]) : emptyPage
+                    },
+                    process: { try await sync.process(account: account, archived: $0, encryption: encryption, transport: client) },
+                    acknowledge: { _ in }, disconnect: { Issue.record("Disconnected at the \(entry.limit)") }, progress: { _ in })
+                try await sync.synchronize(account: account, operations: operations)
+                #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "a1", "\(entry.limit)")
+                // Nothing new was kept; each refused message is a quiet placeholder in its conversation.
+                #expect(try await store.pendingEncryptedIncoming(accountID: account).count == filled, "\(entry.limit)")
+                #expect(try await store.messages(accountID: account, chatID: bob).compactMap(\.unreadableReason) == [.retentionLimit, .retentionLimit], "\(entry.limit)")
+                #expect(try await store.messages(accountID: account, chatID: room).map(\.unreadableReason) == [.retentionLimit], "\(entry.limit)")
+            }
+        }
+    }
+
     @Test func failedAckKeepsAlreadyDurableCheckpointAndDisconnects() async throws {
         try await fixture { store async throws in
             let trace = Trace()
@@ -322,6 +383,124 @@ struct ArchiveSynchronizerTests {
         }
     }
 
+    // MARK: A cursor the server no longer holds
+
+    /// Prosody answers an RSM id it no longer holds (archive expiry, one week by default) with item-not-found.
+    @Test func anExpiredCursorReanchorsByTimeOnTheSameConnection() async throws {
+        for archive in [account, room] {
+            try await fixture { store async throws in
+                let stamp = Date(timeIntervalSince1970: 1_000)
+                _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: archive, expectedRevision: nil, cursor: "lost", stamp: stamp)
+                let trace = Trace()
+                let operations = ArchiveSyncOperations(knownRooms: { archive == room ? [room] : [] }, refreshRoom: { _ in },
+                    fetchPage: { bound, selected in
+                        guard (selected ?? account) == archive else { return emptyPage }
+                        await trace.record("fetch:\(describe(bound))")
+                        switch bound {
+                        case .after("lost"): throw XMPPIQError.stanza(condition: "item-not-found")
+                        case .since: return page(["kept", "n1"], sequence: 1, complete: false)
+                        default: return page("n2", sequence: 2)
+                        }
+                    },
+                    process: { await trace.record("durable:\($0.archiveID)") }, acknowledge: { _ in },
+                    disconnect: { await trace.record("disconnect") }, progress: { _ in })
+                let outcome = try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
+                #expect(outcome.isComplete)
+                // Two seconds before the lost entry, then forward as usual; no disconnect.
+                #expect(await trace.events == ["fetch:after(lost)", "fetch:since(998)", "durable:kept", "durable:n1", "fetch:after(n1)", "durable:n2"])
+                #expect(try await store.archiveCheckpoint(accountID: account, archiveID: archive) ==
+                        ArchiveCheckpoint(revision: 3, cursor: "n2", stamp: Date(timeIntervalSince1970: 100)))
+                #expect(try await store.archiveGaps(accountID: account).map { [$0.archiveID, $0.since.map { "\(Int($0.timeIntervalSince1970))" }] } == [[archive, "1000"]])
+                // History behind the lost cursor keeps its own (here absent) backfill cursor.
+                #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: archive) == nil)
+            }
+        }
+    }
+
+    /// A checkpoint saved before stamps existed restarts at the newest page, and its backfill cursor moves there so
+    /// backfill walks back through whatever the server still holds between the lost cursor and that page.
+    @Test func anExpiredCursorWithoutAStampRestartsAtTheNewestPage() async throws {
+        for archive in [account, room] {
+            try await fixture { store async throws in
+                _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: archive, expectedRevision: nil, cursor: "lost")
+                _ = try await store.saveArchiveBackfillCursor(accountID: account, archiveID: archive, expectedRevision: nil, oldestID: "first", complete: true)
+                let trace = Trace()
+                let operations = ArchiveSyncOperations(knownRooms: { archive == room ? [room] : [] }, refreshRoom: { _ in },
+                    fetchPage: { bound, selected in
+                        guard (selected ?? account) == archive else { return emptyPage }
+                        await trace.record("fetch:\(describe(bound))")
+                        switch bound {
+                        case .after("lost"): throw XMPPIQError.stanza(condition: "item-not-found")
+                        case .before(nil): return page(["m5", "m6"], sequence: 1, complete: false)
+                        default: return emptyPage
+                        }
+                    },
+                    process: { _ in }, acknowledge: { _ in }, disconnect: { await trace.record("disconnect") }, progress: { _ in })
+                #expect(try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations).isComplete)
+                #expect(await trace.events == ["fetch:after(lost)", "fetch:before(nil)", "fetch:after(m6)"])
+                #expect(try await store.archiveCheckpoint(accountID: account, archiveID: archive) ==
+                        ArchiveCheckpoint(revision: 2, cursor: "m6", stamp: Date(timeIntervalSince1970: 100)))
+                #expect(try await store.archiveBackfillCursor(accountID: account, archiveID: archive) == ArchiveBackfillCursor(revision: 2, oldestID: "m5", complete: false))
+                #expect(try await ArchiveSynchronizer(store: store).hasPendingBackfill(account: account, archive: archive == room ? room : nil))
+                #expect(try await store.archiveGaps(accountID: account).map { [$0.archiveID, $0.since.map { "\($0)" }] } == [[archive, nil]])
+            }
+        }
+    }
+
+    /// A refused, repeated-unknown or unanswered query carries no page and no tokens: the archive stays behind its
+    /// checkpoint for the next connection, the connection and the other archives carry on.
+    @Test func archiveQueriesWithoutAPageEndOnlyTheirArchive() async throws {
+        let failures: [any Error] = [XMPPIQError.stanza(condition: "service-unavailable"), XMPPIQError.stanza(condition: "item-not-found"),
+                                     XMPPClientError.timedOut]
+        for failure in failures {
+            try await fixture { store async throws in
+                let other = "other@rooms.localhost", silent = "silent@rooms.localhost"
+                for archive in [account, room, other] {
+                    _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: archive, expectedRevision: nil, cursor: "c-" + archive, stamp: Date(timeIntervalSince1970: 50))
+                }
+                let trace = Trace()
+                let operations = ArchiveSyncOperations(knownRooms: { [room, silent, other] },
+                    refreshRoom: { if $0 == silent { throw XMPPClientError.timedOut } },
+                    fetchPage: { bound, selected in
+                        await trace.record("fetch:\(selected ?? account):\(describe(bound))")
+                        guard selected == other else { throw failure }
+                        return page("o1", sequence: 1)
+                    },
+                    process: { _ in }, acknowledge: { _ in }, disconnect: { await trace.record("disconnect") }, progress: { _ in })
+                let outcome = try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations)
+                #expect(outcome == ArchiveSyncOutcome(ownArchiveComplete: false, unfinishedRooms: [room, silent]))
+                // item-not-found re-anchors once by time, and a second refusal ends the archive rather than looping.
+                let retried = (failure as? XMPPIQError) == .stanza(condition: "item-not-found")
+                #expect(await trace.events == ["fetch:\(account):after(c-\(account))"] + (retried ? ["fetch:\(account):since(48)"] : [])
+                        + ["fetch:\(room):after(c-\(room))"] + (retried ? ["fetch:\(room):since(48)"] : []) + ["fetch:\(other):after(c-\(other))"])
+                #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "c-" + account)
+                #expect(try await store.archiveCheckpoint(accountID: account, archiveID: room)?.cursor == "c-" + room)
+                #expect(try await store.archiveCheckpoint(accountID: account, archiveID: other)?.cursor == "o1")
+                // A destroyed room refuses the re-anchored query too: nothing shows that history was lost.
+                #expect(try await store.archiveGaps(accountID: account).isEmpty)
+            }
+        }
+    }
+
+    /// A lost connection fails the pending query with `timedOut`, like the query's own deadline. With the connection
+    /// gone, the walk must not report a finished catch-up for the app to build on.
+    @Test func aTimeoutFromALostConnectionEndsTheWholeWalk() async throws {
+        try await fixture { store async throws in
+            _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: account, expectedRevision: nil, cursor: "c1", stamp: Date(timeIntervalSince1970: 50))
+            let trace = Trace()
+            let operations = ArchiveSyncOperations(knownRooms: { [room] }, refreshRoom: { _ in },
+                fetchPage: { _, selected in
+                    await trace.record("fetch:\(selected ?? account)")
+                    throw XMPPClientError.timedOut
+                },
+                process: { _ in }, acknowledge: { _ in }, disconnect: { await trace.record("disconnect") }, progress: { _ in },
+                isOnline: { false })
+            await #expect(throws: XMPPClientError.timedOut) { try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operations) }
+            #expect(await trace.events == ["fetch:\(account)", "disconnect"])
+            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "c1")
+        }
+    }
+
     @Test func aRefusedFirstPageCommitDisconnectsWithoutAcknowledging() async throws {
         try await fixture { store async throws in
             // The checkpoint already exists for this archive (a concurrent first sync won): the newest-page write is refused
@@ -348,6 +527,7 @@ func describe(_ bound: XMPPArchiveBound) -> String {
     switch bound {
     case .after(let id): "after(\(id ?? "nil"))"
     case .before(let id): "before(\(id ?? "nil"))"
+    case .since(let date): "since(\(Int(date.timeIntervalSince1970)))"
     }
 }
 

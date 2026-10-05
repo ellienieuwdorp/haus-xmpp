@@ -79,6 +79,8 @@ struct GroupRoomState {
     var occupants: [String: String] = [:]
     var revision: UInt64 = 0
     var joined = false
+    /// The room answered our last join with an error presence (not a member, banned, nickname taken, room gone).
+    var joinRefused = false
     var nickname: String?
     /// The `revision` at which `members` was last validated by this connection.
     var validatedRevision: UInt64? = nil
@@ -106,6 +108,7 @@ struct GroupRoomState {
     }
 
     mutating func requestNickname(_ nickname: String) {
+        joinRefused = false
         guard self.nickname != nickname else { return }
         self.nickname = nickname
         joined = false
@@ -161,7 +164,7 @@ enum GroupChatWire {
         guard query.children.count <= 100 else { throw XMPPGroupError.incompleteMembership }
         return try query.children.map { item in
             guard item.name == "item", item.namespace == admin, item.attributes["affiliation"] == affiliation,
-                  let jid = item.attributes["jid"], let bare = OMEMOWire.bareJID(jid), bare == jid else { throw XMPPGroupError.incompleteMembership }
+                  let jid = item.attributes["jid"], !jid.contains("/"), let bare = OMEMOWire.bareJID(jid) else { throw XMPPGroupError.incompleteMembership }
             return bare
         }
     }
@@ -210,7 +213,7 @@ enum GroupChatWire {
                          hasFallbackBody: !node.children("body", namespace: "jabber:client").isEmpty)
     }
     static func stanzaID(_ node: XMLNode, room: String, archiveID: String? = nil) throws -> String? {
-        let identifiers = node.children.filter { $0.name == "stanza-id" && $0.namespace == "urn:xmpp:sid:0" && $0.attributes["by"] == room }
+        let identifiers = node.children.filter { $0.name == "stanza-id" && $0.namespace == "urn:xmpp:sid:0" && $0.attributes["by"].flatMap(JID.normalized) == room }
         guard identifiers.count <= 1 else { throw XMPPGroupError.invalidMessage }
         let value = identifiers.first?.attributes["id"]
         if let identifier = identifiers.first {
@@ -237,7 +240,7 @@ enum GroupChatWire {
               let affiliation = items[0].attributes["affiliation"], ["member", "admin", "owner"].contains(affiliation),
               items.allSatisfy({ $0.attributes["jid"].flatMap(OMEMOWire.bareJID) == jid && $0.attributes["affiliation"] == affiliation }) else {
             state.occupants[occupant] = nil
-            if ownOccupant { state.joined = false }
+            if ownOccupant { state.joined = false; state.joinRefused = node.attributes["type"] == "error" }
             return
         }
         // Keep authenticated presence for a newly added member; a complete membership
@@ -256,6 +259,8 @@ enum GroupChatWire {
 }
 
 extension XMPPClient {
+    /// The room refused our last join (an error presence to it); a later join clears this.
+    public func groupRoomRefusedJoin(_ room: String) -> Bool { groupRooms[room]?.joinRefused == true }
     public func groupRoomSnapshot(_ room: String) throws -> XMPPGroupRoomSnapshot? {
         guard let state = groupRooms[room], !state.members.isEmpty else { return nil }
         return try .init(room: room, members: state.members, revision: state.revision, joined: state.joined)

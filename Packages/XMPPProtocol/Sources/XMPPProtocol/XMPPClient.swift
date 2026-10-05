@@ -2,6 +2,7 @@ import Foundation
 #if canImport(os)
 import os
 #endif
+import dnssd
 import Network
 import Security
 
@@ -106,14 +107,42 @@ public enum XMPPEvent: Sendable, Equatable {
     case streamAcknowledged
 }
 
+/// What the session tells contacts and the server about the user's attention.
+public enum XMPPAvailability: Sendable, Equatable, Codable {
+    /// The app is in front: plain available presence, and CSI `<active/>` on a resumed stream.
+    case active
+    /// Away from the app (backgrounded, the notification extension, a notification action): XEP-0319
+    /// `<idle since/>` with the last time the app was in front, then CSI `<inactive/>`. nil omits the timestamp,
+    /// for an account that does not share last seen.
+    case away(since: Date?)
+}
+
 public enum XMPPClientError: Error, Sendable {
     case invalidConfiguration, alreadyConnected, notConnected, authenticationUnavailable
     case authenticationFailed, bindingFailed, unexpectedProtocol, connectionClosed, timedOut, eventConsumerTooSlow
+    /// The server could not check the credentials right now (`temporary-auth-failure`, `aborted`): retry later.
+    case authenticationRetryable
+    /// The account authenticated with SCRAM before and the server now offers only weaker mechanisms.
+    case authenticationDowngrade
+    /// A STARTTLS endpoint did not offer or refused TLS. Nothing was sent in plaintext.
+    case encryptionUnavailable
+    /// The domain's SRV records say it offers no client service (target ".").
+    case serviceNotOffered
 }
 
-/// Direct-TLS transport with OMEMO PEP, durable stream management and bounded archive recovery.
-/// DNS SRV, STARTTLS and modern SASL mechanisms are still separate work.
-/// PLAIN is permitted only inside validated TLS. Never use this API as an encryption fallback.
+/// What a successful `connect` used; the caller remembers both for the next connection.
+public struct XMPPConnectedSession: Sendable, Equatable {
+    public let endpoint: XMPPEndpoint
+    public let authenticatedWithSCRAM: Bool
+
+    public init(endpoint: XMPPEndpoint, authenticatedWithSCRAM: Bool) {
+        self.endpoint = endpoint; self.authenticatedWithSCRAM = authenticatedWithSCRAM
+    }
+}
+
+/// Direct TLS or mandatory STARTTLS, reached through SRV discovery or a fixed endpoint, with SCRAM or PLAIN over SASL1,
+/// OMEMO PEP, durable stream management and bounded archive recovery. Every mechanism runs only inside validated TLS.
+/// Never use this API as an encryption fallback.
 public actor XMPPClient {
     public nonisolated let events: AsyncStream<XMPPEvent>
     private let continuation: AsyncStream<XMPPEvent>.Continuation
@@ -136,14 +165,43 @@ public actor XMPPClient {
     /// A MAM `<fin/>` arrives only after every result of the page was streamed: 100 results of a few KiB
     /// take tens of seconds on a slow link. Still within one liveness interval, so a dead query stays bounded.
     static let archiveQueryTimeout: Duration = .seconds(60)
+    /// A deliberate disconnect's last writes (away presence, final `<a/>`): a socket that cannot take a few hundred
+    /// bytes in this time is closed without them.
+    static let farewellWriteLimit: Duration = .milliseconds(500)
+    /// The round trip before a final `<a/>`; on a dead socket the disconnect gives up on it this quickly.
+    static let farewellRoundTripLimit: Duration = .milliseconds(750)
     private var generation = UUID()
     private var phase: Phase = .idle
     private var framer = XMLStreamFramer()
     private(set) var domain = ""
     private var username = ""
     private var password = ""
+    private var requireSCRAM = false
+    private var sasl: SASLNegotiation?
+    private var authenticatedWithSCRAM = false
+    /// One TCP/TLS attempt of a connect; a failed candidate is abandoned without ending the connect.
+    private var attempt = UUID()
+    private var abandonedError: Error?
+    /// Set on the first stream features inside TLS: from then on a failure ends the connect instead of moving on.
+    private var committed = false
+    /// A candidate must reach TLS stream features within this; the whole login within `loginTimeout` of its start.
+    static let candidateTimeout: Duration = .seconds(10)
+    static let loginTimeout: Duration = .seconds(20)
+    /// No DNS query or further candidate starts after this; a candidate's own time is cut to what is left.
+    static let connectTimeout: Duration = .seconds(30)
+    static let discoveryTimeout: Duration = .seconds(5)
     private var bindID = ""
     private var boundJID = ""
+    /// Requested on every fresh bind, so a new session replaces this installation's previous one instead of
+    /// joining it as a second resource. The owner persists one per installation and account (`configureResource`).
+    private var resource = XMPPClient.makeResource()
+    /// A bind the server refused (for example a resource conflict) is retried once with a server-assigned resource.
+    private var bindRetried = false
+    private var availability = XMPPAvailability.active
+    /// What the server holds for this session: nil until initial presence; on a resume, what the snapshot recorded.
+    private var announced: XMPPAvailability?
+    /// Counts emitted events, so the reader can tell whether a stanza produced any.
+    private var emittedEvents: UInt64 = 0
     private struct IQRequest {
         let scope: IQReplyScope
         let continuation: CheckedContinuation<XMLNode, Error>
@@ -180,61 +238,136 @@ public actor XMPPClient {
         continuation = pair.continuation
     }
 
-    public func connect(host: String, port: UInt16 = 5223, domain: String, username: String, password: String) async throws {
+    /// A fixed endpoint; the default is the lab's direct TLS on 5223.
+    @discardableResult
+    public func connect(host: String, port: UInt16 = 5223, security: XMPPTransportSecurity = .directTLS, domain: String,
+                        username: String, password: String, requireSCRAM: Bool = false) async throws -> XMPPConnectedSession {
+        try await connect(route: .fixed(XMPPEndpoint(host: host, port: port, security: security)), domain: domain,
+                          username: username, password: password, requireSCRAM: requireSCRAM)
+    }
+
+    /// Tries the route's candidates in order. A candidate that cannot be reached, fails TLS or refuses STARTTLS is
+    /// skipped; the error is reported only after the last one. Once a candidate delivers stream features inside TLS the
+    /// connect is committed to it: authentication and binding failures end it. `requireSCRAM` refuses PLAIN.
+    @discardableResult
+    public func connect(route: XMPPRoute, domain: String, username: String, password: String,
+                        requireSCRAM: Bool = false) async throws -> XMPPConnectedSession {
         guard connection == nil, phase == .idle else { throw XMPPClientError.alreadyConnected }
-        guard !host.isEmpty, !domain.isEmpty, !username.isEmpty, !password.isEmpty,
-              !username.contains("\0"), !password.contains("\0"), !domain.contains(where: { $0.isWhitespace }),
-              let endpointPort = NWEndpoint.Port(rawValue: port) else { throw XMPPClientError.invalidConfiguration }
+        let validRoute = switch route {
+        case .fixed(let endpoint): !endpoint.host.isEmpty && endpoint.port > 0
+        case .discover(let preferred): preferred.map { !$0.host.isEmpty && $0.port > 0 } ?? true
+        }
+        guard validRoute, !domain.isEmpty, !username.isEmpty, !password.isEmpty,
+              !username.contains("\0"), !password.contains("\0"), !domain.contains(where: { $0.isWhitespace }) else { throw XMPPClientError.invalidConfiguration }
         groupRooms.removeAll(); rosterFetchIDs.removeAll(); rosterRequested = false
-        self.domain = domain; self.username = username; self.password = password
+        self.domain = domain; self.username = username; self.password = password; self.requireSCRAM = requireSCRAM
+        authenticatedWithSCRAM = false
         phase = .features; generation = UUID()
         let token = generation
         do { resumeSnapshot = try await streamManagement?.restore(accountID: username + "@" + domain) }
         catch { if generation == token { phase = .idle; self.password = "" }; throw error }
         guard generation == token else { throw XMPPClientError.connectionClosed }
-        framer = XMLStreamFramer()
-        let tls = NWProtocolTLS.Options()
-        sec_protocol_options_set_tls_server_name(tls.securityProtocolOptions, domain)
-        sec_protocol_options_set_min_tls_protocol_version(tls.securityProtocolOptions, .TLSv12)
-        let certificateData = labCertificateAuthority
-        sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { _, trust, complete in
-            let trustRef = sec_trust_copy_ref(trust).takeRetainedValue()
-            // XMPP service identity is the account domain, not an SRV/IP transport endpoint.
-            guard SecTrustSetPolicies(trustRef, SecPolicyCreateSSL(true, domain as CFString)) == errSecSuccess else { complete(false); return }
-            if let certificateData {
-                guard let certificate = SecCertificateCreateWithData(nil, certificateData as CFData),
-                      SecTrustSetAnchorCertificates(trustRef, [certificate] as CFArray) == errSecSuccess,
-                      SecTrustSetAnchorCertificatesOnly(trustRef, true) == errSecSuccess else { complete(false); return }
-            }
-            complete(SecTrustEvaluateWithError(trustRef, nil))
-        }, queue)
-        let tcp = NWProtocolTCP.Options()
-        tcp.enableKeepalive = true; tcp.keepaliveIdle = 30; tcp.keepaliveInterval = 10; tcp.keepaliveCount = 3
-        let conn = NWConnection(host: NWEndpoint.Host(host), port: endpointPort, using: NWParameters(tls: tls, tcp: tcp))
-        connection = conn
-        deadline = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(20)) } catch { return }
-            await self?.timeout(token)
-        }
         do {
-            try await withTaskCancellationHandler {
+            return try await withTaskCancellationHandler {
                 try Task.checkCancellation()
                 try emit(.state(.connecting))
-                try await Self.start(conn, queue: queue)
-                guard generation == token, connection != nil else { throw XMPPClientError.connectionClosed }
-                try await write(streamOpening())
-                guard generation == token, connection != nil else { throw XMPPClientError.connectionClosed }
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    handshake = continuation
-                    reader = Task { [weak self] in await self?.readLoop(conn, token: token) }
+                var candidates: [XMPPEndpoint]
+                var discovered: Bool
+                switch route {
+                case .fixed(let endpoint): candidates = [endpoint]; discovered = true
+                case .discover(let preferred): candidates = preferred.map { [$0] } ?? []; discovered = false
                 }
+                var tried = Set<XMPPEndpoint>()
+                var failure: Error?
+                let giveUp = ContinuousClock.now + Self.connectTimeout
+                while true {
+                    let remaining = giveUp - .now
+                    guard remaining > .zero else { failure = failure ?? XMPPClientError.timedOut; break }
+                    if candidates.isEmpty {
+                        guard !discovered else { break }
+                        discovered = true
+                        let resolved = await EndpointDiscovery.resolve(domain: domain, timeout: min(Self.discoveryTimeout, remaining))
+                        // Cancellation cuts the queries short; never dial what they left behind.
+                        try Task.checkCancellation()
+                        guard generation == token else { throw XMPPClientError.connectionClosed }
+                        if resolved.isEmpty { failure = XMPPClientError.serviceNotOffered }
+                        candidates = resolved.filter { !tried.contains($0) }
+                        continue
+                    }
+                    let endpoint = candidates.removeFirst()
+                    tried.insert(endpoint)
+                    do {
+                        try await connect(to: endpoint, token: token, within: min(Self.candidateTimeout, remaining))
+                        return XMPPConnectedSession(endpoint: endpoint, authenticatedWithSCRAM: authenticatedWithSCRAM)
+                    } catch let skipped as CandidateFailure {
+                        guard generation == token else { throw XMPPClientError.connectionClosed }
+                        // A refused STARTTLS says more than a later unreachable fallback.
+                        if (failure as? XMPPClientError) != .encryptionUnavailable { failure = skipped.error }
+                    }
+                }
+                throw failure ?? XMPPClientError.connectionClosed
             } onCancel: {
                 Task { await self.cancel(token) }
             }
         } catch {
-            if generation == token { finish("TLS connection failed") }
+            if generation == token { finish(Self.safeDescription(error, otherwise: "TLS connection failed"), error: error) }
             throw error
         }
+    }
+
+    /// One candidate, from TCP to online. A failure before commitment throws `CandidateFailure`.
+    private func connect(to endpoint: XMPPEndpoint, token: UUID, within candidateTimeout: Duration) async throws {
+        guard let port = NWEndpoint.Port(rawValue: endpoint.port), port.rawValue > 0 else { throw CandidateFailure(error: XMPPClientError.invalidConfiguration) }
+        framer = XMLStreamFramer(); phase = .features; committed = false; abandonedError = nil
+        let attemptID = UUID()
+        attempt = attemptID
+        let conn = NWConnection(host: NWEndpoint.Host(endpoint.host), port: port,
+                                using: XMPPTransport.parameters(for: endpoint.security, domain: domain,
+                                                                labCertificateAuthority: labCertificateAuthority, queue: queue))
+        connection = conn
+        deadline?.cancel()
+        deadline = Task { [weak self] in
+            do { try await Task.sleep(for: candidateTimeout) } catch { return }
+            guard await self?.candidateDeadline(token, attempt: attemptID) == true else { return }
+            do { try await Task.sleep(for: Self.loginTimeout - candidateTimeout) } catch { return }
+            await self?.timeout(token)
+        }
+        do {
+            try await Self.start(conn, queue: queue)
+            guard generation == token, attempt == attemptID else { throw XMPPClientError.connectionClosed }
+            try await write(streamOpening())
+        } catch {
+            guard generation == token else { throw XMPPClientError.connectionClosed }
+            abandonAttempt(attemptID, error: Self.transportError(error))
+            throw CandidateFailure(error: abandonedError ?? error)
+        }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            guard generation == token, attempt == attemptID else {
+                continuation.resume(throwing: generation == token ? CandidateFailure(error: abandonedError ?? XMPPClientError.connectionClosed)
+                                                                  : XMPPClientError.connectionClosed)
+                return
+            }
+            handshake = continuation
+            reader = Task { [weak self] in await self?.readLoop(conn, token: token, attempt: attemptID) }
+        }
+    }
+
+    /// Returns whether the attempt is still logging in (committed); an uncommitted one is abandoned.
+    private func candidateDeadline(_ token: UUID, attempt attemptID: UUID) -> Bool {
+        guard generation == token, attempt == attemptID else { return false }
+        if committed { return true }
+        abandonAttempt(attemptID, error: XMPPClientError.timedOut)
+        return false
+    }
+
+    /// Drops one uncommitted candidate without ending the connect or emitting a disconnect.
+    private func abandonAttempt(_ attemptID: UUID, error: Error) {
+        guard attempt == attemptID, !committed else { return }
+        attempt = UUID(); abandonedError = error
+        deadline?.cancel(); deadline = nil
+        connection?.cancel(); connection = nil
+        reader?.cancel()
+        handshake?.resume(throwing: CandidateFailure(error: error)); handshake = nil
     }
 
     public func disconnect() {
@@ -246,6 +379,15 @@ public actor XMPPClient {
     /// Application event consumers and senders must also be cancelled and joined by their owner.
     public func disconnectAndWait() async {
         let previousReader = reader
+        // XEP-0198 recommends a last `<a/>` before a graceful close. Without it the server still counts what we
+        // handled since its last `<r/>` as unacknowledged, and Prosody's mod_cloud_notify pushes for that queue
+        // when the session starts hibernating. Bounded: a stuck write ends the connection instead.
+        if phase == .online, smOffered, streamManagement != nil {
+            // One round trip first: what the server sent before its answer (our own presence reflected, a room's
+            // join answer) has then been read and, where it needs nothing durable, counted.
+            _ = try? await requestIQ(type: "get", to: nil, payload: "<ping xmlns='urn:xmpp:ping'/>", timeout: Self.farewellRoundTripLimit)
+            try? await withFarewellDeadline { try await self.writeAcknowledgement(detaching: true) }
+        }
         finish(nil)
         await previousReader?.value
         // Best effort, after the socket is gone so a held journal gate never delays the cancel: the
@@ -388,14 +530,14 @@ public actor XMPPClient {
         try await write(XMPPChatState.xml(state, to: to, id: UUID().uuidString, groupchat: groupchat))
     }
 
-    private func readLoop(_ conn: NWConnection, token: UUID) async {
+    private func readLoop(_ conn: NWConnection, token: UUID, attempt attemptID: UUID) async {
         do {
-            while generation == token && !Task.isCancelled {
+            while generation == token && attempt == attemptID && !Task.isCancelled {
                 let data = try await Self.receive(conn)
-                guard generation == token else { return }
+                guard generation == token, attempt == attemptID else { return }
                 inboundActivity &+= 1
                 for frame in try framer.feed(data) {
-                    guard generation == token else { return }
+                    guard generation == token, attempt == attemptID else { return }
                     switch frame {
                     case .opened: break
                     case .closed: throw XMPPClientError.connectionClosed
@@ -404,7 +546,8 @@ public actor XMPPClient {
                 }
             }
         } catch {
-            if generation == token { finish(Self.safeDescription(error), error: error) }
+            guard generation == token, attempt == attemptID else { return }
+            if committed { finish(Self.safeDescription(error), error: error) } else { abandonAttempt(attemptID, error: error) }
         }
     }
 
@@ -413,18 +556,33 @@ public actor XMPPClient {
         switch phase {
         case .features:
             guard node.name == "features", node.namespace == "http://etherx.jabber.org/streams" else { throw XMPPClientError.unexpectedProtocol }
-            let mechanisms = node.child("mechanisms", namespace: "urn:ietf:params:xml:ns:xmpp-sasl")
-            guard mechanisms?.children.contains(where: { $0.name == "mechanism" && $0.namespace == "urn:ietf:params:xml:ns:xmpp-sasl" && $0.text == "PLAIN" }) == true else { throw XMPPClientError.authenticationUnavailable }
+            committed = true
+            let mechanisms = node.child("mechanisms", namespace: SASLNegotiation.namespace)?.children
+                .filter { $0.name == "mechanism" && $0.namespace == SASLNegotiation.namespace }
+                .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) } ?? []
+            let negotiation = try SASLNegotiation(offered: Set(mechanisms), username: username, password: password, requireSCRAM: requireSCRAM)
+            password = ""
+            sasl = negotiation
             phase = .authentication
             try emit(.state(.authenticating))
-            let payload = Data(("\0" + username + "\0" + password).utf8).base64EncodedString()
-            password = ""
-            try await write("<auth xmlns='urn:ietf:params:xml:ns:xmpp-sasl' mechanism='PLAIN'>\(payload)</auth>")
+            try await write("<auth xmlns='\(SASLNegotiation.namespace)' mechanism='\(negotiation.mechanism.rawValue)'>\(SASLNegotiation.encode(negotiation.initialResponse))</auth>")
         case .authentication:
-            guard node.namespace == "urn:ietf:params:xml:ns:xmpp-sasl", node.name == "success" else { throw XMPPClientError.authenticationFailed }
-            phase = .authenticatedFeatures
-            framer = XMLStreamFramer()
-            try await write(streamOpening())
+            guard node.namespace == SASLNegotiation.namespace, var negotiation = sasl else { throw XMPPClientError.unexpectedProtocol }
+            switch node.name {
+            case "challenge":
+                let response = try negotiation.respond(to: SASLNegotiation.decode(node.text))
+                sasl = negotiation
+                try await write("<response xmlns='\(SASLNegotiation.namespace)'>\(response.base64EncodedString())</response>")
+            case "success":
+                try negotiation.complete(SASLNegotiation.decode(node.text))
+                sasl = nil
+                authenticatedWithSCRAM = negotiation.usesSCRAM
+                phase = .authenticatedFeatures
+                framer = XMLStreamFramer()
+                try await write(streamOpening())
+            case "failure": throw SASLNegotiation.error(forFailure: node)
+            default: throw XMPPClientError.unexpectedProtocol
+            }
         case .authenticatedFeatures:
             guard node.name == "features", node.namespace == "http://etherx.jabber.org/streams",
                   node.child("bind", namespace: "urn:ietf:params:xml:ns:xmpp-bind") != nil else { throw XMPPClientError.bindingFailed }
@@ -433,37 +591,50 @@ public actor XMPPClient {
             if smOffered, let snapshot = resumeSnapshot, let id = snapshot.streamID {
                 phase = .resumingSM
                 try await write("<resume xmlns='urn:xmpp:sm:3' previd='\(xmlEscaped(id))' h='\(UInt32(truncatingIfNeeded: snapshot.inboundHandled))'/>")
-            } else { try await startBinding() }
+            } else { try await startBinding(resource: resource) }
         case .binding:
+            if node.name == "iq", node.namespace == "jabber:client", node.attributes["id"] == bindID,
+               node.attributes["type"] == "error", !bindRetried {
+                // RFC 6120 §7.7.2: a conflict or refused resource. Let the server pick one rather than fail the session.
+                bindRetried = true
+                try await startBinding(resource: nil)
+                return
+            }
             guard node.name == "iq", node.namespace == "jabber:client", node.attributes["id"] == bindID,
                   node.attributes["type"] == "result",
                   let jid = node.child("bind", namespace: "urn:ietf:params:xml:ns:xmpp-bind")?.child("jid", namespace: "urn:ietf:params:xml:ns:xmpp-bind")?.text, !jid.isEmpty else { throw XMPPClientError.bindingFailed }
-            boundJID = jid
+            // The server picks the resource and the canonical spelling, never another account (RFC 6120 §7.7).
+            guard let bound = JID(jid), bound.localpart != nil, bound.resourcepart != nil,
+                  bound.bare == JID.normalizedBare(username + "@" + domain) else { throw XMPPIdentityError.boundAccountMismatch }
+            boundJID = bound.full
             if smOffered, streamManagement != nil {
                 phase = .enablingSM
-                try await write("<enable xmlns='urn:xmpp:sm:3' resume='true' max='300'/>")
+                // No `max`: the server's default applies (Prosody ignores the attribute; others cap it anyway).
+                try await write("<enable xmlns='urn:xmpp:sm:3' resume='true'/>")
             } else { try await becomeOnline(token: token) }
         case .enablingSM:
+            // The resource is stable, so the server may route to it (or replay a replaced session's queue) before
+            // `<enabled/>`. Such stanzas are not counted by the server and are dropped here; archives cover them.
+            if node.namespace == "jabber:client", ["message", "presence", "iq"].contains(node.name) { return }
             guard node.namespace == "urn:xmpp:sm:3", node.name == "enabled" else { throw XMPPClientError.unexpectedProtocol }
             let resumable = ["true", "1"].contains(node.attributes["resume"] ?? "false")
             let id = node.attributes["id"]
             guard !resumable || id.map(validArchiveID) == true else { throw XMPPClientError.unexpectedProtocol }
-            let maxSeconds = node.attributes["max"].flatMap(UInt32.init) ?? 300
+            let timeout = node.attributes["max"].flatMap(Self.smCount).map { min($0, StreamManagement.maxResumeTimeout) }
             try await streamManagement?.enable(accountID: username + "@" + domain, fullJID: boundJID,
-                                               streamID: resumable ? id : nil, expiresAt: Date().addingTimeInterval(Double(min(maxSeconds, 300))),
-                                               resumeTimeoutSeconds: min(maxSeconds, 300))
+                                               streamID: resumable ? id : nil, resumeTimeoutSeconds: resumable ? timeout : nil)
             try await becomeOnline(token: token)
         case .resumingSM:
             guard node.namespace == "urn:xmpp:sm:3" else { throw XMPPClientError.unexpectedProtocol }
             if node.name == "failed" {
                 // A failed resume never triggers blind retransmission; MAM reconciles uncertain sends.
                 resumeSnapshot = nil
-                try await startBinding()
+                try await startBinding(resource: resource)
             } else {
                 guard node.name == "resumed", let snapshot = resumeSnapshot,
                       node.attributes["previd"] == snapshot.streamID,
                       let h = Self.smCount(node.attributes["h"]), let streamManagement else { throw XMPPClientError.unexpectedProtocol }
-                boundJID = snapshot.fullJID
+                boundJID = JID.normalized(snapshot.fullJID) ?? snapshot.fullJID
                 let replay = try await streamManagement.acknowledge(h, resumed: true)
                 try emit(.streamAcknowledged)
                 guard try await streamManagement.permitsReplay() else { throw XMPPStreamManagementError.invalidState }
@@ -472,15 +643,15 @@ public actor XMPPClient {
                     guard entry.kind != .iq, let xml = entry.xml else { continue }
                     try await rawWrite(xml, expectedGeneration: token)
                 }
-                try await becomeOnline(token: token, presence: false)
+                try await becomeOnline(token: token, resumed: true)
             }
         case .online:
+            // Parse addresses once: everything below compares `from`/`to` (also forwarded ones) in normal form.
+            let node = JID.normalizingAddresses(node)
             if node.namespace == "urn:xmpp:sm:3" {
                 guard let streamManagement else { throw XMPPClientError.unexpectedProtocol }
                 if node.name == "r" {
-                    // Advertise only what the flush made durable; a failed commit ends the stream.
-                    let h = try await streamManagement.flushHandled()
-                    try await write("<a xmlns='urn:xmpp:sm:3' h='\(h)'/>")
+                    try await writeAcknowledgement()
                 } else if node.name == "a", let h = Self.smCount(node.attributes["h"]) {
                     _ = try await streamManagement.acknowledge(h)
                     try emit(.streamAcknowledged)
@@ -514,6 +685,7 @@ public actor XMPPClient {
                       let event = PresenceWire.event(node, accountBareJID: account, accountFullJID: boundJID, rooms: Set(groupRooms.keys)) {
                 try emit(event)
             }
+            let emittedBefore = emittedEvents
             if node.name == "message", node.namespace == "jabber:client" {
                 if Carbons.containsWrapper(node) {
                     // Malformed or foreign wrappers are discarded as a whole; their outer body
@@ -537,7 +709,10 @@ public actor XMPPClient {
                 }
             }
             if let inbound {
-                if node.name == "message" { try emit(.streamManagementBarrier(inbound)) }
+                // A message that produced events is handled once the consumer made them durable. One that produced
+                // none (a room subject, a message from an unknown room) owes nothing: it counts at once, so a final
+                // `<a/>` can cover it; contiguity still keeps h below any earlier stanza the consumer holds.
+                if node.name == "message", emittedEvents != emittedBefore { try emit(.streamManagementBarrier(inbound)) }
                 else { try await streamManagement?.handled(inbound) }
             }
         case .idle: throw XMPPClientError.unexpectedProtocol
@@ -547,6 +722,35 @@ public actor XMPPClient {
     public func configureStreamManagement(persistence: any XMPPStreamManagementPersistence) throws {
         guard connection == nil, phase == .idle else { throw XMPPClientError.alreadyConnected }
         streamManagement = StreamManagement(persistence)
+    }
+
+    /// The resource every fresh bind requests. Without one a client keeps the random one it was created with.
+    public func configureResource(_ resource: String) throws {
+        guard connection == nil, phase == .idle else { throw XMPPClientError.alreadyConnected }
+        guard Self.validResource(resource) else { throw XMPPClientError.invalidConfiguration }
+        self.resource = resource
+    }
+
+    /// `haus-` and 16 random hex digits: names the client, nothing about the user or the device.
+    public static func makeResource() -> String {
+        "haus-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16).lowercased()
+    }
+
+    public static func validResource(_ resource: String) -> Bool {
+        (1...64).contains(resource.utf8.count) && resource.utf8.allSatisfy {
+            (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 46 || $0 == 95
+        }
+    }
+
+    /// Before connecting: what the session announces once online (fresh or resumed). Online: announces it now if it
+    /// changed, bounded like a farewell, since the caller is on its way to the background.
+    public func setAvailability(_ availability: XMPPAvailability) async throws {
+        // Whole seconds, as the wire carries it: the same moment computed by two processes compares equal.
+        if case .away(let since?) = availability {
+            self.availability = .away(since: Date(timeIntervalSince1970: since.timeIntervalSince1970.rounded(.down)))
+        } else { self.availability = availability }
+        guard phase == .online else { return }
+        try await withFarewellDeadline { try await self.announceAvailability(initial: false) }
     }
 
     public func acknowledgeInbound(_ token: XMPPInboundToken) async throws {
@@ -595,25 +799,83 @@ public actor XMPPClient {
         }
     }
 
+    /// False once the stream has ended. A query that failed with `timedOut` while this is still true hit its own
+    /// deadline; after a lost connection (liveness probe) every pending query fails with that same error.
+    public var isOnline: Bool { phase == .online }
+
     private static func smCount(_ value: String?) -> UInt32? {
         guard let value, !value.isEmpty, value.utf8.allSatisfy({ (48...57).contains($0) }) else { return nil }
         return UInt32(value)
     }
 
-    private func startBinding() async throws {
+    /// nil asks the server to assign a resource.
+    private func startBinding(resource: String?) async throws {
         phase = .binding; bindID = UUID().uuidString
         try emit(.state(.binding))
-        try await write("<iq type='set' id='\(bindID)'><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'><resource>ios-lab-\(UUID().uuidString.prefix(8))</resource></bind></iq>")
+        let requested = resource.map { "<resource>\(xmlEscaped($0))</resource>" } ?? ""
+        try await write("<iq type='set' id='\(bindID)'><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'>\(requested)</bind></iq>")
     }
 
-    private func becomeOnline(token: UUID, presence: Bool = true) async throws {
-        if presence { try await write("<presence>\(EntityCapabilities.presenceElement)</presence>") }
+    private func becomeOnline(token: UUID, resumed: Bool = false) async throws {
+        announced = resumed ? resumeSnapshot?.availability : nil
+        try await announceAvailability(initial: !resumed)
         guard generation == token else { throw XMPPClientError.connectionClosed }
-        sessionResumed = !presence
+        sessionResumed = resumed
         phase = .online; deadline?.cancel(); deadline = nil
         liveness = Task { [weak self] in await self?.livenessLoop(token: token) }
         try emit(.state(.online(jid: boundJID)))
         handshake?.resume(); handshake = nil
+    }
+
+    /// A fresh session always sends initial presence. Otherwise presence goes out only when it differs from what the
+    /// server holds: a resumed session keeps the presence an earlier process announced, and repeating it would reach
+    /// every contact and push their hibernating sessions, whose extensions would answer in kind. CSI is a nonza that
+    /// goes nowhere else, so it is always restated. Presence goes before CSI `<inactive/>`, which would otherwise let
+    /// the server hold it back.
+    private func announceAvailability(initial: Bool) async throws {
+        let presence = initial || announced != availability
+        switch availability {
+        case .active:
+            if !initial, csiOffered { try await write(PushNotifications.clientStateXML(active: true)) }
+            if presence { try await write(Self.presenceXML(.active)) }
+        case .away:
+            if presence { try await write(Self.presenceXML(availability)) }
+            if csiOffered { try await write(PushNotifications.clientStateXML(active: false)) }
+        }
+        announced = availability
+        if presence { try await streamManagement?.recordAvailability(availability) }
+    }
+
+    static func presenceXML(_ availability: XMPPAvailability) -> String {
+        guard case .away(let since?) = availability else { return "<presence>\(EntityCapabilities.presenceElement)</presence>" }
+        let stamp = since.formatted(.iso8601)
+        return "<presence>\(EntityCapabilities.presenceElement)<idle xmlns='\(PresenceWire.idleNamespace)' since='\(stamp)'/></presence>"
+    }
+
+    /// Persists the handled count and writes it as `<a/>` under the write gate, so two acknowledgements can never
+    /// reach the server out of order. The advertised h is always the persisted value; a failed commit ends the stream.
+    private func writeAcknowledgement(detaching: Bool = false) async throws {
+        guard let streamManagement else { throw XMPPClientError.unexpectedProtocol }
+        let token = generation
+        await writeGate.enter()
+        do {
+            guard token == generation else { throw XMPPClientError.connectionClosed }
+            let h = detaching ? try await streamManagement.detach() : try await streamManagement.flushHandled()
+            try await rawWrite("<a xmlns='urn:xmpp:sm:3' h='\(h)'/>", expectedGeneration: token)
+            await writeGate.leave()
+        } catch { await writeGate.leave(); throw error }
+    }
+
+    /// Ends this connection if `work` has not finished within `farewellWriteLimit`; cancelling the socket also
+    /// completes a write it was still holding.
+    private func withFarewellDeadline(_ work: () async throws -> Void) async throws {
+        let token = generation
+        let watchdog = Task { [weak self] in
+            guard (try? await Task.sleep(for: Self.farewellWriteLimit)) != nil else { return }
+            await self?.cancel(token)
+        }
+        defer { watchdog.cancel() }
+        try await work()
     }
 
     /// The socket can die without an error (NAT timeout, network change). After a silent
@@ -1017,9 +1279,13 @@ public actor XMPPClient {
 
     private func streamOpening() -> String { "<stream:stream to='\(xmlEscaped(domain))' xmlns='jabber:client' xmlns:stream='http://etherx.jabber.org/streams' version='1.0'>" }
     private func emit(_ event: XMPPEvent) throws {
+        emittedEvents &+= 1
         switch continuation.yield(event) {
         case .enqueued: break
-        case .dropped, .terminated: throw XMPPClientError.eventConsumerTooSlow
+        case .dropped: throw XMPPClientError.eventConsumerTooSlow
+        // Online, a finished stream means the owner stopped consuming on its way to `disconnectAndWait`, possibly
+        // before it: the connection stays for the farewell. A message's barrier then never counts it as handled.
+        case .terminated: if phase != .online { throw XMPPClientError.eventConsumerTooSlow }
         @unknown default: throw XMPPClientError.eventConsumerTooSlow
         }
     }
@@ -1041,7 +1307,7 @@ public actor XMPPClient {
         reader?.cancel()
         deadline?.cancel(); deadline = nil
         liveness?.cancel(); liveness = nil
-        password = ""; phase = .idle; csiOffered = false
+        password = ""; sasl = nil; phase = .idle; csiOffered = false; bindRetried = false
         if case .dropped = continuation.yield(.state(.disconnected(reason))) { continuation.finish() }
     }
     private func write(_ xml: String, groupSnapshot: XMPPGroupRoomSnapshot? = nil) async throws {
@@ -1091,7 +1357,8 @@ public actor XMPPClient {
                 case .failed(let error): result.finish(error)
                 // Waiting is recoverable (for example the first local-network permission
                 // prompt). Keep the attempt alive until ready, cancellation or our deadline.
-                case .waiting: break
+                // A refused port, a failed TLS handshake or a missing name will not recover: move to the next candidate.
+                case .waiting(let error): if definitive(error) { result.finish(error) }
                 case .cancelled: result.finish(XMPPClientError.connectionClosed)
                 default: break
                 }
@@ -1099,17 +1366,34 @@ public actor XMPPClient {
             connection.start(queue: queue)
         }
     }
-    private static func safeDescription(_ error: Error) -> String {
+    private static func definitive(_ error: NWError) -> Bool {
+        switch error {
+        case .posix(.ECONNREFUSED), .tls: true
+        case .dns(let code): code == DNSServiceErrorType(kDNSServiceErr_NoSuchRecord) || code == DNSServiceErrorType(kDNSServiceErr_NoSuchName)
+        default: error == XMPPTransport.startTLSRefused || error == .posix(.EBADMSG)
+        }
+    }
+    private static func transportError(_ error: Error) -> Error {
+        (error as? NWError) == XMPPTransport.startTLSRefused ? XMPPClientError.encryptionUnavailable : error
+    }
+    private static func safeDescription(_ error: Error, otherwise: String = "Connection ended") -> String {
         switch error {
         case XMPPClientError.authenticationFailed: "Authentication failed"
-        case XMPPClientError.authenticationUnavailable: "Server does not offer the laboratory authentication mechanism"
+        case XMPPClientError.authenticationUnavailable: "Server offers no supported authentication mechanism"
+        case XMPPClientError.authenticationRetryable: "Server could not authenticate now"
+        case XMPPClientError.authenticationDowngrade: "Server no longer offers SCRAM"
+        case XMPPClientError.encryptionUnavailable: "Server did not offer TLS"
+        case XMPPClientError.serviceNotOffered: "Domain offers no XMPP client service"
         case XMPPClientError.bindingFailed: "Resource binding failed"
         case XMPPClientError.eventConsumerTooSlow: "Event consumer could not keep up"
         case is XMLStreamError: "Invalid or oversized server XML"
-        default: "Connection ended"
+        default: otherwise
         }
     }
 }
+
+/// A candidate endpoint failed before the connect committed to it; the next one is tried.
+private struct CandidateFailure: Error { let error: Error }
 
 /// NWConnection callbacks are serialized on their queue; the lock also protects cancellation delivery.
 private final class ConnectionStart: @unchecked Sendable {

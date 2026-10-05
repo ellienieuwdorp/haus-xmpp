@@ -94,6 +94,33 @@ struct AccountEncryptionState: Codable {
         incompatiblePeers = try values.decodeIfPresent([String: Bool].self, forKey: .incompatiblePeers) ?? [:]
         pendingBundlePublications = try values.decodeIfPresent(Set<String>.self, forKey: .pendingBundlePublications) ?? []
         groupRooms = try values.decodeIfPresent([String: [String]].self, forKey: .groupRooms) ?? [:]
+        normalizeOwners()
+    }
+
+    /// Owners and rooms in normal form (`JID`), for state saved before addresses were normalised. The engines' own
+    /// session addresses stay opaque; a device keyed under another spelling gets a fresh session. An entry that
+    /// collides with one already in normal form yields to it, so a merge never raises a trust decision.
+    private mutating func normalizeOwners() {
+        func normal(_ jid: String) -> String { JID.normalizedBare(jid) ?? jid }
+        guard devices.contains(where: { normal($0.jid) != $0.jid }) || profiles.keys.contains(where: { normal($0) != $0 })
+                || incompatiblePeers.keys.contains(where: { normal($0) != $0 })
+                || groupRooms.contains(where: { normal($0.key) != $0.key || $0.value.contains { normal($0) != $0 } }) else { return }
+        var seen = Set(devices.filter { normal($0.jid) == $0.jid }.map(\.id))
+        devices = devices.compactMap { device in
+            guard normal(device.jid) != device.jid else { return device }
+            let moved = EncryptionDevice(jid: normal(device.jid), profile: device.profile, deviceID: device.deviceID, identityKey: device.identityKey,
+                                         trust: device.trust, active: device.active, identityChanged: device.identityChanged)
+            guard seen.insert(moved.id).inserted else { return nil }
+            if bundles[moved.id] == nil { bundles[moved.id] = bundles[device.id] }
+            bundles[device.id] = nil
+            return moved
+        }
+        func rekeyed<Value>(_ map: [String: Value]) -> [String: Value] {
+            map.filter { normal($0.key) == $0.key }.merging(map.map { (normal($0.key), $0.value) }) { kept, _ in kept }
+        }
+        profiles = rekeyed(profiles)
+        incompatiblePeers = rekeyed(incompatiblePeers)
+        groupRooms = rekeyed(groupRooms).mapValues { members in members.map(normal).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } } }
     }
 }
 

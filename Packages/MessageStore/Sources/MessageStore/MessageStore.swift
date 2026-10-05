@@ -8,15 +8,59 @@ public actor MessageStore {
     private let connection: Connection
     private let transportOwnership: TransportOwnership
 
-    public init(url: URL) throws {
+    /// The schema this build writes.
+    public static let currentSchemaVersion = 23
+
+    /// How opening treats a file written by an older build.
+    public enum SchemaAccess: Sendable {
+        /// Bring it to the current schema (or create it) while opening.
+        case upgrade
+        /// Refuse an older schema with `upgradeRequired` before writing anything: for processes that must never
+        /// migrate (the notification extension). The file must already exist.
+        case currentOnly
+        /// Open the file as it is and write nothing. The owner takes the transport lease and then either copies it
+        /// (`writeSnapshot`), moves it (`closeForMigration`) or migrates it (`upgradeSchema`). The file must exist.
+        case asIs
+    }
+
+    /// `user_version` when this store was opened, before any migration it ran.
+    public nonisolated let openedSchemaVersion: Int
+    private let url: URL
+    /// The database file this connection opened; a lease is never granted over a file replaced since.
+    private let fileIdentity: FileIdentity
+
+    public init(url: URL) throws { try self.init(url: url, schema: .upgrade) }
+
+    public init(url: URL, schema access: SchemaAccess) throws {
         transportOwnership = try TransportOwnership(url: url)
-        connection = try Connection(url: url)
+        connection = try Connection(url: url, create: access == .upgrade)
+        self.url = url
+        guard let identity = FileIdentity(path: url.path) else { throw MessageStoreError.closed }
+        fileIdentity = identity
         try connection.execute("PRAGMA foreign_keys = ON")
-        try connection.execute("PRAGMA journal_mode = WAL")
         try connection.execute("PRAGMA synchronous = FULL")
+        let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
+        openedSchemaVersion = version
+        guard version <= Self.currentSchemaVersion else { throw MessageStoreError.unsupportedSchema(version) }
+        switch access {
+        case .upgrade: try Self.migrate(connection)
+        case .currentOnly: guard version == Self.currentSchemaVersion else { throw MessageStoreError.upgradeRequired(version) }
+        case .asIs: break
+        }
+    }
+
+    /// Migrates a store opened `asIs` to the current schema. Holding the lease keeps every other process (which opens
+    /// `currentOnly` or waits for the lease) away from the file while it changes.
+    public func upgradeSchema() throws {
+        try requireTransportOwnership()
+        try Self.migrate(connection)
+    }
+
+    private static func migrate(_ connection: Connection) throws {
+        try connection.execute("PRAGMA journal_mode = WAL")
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
-            guard version <= 21 else { throw MessageStoreError.unsupportedSchema(version) }
+            guard version <= currentSchemaVersion else { throw MessageStoreError.unsupportedSchema(version) }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -326,7 +370,25 @@ public actor MessageStore {
                     FOREIGN KEY(account_id,target_message_id) REFERENCES messages(account_id,id) ON DELETE CASCADE
                 )
                 """)
-            try connection.execute("PRAGMA user_version = 21")
+            // v22: the archive time of each checkpoint's entry, so a walk whose cursor the server no longer holds restarts by
+            // time (XEP-0313 `start`), and one row per lost cursor. Column and table checks keep it idempotent in any merge order.
+            if version < 22, try connection.query("SELECT 1 FROM pragma_table_info('archive_checkpoints') WHERE name='stamp'").isEmpty {
+                try connection.execute("ALTER TABLE archive_checkpoints ADD COLUMN stamp REAL")
+            }
+            if version < 22 {
+                try connection.execute("""
+                    CREATE TABLE IF NOT EXISTS archive_gaps (
+                        account_id TEXT NOT NULL, archive_id TEXT NOT NULL, cursor TEXT NOT NULL, since REAL, detected_at REAL NOT NULL,
+                        PRIMARY KEY(account_id, archive_id, cursor)
+                    )
+                    """)
+            }
+            // v23: stored addresses in normal form; merges chats that differ only in spelling. `AddressMigration` checks
+            // each table and column exists and is idempotent, so it is safe in any merge order. A rewrite it had to roll
+            // back leaves the version below 23, so a later open tries again instead of stranding the typed spelling.
+            try AddressMigration.addSealedAccountColumns(connection)
+            let addressesMigrated = try version >= 23 || AddressMigration.run(connection)
+            try connection.execute("PRAGMA user_version = \(addressesMigrated ? 23 : 22)")
         }
     }
 
@@ -424,6 +486,78 @@ public actor MessageStore {
     public func acquireTransportOwnership() throws {
         guard connection.isOpen else { throw MessageStoreError.closed }
         try transportOwnership.acquire()
+        // A restore or directory move replaced the file while this connection waited: it must not write into, or
+        // connect for, data nobody will read again.
+        guard FileIdentity(path: url.path) == fileIdentity else {
+            transportOwnership.release()
+            throw MessageStoreError.replaced
+        }
+    }
+
+    /// Copies the database, as one committed state, to a new file at `destination` with SQLite's online backup API:
+    /// page by page through this connection's read transaction, so frames still in the WAL are included and the
+    /// source is only read (no checkpoint, no journal-mode or version change, same page size and layout). The copy
+    /// is then reopened and checked (`verifySnapshot`) against the counts read in that same transaction. Requires the
+    /// lease, so no other process writes meanwhile.
+    public func writeSnapshot(to destination: URL) throws -> StoreSnapshotSummary {
+        try requireTransportOwnership()
+        guard let source = connection.handle else { throw MessageStoreError.closed }
+        for suffix in ["", "-wal", "-shm", "-journal"] { try? FileManager.default.removeItem(atPath: destination.path + suffix) }
+        try connection.execute("BEGIN")
+        let summary: StoreSnapshotSummary
+        do {
+            summary = try StoreSnapshotSummary(connection)
+            let copy = try Connection(url: destination)
+            defer { try? copy.close() }
+            guard let backup = sqlite3_backup_init(copy.handle, "main", source, "main") else {
+                throw copy.error(sqlite3_errcode(copy.handle))
+            }
+            let stepped = sqlite3_backup_step(backup, -1)
+            let finished = sqlite3_backup_finish(backup)
+            guard stepped == SQLITE_DONE else { throw copy.error(stepped) }
+            guard finished == SQLITE_OK else { throw copy.error(finished) }
+            // At rest the copy is one self-contained file in rollback-journal mode, so reading or verifying it leaves
+            // no WAL sidecars that could be mistaken for part of it. Every build switches it back to WAL when it opens.
+            guard try copy.query("PRAGMA journal_mode = DELETE").first?.first?.optionalString == "delete" else {
+                throw MessageStoreError.snapshotMismatch("journal mode")
+            }
+            try copy.close()
+            // Nothing has the copy open: sidecars left from its brief WAL phase are empty and not part of it.
+            for suffix in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: destination.path + suffix) }
+            try connection.execute("COMMIT")
+        } catch { try? connection.execute("ROLLBACK"); throw error }
+        try Self.verifySnapshot(at: destination, matches: summary)
+        return summary
+    }
+
+    /// Checks a copy made by `writeSnapshot` (then or later, before it is restored): `integrity_check` is ok, and the
+    /// schema version and every table's row count equal what was read from the source.
+    public static func verifySnapshot(at url: URL, matches expected: StoreSnapshotSummary) throws {
+        let copy = try Connection(url: url, create: false)
+        defer { try? copy.close() }
+        let integrity = try copy.query("PRAGMA integrity_check").compactMap { $0.first?.optionalString }
+        guard integrity == ["ok"] else { throw MessageStoreError.snapshotMismatch("integrity: " + integrity.prefix(3).joined(separator: "; ")) }
+        let found = try StoreSnapshotSummary(copy)
+        guard found.schemaVersion == expected.schemaVersion else {
+            throw MessageStoreError.snapshotMismatch("schema \(found.schemaVersion) != \(expected.schemaVersion)")
+        }
+        guard found.rowCounts == expected.rowCounts else {
+            let differing = Set(found.rowCounts.keys).union(expected.rowCounts.keys).filter { found.rowCounts[$0] != expected.rowCounts[$0] }
+            throw MessageStoreError.snapshotMismatch("row counts differ: " + differing.sorted().joined(separator: ","))
+        }
+    }
+
+    /// Whether this store holds the transport lease right now. A caller that gave it up, or never got it, reads false.
+    public var holdsTransportOwnership: Bool { transportOwnership.isHeld }
+
+    /// Switches a database file nobody has open to write-ahead logging, as every build keeps its live store. A copy put
+    /// back at the current schema (which opening does not migrate) would otherwise stay in rollback-journal mode.
+    public static func useWriteAheadLog(at url: URL) throws {
+        let file = try Connection(url: url, create: false)
+        defer { try? file.close() }
+        guard try file.query("PRAGMA journal_mode = WAL").first?.first?.optionalString == "wal" else {
+            throw MessageStoreError.snapshotMismatch("journal mode")
+        }
     }
 
     /// Stop and join all socket/sender/crypto work before closing. This deterministic lifecycle
@@ -734,23 +868,68 @@ public actor MessageStore {
         }
     }
 
+    /// See `PendingRetentionLimits`. The account ceiling keeps the earlier bound (and the retry pass's cost) at 1,000 rows.
+    /// 250 per known sender lets four contacts' unreviewed devices back up for days at once; 20 per stranger covers a
+    /// first-contact burst; strangers stop at 200 rows in all, which leaves at least 800 for known contacts.
+    public static let pendingLimits = PendingRetentionLimits(perKnownSender: 250, perStranger: 20, strangerCeiling: 200, perAccount: 1_000)
+
     /// Keeps ciphertext that may still decrypt later. An existing row keeps its reason: classification is explicit.
     /// `notification` names the chat of an incoming message that is waiting for trust or keys: the new row then also
     /// becomes a notification candidate (plan D5), which is removed with the row when it commits or is converted.
+    /// A new row beyond `pendingLimits` is not kept: `overflow` is recorded in the same transaction instead (its quiet
+    /// placeholder, or only the consumed replay identity), so a full table still yields a durable final outcome and the
+    /// stream and archive walk keep moving. Without `overflow` the conversation is taken to be the sender's direct chat
+    /// and the identity is consumed. Returns false exactly when a limit applied the overflow.
+    @discardableResult
     public func retainEncryptedIncoming(accountID: String, sender: String, digest: String, wire: Data,
                                         reason: PendingEncryptedReason = .trustPending,
-                                        notification: PendingNotificationContext? = nil) throws {
+                                        notification: PendingNotificationContext? = nil,
+                                        overflow: RetentionOverflow? = nil) throws -> Bool {
         guard !accountID.isEmpty, !sender.isEmpty, !digest.isEmpty, !wire.isEmpty, wire.count <= 1_048_576 else { throw MessageStoreError.invalidValue }
-        try connection.transaction {
-            if try hasEncryptedIncoming(accountID: accountID, sender: sender, digest: digest) { return }
-            if try !connection.query("SELECT 1 FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?", [.text(accountID), .text(sender), .text(digest)]).isEmpty { return }
-            guard try connection.query("SELECT COUNT(*) FROM pending_encrypted_inbox WHERE account_id=?", [.text(accountID)]).first![0].integer < 1000 else { throw MessageStoreError.invalidValue }
+        let chatID = overflow?.chatID ?? sender
+        guard !chatID.isEmpty, chatID.utf8.count <= 3071 else { throw MessageStoreError.invalidValue }
+        if let placeholder = overflow?.placeholder {
+            try Self.validate(placeholder)
+            guard placeholder.accountID == accountID, placeholder.reason == .retentionLimit,
+                  placeholder.key == .ciphertext(sender: sender, digest: digest) else { throw MessageStoreError.invalidValue }
+        }
+        return try connection.transaction {
+            if try hasEncryptedIncoming(accountID: accountID, sender: sender, digest: digest) { return true }
+            if try !connection.query("SELECT 1 FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?", [.text(accountID), .text(sender), .text(digest)]).isEmpty { return true }
+            guard try admitsPending(accountID: accountID, sender: sender, chatID: chatID, approved: overflow?.senderApproved ?? false) else {
+                if let placeholder = overflow?.placeholder {
+                    _ = try insertUnreadableInTransaction(placeholder)
+                } else {
+                    try connection.execute("INSERT OR IGNORE INTO encrypted_inbox(account_id,sender,digest) VALUES(?,?,?)", [.text(accountID), .text(sender), .text(digest)])
+                }
+                return false
+            }
             try connection.execute("INSERT INTO pending_encrypted_inbox(account_id,sender,digest,wire,reason) VALUES(?,?,?,?,?)", [.text(accountID), .text(sender), .text(digest), .blob(wire), .text(reason.rawValue)])
             if let notification, try queuesPendingNotification(accountID: accountID, sender: sender, digest: digest, context: notification) {
                 try connection.execute("INSERT OR IGNORE INTO pending_notification_candidates(account_id,sender,digest,chat_id,sent_at) VALUES(?,?,?,?,?)",
                                        [.text(accountID), .text(sender), .text(digest), .text(notification.chatID), .real(notification.sentAt.timeIntervalSince1970)])
             }
+            return true
         }
+    }
+
+    /// Whether one more row from `sender` fits `pendingLimits`: two primary-key range counts, and the known-sender lookup
+    /// only when a stranger's limit would bind. An approved sender device's row answers to the account ceiling alone.
+    private func admitsPending(accountID: String, sender: String, chatID: String, approved: Bool) throws -> Bool {
+        let limits = Self.pendingLimits
+        let total = try connection.query("SELECT COUNT(*) FROM pending_encrypted_inbox WHERE account_id=?", [.text(accountID)]).first![0].integer
+        if approved { return total < limits.perAccount }
+        let held = try connection.query("SELECT COUNT(*) FROM pending_encrypted_inbox WHERE account_id=? AND sender=?", [.text(accountID), .text(sender)]).first![0].integer
+        guard total < limits.perAccount, held < limits.perKnownSender else { return false }
+        guard held >= limits.perStranger || total >= limits.strangerCeiling else { return true }
+        if sender == accountID { return true }
+        // The account wrote in this conversation or to the sender directly, or a message of theirs was authenticated in
+        // their direct chat or, decrypted, in this room (a placeholder never counts). All are prefixes of the timeline index.
+        return try !connection.query("""
+            SELECT 1 FROM messages WHERE account_id=?1 AND ((chat_id IN (?2,?3) AND outgoing=1)
+                OR (chat_id=?3 AND sender_id=?3 AND outgoing=0 AND unreadable_reason IS NULL)
+                OR (chat_id=?2 AND sender_id=?3 AND outgoing=0 AND unreadable_reason IS NULL AND encryption_profile='modern')) LIMIT 1
+            """, [.text(accountID), .text(chatID), .text(sender)]).isEmpty
     }
 
     /// Retained ciphertext has no message row, so the shared notification rules see a stand-in with the conversation,
@@ -777,10 +956,11 @@ public actor MessageStore {
         }
     }
 
-    /// The keys of every retained ciphertext row (at most 1000 per account), without wires. Notification cleanup keeps a
-    /// delivered review notification (plan D5) only while its ciphertext is still retained here.
+    /// The keys of every retained ciphertext row (at most `pendingLimits.perAccount`), without wires. Notification cleanup
+    /// keeps a delivered review notification (plan D5) only while its ciphertext is still retained here.
     public func retainedEncryptedIncomingKeys(accountID: String) throws -> [NotificationCandidateKey] {
-        try connection.query("SELECT sender,digest FROM pending_encrypted_inbox WHERE account_id=? ORDER BY rowid LIMIT 1000", [.text(accountID)])
+        try connection.query("SELECT sender,digest FROM pending_encrypted_inbox WHERE account_id=? ORDER BY rowid LIMIT ?",
+                             [.text(accountID), .integer(Self.pendingLimits.perAccount)])
             .map { .pending(sender: $0[0].string, digest: $0[1].string) }
     }
 
@@ -789,14 +969,16 @@ public actor MessageStore {
     /// and removes the pending row. Returns true when the row was inserted now. Does not require transport ownership
     /// (the extension's archive walk and the app's live path both call it, exactly like `commitEncryptedIncoming`).
     /// The row is never plaintext, never authenticated and never an event target. An incoming placeholder from someone
-    /// else is a notification candidate (plan D5: "Sent a message this device can't read"); an own-device one never is.
+    /// else is a notification candidate (plan D5: "Sent a message this device can't read") when its reason `alerts`; an
+    /// own-device one never is.
     @discardableResult public func recordUnreadableMessage(_ placeholder: UnreadableMessage) throws -> Bool {
         try Self.validate(placeholder)
         return try connection.transaction { try insertUnreadableInTransaction(placeholder) }
     }
 
     /// Consumes the replay identity of ciphertext that failed permanently but was never a message bubble (a key transport
-    /// from a trusted device whose session no longer decrypts): no row, no session change, the pending copy is removed.
+    /// from a trusted device whose session no longer decrypts, or any non-bubble from a blocked device): no row, no session
+    /// change, the pending copy (and its review candidate) is removed.
     public func consumeUndecryptableIncoming(accountID: String, sender: String, digest: String) throws {
         guard !accountID.isEmpty, !sender.isEmpty, !digest.isEmpty, digest.utf8.count <= 128 else { throw MessageStoreError.invalidValue }
         try connection.transaction {
@@ -836,7 +1018,7 @@ public actor MessageStore {
                   .real(placeholder.sentAt.timeIntervalSince1970), .integer(placeholder.isOutgoing ? 1 : 0),
                   .text(Self.unreadableProfile), .text(placeholder.reason.rawValue)])
         let inserted = try connection.query("SELECT changes()").first?[0].integer == 1
-        if inserted, !placeholder.isOutgoing, let row = try message(accountID: placeholder.accountID, messageID: placeholder.id),
+        if inserted, !placeholder.isOutgoing, placeholder.reason.alerts, let row = try message(accountID: placeholder.accountID, messageID: placeholder.id),
            try queuesNotification(accountID: placeholder.accountID, message: row) {
             try connection.execute("INSERT OR IGNORE INTO notification_candidates(account_id,message_id) VALUES(?,?)", [account, .text(placeholder.id)])
         }
@@ -871,9 +1053,14 @@ public actor MessageStore {
     }
 
     public func encryptionState(accountID: String) throws -> EncryptionState? {
-        guard let row = try connection.query("SELECT revision,snapshot FROM encryption_state WHERE account_id=?", [.text(accountID)]).first else { return nil }
+        guard let row = try connection.query("SELECT revision,snapshot,sealed_account FROM encryption_state WHERE account_id=?", [.text(accountID)]).first else { return nil }
         guard let data = row[1].data, !data.isEmpty else { throw MessageStoreError.invalidValue }
-        return EncryptionState(revision: row[0].integer, data: data)
+        return EncryptionState(revision: row[0].integer, data: data, sealedAccount: row[2].optionalString)
+    }
+
+    /// Every account with saved encryption state, in the spelling its row is keyed by.
+    public func encryptionStateAccountIDs() throws -> [String] {
+        try connection.query("SELECT account_id FROM encryption_state").map { $0[0].string }
     }
 
     /// A failed comparison or any persistence error rolls back the whole operation. The caller
@@ -910,7 +1097,7 @@ public actor MessageStore {
         guard current == expectedRevision, (current ?? 0) < Int.max else { throw MessageStoreError.invalidTransition }
         try connection.execute("""
             INSERT INTO encryption_state(account_id,revision,snapshot) VALUES(?,?,?)
-            ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision,snapshot=excluded.snapshot
+            ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision,snapshot=excluded.snapshot,sealed_account=NULL
             """, [.text(accountID), .integer((current ?? 0) + 1), .blob(data)])
     }
 
@@ -1111,6 +1298,12 @@ public actor MessageStore {
             try connection.execute("UPDATE chats SET room_nickname=? WHERE account_id=? AND id=?", [.text(nickname), .text(accountID), .text(room)])
             guard try connection.query("SELECT changes()").first?[0].integer == 1 else { throw MessageStoreError.invalidValue }
         }
+    }
+
+    /// The nickname `setGroupNickname` kept for `room`; nil for a room joined before the store kept it. The extension
+    /// and notification actions rejoin with it, so the room sees the same occupant the app is.
+    public func groupNickname(accountID: String, room: String) throws -> String? {
+        try connection.query("SELECT room_nickname FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(room)]).first?[0].optionalString
     }
 
     /// Test seam: the queued candidates' message IDs, oldest first.
@@ -1525,14 +1718,15 @@ public actor MessageStore {
     }
 
     public func archiveCheckpoint(accountID: String, archiveID: String) throws -> ArchiveCheckpoint? {
-        guard let row = try connection.query("SELECT revision,cursor FROM archive_checkpoints WHERE account_id=? AND archive_id=?", [.text(accountID), .text(archiveID)]).first else { return nil }
-        return ArchiveCheckpoint(revision: row[0].integer, cursor: row[1].string)
+        guard let row = try connection.query("SELECT revision,cursor,stamp FROM archive_checkpoints WHERE account_id=? AND archive_id=?", [.text(accountID), .text(archiveID)]).first else { return nil }
+        return ArchiveCheckpoint(revision: row[0].integer, cursor: row[1].string, stamp: row[2].optionalDate)
     }
 
     /// Advance only after all page results have committed to durable inbox/message storage. CAS
     /// prevents a late page from another synchronization run from overwriting newer progress.
+    /// `stamp` is the archive time of the entry `cursor` names (`ArchiveCheckpoint.stamp`).
     @discardableResult public func saveArchiveCheckpoint(accountID: String, archiveID: String,
-                                                         expectedRevision: Int?, cursor: String) throws -> Int {
+                                                         expectedRevision: Int?, cursor: String, stamp: Date? = nil) throws -> Int {
         try requireTransportOwnership()
         guard !accountID.isEmpty, !archiveID.isEmpty, !cursor.isEmpty, cursor.utf8.count <= 4096 else { throw MessageStoreError.invalidValue }
         return try connection.transaction {
@@ -1540,10 +1734,26 @@ public actor MessageStore {
             guard current == expectedRevision, (current ?? 0) < Int.max else { throw MessageStoreError.invalidTransition }
             let next = (current ?? 0) + 1
             try connection.execute("""
-                INSERT INTO archive_checkpoints(account_id,archive_id,revision,cursor) VALUES(?,?,?,?)
-                ON CONFLICT(account_id,archive_id) DO UPDATE SET revision=excluded.revision,cursor=excluded.cursor
-                """, [.text(accountID), .text(archiveID), .integer(next), .text(cursor)])
+                INSERT INTO archive_checkpoints(account_id,archive_id,revision,cursor,stamp) VALUES(?,?,?,?,?)
+                ON CONFLICT(account_id,archive_id) DO UPDATE SET revision=excluded.revision,cursor=excluded.cursor,stamp=excluded.stamp
+                """, [.text(accountID), .text(archiveID), .integer(next), .text(cursor), stamp.map { .real($0.timeIntervalSince1970) } ?? .null])
             return next
+        }
+    }
+
+    /// Records that the server no longer held `cursor`, once per lost cursor (see `ArchiveGap`).
+    public func recordArchiveGap(accountID: String, archiveID: String, cursor: String, since: Date?, detectedAt: Date = Date()) throws {
+        try requireTransportOwnership()
+        guard !accountID.isEmpty, !archiveID.isEmpty, !cursor.isEmpty, cursor.utf8.count <= 4096 else { throw MessageStoreError.invalidValue }
+        try connection.execute("INSERT OR IGNORE INTO archive_gaps(account_id,archive_id,cursor,since,detected_at) VALUES(?,?,?,?,?)",
+                               [.text(accountID), .text(archiveID), .text(cursor), since.map { .real($0.timeIntervalSince1970) } ?? .null,
+                                .real(detectedAt.timeIntervalSince1970)])
+    }
+
+    /// Every recorded gap of the account, oldest detection first.
+    public func archiveGaps(accountID: String) throws -> [ArchiveGap] {
+        try connection.query("SELECT archive_id,since,detected_at FROM archive_gaps WHERE account_id=? ORDER BY detected_at,archive_id", [.text(accountID)]).map {
+            ArchiveGap(archiveID: $0[0].string, since: $0[1].optionalDate, detectedAt: Date(timeIntervalSince1970: $0[2].double))
         }
     }
 
@@ -1574,31 +1784,37 @@ public actor MessageStore {
 
     /// The first page of a newest-first sync: the archive's first forward checkpoint and its backfill cursor commit in
     /// one transaction, so an interruption can never leave one without the other. Requires that the archive has no
-    /// checkpoint yet. A backfill row that is already there (an interrupted first sync of an earlier build) is replaced:
-    /// paging back from this newer page walks through whatever lies between, and reprocessing an entry is idempotent,
-    /// whereas keeping the older cursor would leave the entries between the two pages unfetched by either walk.
+    /// checkpoint yet, or, with `replacing`, that its checkpoint is at that revision: a walk whose cursor the server no
+    /// longer holds and whose checkpoint has no `stamp` restarts from the newest page. A backfill row that is already
+    /// there (an interrupted first sync of an earlier build, or history behind the lost cursor) is replaced: paging back
+    /// from this newer page walks through whatever lies between, and reprocessing an entry is idempotent, whereas keeping
+    /// the older cursor would leave the entries between the two pages unfetched by either walk.
     /// Returns the new checkpoint revision.
+    /// `stamp` is the archive time of the entry `cursor` names (`ArchiveCheckpoint.stamp`).
     /// `historyThrough` is the newest archive timestamp in the page: the archive's read baseline (see `read_baselines`).
-    @discardableResult public func saveNewestArchivePage(accountID: String, archiveID: String, cursor: String,
-                                                         oldestID: String, complete: Bool, historyThrough: Date? = nil) throws -> Int {
+    @discardableResult public func saveNewestArchivePage(accountID: String, archiveID: String, cursor: String, stamp: Date? = nil,
+                                                         oldestID: String, complete: Bool, historyThrough: Date? = nil,
+                                                         replacing expectedRevision: Int? = nil) throws -> Int {
         try requireTransportOwnership()
         guard !accountID.isEmpty, !archiveID.isEmpty, !cursor.isEmpty, cursor.utf8.count <= 4096,
               !oldestID.isEmpty, oldestID.utf8.count <= 4096 else { throw MessageStoreError.invalidValue }
         return try connection.transaction {
             let key: [Value] = [.text(accountID), .text(archiveID)]
-            guard try connection.query("SELECT 1 FROM archive_checkpoints WHERE account_id=? AND archive_id=?", key).isEmpty else {
-                throw MessageStoreError.invalidTransition
-            }
+            let current = try connection.query("SELECT revision FROM archive_checkpoints WHERE account_id=? AND archive_id=?", key).first?[0].integer
+            guard current == expectedRevision, (current ?? 0) < Int.max else { throw MessageStoreError.invalidTransition }
             let backfill = try connection.query("SELECT revision FROM archive_backfill WHERE account_id=? AND archive_id=?", key).first?[0].integer
             guard (backfill ?? 0) < Int.max else { throw MessageStoreError.invalidTransition }
             try connection.execute("""
                 INSERT INTO archive_backfill(account_id,archive_id,revision,oldest_id,complete) VALUES(?,?,?,?,?)
                 ON CONFLICT(account_id,archive_id) DO UPDATE SET revision=excluded.revision,oldest_id=excluded.oldest_id,complete=excluded.complete
                 """, key + [.integer((backfill ?? 0) + 1), .text(oldestID), .integer(complete ? 1 : 0)])
-            try connection.execute("INSERT INTO archive_checkpoints(account_id,archive_id,revision,cursor) VALUES(?,?,?,?)",
-                                   key + [.integer(1), .text(cursor)])
+            let next = (current ?? 0) + 1
+            try connection.execute("""
+                INSERT INTO archive_checkpoints(account_id,archive_id,revision,cursor,stamp) VALUES(?,?,?,?,?)
+                ON CONFLICT(account_id,archive_id) DO UPDATE SET revision=excluded.revision,cursor=excluded.cursor,stamp=excluded.stamp
+                """, key + [.integer(next), .text(cursor), stamp.map { .real($0.timeIntervalSince1970) } ?? .null])
             if let historyThrough { try recordReadBaseline(accountID: accountID, archiveID: archiveID, sentAt: historyThrough) }
-            return 1
+            return next
         }
     }
 
@@ -1727,13 +1943,37 @@ public actor MessageStore {
             """, [.text(publication.stanzaID), .text(publication.pointerMessageID), .text(accountID), .text(publication.chatID)])
     }
 
+    /// Chats (with their titles) where this account sent an encrypted message at or after `date`: each advanced an
+    /// encryption session that a restore of older data would roll back.
+    public func chatsWithEncryptedSends(accountID: String, since date: Date) throws -> [String] {
+        try Self.chatsWithEncryptedSends(connection, accountID: accountID, since: date)
+    }
+
+    /// The same for a database file nobody has open as a store (a kept copy, or a store an older build wrote): every
+    /// account in it. Only reads; opens nothing that does not exist.
+    public static func chatsWithEncryptedSends(inFileAt url: URL, since date: Date) throws -> [String] {
+        let file = try Connection(url: url, create: false)
+        defer { try? file.close() }
+        return try chatsWithEncryptedSends(file, accountID: nil, since: date)
+    }
+
+    private static func chatsWithEncryptedSends(_ connection: Connection, accountID: String?, since date: Date) throws -> [String] {
+        try connection.query("""
+            SELECT DISTINCT c.title FROM chats c WHERE (?1 IS NULL OR c.account_id=?1) AND EXISTS (SELECT 1 FROM messages m
+            WHERE m.account_id=c.account_id AND m.chat_id=c.id AND m.outgoing=1 AND m.sent_at>=?2
+            AND m.encryption_profile IN ('legacy','modern')) ORDER BY c.title
+            """, [accountID.map(Value.text) ?? .null, .real(date.timeIntervalSince1970)]).map { $0[0].string }
+    }
+
     /// Incoming messages after each chat's read pointer and newer than its archive's history baseline, by chat; chats
     /// with none are absent. A chat never read counts every incoming message since this device joined. One index range
-    /// per chat.
+    /// per chat. Placeholders whose reason never `alerts` (a blocked device, a retention limit) are left out, so neither
+    /// can raise the chat's count or the app badge.
     public func unreadCounts(accountID: String) throws -> [String: Int] {
+        let quiet = UnreadableReason.allCases.filter { !$0.alerts }.map { "'\($0.rawValue)'" }.joined(separator: ",")
         let rows = try connection.query("""
             SELECT c.id,(SELECT COUNT(*) FROM messages m WHERE m.account_id=?1 AND m.chat_id=c.id AND m.outgoing=0 AND m.sender_id<>?1
-                         AND \(Self.unreadCondition))
+                         AND COALESCE(m.unreadable_reason,'') NOT IN (\(quiet)) AND \(Self.unreadCondition))
             FROM chats c LEFT JOIN chat_read_state r ON r.account_id=c.account_id AND r.chat_id=c.id
             LEFT JOIN read_baselines bc ON bc.account_id=c.account_id AND bc.archive_id=c.id
             LEFT JOIN read_baselines ba ON ba.account_id=c.account_id AND ba.archive_id=c.account_id
@@ -2212,7 +2452,7 @@ public actor MessageStore {
     // ponytail: one extra lookup per message row (bounded by the 1000-row page); join when it shows in traces.
     private func decodeRow(_ row: [Value]) throws -> StoredMessage {
         var message = try Self.decode(row)
-        if let attachment = try connection.query("SELECT name,media_type,size,width,height,hash,cipher_hash,secret,url,upload_state,task_id FROM attachments WHERE account_id=? AND message_id=?",
+        if let attachment = try connection.query("SELECT name,media_type,size,width,height,hash,cipher_hash,secret,url,upload_state,task_id,sealed_account FROM attachments WHERE account_id=? AND message_id=?",
                                                  [.text(message.accountID), .text(message.id)]).first {
             func integer(_ value: Value) -> Int? { if case .integer(let number) = value { return number }; return nil }
             func text(_ value: Value) -> String? { if case .text(let string) = value { return string }; return nil }
@@ -2220,6 +2460,7 @@ public actor MessageStore {
                                                   width: integer(attachment[3]), height: integer(attachment[4]), hash: attachment[5].string,
                                                   cipherHash: text(attachment[6]), secret: attachment[7].data ?? Data(), url: text(attachment[8]),
                                                   uploadState: text(attachment[9]).flatMap(StoredAttachment.UploadState.init(rawValue:)), uploadTaskID: integer(attachment[10]))
+            message.attachment?.sealedAccount = text(attachment[11])
         }
         return message
     }
@@ -2244,7 +2485,7 @@ public actor MessageStore {
     }
 }
 
-private enum Value {
+enum Value {
     case text(String), integer(Int), real(Double), blob(Data), null
     var data: Data? { if case let .blob(value) = self { return value }; return nil }
     var string: String { if case let .text(value) = self { return value }; return "" }
@@ -2255,14 +2496,23 @@ private enum Value {
         if case let .integer(value) = self { return Double(value) }
         return 0
     }
+    /// A nullable REAL column holding seconds since 1970.
+    var optionalDate: Date? {
+        switch self {
+        case .real(let seconds): Date(timeIntervalSince1970: seconds)
+        case .integer(let seconds): Date(timeIntervalSince1970: TimeInterval(seconds))
+        default: nil
+        }
+    }
 }
 
 /// Owned exclusively by its MessageStore actor after initialization.
-private final class Connection: @unchecked Sendable {
-    private var handle: OpaquePointer?
+final class Connection: @unchecked Sendable {
+    private(set) var handle: OpaquePointer?
     var isOpen: Bool { handle != nil }
-    init(url: URL) throws {
-        let result = sqlite3_open_v2(url.path, &handle, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)
+    init(url: URL, create: Bool = true) throws {
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX | (create ? SQLITE_OPEN_CREATE : 0)
+        let result = sqlite3_open_v2(url.path, &handle, flags, nil)
         if result != SQLITE_OK {
             let failure = error(result)
             sqlite3_close(handle)
@@ -2351,4 +2601,32 @@ private final class TransportOwnership: @unchecked Sendable {
         if isHeld { _ = flock(descriptor, LOCK_UN); isHeld = false }
     }
     deinit { Darwin.close(descriptor) }
+}
+
+/// Device and inode of a path: which file a connection opened, compared again once the lease is held.
+struct FileIdentity: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+    init?(path: String) {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        device = UInt64(info.st_dev); inode = UInt64(info.st_ino)
+    }
+}
+
+/// What a verified snapshot must match: the schema version and the row count of every table, read in one transaction.
+public struct StoreSnapshotSummary: Codable, Sendable, Equatable {
+    public let schemaVersion: Int
+    public let rowCounts: [String: Int]
+
+    init(_ connection: Connection) throws {
+        schemaVersion = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
+        let tables = try connection.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+            .compactMap { $0.first?.optionalString }
+        var counts: [String: Int] = [:]
+        for table in tables {
+            counts[table] = try connection.query("SELECT count(*) FROM \"\(table.replacingOccurrences(of: "\"", with: "\"\""))\"").first?[0].integer ?? 0
+        }
+        rowCounts = counts
+    }
 }

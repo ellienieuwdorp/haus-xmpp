@@ -13,7 +13,8 @@ struct HausXMPPApp: App {
                 .themedRoot()
                 .environment(\.appearance, appearance)
                 .task { await model.prepare() }
-                .onChange(of: scenePhase) { _, phase in
+                .onChange(of: scenePhase) { previous, phase in
+                    if previous == .active, phase != .active { model.leftForeground() }
                     if phase == .active { model.setForeground(true) }
                     else if phase == .background { model.setForeground(false) }
                 }

@@ -75,7 +75,7 @@ enum PresenceWire {
         let items = query.children.filter { $0.name == "item" && $0.namespace == rosterNamespace }
         guard items.count <= maximumRosterItems else { throw XMPPIQError.malformedResponse }
         return items.compactMap { item in
-            guard let jid = item.attributes["jid"], OMEMOWire.bareJID(jid) == jid,
+            guard let raw = item.attributes["jid"], !raw.contains("/"), let jid = OMEMOWire.bareJID(raw),
                   let subscription = XMPPRosterItem.Subscription(rawValue: item.attributes["subscription"] ?? "none") else { return nil }
             return XMPPRosterItem(jid: jid, subscription: subscription, askPending: item.attributes["ask"] == "subscribe")
         }

@@ -135,7 +135,8 @@ struct EncryptedContent: Equatable {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: value)
     }
-    private static func bare(_ jid: String) -> String { String(jid.split(separator: "/", maxSplits: 1).first ?? "") }
+    /// In normal form (`JID`), like the authenticated sender and recipient it is compared with.
+    private static func bare(_ jid: String) -> String { JID.normalizedBare(jid) ?? String(jid.split(separator: "/", maxSplits: 1).first ?? "") }
     private static func escape(_ value: String) -> String {
         value.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "'", with: "&apos;").replacingOccurrences(of: "\"", with: "&quot;")

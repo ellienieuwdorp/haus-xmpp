@@ -104,6 +104,17 @@ private func bundle(_ profile: XMPPOMEMOProfile) -> XMPPOMEMOBundle {
     let own = IQReplyScope(recipient: nil, accountBareJID: "a@example.test", accountFullJID: "a@example.test/phone", serverDomain: "example.test")
     #expect(own.accepts(try omemoNode("<iq type='result' id='1'/>")))
     #expect(!own.accepts(try omemoNode("<iq from='a@example.test/evil' type='result' id='1'/>")))
+    // Addresses compare in normal form: a query to a typed `B@Example.Test` is answered by `b@example.test`, and an
+    // account entered with capitals still gets its own server's answers. Another entity is still refused.
+    let typed = IQReplyScope(recipient: "B@Example.Test", accountBareJID: "A@example.test", accountFullJID: "A@example.test/phone", serverDomain: "Example.Test")
+    #expect(typed.accepts(try omemoNode("<iq from='b@example.test' to='a@example.test/phone' type='result' id='1'/>")))
+    #expect(!typed.accepts(try omemoNode("<iq from='c@example.test' to='a@example.test/phone' type='result' id='1'/>")))
+    #expect(!typed.accepts(try omemoNode("<iq from='b@example.test/Other' type='result' id='1'/>")))
+    let ownTyped = IQReplyScope(recipient: "A@Example.Test", accountBareJID: "a@example.test", accountFullJID: "a@example.test/phone", serverDomain: "example.test")
+    for from in ["", "from='a@example.test'", "from='example.test'", "from='a@example.test/phone'"] {
+        #expect(ownTyped.accepts(try omemoNode("<iq \(from) type='result' id='1'/>")))
+    }
+    #expect(!ownTyped.accepts(try omemoNode("<iq from='a@example.test/evil' type='result' id='1'/>")))
 }
 
 @Test func iqErrorsPreserveExactConditionAndRejectForgedNamespaces() throws {

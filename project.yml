@@ -93,7 +93,11 @@ targets:
   HausXMPPLifecycleTests:
     type: bundle.unit-test
     platform: iOS
-    sources: [AppLifecycleTests]
+    sources:
+      - AppLifecycleTests
+      # The 045ca73 build's schema-21 store, shared with the MessageStore package tests.
+      - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/schema-21.sql
+        buildPhase: resources
     dependencies:
       - target: HausXMPP
       - package: MessageStore

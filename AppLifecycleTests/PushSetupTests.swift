@@ -99,6 +99,27 @@ import XMPPProtocol
         XCTAssertFalse(PushCleanup.disableSettles(XMPPClientError.timedOut))
     }
 
+    /// A session the app did not set up (the extension, a notification action) re-enables only a subscription whose
+    /// gateway registration is settled: never one still being registered, revoked or disabled, nor another one.
+    func testOnlyASettledRegistrationIsReenabledAfterAFreshBind() throws {
+        let push = try PushSubscription.generate(serviceJID: PushService.serviceJID)
+        var settled = PushRegistrationState(accountID: "alice@example.org", configuration: push, journal: PushRegistrationJournal())
+        let register = try settled.journal.stageFreshRegistration(deviceToken: "abcd")
+        XCTAssertNil(PushRegistrationState.sessionSubscription(saved: push, state: settled), "registration pending")
+        XCTAssertTrue(settled.journal.acknowledge(try XMPPPushRegistrationResult(revision: register.revision, action: .register), for: register))
+        XCTAssertEqual(PushRegistrationState.sessionSubscription(saved: push, state: settled), push)
+
+        XCTAssertNil(PushRegistrationState.sessionSubscription(saved: nil, state: settled), "turned off")
+        XCTAssertNil(PushRegistrationState.sessionSubscription(saved: push, state: nil), "unjournaled")
+        let other = try PushSubscription.generate(serviceJID: PushService.serviceJID)
+        XCTAssertNil(PushRegistrationState.sessionSubscription(saved: other, state: settled), "another subscription")
+        var owed = settled
+        owed.disablePending = true
+        XCTAssertNil(PushRegistrationState.sessionSubscription(saved: push, state: owed), "disable owed")
+        let revoking = try XCTUnwrap(PushRegistrationState.turningOff(accountID: "alice@example.org", saved: settled, enabled: push))
+        XCTAssertNil(PushRegistrationState.sessionSubscription(saved: push, state: revoking), "revocation pending")
+    }
+
     func testReplacingPushKeepsCredentialsForTheExtension() throws {
         let account = NotificationAccount(accountID: "alice@example.org", host: "example.org", port: 5223, domain: "example.org",
                                           username: "alice", password: "synthetic", push: nil)

@@ -77,6 +77,8 @@ public struct StoredAttachment: Sendable, Equatable, Codable {
     /// Nil for received files. A queued message is not sendable until this is `uploaded`.
     public var uploadState: UploadState?
     public var uploadTaskID: Int?
+    /// The account spelling `secret` was sealed under when that differs from the row's key (v23 address migration).
+    public var sealedAccount: String?
 
     public init(name: String, mediaType: String, size: Int, width: Int? = nil, height: Int? = nil, hash: String, cipherHash: String? = nil,
                 secret: Data, url: String? = nil, uploadState: UploadState? = nil, uploadTaskID: Int? = nil) {
@@ -141,6 +143,12 @@ public enum MessageStoreError: Error, Equatable, Sendable {
     case transportOwnershipRequired
     case transportOwnedElsewhere
     case closed
+    /// Opened `currentOnly` over a store an older build wrote: only the app migrates it (after its snapshot).
+    case upgradeRequired(Int)
+    /// The database file was replaced (restored or moved) after this store opened it.
+    case replaced
+    /// A snapshot copy did not match its source: integrity, schema or row counts.
+    case snapshotMismatch(String)
 }
 
 /// Local progress and authenticated stream acknowledgement. None proves peer delivery.
@@ -173,6 +181,9 @@ public struct MessageReply: Codable, Sendable, Equatable {
 public struct EncryptionState: Sendable, Equatable {
     public let revision: Int
     public let data: Data
+    /// The account spelling `data` was sealed under when that differs from the row's key: set by the v23 address
+    /// migration for state saved under the typed spelling, cleared by the next save.
+    public var sealedAccount: String? = nil
 }
 
 public struct PendingEncryptedMessage: Sendable {
@@ -211,6 +222,48 @@ public enum UnreadableReason: String, Sendable, Equatable, CaseIterable {
     case malformedContent
     /// A trusted sender device's ciphertext failed ratchet decrypt, payload authentication or content decoding.
     case decryptFailed
+    /// The sender device is one the user blocked: its ciphertext is never opened and never kept for review.
+    case rejectedDevice
+    /// Not kept for review because its sender, or the account, already had as much ciphertext waiting as
+    /// `MessageStore.pendingLimits` allows.
+    case retentionLimit
+
+    /// Whether an incoming placeholder may alert (plan D5). A blocked device was the user's own decision, and a limit is
+    /// reached only by a sender whose earlier waiting messages already alerted, or by a flood: both stay quiet.
+    public var alerts: Bool { self != .rejectedDevice && self != .retentionLimit }
+}
+
+/// What `MessageStore.retainEncryptedIncoming` records instead of a pending row when a retention limit leaves no room.
+public struct RetentionOverflow: Sendable, Equatable {
+    /// The conversation the ciphertext belongs to (the direct peer, or the room): whether the account took part in it
+    /// decides whether the sender counts as known.
+    public let chatID: String
+    /// The `.retentionLimit` placeholder for ciphertext that would have been a bubble. Nil consumes the replay identity
+    /// without a row (a key transport, reaction or receipt).
+    public let placeholder: UnreadableMessage?
+    /// The sender device is one the user approved: the row waits for a retry (a room read, a transient failure), not for
+    /// a review, so only the account ceiling bounds it.
+    public let senderApproved: Bool
+    public init(chatID: String, placeholder: UnreadableMessage?, senderApproved: Bool = false) {
+        self.chatID = chatID; self.placeholder = placeholder; self.senderApproved = senderApproved
+    }
+}
+
+/// How much ciphertext `pending_encrypted_inbox` keeps for review, per account. A sender is known when it is the account
+/// itself, when the account wrote in the conversation or in a direct chat with it, or when a message of theirs was
+/// authenticated in their direct chat or in this room (so some device of theirs was approved). Everyone else is a
+/// stranger. A row from an approved device (`RetentionOverflow.senderApproved`) meets only `perAccount`. The roster is not a signal:
+/// it lives in memory for one connection and the notification extension never loads it.
+public struct PendingRetentionLimits: Sendable, Equatable {
+    /// Rows one known sender may hold (all its devices together).
+    public let perKnownSender: Int
+    /// Rows one stranger may hold.
+    public let perStranger: Int
+    /// A stranger's ciphertext is kept only while the account holds fewer rows than this, so strangers together can
+    /// never take the room known contacts need.
+    public let strangerCeiling: Int
+    /// Rows the account may hold at all.
+    public let perAccount: Int
 }
 
 /// Why a retained ciphertext is still in `pending_encrypted_inbox`.
@@ -270,6 +323,20 @@ public struct StreamManagementState: Sendable, Equatable {
 public struct ArchiveCheckpoint: Sendable, Equatable {
     public let revision: Int
     public let cursor: String
+    /// The archive `<delay stamp>` of the entry `cursor` names: where a forward walk restarts by time when the server
+    /// no longer holds the cursor. nil for checkpoints saved before schema 22.
+    public let stamp: Date?
+    public init(revision: Int, cursor: String, stamp: Date? = nil) { self.revision = revision; self.cursor = cursor; self.stamp = stamp }
+}
+
+/// A forward cursor the server no longer held (XEP-0313 `item-not-found`), recorded once per lost cursor. Entries
+/// between `since` (the lost entry's archive time, when known) and the first entry fetched after it may have
+/// expired from the server before this device fetched them; messages received live in that time are unaffected.
+public struct ArchiveGap: Sendable, Equatable {
+    public let archiveID: String
+    public let since: Date?
+    public let detectedAt: Date
+    public init(archiveID: String, since: Date?, detectedAt: Date) { self.archiveID = archiveID; self.since = since; self.detectedAt = detectedAt }
 }
 
 /// The backward cursor of one archive's history backfill (newest-first sync).

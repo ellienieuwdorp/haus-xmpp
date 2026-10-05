@@ -6,6 +6,24 @@ import XMPPProtocol
 @testable import HausXMPP
 
 @MainActor final class SharedStorageTests: XCTestCase {
+    /// One resource per installation and account, shared by the app, its actions and the extension, so a fresh bind
+    /// replaces the previous session instead of adding one.
+    func testTheSessionResourceIsCreatedOncePerAccountAndKept() throws {
+        let suite = "haus.xmpp.lifecycle." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
+        let alice = SharedSession.resource(accountID: "alice@example.org", defaults: defaults)
+        XCTAssertEqual(SharedSession.resource(accountID: "alice@example.org", defaults: UserDefaults(suiteName: suite)), alice)
+        XCTAssertNotEqual(SharedSession.resource(accountID: "bob@example.org", defaults: defaults), alice)
+        XCTAssertTrue(alice.hasPrefix("haus-"))
+        XCTAssertFalse(alice.contains("lab"))
+        // A damaged value is replaced, and the replacement kept.
+        defaults.set("bad resource/", forKey: "xmppResource.alice@example.org")
+        let replaced = SharedSession.resource(accountID: "alice@example.org", defaults: defaults)
+        XCTAssertTrue(XMPPClient.validResource(replaced))
+        XCTAssertEqual(SharedSession.resource(accountID: "alice@example.org", defaults: defaults), replaced)
+    }
+
     func testMigrationPreservesProtectedIdentityAndMessages() async throws {
         let fixture = try MigrationFixture()
         addTeardownBlock { try await fixture.remove() }

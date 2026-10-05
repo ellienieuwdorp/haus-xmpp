@@ -4,10 +4,14 @@ import MessageStore
 /// Why a run could not settle. Every one of them shows the generic fallback (plan D2): unknown is never suppressed.
 public enum NotificationFallbackReason: String, Sendable, Equatable, Codable {
     case leaseBusy, network, deadline, expired, protectedData, noAccount, identityUnavailable, postFailed, cancelled, failed
+    /// The store is older than this build, or a restore of the previous version's data is under way or done: only
+    /// the app changes it.
+    case upgradePending
 
     public init(_ error: any Error) {
         switch error {
         case MessageStoreError.transportOwnedElsewhere: self = .leaseBusy
+        case MessageStoreError.upgradeRequired(_), MessageStoreError.replaced, NotificationRunError.upgradePending: self = .upgradePending
         case BackgroundSynchronizationError.deadlineExceeded: self = .deadline
         case BackgroundSynchronizationError.identityUnavailable: self = .identityUnavailable
         case BackgroundSynchronizationError.connectionEnded: self = .network
@@ -16,6 +20,7 @@ public enum NotificationFallbackReason: String, Sendable, Equatable, Codable {
             case .noAccount: self = .noAccount
             case .protectedDataUnavailable: self = .protectedData
             case .postTimedOut: self = .postFailed
+            case .upgradePending: self = .upgradePending
             }
         case is CancellationError: self = .cancelled
         case is URLError, is POSIXError: self = .network
@@ -27,6 +32,8 @@ public enum NotificationFallbackReason: String, Sendable, Equatable, Codable {
 /// Failures the extension and the presenter raise themselves.
 public enum NotificationRunError: Error, Sendable, Equatable {
     case noAccount, protectedDataUnavailable, postTimedOut
+    /// The app is restoring, or has restored, the previous version's data.
+    case upgradePending
 }
 
 /// Counts only: no identifiers, addresses or content. Feeds the DEBUG outcome ring.

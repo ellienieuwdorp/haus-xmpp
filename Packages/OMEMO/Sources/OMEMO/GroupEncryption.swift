@@ -23,6 +23,19 @@ public struct GroupEncryptionOverview: Sendable {
 struct RetainedGroupEnvelope: Codable {
     let message: XMPPEncryptedGroupMessage
     let sentAt: Date
+    /// False for a row kept before room messages recorded their `<body/>` hint, which then decodes as absent: a retry
+    /// counts such a message as a bubble, as it does an old direct row.
+    private(set) var recordsBubbleHint = true
+
+    init(message: XMPPEncryptedGroupMessage, sentAt: Date) { self.message = message; self.sentAt = sentAt }
+    private enum CodingKeys: String, CodingKey { case message, sentAt }
+    private enum MessageKeys: String, CodingKey { case hasFallbackBody }
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        message = try values.decode(XMPPEncryptedGroupMessage.self, forKey: .message)
+        sentAt = try values.decode(Date.self, forKey: .sentAt)
+        recordsBubbleHint = try values.nestedContainer(keyedBy: MessageKeys.self, forKey: .message).contains(.hasFallbackBody)
+    }
 }
 
 extension OMEMOService {
@@ -173,8 +186,12 @@ extension OMEMOService {
             state.devices.last { $0.jid == message.sender && $0.deviceID == message.envelope.senderDeviceID && $0.profile == .modern }
         }
         let storedMembers = first.groupRooms[message.room]
-        let membershipStale = storedMembers == nil || (message.provenance == .liveOccupant && !(storedMembers?.contains(message.sender) ?? false))
         let known = senderDevice(first)
+        // A device the user blocked: final at once, before any room read (see `receiveLocked`).
+        if known?.trust == .rejected {
+            return try await recordRejectedGroupDevice(account: account, message: message, digest: digest, sentAt: retained.sentAt)
+        }
+        let membershipStale = storedMembers == nil || (message.provenance == .liveOccupant && !(storedMembers?.contains(message.sender) ?? false))
         let retentionSkipped = pending == nil && !membershipStale && storedMembers?.contains(account) == true
             && known?.trust.permitsEncryption == true
         // Plan D5, as for a direct message: a member's message waiting for trust or keys alerts in the room without content,
@@ -183,20 +200,27 @@ extension OMEMOService {
         // does wait for trust or keys, `hold` adds the candidate then, on this first observation only.
         let alert = message.sender == account || !Self.expectsBubble(message) ? nil
             : PendingNotificationContext(chatID: message.room, sentAt: retained.sentAt)
-        if pending == nil, !retentionSkipped {
-            try await store.retainEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, wire: JSONEncoder().encode(retained),
-                                                    reason: known != nil ? .trustPending : .keysPending,
-                                                    notification: known?.trust.permitsEncryption == true ? nil : alert)
-        }
         let context = retained
-        func hold(_ reason: PendingEncryptedReason) async throws {
-            if retentionSkipped {
-                try await store.retainEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, wire: JSONEncoder().encode(context), reason: reason,
-                                                        notification: alert)
-            } else {
-                try await store.classifyPendingEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, reason: reason,
-                                                                 notification: pending == nil ? alert : nil)
-            }
+        // Past a retention limit the store records this instead, in the same transaction (see `receiveLocked`).
+        let overflowPlaceholder = Self.expectsBubble(message)
+            ? groupPlaceholder(for: message, account: account, reason: .retentionLimit, sentAt: retained.sentAt,
+                               key: .ciphertext(sender: message.sender, digest: digest)) : nil
+        func retain(_ reason: PendingEncryptedReason, notification: PendingNotificationContext?, approved: Bool = false) async throws -> Bool {
+            try await store.retainEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, wire: JSONEncoder().encode(context),
+                                                    reason: reason, notification: notification,
+                                                    overflow: RetentionOverflow(chatID: message.room, placeholder: overflowPlaceholder, senderApproved: approved))
+        }
+        if pending == nil, !retentionSkipped {
+            // An approved device's copy waits only for the room read: the account ceiling alone bounds it.
+            let approved = known?.trust.permitsEncryption == true
+            guard try await retain(known != nil ? .trustPending : .keysPending, notification: approved ? nil : alert, approved: approved) else { return false }
+        }
+        /// False when a limit gave the ciphertext its final outcome instead of keeping it.
+        func hold(_ reason: PendingEncryptedReason) async throws -> Bool {
+            if retentionSkipped { return try await retain(reason, notification: alert) }
+            try await store.classifyPendingEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, reason: reason,
+                                                             notification: pending == nil ? alert : nil)
+            return true
         }
         var refreshedMembers: [String]?
         if membershipStale {
@@ -219,11 +243,14 @@ extension OMEMOService {
             var state = old
             guard let members = state.groupRooms[message.room], members.contains(account), (message.provenance != .liveOccupant || members.contains(message.sender)) else { throw XMPPGroupError.incompleteMembership }
             guard let device = senderDevice(state) else {
-                try await hold(.keysPending)
+                guard try await hold(.keysPending) else { return false }
                 throw OMEMOError.trustRequired
             }
+            if device.trust == .rejected {
+                return try await recordRejectedGroupDevice(account: account, message: message, digest: digest, sentAt: retained.sentAt)
+            }
             guard device.trust.permitsEncryption else {
-                try await hold(.trustPending)
+                guard try await hold(.trustPending) else { return false }
                 throw OMEMOError.trustRequired
             }
             let local = try engine(state, .modern)
@@ -290,10 +317,9 @@ extension OMEMOService {
             // As in `receiveLocked`: a failure without a durable outcome after skipped retention keeps the ciphertext,
             // unless storage itself fails, in which case the caller must not acknowledge the stanza.
             if retentionSkipped, !Self.leavesDurableOutcome(failure) {
-                do {
-                    try await store.retainEncryptedIncoming(accountID: account, sender: message.sender, digest: digest,
-                                                            wire: JSONEncoder().encode(context), reason: .trustPending)
-                } catch { throw failure }
+                let kept: Bool
+                do { kept = try await retain(.trustPending, notification: nil, approved: true) } catch { throw failure }
+                if !kept { return false }
             }
             throw failure
         }
@@ -322,6 +348,17 @@ extension OMEMOService {
                                   key: UnreadableMessage.Key) -> UnreadableMessage {
         UnreadableMessage(accountID: account, chatID: message.room, senderID: message.sender, isOutgoing: message.sender == account,
                           sentAt: sentAt ?? Date(), reason: reason, key: key)
+    }
+    /// A blocked sender device's room ciphertext: a quiet `rejectedDevice` placeholder when it would have been a bubble,
+    /// else the consumed replay identity. Never decrypted, never alerts, removes a retained copy. Returns false.
+    private func recordRejectedGroupDevice(account: String, message: XMPPEncryptedGroupMessage, digest: String, sentAt: Date) async throws -> Bool {
+        if Self.expectsBubble(message) {
+            try await store.recordUnreadableMessage(groupPlaceholder(for: message, account: account, reason: .rejectedDevice, sentAt: sentAt,
+                                                                     key: .ciphertext(sender: message.sender, digest: digest)))
+        } else {
+            try await store.consumeUndecryptableIncoming(accountID: account, sender: message.sender, digest: digest)
+        }
+        return false
     }
     /// Records the durable `decryptFailed` placeholder for group ciphertext this device will never read. Works whether
     /// or not a pending row exists. Never called for storage, cancellation or state errors.

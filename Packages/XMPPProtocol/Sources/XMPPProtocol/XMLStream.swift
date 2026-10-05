@@ -51,6 +51,9 @@ struct XMLStreamFramer {
 
     init(maximumBytes: Int = 1_048_576) { self.maximumBytes = maximumBytes }
 
+    /// Bytes fed but not yet framed, apart from whitespace between elements.
+    var hasBufferedInput: Bool { !stanza.isEmpty || !pending.allSatisfy(Self.whitespace) }
+
     mutating func feed(_ data: Data) throws -> [XMLStreamFrame] {
         guard pending.count + stanza.count + data.count <= maximumBytes else { throw XMLStreamError.limitExceeded }
         pending.append(contentsOf: data)

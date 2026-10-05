@@ -81,6 +81,8 @@ private enum ExtensionRun {
             let root: URL
             do { root = try await SharedStorage.directory(migrate: false) } catch { throw NotificationRunError.protectedDataUnavailable }
             directory = root
+            // A restore of the previous version's data is under way or done: that data is the app's alone.
+            guard !PreUpgradeHold.isHeld(groupRoot: root.deletingLastPathComponent()) else { throw NotificationRunError.upgradePending }
             guard let account = try NotificationAccount.load(), account.push != nil else { throw NotificationRunError.noAccount }
             let key: Data
             do { key = try EncryptionKeychain.load(storageID: "primary", allowCreation: false) }
@@ -91,8 +93,12 @@ private enum ExtensionRun {
                 AvatarStore.notificationImageData(root: root, account: accountID, hash: hash)
             }))
             try await BackgroundSynchronizer().synchronize(databaseURL: root.appending(path: "messages.sqlite"), wrappingKey: key,
-                account: BackgroundAccount(host: account.host, port: account.port, domain: account.domain,
-                                           username: account.username, password: account.password),
+                account: BackgroundAccount(route: account.route, domain: account.domain, username: account.username,
+                                           password: account.password, requiresSCRAM: account.requiresSCRAM,
+                                           resource: SharedSession.resource(accountID: accountID),
+                                           push: PushRegistrationState.sessionSubscription(
+                                               saved: account.push, state: try? PushRegistrationState.load(accountID: accountID)),
+                                           leftForeground: SharedSession.leftForeground()),
                 progress: progress, presentation: { store in
                     // Keep the transport lease through presentation. Preferences cannot change under this lease;
                     // logout authorization is reread after the network work.
