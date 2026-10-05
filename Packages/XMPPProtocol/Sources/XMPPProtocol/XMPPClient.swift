@@ -225,6 +225,10 @@ public actor XMPPClient {
     var roomRefreshes: [GroupRoomRefreshKey: GroupRoomRefresh] = [:]
     private var streamManagement: StreamManagement?
     private var resumeSnapshot: XMPPStreamManagementSnapshot?
+    /// The earliest server stamp this connection can carry (`ServerStampWindow.floor`), kept through a refused resume.
+    private var stampFloor: Date?
+    /// Open from going online until the catch-up our server sends first is over; nil after that.
+    private var stampWindow: ServerStampWindow?
     private var smOffered = false
     private var csiOffered = false
     private let writeGate = XMPPAsyncGate()
@@ -268,6 +272,7 @@ public actor XMPPClient {
         let token = generation
         do { resumeSnapshot = try await streamManagement?.restore(accountID: username + "@" + domain) }
         catch { if generation == token { phase = .idle; self.password = "" }; throw error }
+        stampFloor = ServerStampWindow.floor(after: resumeSnapshot)
         guard generation == token else { throw XMPPClientError.connectionClosed }
         do {
             return try await withTaskCancellationHandler {
@@ -671,6 +676,8 @@ public actor XMPPClient {
             }
             let rosterFetch = node.attributes["id"].map(rosterFetchIDs.contains) ?? false
             if routeIQ(node) {
+                // Answered after anything our server held for us: the catch-up is over.
+                stampWindow = nil
                 if rosterFetch, node.attributes["type"] == "result", let items = try? PresenceWire.rosterResult(node) {
                     try emit(.rosterItems(items, replacesAll: true))
                 }
@@ -689,6 +696,9 @@ public actor XMPPClient {
             }
             let emittedBefore = emittedEvents
             if node.name == "message", node.namespace == "jabber:client" {
+                // Our server's delay (on a carbon, the wrapper it wrote) dates the message only during the catch-up.
+                let serverStamp = OMEMOWire.bareJID(boundJID).flatMap { stampWindow?.stamp(of: node, accountBareJID: $0) }
+                if stampWindow?.ends(with: node) == true { stampWindow = nil }
                 if Carbons.containsWrapper(node) {
                     // Malformed or foreign wrappers are discarded as a whole; their outer body
                     // must not become a plaintext fallback or their inner sender become trusted.
@@ -696,9 +706,8 @@ public actor XMPPClient {
                           let (forwarded, provenance) = try? Carbons.unwrap(node, accountBareJID: ownBare, accountFullJID: boundJID) else {
                         if let inbound { try await streamManagement?.handled(inbound) }; return
                     }
-                    // A carbon replayed from a hibernated stream carries our server's delay on the wrapper it wrote.
-                    try emitMessage(forwarded, provenance: provenance, serverStamp: ServerStamp.of(node, accountBareJID: ownBare))
-                } else { try emitMessage(node, provenance: .direct, serverStamp: OMEMOWire.bareJID(boundJID).flatMap { ServerStamp.of(node, accountBareJID: $0) }) }
+                    try emitMessage(forwarded, provenance: provenance, serverStamp: serverStamp)
+                } else { try emitMessage(node, provenance: .direct, serverStamp: serverStamp) }
             } else if node.name == "iq", node.namespace == "jabber:client",
                       ["get", "set"].contains(node.attributes["type"] ?? ""), let id = node.attributes["id"] {
                 if rosterRequested, let account = OMEMOWire.bareJID(boundJID),
@@ -824,6 +833,7 @@ public actor XMPPClient {
         try await announceAvailability(initial: !resumed)
         guard generation == token else { throw XMPPClientError.connectionClosed }
         sessionResumed = resumed
+        stampWindow = ServerStampWindow(floor: stampFloor)
         phase = .online; deadline?.cancel(); deadline = nil
         liveness = Task { [weak self] in await self?.livenessLoop(token: token) }
         try emit(.state(.online(jid: boundJID)))
@@ -1321,7 +1331,7 @@ public actor XMPPClient {
         roomRefreshes.removeAll()
         let pending = iqRequests; iqRequests.removeAll()
         for request in pending.values { request.timeout.cancel(); request.continuation.resume(throwing: error) }
-        boundJID = ""
+        boundJID = ""; stampWindow = nil
         handshake?.resume(throwing: error); handshake = nil
         connection?.cancel(); connection = nil
         // Keep the task handle until the next connection so a later lifecycle join still

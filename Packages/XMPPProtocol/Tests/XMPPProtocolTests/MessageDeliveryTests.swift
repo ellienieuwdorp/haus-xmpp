@@ -19,6 +19,12 @@ struct MessageDeliveryTests {
 
     private static func delay(_ from: String, _ stamp: String) -> String { "<delay xmlns='urn:xmpp:delay' from='\(from)' stamp='\(stamp)'/>" }
 
+    /// `message` as a received carbon our server wrote, with `extra` on the wrapper.
+    private static func carbon(_ message: String, extra: String = "") -> String {
+        "<message from='alice@localhost' to='alice@localhost/r'><received xmlns='urn:xmpp:carbons:2'><forwarded xmlns='urn:xmpp:forward:0'>"
+            + message.replacingOccurrences(of: "<message ", with: "<message xmlns='jabber:client' ") + "</forwarded></received>\(extra)</message>"
+    }
+
     /// Signed in as alice@localhost/r without stream management; the iterator has seen everything up to `.online`.
     private func online() async throws -> (LoopbackServer, XMPPClient, AsyncStream<XMPPEvent>.Iterator) {
         let server = try await LoopbackServer.start()
@@ -54,11 +60,9 @@ struct MessageDeliveryTests {
             + Self.encrypted("resource", extra: Self.delay("alice@localhost/r", held))
             + Self.encrypted("ambiguous", extra: Self.delay("alice@localhost", held) + Self.delay("localhost", offline))
             + Self.encrypted("future", extra: Self.delay("alice@localhost", "2099-01-01T00:00:00Z"))
-            + Self.encrypted("live")
             // Prosody's mod_smacks puts its delay on the carbon wrapper it queued, not inside the forwarded copy.
-            + "<message from='alice@localhost' to='alice@localhost/r'><received xmlns='urn:xmpp:carbons:2'><forwarded xmlns='urn:xmpp:forward:0'>"
-            + Self.encrypted("carbon", extra: Self.delay("bob@localhost", "2026-09-01T00:00:00Z")).replacingOccurrences(of: "<message ", with: "<message xmlns='jabber:client' ")
-            + "</forwarded></received>\(Self.delay("alice@localhost", held))</message>"
+            + Self.carbon(Self.encrypted("carbon", extra: Self.delay("bob@localhost", "2026-09-01T00:00:00Z")), extra: Self.delay("alice@localhost", held))
+            + Self.encrypted("live")
             + "<message from='bob@localhost/phone' id='end'><body>end</body></message>")
         var stamps: [String: Date?] = [:]
         for case .encryptedMessage(let message) in await collect(until: "end", from: &events) { stamps[message.id] = message.serverStamp }
@@ -71,6 +75,71 @@ struct MessageDeliveryTests {
         #expect(future <= Date())
         await client.disconnect()
         await server.stop()
+    }
+
+    /// Our server stamps only what it held while we were away and sends it first. Later, a delay naming our server was
+    /// written by the sender, who could otherwise date a live message into the past, below the read pointer.
+    @Test func aDelayNamingOurServerAfterTheCatchUpIsTheSendersClaim() async throws {
+        for ending in ["live message", "answer to our request"] {
+            let (server, client, iterator) = try await online()
+            var events = iterator
+            let forged = Self.delay("localhost", "2026-10-01T08:00:00Z")
+            try await server.send(Self.encrypted("held", extra: Self.delay("alice@localhost", "2026-10-01T09:00:00Z")))
+            if ending == "live message" {
+                try await server.send(Self.encrypted("live"))
+            } else {
+                async let roster = client.fetchRoster()
+                let request = try await server.next()
+                try await server.send("<iq type='result' id='\(request.attributes["id"] ?? "")'><query xmlns='\(PresenceWire.rosterNamespace)'/></iq>")
+                _ = try await roster
+            }
+            try await server.send(Self.encrypted("forged", extra: forged)
+                + Self.carbon(Self.encrypted("forged-carbon"), extra: forged)
+                + "<message from='bob@localhost/phone' id='end'><body>end</body></message>")
+            var stamps: [String: Date?] = [:]
+            for case .encryptedMessage(let message) in await collect(until: "end", from: &events) { stamps[message.id] = message.serverStamp }
+            #expect(stamps["held"] == ArchiveQuery.timestamp("2026-10-01T09:00:00Z"), "\(ending)")
+            #expect(stamps["forged"] == .some(nil), "\(ending)")
+            #expect(stamps["forged-carbon"] == .some(nil), "\(ending)")
+            await client.disconnect()
+            await server.stop()
+        }
+    }
+
+    /// A hibernation queue holds only what arrived after the previous stream's last contact, so a replayed message
+    /// stamped earlier than that (less the margin) carries a delay its sender wrote.
+    @Test func aResumedStreamTakesNoStampOlderThanThePreviousStreamsLastContact() async throws {
+        let lastContact = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 - 3_600).rounded())
+        var saved = XMPPStreamManagementSnapshot(revision: 1, accountID: "alice@localhost", fullJID: "alice@localhost/r", streamID: "s1",
+                                                 expiresAt: lastContact.addingTimeInterval(600), inboundHandled: 0, outboundSent: 0,
+                                                 outboundAcknowledged: 0, journal: [], resumeTimeoutSeconds: 600)
+        saved.availability = .active
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: Persistence(saved))
+        var events = client.events.makeAsyncIterator()
+        async let connected: Void = server.connect(client)
+        try await server.authenticate()
+        #expect(try await server.next().name == "resume")
+        try await server.send("<resumed xmlns='urn:xmpp:sm:3' previd='s1' h='0'/>")
+        try await connected
+        func stamp(_ date: Date) -> String { Self.delay("alice@localhost", date.formatted(.iso8601)) }
+        let queued = lastContact.addingTimeInterval(-60), backdated = lastContact.addingTimeInterval(-6 * 3_600)
+        try await server.send(Self.encrypted("queued", extra: stamp(queued)) + Self.encrypted("backdated", extra: stamp(backdated))
+            + "<message from='bob@localhost/phone' id='end'><body>end</body></message>")
+        var stamps: [String: Date?] = [:]
+        for case .encryptedMessage(let message) in await collect(until: "end", from: &events) { stamps[message.id] = message.serverStamp }
+        #expect(stamps["queued"] == queued)
+        #expect(stamps["backdated"] == .some(nil))
+        await client.disconnect()
+        await server.stop()
+    }
+
+    private actor Persistence: XMPPStreamManagementPersistence {
+        var value: XMPPStreamManagementSnapshot?
+        init(_ value: XMPPStreamManagementSnapshot?) { self.value = value }
+        func load() -> XMPPStreamManagementSnapshot? { value }
+        func save(_ snapshot: XMPPStreamManagementSnapshot, expectedRevision: Int?, acknowledgedMessageIDs: [String]) { value = snapshot }
     }
 
     @Test func returnedStanzasAreRoutedBeforeContentAndNeverReachDecryption() async throws {

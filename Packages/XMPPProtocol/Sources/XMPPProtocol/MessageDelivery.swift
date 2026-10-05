@@ -62,7 +62,8 @@ public struct XMPPMessageError: Sendable, Equatable {
 /// The XEP-0203 stamp our own server put on a stanza it held for this session: offline storage (`from` = our domain)
 /// or a hibernated stream's queue (Prosody's mod_smacks stamps every queued stanza, `from` = our bare JID). Exactly
 /// one such delay counts, clamped to now; a delay anyone else added is the sender's claim and is ignored. A peer can
-/// still write one naming our server, so the stamp only places the message in time and never authenticates anything.
+/// still write one naming our server, so `ServerStampWindow` decides when a stamp can be real, and the stamp only
+/// places the message in time: it never authenticates anything.
 enum ServerStamp {
     static let namespace = "urn:xmpp:delay"
 
@@ -74,5 +75,43 @@ enum ServerStamp {
         }
         guard ours.count == 1, let stamp = ours[0].attributes["stamp"], let date = ArchiveQuery.timestamp(stamp) else { return nil }
         return min(date, now)
+    }
+}
+
+/// When a stamp of ours can be real. Our server stamps only what it held while this session was away, and it sends all
+/// of that at once: the hibernation queue right after `<resumed/>`, offline storage right after initial presence. So a
+/// stamp counts only during that catch-up, which ends at the first message with no delay at all (live traffic), the
+/// first answer to one of our own requests (sent after going online, so the server answers it after the catch-up), or
+/// `catchUpLimit` after going online, whichever comes first. A delay naming our server on a later message was written
+/// by its sender. Within the catch-up a stamp is also no older than `floor`: the previous stream's last contact, less
+/// `floorMargin` for clock skew and for stanzas received but not yet acknowledged. Nothing older is still queued.
+struct ServerStampWindow {
+    static let catchUpLimit: TimeInterval = 60
+    static let floorMargin: TimeInterval = 300
+
+    let floor: Date?
+    let closesAt: Date
+
+    init(floor: Date?, openedAt: Date = Date()) {
+        self.floor = floor; closesAt = openedAt.addingTimeInterval(Self.catchUpLimit)
+    }
+
+    /// The earliest stamp a stream resuming `snapshot` (or binding afresh after it) can carry: its last contact, which
+    /// `expiresAt` holds plus the server's timeout, less the margin. Nil when unknown: the first session on this device.
+    static func floor(after snapshot: XMPPStreamManagementSnapshot?) -> Date? {
+        guard let expiresAt = snapshot?.expiresAt, let timeout = snapshot?.resumeTimeoutSeconds else { return nil }
+        return expiresAt.addingTimeInterval(-TimeInterval(timeout) - floorMargin)
+    }
+
+    /// Whether `stanza` (as it reached us: a carbon's wrapper, not what it forwards) ends the catch-up.
+    func ends(with stanza: XMLNode, now: Date = Date()) -> Bool {
+        now >= closesAt || stanza.child("delay", namespace: ServerStamp.namespace) == nil
+    }
+
+    /// Our server's stamp on `stanza` when it can be real; nil otherwise.
+    func stamp(of stanza: XMLNode, accountBareJID: String, now: Date = Date()) -> Date? {
+        guard !ends(with: stanza, now: now), let stamp = ServerStamp.of(stanza, accountBareJID: accountBareJID, now: now),
+              floor.map({ stamp >= $0 }) ?? true else { return nil }
+        return stamp
     }
 }
