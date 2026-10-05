@@ -679,16 +679,20 @@ public actor MessageStore {
     /// stream acknowledgement said, since server acceptance was never delivery. Left alone: a queued retry (not sent yet)
     /// and a message the peer already confirmed with a receipt or read marker. The rejection stays on the row through a
     /// retry: our archive keeps a copy of the returned attempt, which must not pass for the retry being accepted.
-    /// Returns what failed, or nil when nothing matched.
-    @discardableResult public func rejectOutgoing(accountID: String, chatID: String, wireID: String, rejection: String) throws -> RejectedOutgoing? {
+    /// `firstOnly` (the archive's copy of a bounce, which may be older than a retry) leaves a row alone once it carries
+    /// any rejection. Returns what failed, or nil when nothing matched or the row already failed for this reason (a
+    /// bounce redelivered on a resumed stream).
+    @discardableResult public func rejectOutgoing(accountID: String, chatID: String, wireID: String, rejection: String,
+                                                  firstOnly: Bool = false) throws -> RejectedOutgoing? {
         try requireTransportOwnership()
         guard !accountID.isEmpty, !chatID.isEmpty, !wireID.isEmpty, wireID.utf8.count <= 1_024, (1...64).contains(rejection.utf8.count),
               rejection.utf8.allSatisfy({ (97...122).contains($0) || $0 == 45 }) else { throw MessageStoreError.invalidValue }
         return try connection.transaction {
-            let parameters: [Value] = [.text(rejection), .text(accountID), .text(wireID), .text(chatID)]
+            let parameters: [Value] = [.text(rejection), .text(accountID), .text(wireID), .text(chatID), .integer(firstOnly ? 1 : 0)]
             try connection.execute("""
                 UPDATE outbox SET state='failed',attempt_id=NULL,rejection=?1
-                WHERE account_id=?2 AND message_id=?3 AND state IN ('submitting','unconfirmed','serverAccepted','failed')
+                WHERE account_id=?2 AND message_id=?3 AND state IN ('submitting','unconfirmed','serverAccepted','failed') AND (?5=0 OR rejection IS NULL)
+                AND NOT (state='failed' AND rejection IS ?1)
                 AND EXISTS (SELECT 1 FROM messages m WHERE m.account_id=?2 AND m.id=?3 AND m.chat_id=?4 AND m.outgoing=1 AND m.sender_id=?2
                     AND NOT EXISTS (SELECT 1 FROM message_events e WHERE e.account_id=?2 AND e.chat_id=?4 AND e.actor_id<>?2
                         AND e.kind IN ('delivered','displayed') AND e.target_wire_id IN (m.id, m.wire_id)))
@@ -698,7 +702,8 @@ public actor MessageStore {
             }
             try connection.execute("""
                 UPDATE outgoing_updates SET state='failed',attempt_id=NULL,rejection=?1
-                WHERE account_id=?2 AND id=?3 AND chat_id=?4 AND state IN ('submitting','unconfirmed','serverAccepted','failed')
+                WHERE account_id=?2 AND id=?3 AND chat_id=?4 AND state IN ('submitting','unconfirmed','serverAccepted','failed') AND (?5=0 OR rejection IS NULL)
+                AND NOT (state='failed' AND rejection IS ?1)
                 """, parameters)
             return try connection.query("SELECT changes()").first?[0].integer == 1 ? RejectedOutgoing(chatID: chatID, messageID: nil, rejection: rejection) : nil
         }

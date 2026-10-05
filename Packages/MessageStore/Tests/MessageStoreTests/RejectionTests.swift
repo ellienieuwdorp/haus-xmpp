@@ -33,6 +33,8 @@ private func withSentMessages(_ ids: [String], _ operation: (MessageStore) async
         #expect(try await store.rejectOutgoing(accountID: "self", chatID: "peer", wireID: "pending", rejection: "remote-server-timeout") != nil)
         let acked = try #require(await store.message(accountID: "self", messageID: "acked"))
         #expect(acked.transportState == .failed && acked.rejection == "service-unavailable")
+        // A resumed stream redelivers a bounce it already gave us: nothing changes, so nothing is reported twice.
+        #expect(try await store.rejectOutgoing(accountID: "self", chatID: "peer", wireID: "acked", rejection: "service-unavailable") == nil)
         // The acknowledgement that arrives after the bounce cannot turn it back into Sent.
         try await store.saveStreamManagement(accountID: "self", expectedRevision: 1, data: Data([2]), acknowledgedMessageIDs: ["pending"])
         #expect(try await store.message(accountID: "self", messageID: "pending")?.transportState == .failed)
