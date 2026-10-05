@@ -120,4 +120,61 @@ struct SessionLifecycleTests {
         #expect(written.last?.name == "a" && written.last?.attributes["h"] == "1")
         await server.stop()
     }
+
+    /// Binds fresh and enables `s2`; returns once the client is online.
+    private func bindFresh(_ client: XMPPClient, on server: LoopbackServer) async throws {
+        async let online: Void = server.connect(client)
+        try await server.authenticate()
+        let bind = try await server.next()
+        try #require(bind.name == "iq" && bind.child("bind", namespace: Self.bindNamespace) != nil)
+        try await server.send("<iq type='result' id='\(bind.attributes["id"] ?? "")'><bind xmlns='\(Self.bindNamespace)'><jid>alice@localhost/r</jid></bind></iq>")
+        #expect(try await server.next().name == "enable")
+        try await server.send("<enabled xmlns='urn:xmpp:sm:3' id='s2' resume='true'/>")
+        #expect(try await server.next().name == "presence")
+        try await online
+    }
+
+    /// A server that counts stanzas we never sent gets the XEP-0198 error, and the session is retired: the next
+    /// connect binds instead of resuming into the same count for the rest of the 72 h window.
+    @Test func acknowledgementAboveWhatWasSentRetiresTheSession() async throws {
+        let persistence = Persistence(nil)
+        do {
+            let server = try await LoopbackServer.start()
+            let client = server.client()
+            try await client.configureStreamManagement(persistence: persistence)
+            try await bindFresh(client, on: server)
+            try await server.send("<a xmlns='urn:xmpp:sm:3' h='5'/>")
+            let error = try await server.next()
+            #expect(error.name == "error" && error.namespace == "http://etherx.jabber.org/streams")
+            let count = error.child("handled-count-too-high", namespace: "urn:xmpp:sm:3")
+            #expect(error.child("undefined-condition", namespace: "urn:ietf:params:xml:ns:xmpp-streams") != nil)
+            #expect(count?.attributes["h"] == "5" && count?.attributes["send-count"] == "1")
+            await server.stop()
+        }
+        #expect(await persistence.value?.streamID == nil)
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: persistence)
+        try await bindFresh(client, on: server)
+        #expect(await persistence.value?.streamID == "s2")
+        await client.disconnect()
+        await server.stop()
+    }
+
+    /// The same count on `<resumed/>` ends that connect; the session is retired so the next one binds.
+    @Test func resumedCountAboveWhatWasSentRetiresTheSession() async throws {
+        let persistence = Persistence(Self.saved(availability: .active))
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: persistence)
+        let online = Task { try await server.connect(client) }
+        try await server.authenticate()
+        #expect(try await server.next().name == "resume")
+        try await server.send("<resumed xmlns='urn:xmpp:sm:3' previd='s1' h='2'/>")
+        let error = try await server.next()
+        #expect(error.child("handled-count-too-high", namespace: "urn:xmpp:sm:3")?.attributes["send-count"] == "0")
+        await #expect(throws: XMPPStreamManagementError.invalidAcknowledgement) { try await online.value }
+        #expect(await persistence.value?.streamID == nil)
+        await server.stop()
+    }
 }

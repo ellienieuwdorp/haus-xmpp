@@ -635,7 +635,7 @@ public actor XMPPClient {
                       node.attributes["previd"] == snapshot.streamID,
                       let h = Self.smCount(node.attributes["h"]), let streamManagement else { throw XMPPClientError.unexpectedProtocol }
                 boundJID = JID.normalized(snapshot.fullJID) ?? snapshot.fullJID
-                let replay = try await streamManagement.acknowledge(h, resumed: true)
+                let replay = try await acknowledge(h, resumed: true, streamManagement)
                 try emit(.streamAcknowledged)
                 guard try await streamManagement.permitsReplay() else { throw XMPPStreamManagementError.invalidState }
                 // IQs are never replayed: their continuations failed on disconnect and setup re-runs.
@@ -653,7 +653,7 @@ public actor XMPPClient {
                 if node.name == "r" {
                     try await writeAcknowledgement()
                 } else if node.name == "a", let h = Self.smCount(node.attributes["h"]) {
-                    _ = try await streamManagement.acknowledge(h)
+                    _ = try await acknowledge(h, streamManagement)
                     try emit(.streamAcknowledged)
                 } else { throw XMPPClientError.unexpectedProtocol }
                 return
@@ -864,6 +864,21 @@ public actor XMPPClient {
             try await rawWrite("<a xmlns='urn:xmpp:sm:3' h='\(h)'/>", expectedGeneration: token)
             await writeGate.leave()
         } catch { await writeGate.leave(); throw error }
+    }
+
+    /// A count above what we sent retires the session (`StreamManagement.acknowledge`) and ends the stream with the
+    /// XEP-0198 error, so the server drops its side too; the next connect binds fresh.
+    private func acknowledge(_ h: UInt32, resumed: Bool = false, _ streamManagement: StreamManagement) async throws -> [XMPPStreamJournalEntry] {
+        do { return try await streamManagement.acknowledge(h, resumed: resumed) }
+        catch XMPPStreamManagementError.invalidAcknowledgement {
+            let sent = await streamManagement.sentCount()
+            Logger(subsystem: "haus.xmpp.ios", category: "xmpp").error("Server acknowledged \(h, privacy: .public) stanzas of \(sent, privacy: .public) sent; stream session retired")
+            try? await withFarewellDeadline {
+                try await self.write("<stream:error><undefined-condition xmlns='urn:ietf:params:xml:ns:xmpp-streams'/>"
+                    + "<handled-count-too-high xmlns='urn:xmpp:sm:3' h='\(h)' send-count='\(sent)'/></stream:error></stream:stream>")
+            }
+            throw XMPPStreamManagementError.invalidAcknowledgement
+        }
     }
 
     /// Ends this connection if `work` has not finished within `farewellWriteLimit`; cancelling the socket also

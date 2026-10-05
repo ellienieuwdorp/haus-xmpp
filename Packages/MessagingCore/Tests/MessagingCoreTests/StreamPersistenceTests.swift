@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import MessageStore
-import XMPPProtocol
+@testable import XMPPProtocol
 import OMEMO
 @testable import MessagingCore
 
@@ -44,11 +44,18 @@ struct StreamPersistenceTests {
         #expect(try await adapter.load()?.revision == 2)
     }
 
-    @Test func corruptInnerRevisionFailsClosed() async throws {
-        let (store, adapter) = try await fixture()
-        _ = try await store.saveStreamManagement(accountID: "alice@localhost", expectedRevision: nil,
-                                                 data: JSONEncoder().encode(snapshot(revision: 90)))
-        await #expect(throws: XMPPStreamManagementError.self) { _ = try await adapter.load() }
+    /// A saved session that cannot be decoded (corrupt bytes, or an inner revision that disagrees with its row) is
+    /// never resumed, and the fresh bind replaces it. Failing the connect instead repeated on every connect.
+    @Test func unreadableSessionBindsFreshAndIsReplaced() async throws {
+        for data in [Data("{".utf8), try JSONEncoder().encode(snapshot(revision: 90))] {
+            let (store, adapter) = try await fixture()
+            _ = try await store.saveStreamManagement(accountID: "alice@localhost", expectedRevision: nil, data: data)
+            await #expect(throws: XMPPStreamManagementUnreadable(revision: 1)) { _ = try await adapter.load() }
+            let sm = StreamManagement(adapter)
+            #expect(try await sm.restore(accountID: "alice@localhost") == nil)
+            try await sm.enable(accountID: "alice@localhost", fullJID: "alice@localhost/device", streamID: "fresh")
+            #expect(try await adapter.load()?.streamID == "fresh")
+        }
     }
 
     @Test func plaintextAndUnknownCiphertextNeverResume() async throws {
