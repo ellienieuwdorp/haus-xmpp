@@ -136,10 +136,9 @@ final class AppModel {
     @ObservationIgnored private var acquiringOwnership = false
     @ObservationIgnored private var hasTransportOwnership = false
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
-    @ObservationIgnored private var reconnectAttempt = 0
+    @ObservationIgnored private var reconnection = ReconnectPolicy()
     @ObservationIgnored private var userWantsOffline = false
     @ObservationIgnored private var authenticationRejected = false
-    @ObservationIgnored private var reportedSetupFailure: String?
     @ObservationIgnored private let pathMonitor = NWPathMonitor()
     /// The chat the encryption projection describes. Set as a chat opens, before its store read returns, and kept
     /// across pop-back, disconnect and reconnect; only another chat or account replaces it.
@@ -486,7 +485,7 @@ final class AppModel {
             return false
         }
         let manual = savedEndpoint == nil
-        if manual { userWantsOffline = false; authenticationRejected = false; reconnectAttempt = 0 }
+        if manual { userWantsOffline = false; authenticationRejected = false; reconnection.retryNow() }
         let fixedEndpoint = server ?? (Self.labDomains.contains(requestedDomain)
             ? XMPPEndpoint(host: requestedDomain == "localhost" ? DevelopmentEndpoint.host : requestedDomain, port: 5223, security: .directTLS) : nil)
         if let sessionAccount, sessionAccount.accountID != username + "@" + requestedDomain {
@@ -594,13 +593,6 @@ final class AppModel {
         }
     }
 
-    /// Reconnect delay for the given consecutive failure count: immediate, then 1, 2, 4 … 60 s with jitter.
-    nonisolated static func reconnectDelay(attempt: Int) -> Duration {
-        guard attempt > 0 else { return .zero }
-        let base = min(60.0, pow(2.0, Double(attempt - 1)))
-        return .seconds(base * Double.random(in: 1.0...1.25))
-    }
-
     /// Desired state: connected whenever the app is in front with an account whose password still works.
     private var wantsConnection: Bool {
         foreground && !quiescing && !userWantsOffline && !authenticationRejected && sessionAccount != nil && !isDemo && upgradeState == .none
@@ -610,21 +602,22 @@ final class AppModel {
     /// change (scene, network path, sign-in, disconnect) only updates state and calls this.
     private func reconcile() {
         guard wantsConnection, session.isConnectable, reconnectTask == nil, let saved = sessionAccount else { return }
-        let delay = Self.reconnectDelay(attempt: reconnectAttempt)
+        let delay = reconnection.nextDelay
+        Self.syncLog.notice("reconnect in \(Int(delay / .milliseconds(1)), privacy: .public) ms attempt=\(self.reconnection.attempt, privacy: .public)")
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(for: delay)
             guard let self, !Task.isCancelled else { return }
             await self.lifecycleTask?.value
             self.reconnectTask = nil
             guard self.wantsConnection, self.session.isConnectable, self.sessionAccount == saved else { return }
-            self.reconnectAttempt += 1
+            self.reconnection.attemptStarted()
             _ = await self.connect(username: saved.username, password: saved.password, savedEndpoint: saved)
         }
     }
 
     private func networkBecameReachable() {
         guard wantsConnection, session.isConnectable else { return }
-        reconnectAttempt = 0
+        reconnection.retryNow()
         reconnectTask?.cancel(); reconnectTask = nil
         reconcile()
     }
@@ -725,7 +718,7 @@ final class AppModel {
                 guard self.foreground else { return }
                 self.returnedToForegroundForUpgrade()
                 self.refreshNotificationPermission()
-                self.reconnectAttempt = 0
+                self.reconnection.retryNow()
                 self.reconcile()
                 if let client = self.client { try? await client.setClientActive(true) }
                 await self.refresh()
@@ -1471,6 +1464,7 @@ final class AppModel {
             case .online:
                 session = .connected(settingUp: ConnectionSetup.featuresStep)
                 onlineAt = .now
+                reconnection.online()
                 firstMessageLogged = false
                 liveStoredLogged = false
                 catchUpByArchive = [:]
@@ -1520,6 +1514,7 @@ final class AppModel {
                 resetPresence()
                 drainTask?.cancel()
                 if case .needsAttention = session {} else { session = .offline(reason: reason) }
+                reconnection.ended()
                 reconcile()
             }
         case .chatState(let update):
@@ -1800,13 +1795,12 @@ final class AppModel {
         // Runs in the setup child's task on the main actor, so a `.disconnected` handled before this job ran has
         // already cancelled it.
         guard setupIsCurrent(token) else { return }
+        reconnection.observe(event)
         switch event {
         case .step(let step):
             if !session.isReady { session = .connected(settingUp: step) }
         case .ready:
             session = .ready
-            reconnectAttempt = 0
-            reportedSetupFailure = nil
             Self.syncLog.notice("ready +\(self.syncElapsed(), privacy: .public) ms")
             // Roster pushes are answered only after a fetch on this stream. Its result arrives as a
             // `.rosterItems` event, which then revokes and asks (see there).
@@ -1853,8 +1847,7 @@ final class AppModel {
         Logger(subsystem: "haus.xmpp.ios", category: "encryption").error("Encryption setup failed at \(step, privacy: .public): \(detail, privacy: .public)")
         session = .needsAttention(step: step, detail: detail)
         encryptionAttention.note("Setup failed at \(step): \(detail)")
-        if reportedSetupFailure != detail {
-            reportedSetupFailure = detail
+        if reconnection.shouldAlert(detail) {
             self.error = wasReady ? "Could not finish synchronizing (\(step): \(detail))."
                 : "Could not prepare encryption (\(step): \(detail)). Your queued messages have not been sent."
         }

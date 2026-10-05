@@ -42,7 +42,7 @@ struct ConnectionSetup: Sendable {
         /// An optional step failed and setup went on without its answer. Logged only.
         case degraded(step: String, detail: String)
         case failed(step: String, detail: String)
-        /// Every step finished and none failed. The only event that makes a session count as healthy
+        /// Every step finished and none failed. With a minute of uptime, what makes a session count as healthy
         /// (`ReconnectPolicy`): `.ready` comes before the walk and the rejoins.
         case settled
     }
