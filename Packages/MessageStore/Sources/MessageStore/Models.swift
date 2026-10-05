@@ -18,7 +18,7 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public var isStarred: Bool
     public var transportState: OutgoingTransportState?
     /// Set when a server returned this outgoing message (`rejectOutgoing`): the RFC 6120 condition it gave, or
-    /// `blocked`. Shown only while `transportState` is `.failed`; a retry keeps it (see `rejectOutgoing`).
+    /// `blocked`. Shown only while `transportState` is `.failed`; a retry clears it (see `rejectOutgoing`).
     public var rejection: String?
     /// The one file this message shares; `body` is then its caption and may be empty.
     public var attachment: StoredAttachment?

@@ -38,7 +38,7 @@ struct MigrationTests {
         try await old.enqueueOutgoing(StoredMessage(id: "m", accountID: "self", chatID: "peer", senderID: "self", body: "hi", isOutgoing: true))
         try await old.finishOutgoingSubmission(#require(await old.claimNextOutgoing(accountID: "self")))
         try await old.close()
-        #expect(sqliteExecute(url: url, sql: "ALTER TABLE outbox DROP COLUMN rejection; ALTER TABLE outgoing_updates DROP COLUMN rejection; PRAGMA user_version=23"))
+        #expect(sqliteExecute(url: url, sql: "ALTER TABLE outbox DROP COLUMN rejection; ALTER TABLE outbox DROP COLUMN returned; ALTER TABLE outgoing_updates DROP COLUMN rejection; ALTER TABLE outgoing_updates DROP COLUMN returned; PRAGMA user_version=23"))
 
         let store = try MessageStore(url: url)
         try await store.acquireTransportOwnership()

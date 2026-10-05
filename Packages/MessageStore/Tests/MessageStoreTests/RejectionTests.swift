@@ -55,6 +55,8 @@ private func withSentMessages(_ ids: [String], _ operation: (MessageStore) async
         // Our archive stored the attempt before the server routed (and returned) it.
         #expect(try await !store.reconcileArchivedOutgoing(accountID: "self", messageID: "m", expectedEncryptedWire: Data("m".utf8)))
         try await store.retryOutgoing(accountID: "self", messageID: "m")
+        // The reason described the returned attempt; a retry that later fails locally must not repeat it.
+        #expect(try await store.message(accountID: "self", messageID: "m")?.rejection == nil)
         #expect(try await !store.reconcileArchivedOutgoing(accountID: "self", messageID: "m", expectedEncryptedWire: Data("m".utf8)))
         // A queued retry has not been sent: a late copy of the old bounce leaves it to go out.
         #expect(try await store.rejectOutgoing(accountID: "self", chatID: "peer", wireID: "m", rejection: "gone") == nil)

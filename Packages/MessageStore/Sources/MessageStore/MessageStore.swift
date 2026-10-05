@@ -388,12 +388,14 @@ public actor MessageStore {
             // back leaves the version below 23, so a later open tries again instead of stranding the typed spelling.
             try AddressMigration.addSealedAccountColumns(connection)
             let addressesMigrated = try version >= 23 || AddressMigration.run(connection)
-            // v24: why a server returned an outgoing message or update (`rejectOutgoing`). Column checks keep it
-            // idempotent in any merge order, and when a rolled-back address rewrite leaves the version at 22.
+            // v24: why a server returned an outgoing message or update (`rejectOutgoing`), and that it ever did. Column
+            // checks keep it idempotent in any merge order, and when a rolled-back address rewrite leaves the version at 22.
             if version < 24 {
-                for table in ["outbox", "outgoing_updates"]
-                where try connection.query("SELECT 1 FROM pragma_table_info('\(table)') WHERE name='rejection'").isEmpty {
-                    try connection.execute("ALTER TABLE \(table) ADD COLUMN rejection TEXT")
+                for table in ["outbox", "outgoing_updates"] {
+                    for (column, type) in [("rejection", "TEXT"), ("returned", "INTEGER NOT NULL DEFAULT 0")]
+                    where try connection.query("SELECT 1 FROM pragma_table_info('\(table)') WHERE name='\(column)'").isEmpty {
+                        try connection.execute("ALTER TABLE \(table) ADD COLUMN \(column) \(type)")
+                    }
                 }
             }
             try connection.execute("PRAGMA user_version = \(addressesMigrated ? 24 : 22)")
@@ -665,7 +667,7 @@ public actor MessageStore {
         try requireTransportOwnership()
         return try connection.transaction {
             try connection.execute("""
-                UPDATE outbox SET state='queued',attempt_id=NULL WHERE account_id=? AND message_id=?
+                UPDATE outbox SET state='queued',attempt_id=NULL,rejection=NULL WHERE account_id=? AND message_id=?
                 AND state IN ('unconfirmed','failed')
                 """, [.text(accountID), .text(messageID)])
             guard try connection.query("SELECT changes()").first?[0].integer == 1 else {
@@ -677,11 +679,11 @@ public actor MessageStore {
     /// A server returned one of our stanzas (`<message type='error'>`): the outbox message or outgoing update whose wire
     /// id is `wireID` in `chatID` becomes `failed` with `rejection` (an RFC 6120 condition, or `blocked`), whatever the
     /// stream acknowledgement said, since server acceptance was never delivery. Left alone: a queued retry (not sent yet)
-    /// and a message the peer already confirmed with a receipt or read marker. The rejection stays on the row through a
-    /// retry: our archive keeps a copy of the returned attempt, which must not pass for the retry being accepted.
-    /// `firstOnly` (the archive's copy of a bounce, which may be older than a retry) leaves a row alone once it carries
-    /// any rejection. Returns what failed, or nil when nothing matched or the row already failed for this reason (a
-    /// bounce redelivered on a resumed stream).
+    /// and a message the peer already confirmed with a receipt or read marker. A retry clears the reason (it described
+    /// the returned attempt) but the row stays marked as returned: our archive keeps a copy of that attempt, which must
+    /// not pass for the retry being accepted. `firstOnly` (the archive's copy of a bounce, which may be older than a
+    /// retry) leaves a row alone once it was ever returned. Returns what failed, or nil when nothing matched or the row
+    /// already failed for this reason (a bounce redelivered on a resumed stream).
     @discardableResult public func rejectOutgoing(accountID: String, chatID: String, wireID: String, rejection: String,
                                                   firstOnly: Bool = false) throws -> RejectedOutgoing? {
         try requireTransportOwnership()
@@ -690,8 +692,8 @@ public actor MessageStore {
         return try connection.transaction {
             let parameters: [Value] = [.text(rejection), .text(accountID), .text(wireID), .text(chatID), .integer(firstOnly ? 1 : 0)]
             try connection.execute("""
-                UPDATE outbox SET state='failed',attempt_id=NULL,rejection=?1
-                WHERE account_id=?2 AND message_id=?3 AND state IN ('submitting','unconfirmed','serverAccepted','failed') AND (?5=0 OR rejection IS NULL)
+                UPDATE outbox SET state='failed',attempt_id=NULL,rejection=?1,returned=1
+                WHERE account_id=?2 AND message_id=?3 AND state IN ('submitting','unconfirmed','serverAccepted','failed') AND (?5=0 OR returned=0)
                 AND NOT (state='failed' AND rejection IS ?1)
                 AND EXISTS (SELECT 1 FROM messages m WHERE m.account_id=?2 AND m.id=?3 AND m.chat_id=?4 AND m.outgoing=1 AND m.sender_id=?2
                     AND NOT EXISTS (SELECT 1 FROM message_events e WHERE e.account_id=?2 AND e.chat_id=?4 AND e.actor_id<>?2
@@ -701,8 +703,8 @@ public actor MessageStore {
                 return RejectedOutgoing(chatID: chatID, messageID: wireID, rejection: rejection)
             }
             try connection.execute("""
-                UPDATE outgoing_updates SET state='failed',attempt_id=NULL,rejection=?1
-                WHERE account_id=?2 AND id=?3 AND chat_id=?4 AND state IN ('submitting','unconfirmed','serverAccepted','failed') AND (?5=0 OR rejection IS NULL)
+                UPDATE outgoing_updates SET state='failed',attempt_id=NULL,rejection=?1,returned=1
+                WHERE account_id=?2 AND id=?3 AND chat_id=?4 AND state IN ('submitting','unconfirmed','serverAccepted','failed') AND (?5=0 OR returned=0)
                 AND NOT (state='failed' AND rejection IS ?1)
                 """, parameters)
             return try connection.query("SELECT changes()").first?[0].integer == 1 ? RejectedOutgoing(chatID: chatID, messageID: nil, rejection: rejection) : nil
@@ -1696,7 +1698,7 @@ public actor MessageStore {
             // too: it proves acceptance, never delivery, and cannot tell a retry from the attempt that was returned.
             try connection.execute("""
                 UPDATE outbox SET state='serverAccepted',attempt_id=NULL WHERE account_id=? AND message_id=?
-                AND state IN ('queued','submitting','unconfirmed','failed','serverAccepted') AND rejection IS NULL
+                AND state IN ('queued','submitting','unconfirmed','failed','serverAccepted') AND returned=0
                 AND EXISTS (SELECT 1 FROM messages WHERE messages.account_id=outbox.account_id
                             AND messages.id=outbox.message_id AND messages.outgoing=1 AND messages.sender_id=?)
                 """, [.text(accountID), .text(messageID), .text(accountID)])
@@ -2400,7 +2402,7 @@ public actor MessageStore {
 
     public func retryUpdate(accountID: String, updateID: String) throws {
         try requireTransportOwnership()
-        try connection.execute("UPDATE outgoing_updates SET state='queued',attempt_id=NULL WHERE account_id=? AND id=? AND state IN ('unconfirmed','failed')", [.text(accountID), .text(updateID)])
+        try connection.execute("UPDATE outgoing_updates SET state='queued',attempt_id=NULL,rejection=NULL WHERE account_id=? AND id=? AND state IN ('unconfirmed','failed')", [.text(accountID), .text(updateID)])
         guard try connection.query("SELECT changes()").first?[0].integer == 1 else { throw MessageStoreError.invalidTransition }
     }
 
@@ -2409,7 +2411,7 @@ public actor MessageStore {
         try requireTransportOwnership()
         guard try updateWire(accountID: accountID, updateID: updateID) == expectedWire else { return false }
         // As for messages: an archived copy of a returned update is not acceptance of a retry.
-        try connection.execute("UPDATE outgoing_updates SET state='serverAccepted',attempt_id=NULL WHERE account_id=? AND id=? AND rejection IS NULL", [.text(accountID), .text(updateID)])
+        try connection.execute("UPDATE outgoing_updates SET state='serverAccepted',attempt_id=NULL WHERE account_id=? AND id=? AND returned=0", [.text(accountID), .text(updateID)])
         return try connection.query("SELECT changes()").first?[0].integer == 1
     }
 
