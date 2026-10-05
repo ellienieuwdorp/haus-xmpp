@@ -205,6 +205,8 @@ final class AppModel {
     /// details pages cover it.
     private var encryptionShownChatID: String? { openChatID ?? encryptionOverviewChatID }
     @ObservationIgnored private var generation = UUID()
+    /// The connection (`generation`) in which each room was last rejoined after a bounce (`rejoinAfterBounce`).
+    @ObservationIgnored private var bounceRejoins: [String: UUID] = [:]
     /// `prepare()` runs once; a notification action on a background launch joins it.
     @ObservationIgnored private var preparation: Task<Void, Never>?
     @ObservationIgnored private var backgroundLaunchObserver: (any NSObjectProtocol)?
@@ -1538,6 +1540,7 @@ final class AppModel {
             // One processor per connection: it owns the "may acknowledge" rule for this stream.
             if inbound?.client !== client { inbound = InboundProcessor(encryption: encryption, client: client, account: account) }
             guard let inbound else { return }
+            if case .messageError(let bounce) = event { rejoinAfterBounce(bounce, token: token) }
             do {
                 let outcome = try await inbound.process(event)
                 guard generation == token else { return }
@@ -1562,8 +1565,9 @@ final class AppModel {
                     refreshSoon()
                 case .rejected(let rejected):
                     // The bubble turns to Not sent with Retry; a message (not a reaction or receipt) also says why, once.
+                    guard rejected.messageID != nil else { refreshSoon(); break }
                     await refresh()
-                    guard generation == token, rejected.messageID != nil, foreground else { return }
+                    guard generation == token, foreground else { return }
                     let name = chats.first { $0.id == rejected.chatID }?.displayTitle ?? AppModel.displayName(for: rejected.chatID, title: nil)
                     self.error = "A message to \(name) wasn't delivered. \(RejectionCopy.reason(rejected.rejection, isGroup: isGroup(rejected.chatID))) You can retry it from the message."
                 case .acknowledged, .ignored: break
@@ -1883,6 +1887,24 @@ final class AppModel {
                 groupChats[room]?.issue = groupFailure(error)
                 // No send is allowed until this room's own authenticated presence is received.
                 // Archive synchronization separately fails closed if room provenance is unavailable.
+            }
+        }
+    }
+
+    /// A room that answered one of our stanzas (usually a chat state) as from a non-occupant: the client marked it not
+    /// joined, and queued group messages wait for a join. One rejoin per room and connection; its self-presence makes
+    /// the room joined again and restarts the outbox. Self-ping and a fuller error policy are MS-089.
+    private func rejoinAfterBounce(_ bounce: XMPPMessageError, token: UUID) {
+        let room = bounce.from, account = accountID
+        guard bounce.meansNotInRoom, groupChats[room] != nil, bounceRejoins[room] != token,
+              let client, foreground, !quiescing else { return }
+        bounceRejoins[room] = token
+        let nickname = preferences.string(forKey: "groupNickname.\(account).\(room)") ?? String(account.prefix { $0 != "@" })
+        Task { [weak self] in
+            do { _ = try await client.joinGroupRoom(room, nickname: nickname) }
+            catch {
+                guard let self, self.generation == token else { return }
+                self.groupChats[room]?.issue = self.groupFailure(error)
             }
         }
     }

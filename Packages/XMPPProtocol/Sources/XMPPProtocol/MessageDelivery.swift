@@ -56,7 +56,7 @@ public struct XMPPMessageError: Sendable, Equatable {
 
     /// XEP-0045 §7.2.1 and XEP-0410: a room that answers a message with `not-acceptable` (or `not-allowed`) no longer
     /// counts us as an occupant.
-    var meansNotInRoom: Bool { condition == "not-acceptable" || condition == "not-allowed" }
+    public var meansNotInRoom: Bool { condition == "not-acceptable" || condition == "not-allowed" }
 }
 
 /// The XEP-0203 stamp our own server put on a stanza it held for this session: offline storage (`from` = our domain)
