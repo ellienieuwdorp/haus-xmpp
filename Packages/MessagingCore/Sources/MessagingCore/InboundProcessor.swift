@@ -42,7 +42,8 @@ public actor InboundProcessor {
     public func process(_ event: XMPPEvent) async throws -> Outcome {
         switch event {
         case .encryptedMessage(let message):
-            do { _ = try await encryption.receive(account: account, message: message, transport: client); return .stored }
+            // Our own server's delay (offline storage, a hibernated stream's queue) is when it was sent, not now.
+            do { _ = try await encryption.receive(account: account, message: message, transport: client, sentAt: message.serverStamp); return .stored }
             catch OMEMOError.notForThisDevice { return .excluded(reason: .notForThisDevice) }
             catch OMEMOError.undecryptable { return .excluded(reason: .decryptFailed) }
             catch {
@@ -54,7 +55,7 @@ public actor InboundProcessor {
                 return .retained(problem: (error as? OMEMOError)?.errorDescription ?? "An encrypted message needs attention")
             }
         case .encryptedGroupMessage(let message):
-            do { _ = try await encryption.receiveGroup(account: account, message: message, transport: client); return .stored }
+            do { _ = try await encryption.receiveGroup(account: account, message: message, transport: client, sentAt: message.serverStamp); return .stored }
             catch OMEMOError.notForThisDevice { return .excluded(reason: .notForThisDevice) }
             catch OMEMOError.undecryptable { return .excluded(reason: .decryptFailed) }
             catch {

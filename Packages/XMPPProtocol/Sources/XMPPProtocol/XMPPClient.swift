@@ -694,8 +694,9 @@ public actor XMPPClient {
                           let (forwarded, provenance) = try? Carbons.unwrap(node, accountBareJID: ownBare, accountFullJID: boundJID) else {
                         if let inbound { try await streamManagement?.handled(inbound) }; return
                     }
-                    try emitMessage(forwarded, provenance: provenance)
-                } else { try emitMessage(node, provenance: .direct) }
+                    // A carbon replayed from a hibernated stream carries our server's delay on the wrapper it wrote.
+                    try emitMessage(forwarded, provenance: provenance, serverStamp: ServerStamp.of(node, accountBareJID: ownBare))
+                } else { try emitMessage(node, provenance: .direct, serverStamp: OMEMOWire.bareJID(boundJID).flatMap { ServerStamp.of(node, accountBareJID: $0) }) }
             } else if node.name == "iq", node.namespace == "jabber:client",
                       ["get", "set"].contains(node.attributes["type"] ?? ""), let id = node.attributes["id"] {
                 if rosterRequested, let account = OMEMOWire.bareJID(boundJID),
@@ -904,13 +905,18 @@ public actor XMPPClient {
         try await write(xml, groupSnapshot: snapshot)
     }
 
-    private func emitMessage(_ node: XMLNode, provenance: XMPPMessageProvenance) throws {
+    /// `serverStamp` is our own server's delay on the stanza as it reached us (`ServerStamp`), nil when it had none.
+    private func emitMessage(_ node: XMLNode, provenance: XMPPMessageProvenance, serverStamp: Date? = nil) throws {
         if provenance == .direct, let account = OMEMOWire.bareJID(boundJID),
            let state = Self.parsedChatState(node, account: account, rooms: groupRooms) { try emit(.chatState(state)) }
         if node.attributes["type"] == "groupchat" {
             if provenance == .direct, let room = node.attributes["from"].flatMap(OMEMOWire.bareJID),
                let state = groupRooms[room], let account = OMEMOWire.bareJID(boundJID), OMEMOWire.hasEncryptedContent(node) {
-                do { try emit(.encryptedGroupMessage(GroupChatWire.message(node, account: account, room: room, state: state))) }
+                do {
+                    var message = try GroupChatWire.message(node, account: account, room: room, state: state)
+                    message.serverStamp = serverStamp
+                    try emit(.encryptedGroupMessage(message))
+                }
                 catch { try emit(.encryptionFailure(from: room, id: node.attributes["id"])) }
             }
             return
@@ -920,6 +926,7 @@ public actor XMPPClient {
                 var message = try OMEMOWire.parseMessage(node, provenance: provenance)
                 // XEP-0359: the id our own server gave this message when it archived it; XEP-0490 names messages by it.
                 message.archiveStanzaID = OMEMOWire.bareJID(boundJID).flatMap { DisplayedSync.ownStanzaID(node, accountBareJID: $0) }
+                message.serverStamp = serverStamp
                 try emit(.encryptedMessage(message))
             }
             catch { try emit(.encryptionFailure(from: node.attributes["from"] ?? "", id: node.attributes["id"])) }

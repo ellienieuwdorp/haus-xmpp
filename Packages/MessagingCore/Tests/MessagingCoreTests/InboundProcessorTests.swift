@@ -79,6 +79,23 @@ struct InboundProcessorTests {
         #expect(try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: 2))) == .acknowledged)
     }
 
+    /// A stanza our server held for this session (offline storage, a hibernated stream's queue) is placed at the time
+    /// the server stamped, not when the resumed stream delivered it.
+    @Test func ourServersStampIsTheTimeOfALiveMessage() async throws {
+        let (store, _, processor) = try await initializedFixture()
+        let held = Date(timeIntervalSince1970: 1_790_000_000), room = "room@conference.localhost"
+        var direct = XMPPEncryptedMessage(id: "m1", from: peer + "/x", to: account, originID: nil,
+                                          envelope: XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: 4242, keys: [], payload: Data([1])), hasFallbackBody: true)
+        direct.serverStamp = held
+        var group = try XMPPEncryptedGroupMessage(id: "m2", room: room, occupant: room + "/bob", sender: peer,
+                                                  envelope: XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: 4242, keys: [], payload: Data([2])), hasFallbackBody: true)
+        group.serverStamp = held.addingTimeInterval(60)
+        #expect(try await processor.process(.encryptedMessage(direct)) == .excluded(reason: .notForThisDevice))
+        #expect(try await processor.process(.encryptedGroupMessage(group)) == .excluded(reason: .notForThisDevice))
+        #expect(try await store.messages(accountID: account, chatID: peer).map(\.sentAt) == [held])
+        #expect(try await store.messages(accountID: account, chatID: room).map(\.sentAt) == [held.addingTimeInterval(60)])
+    }
+
     private func addressedCiphertext(_ encryption: OMEMOService) async throws -> [XMPPEvent] {
         let (direct, group) = try await unknownSenderEnvelopes(account: account, encryption: encryption)
         let room = "room@conference.localhost"
