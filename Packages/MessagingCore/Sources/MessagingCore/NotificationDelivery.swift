@@ -73,6 +73,7 @@ public final class NotificationRunProgress: @unchecked Sendable {
     private var currentPhase = NotificationRunPhase.queued
     private var currentReport = NotificationRunReport()
     private var abandoned = false
+    private var soundPlayed = false
     private var joinedCount = 0
     private var expiredCount = 0
     public let started = Date()
@@ -98,6 +99,18 @@ public final class NotificationRunProgress: @unchecked Sendable {
 
     var isJoinable: Bool { lock.withLock { !abandoned && currentPhase < .presenting } }
     func abandon() { lock.withLock { abandoned = true } }
+    /// Whether an add of this run already carried the sound (a run plays one, whichever presentation adds it).
+    var hasPlayedSound: Bool { lock.withLock { soundPlayed } }
+    /// One completed add: counted as it happens, so a presentation that fails part-way leaves an exact record.
+    func noteAdded(playingSound: Bool) {
+        lock.withLock {
+            currentReport.posted += 1
+            if currentReport.firstPostMilliseconds == nil {
+                currentReport.firstPostMilliseconds = Int(Date().timeIntervalSince(started) * 1000)
+            }
+            if playingSound { soundPlayed = true }
+        }
+    }
     func noteJoined() { lock.withLock { joinedCount += 1 } }
     func noteExpired() { lock.withLock { expiredCount += 1 } }
 }
@@ -182,19 +195,20 @@ public final class NotificationRunCoordinator: @unchecked Sendable {
 
 /// Which presentation of a run this is. The extension presents direct messages as soon as the own archive committed,
 /// while rooms are still walked, and everything else once its network work ended (MS-110). Each presentation claims
-/// only what it posted; identifiers are stable, so a later one replaces rather than duplicates.
-public struct PresentationStage: Sendable, Equatable {
-    /// False for the early presentation: it posts only when it has something, and leaves cleanup to the final one.
+/// only what it posted; identifiers are stable, so a later one replaces rather than duplicates. A run plays one sound,
+/// on the first add that carries it.
+public struct PresentationStage: Sendable {
+    /// False for the early presentation. It leaves the run's phase alone, so pushes keep joining the run while its
+    /// network work goes on, and it never commits the run: only the final presentation settles it (and an expiring
+    /// request). Cleanup of stale notifications is left to the final one as well.
     public let isFinal: Bool
-    /// Requests earlier presentations of this run posted. A run plays one sound, on the first presentation that posts.
-    public let postedEarlier: Int
-    /// Set on a final presentation whose rooms were not all walked (the deadline or a lost connection cut them short).
-    /// When the run would then post nothing at all, what the push was about is unknown: it throws this instead of
-    /// settling, and the run shows the fallback as it would have before.
-    public let unfinished: BackgroundSynchronizationError?
+    /// Set on a final presentation whose rooms were not all walked: why they were cut short (the deadline, a lost
+    /// connection, or the error a room page raised). When the run has then added nothing at all, what the push was
+    /// about is unknown: it throws this instead of settling, and the run shows the fallback as it would have before.
+    public let unfinished: (any Error)?
 
-    public init(isFinal: Bool, postedEarlier: Int = 0, unfinished: BackgroundSynchronizationError? = nil) {
-        self.isFinal = isFinal; self.postedEarlier = postedEarlier; self.unfinished = unfinished
+    public init(isFinal: Bool, unfinished: (any Error)? = nil) {
+        self.isFinal = isFinal; self.unfinished = unfinished
     }
     /// A run that caught up completely and presents once.
     public static let complete = PresentationStage(isFinal: true)
@@ -214,44 +228,36 @@ public struct NotificationPresenter: Sendable {
     }
 
     /// `authorize` rereads the protected account after the network work; it throws when the user signed out meanwhile.
-    /// Returns how many requests it posted.
-    @discardableResult
     public func present(store: MessageStore, accountID: String, progress: NotificationRunProgress, stage: PresentationStage = .complete,
-                        authorize: @Sendable () throws -> Void = {}) async throws -> Int {
-        // An early presentation that finds nothing leaves the phase alone: pushes may still join the run.
+                        authorize: @Sendable () throws -> Void = {}) async throws {
+        // An early presentation leaves the phase alone: pushes keep joining the run while it walks rooms.
         if stage.isFinal { progress.enter(.presenting) }
         try Task.checkCancellation()
         try authorize()
         let batch = try await store.pendingNotifications(accountID: accountID)
         // Best effort: an unknown badge leaves the icon as it is rather than failing the run.
         let badge = try? await NotificationBadge.count(store: store, accountID: accountID)
-        let plan = NotificationPlanner.plan(batch, accountID: accountID, badge: badge, playsSound: stage.postedEarlier == 0)
+        let plan = NotificationPlanner.plan(batch, accountID: accountID, badge: badge, playsSound: !progress.hasPlayedSound)
         if plan.requests.isEmpty {
-            if stage.postedEarlier == 0, let unfinished = stage.unfinished { throw unfinished }
-            if !stage.isFinal { return 0 }
+            if progress.report.posted == 0, let unfinished = stage.unfinished { throw unfinished }
+            if !stage.isFinal { return }
         }
-        progress.enter(.presenting)
         progress.update { $0.badge = badge }
         for request in plan.requests {
             try Task.checkCancellation()
             // The system add keeps its whole limit; an intent donation before it has its own allowance.
             try await withTimeout(addTimeout + posting.preparationAllowance(for: request)) { try await posting.add(request) }
-            progress.update { report in
-                if report.firstPostMilliseconds == nil { report.firstPostMilliseconds = Int(Date().timeIntervalSince(progress.started) * 1000) }
-            }
+            progress.noteAdded(playingSound: request.playsSound)
         }
         try await store.removeNotificationCandidates(accountID: accountID, keys: plan.claimed)
-        progress.update {
-            $0.posted += plan.requests.count; $0.claimed += plan.claimed.count; $0.deferred = batch.deferredCount
-        }
+        progress.update { $0.claimed += plan.claimed.count; $0.deferred = batch.deferredCount }
+        guard stage.isFinal else { return }
         progress.enter(.committed)
-        guard stage.isFinal else { return plan.requests.count }
         // Settled. Cleanup is best effort and never changes the outcome.
         let removed = try? await withTimeout(cleanupTimeout) {
             try await removeStaleDelivered(store: store, accountID: accountID, summaryPosted: plan.summarizesDeferredChats)
         }
         if let removed { progress.update { $0.removedFallbacks = removed.fallbacks; $0.removedStale = removed.messages } }
-        return plan.requests.count
     }
 
     /// Removes delivered notifications a successful run supersedes:

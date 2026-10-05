@@ -46,8 +46,8 @@ public enum BackgroundSynchronizationError: Error, Sendable, Equatable {
 public struct BackgroundSynchronizer: Sendable {
     public init() {}
 
-    /// Presents what a run committed, under the lease, and returns how many requests it posted.
-    public typealias Presentation = @Sendable (MessageStore, PresentationStage) async throws -> Int
+    /// Presents what a run committed, under the lease.
+    public typealias Presentation = @Sendable (MessageStore, PresentationStage) async throws -> Void
 
     /// `leaseWait` is spent inside `timeBudget`: the app or another run may briefly hold the lease (plan D2).
     /// `presentation` runs early once the own archive committed and rooms follow (`.direct`), and once at the end.
@@ -136,6 +136,10 @@ public struct BackgroundSynchronizer: Sendable {
 /// the rooms. From then on the deadline only ends the best-effort work (rooms, pull, rejoins, push enable): a slow or
 /// unreachable room can no longer turn committed direct messages into the fallback. The final presentation posts what
 /// the rooms and the live stream committed meanwhile.
+///
+/// Once the early presentation added something, the user may open the app from it, and the app waits for this run's
+/// lease: the rooms then get `roomsAfterPost` more rather than the rest of the budget. Until the final presentation the
+/// run stays joinable, so pushes that arrive meanwhile wait for it instead of queueing a second run.
 struct BackgroundCatchUp: Sendable {
     let connect: @Sendable () async throws -> Void
     /// Best-effort work beside the walk (push enable, rejoins once the own archive is walked); never fails the run.
@@ -147,6 +151,9 @@ struct BackgroundCatchUp: Sendable {
     let pull: @Sendable (Duration) async throws -> Void
     let consume: @Sendable () async throws -> Void
     let stop: @Sendable () async -> Void
+    /// How long rooms may still be walked after the early presentation added something (MS-111 would let the app ask
+    /// for the lease instead).
+    var roomsAfterPost: Duration = .seconds(5)
 
     func run(store: MessageStore, timeBudget: Duration, deadline: ContinuousClock.Instant, progress: NotificationRunProgress?,
              presentation: BackgroundSynchronizer.Presentation?) async throws {
@@ -156,27 +163,43 @@ struct BackgroundCatchUp: Sendable {
             if let timeout = readSyncTimeout(until: deadline) { try await pull(timeout) }
             await ledger.notePull()
         }
+        // The own archive, the early presentation, then the rooms.
+        @Sendable func walkArchives() async throws {
+            try await walk({ if $0.archive != nil, $0.messages > 0 { await ledger.noteRoomMessages() } }, { complete, rooms in
+                await ownArchiveWalked.reach()
+                // The own archive holds the direct messages a push is about; without its newest entry the run shows
+                // the fallback, and the next run or the app walks it again. A refused or unreachable room does not fail it.
+                guard complete else { throw BackgroundSynchronizationError.ownArchiveIncomplete }
+                await caughtUp.reach()
+                guard rooms > 0 else { return }
+                // Before the claim: chats read on another device have their pointers moved, which removes their
+                // candidates. Own XEP-0333 markers were applied by the walk and the live consumer.
+                try await pullReadState()
+                guard let presentation else { return }
+                do { try await presentation(store, .direct) }
+                catch is CancellationError { throw CancellationError() }
+                // The final presentation tries again with everything still pending.
+                catch { BackgroundSession.log.notice("direct presentation failed: \(String(describing: type(of: error)), privacy: .public)") }
+                // Adds are counted as they complete, so one that failed part-way still counts as showing.
+                if (progress?.report.posted ?? 0) > 0 { await ledger.notePostedEarly() }
+            })
+        }
         try await runBackgroundWork(timeBudget: timeBudget, caughtUp: caughtUp, operation: {
             try await connect()
             try Task.checkCancellation()
             async let duties: Void = sessionDuties(ownArchiveWalked)
             do {
-                try await walk({ if $0.archive != nil, $0.messages > 0 { await ledger.noteRoomMessages() } }, { complete, rooms in
-                    await ownArchiveWalked.reach()
-                    // The own archive holds the direct messages a push is about; without its newest entry the run shows
-                    // the fallback, and the next run or the app walks it again. A refused or unreachable room does not fail it.
-                    guard complete else { throw BackgroundSynchronizationError.ownArchiveIncomplete }
-                    await caughtUp.reach()
-                    guard rooms > 0 else { return }
-                    // Before the claim: chats read on another device have their pointers moved, which removes their
-                    // candidates. Own XEP-0333 markers were applied by the walk and the live consumer.
-                    try await pullReadState()
-                    guard let presentation else { return }
-                    do { await ledger.notePosted(try await presentation(store, .direct)) }
-                    catch is CancellationError { throw CancellationError() }
-                    // The final presentation tries again with everything still pending.
-                    catch { BackgroundSession.log.notice("direct presentation failed: \(String(describing: type(of: error)), privacy: .public)") }
-                })
+                // Once a notification is showing, the rooms get `roomsAfterPost` more: the app may be waiting for the lease.
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    group.addTask { try await walkArchives() }
+                    group.addTask {
+                        while await !ledger.postedEarly { try await Task.sleep(for: .milliseconds(50)) }
+                        try await Task.sleep(for: roomsAfterPost)
+                        throw BackgroundSynchronizationError.deadlineExceeded
+                    }
+                    try await group.next()
+                    group.cancelAll()
+                }
                 await ledger.noteRoomsWalked()
             } catch {
                 // Rooms are best effort once the own archive committed: their checkpoints stand for the next run. A
@@ -195,22 +218,24 @@ struct BackgroundCatchUp: Sendable {
         progress?.enter(.presenting)
         let stage = await ledger.finalStage(pastDeadline: ContinuousClock.now >= deadline)
         var final: (@Sendable (MessageStore) async throws -> Void)?
-        if let presentation { final = { _ = try await presentation($0, stage) } }
+        if let presentation { final = { try await presentation($0, stage) } }
         try await finishBackgroundPresentation(store: store, presentation: final)
     }
 }
 
 /// What one run's catch-up got through, for its final presentation.
 actor CatchUpLedger {
-    private var postedEarly = 0, roomsWalked = false, pulled = false, roomMessages = false
-    func notePosted(_ count: Int) { postedEarly += count }
+    /// The early presentation added something: a notification is showing.
+    private(set) var postedEarly = false
+    private var roomsWalked = false, pulled = false, roomMessages = false
+    func notePostedEarly() { postedEarly = true }
     func noteRoomsWalked() { roomsWalked = true }
     func notePull() { pulled = true }
     func noteRoomMessages() { roomMessages = true }
     var needsPull: Bool { !pulled || roomMessages }
     func finalStage(pastDeadline: Bool) -> PresentationStage {
-        PresentationStage(isFinal: true, postedEarlier: postedEarly,
-                          unfinished: roomsWalked ? nil : pastDeadline ? .deadlineExceeded : .connectionEnded)
+        PresentationStage(isFinal: true, unfinished: roomsWalked ? nil : pastDeadline ? BackgroundSynchronizationError.deadlineExceeded
+                                                                                      : BackgroundSynchronizationError.connectionEnded)
     }
 }
 
