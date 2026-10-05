@@ -131,4 +131,28 @@ struct ResumeLabTests {
         await active.disconnectAndWait()
         #expect(try queued(resource: other) == before + 1)
     }
+
+    /// Prosody's mod_smacks stamps each stanza it queues for a hibernating session with a delay from the account's bare
+    /// JID. A message that waited is dated by that stamp on resume, not by when the resumed stream delivered it.
+    @Test func aMessageQueuedForAHibernatingSessionKeepsItsQueueTime() async throws {
+        let account = try credentials(), resource = XMPPClient.makeResource(), persistence = Persistence()
+        let first = try await connect(persistence, resource: resource)
+        await first.disconnectAndWait()
+        let sender = try await connect(Persistence(), resource: XMPPClient.makeResource())
+        let id = "held-" + UUID().uuidString, queuedAt = Date()
+        let envelope = XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: 7,
+                                         keys: [.init(recipientJID: account.jid, deviceID: 9, keyExchange: false, data: Data([1]))], payload: Data([2]))
+        try await sender.sendEncryptedMessage(to: account.jid + "/" + resource, envelope: envelope, id: id)
+        await sender.disconnectAndWait()
+        try await Task.sleep(for: .seconds(4))
+        let resumed = try await connect(persistence, resource: resource)
+        #expect(await resumed.sessionResumed)
+        var received: XMPPEncryptedMessage?
+        for await event in resumed.events {
+            if case .encryptedMessage(let message) = event, message.id == id { received = message; break }
+        }
+        await resumed.disconnectAndWait()
+        let held = try #require(received?.serverStamp)
+        #expect(abs(held.timeIntervalSince(queuedAt)) < 2, "stamped \(held), sent \(queuedAt)")
+    }
 }
