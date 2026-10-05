@@ -227,6 +227,8 @@ final class AppModel {
     /// and reconnect. Observed: the composer's attach button follows it.
     private var uploadService: XMPPUploadService?
     private var uploads: UploadServiceMemory { UploadServiceMemory(defaults: preferences) }
+    /// True from the start of a connection's setup until its upload discovery settled.
+    @ObservationIgnored private var uploadDiscoveryPending = false
     private var files: AttachmentFiles? { storageDirectory.map { AttachmentFiles(directory: $0, account: accountID) } }
     @ObservationIgnored private var uploader: AttachmentUploader?
     @ObservationIgnored private var storageDirectory: URL?
@@ -1739,6 +1741,7 @@ final class AppModel {
     /// generation fence. Every operation runs inside the setup task; none spawns an unstructured task.
     private func runConnectionSetup(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore,
                                     identityExists: Bool, token: UUID) async {
+        uploadDiscoveryPending = true
         let operations = ConnectionSetup.Operations(
             features: { [domain = accountDomain] in
                 try await ConnectionSetup.discoverFeatures(server: { try await client.discoveryFeatures(for: domain) },
@@ -1776,9 +1779,16 @@ final class AppModel {
         }
     }
 
-    private func settleUploadDiscovery(_ discovery: Result<XMPPUploadService?, any Error>, account: String, token: UUID) {
+    /// Discovery now ends after `.ready`, so `.ready` reconciles stranded uploads only against a known answer; a
+    /// discovery that changes whether uploads are offered reconciles them again.
+    private func settleUploadDiscovery(_ discovery: Result<XMPPUploadService?, any Error>, account: String, token: UUID) async {
         guard generation == token else { return }
-        uploadService = uploads.settle(account: account, previous: uploadService, discovery: discovery)
+        let previous = uploadService
+        uploadService = uploads.settle(account: account, previous: previous, discovery: discovery)
+        uploadDiscoveryPending = false
+        if case .failure(let error) = discovery { Self.syncLog.notice("upload discovery kept the stored service: \(ConnectionSetup.detail(error), privacy: .public)") }
+        guard session.isReady, (previous == nil) != (uploadService == nil) else { return }
+        await reconcileUploads()
     }
 
     /// True while this connection's setup may still change state. `.disconnected` cancels the setup task without
@@ -1806,7 +1816,8 @@ final class AppModel {
             await refresh()
             guard setupIsCurrent(token) else { return }
             startOutbox()
-            await reconcileUploads()
+            // With no stored service and this connection's discovery still running, "no longer offered" is not known yet.
+            if uploadService != nil || !uploadDiscoveryPending { await reconcileUploads() }
             if let openChatID { await loadEncryptionDetails(for: openChatID) }
             avatarChecked = []
             await loadAvatar(for: account)
@@ -1825,6 +1836,10 @@ final class AppModel {
                 // XEP-0490 after the walk, so the ids other devices published name messages we now hold.
                 syncReadState(account: account, client: client, token: token)
             }
+        case .degraded(let step, let detail):
+            Self.syncLog.notice("setup went on without \(step, privacy: .public): \(detail, privacy: .public)")
+        case .settled:
+            Self.syncLog.notice("settled +\(self.syncElapsed(), privacy: .public) ms")
         case .failed(let step, let detail):
             catchUp = nil
             if step == ConnectionSetup.archiveStep { Self.syncLog.notice("catch-up failed +\(self.syncElapsed(), privacy: .public) ms") }
