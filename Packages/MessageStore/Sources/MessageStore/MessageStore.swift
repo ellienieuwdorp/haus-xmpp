@@ -9,7 +9,7 @@ public actor MessageStore {
     private let transportOwnership: TransportOwnership
 
     /// The schema this build writes.
-    public static let currentSchemaVersion = 23
+    public static let currentSchemaVersion = 24
 
     /// How opening treats a file written by an older build.
     public enum SchemaAccess: Sendable {
@@ -388,7 +388,15 @@ public actor MessageStore {
             // back leaves the version below 23, so a later open tries again instead of stranding the typed spelling.
             try AddressMigration.addSealedAccountColumns(connection)
             let addressesMigrated = try version >= 23 || AddressMigration.run(connection)
-            try connection.execute("PRAGMA user_version = \(addressesMigrated ? 23 : 22)")
+            // v24: why a server returned an outgoing message or update (`rejectOutgoing`). Column checks keep it
+            // idempotent in any merge order, and when a rolled-back address rewrite leaves the version at 22.
+            if version < 24 {
+                for table in ["outbox", "outgoing_updates"]
+                where try connection.query("SELECT 1 FROM pragma_table_info('\(table)') WHERE name='rejection'").isEmpty {
+                    try connection.execute("ALTER TABLE \(table) ADD COLUMN rejection TEXT")
+                }
+            }
+            try connection.execute("PRAGMA user_version = \(addressesMigrated ? 24 : 22)")
         }
     }
 
@@ -425,6 +433,7 @@ public actor MessageStore {
             var comparison = message
             comparison.isStarred = existing.isStarred
             comparison.transportState = existing.transportState
+            comparison.rejection = existing.rejection
             comparison.attachment = existing.attachment
             guard existing == comparison else { throw MessageStoreError.conflictingIdentity }
             return false
@@ -662,6 +671,36 @@ public actor MessageStore {
             guard try connection.query("SELECT changes()").first?[0].integer == 1 else {
                 throw MessageStoreError.invalidTransition
             }
+        }
+    }
+
+    /// A server returned one of our stanzas (`<message type='error'>`): the outbox message or outgoing update whose wire
+    /// id is `wireID` in `chatID` becomes `failed` with `rejection` (an RFC 6120 condition, or `blocked`), whatever the
+    /// stream acknowledgement said, since server acceptance was never delivery. Left alone: a queued retry (not sent yet)
+    /// and a message the peer already confirmed with a receipt or read marker. The rejection stays on the row through a
+    /// retry: our archive keeps a copy of the returned attempt, which must not pass for the retry being accepted.
+    /// Returns what failed, or nil when nothing matched.
+    @discardableResult public func rejectOutgoing(accountID: String, chatID: String, wireID: String, rejection: String) throws -> RejectedOutgoing? {
+        try requireTransportOwnership()
+        guard !accountID.isEmpty, !chatID.isEmpty, !wireID.isEmpty, wireID.utf8.count <= 1_024, (1...64).contains(rejection.utf8.count),
+              rejection.utf8.allSatisfy({ (97...122).contains($0) || $0 == 45 }) else { throw MessageStoreError.invalidValue }
+        return try connection.transaction {
+            let parameters: [Value] = [.text(rejection), .text(accountID), .text(wireID), .text(chatID)]
+            try connection.execute("""
+                UPDATE outbox SET state='failed',attempt_id=NULL,rejection=?1
+                WHERE account_id=?2 AND message_id=?3 AND state IN ('submitting','unconfirmed','serverAccepted','failed')
+                AND EXISTS (SELECT 1 FROM messages m WHERE m.account_id=?2 AND m.id=?3 AND m.chat_id=?4 AND m.outgoing=1 AND m.sender_id=?2
+                    AND NOT EXISTS (SELECT 1 FROM message_events e WHERE e.account_id=?2 AND e.chat_id=?4 AND e.actor_id<>?2
+                        AND e.kind IN ('delivered','displayed') AND e.target_wire_id IN (m.id, m.wire_id)))
+                """, parameters)
+            if try connection.query("SELECT changes()").first?[0].integer == 1 {
+                return RejectedOutgoing(chatID: chatID, messageID: wireID, rejection: rejection)
+            }
+            try connection.execute("""
+                UPDATE outgoing_updates SET state='failed',attempt_id=NULL,rejection=?1
+                WHERE account_id=?2 AND id=?3 AND chat_id=?4 AND state IN ('submitting','unconfirmed','serverAccepted','failed')
+                """, parameters)
+            return try connection.query("SELECT changes()").first?[0].integer == 1 ? RejectedOutgoing(chatID: chatID, messageID: nil, rejection: rejection) : nil
         }
     }
 
@@ -1648,9 +1687,11 @@ public actor MessageStore {
             guard try encryptedOutgoing(accountID: accountID, messageID: messageID) == expectedEncryptedWire else { return false }
             if let groupRoom, let roomStanzaID { try bindGroupReference(accountID: accountID, room: groupRoom, messageID: messageID, stanzaID: roomStanzaID) }
             else if roomStanzaID != nil { throw MessageStoreError.invalidValue }
+            // Our archive keeps what we sent before the server routes it, so a returned message has an archived copy
+            // too: it proves acceptance, never delivery, and cannot tell a retry from the attempt that was returned.
             try connection.execute("""
                 UPDATE outbox SET state='serverAccepted',attempt_id=NULL WHERE account_id=? AND message_id=?
-                AND state IN ('queued','submitting','unconfirmed','failed','serverAccepted')
+                AND state IN ('queued','submitting','unconfirmed','failed','serverAccepted') AND rejection IS NULL
                 AND EXISTS (SELECT 1 FROM messages WHERE messages.account_id=outbox.account_id
                             AND messages.id=outbox.message_id AND messages.outgoing=1 AND messages.sender_id=?)
                 """, [.text(accountID), .text(messageID), .text(accountID)])
@@ -2362,7 +2403,8 @@ public actor MessageStore {
     @discardableResult public func reconcileArchivedUpdate(accountID: String, updateID: String, expectedWire: Data) throws -> Bool {
         try requireTransportOwnership()
         guard try updateWire(accountID: accountID, updateID: updateID) == expectedWire else { return false }
-        try connection.execute("UPDATE outgoing_updates SET state='serverAccepted',attempt_id=NULL WHERE account_id=? AND id=?", [.text(accountID), .text(updateID)])
+        // As for messages: an archived copy of a returned update is not acceptance of a retry.
+        try connection.execute("UPDATE outgoing_updates SET state='serverAccepted',attempt_id=NULL WHERE account_id=? AND id=? AND rejection IS NULL", [.text(accountID), .text(updateID)])
         return try connection.query("SELECT changes()").first?[0].integer == 1
     }
 
@@ -2440,7 +2482,8 @@ public actor MessageStore {
     private static let columns = """
         account_id,id,chat_id,sender_id,body,sent_at,outgoing,starred,
         (SELECT state FROM outbox WHERE outbox.account_id=messages.account_id AND outbox.message_id=messages.id),reply_json,encryption_profile,wire_id,wire_id_authenticated,
-        unreadable_reason
+        unreadable_reason,
+        (SELECT rejection FROM outbox WHERE outbox.account_id=messages.account_id AND outbox.message_id=messages.id)
         """
     private static func validateReply(_ reply: MessageReply) throws {
         guard !reply.messageID.isEmpty, reply.messageID.utf8.count <= 1_024,
@@ -2474,7 +2517,7 @@ public actor MessageStore {
             try validateReply(decoded)
             reply = decoded
         }
-        return StoredMessage(id: row[1].string, accountID: row[0].string, chatID: row[2].string,
+        var message = StoredMessage(id: row[1].string, accountID: row[0].string, chatID: row[2].string,
                       senderID: row[3].string, body: row[4].string,
                       sentAt: Date(timeIntervalSince1970: row[5].double),
                       isOutgoing: row[6].integer != 0, isStarred: row[7].integer != 0,
@@ -2482,6 +2525,8 @@ public actor MessageStore {
                       encryptionProfile: row[10].string.isEmpty ? nil : row[10].string,
                       wireID: row[11].string.isEmpty ? nil : row[11].string, wireIDAuthenticated: row[12].integer != 0,
                       unreadableReason: row[13].optionalString.flatMap(UnreadableReason.init(rawValue:)))
+        message.rejection = row[14].optionalString
+        return message
     }
 }
 
