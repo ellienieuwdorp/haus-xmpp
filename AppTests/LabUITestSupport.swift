@@ -39,6 +39,17 @@ extension XCUIApplication {
         let consent = switches["labConsent"]
         XCTAssertTrue(consent.waitForExistence(timeout: 5))
         consent.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        // A lab reached through a local proxy (for example `infra/local/slow_link.py`, a slow link) on another port.
+        if let port = ProcessInfo.processInfo.environment["HAUS_LAB_PORT"] {
+            buttons["Advanced"].tap()
+            let host = textFields["serverHost"]
+            XCTAssertTrue(host.waitForExistence(timeout: 5))
+            host.tap()
+            host.typeText("localhost")
+            buttons["Direct TLS"].tap()
+            textFields["serverPort"].tap()
+            textFields["serverPort"].typeText(port)
+        }
         buttons["Connect"].tap()
         // The system asks once per install. Stop at whichever comes first rather than waiting out a prompt that
         // already came on an earlier run.
