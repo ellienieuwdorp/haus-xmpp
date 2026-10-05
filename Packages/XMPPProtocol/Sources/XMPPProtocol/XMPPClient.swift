@@ -384,7 +384,10 @@ public actor XMPPClient {
         // when the session starts hibernating. Bounded: a stuck write ends the connection instead.
         if phase == .online, smOffered, streamManagement != nil {
             // One round trip first: what the server sent before its answer (our own presence reflected, a room's
-            // join answer) has then been read and, where it needs nothing durable, counted.
+            // join answer) has then been read and, where it needs nothing durable, counted. The `<r/>` before it
+            // brings the server's `<a/>` back ahead of the answer, so the journal is trimmed too: the away presence
+            // and chat states just written are then not replayed (and pushed to every contact) on the next resume.
+            try? await withFarewellDeadline { try await self.write("<r xmlns='urn:xmpp:sm:3'/>") }
             _ = try? await requestIQ(type: "get", to: nil, payload: "<ping xmlns='urn:xmpp:ping'/>", timeout: Self.farewellRoundTripLimit)
             try? await withFarewellDeadline { try await self.writeAcknowledgement(detaching: true) }
         }

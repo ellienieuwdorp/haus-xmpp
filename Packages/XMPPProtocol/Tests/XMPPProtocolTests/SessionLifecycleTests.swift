@@ -61,14 +61,14 @@ struct SessionLifecycleTests {
         let persistence = Persistence(Self.saved(availability: .away(since: since)))
         // The extension resumes what the app left away; its own reading of the time carries a fraction.
         var written = try await resume(persistence, availability: .away(since: since.addingTimeInterval(0.4)))
-        #expect(written.map(\.name) == ["inactive", "iq", "a"])
+        #expect(written.map(\.name) == ["inactive", "r", "iq", "a"])
         // Back in front: announced once, and remembered for the next resume.
         written = try await resume(persistence, availability: .active)
-        #expect(written.map(\.name) == ["active", "presence", "iq", "a"])
+        #expect(written.map(\.name) == ["active", "presence", "r", "iq", "a"])
         #expect(written.first { $0.name == "presence" }?.child("idle", namespace: PresenceWire.idleNamespace) == nil)
         #expect(await persistence.value?.availability == .active)
         written = try await resume(persistence, availability: .active)
-        #expect(written.map(\.name) == ["active", "iq", "a"])
+        #expect(written.map(\.name) == ["active", "r", "iq", "a"])
     }
 
     /// Resumes the saved session with `availability` and disconnects; returns what the client wrote after `<resume/>`.
@@ -132,6 +132,32 @@ struct SessionLifecycleTests {
         try await server.send("<enabled xmlns='urn:xmpp:sm:3' id='s2' resume='true'/>")
         #expect(try await server.next().name == "presence")
         try await online
+    }
+
+    /// The away presence and a chat state written on the way to the background are acknowledged by the farewell, so
+    /// the next resume replays nothing: replaying the presence would reach every contact and push their sessions.
+    @Test func farewellRequestsAnAcknowledgementBeforeItsPing() async throws {
+        let server = try await LoopbackServer.start()
+        let persistence = Persistence(nil)
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: persistence)
+        try await bindFresh(client, on: server)
+        try await client.sendChatState(.paused, to: "bob@localhost")
+        async let away: Void = client.setAvailability(.away(since: Date(timeIntervalSince1970: 1_790_000_000)))
+        #expect(try await server.next().name == "message")
+        #expect(try await server.next().name == "presence")
+        #expect(try await server.next().name == "inactive")
+        try await away
+        async let closed: Void = client.disconnectAndWait()
+        #expect(try await server.next().name == "r")
+        try await server.send("<a xmlns='urn:xmpp:sm:3' h='3'/>")
+        let written = try await server.remainder()
+        await closed
+        #expect(written.map(\.name) == ["iq", "a"])
+        let saved = try #require(await persistence.value)
+        // Only the farewell ping's slot is left, and an IQ is never replayed.
+        #expect(saved.outboundAcknowledged == 3 && saved.journal.map(\.kind) == [.iq])
+        await server.stop()
     }
 
     /// A server that counts stanzas we never sent gets the XEP-0198 error, and the session is retired: the next
