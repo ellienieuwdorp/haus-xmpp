@@ -44,10 +44,12 @@ struct StreamPersistenceTests {
         #expect(try await adapter.load()?.revision == 2)
     }
 
-    /// A saved session that cannot be decoded (corrupt bytes, or an inner revision that disagrees with its row) is
-    /// never resumed, and the fresh bind replaces it. Failing the connect instead repeated on every connect.
+    /// A saved session that cannot be decoded (corrupt bytes, an inner revision that disagrees with its row, or contents
+    /// naming another account under this account's key) is never resumed, and the fresh bind replaces it. Failing the
+    /// connect instead repeated on every connect.
     @Test func unreadableSessionBindsFreshAndIsReplaced() async throws {
-        for data in [Data("{".utf8), try JSONEncoder().encode(snapshot(revision: 90))] {
+        for data in [Data("{".utf8), try JSONEncoder().encode(snapshot(revision: 90)),
+                     try JSONEncoder().encode(snapshot(account: "mallory@localhost"))] {
             let (store, adapter) = try await fixture()
             _ = try await store.saveStreamManagement(accountID: "alice@localhost", expectedRevision: nil, data: data)
             await #expect(throws: XMPPStreamManagementUnreadable(revision: 1)) { _ = try await adapter.load() }
