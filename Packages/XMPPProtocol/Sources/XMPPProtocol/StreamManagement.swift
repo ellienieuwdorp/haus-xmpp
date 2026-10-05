@@ -57,6 +57,9 @@ public struct XMPPStreamManagementSnapshot: Codable, Sendable, Equatable {
     /// What this session last announced (presence and CSI). A resume repeats presence only when it changed: every
     /// presence reaches contacts and the account's other resources, and a push-enabled hibernating one is pushed for it.
     public var availability: XMPPAvailability?
+    /// The caps `ver` that presence carried. A resume after an update changed the feature list repeats presence once,
+    /// so contacts learn the new features without waiting for the next availability change.
+    public var capabilities: String?
     public var inboundHandled: UInt64
     public var outboundSent: UInt64
     public var outboundAcknowledged: UInt64
@@ -385,8 +388,10 @@ actor StreamManagement {
     func recordAvailability(_ availability: XMPPAvailability) async throws {
         await gate.enter()
         do {
-            if active, var next = snapshot, next.availability != availability {
+            let capabilities = EntityCapabilities.verification
+            if active, var next = snapshot, next.availability != availability || next.capabilities != capabilities {
                 next.availability = availability
+                next.capabilities = capabilities
                 next.inboundHandled = handledContiguous
                 try await commit(next)
             }

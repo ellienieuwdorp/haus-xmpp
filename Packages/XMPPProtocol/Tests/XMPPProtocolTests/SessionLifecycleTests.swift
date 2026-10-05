@@ -23,6 +23,7 @@ struct SessionLifecycleTests {
                                                     streamID: "s1", expiresAt: nil, inboundHandled: 3, outboundSent: 0,
                                                     outboundAcknowledged: 0, journal: [])
         snapshot.availability = availability
+        snapshot.capabilities = EntityCapabilities.verification
         return snapshot
     }
 
@@ -67,6 +68,21 @@ struct SessionLifecycleTests {
         #expect(written.map(\.name) == ["active", "presence", "r", "iq", "a"])
         #expect(written.first { $0.name == "presence" }?.child("idle", namespace: PresenceWire.idleNamespace) == nil)
         #expect(await persistence.value?.availability == .active)
+        written = try await resume(persistence, availability: .active)
+        #expect(written.map(\.name) == ["active", "r", "iq", "a"])
+    }
+
+    /// After an update that changed the feature list, contacts would keep the old caps until the next availability
+    /// change. The first resume repeats presence once with the new `ver`; later resumes stay quiet again.
+    @Test func resumeAfterAnUpdateAnnouncesTheNewCapabilitiesOnce() async throws {
+        var older = Self.saved(availability: .active)
+        older.capabilities = nil
+        let persistence = Persistence(older)
+        var written = try await resume(persistence, availability: .active)
+        #expect(written.map(\.name) == ["active", "presence", "r", "iq", "a"])
+        let caps = written.first { $0.name == "presence" }?.child("c", namespace: "http://jabber.org/protocol/caps")
+        #expect(caps?.attributes["ver"] == EntityCapabilities.verification)
+        #expect(await persistence.value?.capabilities == EntityCapabilities.verification)
         written = try await resume(persistence, availability: .active)
         #expect(written.map(\.name) == ["active", "r", "iq", "a"])
     }

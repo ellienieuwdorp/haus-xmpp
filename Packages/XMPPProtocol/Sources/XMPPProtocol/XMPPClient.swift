@@ -820,7 +820,8 @@ public actor XMPPClient {
     }
 
     private func becomeOnline(token: UUID, resumed: Bool = false) async throws {
-        announced = resumed ? resumeSnapshot?.availability : nil
+        // Presence from an earlier build carried other caps: announce once so contacts see the current features.
+        announced = resumed && resumeSnapshot?.capabilities == EntityCapabilities.verification ? resumeSnapshot?.availability : nil
         try await announceAvailability(initial: !resumed)
         guard generation == token else { throw XMPPClientError.connectionClosed }
         sessionResumed = resumed
