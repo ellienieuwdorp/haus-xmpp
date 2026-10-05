@@ -72,4 +72,61 @@ struct MessageDeliveryTests {
         await client.disconnect()
         await server.stop()
     }
+
+    @Test func returnedStanzasAreRoutedBeforeContentAndNeverReachDecryption() async throws {
+        let (server, client, iterator) = try await online()
+        var events = iterator
+        func bounce(_ id: String?, from: String = "nobody@localhost", error: String) throws -> String {
+            let xml = try Self.encrypted(id ?? "x", from: from, extra: "<error type='cancel'>\(error)<text xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'>Visit evil.example</text></error>")
+                .replacingOccurrences(of: "type='chat'", with: "type='error'")
+            return id == nil ? xml.replacingOccurrences(of: " id='x'", with: "") : xml
+        }
+        let stanzas = "urn:ietf:params:xml:ns:xmpp-stanzas"
+        try await server.send(bounce("m1", error: "<service-unavailable xmlns='\(stanzas)'/>")
+            + bounce("m2", from: "bob@localhost", error: "<not-acceptable xmlns='\(stanzas)'/><blocked xmlns='urn:xmpp:blocking:errors'/>")
+            + bounce("m3", from: "carol@remote.example", error: "<made-up xmlns='\(stanzas)'/>")
+            + bounce(nil, error: "<item-not-found xmlns='\(stanzas)'/>")
+            + "<message from='bob@localhost/phone' id='end'><body>end</body></message>")
+        let seen = await collect(until: "end", from: &events)
+        // The echoed ciphertext is not a message, nor a failed decryption.
+        #expect(!seen.contains { if case .encryptedMessage = $0 { true } else if case .encryptionFailure = $0 { true } else { false } })
+        #expect(seen.compactMap { if case .messageError(let error) = $0 { error } else { nil } } == [
+            XMPPMessageError(id: "m1", from: "nobody@localhost", condition: "service-unavailable", type: "cancel"),
+            XMPPMessageError(id: "m2", from: "bob@localhost", condition: "not-acceptable", type: "cancel", blockedByUs: true),
+            XMPPMessageError(id: "m3", from: "carol@remote.example", condition: "undefined-condition", type: "cancel")
+        ])
+        await client.disconnect()
+        await server.stop()
+    }
+
+    @Test func aRoomThatReturnsOurMessageAsNotAcceptableIsNoLongerJoined() async throws {
+        let (server, client, iterator) = try await online()
+        var events = iterator
+        let room = "room@rooms.localhost"
+        async let joining = client.joinGroupRoom(room, nickname: "alice")
+        // Discovery and the affiliation lists, read twice (nothing is cached yet), then the join presence.
+        for _ in 0..<2 {
+            let disco = try await server.next()
+            try await server.send("<iq type='result' from='\(room)' id='\(disco.attributes["id"] ?? "")'><query xmlns='\(GroupChatWire.disco)'><feature var='muc_nonanonymous'/><feature var='muc_membersonly'/><feature var='urn:xmpp:sid:0'/></query></iq>")
+            for affiliation in ["member", "admin", "owner"] {
+                let query = try await server.next()
+                let item = affiliation == "owner" ? "<item affiliation='owner' jid='alice@localhost'/>" : ""
+                try await server.send("<iq type='result' from='\(room)' id='\(query.attributes["id"] ?? "")'><query xmlns='\(GroupChatWire.admin)'>\(item)</query></iq>")
+            }
+        }
+        #expect(try await server.next().name == "presence")
+        _ = try await joining
+        try await server.send("<presence from='\(room)/alice' to='alice@localhost/r'><x xmlns='\(GroupChatWire.user)'><item affiliation='owner' jid='alice@localhost/r'/><status code='110'/></x></presence>")
+        while let event = await events.next() { if case .groupPresence = event { break } }
+        #expect(try await client.groupRoomSnapshot(room)?.joined == true)
+        // A server restart or a kick we never saw: the room answers our next message as from a non-occupant.
+        try await server.send("<message from='\(room)' to='alice@localhost/r' type='error' id='g1'><error type='cancel'><not-acceptable xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></message>"
+            + "<message from='bob@localhost/phone' id='end'><body>end</body></message>")
+        let seen = await collect(until: "end", from: &events)
+        #expect(seen.contains(.groupPresence(room: room)))
+        #expect(seen.contains(.messageError(XMPPMessageError(id: "g1", from: room, condition: "not-acceptable", type: "cancel"))))
+        #expect(try await client.groupRoomSnapshot(room)?.joined == false)
+        await client.disconnect()
+        await server.stop()
+    }
 }

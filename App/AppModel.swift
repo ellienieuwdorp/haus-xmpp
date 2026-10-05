@@ -1525,7 +1525,7 @@ final class AppModel {
             guard chats.contains(where: { $0.id == update.chat }) else { return }
             typingTracker.apply(update.state, chat: update.chat, participant: update.participant ?? update.chat, settles: update.ridesOnMessage, now: .now)
             publishTyping()
-        case .reaction, .retraction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier, .displayedSync:
+        case .reaction, .retraction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier, .displayedSync, .messageError:
             guard let encryption, let client else { return }
             if case .encryptedMessage = event { receivedCount += 1 }
             // A real message ends its sender's typing, even from a client that sends no `active` with it.
@@ -1560,6 +1560,12 @@ final class AppModel {
                         ? "A message from another device was not encrypted for this iPhone; it is shown as a placeholder."
                         : "An encrypted message could not be read; it is shown as a placeholder.")
                     refreshSoon()
+                case .rejected(let rejected):
+                    // The bubble turns to Not sent with Retry; a message (not a reaction or receipt) also says why, once.
+                    await refresh()
+                    guard generation == token, rejected.messageID != nil, foreground else { return }
+                    let name = chats.first { $0.id == rejected.chatID }?.displayTitle ?? AppModel.displayName(for: rejected.chatID, title: nil)
+                    self.error = "A message to \(name) wasn't delivered. \(RejectionCopy.reason(rejected.rejection, isGroup: isGroup(rejected.chatID))) You can retry it from the message."
                 case .acknowledged, .ignored: break
                 }
             } catch InboundProcessor.Failure.unsavedInbound {

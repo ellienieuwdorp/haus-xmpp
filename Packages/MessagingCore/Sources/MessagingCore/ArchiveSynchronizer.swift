@@ -91,6 +91,13 @@ public struct ArchiveSynchronizer: Sendable {
     /// One archive entry: rejection/placeholder, own-send reconciliation, decrypt, or deliberate exclusion. Every path is
     /// durable before it returns; a thrown error means nothing durable exists for this entry and the page must not advance.
     func process(account: String, archived: XMPPArchiveMessage, encryption: OMEMOService, transport: XMPPClient) async throws {
+        if let error = archived.messageError {
+            // A bounce our server kept; the live copy may have been applied already, and a retry since must stand.
+            if let chat = error.bouncedAddress {
+                _ = try await encryption.rejectOutgoing(account: account, chatID: chat, wireID: error.id, rejection: error.rejection, firstOnly: true)
+            }
+            return
+        }
         if try await persistRejectedContent(account: account, archived: archived) { return }
         if let group = archived.encryptedGroupMessage {
             do {

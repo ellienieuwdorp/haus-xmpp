@@ -18,6 +18,8 @@ public actor InboundProcessor {
         /// marks it; otherwise (an update from a device that excluded this one) nothing is stored. Nothing to review.
         /// The reason is the error class; the row carries the exact reason.
         case excluded(reason: UnreadableReason)
+        /// A server returned one of our stanzas, and the message or update it named is now failed with the reason.
+        case rejected(RejectedOutgoing)
         /// The barrier was acknowledged to the server.
         case acknowledged
     }
@@ -73,6 +75,14 @@ public actor InboundProcessor {
         case .receipt(let receipt):
             do { _ = try await encryption.receivePlaintextReceipt(account: account, receipt: receipt); return .stored }
             catch { mayAcknowledge = false; throw error }
+        case .messageError(let error):
+            // Only a bounce from the address we sent to counts: its server (or the room) returning the stanza. An error
+            // one of a peer's resources wrote names a full JID; the message may still have reached the others.
+            guard let chat = error.bouncedAddress else { return .ignored }
+            do {
+                let rejected = try await encryption.rejectOutgoing(account: account, chatID: chat, wireID: error.id, rejection: error.rejection)
+                return rejected.map(Outcome.rejected) ?? .ignored
+            } catch { mayAcknowledge = false; throw error }
         case .displayedSync(let items):
             // XEP-0490 state another device of ours published; the client verified it came from our bare JID.
             do { _ = try await encryption.receiveDisplayedSync(account: account, items: items); return .stored }

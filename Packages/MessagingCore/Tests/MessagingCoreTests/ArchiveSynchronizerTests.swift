@@ -164,6 +164,30 @@ struct ArchiveSynchronizerTests {
         }
     }
 
+    /// Our archive keeps bounces. Its copy fails a send the live stream never told us about, adds no message, and never
+    /// undoes a retry made after the live copy (the walk can reach an old bounce after the user retried).
+    @Test func archivedBounceFailsTheSendOnceAndLeavesALaterRetryAlone() async throws {
+        try await fixture { store async throws in
+            let bob = "bob@localhost"
+            let encryption = OMEMOService(store: store, protection: try StateProtection(key: Data(repeating: 7, count: 32)))
+            try await store.upsertChat(accountID: account, chatID: bob, title: "Bob")
+            try await store.enqueueOutgoing(StoredMessage(id: "s1", accountID: account, chatID: bob, senderID: account, body: "hi", isOutgoing: true))
+            try await store.finishOutgoingSubmission(#require(await store.claimNextOutgoing(accountID: account)))
+            var archived = XMPPArchiveMessage(archiveID: "b1", timestamp: Date(timeIntervalSince1970: 100), message: nil, encryptedMessage: nil)
+            archived.messageError = XMPPMessageError(id: "s1", from: bob, condition: "remote-server-not-found", type: "cancel")
+            let sync = ArchiveSynchronizer(store: store), client = XMPPClient(labCertificateAuthority: nil)
+            try await sync.process(account: account, archived: archived, encryption: encryption, transport: client)
+            let failed = try #require(try await store.message(accountID: account, messageID: "s1"))
+            #expect(failed.transportState == .failed && failed.rejection == "remote-server-not-found")
+            #expect(try await store.messages(accountID: account, chatID: bob).count == 1)
+            try await store.retryOutgoing(accountID: account, messageID: "s1")
+            try await store.finishOutgoingSubmission(#require(await store.claimNextOutgoing(accountID: account)))
+            try await store.saveStreamManagement(accountID: account, expectedRevision: nil, data: Data([1]), acknowledgedMessageIDs: ["s1"])
+            try await sync.process(account: account, archived: archived, encryption: encryption, transport: client)
+            #expect(try await store.message(accountID: account, messageID: "s1")?.transportState == .serverAccepted)
+        }
+    }
+
     @Test func excludedArchiveEntryKeepsTheArchiveTimestampAndIsIdempotent() async throws {
         try await fixture { store async throws in
             let encryption = OMEMOService(store: store, protection: try StateProtection(key: Data(repeating: 7, count: 32)))

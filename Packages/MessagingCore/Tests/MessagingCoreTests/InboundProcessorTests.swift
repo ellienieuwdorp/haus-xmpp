@@ -96,6 +96,19 @@ struct InboundProcessorTests {
         #expect(try await store.messages(accountID: account, chatID: room).map(\.sentAt) == [held.addingTimeInterval(60)])
     }
 
+    /// Only a bounce from the address we sent to fails the send; an error one of the peer's resources wrote does not.
+    @Test func aBounceFromTheRecipientsAddressFailsTheSend() async throws {
+        let (store, processor) = try await fixture()
+        try await store.enqueueOutgoing(StoredMessage(id: "s1", accountID: account, chatID: peer, senderID: account, body: "hi", isOutgoing: true))
+        try await store.finishOutgoingSubmission(#require(await store.claimNextOutgoing(accountID: account)))
+        #expect(try await processor.process(.messageError(XMPPMessageError(id: "s1", from: peer + "/phone", condition: "feature-not-implemented"))) == .ignored)
+        #expect(try await store.message(accountID: account, messageID: "s1")?.transportState == .unconfirmed)
+        #expect(try await processor.process(.messageError(XMPPMessageError(id: "s1", from: peer, condition: "not-acceptable", blockedByUs: true)))
+                == .rejected(RejectedOutgoing(chatID: peer, messageID: "s1", rejection: "blocked")))
+        #expect(try await store.message(accountID: account, messageID: "s1")?.transportState == .failed)
+        #expect(try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: 1))) == .acknowledged)
+    }
+
     private func addressedCiphertext(_ encryption: OMEMOService) async throws -> [XMPPEvent] {
         let (direct, group) = try await unknownSenderEnvelopes(account: account, encryption: encryption)
         let room = "room@conference.localhost"

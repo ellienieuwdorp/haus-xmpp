@@ -94,6 +94,8 @@ public enum XMPPEvent: Sendable, Equatable {
     /// A contact's PEP avatar changed; nil means it was removed. The bytes are fetched lazily.
     case avatarMetadata(owner: String, metadata: XMPPAvatarMetadata?)
     case encryptionFailure(from: String, id: String?)
+    /// A server returned one of our stanzas. Routed before any content parsing; never decrypted.
+    case messageError(XMPPMessageError)
     /// A contact resource became available, idle or unavailable. Never stored.
     case contactPresence(XMPPContactPresence)
     /// A contact asked for, granted, withdrew or refused a presence subscription.
@@ -907,6 +909,19 @@ public actor XMPPClient {
 
     /// `serverStamp` is our own server's delay on the stanza as it reached us (`ServerStamp`), nil when it had none.
     private func emitMessage(_ node: XMLNode, provenance: XMPPMessageProvenance, serverStamp: Date? = nil) throws {
+        if node.attributes["type"] == "error" {
+            // A bounce echoes what we sent (ciphertext included): it is never parsed as content or handed to OMEMO.
+            // Carbons never unwrap one, so only a direct error reaches here.
+            guard provenance == .direct, let error = XMPPMessageError.parse(node) else { return }
+            if error.meansNotInRoom, var state = groupRooms[error.from], state.joined {
+                // The room no longer counts us as an occupant: sends wait until a join succeeds again.
+                state.joined = false; state.revision &+= 1
+                groupRooms[error.from] = state
+                try emit(.groupPresence(room: error.from))
+            }
+            try emit(.messageError(error))
+            return
+        }
         if provenance == .direct, let account = OMEMOWire.bareJID(boundJID),
            let state = Self.parsedChatState(node, account: account, rooms: groupRooms) { try emit(.chatState(state)) }
         if node.attributes["type"] == "groupchat" {
