@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import MessageStore
-import XMPPProtocol
+@testable import XMPPProtocol
 import Darwin
 import SQLite3
 @testable import MessagingCore
@@ -125,6 +125,46 @@ struct BackgroundSynchronizerTests {
         }
     }
 
+    /// MS-110: a room that never answers (or a connection lost during the room walk) once the own archive committed. The
+    /// direct message is posted before the deadline and the run ends as a success; with nothing direct to post, what the
+    /// push was about is unknown and the run fails as before, so the extension shows the fallback.
+    @Test(arguments: [RoomTrouble.stalls, .losesConnection])
+    func aStuckRoomNeverHidesCommittedDirectMessages(_ trouble: RoomTrouble) async throws {
+        for direct in [true, false] {
+            try await withStore { store in
+                let run = try await CatchUpFixture(store: store, ownMessage: direct, roomMessage: false, trouble: trouble)
+                let clock = ContinuousClock(), start = clock.now
+                if direct {
+                    try await run.run(budget: .seconds(2))
+                    #expect(clock.now - start < .seconds(3))
+                    #expect(await run.posting.added.map(\.body) == ["Direct"])
+                    #expect(run.progress.isCommitted && run.progress.report.posted == 1)
+                    #expect(try #require(run.progress.report.firstPostMilliseconds) < 2_000)
+                } else {
+                    await #expect(throws: trouble == .stalls ? BackgroundSynchronizationError.deadlineExceeded : .connectionEnded) {
+                        try await run.run(budget: .seconds(2))
+                    }
+                    #expect(await run.posting.added.isEmpty)
+                    #expect(!run.progress.isCommitted)
+                }
+            }
+        }
+    }
+
+    /// The early presentation claims what it posted, so the final one adds only what the rooms brought, after a second
+    /// read-state pull, and the run plays one sound.
+    @Test func roomMessagesFollowTheDirectOnesWithoutRepeatingThem() async throws {
+        try await withStore { store in
+            let run = try await CatchUpFixture(store: store, ownMessage: true, roomMessage: true, trouble: nil)
+            try await run.run(budget: .seconds(5))
+            let added = await run.posting.added
+            #expect(added.map(\.body) == ["Direct", "Room"])
+            #expect(added.map(\.playsSound) == [true, false])
+            #expect(await run.trace.events == ["pull", "post", "room", "pull", "post"])
+            #expect(run.progress.report.posted == 2 && run.progress.report.claimed == 2)
+        }
+    }
+
     @Test func readSyncPullNeverOutlastsTheBudget() {
         let now = ContinuousClock.now
         #expect(readSyncTimeout(until: now + .seconds(20), now: now) == .seconds(5))
@@ -194,4 +234,86 @@ struct BackgroundSynchronizerTests {
         let wal = (try? Data(contentsOf: URL(filePath: url.path + "-wal"))) ?? Data()
         #expect(wal.isEmpty)
     }
+}
+
+enum RoomTrouble: Sendable, CustomStringConvertible {
+    /// The room never answers its membership read, as an unreachable MUC component holds an IQ.
+    case stalls
+    /// The connection is lost during the room walk.
+    case losesConnection
+    var description: String { self == .stalls ? "stalls" : "losesConnection" }
+}
+
+/// One run through `BackgroundCatchUp` with the real archive walk, store and presenter: only the server is fake. The
+/// own archive holds one new direct message when `ownMessage`; one room follows, which holds one new message when
+/// `roomMessage`, or misbehaves as `trouble` says.
+private struct CatchUpFixture {
+    let store: MessageStore
+    let ownMessage: Bool, roomMessage: Bool, trouble: RoomTrouble?
+    let posting: TracingPosting
+    let progress = NotificationRunProgress()
+    let trace = BackgroundProbe()
+    private let account = "alice@example.org", room = "room@rooms.example.org"
+
+    init(store: MessageStore, ownMessage: Bool, roomMessage: Bool, trouble: RoomTrouble?) async throws {
+        self.store = store; self.ownMessage = ownMessage; self.roomMessage = roomMessage; self.trouble = trouble
+        posting = TracingPosting(trace: trace)
+        // Both archives were walked before, so this run's entries are new rather than history.
+        _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: account, expectedRevision: nil, cursor: "own-0")
+        _ = try await store.saveArchiveCheckpoint(accountID: account, archiveID: room, expectedRevision: nil, cursor: "room-0")
+    }
+
+    private static func page(_ id: String, entries: Bool) -> XMPPArchivePage {
+        guard entries else { return XMPPArchivePage(messages: [], complete: true, firstID: nil, lastID: nil, handledTokens: []) }
+        return XMPPArchivePage(messages: [.init(archiveID: id, timestamp: Date(timeIntervalSince1970: 100), message: nil, encryptedMessage: nil)],
+                               complete: true, firstID: id, lastID: id, handledTokens: [])
+    }
+
+    func run(budget: Duration) async throws {
+        let (store, account, room, trace, trouble) = (store, account, room, trace, trouble)
+        let (ownMessage, roomMessage, progress, posting) = (ownMessage, roomMessage, progress, posting)
+        let operationsFor: @Sendable (@escaping @Sendable (ArchiveSyncProgress) async -> Void,
+                                      @escaping @Sendable (Bool, Int) async throws -> Void) -> ArchiveSyncOperations = { walkProgress, walked in
+            ArchiveSyncOperations(
+                knownRooms: { [room] },
+                refreshRoom: { _ in
+                    switch trouble {
+                    case .stalls: try await Task.sleep(for: .seconds(60))
+                    case .losesConnection: throw XMPPClientError.connectionClosed
+                    case nil: break
+                    }
+                },
+                fetchPage: { _, selected in
+                    selected == nil ? Self.page("own-1", entries: ownMessage) : Self.page("room-1", entries: roomMessage)
+                },
+                process: { archived in
+                    // What decrypting the entry commits: the message and its notification candidate.
+                    if archived.archiveID == "room-1" { await trace.record("room") }
+                    try await receive(store, chat: archived.archiveID == "own-1" ? "bob@example.org" : room,
+                                      body: archived.archiveID == "own-1" ? "Direct" : "Room", at: archived.archiveID == "own-1" ? 1_000 : 2_000)
+                },
+                acknowledge: { _ in }, disconnect: {}, progress: walkProgress, ownArchiveWalked: walked)
+        }
+        try await BackgroundCatchUp(
+            connect: {}, sessionDuties: { _ in },
+            walk: { walkProgress, walked in
+                try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: operationsFor(walkProgress, walked))
+            },
+            pull: { _ in await trace.record("pull") },
+            consume: { try await Task.sleep(for: .seconds(60)) },
+            stop: {}
+        ).run(store: store, timeBudget: budget, deadline: .now + budget, progress: progress, presentation: { store, stage in
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: progress, stage: stage)
+        })
+    }
+}
+
+/// `FakePosting` that also notes each add in the run's trace.
+private actor TracingPosting: NotificationPosting {
+    let trace: BackgroundProbe
+    private(set) var added: [PlannedNotification] = []
+    init(trace: BackgroundProbe) { self.trace = trace }
+    func add(_ request: PlannedNotification) async throws { added.append(request); await trace.record("post") }
+    func deliveredNotifications() async -> [DeliveredNotification] { [] }
+    func removeDelivered(identifiers: [String]) async {}
 }
