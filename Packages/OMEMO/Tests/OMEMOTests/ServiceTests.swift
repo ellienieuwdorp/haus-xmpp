@@ -672,6 +672,23 @@ final class ServiceTests: XCTestCase {
         expectEqual(next.messageIDs, [original.id, late.id])
     }
 
+    /// Files sent together queue one message each. One pass fetches the chat's device list once, not once per
+    /// message, and every message is still sealed for the peer.
+    func testOnePassFetchesAChatsDevicesOnceForSeveralMessages() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        var queued: [StoredMessage] = []
+        for body in ["Photo one", "Photo two", "Caption"] { queued.append(try await f.queue(body)) }
+        let log = TransportLog()
+        let result = try await f.a.prepareAvailableMessages(account: f.alice, transport: CountingTransport(base: f.aTransport, log: log))
+        expectEqual(result.messageIDs, Set(queued.map(\.id)))
+        expectEqual(await log.calls.filter { $0 == .devices(f.bob, .modern) }.count, 1)
+        for message in queued {
+            let envelope = try await f.a.outgoingEnvelope(account: f.alice, messageID: message.id)
+            expectTrue(try await f.b.receive(account: f.bob, message: f.message(envelope, id: message.id), transport: f.bTransport))
+        }
+    }
+
     func testUntrustedChatDoesNotBlockIndependentTrustedChat() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
