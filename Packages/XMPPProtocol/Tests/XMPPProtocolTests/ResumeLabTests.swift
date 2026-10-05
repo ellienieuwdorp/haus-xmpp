@@ -92,28 +92,36 @@ struct ResumeLabTests {
         await probe.disconnectAndWait()
     }
 
-    /// The stanzas the server holds unacknowledged for a hibernating session of the account.
-    private func queued(resource: String) throws -> Int? {
-        let jid = try credentials().jid + "/" + resource
+    /// `prosodyctl shell` in the lab container: the server's own view, which no client can query.
+    private func prosody(_ arguments: String...) throws -> [Substring] {
         let process = Process(), output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["docker", "exec", env["HAUS_LAB_PROSODY_CONTAINER"] ?? "haus-xmpp-lab-prosody-1",
-                             "prosodyctl", "shell", "c2s", "show", jid, "jid smacks_queue"]
+        process.arguments = ["docker", "exec", env["HAUS_LAB_PROSODY_CONTAINER"] ?? "haus-xmpp-lab-prosody-1", "prosodyctl", "shell"] + arguments
         process.standardOutput = output
         try process.run()
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        let row = String(decoding: data, as: UTF8.self).split(separator: "\n").first { $0.hasPrefix(jid + " ") }
+        return String(decoding: data, as: UTF8.self).split(separator: "\n")
+    }
+
+    /// The stanzas the server holds unacknowledged for a hibernating session of the account.
+    private func queued(resource: String) throws -> Int? {
+        let jid = try credentials().jid + "/" + resource
+        let row = try prosody("c2s", "show", jid, "jid smacks_queue").first { $0.hasPrefix(jid + " ") }
         return row?.split(separator: "|").last.flatMap { Int($0.trimmingCharacters(in: .whitespaces)) }
     }
 
     /// Two installations of one account. Presence from one reaches the other's hibernating session, where Prosody queues
     /// it (and, with push enabled, pushes for it). A resumed session whose availability did not change sends none.
     @Test func resumedAwaySessionSendsNoPresenceToAnotherHibernatingSession() async throws {
+        // Sessions left by earlier runs expire after Prosody's hibernation time, and each sends the other resources an
+        // unavailable presence: close them, so only this test's presence reaches the queue it counts.
+        _ = try prosody("c2s", "close", try credentials().jid)
         let other = XMPPClient.makeResource(), resource = XMPPClient.makeResource()
         let hibernating = try await connect(Persistence(), resource: other)
         await hibernating.disconnectAndWait()
-        let since = Date().addingTimeInterval(-600)
+        // A whole second, as the wire carries it: the later reading 0.3 s on must not cross into the next second.
+        let since = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 - 600).rounded(.down))
         let persistence = Persistence()
         // A fresh bind announces itself: the other session queues that presence.
         let first = try await connect(persistence, resource: resource, availability: .away(since: since))
