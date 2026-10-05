@@ -131,4 +131,40 @@ struct ResumeLabTests {
         await active.disconnectAndWait()
         #expect(try queued(resource: other) == before + 1)
     }
+
+    /// Typing and then going to the background leaves nothing for a resume to replay: Prosody answers the farewell's
+    /// `<r/>` ahead of its ping, so the chat state and the away presence are acknowledged before the socket closes.
+    @Test func typingThenGoingAwayLeavesNothingToReplay() async throws {
+        let resource = XMPPClient.makeResource()
+        let persistence = Persistence()
+        let first = try await connect(persistence, resource: resource)
+        try await first.sendChatState(.composing, to: "nobody@localhost")
+        try await first.sendChatState(.paused, to: "nobody@localhost")
+        try await first.setAvailability(.away(since: Date()))
+        await first.disconnectAndWait()
+        let saved = try #require(await persistence.value)
+        #expect(saved.journal.allSatisfy { $0.kind == .iq && $0.xml == nil })
+        #expect(saved.outboundAcknowledged >= 4)
+        let second = try await connect(persistence, resource: resource)
+        #expect(await second.sessionResumed)
+        await second.disconnectAndWait()
+    }
+
+    /// A local count behind the server's (a counting error) meets `<resumed h>` above what we sent: that connect ends
+    /// with the XEP-0198 error and retires the session, and the next one binds fresh instead of failing again.
+    @Test func resumedCountAboveWhatWeSentBindsFreshNextTime() async throws {
+        let resource = XMPPClient.makeResource()
+        let persistence = Persistence()
+        let first = try await connect(persistence, resource: resource)
+        await first.disconnectAndWait()
+        var saved = try #require(await persistence.value)
+        saved.outboundSent = 0; saved.outboundAcknowledged = 0; saved.journal = []
+        await persistence.seed(saved)
+        await #expect(throws: XMPPStreamManagementError.invalidAcknowledgement) { _ = try await connect(persistence, resource: resource) }
+        #expect(await persistence.value?.streamID == nil)
+        let third = try await connect(persistence, resource: resource)
+        #expect(await !third.sessionResumed)
+        #expect(await persistence.value?.streamID != nil)
+        await third.disconnectAndWait()
+    }
 }
