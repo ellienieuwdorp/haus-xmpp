@@ -326,7 +326,8 @@ struct ConversationView: View {
                 Task { await model.markDisplayed(id) }
             }, onRestoreComposerFocus: { composerState.focused = true }, onReachTop: { Task { await model.loadOlderMessages() } },
             onAttachmentDisplayed: { model.attachmentDisplayed($0) }, onDownloadAttachment: { model.downloadAttachment($0) },
-            attachmentKeyboard: composerState.attachmentKeyboard)
+            // Without "+" (a group, or a server with no upload service) there is no panel to warm up.
+            attachmentKeyboard: isGroup || !model.canSendAttachments ? nil : composerState.attachmentKeyboard)
             // The controller pins the composer to the keyboard itself and insets the messages to match.
             .ignoresSafeArea(.keyboard)
             .ignoresSafeArea(.container, edges: [.top, .bottom])
