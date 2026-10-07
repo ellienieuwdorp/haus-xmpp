@@ -8,16 +8,18 @@ import Testing
 struct SnapshotTests {
     private let previousVersion = 21
 
-    /// The previous build's store (a real schema-21 file, `writePreviousReleaseStore`) with its three messages in the
-    /// main file and `walMessages` more committed through a connection that stays open, so they exist only as WAL
-    /// frames. Returns that connection; close it with `sqlite3_close`.
-    private func previousBuildStore(at url: URL, walMessages: Int) async throws -> OpaquePointer? {
-        try writePreviousReleaseStore(at: url)
+    /// A previous build's store (a real schema-21 or schema-23 file, `writePreviousReleaseStore`) with its three
+    /// messages with Bob in the main file and `walMessages` more committed through a connection that stays open, so
+    /// they exist only as WAL frames. Returns that connection; close it with `sqlite3_close`.
+    private func previousBuildStore(at url: URL, schema: Int = 21, walMessages: Int) async throws -> OpaquePointer? {
+        try writePreviousReleaseStore(at: url, schema: schema)
+        // As that build wrote the account: schema 21 kept the spelling as typed, 23 the normal form.
+        let account = schema < 23 ? "Ellie@Example.org" : "ellie@example.org"
         var writer: OpaquePointer?
         #expect(sqlite3_open(url.path, &writer) == SQLITE_OK)
         #expect(sqlite3_exec(writer, "PRAGMA wal_autocheckpoint=0", nil, nil, nil) == SQLITE_OK)
         for index in 0..<walMessages {
-            let sql = "INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing) VALUES('Ellie@Example.org','wal-\(index)','bob@example.org','bob@example.org','late',1790000100,0)"
+            let sql = "INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing) VALUES('\(account)','wal-\(index)','bob@example.org','bob@example.org','late',1790000100,0)"
             #expect(sqlite3_exec(writer, sql, nil, nil, nil) == SQLITE_OK)
         }
         return writer
@@ -84,28 +86,30 @@ struct SnapshotTests {
         #expect(throws: MessageStoreError.snapshotMismatch("schema 23 != 21")) { try MessageStore.verifySnapshot(at: copy, matches: summary) }
     }
 
-    /// The notification extension's open: an older store is refused before anything is written to it, and neither
-    /// that open nor the snapshot path creates a store that is not there.
-    @Test func currentOnlyRefusesAnOlderStoreWithoutWritingToIt() async throws {
+    /// The notification extension's open: an older store (either previous build's) is refused before anything is
+    /// written to it, and neither that open nor the snapshot path creates a store that is not there.
+    @Test(arguments: [21, 23]) func currentOnlyRefusesAnOlderStoreWithoutWritingToIt(schema: Int) async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "messages.sqlite")
-        sqlite3_close(try await previousBuildStore(at: url, walMessages: 0))
+        sqlite3_close(try await previousBuildStore(at: url, schema: schema, walMessages: 0))
         let before = bytes(url)
-        #expect(throws: MessageStoreError.upgradeRequired(previousVersion)) { _ = try MessageStore(url: url, schema: .currentOnly) }
+        #expect(throws: MessageStoreError.upgradeRequired(schema)) { _ = try MessageStore(url: url, schema: .currentOnly) }
         #expect(bytes(url) == before)
-        #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["\(previousVersion)"]])
+        #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["\(schema)"]])
         let missing = directory.appending(path: "absent.sqlite")
         #expect(throws: (any Error).self) { _ = try MessageStore(url: missing, schema: .currentOnly) }
         #expect(throws: (any Error).self) { _ = try MessageStore(url: missing, schema: .asIs) }
         #expect(!FileManager.default.fileExists(atPath: missing.path))
     }
 
-    @Test func upgradeAfterTheSnapshotNeedsTheLeaseAndReachesTheCurrentSchema() async throws {
+    /// Either previous build's real store, frames still in its WAL included, migrates to the current schema under the
+    /// lease with every message readable.
+    @Test(arguments: [21, 23]) func upgradeAfterTheSnapshotNeedsTheLeaseAndReachesTheCurrentSchema(schema: Int) async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "messages.sqlite")
-        sqlite3_close(try await previousBuildStore(at: url, walMessages: 2))
+        sqlite3_close(try await previousBuildStore(at: url, schema: schema, walMessages: 2))
         let store = try MessageStore(url: url, schema: .asIs)
         await #expect(throws: MessageStoreError.transportOwnershipRequired) { try await store.upgradeSchema() }
         try await store.acquireTransportOwnership()
