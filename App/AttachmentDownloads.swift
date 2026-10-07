@@ -1,7 +1,9 @@
 import CryptoKit
 import Foundation
 import MessageStore
+import Observation
 import OMEMO
+import os
 
 /// Why a received file waits for a tap instead of downloading on sight.
 enum AttachmentDownloadHold: Equatable, Sendable {
@@ -326,3 +328,134 @@ struct AttachmentDownloadJob: Sendable {
     let knownSender: Bool
 }
 
+/// The open chat's received files: which download on sight and in which order, and what each bubble shows until its
+/// file is on disk. A stranger's file, one above the automatic limit and one the network policy refuses wait for a
+/// tap. At most `concurrent` downloads run at once; the newest `lookahead` files start when the chat opens, older
+/// ones once their bubble comes on screen.
+@MainActor @Observable
+final class AttachmentDownloadCenter {
+    /// Received files of the open chat that are not on disk, by message ID.
+    private(set) var states: [String: AttachmentDownloadState] = [:]
+    /// A verified file is on disk for these messages of the account: found in the cache or just downloaded.
+    @ObservationIgnored var onFile: (_ account: String, _ messageIDs: [String], _ file: URL) -> Void = { _, _, _ in }
+    /// A job's file key and IV; nil for a file shared without encryption. Throws while the account's keys cannot be
+    /// opened, which fails that download.
+    @ObservationIgnored var openSecret: (AttachmentDownloadJob) throws -> (key: Data, iv: Data)? = { _ in throw CancellationError() }
+    @ObservationIgnored private let downloader: AttachmentDownloader
+    @ObservationIgnored private let lookahead: Int
+    @ObservationIgnored private var queue: AttachmentDownloadQueue
+    /// What each queued or running download needs, by cache path.
+    @ObservationIgnored private var jobs: [String: AttachmentDownloadJob] = [:]
+    /// Older files that may download on sight, waiting until their bubble comes on screen, by message ID.
+    @ObservationIgnored private var deferred: [String: AttachmentDownloadJob] = [:]
+
+    init(configuration: URLSessionConfiguration, concurrent: Int = 2, lookahead: Int = 10) {
+        downloader = AttachmentDownloader(configuration: configuration)
+        queue = AttachmentDownloadQueue(limit: concurrent)
+        self.lookahead = lookahead
+    }
+
+    /// The open chat's loaded messages, after every load. `known` is a group or a chat the user pinned; a 1:1 chat is
+    /// also known once the window holds an own message. Messages `onDisk` already has a file for are skipped.
+    func load(_ messages: [StoredMessage], known: Bool, files: AttachmentFiles, account: String, onDisk: (String) -> Bool) {
+        // Approving a stranger's device lets their messages show; writing back is what lets their files download on
+        // sight. The roster is no signal here: opening a chat asks for a subscription, and a direct chat's peer gets
+        // one approved on request.
+        let knownChat = known || messages.contains { $0.isOutgoing }
+        // Written to since the chat opened: what waited for that is decided again.
+        if knownChat, states.values.contains(.tapToDownload(.sender)) {
+            states = states.filter { $0.value != .tapToDownload(.sender) }
+        }
+        var ahead = lookahead
+        for message in messages.reversed() {
+            guard let attachment = message.attachment, !onDisk(message.id) else { continue }
+            if let cached = files.cached(attachment, messageID: message.id) {
+                states[message.id] = nil
+                onFile(account, [message.id], cached)
+                continue
+            }
+            guard attachment.url != nil, attachment.uploadState == nil, states[message.id] == nil else { continue }
+            let job = AttachmentDownloadJob(messageID: message.id, sentAt: message.sentAt, attachment: attachment, account: account,
+                                            destination: files.cacheURL(attachment, messageID: message.id),
+                                            automatic: true, knownSender: knownChat || message.isOutgoing)
+            switch AttachmentDownloadPolicy.decide(bodyLength: AttachmentDownloadPolicy.bodyLength(declaredSize: attachment.size),
+                                                   automatic: true, knownSender: job.knownSender) {
+            case .tooLarge: states[message.id] = .tooLarge
+            case .hold(let reason): states[message.id] = .tapToDownload(reason)
+            case .fetch, .probe:
+                states[message.id] = .loading
+                if ahead > 0 { ahead -= 1; enqueue(job, visible: false) } else { deferred[message.id] = job }
+            }
+        }
+        start()
+    }
+
+    /// A bubble whose file is not on disk came on screen: its download goes before those of bubbles not seen.
+    func displayed(_ messageID: String, attachment: StoredAttachment?, files: AttachmentFiles) {
+        if let job = deferred.removeValue(forKey: messageID) {
+            enqueue(job, visible: true)
+        } else if let attachment {
+            queue.promote(files.cacheURL(attachment, messageID: messageID).path)
+        }
+        start()
+    }
+
+    /// A tap on a file waiting for one, or on a failed one: fetched on any network, up to the hard limit.
+    func request(_ message: StoredMessage, files: AttachmentFiles, account: String) {
+        guard states[message.id]?.canRequest == true, let attachment = message.attachment else { return }
+        states[message.id] = .loading
+        deferred[message.id] = nil
+        enqueue(AttachmentDownloadJob(messageID: message.id, sentAt: message.sentAt, attachment: attachment, account: account,
+                                      destination: files.cacheURL(attachment, messageID: message.id), automatic: false, knownSender: true),
+                visible: true)
+        start()
+    }
+
+    /// The open chat changed: its states go, queued downloads are dropped, running ones finish into the cache.
+    func reset() {
+        states = [:]
+        deferred = [:]
+        queue.dropPending()
+        jobs = jobs.filter { queue.contains($0.key) }
+    }
+
+    private func enqueue(_ job: AttachmentDownloadJob, visible: Bool) {
+        let key = job.destination.path
+        // A tap makes a queued automatic download of the same file a requested one; a running one is joined as it is.
+        if jobs[key] == nil || !job.automatic { jobs[key] = job }
+        queue.add(key, messageID: job.messageID, order: job.sentAt, visible: visible)
+    }
+
+    private func start() {
+        while let key = queue.next() {
+            guard let job = jobs[key] else { _ = queue.finish(key); continue }
+            let downloader = downloader
+            let secret = Result { try openSecret(job) }
+            Task { [weak self] in
+                let outcome: AttachmentDownloadOutcome = switch secret {
+                case .success(let secret):
+                    await downloader.download(job.attachment, secret: secret, automatic: job.automatic, knownSender: job.knownSender, to: job.destination)
+                case .failure: .state(.failed)
+                }
+                self?.finish(key, job: job, outcome: outcome)
+            }
+        }
+    }
+
+    private func finish(_ key: String, job: AttachmentDownloadJob, outcome: AttachmentDownloadOutcome) {
+        // Only messages of the chat still open have a state; the file stays cached for the others.
+        let waiting = queue.finish(key).filter { states[$0] != nil }
+        jobs[key] = nil
+        if outcome == .state(.failed) || outcome == .state(.mismatch) {
+            Logger(subsystem: "haus.xmpp.ios", category: "attachments").error("Download of \(job.attachment.name, privacy: .public) failed: \(String(describing: outcome), privacy: .public)")
+        }
+        switch outcome {
+        case .saved:
+            for id in waiting { states[id] = nil }
+            if !waiting.isEmpty { onFile(job.account, Array(waiting), job.destination) }
+        case .state(let state): for id in waiting { states[id] = state }
+        case .cancelled: for id in waiting { states[id] = .failed }
+        }
+        start()
+    }
+}

@@ -140,13 +140,55 @@ final class AttachmentDownloadTests: XCTestCase {
         }
     }
 
-    func testStrangersAndOversizedFilesAreNeverFetchedOnSight() {
+    func testOversizedFilesAreNeverFetchedAndLargeOnesWaitForATap() {
         let oversized = AttachmentDownloadPolicy.bodyLength(declaredSize: AttachmentTransfer.maximumBytes + 1)
         XCTAssertEqual(AttachmentDownloadPolicy.decide(bodyLength: oversized, automatic: true, knownSender: false), .tooLarge)
         XCTAssertEqual(AttachmentDownloadPolicy.decide(bodyLength: oversized, automatic: false, knownSender: true), .tooLarge, "Not even on a tap")
-        XCTAssertEqual(AttachmentDownloadPolicy.decide(bodyLength: 1_000, automatic: true, knownSender: false), .hold(.sender))
-        XCTAssertEqual(AttachmentDownloadPolicy.decide(bodyLength: nil, automatic: true, knownSender: false), .hold(.sender), "Not even a HEAD")
         XCTAssertEqual(AttachmentDownloadPolicy.decide(bodyLength: AttachmentDownloadPolicy.automaticLimit + 1, automatic: true, knownSender: true), .hold(.size))
+    }
+
+    @MainActor
+    func testAStrangersFilesWaitForATapUntilTheUserWrites() async throws {
+        let (center, saved) = center()
+        let sized = file(1), legacy = file(2, declaresSize: false)
+        var messages = [incoming("m1", sized), incoming("m2", legacy)]
+        center.load(messages, known: false, files: files, account: Self.account, onDisk: { saved.files[$0] != nil })
+        XCTAssertEqual(center.states, ["m1": .tapToDownload(.sender), "m2": .tapToDownload(.sender)])
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(StubServer.methods(sized.url) + StubServer.methods(legacy.url), [], "Nothing, not even a HEAD, reaches a stranger's host")
+
+        messages.append(StoredMessage(id: "m3", accountID: Self.account, chatID: Self.peer, senderID: Self.account, body: "hi", isOutgoing: true))
+        center.load(messages, known: false, files: files, account: Self.account, onDisk: { saved.files[$0] != nil })
+        try await waitUntil { saved.files.count == 2 }
+        XCTAssertEqual(center.states, [:])
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(saved.files["m1"])), sized.plain)
+        XCTAssertEqual(StubServer.methods(legacy.url), ["HEAD", "GET"])
+    }
+
+    @MainActor
+    func testAnOpenedChatDownloadsTwoAtATimeAndOlderFilesOnceSeen() async throws {
+        let (center, saved) = center()
+        let sent = Date()
+        let items = (0..<12).map { index in (id: "m\(index)", file: file(index, pause: 20_000), sentAt: sent.addingTimeInterval(Double(index))) }
+        let messages = items.map { incoming($0.id, $0.file, sentAt: $0.sentAt) } + [
+            StoredMessage(id: "own", accountID: Self.account, chatID: Self.peer, senderID: Self.account, body: "hi", sentAt: sent, isOutgoing: true)
+        ]
+        center.load(messages, known: false, files: files, account: Self.account, onDisk: { saved.files[$0] != nil })
+        // Leaving and reopening the chat joins the downloads already running instead of starting them again.
+        center.reset()
+        center.load(messages, known: false, files: files, account: Self.account, onDisk: { saved.files[$0] != nil })
+        try await waitUntil { saved.files.count == 10 }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(Set(saved.files.keys), Set(items.suffix(10).map(\.id)), "The newest ten start on their own")
+        XCTAssertEqual(StubServer.methods(items[0].file.url) + StubServer.methods(items[1].file.url), [], "Older files wait to be seen")
+        XCTAssertEqual(center.states, ["m0": .loading, "m1": .loading])
+
+        center.displayed("m1", attachment: messages[1].attachment, files: files)
+        try await waitUntil { saved.files.count == 11 }
+        XCTAssertEqual(center.states, ["m0": .loading])
+        // At most two: whether the two slots overlapped in time depends on the load on the machine.
+        XCTAssertLessThanOrEqual(StubServer.peakConcurrentBodies, 2)
+        XCTAssertEqual(items.flatMap { StubServer.methods($0.file.url) }, Array(repeating: "GET", count: 11), "One request per file")
     }
 
     func testTheQueueRunsTwoAtATimeVisibleFirstThenNewestFirst() {
@@ -168,6 +210,40 @@ final class AttachmentDownloadTests: XCTestCase {
         queue.dropPending()
         XCTAssertNil(queue.next())
         XCTAssertEqual(queue.finish("older"), ["m0"])
+    }
+
+    private static let account = "me@localhost", peer = "peer@localhost"
+    private var files: AttachmentFiles { AttachmentFiles(directory: directory, account: Self.account) }
+
+    /// Files the center reported on disk, by message ID.
+    @MainActor private final class Saved { var files: [String: URL] = [:] }
+
+    @MainActor private func center() -> (AttachmentDownloadCenter, Saved) {
+        let center = AttachmentDownloadCenter(configuration: configuration), saved = Saved()
+        center.openSecret = { _ in nil }
+        center.onFile = { _, ids, file in for id in ids { saved.files[id] = file } }
+        return (center, saved)
+    }
+
+    /// A served, unencrypted file of 256 KiB whose bytes depend on `index`.
+    private func file(_ index: Int, declaresSize: Bool = true, pause: useconds_t = 2_000) -> (plain: Data, url: URL, attachment: StoredAttachment) {
+        let plain = Data(repeating: UInt8(index), count: 256 * 1024)
+        let url = StubServer.serve(.init(body: plain, pause: pause))
+        let stored = StoredAttachment(name: "\(index).bin", mediaType: "application/octet-stream", size: declaresSize ? plain.count : 0,
+                                      hash: declaresSize ? Data.sha256(plain).hexString : "", secret: Data(), url: url.absoluteString)
+        return (plain, url, stored)
+    }
+
+    private func incoming(_ id: String, _ file: (plain: Data, url: URL, attachment: StoredAttachment), sentAt: Date = Date()) -> StoredMessage {
+        StoredMessage(id: id, accountID: Self.account, chatID: Self.peer, senderID: Self.peer, body: "", sentAt: sentAt, attachment: file.attachment)
+    }
+
+    @MainActor private func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(30)
+        while !condition() {
+            guard Date() < deadline else { return XCTFail("Timed out") }
+            try await Task.sleep(for: .milliseconds(20))
+        }
     }
 
     private func attachment(declaring size: Int, hash: Data, url: URL) -> StoredAttachment {
