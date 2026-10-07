@@ -58,6 +58,13 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
         self.isStarred = isStarred
         self.transportState = transportState
     }
+
+    /// The text a reply to this message quotes: its body, or for a file without a caption, the file's quote label.
+    /// Replies store this snapshot (`MessageReply.body`), so the strip, the bubble and the wire all show the same words.
+    public var quoteText: String {
+        guard body.isEmpty, let attachment else { return body }
+        return attachment.quoteLabel
+    }
 }
 
 /// Metadata and transfer state of a shared file. Bytes live in the file cache keyed by `hash`,
@@ -89,6 +96,13 @@ public struct StoredAttachment: Sendable, Equatable, Codable {
     public var isVideo: Bool { mediaType.hasPrefix("video/") }
     /// Chat-list and notification stand-in for an empty caption.
     public var kindLabel: String { isImage ? "Photo" : isVideo ? "Video" : mediaType.hasPrefix("audio/") ? "Audio" : "File" }
+    /// What a reply to this file quotes when it has no caption: the kind for media, the file name for a document.
+    /// One line, because the quote is a one-line snapshot in the composer, the bubble and the wire fallback.
+    public var quoteLabel: String {
+        guard !isImage, !isVideo, !mediaType.hasPrefix("audio/") else { return kindLabel }
+        let line = name.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        return line.isEmpty ? kindLabel : String(line.prefix(200))
+    }
 }
 
 public struct StoredChat: Identifiable, Equatable, Sendable {

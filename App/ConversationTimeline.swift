@@ -7,6 +7,10 @@ import UIKit.UIGestureRecognizerSubclass
 struct TimelineReply: Sendable, Equatable {
     let author: String
     let body: String
+    /// The quoted photo or video on disk, shown as a small still at the quote's trailing edge; nil shows the text alone.
+    var thumbnail: TimelineAttachment? = nil
+    /// Side of that still, in the bubble and in the composer's reply strip.
+    static let thumbnailSide: CGFloat = 36
 }
 
 struct TimelineReaction: Sendable, Equatable {
@@ -952,6 +956,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private let quoteBar = UIView()
     private let quoteAuthor = UILabel()
     private let quoteBody = UILabel()
+    private let quoteThumbnail = UIImageView()
+    private var quoteLabelsTrailing: NSLayoutConstraint!
+    private var quoteLabelsBeforeThumbnail: NSLayoutConstraint!
     private var plainTextTop: NSLayoutConstraint!
     private var replyTextTop: NSLayoutConstraint!
     private let bubble = UIView()
@@ -1038,6 +1045,15 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         quoteLabels.axis = .vertical
         quoteLabels.spacing = 1
         quote.addSubview(quoteLabels)
+        quoteThumbnail.translatesAutoresizingMaskIntoConstraints = false
+        quoteThumbnail.contentMode = .scaleAspectFill
+        quoteThumbnail.clipsToBounds = true
+        quoteThumbnail.layer.cornerRadius = 6
+        quoteThumbnail.layer.cornerCurve = .continuous
+        quoteThumbnail.isAccessibilityElement = false
+        quote.addSubview(quoteThumbnail)
+        quoteLabelsTrailing = quoteLabels.trailingAnchor.constraint(equalTo: quote.trailingAnchor, constant: -10)
+        quoteLabelsBeforeThumbnail = quoteLabels.trailingAnchor.constraint(equalTo: quoteThumbnail.leadingAnchor, constant: -8)
         quoteAuthor.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(for: .systemFont(ofSize: 13, weight: .semibold))
         quoteAuthor.numberOfLines = 1
         quoteBody.font = .preferredFont(forTextStyle: .footnote)
@@ -1056,7 +1072,13 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             quoteBar.bottomAnchor.constraint(equalTo: quote.bottomAnchor, constant: -6),
             quoteBar.widthAnchor.constraint(equalToConstant: 3),
             quoteLabels.leadingAnchor.constraint(equalTo: quoteBar.trailingAnchor, constant: 8),
-            quoteLabels.trailingAnchor.constraint(equalTo: quote.trailingAnchor, constant: -10),
+            quoteLabelsTrailing,
+            quoteThumbnail.trailingAnchor.constraint(equalTo: quote.trailingAnchor, constant: -6),
+            quoteThumbnail.centerYAnchor.constraint(equalTo: quote.centerYAnchor),
+            // Square, 36 pt, shrinking rather than growing the quote when small text makes the labels shorter.
+            quoteThumbnail.widthAnchor.constraint(equalTo: quoteThumbnail.heightAnchor),
+            quoteThumbnail.heightAnchor.constraint(lessThanOrEqualTo: quote.heightAnchor, constant: -8),
+            { let side = quoteThumbnail.heightAnchor.constraint(equalToConstant: TimelineReply.thumbnailSide); side.priority = .required - 1; return side }(),
             quoteLabels.topAnchor.constraint(equalTo: quote.topAnchor, constant: 6),
             quoteLabels.bottomAnchor.constraint(equalTo: quote.bottomAnchor, constant: -6)
         ])
@@ -1218,7 +1240,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             let limit = min(230, maximumTextWidth - 21)
             let bodyWidth = (reply.body as NSString).size(withAttributes: [.font: quoteBody.font!]).width
             let authorWidth = (reply.author as NSString).size(withAttributes: [.font: quoteAuthor.font!]).width
-            quoteWidth = min(limit, max(bodyWidth, authorWidth)) + 45
+            // A still widens the quote by its own slot only; the bubble's other width rules are unchanged.
+            let still: CGFloat = reply.thumbnail == nil ? 0 : TimelineReply.thumbnailSide + 4
+            quoteWidth = min(limit, max(bodyWidth, authorWidth)) + 45 + still
         }
         var width = min(maximumTextWidth + 24, max(quoteWidth, max(metadataWidth, max(44, ceil(measured.width) + 25))))
         if let attachment = message?.attachment {
@@ -1276,6 +1300,23 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             mediaSpinner.stopAnimating()
             media.image = image ?? UIImage(systemName: attachment.isVideo ? "video" : "photo")
             media.contentMode = image == nil ? .center : .scaleAspectFill
+        }
+    }
+
+    /// The slot is kept whenever the reply names a still on disk, so the bubble's width never changes when it loads;
+    /// a still that fails to decode leaves the quote's tint showing through an empty slot.
+    private func configureQuoteThumbnail(_ still: TimelineAttachment?) {
+        quoteThumbnail.isHidden = still == nil
+        quoteLabelsTrailing.isActive = still == nil
+        quoteLabelsBeforeThumbnail.isActive = still != nil
+        quoteThumbnail.image = nil
+        guard let still, let url = still.localURL else { return }
+        if let hit = AttachmentThumbnails.cached(for: url) { quoteThumbnail.image = hit; return }
+        let id = messageID
+        Task { [weak self] in
+            let image = await AttachmentThumbnails.image(for: url, mediaType: still.mediaType)
+            guard let self, messageID == id, message?.reply?.thumbnail?.localURL == url else { return }
+            quoteThumbnail.image = image
         }
     }
 
@@ -1529,6 +1570,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         quote.isHidden = message.reply == nil
         quoteAuthor.text = message.reply?.author
         quoteBody.text = message.reply?.body
+        configureQuoteThumbnail(message.reply?.thumbnail)
         NSLayoutConstraint.deactivate([plainTextTop, replyTextTop, plainAttachmentTop, replyAttachmentTop])
         (message.reply == nil ? plainAttachmentTop : replyAttachmentTop)?.isActive = true
         // Under a preview the caption keeps its own inset; under a quote alone the text tucks up as before.

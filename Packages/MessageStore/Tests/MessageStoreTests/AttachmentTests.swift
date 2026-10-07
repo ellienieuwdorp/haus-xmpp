@@ -70,3 +70,16 @@ private func media(_ id: String, body: String = "", attachment: StoredAttachment
     #expect(try await !store.insertMessage(replay), "The same message replayed from the archive is a no-op even if its sealed secret differs")
     #expect(try await store.chats(accountID: "a").first?.lastMessage?.attachment?.kindLabel == "File")
 }
+
+@Test func replyQuoteNamesTheFileWhenThereIsNoCaption() {
+    func file(_ name: String, _ type: String) -> StoredAttachment { StoredAttachment(name: name, mediaType: type, size: 1, hash: "", secret: Data()) }
+    #expect(media("p").quoteText == "Photo")
+    #expect(media("v", attachment: file("clip.mov", "video/quicktime")).quoteText == "Video")
+    #expect(media("a", attachment: file("voice.m4a", "audio/mp4")).quoteText == "Audio")
+    #expect(media("d", attachment: file("Q3 report.pdf", "application/pdf")).quoteText == "Q3 report.pdf")
+    // One line for the strip, the bubble and the wire; a file with no usable name falls back to its kind.
+    #expect(media("n", attachment: file("two\nlines.txt", "text/plain")).quoteText == "two lines.txt")
+    #expect(media("e", attachment: file("  ", "application/zip")).quoteText == "File")
+    #expect(media("c", body: "At the beach").quoteText == "At the beach")
+    #expect(media("t", body: "Just text", attachment: nil).quoteText == "Just text")
+}
