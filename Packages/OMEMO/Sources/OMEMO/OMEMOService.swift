@@ -463,8 +463,12 @@ public actor OMEMOService {
                                                     sender: account, recipient: message.chatID, modern: profile == .modern,
                                                     originID: message.id, fileSharing: message.attachment.map { try fileSharing(for: $0, account: account) })
         let saved = try sealContent(plaintext, account: account, peer: message.chatID, profile: profile, state: &state)
+        // A file whose reply could not ride along (the chat fell back to legacy after it was queued) loses the stored
+        // quote with the seal, so the sender's bubble never shows a reply the peer did not get.
+        let droppedReply = message.attachment != nil && message.reply.map { !EncryptedContent.fileCarries($0, modern: profile == .modern) } == true
         try await store.sealQueuedOutgoing(accountID: account, messageID: message.id, profile: profile.rawValue,
-                                           expectedRevision: revision, state: encode(state, account: account), wire: JSONEncoder().encode(saved))
+                                           expectedRevision: revision, state: encode(state, account: account), wire: JSONEncoder().encode(saved),
+                                           clearReply: droppedReply)
     }
 
     private func sealContent(_ plaintext: Data, account: String, peer: String, profile: XMPPOMEMOProfile,

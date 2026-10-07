@@ -49,4 +49,28 @@ final class AttachmentServiceTests: XCTestCase {
         XCTAssertEqual(try AttachmentTransfer.open(sealed.ciphertext, key: secret.key, iv: secret.iv,
                                                    expectedCipherHash: Data(hex: received.cipherHash!), expectedPlainHash: Data(hex: received.hash)), plain)
     }
+
+    /// A file queued as a reply in a modern chat keeps its reply when sealed for modern; if the chat fell back to
+    /// legacy before the upload finished, the seal leaves the reference out and the stored quote goes with it.
+    func testSealedFileKeepsItsReplyOnlyWhereTheEnvelopeCarriesIt() async throws {
+        for profile in [XMPPOMEMOProfile.modern, .legacy] {
+            let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+            try await f.initialize(profile)
+            let plain = Data("photo bytes".utf8)
+            let sealed = try AttachmentTransfer.seal(plain)
+            let attachment = StoredAttachment(name: "beach.jpg", mediaType: "image/jpeg", size: plain.count, width: 4, height: 3,
+                                              hash: Data.sha256(plain).hexString, cipherHash: Data.sha256(sealed.ciphertext).hexString,
+                                              secret: try f.a.sealAttachmentSecret(account: f.alice, key: sealed.key, iv: sealed.iv), uploadState: .pending)
+            try await f.aStore.upsertChat(accountID: f.alice, chatID: f.bob, title: "Bob")
+            let reply = MessageReply(messageID: "earlier", senderID: f.alice, body: "Ten it is", wireID: "earlier")
+            _ = try await f.aStore.enqueueOutgoing(StoredMessage(id: "file-1", accountID: f.alice, chatID: f.bob, senderID: f.alice, body: "",
+                                                                 isOutgoing: true, reply: reply, attachment: attachment))
+            try await f.aStore.setAttachmentUploadTask(accountID: f.alice, messageID: "file-1", taskID: 1, url: "https://uploads.localhost:5281/get/beach.jpg")
+            try await f.aStore.markAttachmentUploaded(accountID: f.alice, messageID: "file-1")
+            let ready = try await f.a.prepareAvailableMessages(account: f.alice, transport: f.aTransport).messageIDs
+            XCTAssertEqual(ready, ["file-1"], "\(profile)")
+            let stored = try await f.aStore.messages(accountID: f.alice, chatID: f.bob).first { $0.id == "file-1" }
+            XCTAssertEqual(stored?.reply, profile == .modern ? reply : nil, "\(profile)")
+        }
+    }
 }
