@@ -198,6 +198,31 @@ struct UploadFailureBudget {
     mutating func reset(_ messageID: String) { failures[messageID] = nil }
 }
 
+/// One pass at a time over work that each pass reads once when it starts. A request made while a pass runs is kept
+/// and another pass starts when it ends, so work queued meanwhile (the next file of a multi-file send) is not left
+/// waiting for some later event to start a pass.
+@MainActor final class RerunningPass {
+    private var requested = false
+    private var running = false
+    /// Returns the pass to run, or nil when it cannot run now; the request is then kept until the next one.
+    private let makePass: @MainActor () -> (@MainActor () async -> Void)?
+
+    init(_ makePass: @escaping @MainActor () -> (@MainActor () async -> Void)?) { self.makePass = makePass }
+
+    func request() {
+        requested = true
+        guard !running, let pass = makePass() else { return }
+        requested = false
+        running = true
+        Task { [weak self] in
+            await pass()
+            guard let self else { return }
+            self.running = false
+            if self.requested { self.request() }
+        }
+    }
+}
+
 /// Background PUTs: the ciphertext file is handed to the system so a suspended app still finishes.
 /// Task identifiers are persisted on the attachment row; a relaunch asks which are still running.
 final class AttachmentUploader: NSObject, URLSessionTaskDelegate, @unchecked Sendable {

@@ -230,9 +230,7 @@ final class AppModel {
     private var files: AttachmentFiles? { storageDirectory.map { AttachmentFiles(directory: $0, account: accountID) } }
     @ObservationIgnored private var uploader: AttachmentUploader?
     @ObservationIgnored private var storageDirectory: URL?
-    @ObservationIgnored private var uploadTask: Task<Void, Never>?
-    /// Set by every `startUploads` call and cleared when a pass starts; a pass that ends with it set runs again.
-    @ObservationIgnored private var uploadsRequested = false
+    @ObservationIgnored private lazy var uploadPasses = RerunningPass { [weak self] in self?.uploadPass() }
     @ObservationIgnored private var uploadFailures = UploadFailureBudget()
     @ObservationIgnored private var downloading: Set<String> = []
     /// Bytes a chosen file may have before it is refused; the server's limit when it publishes one.
@@ -1320,19 +1318,16 @@ final class AppModel {
         }
     }
 
-    /// One slot request and one PUT per pending file that has no task in flight. A pass reads the pending files once,
-    /// so a call while one runs (the next file of a multi-file send) is remembered and the pass runs again when it ends.
-    private func startUploads() {
-        uploadsRequested = true
-        guard uploadTask == nil, session.isReady, hasTransportOwnership, foreground, !quiescing,
-              let client, let store, let uploader, let service = uploadService, let files else { return }
-        uploadsRequested = false
+    /// A pass reads the pending files once, so a call while one runs (the next file of a multi-file send) runs
+    /// another pass when it ends.
+    private func startUploads() { uploadPasses.request() }
+
+    /// One slot request and one PUT per pending file that has no task in flight.
+    private func uploadPass() -> (@MainActor () async -> Void)? {
+        guard session.isReady, hasTransportOwnership, foreground, !quiescing,
+              let client, let store, let uploader, let service = uploadService, let files else { return nil }
         let account = accountID, token = generation
-        uploadTask = Task { [weak self] in
-            defer {
-                self?.uploadTask = nil
-                if self?.uploadsRequested == true { self?.startUploads() }
-            }
+        return { [weak self] in
             guard let pending = try? await store.attachmentsAwaitingUpload(accountID: account) else { return }
             for message in pending where message.attachment?.uploadTaskID == nil {
                 guard let attachment = message.attachment, self?.generation == token else { return }
