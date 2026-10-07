@@ -19,7 +19,8 @@ final class AttachmentSendLabUITests: XCTestCase {
         app.buttons["sendMessage"].tap()
         // A file still uploading holds everything queued after it in its chat, so the caption goes last: once the
         // server holds it, every photo before it has uploaded and gone. A file that used up its tries raises an alert.
-        let sent = app.textViews.containing(NSPredicate(format: "value == %@", caption)).firstMatch
+        // Our own bubble: the echo peer sends the same text back, and its bubble can come first in the query.
+        let sent = app.textViews.matching(NSPredicate(format: "value == %@ AND label BEGINSWITH %@", caption, "You:")).firstMatch
         XCTAssertTrue(sent.waitForExistence(timeout: 15))
         let held = XCTNSPredicateExpectation(predicate: serverHeldLabel, object: sent)
         XCTAssertEqual(XCTWaiter().wait(for: [held], timeout: 90), .completed, "the caption is still \(sent.label)")
