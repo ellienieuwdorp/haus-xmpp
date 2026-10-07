@@ -631,6 +631,8 @@ final class AppModel {
         if !account.isEmpty { try? snapshots?.removeSavedReplies(of: account) }
         uploads.forget(account: account)
         serverProfiles.forget(account: account)
+        // The next account starts without the backoff or the alert this one earned.
+        reconnection = ReconnectPolicy()
         selectAccount("")
         preferences.removeObject(forKey: "lastAccount")
     }
