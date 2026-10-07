@@ -34,6 +34,8 @@ final class SnapshotBenchmarks: XCTestCase {
   private func measureRoundTrip(sessions: Int) throws {
     let (snapshot, peer) = try snapshot(sessions: sessions)
     print("SnapshotBenchmarks sessions=\(sessions) snapshot_bytes=\(snapshot.count)")
+    // One untimed round trip first, so the first test does not carry the one-time setup into its samples.
+    _ = try OMEMOEngine(snapshot: snapshot).snapshot()
     var exported = Data()
     var restored = false
     measure {
