@@ -6,6 +6,7 @@ import Testing
 ///   HAUS_LAB_RESUME_ACCOUNT  credential JSON ({"jid", "password"}) of a disposable lab account
 ///   HAUS_LAB_CA              the lab CA (PEM)
 ///   HAUS_LAB_PROSODY_CONTAINER the lab's Prosody container (default haus-xmpp-lab-prosody-1), for the server's view
+///   HAUS_LAB_DIRECT_TLS_PORT direct TLS port on localhost (default 5223), for a disposable copy of the lab
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["HAUS_LAB_RESUME_ACCOUNT"] != nil), .serialized)
 struct ResumeLabTests {
     private struct Credentials: Decodable { let jid: String; let password: String }
@@ -39,7 +40,7 @@ struct ResumeLabTests {
         try await client.configureStreamManagement(persistence: persistence)
         try await client.configureResource(resource)
         try await client.setAvailability(availability)
-        try await client.connect(host: "localhost", port: 5223, domain: parts[1], username: parts[0], password: account.password)
+        try await client.connect(host: "localhost", port: env["HAUS_LAB_DIRECT_TLS_PORT"].flatMap(UInt16.init) ?? 5223, domain: parts[1], username: parts[0], password: account.password)
         return client
     }
 
