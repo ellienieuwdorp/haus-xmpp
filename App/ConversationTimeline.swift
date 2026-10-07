@@ -57,6 +57,8 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     var attachment: TimelineAttachment? = nil
     var sentAt: Date? = nil
     var status: Status? = nil
+    /// Why a server returned this message (`RejectionCopy`); set only while it shows as failed.
+    var failure: String? = nil
     var reply: TimelineReply? = nil
     var securityNotice: String? = nil
     var reactions: [TimelineReaction] = []
@@ -115,6 +117,25 @@ enum UnreadableCopy {
         case .unsupportedEncryption, .malformedContent, .decryptFailed: "Couldn't read this message"
         case .rejectedDevice: "From a device you blocked"
         case .retentionLimit: "Not kept: too many messages waiting"
+        }
+    }
+}
+
+/// Why a server returned a message (`StoredMessage.rejection`), in our words: the error's own text is written by
+/// whoever bounced it and is never shown. The alert, the retry dialog and VoiceOver read the same sentence.
+enum RejectionCopy {
+    static func reason(_ rejection: String, isGroup: Bool) -> String {
+        switch rejection {
+        case "blocked": "You blocked this contact."
+        case "item-not-found", "service-unavailable", "gone", "jid-malformed", "registration-required", "subscription-required":
+            isGroup ? "The group isn't available." : "This address doesn't exist or isn't accepting messages."
+        case "remote-server-not-found": "Their server couldn't be found."
+        case "remote-server-timeout": "Their server didn't answer."
+        case "not-acceptable", "not-allowed": isGroup ? "You weren't in the group when it was sent." : "Their server refused it."
+        case "forbidden", "not-authorized": isGroup ? "You aren't allowed to send to this group." : "Their server refused it."
+        case "policy-violation": "A server refused it under its rules."
+        case "resource-constraint", "internal-server-error": "A server couldn't handle it right now."
+        default: "A server returned it."
         }
     }
 }
@@ -1570,7 +1591,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         if let quote = message.reply { descriptions.append("Replying to \(quote.author): \(quote.body)") }
         if message.isStarred { descriptions.append("starred") }
         if let date = message.sentAt { descriptions.append(date.formatted(date: .abbreviated, time: .shortened)) }
-        if message.isOutgoing, let state = message.status { descriptions.append(state.accessibilityDescription) }
+        if message.isOutgoing, let state = message.status {
+            descriptions.append(message.failure.flatMap { state == .failed ? "Not delivered: \($0)" : nil } ?? state.accessibilityDescription)
+        }
         if let notice = message.securityNotice { descriptions.append(notice) }
         if !message.reactions.isEmpty { descriptions.append(message.reactions.map(\.accessibilityDescription).joined(separator: ", ")) }
         for pill in reactionRow.arrangedSubviews { pill.removeFromSuperview() }

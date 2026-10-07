@@ -17,6 +17,9 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public let isOutgoing: Bool
     public var isStarred: Bool
     public var transportState: OutgoingTransportState?
+    /// Set when a server returned this outgoing message (`rejectOutgoing`): the RFC 6120 condition it gave, or
+    /// `blocked`. Shown only while `transportState` is `.failed`; a retry clears it (see `rejectOutgoing`).
+    public var rejection: String?
     /// The one file this message shares; `body` is then its caption and may be empty.
     public var attachment: StoredAttachment?
     /// Set only on a placeholder row (`encryptionProfile == "unreadable"`, empty body): why this device cannot show it.
@@ -154,6 +157,18 @@ public enum MessageStoreError: Error, Equatable, Sendable {
 /// Local progress and authenticated stream acknowledgement. None proves peer delivery.
 public enum OutgoingTransportState: String, Equatable, Sendable {
     case queued, submitting, unconfirmed, failed, serverAccepted
+}
+
+/// What `MessageStore.rejectOutgoing` failed: a message row, or an update (reaction, receipt, retraction, correction,
+/// key transport), which has no bubble of its own.
+public struct RejectedOutgoing: Sendable, Equatable {
+    public let chatID: String
+    /// The failed message; nil when the bounce named an update.
+    public let messageID: String?
+    public let rejection: String
+    public init(chatID: String, messageID: String?, rejection: String) {
+        self.chatID = chatID; self.messageID = messageID; self.rejection = rejection
+    }
 }
 
 /// A claim token fences late callbacks after recovery and manual retry.

@@ -767,6 +767,12 @@ public actor OMEMOService {
         try await store.retryUpdate(accountID: account, updateID: updateID)
     }
 
+    /// Delivery bookkeeping only (`MessageStore.rejectOutgoing`): a returned stanza is never decrypted, and no crypto
+    /// state changes, so this does not take the operation gate.
+    public func rejectOutgoing(account: String, chatID: String, wireID: String, rejection: String, firstOnly: Bool = false) async throws -> RejectedOutgoing? {
+        try await store.rejectOutgoing(accountID: account, chatID: chatID, wireID: wireID, rejection: rejection, firstOnly: firstOnly)
+    }
+
     /// Conversations and most deployed clients react unencrypted even in OMEMO chats. The actor is
     /// server-authenticated only; the untrusted target still has to resolve to one stored message.
     /// Returns false for content this client ignores; throws only when storage fails.

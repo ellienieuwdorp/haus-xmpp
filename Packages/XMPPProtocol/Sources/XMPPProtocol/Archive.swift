@@ -29,6 +29,9 @@ public struct XMPPArchiveMessage: Sendable, Equatable {
     public var rejectedPeer: String? = nil
     /// True when the rejected entry was sent by the account (own archive, `from` is the account).
     public var rejectedOutgoing: Bool = false
+    /// A stanza a server returned to us, which Prosody keeps in the own archive ("so you know if your own messages
+    /// were not delivered"). Never content: only its id, sender and condition are read.
+    public var messageError: XMPPMessageError? = nil
 }
 
 /// Which side of a cursor an archive page is taken from (XEP-0059 §2.2, §2.5; XEP-0313 §4.1).
@@ -149,6 +152,12 @@ struct ArchiveQuery {
               sender == accountBareJID || recipient == accountBareJID else { return reject(.foreignSender) }
         let outgoing = sender == accountBareJID
         let peer = outgoing ? recipient : sender
+        if inner.attributes["type"] == "error" {
+            // A returned stanza echoes what we sent, ciphertext included: it is a bounce, never a message to decrypt.
+            messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil,
+                                  messageError: outgoing ? nil : XMPPMessageError.parse(inner)))
+            identifiers.insert(id); return
+        }
         guard !Self.nestsWrapper(inner) else { return reject(.unsupportedDirectContent, peer: peer, outgoing: outgoing) }
         // Reuse already authenticated own-account forwarding provenance; archive ID and time are separate.
         let provenance: XMPPMessageProvenance = outgoing ? .sentCarbon : .receivedCarbon

@@ -79,6 +79,39 @@ struct InboundProcessorTests {
         #expect(try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: 2))) == .acknowledged)
     }
 
+    /// A stanza our server held for this session (offline storage, a hibernated stream's queue) is placed at the time
+    /// the server stamped, not when the resumed stream delivered it.
+    @Test func ourServersStampIsTheTimeOfALiveMessage() async throws {
+        let (store, _, processor) = try await initializedFixture()
+        let held = Date(timeIntervalSince1970: 1_790_000_000), room = "room@conference.localhost"
+        var direct = XMPPEncryptedMessage(id: "m1", from: peer + "/x", to: account, originID: nil,
+                                          envelope: XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: 4242, keys: [], payload: Data([1])), hasFallbackBody: true)
+        direct.serverStamp = held
+        var group = try XMPPEncryptedGroupMessage(id: "m2", room: room, occupant: room + "/bob", sender: peer,
+                                                  envelope: XMPPOMEMOEnvelope(profile: .modern, senderDeviceID: 4242, keys: [], payload: Data([2])), hasFallbackBody: true)
+        group.serverStamp = held.addingTimeInterval(60)
+        #expect(try await processor.process(.encryptedMessage(direct)) == .excluded(reason: .notForThisDevice))
+        #expect(try await processor.process(.encryptedGroupMessage(group)) == .excluded(reason: .notForThisDevice))
+        #expect(try await store.messages(accountID: account, chatID: peer).map(\.sentAt) == [held])
+        #expect(try await store.messages(accountID: account, chatID: room).map(\.sentAt) == [held.addingTimeInterval(60)])
+    }
+
+    /// Only a bounce from the address we sent to fails the send; an error one of the peer's resources wrote does not,
+    /// nor does `recipient-unavailable`, which Prosody's mod_smacks sends from the peer's bare JID when one of its
+    /// sessions dies with the message unacknowledged, though the peer's other sessions may have it.
+    @Test func aBounceFromTheRecipientsAddressFailsTheSend() async throws {
+        let (store, processor) = try await fixture()
+        try await store.enqueueOutgoing(StoredMessage(id: "s1", accountID: account, chatID: peer, senderID: account, body: "hi", isOutgoing: true))
+        try await store.finishOutgoingSubmission(#require(await store.claimNextOutgoing(accountID: account)))
+        #expect(try await processor.process(.messageError(XMPPMessageError(id: "s1", from: peer + "/phone", condition: "feature-not-implemented"))) == .ignored)
+        #expect(try await processor.process(.messageError(XMPPMessageError(id: "s1", from: peer, condition: "recipient-unavailable", type: "cancel"))) == .ignored)
+        #expect(try await store.message(accountID: account, messageID: "s1")?.transportState == .unconfirmed)
+        #expect(try await processor.process(.messageError(XMPPMessageError(id: "s1", from: peer, condition: "not-acceptable", blockedByUs: true)))
+                == .rejected(RejectedOutgoing(chatID: peer, messageID: "s1", rejection: "blocked")))
+        #expect(try await store.message(accountID: account, messageID: "s1")?.transportState == .failed)
+        #expect(try await processor.process(.streamManagementBarrier(XMPPInboundToken(session: UUID(), sequence: 1))) == .acknowledged)
+    }
+
     private func addressedCiphertext(_ encryption: OMEMOService) async throws -> [XMPPEvent] {
         let (direct, group) = try await unknownSenderEnvelopes(account: account, encryption: encryption)
         let room = "room@conference.localhost"

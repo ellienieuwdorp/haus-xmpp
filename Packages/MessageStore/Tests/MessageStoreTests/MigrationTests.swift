@@ -5,7 +5,7 @@ import Testing
 @testable import MessageStore
 
 /// The schema this build writes. A schema bump changes this one literal.
-private let currentSchemaVersion: Int32 = 23
+private let currentSchemaVersion: Int32 = 24
 
 struct MigrationTests {
     @Test func openingStampsTheCurrentSchemaAndRefusesANewerOne() async throws {
@@ -24,6 +24,28 @@ struct MigrationTests {
         #expect(sqlite3_exec(db, "PRAGMA user_version=\(currentSchemaVersion + 1);", nil, nil, nil) == SQLITE_OK)
         sqlite3_close(db)
         #expect(throws: MessageStoreError.unsupportedSchema(Int(currentSchemaVersion) + 1)) { _ = try MessageStore(url: url) }
+    }
+
+    /// v24 adds where a returned send's reason lives; a v23 outbox keeps its rows and states and can record one.
+    @Test func aVersion23OutboxGainsRejectionsAndKeepsItsWork() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "rejection-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "messages.sqlite")
+        let old = try MessageStore(url: url)
+        try await old.acquireTransportOwnership()
+        try await old.upsertChat(accountID: "self", chatID: "peer", title: "Peer")
+        try await old.enqueueOutgoing(StoredMessage(id: "m", accountID: "self", chatID: "peer", senderID: "self", body: "hi", isOutgoing: true))
+        try await old.finishOutgoingSubmission(#require(await old.claimNextOutgoing(accountID: "self")))
+        try await old.close()
+        #expect(sqliteExecute(url: url, sql: "ALTER TABLE outbox DROP COLUMN rejection; ALTER TABLE outbox DROP COLUMN returned; ALTER TABLE outgoing_updates DROP COLUMN rejection; ALTER TABLE outgoing_updates DROP COLUMN returned; PRAGMA user_version=23"))
+
+        let store = try MessageStore(url: url)
+        try await store.acquireTransportOwnership()
+        #expect(try await store.message(accountID: "self", messageID: "m")?.transportState == .unconfirmed)
+        #expect(try await store.rejectOutgoing(accountID: "self", chatID: "peer", wireID: "m", rejection: "item-not-found") != nil)
+        #expect(try await store.message(accountID: "self", messageID: "m")?.rejection == "item-not-found")
+        try await store.close()
     }
 
     /// A v21 store written by a build that kept typed capitals: the account `Ellie@Example.org`, and chats with
@@ -90,7 +112,7 @@ struct MigrationTests {
                 PRAGMA user_version=21;
                 """))
             let store = try MessageStore(url: url)
-            #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["23"]])
+            #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["\(MessageStore.currentSchemaVersion)"]])
             #expect(try await store.messages(accountID: account, chatID: "bob@example.org").map(\.body) == [account])
             #expect(try await store.messages(accountID: typed, chatID: "bob@example.org").map(\.body) == [typed])
             #expect(try await store.messages(accountID: account, chatID: "carol@example.org").map(\.id) == ["only-typed"])
