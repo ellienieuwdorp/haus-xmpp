@@ -95,6 +95,21 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertFalse(memory.isFresh(account: account))
     }
 
+    func testStrandedUploadsWaitForAKnownAnswerAndAreSettledByIt() {
+        let service = XMPPUploadService(jid: "upload.example.org", maximumFileSize: nil)
+        let timedOut: Result<XMPPUploadService?, any Error> = .failure(XMPPClientError.connectionClosed)
+        XCTAssertTrue(UploadServiceMemory.reconcilesAtReady(stored: service, discoveryPending: true))
+        XCTAssertTrue(UploadServiceMemory.reconcilesAtReady(stored: nil, discoveryPending: false), "this connection already answered")
+        XCTAssertFalse(UploadServiceMemory.reconcilesAtReady(stored: nil, discoveryPending: true), "a stale \"none\" fails nothing")
+
+        // Nothing stored, so `.ready` left them: the answer settles them either way, or they would hold their chats.
+        XCTAssertTrue(UploadServiceMemory.reconcilesAfterReady(previous: nil, discovery: .success(nil)))
+        XCTAssertTrue(UploadServiceMemory.reconcilesAfterReady(previous: nil, discovery: .success(service)))
+        XCTAssertTrue(UploadServiceMemory.reconcilesAfterReady(previous: service, discovery: .success(nil)), "withdrawn")
+        XCTAssertFalse(UploadServiceMemory.reconcilesAfterReady(previous: service, discovery: .success(service)), "`.ready` already did")
+        XCTAssertFalse(UploadServiceMemory.reconcilesAfterReady(previous: nil, discovery: timedOut))
+    }
+
     func testRetainedCiphertextForcesReviewOnlyForThatChat() {
         XCTAssertEqual(direct(.stored(verified), review: true, ready: true).encryption, .needsReview)
         XCTAssertEqual(direct(.pending, review: true, ready: false).encryption, .needsReview)

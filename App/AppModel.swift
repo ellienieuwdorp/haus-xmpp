@@ -1792,15 +1792,15 @@ final class AppModel {
         }
     }
 
-    /// Discovery now ends after `.ready`, so `.ready` reconciles stranded uploads only against a known answer; a
-    /// discovery that changes whether uploads are offered reconciles them again.
+    /// Discovery now ends after `.ready`, so `.ready` reconciles stranded uploads only against a known answer; a later
+    /// completed discovery reconciles them when nothing was stored or when it withdraws the stored service.
     private func settleUploadDiscovery(_ discovery: Result<XMPPUploadService?, any Error>, account: String, token: UUID) async {
         guard generation == token else { return }
         let previous = uploadService
         uploadService = uploads.settle(account: account, previous: previous, discovery: discovery)
         uploadDiscoveryPending = false
         if case .failure(let error) = discovery { Self.syncLog.notice("upload discovery kept the stored service: \(ConnectionSetup.detail(error), privacy: .public)") }
-        guard session.isReady, (previous == nil) != (uploadService == nil) else { return }
+        guard session.isReady, UploadServiceMemory.reconcilesAfterReady(previous: previous, discovery: discovery) else { return }
         await reconcileUploads()
     }
 
@@ -1828,8 +1828,7 @@ final class AppModel {
             await refresh()
             guard setupIsCurrent(token) else { return }
             startOutbox()
-            // With no stored service and this connection's discovery still running, "no longer offered" is not known yet.
-            if uploadService != nil || !uploadDiscoveryPending { await reconcileUploads() }
+            if UploadServiceMemory.reconcilesAtReady(stored: uploadService, discoveryPending: uploadDiscoveryPending) { await reconcileUploads() }
             if let openChatID { await loadEncryptionDetails(for: openChatID) }
             avatarChecked = []
             await loadAvatar(for: account)

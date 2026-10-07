@@ -167,6 +167,19 @@ struct UploadServiceMemory {
         return XMPPUploadService(jid: jid, maximumFileSize: saved["maximumFileSize"] as? Int)
     }
 
+    /// Whether stranded uploads can be reconciled at `.ready`. Failing them as "no longer offered" needs a known
+    /// answer: a stored service, or this connection's discovery already settled.
+    static func reconcilesAtReady(stored: XMPPUploadService?, discoveryPending: Bool) -> Bool {
+        stored != nil || !discoveryPending
+    }
+
+    /// Whether a discovery that settled after `.ready` reconciles stranded uploads: with nothing stored `.ready` left
+    /// them to this answer, and an answer that withdraws the stored service fails them. A thrown discovery knows nothing.
+    static func reconcilesAfterReady(previous: XMPPUploadService?, discovery: Result<XMPPUploadService?, any Error>) -> Bool {
+        guard case .success(let found) = discovery else { return false }
+        return previous == nil || found == nil
+    }
+
     /// A thrown discovery (a dropped stream, a timeout) keeps what was known. A completed one replaces it,
     /// including a completed "none offered", which stands until the next completed answer.
     func settle(account: String, previous: XMPPUploadService?, discovery: Result<XMPPUploadService?, any Error>, now: Date = .now) -> XMPPUploadService? {
