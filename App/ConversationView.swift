@@ -1,3 +1,4 @@
+import MessageStore
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -110,23 +111,28 @@ struct ConversationView: View {
     private var timelineMessages: [TimelineMessage] {
         // One set per pass keeps the quoted-unsent lookup linear.
         let retracted = Set(model.messages.lazy.filter(\.isRetracted).map(\.id))
-        // Quoted photos and videos that are loaded and on disk, for the quote's still; anything else quotes text alone.
+        // Quoted messages that are loaded: their kind and, once on disk, their file, for the quote's still.
         let quoted = Set(messages.lazy.compactMap { $0.reply?.messageID })
-        var stills: [String: TimelineAttachment] = [:]
+        var sources: [String: ChatMessage] = [:]
         if !quoted.isEmpty {
-            for source in model.messages where quoted.contains(source.id) {
-                if let still = quoteStill(of: source) { stills[source.id] = still }
-            }
+            for source in model.messages where quoted.contains(source.id) { sources[source.id] = source }
         }
-        return messages.map { timelineMessage($0, retracted: retracted, stills: stills) }
+        return messages.map { timelineMessage($0, retracted: retracted, sources: sources) }
     }
 
-    private func quoteStill(of source: ChatMessage) -> TimelineAttachment? {
-        guard let attachment = source.attachment, attachment.isImage || attachment.isVideo, let url = model.attachmentFiles[source.id] else { return nil }
-        return TimelineAttachment(name: attachment.name, mediaType: attachment.mediaType, size: attachment.size, width: attachment.width, height: attachment.height, localURL: url)
+    /// The quote's still for a photo or video: its slot is kept from the reply snapshot's media type (or the loaded
+    /// source's), so the bubble does not widen when the file downloads or an earlier page loads; the image itself
+    /// shows once the source is loaded and on disk. Anything else quotes text alone.
+    private func quoteStill(of reply: MessageReply, sources: [String: ChatMessage]) -> TimelineAttachment? {
+        let source = sources[reply.messageID]
+        guard let mediaType = reply.mediaType ?? source?.attachment?.mediaType,
+              mediaType.hasPrefix("image/") || mediaType.hasPrefix("video/") else { return nil }
+        return TimelineAttachment(name: source?.attachment?.name ?? "", mediaType: mediaType, size: source?.attachment?.size ?? 0,
+                                  width: source?.attachment?.width, height: source?.attachment?.height,
+                                  localURL: source?.attachment == nil ? nil : model.attachmentFiles[reply.messageID])
     }
 
-    private func timelineMessage(_ message: ChatMessage, retracted: Set<String>, stills: [String: TimelineAttachment]) -> TimelineMessage {
+    private func timelineMessage(_ message: ChatMessage, retracted: Set<String>, sources: [String: ChatMessage]) -> TimelineMessage {
         var counts: [String: Int] = [:]
         var selected: Set<String> = []
         for update in model.messageReactions[message.id] ?? [] {
@@ -155,7 +161,7 @@ struct ConversationView: View {
                                                                                        localURL: model.attachmentFiles[message.id]) },
                                sentAt: message.sentAt, status: status(message),
                                reply: message.reply.map { TimelineReply(author: authorName($0.senderID), body: quotedUnsent ? "Message unsent" : $0.body,
-                                                                        thumbnail: quotedUnsent ? nil : stills[$0.messageID]) },
+                                                                        thumbnail: quotedUnsent ? nil : quoteStill(of: $0, sources: sources)) },
                                securityNotice: !model.isDemo && message.encryptionProfile == nil ? "Not encrypted" : nil,
                                reactions: message.isRetracted ? [] : emoji.map { TimelineReaction(emoji: $0, count: counts[$0]!, isSelected: selected.contains($0)) },
                                canReact: !message.isRetracted && model.canReact(to: message),
@@ -639,10 +645,10 @@ struct ConversationComposer: View {
         .accessibilityIdentifier("attachFile")
     }
 
-    /// The quoted photo or video on disk, for a small still beside the quote; nil shows the label alone.
-    private func replyStill(_ source: ChatMessage) -> (url: URL, mediaType: String)? {
-        guard let attachment = source.attachment, attachment.isImage || attachment.isVideo, let url = model.attachmentFiles[source.id] else { return nil }
-        return (url, attachment.mediaType)
+    /// The quoted photo or video, for a small still beside the quote (its file once on disk); nil shows the label alone.
+    private func replyStill(_ source: ChatMessage) -> (url: URL?, mediaType: String)? {
+        guard let attachment = source.attachment, attachment.isImage || attachment.isVideo else { return nil }
+        return (model.attachmentFiles[source.id], attachment.mediaType)
     }
 
     var body: some View {
@@ -716,19 +722,24 @@ struct ConversationComposer: View {
 }
 
 /// A small still of the quoted photo or video in the reply strip. The slot is fixed, so the strip does not change
-/// size when the still decodes; until then (or if it never does) the slot shows a quiet fill.
+/// size when the still decodes; until then (while the file downloads, or if it never decodes) the slot shows a quiet
+/// fill with the kind's symbol.
 struct QuoteStill: View {
-    let url: URL
+    let url: URL?
     let mediaType: String
     @State private var image: UIImage?
 
     var body: some View {
         RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.quaternary)
-            .overlay { if let image { Image(uiImage: image).resizable().scaledToFill() } }
+            .overlay {
+                if let image { Image(uiImage: image).resizable().scaledToFill() }
+                else { Image(systemName: mediaType.hasPrefix("video/") ? "video" : "photo").font(.footnote).foregroundStyle(.secondary) }
+            }
             .frame(width: TimelineReply.thumbnailSide, height: TimelineReply.thumbnailSide)
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .accessibilityHidden(true)
             .task(id: url) {
+                guard let url else { image = nil; return }
                 if let hit = AttachmentThumbnails.cached(for: url) { image = hit } else { image = nil; image = await AttachmentThumbnails.image(for: url, mediaType: mediaType) }
             }
     }

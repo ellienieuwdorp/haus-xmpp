@@ -1304,20 +1304,29 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         }
     }
 
-    /// The slot is kept whenever the reply names a still on disk, so the bubble's width never changes when it loads;
-    /// a still that fails to decode leaves the quote's tint showing through an empty slot.
+    /// The slot is kept whenever the quote is of a photo or video, so the bubble's width never changes as its file
+    /// downloads, an earlier page loads or the still decodes. Until the still shows (or if it never does) the slot
+    /// holds the kind's symbol on a quiet fill, like the attachment preview itself.
     private func configureQuoteThumbnail(_ still: TimelineAttachment?) {
         quoteThumbnail.isHidden = still == nil
         quoteLabelsTrailing.isActive = still == nil
         quoteLabelsBeforeThumbnail.isActive = still != nil
         quoteThumbnail.image = nil
-        guard let still, let url = still.localURL else { return }
-        if let hit = AttachmentThumbnails.cached(for: url) { quoteThumbnail.image = hit; return }
+        guard let still else { return }
+        let placeholder = UIImage(systemName: still.isVideo ? "video" : "photo",
+                                  withConfiguration: UIImage.SymbolConfiguration(textStyle: .footnote))
+        func show(_ image: UIImage?) {
+            quoteThumbnail.image = image ?? placeholder
+            quoteThumbnail.contentMode = image == nil ? .center : .scaleAspectFill
+        }
+        guard let url = still.localURL else { show(nil); return }
+        if let hit = AttachmentThumbnails.cached(for: url) { show(hit); return }
+        show(nil)
         let id = messageID
         Task { [weak self] in
             let image = await AttachmentThumbnails.image(for: url, mediaType: still.mediaType)
             guard let self, messageID == id, message?.reply?.thumbnail?.localURL == url else { return }
-            quoteThumbnail.image = image
+            show(image)
         }
     }
 
@@ -1596,6 +1605,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         quoteBar.backgroundColor = message.isOutgoing ? theme.bubbleText : theme.tint
         quoteAuthor.textColor = text
         quoteBody.textColor = text
+        quoteThumbnail.tintColor = meta
+        quoteThumbnail.backgroundColor = quote.backgroundColor
         time.textColor = meta
         star.tintColor = meta
         replyIndicator.tintColor = theme.tint

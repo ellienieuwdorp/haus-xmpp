@@ -182,12 +182,16 @@ public struct MessageReply: Codable, Sendable, Equatable {
     public let wireID: String?
     public let senderID: String
     public let body: String
+    /// The quoted file's media type, nil for text. Local only, never sent: it lets the quote keep a photo or video
+    /// still's slot before that file is loaded or downloaded, so the bubble's width does not change when it arrives.
+    public let mediaType: String?
 
-    public init(messageID: String, senderID: String, body: String, wireID: String? = nil) {
+    public init(messageID: String, senderID: String, body: String, wireID: String? = nil, mediaType: String? = nil) {
         self.messageID = messageID
         self.wireID = wireID
         self.senderID = senderID
         self.body = body
+        self.mediaType = mediaType
     }
 }
 

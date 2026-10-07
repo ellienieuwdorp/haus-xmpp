@@ -83,3 +83,9 @@ private func media(_ id: String, body: String = "", attachment: StoredAttachment
     #expect(media("c", body: "At the beach").quoteText == "At the beach")
     #expect(media("t", body: "Just text", attachment: nil).quoteText == "Just text")
 }
+
+/// Replies stored before the snapshot kept the quoted media type still load, and quote text alone.
+@Test func replyStoredWithoutAMediaTypeStillDecodes() throws {
+    let older = try JSONDecoder().decode(MessageReply.self, from: Data(#"{"messageID":"m","senderID":"a","body":"Ten it is","wireID":"m"}"#.utf8))
+    #expect(older == MessageReply(messageID: "m", senderID: "a", body: "Ten it is", wireID: "m"))
+}

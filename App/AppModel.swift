@@ -2033,7 +2033,7 @@ final class AppModel {
     /// Only our own sent direct message has a wire ID we can reference (replies to received messages are quote-only, CX-4).
     private func replySnapshot(of source: ChatMessage, in chatID: String) -> MessageReply {
         MessageReply(messageID: source.id, senderID: source.senderID, body: source.quoteText,
-                     wireID: Self.replyWireID(of: source, isGroup: isGroup(chatID)))
+                     wireID: Self.replyWireID(of: source, isGroup: isGroup(chatID)), mediaType: source.attachment?.mediaType)
     }
 
     /// The ID a reply can reference: only our own sent direct message has one we know the peer holds.
