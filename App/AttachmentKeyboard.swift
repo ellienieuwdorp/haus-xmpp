@@ -302,6 +302,9 @@ final class AttachmentKeyboardView: UIInputView {
     private var top: NSLayoutConstraint!
     private var afterBanner: NSLayoutConstraint!
     private var chipHeight: NSLayoutConstraint!
+    /// The parts' side and bottom insets: the safe area, never the view's layout margins (see `followSafeArea`).
+    private var insetConstraints: [(NSLayoutConstraint, (UIEdgeInsets) -> CGFloat)] = []
+    private var insets: UIEdgeInsets?
     private var compact = false
 
     init(keyboard: AttachmentKeyboard) {
@@ -313,12 +316,6 @@ final class AttachmentKeyboardView: UIInputView {
         // iOS 26 draws the keyboard backdrop behind an input view; the panel adds nothing of its own.
         backgroundColor = .clear
         accessibilityIdentifier = "attachmentPanel"
-        // The parts sit inside the safe area through the margins, which `prepare` can set before the panel has a
-        // window: a warm-up laid out without the home indicator inset made the rail 34 pt taller than it is once
-        // presented, so the tiles were sized and drawn again on the tap.
-        insetsLayoutMarginsFromSafeArea = false
-        preservesSuperviewLayoutMargins = false
-        directionalLayoutMargins = .zero
         limitedRow.onSelectMore = { [unowned keyboard] in keyboard.presentLimitedPicker() }
         limitedRow.onSettings = { [unowned keyboard] in keyboard.openSettings() }
         rail.onAccessChanged = { [weak self] limited in self?.showLimitedRow(limited) }
@@ -332,17 +329,20 @@ final class AttachmentKeyboardView: UIInputView {
         chipHeight = chips.heightAnchor.constraint(equalToConstant: 122)
         limitedRow.isHidden = true
         limitedRow.collapsed = true
-        NSLayoutConstraint.activate([
-            height, top, afterBanner, chipHeight,
-            limitedRow.leadingAnchor.constraint(equalTo: layoutMarginsGuide.leadingAnchor, constant: 16),
-            limitedRow.trailingAnchor.constraint(equalTo: layoutMarginsGuide.trailingAnchor, constant: -16),
-            rail.leadingAnchor.constraint(equalTo: layoutMarginsGuide.leadingAnchor),
-            rail.trailingAnchor.constraint(equalTo: layoutMarginsGuide.trailingAnchor),
-            chips.topAnchor.constraint(equalTo: rail.bottomAnchor),
-            chips.leadingAnchor.constraint(equalTo: layoutMarginsGuide.leadingAnchor),
-            chips.trailingAnchor.constraint(equalTo: layoutMarginsGuide.trailingAnchor),
-            chips.bottomAnchor.constraint(equalTo: layoutMarginsGuide.bottomAnchor),
-        ])
+        // The safe area is physical (left, right), so the sides pin to left and right; the parts lay out their own
+        // content in the reading direction.
+        insetConstraints = [
+            (limitedRow.leftAnchor.constraint(equalTo: leftAnchor), { $0.left + 16 }),
+            (rightAnchor.constraint(equalTo: limitedRow.rightAnchor), { $0.right + 16 }),
+            (rail.leftAnchor.constraint(equalTo: leftAnchor), { $0.left }),
+            (rightAnchor.constraint(equalTo: rail.rightAnchor), { $0.right }),
+            (chips.leftAnchor.constraint(equalTo: leftAnchor), { $0.left }),
+            (rightAnchor.constraint(equalTo: chips.rightAnchor), { $0.right }),
+            (bottomAnchor.constraint(equalTo: chips.bottomAnchor), { $0.bottom }),
+        ]
+        NSLayoutConstraint.activate([height, top, afterBanner, chipHeight, chips.topAnchor.constraint(equalTo: rail.bottomAnchor)]
+                                    + insetConstraints.map(\.0))
+        followSafeArea(.zero)
         // A rail that starts with an earlier chat's tiles also starts with its access row, so the warm-up lays out
         // the rail at the height it is presented at.
         if RecentPhotosLibrary.shared.isLimited { showLimitedRow(true) }
@@ -375,9 +375,19 @@ final class AttachmentKeyboardView: UIInputView {
         if window != nil { followSafeArea(safeAreaInsets) }
     }
 
-    private func followSafeArea(_ insets: UIEdgeInsets) {
-        let margins = UIEdgeInsets(top: 0, left: insets.left, bottom: insets.bottom, right: insets.right)
-        if layoutMargins != margins { layoutMargins = margins }
+    /// The parts sit inside the safe area through constraint constants, which `prepare` can set from the window's
+    /// safe area before the panel has one of its own: a warm-up laid out without the home indicator inset made the
+    /// rail 34 pt taller than it is once presented, so the tiles were sized and drawn again on the tap. Layout
+    /// margins cannot carry this: once presented, the panel's side margins read 20 pt whatever was set (iOS 26.5),
+    /// which pulled the rail in from the screen edges.
+    private func followSafeArea(_ safeArea: UIEdgeInsets) {
+        let value = UIEdgeInsets(top: 0, left: safeArea.left, bottom: safeArea.bottom, right: safeArea.right)
+        guard value != insets else { return }
+        insets = value
+        for (constraint, constant) in insetConstraints { constraint.constant = constant(value) }
+        // Outside a window a constant change does not mark the panel for layout, and the warm-up's layout pass
+        // would then keep the old insets.
+        setNeedsLayout()
     }
 
     private func showLimitedRow(_ limited: Bool) {
