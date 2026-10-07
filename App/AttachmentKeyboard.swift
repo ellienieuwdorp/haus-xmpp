@@ -163,7 +163,8 @@ final class AttachmentKeyboardResponder: UIView {
         let panel = self.panel ?? AttachmentKeyboardView(keyboard: self)
         self.panel = panel
         responder.panel = panel
-        panel.prepare(height: KeyboardHeightCache.height(in: window), compact: window.traitCollection.verticalSizeClass == .compact)
+        panel.prepare(height: KeyboardHeightCache.height(in: window), compact: window.traitCollection.verticalSizeClass == .compact,
+                      safeArea: window.safeAreaInsets)
         return panel
     }
 
@@ -311,6 +312,12 @@ final class AttachmentKeyboardView: UIInputView {
         // iOS 26 draws the keyboard backdrop behind an input view; the panel adds nothing of its own.
         backgroundColor = .clear
         accessibilityIdentifier = "attachmentPanel"
+        // The parts sit inside the safe area through the margins, which `prepare` can set before the panel has a
+        // window: a warm-up laid out without the home indicator inset made the rail 34 pt taller than it is once
+        // presented, so the tiles were sized and drawn again on the tap.
+        insetsLayoutMarginsFromSafeArea = false
+        preservesSuperviewLayoutMargins = false
+        directionalLayoutMargins = .zero
         limitedRow.onSelectMore = { [unowned keyboard] in keyboard.presentLimitedPicker() }
         limitedRow.onSettings = { [unowned keyboard] in keyboard.openSettings() }
         rail.onAccessChanged = { [weak self] limited in self?.showLimitedRow(limited) }
@@ -326,20 +333,25 @@ final class AttachmentKeyboardView: UIInputView {
         limitedRow.collapsed = true
         NSLayoutConstraint.activate([
             height, top, afterBanner, chipHeight,
-            limitedRow.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 16),
-            limitedRow.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -16),
-            rail.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor),
-            rail.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor),
+            limitedRow.leadingAnchor.constraint(equalTo: layoutMarginsGuide.leadingAnchor, constant: 16),
+            limitedRow.trailingAnchor.constraint(equalTo: layoutMarginsGuide.trailingAnchor, constant: -16),
+            rail.leadingAnchor.constraint(equalTo: layoutMarginsGuide.leadingAnchor),
+            rail.trailingAnchor.constraint(equalTo: layoutMarginsGuide.trailingAnchor),
             chips.topAnchor.constraint(equalTo: rail.bottomAnchor),
-            chips.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor),
-            chips.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor),
-            chips.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor),
+            chips.leadingAnchor.constraint(equalTo: layoutMarginsGuide.leadingAnchor),
+            chips.trailingAnchor.constraint(equalTo: layoutMarginsGuide.trailingAnchor),
+            chips.bottomAnchor.constraint(equalTo: layoutMarginsGuide.bottomAnchor),
         ])
+        // A rail that starts with an earlier chat's tiles also starts with its access row, so the warm-up lays out
+        // the rail at the height it is presented at.
+        if RecentPhotosLibrary.shared.isLimited { showLimitedRow(true) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func prepare(height value: CGFloat, compact: Bool) {
+    /// `safeArea` is the window's; a presented panel follows its own safe area instead.
+    func prepare(height value: CGFloat, compact: Bool, safeArea: UIEdgeInsets) {
+        if window == nil { followSafeArea(safeArea) }
         height.constant = value
         self.compact = compact
         chips.compact = compact
@@ -355,6 +367,16 @@ final class AttachmentKeyboardView: UIInputView {
 
     func update(selection: [String], trayCount: Int) {
         rail.update(selection: selection, trayCount: trayCount)
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        if window != nil { followSafeArea(safeAreaInsets) }
+    }
+
+    private func followSafeArea(_ insets: UIEdgeInsets) {
+        let margins = UIEdgeInsets(top: 0, left: insets.left, bottom: insets.bottom, right: insets.right)
+        if layoutMargins != margins { layoutMargins = margins }
     }
 
     private func showLimitedRow(_ limited: Bool) {
@@ -521,6 +543,8 @@ private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, 
     /// The last read and the access it was made under; `nil` until the first read lands, or after a denial.
     private(set) var assets: PHFetchResult<PHAsset>?
     private var readUnder: PHAuthorizationStatus?
+    /// The read on hand was made under limited access.
+    var isLimited: Bool { assets != nil && readUnder == .limited }
     private let rails = NSHashTable<RecentPhotosRail>.weakObjects()
 
     private init() {
