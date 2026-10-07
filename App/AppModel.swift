@@ -2033,7 +2033,12 @@ final class AppModel {
     /// Only our own sent direct message has a wire ID we can reference (replies to received messages are quote-only, CX-4).
     private func replySnapshot(of source: ChatMessage, in chatID: String) -> MessageReply {
         MessageReply(messageID: source.id, senderID: source.senderID, body: source.quoteText,
-                     wireID: !isGroup(chatID) && source.isOutgoing && source.transportState != nil ? source.id : nil)
+                     wireID: Self.replyWireID(of: source, isGroup: isGroup(chatID)))
+    }
+
+    /// The ID a reply can reference: only our own sent direct message has one we know the peer holds.
+    nonisolated static func replyWireID(of source: ChatMessage, isGroup: Bool) -> String? {
+        !isGroup && source.isOutgoing && source.transportState != nil ? source.id : nil
     }
 
     /// Whether files sent with no caption can carry a reply to `source`. A file's body must stay exactly its link, so
@@ -2041,10 +2046,16 @@ final class AppModel {
     /// message) and somewhere private to put it (a modern OMEMO envelope; legacy OMEMO would put it in clear).
     /// Sample chats send nothing and follow the same own-message rule.
     func canReplyWithFilesAlone(to source: ChatMessage, in chatID: String) -> Bool {
-        guard source.accountID == accountID, source.chatID == chatID, !isGroup(chatID), source.isOutgoing else { return false }
+        Self.filesAloneCanReply(to: source, accountID: accountID, chatID: chatID, isGroup: isGroup(chatID), isDemo: isDemo,
+                                chatProfile: encryptionOverviewChatID == chatID ? encryptionOverview?.profile : nil)
+    }
+
+    /// `canReplyWithFilesAlone` from its facts. `chatProfile` is the OMEMO version this chat sends with, nil while unknown.
+    nonisolated static func filesAloneCanReply(to source: ChatMessage, accountID: String, chatID: String, isGroup: Bool,
+                                               isDemo: Bool, chatProfile: XMPPOMEMOProfile?) -> Bool {
+        guard source.accountID == accountID, source.chatID == chatID, !isGroup, source.isOutgoing else { return false }
         if isDemo { return true }
-        return replySnapshot(of: source, in: chatID).wireID != nil
-            && encryptionOverviewChatID == chatID && encryptionOverview?.profile == .modern
+        return replyWireID(of: source, isGroup: isGroup) != nil && chatProfile == .modern
     }
 
     nonisolated static func sendFailure(_ problem: XMPPClient.MessageProblem) -> String {

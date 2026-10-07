@@ -590,7 +590,10 @@ struct ConversationComposer: View {
 
     private var placeholder: String {
         if !model.isDemo, model.encryptionNeedsReview { return "Sending paused until you review" }
-        return showsTray ? "Add a caption…" : "Message"
+        guard showsTray else { return "Message" }
+        // Files alone go without this reply (see `send()`), so say before Send that the reply needs a caption.
+        if let replyingTo, !model.canReplyWithFilesAlone(to: replyingTo, in: chatID) { return "Add a caption to reply…" }
+        return "Add a caption…"
     }
 
     private var canSend: Bool {

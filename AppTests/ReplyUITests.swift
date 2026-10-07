@@ -83,13 +83,15 @@ final class ReplyUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Photo"].exists, "The strip quotes the photo by kind")
         capture(app, "Replying to a photo")
 
-        // Files alone cannot quote a received message (the body must stay the link): the reply waits for a caption.
+        // Files alone cannot quote a received message (the body must stay the link): the reply waits for a caption,
+        // and the field says so before Send.
         pickRailPhoto(in: app)
+        let input = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
+        XCTAssertEqual(input.placeholderValue, "Add a caption to reply…")
         app.buttons["sendMessage"].tap()
         XCTAssertTrue(app.buttons["removeAttachment"].waitForNonExistence(timeout: 10), "The file is sent")
         XCTAssertTrue(app.buttons["cancelReply"].exists, "The reply stays for a caption")
 
-        let input = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
         input.tap()
         let answer = "Love this view \(UUID().uuidString.prefix(4))"
         input.typeText(answer)
@@ -104,9 +106,13 @@ final class ReplyUITests: XCTestCase {
         ownStart.press(forDuration: 0.05, thenDragTo: ownStart.withOffset(CGVector(dx: 110, dy: 0)))
         XCTAssertTrue(app.buttons["cancelReply"].waitForExistence(timeout: 4))
         pickRailPhoto(in: app)
+        XCTAssertEqual(input.placeholderValue, "Add a caption…", "The file can carry this reply on its own")
         app.buttons["sendMessage"].tap()
         XCTAssertTrue(app.buttons["removeAttachment"].waitForNonExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["cancelReply"].waitForNonExistence(timeout: 4), "The file carried the reply")
+        XCTAssertTrue(app.buttons["cancelReply"].waitForNonExistence(timeout: 4), "The strip clears")
+        // The sent photo has no caption, so the photo itself speaks for the message, quote included.
+        let sentPhoto = timeline.images.matching(NSPredicate(format: "label BEGINSWITH 'You, Photo' AND label CONTAINS[c] %@", "Replying to you: \(answer)")).firstMatch
+        XCTAssertTrue(sentPhoto.waitForExistence(timeout: 5), "The file carried the reply")
         capture(app, "Photo sent as a reply")
     }
 
