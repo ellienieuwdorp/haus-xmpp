@@ -28,6 +28,7 @@ work/push-gateway-venv/bin/python infra/local/create_group_fixture.py work/lab/<
 Start the peer that suite needs from `Packages/OMEMO/Scripts/Interop` with `--credentials work/lab/<suite>/peer.json --state work/lab/<suite>/peer-state.json --ca work/lab/<suite>/ca.crt`, and wait for its ready line. Which peer:
 
 - `peer.py --echo` for Encryption, Outbox, Receipt and Last Seen.
+- `peer.py` without `--echo` for AttachmentSend: echoed photos push the caption off screen, where its state cannot be read.
 - `peer.py --echo --profile modern` for Reaction and the peer half of Revision.
 - `peer.py --echo --typing` for the notification lab, also exporting `TEST_RUNNER_XMPP_NOTIFICATION_ACTION_LAB=1`.
 - `group_peer.py --room <room>` for Group.
