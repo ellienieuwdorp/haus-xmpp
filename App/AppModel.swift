@@ -208,6 +208,8 @@ final class AppModel {
     @ObservationIgnored private var generation = UUID()
     /// The connection (`generation`) in which each room was last rejoined after a bounce (`rejoinAfterBounce`).
     @ObservationIgnored private var bounceRejoins: [String: UUID] = [:]
+    /// Rooms that bounced before setup finished, by connection: rejoined at `.ready` if setup's own join left them out.
+    @ObservationIgnored private var deferredBounceRejoins: [String: UUID] = [:]
     /// `prepare()` runs once; a notification action on a background launch joins it.
     @ObservationIgnored private var preparation: Task<Void, Never>?
     @ObservationIgnored private var backgroundLaunchObserver: (any NSObjectProtocol)?
@@ -1862,6 +1864,7 @@ final class AppModel {
             await refresh()
             guard setupIsCurrent(token) else { return }
             startOutbox()
+            rejoinRoomsThatBouncedDuringSetup(token: token)
             if uploadReconciliation.reconcilesAtReady(stored: uploadService) { await reconcileUploads() }
             if let openChatID { await loadEncryptionDetails(for: openChatID) }
             avatarChecked = []
@@ -1944,16 +1947,34 @@ final class AppModel {
     /// A room that answered one of our stanzas (usually a chat state) as from a non-occupant: the client marked it not
     /// joined, and queued group messages wait for a join. One rejoin per room and connection; its self-presence makes
     /// the room joined again and restarts the outbox. Self-ping and a fuller error policy are MS-089.
+    ///
+    /// Until setup is done its own pass over the known rooms (`rejoinKnownGroups`) joins this one too, and a second
+    /// join beside it would race it (a resumed stream delivers queued bounces right after `.online`). So a bounce
+    /// during setup is only noted, and the room rejoined at `.ready` if it is still not joined then.
     private func rejoinAfterBounce(_ bounce: XMPPMessageError, token: UUID) {
-        let room = bounce.from, account = accountID
-        guard bounce.meansNotInRoom, groupChats[room] != nil, bounceRejoins[room] != token,
-              let client, foreground, !quiescing else { return }
+        let room = bounce.from
+        guard bounce.meansNotInRoom, groupChats[room] != nil, bounceRejoins[room] != token else { return }
+        guard session.isReady else { deferredBounceRejoins[room] = token; return }
+        rejoinBouncedRoom(room, token: token)
+    }
+
+    private func rejoinRoomsThatBouncedDuringSetup(token: UUID) {
+        let rooms = deferredBounceRejoins.filter { $0.value == token }.keys.sorted()
+        deferredBounceRejoins = [:]
+        for room in rooms where groupChats[room]?.joined != true && bounceRejoins[room] != token { rejoinBouncedRoom(room, token: token) }
+    }
+
+    private func rejoinBouncedRoom(_ room: String, token: UUID) {
+        let account = accountID
+        guard generation == token, groupChats[room] != nil, let client, foreground, !quiescing else { return }
         bounceRejoins[room] = token
         let nickname = preferences.string(forKey: "groupNickname.\(account).\(room)") ?? String(account.prefix { $0 != "@" })
         Task { [weak self] in
+            // A disconnect, sign-out or background transition since the bounce: that connection is done with.
+            guard let self, self.generation == token, self.foreground, !self.quiescing else { return }
             do { _ = try await client.joinGroupRoom(room, nickname: nickname) }
             catch {
-                guard let self, self.generation == token else { return }
+                guard self.generation == token else { return }
                 self.groupChats[room]?.issue = self.groupFailure(error)
             }
         }
