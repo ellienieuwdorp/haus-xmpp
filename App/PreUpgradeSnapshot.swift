@@ -17,10 +17,10 @@ import os
 /// restore or a return runs; `restored.json` while the previous version's data is in place; `saved-replies.json`
 /// for notification replies typed before the upgrade. Secrets stay in the Keychain as separate copy items.
 struct PreUpgradeSnapshot: Sendable {
-    /// The newest schema the build this one replaces can open (it refuses anything above 21). A store at or below it
-    /// is copied before migrating; one above it (a migration that stopped part way) holds nothing a previous build
-    /// could read back.
-    static let previousReleaseSchema = 21
+    /// The newest schema the build this one replaces can open: f563365 (the owner's build) refuses anything above 23;
+    /// 045ca73 stops at 21 and opens nothing newer. A store at or below it is copied before migrating, whichever of the
+    /// two left it; one above it (a migration that stopped part way) holds nothing a previous build could read back.
+    static let previousReleaseSchema = 23
     /// After this long Settings suggests deleting the backup. Nothing is ever deleted on a clock reading: the wall
     /// clock can jump, and no monotonic clock survives a restart.
     static let suggestedLifetime: TimeInterval = 14 * 24 * 60 * 60
