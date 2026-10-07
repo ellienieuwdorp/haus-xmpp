@@ -1017,7 +1017,10 @@ private final class FormatChipRow: UIView {
         return column
     }
 
-    /// Each chip springs from half size, a third of the duration after the one before it.
+    /// Each chip springs from half size, a third of the duration after the one before it. The chips hide at once,
+    /// so the panel never shows them at full size, but the spring starts on the next turn of the run loop: started
+    /// while UIKit presents the panel, it put about 7 ms (Release, simulator) between the "+" and the start of the
+    /// panel's slide, on every open.
     func animateIn() {
         let reduceMotion = UIAccessibility.isReduceMotionEnabled
         for item in items {
@@ -1033,6 +1036,6 @@ private final class FormatChipRow: UIView {
                 item.transform = .identity
             }, delayFactor: reduceMotion ? 0 : CGFloat(index) / CGFloat(items.count))
         }
-        animator.startAnimation()
+        DispatchQueue.main.async { animator.startAnimation() }
     }
 }
