@@ -11,11 +11,14 @@ import os
 /// that copy holds the encryption sessions contacts used since; coming back offers to return to it.
 /// docs/development/pre-upgrade-snapshot.md has the inventory, the choices and the reasons.
 ///
-/// Layout, in the App Group container beside `Messaging/`: `PreUpgrade/snapshot/` (the previous version's data) and
-/// `PreUpgrade/post-upgrade/` (this version's data as it was at a restore), each complete once its `snapshot.json` is
-/// written and the folder renamed from `<name>.partial/`; `restore-journal.json` and `return-journal.json` while a
-/// restore or a return runs; `restored.json` while the previous version's data is in place; `saved-replies.json`
-/// for notification replies typed before the upgrade. Secrets stay in the Keychain as separate copy items.
+/// Layout, in the App Group container beside `Messaging/`, in this build's generation folder `PreUpgrade-<schema>/`
+/// (`PreUpgradeHold`): `snapshot/` (the previous version's data) and `post-upgrade/` (this version's data as it was at
+/// a restore), each complete once its `snapshot.json` is written and the folder renamed from `<name>.partial/`;
+/// `restore-journal.json` and `return-journal.json` while a restore or a return runs; `restored.json` while the
+/// previous version's data is in place; `saved-replies.json` for notification replies typed before the upgrade.
+/// Secrets stay in the Keychain as separate copy items, under a service named for the same generation. Builds up to
+/// f563365 have this code too, under the unnumbered names: they never see a newer generation's backups, and this build
+/// takes theirs over when it opens (`adoptOlderGeneration`).
 struct PreUpgradeSnapshot: Sendable {
     /// The newest schema the build this one replaces can open: f563365 (the owner's build) refuses anything above 23;
     /// 045ca73 stops at 21 and opens nothing newer. A store at or below it is copied before migrating, whichever of the
@@ -51,7 +54,18 @@ struct PreUpgradeSnapshot: Sendable {
         let accountService: String
         let accountKey: String
         let pushService: String
-        let snapshotService: String
+        /// The snapshot service's name without a generation, where builds up to f563365 keep their copies.
+        let unnumberedSnapshotService: String
+
+        init(accountService: String, accountKey: String, pushService: String, snapshotService: String) {
+            self.accountService = accountService; self.accountKey = accountKey; self.pushService = pushService
+            unnumberedSnapshotService = snapshotService
+        }
+
+        /// The service holding one generation's copies; nil is the unnumbered one.
+        func snapshotService(generation: Int?) -> String { generation.map { "\(unnumberedSnapshotService).\($0)" } ?? unnumberedSnapshotService }
+        /// This build's.
+        var snapshotService: String { snapshotService(generation: PreUpgradeHold.generation) }
 
         static let production = KeychainNames(accountService: "haus.xmpp.notification-account", accountKey: "primary",
                                               pushService: PushRegistrationState.service, snapshotService: "haus.xmpp.pre-upgrade-snapshot")
@@ -71,6 +85,7 @@ struct PreUpgradeSnapshot: Sendable {
 
         var database: URL { messaging.appending(path: "messages.sqlite") }
         var directory: URL { PreUpgradeHold.directory(groupRoot: groupRoot) }
+        func directory(generation: Int?) -> URL { PreUpgradeHold.directory(groupRoot: groupRoot, generation: generation) }
         func folder(_ copy: Copy) -> URL { directory.appending(path: copy.rawValue, directoryHint: .isDirectory) }
         func partial(_ copy: Copy) -> URL { directory.appending(path: copy.rawValue + ".partial", directoryHint: .isDirectory) }
         /// A complete copy moved aside while its replacement is renamed into place.
@@ -121,9 +136,12 @@ struct PreUpgradeSnapshot: Sendable {
         let restoredAt: Date
         let takenAt: Date
         let installation: String
-        /// SHA-256 of the database file as restored. Any build that opens it switches it to write-ahead logging, so
-        /// a different digest (or a sidecar) means an older build used it since.
+        /// SHA-256 of the database file as restored: a different digest (or a sidecar) means an older build used it
+        /// since.
         var database: String?
+        /// Put back in write-ahead-log mode, as every build keeps its live store (every restore by this build). Nil:
+        /// restored by an older build, in rollback-journal mode, which 045ca73 switched to write-ahead logging on open.
+        var writeAheadLog: Bool?
     }
 
     /// Where a launch finds the restored data.
@@ -185,6 +203,7 @@ struct PreUpgradeSnapshot: Sendable {
     /// had the previous build's preference, folder and push spellings rewritten (`adopt`).
     func open(upgradeAllowed: Bool, withoutSnapshot: Bool = false, now: Date) async throws -> Opening {
         let files = FileManager.default
+        adoptOlderGeneration()
         tidy()
         if files.fileExists(atPath: locations.journal.path) { return try await finishRestore(now: now) }
         if files.fileExists(atPath: locations.returnJournal.path) {
@@ -227,6 +246,35 @@ struct PreUpgradeSnapshot: Sendable {
         } catch { try? await store.close(); throw error }
         adopt()
         return .ready(store)
+    }
+
+    /// Moves an older build's backups (its generation folder and Keychain copies) to this build's names, so that an
+    /// older build installed after a restore finds nothing of this build's, and drops the Keychain copies of any older
+    /// generation whose folder is gone. Only when this build has no folder of its own yet: one that has (an older build
+    /// ran after this one and made its own backup) is left to Delete backup. Every step can run again after a crash:
+    /// the copies are written before the folder moves, and the old ones are deleted only once it has. A Keychain that
+    /// cannot be read leaves everything in place for the next launch.
+    private func adoptOlderGeneration() {
+        let files = FileManager.default, keychain = locations.keychain
+        if !files.fileExists(atPath: locations.directory.path),
+           let older = PreUpgradeHold.olderGenerations.first(where: { files.fileExists(atPath: locations.directory(generation: $0).path) }) {
+            let service = keychain.snapshotService(generation: older)
+            do {
+                for key in try Self.keychainAccounts(service: service) {
+                    guard let data = try Self.keychainData(service: service, account: key) else { continue }
+                    try Self.keychainSet(service: keychain.snapshotService, account: key, data: data)
+                }
+                try files.moveItem(at: locations.directory(generation: older), to: locations.directory)
+                Self.log.notice("moved the backups of generation \(older.map(String.init) ?? "unnumbered", privacy: .public) to \(PreUpgradeHold.generation, privacy: .public)")
+            } catch {
+                Self.log.error("could not move older backups: \(String(describing: error), privacy: .public)")
+                return
+            }
+        }
+        for older in PreUpgradeHold.olderGenerations where !files.fileExists(atPath: locations.directory(generation: older).path) {
+            let service = keychain.snapshotService(generation: older)
+            for key in (try? Self.keychainAccounts(service: service)) ?? [] { try? Self.keychainDelete(service: service, account: key) }
+        }
     }
 
     /// Rewrites the previous build's account spellings outside the store (preference keys, the attachment and avatar
@@ -351,6 +399,7 @@ struct PreUpgradeSnapshot: Sendable {
         try putBack(manifest, captured, from: .previousVersion)
         var marked = restored
         marked.database = try Self.digest(locations.database)
+        marked.writeAheadLog = true
         try JSONEncoder().encode(marked).write(to: locations.restored, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         try Self.removeIfPresent(locations.journal)
         return marked
@@ -372,17 +421,20 @@ struct PreUpgradeSnapshot: Sendable {
                              rolledBack: rolledBack, sentOnPreviousVersion: sent)
     }
 
-    /// True once an older build opened the restored database. The restored file is a rollback-journal copy; the
-    /// previous build (and its notification extension) switches every store it opens to write-ahead logging, which
-    /// rewrites the header and leaves `-wal`/`-shm` beside it. Reinstalling this build changes none of that, so a
-    /// reinstall still finds the data untouched. When it cannot tell, it answers true: the choices then keep the
-    /// data the previous build may have written as the new backup.
+    /// True once an older build opened the restored database. The restored file is put back in write-ahead-log mode
+    /// with no sidecars and its digest recorded. An older build (app or extension) that opens it leaves `-wal`/`-shm`
+    /// beside it (the system SQLite keeps them after closing), and anything it writes changes the file or the WAL.
+    /// f563365 opens a store at its own schema as it is, so the journal mode alone cannot tell. Reinstalling this
+    /// build changes none of that, so a reinstall still finds the data untouched. A restore an older build made was
+    /// in rollback-journal mode, which 045ca73 switched on open; its header is checked too. When it cannot tell, it
+    /// answers true: the choices then keep the data the previous build may have written as the new backup.
     func previousVersionRan(_ restored: Restored) -> Bool {
         let files = FileManager.default, path = locations.database.path
         if ["-wal", "-shm", "-journal"].contains(where: { files.fileExists(atPath: path + $0) }) { return true }
         guard let handle = FileHandle(forReadingAtPath: path) else { return true }
         defer { try? handle.close() }
-        guard let header = try? handle.read(upToCount: 20), header.count == 20, header[18] == 1, header[19] == 1 else { return true }
+        let mode: UInt8 = restored.writeAheadLog == true ? 2 : 1
+        guard let header = try? handle.read(upToCount: 20), header.count == 20, header[18] == mode, header[19] == mode else { return true }
         guard let expected = restored.database else { return false }
         guard let digest = try? Self.digest(locations.database) else { return true }
         return digest != expected
@@ -506,8 +558,9 @@ struct PreUpgradeSnapshot: Sendable {
     }
 
     /// Runs with SQLite closed and the lease held. The database is replaced by one rename, after the sidecars of the
-    /// file it replaces are gone; the folders, the tombstone, the Keychain records and the preferences follow. A copy
-    /// at the current schema goes back to write-ahead logging, as the live store always is.
+    /// file it replaces are gone; the folders, the tombstone, the Keychain records and the preferences follow. Every
+    /// copy goes back in write-ahead-log mode, as each build keeps its live store: f563365 and this build open a store
+    /// at their own schema as it is, so a copy left in the snapshot's rollback-journal mode would stay in it.
     private func putBack(_ manifest: Manifest, _ captured: Captured, from copy: Copy) throws {
         let files = FileManager.default
         let source = locations.folder(copy)
@@ -516,7 +569,7 @@ struct PreUpgradeSnapshot: Sendable {
         for suffix in ["", "-wal", "-shm"] { try Self.removeIfPresent(URL(filePath: staged.path + suffix)) }
         try files.copyItem(at: source.appending(path: "messages.sqlite"), to: staged)
         try Self.protect(staged)
-        if manifest.database.schemaVersion == MessageStore.currentSchemaVersion { try MessageStore.useWriteAheadLog(at: staged) }
+        try MessageStore.useWriteAheadLog(at: staged)
         for suffix in ["-wal", "-shm", "-journal"] { try Self.removeIfPresent(URL(filePath: database.path + suffix)) }
         guard Darwin.rename(staged.path, database.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
         for suffix in ["-wal", "-shm"] { try Self.removeIfPresent(URL(filePath: staged.path + suffix)) }
@@ -563,14 +616,17 @@ struct PreUpgradeSnapshot: Sendable {
     // MARK: Deleting
 
     /// Settings' "Delete backup": both copies, whatever state they are in, every Keychain copy, and replies saved
-    /// before the upgrade that were never queued.
+    /// before the upgrade that were never queued; also any older build's backup folder and Keychain copies left beside
+    /// this build's (`adoptOlderGeneration`).
     func delete() throws {
         for copy in Copy.allCases {
             for folder in [locations.folder(copy), locations.partial(copy), locations.replaced(copy)] { try Self.removeIfPresent(folder) }
         }
         try Self.removeIfPresent(locations.savedReplies)
-        for key in try Self.keychainAccounts(service: locations.keychain.snapshotService) {
-            try Self.keychainDelete(service: locations.keychain.snapshotService, account: key)
+        for older in PreUpgradeHold.olderGenerations { try Self.removeIfPresent(locations.directory(generation: older)) }
+        for generation in ([PreUpgradeHold.generation] as [Int?]) + PreUpgradeHold.olderGenerations {
+            let service = locations.keychain.snapshotService(generation: generation)
+            for key in try Self.keychainAccounts(service: service) { try Self.keychainDelete(service: service, account: key) }
         }
     }
 

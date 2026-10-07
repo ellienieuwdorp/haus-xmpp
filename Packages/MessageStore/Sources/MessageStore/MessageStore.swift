@@ -528,7 +528,8 @@ public actor MessageStore {
             guard stepped == SQLITE_DONE else { throw copy.error(stepped) }
             guard finished == SQLITE_OK else { throw copy.error(finished) }
             // At rest the copy is one self-contained file in rollback-journal mode, so reading or verifying it leaves
-            // no WAL sidecars that could be mistaken for part of it. Every build switches it back to WAL when it opens.
+            // no WAL sidecars that could be mistaken for part of it. Putting it back switches it to WAL
+            // (`useWriteAheadLog`): a build opening a store at its own schema leaves the journal mode as it is.
             guard try copy.query("PRAGMA journal_mode = DELETE").first?.first?.optionalString == "delete" else {
                 throw MessageStoreError.snapshotMismatch("journal mode")
             }
@@ -562,7 +563,8 @@ public actor MessageStore {
     public var holdsTransportOwnership: Bool { transportOwnership.isHeld }
 
     /// Switches a database file nobody has open to write-ahead logging, as every build keeps its live store. A copy put
-    /// back at the current schema (which opening does not migrate) would otherwise stay in rollback-journal mode.
+    /// back at the schema of the build that opens it (which then does not migrate it) would otherwise stay in
+    /// rollback-journal mode.
     public static func useWriteAheadLog(at url: URL) throws {
         let file = try Connection(url: url, create: false)
         defer { try? file.close() }
