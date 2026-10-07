@@ -75,9 +75,14 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(memory.load(account: account), service, "a relaunch restores it")
         XCTAssertNil(memory.load(account: "bob@example.org"), "per account")
 
-        current = memory.settle(account: account, previous: current, discovery: .failure(XMPPClientError.connectionClosed))
+        XCTAssertTrue(memory.isFresh(account: account))
+        XCTAssertFalse(memory.isFresh(account: account, now: .now.addingTimeInterval(UploadServiceMemory.lifetime + 1)))
+        current = memory.settle(account: account, previous: current, discovery: .failure(XMPPClientError.connectionClosed),
+                                now: .now.addingTimeInterval(UploadServiceMemory.lifetime + 1))
         XCTAssertEqual(current, service, "a thrown discovery keeps the last answer")
         XCTAssertEqual(memory.load(account: account), service)
+        XCTAssertFalse(memory.isFresh(account: account, now: .now.addingTimeInterval(UploadServiceMemory.lifetime + 1)),
+                       "and does not count as a fresh one")
 
         current = memory.settle(account: account, previous: current, discovery: .success(nil))
         XCTAssertNil(current, "a completed answer without uploads is definitive")
@@ -87,6 +92,36 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(memory.load(account: account)?.maximumFileSize, nil)
         memory.forget(account: account)
         XCTAssertNil(memory.load(account: account), "sign-out clears it")
+        XCTAssertFalse(memory.isFresh(account: account))
+    }
+
+    /// Discovery can end after `.ready`. Stranded uploads fail as "no longer offered" only against a known answer, and
+    /// with nothing stored the answer that comes after `.ready` must settle them, or they hold their chats.
+    func testStrandedUploadsWaitForAKnownAnswerAndAreSettledByIt() {
+        let service = XMPPUploadService(jid: "upload.example.org", maximumFileSize: nil)
+        let timedOut: Result<XMPPUploadService?, any Error> = .failure(XMPPClientError.timedOut)
+
+        var gate = UploadReconciliation()
+        gate.setupStarted(discovers: true)
+        XCTAssertTrue(gate.reconcilesAtReady(stored: service), "a stored service is a known answer")
+        XCTAssertFalse(gate.reconcilesAtReady(stored: nil), "a stale \"none\" fails nothing")
+        XCTAssertFalse(gate.discoverySettled(timedOut, previous: nil, ready: false))
+        XCTAssertFalse(gate.reconcilesAtReady(stored: nil), "a discovery that threw before `.ready` is not an answer")
+        XCTAssertFalse(gate.discoverySettled(timedOut, previous: nil, ready: true))
+
+        gate.setupStarted(discovers: true)
+        XCTAssertFalse(gate.discoverySettled(.success(nil), previous: nil, ready: false), "not ready yet")
+        XCTAssertTrue(gate.reconcilesAtReady(stored: nil), "this connection answered \"none\" before `.ready`")
+
+        let afterReady: [(XMPPUploadService?, XMPPUploadService?, Bool)] = [(nil, nil, true), (nil, service, true), (service, nil, true), (service, service, false)]
+        for (previous, found, settles) in afterReady {
+            gate.setupStarted(discovers: true)
+            XCTAssertEqual(gate.discoverySettled(.success(found), previous: previous, ready: true), settles,
+                           "after `.ready`: stored \(String(describing: previous)), found \(String(describing: found))")
+        }
+
+        gate.setupStarted(discovers: false)
+        XCTAssertTrue(gate.reconcilesAtReady(stored: nil), "a resume trusting a fresh stored \"none\"")
     }
 
     func testRetainedCiphertextForcesReviewOnlyForThatChat() {

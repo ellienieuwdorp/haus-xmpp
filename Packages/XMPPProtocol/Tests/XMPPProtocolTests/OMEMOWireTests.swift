@@ -121,6 +121,9 @@ private func bundle(_ profile: XMPPOMEMOProfile) -> XMPPOMEMOBundle {
     let xml = "<iq from='b@example.test' type='error'><error type='cancel'><item-not-found xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></iq>"
     #expect(throws: XMPPIQError.stanza(condition: "item-not-found")) { try IQReplyScope.result(omemoNode(xml)) }
     #expect(throws: XMPPIQError.malformedResponse) { try IQReplyScope.result(omemoNode(xml.replacingOccurrences(of: "urn:ietf:params:xml:ns:xmpp-stanzas", with: "urn:wrong"))) }
+    // A server that adds a second condition still refused: the first one is the answer, not a malformed reply.
+    let doubled = xml.replacingOccurrences(of: "</error>", with: "<undefined-condition xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error>")
+    #expect(throws: XMPPIQError.stanza(condition: "item-not-found")) { try IQReplyScope.result(omemoNode(doubled)) }
 }
 
 @Test func trustedCarbonsPreserveDirectionAndRejectForgedOrNestedWrappers() throws {

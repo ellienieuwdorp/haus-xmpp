@@ -186,16 +186,50 @@ private struct PickedMovie: Transferable {
 // ponytail: counts live in memory, so each launch gives a stuck file `limit` fresh tries; persist them if that matters.
 struct UploadFailureBudget {
     static let limit = 3
+    /// How long a refused file waits before its next try, so a pass that runs meanwhile does not use the tries up.
+    static let backOff: Duration = .seconds(5)
     private var failures: [String: Int] = [:]
+    private var waitUntil: [String: ContinuousClock.Instant] = [:]
 
     /// True when this failure used the file's last try.
-    mutating func recordFailure(_ messageID: String) -> Bool {
+    mutating func recordFailure(_ messageID: String, at now: ContinuousClock.Instant = .now) -> Bool {
         let count = failures[messageID, default: 0] + 1
         failures[messageID] = count < Self.limit ? count : nil
+        waitUntil[messageID] = count < Self.limit ? now + Self.backOff : nil
         return count >= Self.limit
     }
 
-    mutating func reset(_ messageID: String) { failures[messageID] = nil }
+    /// True while a refused file is inside its back-off.
+    func isWaiting(_ messageID: String, at now: ContinuousClock.Instant = .now) -> Bool {
+        waitUntil[messageID].map { now < $0 } ?? false
+    }
+
+    mutating func reset(_ messageID: String) { failures[messageID] = nil; waitUntil[messageID] = nil }
+}
+
+/// One pass at a time over work that each pass reads once when it starts. A request made while a pass runs is kept
+/// and another pass starts when it ends, so work queued meanwhile (the next file of a multi-file send) is not left
+/// waiting for some later event to start a pass.
+@MainActor final class RerunningPass {
+    private var requested = false
+    private var running = false
+    /// Returns the pass to run, or nil when it cannot run now; the request is then kept until the next one.
+    private let makePass: @MainActor () -> (@MainActor () async -> Void)?
+
+    init(_ makePass: @escaping @MainActor () -> (@MainActor () async -> Void)?) { self.makePass = makePass }
+
+    func request() {
+        requested = true
+        guard !running, let pass = makePass() else { return }
+        requested = false
+        running = true
+        Task { [weak self] in
+            await pass()
+            guard let self else { return }
+            self.running = false
+            if self.requested { self.request() }
+        }
+    }
 }
 
 /// Background PUTs: the ciphertext file is handed to the system so a suspended app still finishes.
@@ -231,28 +265,6 @@ final class AttachmentUploader: NSObject, URLSessionTaskDelegate, @unchecked Sen
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
         let status = (task.response as? HTTPURLResponse)?.statusCode ?? 0
         onFinish(task.taskIdentifier, error == nil && (200...299).contains(status))
-    }
-}
-
-/// Fetches a shared file and authenticates it. TLS trust is the system store's (the simulator
-/// carries the lab CA); nothing here relaxes it.
-enum AttachmentDownloader {
-    private static let session = URLSession(configuration: .ephemeral)
-
-    static func fetch(_ attachment: StoredAttachment, secret: (key: Data, iv: Data)?) async throws -> Data {
-        guard let remote = attachment.url, let url = URL(string: remote), url.scheme == "https" else { throw AttachmentTransfer.Failure.unencrypted }
-        let (file, response) = try await session.download(from: url)
-        defer { try? FileManager.default.removeItem(at: file) }
-        guard (response as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) ?? false else { throw URLError(.badServerResponse) }
-        guard let size = try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int, size <= AttachmentTransfer.maximumBytes + 16 else { throw AttachmentTransfer.Failure.tooLarge }
-        let bytes = try Data(contentsOf: file)
-        guard let secret else {
-            // An unencrypted source still has to match the hash the authenticated message promised.
-            if let expected = Data(hex: attachment.hash), !expected.isEmpty, Data.sha256(bytes) != expected { throw AttachmentTransfer.Failure.plainHashMismatch }
-            return bytes
-        }
-        return try AttachmentTransfer.open(bytes, key: secret.key, iv: secret.iv,
-                                           expectedCipherHash: attachment.cipherHash.flatMap { Data(hex: $0) }, expectedPlainHash: Data(hex: attachment.hash))
     }
 }
 

@@ -72,7 +72,7 @@ import XMPPProtocol
                     return
                 }
             case .avatarMetadata(let owner, let metadata): print("AVATAR \(owner) \(metadata?.id ?? "removed")")
-            case .encryptedMessage, .omemoDevices, .encryptionFailure, .streamAcknowledged: break
+            case .encryptedMessage, .omemoDevices, .encryptionFailure, .messageError, .streamAcknowledged: break
             case .state, .encryptedGroupMessage, .groupPresence, .reaction, .retraction, .receipt, .chatState, .contactPresence, .subscription, .rosterItems, .displayedSync: break
             case .message(let message):
                 if let expected = env["HAUS_LAB_EXPECT_BODY"], message.body != expected { throw XMPPClientError.unexpectedProtocol }
@@ -298,7 +298,7 @@ import XMPPProtocol
                                                  reply: XMPPReply(id: sourceID, to: message.from, body: source))
             case .state(.disconnected): throw XMPPClientError.connectionClosed
             case .avatarMetadata(let owner, let metadata): print("AVATAR \(owner) \(metadata?.id ?? "removed")")
-            case .encryptedMessage, .omemoDevices, .encryptionFailure, .streamAcknowledged: break
+            case .encryptedMessage, .omemoDevices, .encryptionFailure, .messageError, .streamAcknowledged: break
             case .state, .encryptedGroupMessage, .groupPresence, .reaction, .retraction, .receipt, .chatState, .contactPresence, .subscription, .rosterItems, .displayedSync: break
             }
         }

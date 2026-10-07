@@ -52,6 +52,9 @@ public struct XMPPEncryptedGroupMessage: Sendable, Equatable, Codable {
     public let roomStanzaID: String?
     /// Unencrypted outer `<body/>` fallback: a content hint only (see `XMPPEncryptedMessage.hasFallbackBody`).
     public let hasFallbackBody: Bool
+    /// A live stanza our own server held for this session (see `XMPPEncryptedMessage.serverStamp`). Not encoded:
+    /// a retained envelope keeps its time beside it.
+    public var serverStamp: Date? = nil
     public init(id: String, room: String, occupant: String, sender: String, envelope: XMPPOMEMOEnvelope, provenance: XMPPGroupProvenance = .liveOccupant, roomStanzaID: String? = nil,
                 hasFallbackBody: Bool = false) throws {
         guard OMEMOWire.validStanzaID(id), roomStanzaID.map(OMEMOWire.validStanzaID) ?? true, OMEMOWire.bareJID(room) == room,

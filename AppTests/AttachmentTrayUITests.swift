@@ -12,6 +12,28 @@ extension XCUIApplication {
         while Date() < deadline, !allow.exists, !railPhoto.exists { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1)) }
         if allow.exists { allow.tap() }
     }
+
+    /// Picks the first `count` library photos through the system picker, opened from the attachment panel's Photos
+    /// chip, and waits until each has landed in the tray.
+    @MainActor func pickPhotos(_ count: Int) {
+        let attach = buttons["attachFile"]
+        XCTAssertTrue(attach.waitForExistence(timeout: 5))
+        attach.tap()
+        allowPhotoAccessIfAsked()
+        let photos = buttons["attachPhotos"]
+        XCTAssertTrue(photos.waitForExistence(timeout: 5), "The attachment panel's Photos chip")
+        photos.tap()
+        let grid = images.matching(identifier: "PXGGridLayout-Info")
+        XCTAssertTrue(grid.firstMatch.waitForExistence(timeout: 10), "The simulator's stock photos")
+        // The picker runs out of process: its elements are visible but report not hittable, so tap their centres.
+        let centre = CGVector(dx: 0.5, dy: 0.5)
+        for index in 0..<count { grid.element(boundBy: index).coordinate(withNormalizedOffset: centre).tap() }
+        buttons["Done"].coordinate(withNormalizedOffset: centre).tap()
+        let removes = buttons.matching(identifier: "removeAttachment")
+        let filled = NSPredicate { _, _ in removes.count == count }
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: filled, object: nil)], timeout: 15), .completed,
+                       "\(count) photos in the tray")
+    }
 }
 
 /// Sample chats accept files locally (nothing is uploaded), so the tray runs without the lab. Photos come from the
@@ -32,30 +54,11 @@ final class AttachmentTrayUITests: XCTestCase {
         return field.exists ? field : app.textViews["messageComposer"]
     }
 
-    @MainActor private func pickPhotos(_ count: Int, in app: XCUIApplication) {
-        let attach = app.buttons["attachFile"]
-        XCTAssertTrue(attach.waitForExistence(timeout: 5))
-        attach.tap()
-        app.allowPhotoAccessIfAsked()
-        let photos = app.buttons["attachPhotos"]
-        XCTAssertTrue(photos.waitForExistence(timeout: 5), "The attachment panel's Photos chip")
-        photos.tap()
-        let grid = app.images.matching(identifier: "PXGGridLayout-Info")
-        XCTAssertTrue(grid.firstMatch.waitForExistence(timeout: 10), "The simulator's stock photos")
-        // The picker runs out of process: its elements are visible but report not hittable, so tap their centres.
-        let centre = CGVector(dx: 0.5, dy: 0.5)
-        for index in 0..<count { grid.element(boundBy: index).coordinate(withNormalizedOffset: centre).tap() }
-        app.buttons["Done"].coordinate(withNormalizedOffset: centre).tap()
-        let removes = app.buttons.matching(identifier: "removeAttachment")
-        let filled = NSPredicate { _, _ in removes.count == count }
-        wait(for: [XCTNSPredicateExpectation(predicate: filled, object: nil)], timeout: 15)
-    }
-
     /// Two photos and a caption become three messages: each photo on its own, the caption last and on its own.
     @MainActor func testTwoPhotosAndACaptionSendThreeMessagesCaptionLast() throws {
         let app = openAlex()
         XCTAssertTrue(app.collectionViews["conversation.timeline"].waitForExistence(timeout: 5))
-        pickPhotos(2, in: app)
+        app.pickPhotos(2)
         let input = composer(in: app)
         input.tap()
         let caption = "Tray caption \(UUID().uuidString.prefix(6))"

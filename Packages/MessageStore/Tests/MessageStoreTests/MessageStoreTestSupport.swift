@@ -43,10 +43,11 @@ func sqliteExecute(url: URL, sql: String) -> Bool {
     return sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK
 }
 
-/// Writes the store the 045ca73 build (schema 21, the build this one replaces) left: its own schema and three synthetic
-/// messages of `Ellie@Example.org` with `bob@example.org`, in write-ahead-log mode as that build always keeps it.
-func writePreviousReleaseStore(at url: URL) throws {
-    let fixture = try #require(Bundle.module.url(forResource: "schema-21", withExtension: "sql", subdirectory: "Fixtures"))
+/// Writes a store a previous build left, from its real dump: schema 21 is the 045ca73 build's (three synthetic messages
+/// of `Ellie@Example.org`, as typed, with `bob@example.org`), schema 23 the f563365 build's (the same three, already
+/// `ellie@example.org`, plus a group message). In write-ahead-log mode, as both builds keep it.
+func writePreviousReleaseStore(at url: URL, schema: Int = 21) throws {
+    let fixture = try #require(Bundle.module.url(forResource: "schema-\(schema)", withExtension: "sql", subdirectory: "Fixtures"))
     #expect(sqliteExecute(url: url, sql: try String(contentsOf: fixture, encoding: .utf8) + "PRAGMA journal_mode=WAL;"))
-    #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["21"]])
+    #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["\(schema)"]])
 }
