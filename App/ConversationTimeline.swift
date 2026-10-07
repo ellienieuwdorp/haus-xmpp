@@ -357,7 +357,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         collectionView.register(MessageBubbleCell.self, forCellWithReuseIdentifier: "message")
         collectionView.register(TypingIndicatorCell.self, forCellWithReuseIdentifier: "typing")
         collectionView.register(LoadingEarlierCell.self, forCellWithReuseIdentifier: "loadingEarlier")
-        collectionView.addGestureRecognizer(TouchGate(down: { [weak self] point in self?.reserveSwipe(forBubbleAt: point) }, up: { [weak self] in self?.releaseSwipe() }))
+        collectionView.addGestureRecognizer(TouchGate(down: { [weak self] point in self?.reserveSwipe(at: point) }, up: { [weak self] in self?.releaseSwipe() }))
         let container = UIView()
         container.backgroundColor = .systemBackground
         collectionView.frame = container.bounds
@@ -599,14 +599,14 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         }
     }
 
-    /// A rightward swipe that starts on a bubble is a reply; anywhere else it is the system's swipe back. The system
-    /// recognizer takes no failure requirement from ours (each ends up waiting for the other), so it is switched off
-    /// for the length of a touch that starts on a bubble.
+    /// A rightward swipe that starts on a message row is a reply; at the leading edge, on a day header or where there is
+    /// no message it is the system's swipe back. The system recognizer takes no failure requirement from ours (each ends
+    /// up waiting for the other), so it is switched off for the length of a touch that starts where a reply can.
     private weak var reservedPopGesture: UIGestureRecognizer?
 
-    private func reserveSwipe(forBubbleAt point: CGPoint) {
+    private func reserveSwipe(at point: CGPoint) {
         guard let path = collectionView.indexPathForItem(at: point), let cell = collectionView.cellForItem(at: path) as? MessageBubbleCell,
-              cell.bubbleContains(collectionView.convert(point, to: cell)),
+              cell.ownsReplySwipe(at: collectionView.convert(point, to: cell)),
               let gesture = navigationController?.interactiveContentPopGestureRecognizer, gesture.isEnabled else { return }
         gesture.isEnabled = false
         reservedPopGesture = gesture
@@ -1004,6 +1004,13 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private static let squeezeDuration: TimeInterval = 0.2
     private static let squeezedScale: CGFloat = 0.95
     private var swipeReplyAction: (() -> Void)?
+    private let press = UILongPressGestureRecognizer()
+    private let replyPan = UIPanGestureRecognizer()
+    /// Where the reply pan's touch went down, in the cell's coordinates: the row region and the edge are judged from
+    /// there, not from where the finger is once the pan has moved far enough to begin.
+    private var replyTouchStart: CGPoint?
+    /// The leading strip left to the system's edge swipe back.
+    private static let backEdgeWidth: CGFloat = 24
     private var crossedReplyThreshold = false
     private let replyFeedback = UIImpactFeedbackGenerator(style: .light)
     private let dateLabel = UILabel()
@@ -1059,14 +1066,16 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             replyIndicator.widthAnchor.constraint(equalToConstant: 24),
             replyIndicator.heightAnchor.constraint(equalToConstant: 24)
         ])
-        let press = UILongPressGestureRecognizer(target: self, action: #selector(handlePress(_:)))
+        press.addTarget(self, action: #selector(handlePress(_:)))
         press.minimumPressDuration = Self.pressDelay
         press.delegate = self
         bubble.addGestureRecognizer(press)
-        let replyPan = UIPanGestureRecognizer(target: self, action: #selector(handleReplyPan(_:)))
+        // The whole row starts a reply, not just the bubble: a short sent message hugs the trailing edge and would
+        // leave almost no room to travel. The bubble is still what moves.
+        replyPan.addTarget(self, action: #selector(handleReplyPan(_:)))
         replyPan.maximumNumberOfTouches = 1
         replyPan.delegate = self
-        bubble.addGestureRecognizer(replyPan)
+        contentView.addGestureRecognizer(replyPan)
         dateLabel.translatesAutoresizingMaskIntoConstraints = false
         dateLabel.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(for: .systemFont(ofSize: 12, weight: .semibold))
         dateLabel.adjustsFontForContentSizeCategory = true
@@ -1495,11 +1504,24 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     /// `point` is in the cell's coordinates.
     func bubbleContains(_ point: CGPoint) -> Bool { messageID != nil && bubblePath(in: bubble.bounds).contains(convert(point, to: bubble)) }
 
+    /// Whether a touch going down at `point` (cell coordinates) belongs to this message's reply swipe: anywhere on the
+    /// row, full width, below its day header and clear of the leading edge.
+    func ownsReplySwipe(at point: CGPoint) -> Bool {
+        guard messageID != nil, bounds.contains(point), convert(point, to: nil).x > Self.backEdgeWidth else { return false }
+        return dateLabel.isHidden || point.y >= contentView.convert(dateLabel.frame, to: self).maxY
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if gestureRecognizer === replyPan, replyPan.state == .possible { replyTouchStart = touch.location(in: self) }
+        return true
+    }
+
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard !isSelectingText, bubbleContains(gestureRecognizer.location(in: self)) else { return false }
-        guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
-        let velocity = pan.velocity(in: contentView)
-        return pan.location(in: window).x > 24 && velocity.x > 0 && velocity.x > abs(velocity.y) * 1.5
+        if gestureRecognizer === press { return !isSelectingText && bubbleContains(press.location(in: self)) }
+        guard gestureRecognizer === replyPan else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
+        guard !isSelectingText, let start = replyTouchStart, ownsReplySwipe(at: start) else { return false }
+        let velocity = replyPan.velocity(in: contentView)
+        return velocity.x > 0 && velocity.x > abs(velocity.y) * 1.5
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRequireFailureOf otherGestureRecognizer: UIGestureRecognizer) -> Bool {
