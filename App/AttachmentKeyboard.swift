@@ -638,8 +638,6 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         collection.delegate = self
         collection.register(RecentPhotoCell.self, forCellWithReuseIdentifier: "photo")
         collection.accessibilityIdentifier = "recentPhotos"
-        collection.frame = bounds
-        collection.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         addSubview(collection)
     }
 
@@ -648,17 +646,22 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
     override func layoutSubviews() {
         super.layoutSubviews()
         let height = bounds.height
-        guard height > 0 else { return }
+        guard height > 0 else { collection.frame = bounds; return }
         // Two rows only once the rail is tall enough (iPad); a phone keeps one row of full-height squares.
         let side = height > 250 ? floor((height - 12) / 2) : height
         let inset: CGFloat = bounds.width >= 430 ? 20 : 16
-        if abs(side - itemSide) > 0.5 || layout.sectionInset.left != inset {
+        let resized = abs(side - itemSide) > 0.5 || layout.sectionInset.left != inset
+        if resized {
             itemSide = side
             layout.itemSize = CGSize(width: side, height: side)
             layout.sectionInset = UIEdgeInsets(top: 0, left: inset, bottom: 0, right: inset)
             layout.invalidateLayout()
-            collection.reloadData()
         }
+        // The tiles take their size before the collection takes the rail's: the other way round (autoresizing), a
+        // rail shortened by the limited-access row briefly held tiles taller than itself and UIKit logged an
+        // invalid flow layout size.
+        if collection.frame != bounds { collection.frame = bounds }
+        if resized { collection.reloadData() }
     }
 
     /// Asked for on first open only, never at launch.
