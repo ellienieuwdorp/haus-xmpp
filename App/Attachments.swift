@@ -186,16 +186,50 @@ private struct PickedMovie: Transferable {
 // ponytail: counts live in memory, so each launch gives a stuck file `limit` fresh tries; persist them if that matters.
 struct UploadFailureBudget {
     static let limit = 3
+    /// How long a refused file waits before its next try, so a pass that runs meanwhile does not use the tries up.
+    static let backOff: Duration = .seconds(5)
     private var failures: [String: Int] = [:]
+    private var waitUntil: [String: ContinuousClock.Instant] = [:]
 
     /// True when this failure used the file's last try.
-    mutating func recordFailure(_ messageID: String) -> Bool {
+    mutating func recordFailure(_ messageID: String, at now: ContinuousClock.Instant = .now) -> Bool {
         let count = failures[messageID, default: 0] + 1
         failures[messageID] = count < Self.limit ? count : nil
+        waitUntil[messageID] = count < Self.limit ? now + Self.backOff : nil
         return count >= Self.limit
     }
 
-    mutating func reset(_ messageID: String) { failures[messageID] = nil }
+    /// True while a refused file is inside its back-off.
+    func isWaiting(_ messageID: String, at now: ContinuousClock.Instant = .now) -> Bool {
+        waitUntil[messageID].map { now < $0 } ?? false
+    }
+
+    mutating func reset(_ messageID: String) { failures[messageID] = nil; waitUntil[messageID] = nil }
+}
+
+/// One pass at a time over work that each pass reads once when it starts. A request made while a pass runs is kept
+/// and another pass starts when it ends, so work queued meanwhile (the next file of a multi-file send) is not left
+/// waiting for some later event to start a pass.
+@MainActor final class RerunningPass {
+    private var requested = false
+    private var running = false
+    /// Returns the pass to run, or nil when it cannot run now; the request is then kept until the next one.
+    private let makePass: @MainActor () -> (@MainActor () async -> Void)?
+
+    init(_ makePass: @escaping @MainActor () -> (@MainActor () async -> Void)?) { self.makePass = makePass }
+
+    func request() {
+        requested = true
+        guard !running, let pass = makePass() else { return }
+        requested = false
+        running = true
+        Task { [weak self] in
+            await pass()
+            guard let self else { return }
+            self.running = false
+            if self.requested { self.request() }
+        }
+    }
 }
 
 /// Background PUTs: the ciphertext file is handed to the system so a suspended app still finishes.

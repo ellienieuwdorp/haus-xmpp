@@ -236,7 +236,7 @@ final class AppModel {
     private var files: AttachmentFiles? { storageDirectory.map { AttachmentFiles(directory: $0, account: accountID) } }
     @ObservationIgnored private var uploader: AttachmentUploader?
     @ObservationIgnored private var storageDirectory: URL?
-    @ObservationIgnored private var uploadTask: Task<Void, Never>?
+    @ObservationIgnored private lazy var uploadPasses = RerunningPass { [weak self] in self?.uploadPass() }
     @ObservationIgnored private var uploadFailures = UploadFailureBudget()
     @ObservationIgnored private let downloads = AttachmentDownloadCenter(configuration: .ephemeral)
     /// Bytes a chosen file may have before it is refused; the server's limit when it publishes one.
@@ -1331,16 +1331,21 @@ final class AppModel {
         }
     }
 
-    /// One slot request and one PUT per pending file that has no task in flight.
-    private func startUploads() {
-        guard uploadTask == nil, session.isReady, hasTransportOwnership, foreground, !quiescing,
-              let client, let store, let uploader, let service = uploadService, let files else { return }
+    /// A pass reads the pending files once, so a call while one runs (the next file of a multi-file send) runs
+    /// another pass when it ends.
+    private func startUploads() { uploadPasses.request() }
+
+    /// One slot request and one PUT per pending file that has no task in flight and is not backing off.
+    private func uploadPass() -> (@MainActor () async -> Void)? {
+        guard session.isReady, hasTransportOwnership, foreground, !quiescing,
+              let client, let store, let uploader, let service = uploadService, let files else { return nil }
         let account = accountID, token = generation
-        uploadTask = Task { [weak self] in
-            defer { self?.uploadTask = nil }
+        return { [weak self] in
             guard let pending = try? await store.attachmentsAwaitingUpload(accountID: account) else { return }
             for message in pending where message.attachment?.uploadTaskID == nil {
                 guard let attachment = message.attachment, self?.generation == token else { return }
+                // Its timer starts a pass once the back-off ends.
+                if self?.uploadFailures.isWaiting(message.id) == true { continue }
                 let staged = files.stagingURL(messageID: message.id)
                 guard let size = try? FileManager.default.attributesOfItem(atPath: staged.path)[.size] as? Int else {
                     // The staged ciphertext is gone (a cleared cache); the message can never be sent as is.
@@ -1368,7 +1373,7 @@ final class AppModel {
         guard uploadFailures.recordFailure(message.id) else {
             error = "Could not upload \(name). It will be retried."
             Task { [weak self] in
-                try? await Task.sleep(for: .seconds(5))
+                try? await Task.sleep(for: UploadFailureBudget.backOff)
                 self?.startUploads()
             }
             return
