@@ -130,7 +130,7 @@ struct BackgroundSynchronizerTests {
     /// the stalled room cut short soon after the post (the app may be waiting for the lease); with nothing direct to
     /// post, what the push was about is unknown and the run fails with what cut the rooms short, so the extension shows
     /// the fallback.
-    @Test(arguments: [RoomTrouble.stalls, .losesConnection])
+    @Test(arguments: [RoomTrouble.stalls, .losesConnection, .breaks])
     func aStuckRoomNeverHidesCommittedDirectMessages(_ trouble: RoomTrouble) async throws {
         for direct in [true, false] {
             try await withStore { store in

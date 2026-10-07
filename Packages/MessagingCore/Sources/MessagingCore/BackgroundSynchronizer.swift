@@ -206,6 +206,7 @@ struct BackgroundCatchUp: Sendable {
                 // storage failure or cancellation still ends the run.
                 guard await caughtUp.reached, !(error is CancellationError), !(error is MessageStoreError) else { throw error }
                 BackgroundSession.log.notice("room walk ended early: \(String(describing: type(of: error)), privacy: .public)")
+                await ledger.noteRoomWalkFailed(error)
             }
             // After the rooms, another pull for what their pages brought; with no rooms, the only one.
             if await ledger.needsPull { try await pullReadState() }
@@ -228,14 +229,22 @@ actor CatchUpLedger {
     /// The early presentation added something: a notification is showing.
     private(set) var postedEarly = false
     private var roomsWalked = false, pulled = false, roomMessages = false
+    private var roomError: (any Error)?
     func notePostedEarly() { postedEarly = true }
     func noteRoomsWalked() { roomsWalked = true }
+    func noteRoomWalkFailed(_ error: any Error) { roomError = error }
     func notePull() { pulled = true }
     func noteRoomMessages() { roomMessages = true }
     var needsPull: Bool { !pulled || roomMessages }
+    /// Why the rooms were cut short: the deadline, a lost connection (a transport error, or no error when the stream
+    /// ended first), or what the room walk raised (a page that could not be processed).
     func finalStage(pastDeadline: Bool) -> PresentationStage {
-        PresentationStage(isFinal: true, unfinished: roomsWalked ? nil : pastDeadline ? BackgroundSynchronizationError.deadlineExceeded
-                                                                                      : BackgroundSynchronizationError.connectionEnded)
+        guard !roomsWalked else { return .complete }
+        if pastDeadline { return PresentationStage(isFinal: true, unfinished: BackgroundSynchronizationError.deadlineExceeded) }
+        guard let roomError, !(roomError is XMPPClientError) else {
+            return PresentationStage(isFinal: true, unfinished: BackgroundSynchronizationError.connectionEnded)
+        }
+        return PresentationStage(isFinal: true, unfinished: roomError)
     }
 }
 
