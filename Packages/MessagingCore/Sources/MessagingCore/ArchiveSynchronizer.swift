@@ -49,10 +49,15 @@ public struct ArchiveSynchronizer: Sendable {
     private static let log = Logger(subsystem: "haus.xmpp.ios", category: "sync")
     public init(store: MessageStore) { self.store = store }
 
+    /// `ownArchiveWalked` runs once the own archive's walk ended, before the first room: with whether it reached the
+    /// newest entry and how many rooms follow. A throw ends the walk like any other failure (the stream is closed).
     @discardableResult
     public func synchronize(account: String, client: XMPPClient, encryption: OMEMOService,
-                            progress: (@Sendable (ArchiveSyncProgress) async -> Void)? = nil) async throws -> ArchiveSyncOutcome {
-        try await synchronize(account: account, operations: productionOperations(account: account, client: client, encryption: encryption, progress: progress))
+                            progress: (@Sendable (ArchiveSyncProgress) async -> Void)? = nil,
+                            ownArchiveWalked: (@Sendable (_ complete: Bool, _ rooms: Int) async throws -> Void)? = nil) async throws -> ArchiveSyncOutcome {
+        var operations = productionOperations(account: account, client: client, encryption: encryption, progress: progress)
+        if let ownArchiveWalked { operations.ownArchiveWalked = ownArchiveWalked }
+        return try await synchronize(account: account, operations: operations)
     }
 
     /// Pages backwards from the archive's backfill cursor. Each page is committed (messages, then the
@@ -183,6 +188,7 @@ public struct ArchiveSynchronizer: Sendable {
             // refreshing through the transport only for a room unknown there. An archived occupant
             // nickname alone is never enough to recover a real sender JID.
             let ownArchiveComplete = try await synchronizePages(account: account, room: nil, operations: operations)
+            try await operations.ownArchiveWalked(ownArchiveComplete, rooms.count)
             var unfinishedRooms: [String] = []
             for room in rooms {
                 try Task.checkCancellation()
@@ -387,4 +393,6 @@ struct ArchiveSyncOperations: Sendable {
     let progress: @Sendable (ArchiveSyncProgress) async -> Void
     /// Whether the connection is still up after a failed query (`endsOnlyThisArchive`).
     var isOnline: @Sendable () async -> Bool = { true }
+    /// After the own archive's walk, before the first room (`synchronize`'s `ownArchiveWalked`).
+    var ownArchiveWalked: @Sendable (_ complete: Bool, _ rooms: Int) async throws -> Void = { _, _ in }
 }
