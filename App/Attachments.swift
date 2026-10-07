@@ -186,16 +186,25 @@ private struct PickedMovie: Transferable {
 // ponytail: counts live in memory, so each launch gives a stuck file `limit` fresh tries; persist them if that matters.
 struct UploadFailureBudget {
     static let limit = 3
+    /// How long a refused file waits before its next try, so a pass that runs meanwhile does not use the tries up.
+    static let backOff: Duration = .seconds(5)
     private var failures: [String: Int] = [:]
+    private var waitUntil: [String: ContinuousClock.Instant] = [:]
 
     /// True when this failure used the file's last try.
-    mutating func recordFailure(_ messageID: String) -> Bool {
+    mutating func recordFailure(_ messageID: String, at now: ContinuousClock.Instant = .now) -> Bool {
         let count = failures[messageID, default: 0] + 1
         failures[messageID] = count < Self.limit ? count : nil
+        waitUntil[messageID] = count < Self.limit ? now + Self.backOff : nil
         return count >= Self.limit
     }
 
-    mutating func reset(_ messageID: String) { failures[messageID] = nil }
+    /// True while a refused file is inside its back-off.
+    func isWaiting(_ messageID: String, at now: ContinuousClock.Instant = .now) -> Bool {
+        waitUntil[messageID].map { now < $0 } ?? false
+    }
+
+    mutating func reset(_ messageID: String) { failures[messageID] = nil; waitUntil[messageID] = nil }
 }
 
 /// One pass at a time over work that each pass reads once when it starts. A request made while a pass runs is kept

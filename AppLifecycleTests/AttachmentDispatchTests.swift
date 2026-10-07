@@ -32,6 +32,22 @@ import XCTest
         for _ in 1..<UploadFailureBudget.limit { XCTAssertFalse(budget.recordFailure("other")) }
     }
 
+    /// A pass started by another file of the same send must not spend a refused file's next try before its back-off.
+    func testARefusedFileWaitsOutItsBackOff() {
+        var budget = UploadFailureBudget()
+        let refused = ContinuousClock.now
+        XCTAssertFalse(budget.recordFailure("photo", at: refused))
+        XCTAssertTrue(budget.isWaiting("photo", at: refused + .seconds(1)))
+        XCTAssertFalse(budget.isWaiting("other", at: refused + .seconds(1)), "Only the refused file waits")
+        XCTAssertFalse(budget.isWaiting("photo", at: refused + UploadFailureBudget.backOff))
+        XCTAssertFalse(budget.recordFailure("photo", at: refused))
+        budget.reset("photo")
+        XCTAssertFalse(budget.isWaiting("photo", at: refused), "Retry tries again at once")
+        for _ in 1..<UploadFailureBudget.limit { XCTAssertFalse(budget.recordFailure("photo", at: refused)) }
+        XCTAssertTrue(budget.recordFailure("photo", at: refused))
+        XCTAssertFalse(budget.isWaiting("photo", at: refused), "A file that used its tries is failed, not waiting")
+    }
+
     /// A pass that parks until the test releases it and takes the files queued when it starts, as an upload pass
     /// reads the files awaiting a slot once.
     @MainActor private final class UploadPassGate {

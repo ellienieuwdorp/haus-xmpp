@@ -1322,7 +1322,7 @@ final class AppModel {
     /// another pass when it ends.
     private func startUploads() { uploadPasses.request() }
 
-    /// One slot request and one PUT per pending file that has no task in flight.
+    /// One slot request and one PUT per pending file that has no task in flight and is not backing off.
     private func uploadPass() -> (@MainActor () async -> Void)? {
         guard session.isReady, hasTransportOwnership, foreground, !quiescing,
               let client, let store, let uploader, let service = uploadService, let files else { return nil }
@@ -1331,6 +1331,8 @@ final class AppModel {
             guard let pending = try? await store.attachmentsAwaitingUpload(accountID: account) else { return }
             for message in pending where message.attachment?.uploadTaskID == nil {
                 guard let attachment = message.attachment, self?.generation == token else { return }
+                // Its timer starts a pass once the back-off ends.
+                if self?.uploadFailures.isWaiting(message.id) == true { continue }
                 let staged = files.stagingURL(messageID: message.id)
                 guard let size = try? FileManager.default.attributesOfItem(atPath: staged.path)[.size] as? Int else {
                     // The staged ciphertext is gone (a cleared cache); the message can never be sent as is.
@@ -1358,7 +1360,7 @@ final class AppModel {
         guard uploadFailures.recordFailure(message.id) else {
             error = "Could not upload \(name). It will be retried."
             Task { [weak self] in
-                try? await Task.sleep(for: .seconds(5))
+                try? await Task.sleep(for: UploadFailureBudget.backOff)
                 self?.startUploads()
             }
             return
