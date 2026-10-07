@@ -185,6 +185,21 @@ struct BackgroundSynchronizerTests {
         }
     }
 
+    /// The deadline cancels the early presentation while the system is still adding its sound-carrying request: that add
+    /// may still land, so the final presentation posts the message again without a sound. The run plays one sound.
+    @Test func aDeadlineDuringTheDirectPresentationNeverPlaysASecondSound() async throws {
+        try await withStore { store in
+            let run = try await CatchUpFixture(store: store, ownMessages: 1, roomMessage: false, trouble: nil)
+            await run.posting.delayFirstAdd(by: .milliseconds(1_500))
+            try await run.run(budget: .seconds(1))
+            while await run.posting.added.count < 2 { try await Task.sleep(for: .milliseconds(20)) }
+            let added = await run.posting.added
+            #expect(added.map(\.body) == ["Direct", "Direct"])
+            #expect(added.filter(\.playsSound).count == 1)
+            #expect(run.progress.isCommitted)
+        }
+    }
+
     /// A push that arrives while the rooms are walked, after the direct message was posted, joins the run (its message
     /// comes in over the same connection) instead of queueing a second full run that would hold the lease again. Until
     /// the final presentation commits, an expiring request is not settled: its message may not be posted yet.
@@ -374,11 +389,18 @@ private actor TracingPosting: NotificationPosting {
     enum Failure: Error { case rejected }
     let trace: BackgroundProbe
     private(set) var added: [PlannedNotification] = []
-    private var failingAt: Int?
+    private var failingAt: Int?, firstDelay: Duration?
     init(trace: BackgroundProbe) { self.trace = trace }
     func failOnce(at index: Int) { failingAt = index }
+    /// The first add takes `delay` and, like the system's, is not stopped by cancellation.
+    func delayFirstAdd(by delay: Duration) { firstDelay = delay }
     func add(_ request: PlannedNotification) async throws {
         if failingAt == added.count { failingAt = nil; throw Failure.rejected }
+        if let delay = firstDelay {
+            firstDelay = nil
+            let seconds = Double(delay.components.seconds) + Double(delay.components.attoseconds) / 1e18
+            await withCheckedContinuation { done in DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { done.resume() } }
+        }
         added.append(request); await trace.record("post")
     }
     func deliveredNotifications() async -> [DeliveredNotification] { [] }

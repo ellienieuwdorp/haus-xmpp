@@ -99,16 +99,19 @@ public final class NotificationRunProgress: @unchecked Sendable {
 
     var isJoinable: Bool { lock.withLock { !abandoned && currentPhase < .presenting } }
     func abandon() { lock.withLock { abandoned = true } }
-    /// Whether an add of this run already carried the sound (a run plays one, whichever presentation adds it).
+    /// Whether an add of this run carried the sound, or may still: a run plays one, whichever presentation adds it.
     var hasPlayedSound: Bool { lock.withLock { soundPlayed } }
+    /// Before an add that carries the sound. One that is cancelled or times out may still land, sound included.
+    func noteAddingSound() { lock.withLock { soundPlayed = true } }
+    /// The add that carried the sound was refused: it shows nothing, so a later presentation plays the sound.
+    func noteSoundRefused() { lock.withLock { soundPlayed = false } }
     /// One completed add: counted as it happens, so a presentation that fails part-way leaves an exact record.
-    func noteAdded(playingSound: Bool) {
+    func noteAdded() {
         lock.withLock {
             currentReport.posted += 1
             if currentReport.firstPostMilliseconds == nil {
                 currentReport.firstPostMilliseconds = Int(Date().timeIntervalSince(started) * 1000)
             }
-            if playingSound { soundPlayed = true }
         }
     }
     func noteJoined() { lock.withLock { joinedCount += 1 } }
@@ -246,8 +249,17 @@ public struct NotificationPresenter: Sendable {
         for request in plan.requests {
             try Task.checkCancellation()
             // The system add keeps its whole limit; an intent donation before it has its own allowance.
-            try await withTimeout(addTimeout + posting.preparationAllowance(for: request)) { try await posting.add(request) }
-            progress.noteAdded(playingSound: request.playsSound)
+            if request.playsSound { progress.noteAddingSound() }
+            do {
+                try await withTimeout(addTimeout + posting.preparationAllowance(for: request)) { try await posting.add(request) }
+            } catch {
+                // A cancelled or timed-out add keeps running in the system and may still play the sound.
+                if request.playsSound, !(error is CancellationError), error as? NotificationRunError != .postTimedOut {
+                    progress.noteSoundRefused()
+                }
+                throw error
+            }
+            progress.noteAdded()
         }
         try await store.removeNotificationCandidates(accountID: accountID, keys: plan.claimed)
         progress.update { $0.claimed += plan.claimed.count; $0.deferred = batch.deferredCount }
