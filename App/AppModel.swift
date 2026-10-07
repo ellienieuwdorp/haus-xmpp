@@ -44,6 +44,8 @@ final class AppModel {
     @ObservationIgnored private var timelineWindow = AppModel.timelinePage
     @ObservationIgnored private var loadingOlder = false
     private static let timelinePage = 100, timelineCeiling = 1000
+    /// Downloads running at once, and how many of the newest files of an opened chat start before they are seen.
+    private static let concurrentDownloads = 2, downloadsAhead = 10
     /// Archive pages (100 messages each) one reach-top asks the server for, and the one idle backfill after catch-up.
     private static let backfillPagesPerScroll = 5, opportunisticBackfillPages = 3
     /// Newest pages of recently seen chats, so pushing one shows its tail in the first frame. In memory, one account.
@@ -223,6 +225,8 @@ final class AppModel {
     @ObservationIgnored private var readStateChangedWhilePublishing = false
     /// Local plaintext files of the open chat's attachments, by message ID, once downloaded or sent.
     private(set) var attachmentFiles: [String: URL] = [:]
+    /// The open chat's received files that are not on disk: loading, held for a tap, failed or too large.
+    private(set) var attachmentDownloads: [String: AttachmentDownloadState] = [:]
     /// The account's upload service as last discovered; persisted per account so the attach button survives launch
     /// and reconnect. Observed: the composer's attach button follows it.
     private var uploadService: XMPPUploadService?
@@ -232,7 +236,12 @@ final class AppModel {
     @ObservationIgnored private var storageDirectory: URL?
     @ObservationIgnored private var uploadTask: Task<Void, Never>?
     @ObservationIgnored private var uploadFailures = UploadFailureBudget()
-    @ObservationIgnored private var downloading: Set<String> = []
+    @ObservationIgnored private let downloader = AttachmentDownloader(configuration: .ephemeral)
+    @ObservationIgnored private var downloadQueue = AttachmentDownloadQueue(limit: AppModel.concurrentDownloads)
+    /// What each queued or running download needs, by cache path.
+    @ObservationIgnored private var downloadJobs: [String: AttachmentDownloadJob] = [:]
+    /// Older files of the open chat that may download on sight, waiting until their bubble comes on screen.
+    @ObservationIgnored private var deferredDownloads: [String: AttachmentDownloadJob] = [:]
     /// Bytes a chosen file may have before it is refused; the server's limit when it publishes one.
     var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
     /// The server offered uploads on its last completed discovery. Never gated on the socket: a file is sealed and
@@ -1260,6 +1269,7 @@ final class AppModel {
         messages = []
         messageReactions = [:]; messageReceipts = [:]
         attachmentFiles = [:]
+        resetDownloads()
         openChatID = nil
         requestedRoute = nil
         encryptionOverviewChatID = nil; encryptionOverview = nil; encryptionDetailsChatID = nil
@@ -1404,29 +1414,111 @@ final class AppModel {
         }
     }
 
-    /// Received files of the open chat are fetched on sight and verified before they exist locally.
+    /// Received files of the open chat are fetched on sight and verified before they exist locally, newest first and
+    /// at most `concurrentDownloads` at a time. A stranger's file, one above the automatic limit and one the network
+    /// policy refuses wait for a tap; the newest `downloadsAhead` start at once, older ones once their bubble shows.
     private func loadAttachments(_ storedMessages: [StoredMessage], chat: String) {
-        guard let files, let encryption else { return }
-        for message in storedMessages {
+        guard let files else { return }
+        // A stranger is the peer of a 1:1 chat with no own message in the loaded window. Approving their device lets
+        // their messages show; writing back is what lets their files download on sight. The roster is no signal
+        // here: opening a chat asks for a subscription, and a direct chat's peer gets one approved on request.
+        let knownChat = isGroup(chat) || storedMessages.contains { $0.isOutgoing }
+        // Written to since the chat opened: what waited for that is decided again.
+        if knownChat, attachmentDownloads.values.contains(.tapToDownload(.sender)) {
+            attachmentDownloads = attachmentDownloads.filter { $0.value != .tapToDownload(.sender) }
+        }
+        var ahead = AppModel.downloadsAhead
+        for message in storedMessages.reversed() {
             guard let attachment = message.attachment, attachmentFiles[message.id] == nil else { continue }
-            if let cached = files.cached(attachment, messageID: message.id) { attachmentFiles[message.id] = cached; continue }
-            guard attachment.url != nil, attachment.uploadState == nil, !downloading.contains(message.id) else { continue }
-            downloading.insert(message.id)
-            let account = accountID
+            if let cached = files.cached(attachment, messageID: message.id) {
+                attachmentFiles[message.id] = cached; attachmentDownloads[message.id] = nil
+                continue
+            }
+            guard attachment.url != nil, attachment.uploadState == nil, attachmentDownloads[message.id] == nil else { continue }
+            let job = AttachmentDownloadJob(messageID: message.id, sentAt: message.sentAt, attachment: attachment, account: accountID,
+                                            destination: files.cacheURL(attachment, messageID: message.id),
+                                            automatic: true, knownSender: knownChat || message.isOutgoing)
+            switch AttachmentDownloadPolicy.decide(bodyLength: AttachmentDownloadPolicy.bodyLength(declaredSize: attachment.size),
+                                                   automatic: true, knownSender: job.knownSender) {
+            case .tooLarge: attachmentDownloads[message.id] = .tooLarge
+            case .hold(let reason): attachmentDownloads[message.id] = .tapToDownload(reason)
+            case .fetch, .probe:
+                attachmentDownloads[message.id] = .loading
+                if ahead > 0 { ahead -= 1; enqueueDownload(job, visible: false) } else { deferredDownloads[message.id] = job }
+            }
+        }
+        startDownloads()
+    }
+
+    /// A bubble whose file is not on disk came on screen: its download goes before those of bubbles not seen.
+    func attachmentDisplayed(_ messageID: String) {
+        if let job = deferredDownloads.removeValue(forKey: messageID) {
+            enqueueDownload(job, visible: true)
+        } else if let attachment = messages.first(where: { $0.id == messageID })?.attachment, let files {
+            downloadQueue.promote(files.cacheURL(attachment, messageID: messageID).path)
+        }
+        startDownloads()
+    }
+
+    /// A tap on a file waiting for one, or on a failed one: fetched on any network, up to the hard limit.
+    func downloadAttachment(_ messageID: String) {
+        guard attachmentDownloads[messageID]?.canRequest == true, let files,
+              let message = messages.first(where: { $0.id == messageID }), let attachment = message.attachment else { return }
+        attachmentDownloads[messageID] = .loading
+        deferredDownloads[messageID] = nil
+        enqueueDownload(AttachmentDownloadJob(messageID: messageID, sentAt: message.sentAt, attachment: attachment, account: accountID,
+                                              destination: files.cacheURL(attachment, messageID: messageID), automatic: false, knownSender: true),
+                        visible: true)
+        startDownloads()
+    }
+
+    private func enqueueDownload(_ job: AttachmentDownloadJob, visible: Bool) {
+        let key = job.destination.path
+        // A tap makes a queued automatic download of the same file a requested one; a running one is joined as it is.
+        if downloadJobs[key] == nil || !job.automatic { downloadJobs[key] = job }
+        downloadQueue.add(key, messageID: job.messageID, order: job.sentAt, visible: visible)
+    }
+
+    private func startDownloads() {
+        guard let encryption else { return }
+        while let key = downloadQueue.next() {
+            guard let job = downloadJobs[key] else { _ = downloadQueue.finish(key); continue }
+            let downloader = downloader
             Task { [weak self] in
-                defer { self?.downloading.remove(message.id) }
-                do {
-                    let secret = try encryption.openAttachmentSecret(account: account, secret: attachment.secret, sealedAs: attachment.sealedAccount)
-                    let bytes = try await AttachmentDownloader.fetch(attachment, secret: secret)
-                    let destination = files.cacheURL(attachment, messageID: message.id)
-                    try files.write(bytes, to: destination)
-                    guard let self, self.accountID == account, self.openChatID == chat else { return }
-                    attachmentFiles[message.id] = destination
-                } catch {
-                    Logger(subsystem: "haus.xmpp.ios", category: "attachments").error("Download of \(attachment.name, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                let outcome: AttachmentDownloadOutcome
+                if let secret = try? encryption.openAttachmentSecret(account: job.account, secret: job.attachment.secret, sealedAs: job.attachment.sealedAccount) {
+                    outcome = await downloader.download(job.attachment, secret: secret, automatic: job.automatic, knownSender: job.knownSender, to: job.destination)
+                } else { outcome = .state(.failed) }
+                self?.finishDownload(key, job: job, outcome: outcome)
+            }
+        }
+    }
+
+    private func finishDownload(_ key: String, job: AttachmentDownloadJob, outcome: AttachmentDownloadOutcome) {
+        let waiting = downloadQueue.finish(key)
+        downloadJobs[key] = nil
+        if outcome == .state(.failed) {
+            Logger(subsystem: "haus.xmpp.ios", category: "attachments").error("Download of \(job.attachment.name, privacy: .public) failed")
+        }
+        // Only messages of the chat still open have a state; the file stays cached for the others.
+        if accountID == job.account {
+            for id in waiting where attachmentDownloads[id] != nil {
+                switch outcome {
+                case .saved: attachmentFiles[id] = job.destination; attachmentDownloads[id] = nil
+                case .state(let state): attachmentDownloads[id] = state
+                case .cancelled: attachmentDownloads[id] = .failed
                 }
             }
         }
+        startDownloads()
+    }
+
+    /// The open chat changed: its download states go, queued downloads are dropped, running ones finish into the cache.
+    private func resetDownloads() {
+        attachmentDownloads = [:]
+        deferredDownloads = [:]
+        downloadQueue.dropPending()
+        downloadJobs = downloadJobs.filter { downloadQueue.contains($0.key) }
     }
 
     private func resetSession() -> XMPPClient? {
@@ -2183,6 +2275,7 @@ final class AppModel {
     func prepareChat(_ chatID: String) {
         guard openChatID != chatID || messagesLoadedFor != chatID else { return }
         openChatID = chatID; timelineWindow = AppModel.timelinePage; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]
+        resetDownloads()
         if let page = timelinePages.page(for: chats.first { $0.id == chatID }, account: accountID) { publishTimeline(page, chat: chatID) }
     }
 
@@ -2459,6 +2552,7 @@ final class AppModel {
                                              reactableGroupMessages: reactableGroupMessages), for: chats.first { $0.id == chatID }, account: accountID)
         }
         openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]
+        resetDownloads()
     }
 
     // MARK: Typing

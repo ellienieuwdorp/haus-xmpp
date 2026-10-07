@@ -234,28 +234,6 @@ final class AttachmentUploader: NSObject, URLSessionTaskDelegate, @unchecked Sen
     }
 }
 
-/// Fetches a shared file and authenticates it. TLS trust is the system store's (the simulator
-/// carries the lab CA); nothing here relaxes it.
-enum AttachmentDownloader {
-    private static let session = URLSession(configuration: .ephemeral)
-
-    static func fetch(_ attachment: StoredAttachment, secret: (key: Data, iv: Data)?) async throws -> Data {
-        guard let remote = attachment.url, let url = URL(string: remote), url.scheme == "https" else { throw AttachmentTransfer.Failure.unencrypted }
-        let (file, response) = try await session.download(from: url)
-        defer { try? FileManager.default.removeItem(at: file) }
-        guard (response as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) ?? false else { throw URLError(.badServerResponse) }
-        guard let size = try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int, size <= AttachmentTransfer.maximumBytes + 16 else { throw AttachmentTransfer.Failure.tooLarge }
-        let bytes = try Data(contentsOf: file)
-        guard let secret else {
-            // An unencrypted source still has to match the hash the authenticated message promised.
-            if let expected = Data(hex: attachment.hash), !expected.isEmpty, Data.sha256(bytes) != expected { throw AttachmentTransfer.Failure.plainHashMismatch }
-            return bytes
-        }
-        return try AttachmentTransfer.open(bytes, key: secret.key, iv: secret.iv,
-                                           expectedCipherHash: attachment.cipherHash.flatMap { Data(hex: $0) }, expectedPlainHash: Data(hex: attachment.hash))
-    }
-}
-
 /// Bounded decoding for bubbles: the thumbnail pass never inflates the full image.
 enum AttachmentThumbnails {
     // NSCache is thread-safe; the annotation only tells the compiler so.
