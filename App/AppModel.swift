@@ -2163,6 +2163,11 @@ final class AppModel {
                         self.groupChats[room]?.issue = self.groupFailure(error)
                         return self.encryptionAttention.hold([room: self.groupFailure(error)], shownChat: self.encryptionShownChatID)
                     },
+                    repliesDropped: { [weak self] _ in
+                        // The composer let these replies go at Send, and the seal has cleared their quotes.
+                        guard let self, self.generation == token else { return }
+                        self.error = "This chat switched to an older encryption version, so a file you sent as a reply goes without it. Reply again with a caption to quote the message."
+                    },
                     didChange: { [weak self] in await self?.refresh() }))
                 if let self, self.generation == token { self.encryptionAttention.settlePass(heldForTrust: heldForTrust) }
                 await self?.refresh()

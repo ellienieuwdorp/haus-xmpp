@@ -67,8 +67,10 @@ final class AttachmentServiceTests: XCTestCase {
                                                                  isOutgoing: true, reply: reply, attachment: attachment))
             try await f.aStore.setAttachmentUploadTask(accountID: f.alice, messageID: "file-1", taskID: 1, url: "https://uploads.localhost:5281/get/beach.jpg")
             try await f.aStore.markAttachmentUploaded(accountID: f.alice, messageID: "file-1")
-            let ready = try await f.a.prepareAvailableMessages(account: f.alice, transport: f.aTransport).messageIDs
-            XCTAssertEqual(ready, ["file-1"], "\(profile)")
+            let preparation = try await f.a.prepareAvailableMessages(account: f.alice, transport: f.aTransport)
+            XCTAssertEqual(preparation.messageIDs, ["file-1"], "\(profile)")
+            // The caller is told, so it can say the file went without its reply.
+            XCTAssertEqual(preparation.droppedReplies, profile == .modern ? [] : ["file-1"], "\(profile)")
             let stored = try await f.aStore.messages(accountID: f.alice, chatID: f.bob).first { $0.id == "file-1" }
             XCTAssertEqual(stored?.reply, profile == .modern ? reply : nil, "\(profile)")
         }
