@@ -197,10 +197,11 @@ actor StreamManagement {
 
     /// A hint-only `no-store` message (a chat state) as an unreplayed slot. Builds before hint slots journaled chat
     /// states as messages with an ID, which no replay policy can vouch for: one typing notification refused the resume.
+    /// Only entries naming `no-store` are parsed; encrypted messages carry the `store` hint and stay as they are.
     private static func withHintSlots(_ saved: XMPPStreamManagementSnapshot) -> XMPPStreamManagementSnapshot {
         var next = saved
         next.journal = saved.journal.map { entry in
-            guard entry.kind == .message, let xml = entry.xml, xml.contains(hintsNamespace),
+            guard entry.kind == .message, let xml = entry.xml, xml.contains("no-store"),
                   let node = try? stanza(xml), isHintOnly(node) else { return entry }
             return XMPPStreamJournalEntry(sequence: entry.sequence, kind: .iq, xml: nil, messageID: nil)
         }
