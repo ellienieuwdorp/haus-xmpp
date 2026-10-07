@@ -74,10 +74,14 @@ final class ReplyUITests: XCTestCase {
         alex.tap()
         let first = app.textViews.containing(NSPredicate(format: "value BEGINSWITH %@", "Found a quiet spot")).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 5))
-        // The day header sits just above the first bubble, in the same cell.
+        // The day header sits just above the first bubble, in the same cell. The demo messages are all sent on one day.
+        let day = Date(timeIntervalSince1970: 1_789_380_000).formatted(date: .abbreviated, time: .omitted)
+        let dayHeader = app.staticTexts.matching(NSPredicate(format: "label == %@", day)).firstMatch
+        XCTAssertTrue(dayHeader.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(dayHeader.frame.maxY, first.frame.minY, "the day header is above the first bubble")
         let origin = app.coordinate(withNormalizedOffset: .zero)
         // Past half the width, so the back swipe completes at XCTest's drag speed.
-        let header = origin.withOffset(CGVector(dx: app.frame.width * 0.15, dy: first.frame.minY - 14))
+        let header = origin.withOffset(CGVector(dx: app.frame.width * 0.15, dy: dayHeader.frame.midY))
         header.press(forDuration: 0.05, thenDragTo: header.withOffset(CGVector(dx: app.frame.width * 0.75, dy: 0)))
         XCTAssertTrue(app.buttons["newConversation"].waitForExistence(timeout: 5), "a day header gives the swipe back")
         XCTAssertFalse(app.buttons["cancelReply"].exists)
