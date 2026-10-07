@@ -224,6 +224,8 @@ final class AppModel {
     @ObservationIgnored private var readStateChangedWhilePublishing = false
     /// Local plaintext files of the open chat's attachments, by message ID, once downloaded or sent.
     private(set) var attachmentFiles: [String: URL] = [:]
+    /// The open chat's received files that are not on disk: loading, held for a tap, failed or too large.
+    var attachmentDownloads: [String: AttachmentDownloadState] { downloads.states }
     /// The account's upload service as last discovered; persisted per account so the attach button survives launch
     /// and reconnect. Observed: the composer's attach button follows it.
     private var uploadService: XMPPUploadService?
@@ -236,7 +238,7 @@ final class AppModel {
     @ObservationIgnored private var storageDirectory: URL?
     @ObservationIgnored private var uploadTask: Task<Void, Never>?
     @ObservationIgnored private var uploadFailures = UploadFailureBudget()
-    @ObservationIgnored private var downloading: Set<String> = []
+    @ObservationIgnored private let downloads = AttachmentDownloadCenter(configuration: .ephemeral)
     /// Bytes a chosen file may have before it is refused; the server's limit when it publishes one.
     var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
     /// The server offered uploads on its last completed discovery. Never gated on the socket: a file is sealed and
@@ -267,6 +269,14 @@ final class AppModel {
             await self?.performNotificationAction(request, budget: budget) ?? .rejected
         }
         NotificationActionCenter.shared.abort = { [weak self] in self?.abortNotificationAction() ?? false }
+        downloads.onFile = { [weak self] account, messageIDs, file in
+            guard let self, self.accountID == account else { return }
+            for id in messageIDs { self.attachmentFiles[id] = file }
+        }
+        downloads.openSecret = { [weak self] job in
+            guard let encryption = self?.encryption else { throw OMEMOError.unavailable }
+            return try encryption.openAttachmentSecret(account: job.account, secret: job.attachment.secret, sealedAs: job.attachment.sealedAccount)
+        }
     }
 
     /// Opens storage and the saved account once. Every caller (the root view, a notification action on a background
@@ -1262,6 +1272,7 @@ final class AppModel {
         messages = []
         messageReactions = [:]; messageReceipts = [:]
         attachmentFiles = [:]
+        downloads.reset()
         openChatID = nil
         requestedRoute = nil
         encryptionOverviewChatID = nil; encryptionOverview = nil; encryptionDetailsChatID = nil
@@ -1406,29 +1417,24 @@ final class AppModel {
         }
     }
 
-    /// Received files of the open chat are fetched on sight and verified before they exist locally.
+    /// Received files of the open chat are fetched on sight and verified before they exist locally; `downloads` decides
+    /// which wait for a tap. A group and a pinned chat are known; a 1:1 chat becomes known once the user writes in it.
     private func loadAttachments(_ storedMessages: [StoredMessage], chat: String) {
-        guard let files, let encryption else { return }
-        for message in storedMessages {
-            guard let attachment = message.attachment, attachmentFiles[message.id] == nil else { continue }
-            if let cached = files.cached(attachment, messageID: message.id) { attachmentFiles[message.id] = cached; continue }
-            guard attachment.url != nil, attachment.uploadState == nil, !downloading.contains(message.id) else { continue }
-            downloading.insert(message.id)
-            let account = accountID
-            Task { [weak self] in
-                defer { self?.downloading.remove(message.id) }
-                do {
-                    let secret = try encryption.openAttachmentSecret(account: account, secret: attachment.secret, sealedAs: attachment.sealedAccount)
-                    let bytes = try await AttachmentDownloader.fetch(attachment, secret: secret)
-                    let destination = files.cacheURL(attachment, messageID: message.id)
-                    try files.write(bytes, to: destination)
-                    guard let self, self.accountID == account, self.openChatID == chat else { return }
-                    attachmentFiles[message.id] = destination
-                } catch {
-                    Logger(subsystem: "haus.xmpp.ios", category: "attachments").error("Download of \(attachment.name, privacy: .public) failed: \(String(describing: error), privacy: .public)")
-                }
-            }
-        }
+        guard let files else { return }
+        downloads.load(storedMessages, known: isGroup(chat) || chats.first { $0.id == chat }?.isPinned == true, files: files, account: accountID,
+                       onDisk: { attachmentFiles[$0] != nil })
+    }
+
+    /// A bubble whose file is not on disk came on screen.
+    func attachmentDisplayed(_ messageID: String) {
+        guard let files else { return }
+        downloads.displayed(messageID, attachment: messages.first { $0.id == messageID }?.attachment, files: files)
+    }
+
+    /// A tap on a file waiting for one, or on a failed one.
+    func downloadAttachment(_ messageID: String) {
+        guard let files, let message = messages.first(where: { $0.id == messageID }) else { return }
+        downloads.request(message, files: files, account: accountID)
     }
 
     private func resetSession() -> XMPPClient? {
@@ -2240,6 +2246,7 @@ final class AppModel {
     func prepareChat(_ chatID: String) {
         guard openChatID != chatID || messagesLoadedFor != chatID else { return }
         openChatID = chatID; timelineWindow = AppModel.timelinePage; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]
+        downloads.reset()
         if let page = timelinePages.page(for: chats.first { $0.id == chatID }, account: accountID) { publishTimeline(page, chat: chatID) }
     }
 
@@ -2516,6 +2523,7 @@ final class AppModel {
                                              reactableGroupMessages: reactableGroupMessages), for: chats.first { $0.id == chatID }, account: accountID)
         }
         openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]
+        downloads.reset()
     }
 
     // MARK: Typing

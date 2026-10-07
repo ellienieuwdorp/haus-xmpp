@@ -37,8 +37,10 @@ struct TimelineAttachment: Sendable, Equatable {
     let size: Int
     let width: Int?
     let height: Int?
-    /// Plaintext on disk once sent or downloaded and verified; nil while it is still fetching.
+    /// Plaintext on disk once sent or downloaded and verified; nil until then.
     var localURL: URL? = nil
+    /// Where a file that is not on disk stands; ignored once `localURL` is set.
+    var download: AttachmentDownloadState = .loading
     var isImage: Bool { mediaType.hasPrefix("image/") }
     var isVideo: Bool { mediaType.hasPrefix("video/") }
     var showsPreview: Bool { isImage || isVideo }
@@ -47,6 +49,28 @@ struct TimelineAttachment: Sendable, Equatable {
         return CGFloat(width) / CGFloat(height)
     }
     var kindLabel: String { isImage ? "Photo" : isVideo ? "Video" : "File" }
+    /// What a file that is not on disk shows under its name, or under its symbol in a preview.
+    var downloadDetail: String {
+        let size = self.size > 0 ? ByteCountFormatter.string(fromByteCount: Int64(self.size), countStyle: .file) : nil
+        let parts: [String?] = switch download {
+        case .loading: [size, "Downloading…"]
+        case .tapToDownload: [size, "Tap to download"]
+        // Short enough for the file card's one detail line.
+        case .failed: ["Failed", "Tap to retry"]
+        case .mismatch: ["Doesn’t match its message"]
+        case .tooLarge: [size, "Too large to download"]
+        }
+        return parts.compactMap { $0 }.joined(separator: " · ")
+    }
+    var downloadAccessibility: String {
+        switch download {
+        case .loading: "downloading"
+        case .tapToDownload: "not downloaded"
+        case .failed: "could not be downloaded"
+        case .mismatch: "does not match its message, not downloaded"
+        case .tooLarge: "too large to download"
+        }
+    }
 }
 
 struct TimelineMessage: Identifiable, Sendable, Equatable {
@@ -222,6 +246,10 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     var onRestoreComposerFocus: () -> Void = {}
     /// The user scrolled to the oldest loaded message.
     var onReachTop: () -> Void = {}
+    /// A bubble whose file is not on disk came on screen.
+    var onAttachmentDisplayed: (String) -> Void = { _ in }
+    /// A tap on a file waiting for one, or on a failed one.
+    var onDownloadAttachment: (String) -> Void = { _ in }
     /// Its hidden responder is installed in the controller's view, so the attachment panel is the keyboard here.
     var attachmentKeyboard: AttachmentKeyboard? = nil
     // Observed so a stored accent change re-renders visible bubbles.
@@ -234,6 +262,9 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: ConversationTimelineController, context: Context) {
         if controller.additionalSafeAreaInsets.top != topBannerHeight { controller.additionalSafeAreaInsets.top = topBannerHeight }
         controller.setComposer(composer)
+        // Before the update: its snapshot displays cells, which report their files.
+        controller.onAttachmentDisplayed = onAttachmentDisplayed
+        controller.onDownloadAttachment = onDownloadAttachment
         controller.update(messages: messages, typing: typing, loadingEarlier: loadingEarlier, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend,
                           onOpenEncryption: onOpenEncryption, onDisplayed: onDisplayed)
         controller.onRestoreComposerFocus = onRestoreComposerFocus
@@ -275,6 +306,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private let composerHost = UIHostingController(rootView: AnyView(EmptyView()))
     var onRestoreComposerFocus: () -> Void = {}
     var onReachTop: () -> Void = {}
+    var onAttachmentDisplayed: (String) -> Void = { _ in }
+    var onDownloadAttachment: (String) -> Void = { _ in }
     /// While the long-press menu is up the timeline holds still: its snapshot sits at the bubble's captured frame.
     private var actionsVisible = false
     private var heldUpdate: (() -> Void)?
@@ -394,7 +427,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                                // The bubble was measured with the keyboard up and the overlay now covers the timeline.
                                putKeyboardAwayForActions()
                                return true
-                           }, openAttachment: { [weak self] url in self?.preview(url, title: row.message.attachment?.name, isImage: row.message.attachment?.isImage == true) })
+                           }, openAttachment: { [weak self] url in self?.preview(url, title: row.message.attachment?.name, isImage: row.message.attachment?.isImage == true) },
+                           download: { [weak self] in self?.onDownloadAttachment(id) })
             return cell
         }
     }
@@ -684,7 +718,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             if typingArrived { typingArrived = false; cell.animateIn() }
             return
         }
-        guard let id = dataSource.itemIdentifier(for: indexPath), let row = rowsByID[id], !row.message.isOutgoing else { return }
+        guard let id = dataSource.itemIdentifier(for: indexPath), let row = rowsByID[id] else { return }
+        if let attachment = row.message.attachment, attachment.localURL == nil, !row.message.showsPlaceholder { onAttachmentDisplayed(id) }
+        guard !row.message.isOutgoing else { return }
         onDisplayed(id)
     }
 
@@ -921,9 +957,14 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private var row: TimelineRow?
     private var message: TimelineMessage? { row?.message }
     private var openAttachment: (URL) -> Void = { _ in }
+    private var download: () -> Void = {}
     private let attachmentArea = UIView()
     private let media = UIImageView()
     private let mediaSpinner = UIActivityIndicatorView(style: .medium)
+    /// A preview whose file is not on disk: what a tap does, and the size or why not.
+    private let mediaStatusIcon = UIImageView()
+    private let mediaStatusLabel = UILabel()
+    private lazy var mediaStatus = UIStackView(arrangedSubviews: [mediaStatusIcon, mediaStatusLabel])
     private let fileIcon = UIImageView(image: UIImage(systemName: "doc.fill"))
     private let fileName = UILabel()
     private let fileDetail = UILabel()
@@ -1099,6 +1140,18 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         mediaSpinner.translatesAutoresizingMaskIntoConstraints = false
         mediaSpinner.hidesWhenStopped = true
         attachmentArea.addSubview(mediaSpinner)
+        mediaStatusIcon.contentMode = .scaleAspectFit
+        mediaStatusIcon.preferredSymbolConfiguration = .init(pointSize: 30, weight: .regular)
+        mediaStatusLabel.font = .preferredFont(forTextStyle: .caption1)
+        mediaStatusLabel.adjustsFontForContentSizeCategory = true
+        mediaStatusLabel.textAlignment = .center
+        mediaStatusLabel.numberOfLines = 2
+        mediaStatus.translatesAutoresizingMaskIntoConstraints = false
+        mediaStatus.axis = .vertical
+        mediaStatus.alignment = .center
+        mediaStatus.spacing = 6
+        mediaStatus.isHidden = true
+        attachmentArea.addSubview(mediaStatus)
         fileIcon.translatesAutoresizingMaskIntoConstraints = false
         fileIcon.contentMode = .scaleAspectFit
         fileIcon.preferredSymbolConfiguration = .init(pointSize: 26, weight: .regular)
@@ -1119,6 +1172,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             media.topAnchor.constraint(equalTo: attachmentArea.topAnchor, constant: Self.mediaInset),
             media.bottomAnchor.constraint(equalTo: attachmentArea.bottomAnchor, constant: -Self.mediaInset),
             mediaSpinner.centerXAnchor.constraint(equalTo: attachmentArea.centerXAnchor), mediaSpinner.centerYAnchor.constraint(equalTo: attachmentArea.centerYAnchor),
+            mediaStatus.centerXAnchor.constraint(equalTo: attachmentArea.centerXAnchor), mediaStatus.centerYAnchor.constraint(equalTo: attachmentArea.centerYAnchor),
+            mediaStatus.leadingAnchor.constraint(greaterThanOrEqualTo: attachmentArea.leadingAnchor, constant: 12),
             fileIcon.leadingAnchor.constraint(equalTo: attachmentArea.leadingAnchor, constant: 12),
             fileIcon.centerYAnchor.constraint(equalTo: attachmentArea.centerYAnchor),
             fileIcon.widthAnchor.constraint(equalToConstant: 32),
@@ -1259,8 +1314,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     }
 
     @objc private func handleAttachmentTap() {
-        guard let url = message?.attachment?.localURL else { return }
-        openAttachment(url)
+        guard let attachment = message?.attachment else { return }
+        if let url = attachment.localURL { openAttachment(url) } else if attachment.download.canRequest { download() }
     }
 
     private func configureAttachment(_ attachment: TimelineAttachment?, isOutgoing: Bool, textColor: UIColor) {
@@ -1272,18 +1327,34 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         fileDetail.isHidden = !showsCard
         media.image = nil
         mediaSpinner.stopAnimating()
+        mediaStatus.isHidden = true
         guard let attachment else { return }
         if showsCard {
             fileIcon.tintColor = textColor
             fileName.textColor = textColor
             fileDetail.textColor = textColor.withAlphaComponent(0.75)
             fileName.text = attachment.name
-            let size = attachment.size > 0 ? ByteCountFormatter.string(fromByteCount: Int64(attachment.size), countStyle: .file) : nil
-            fileDetail.text = [size, attachment.localURL == nil ? "Downloading…" : nil].compactMap { $0 }.joined(separator: " · ")
-            if fileDetail.text?.isEmpty ?? true { fileDetail.text = attachment.mediaType }
+            if attachment.localURL != nil {
+                fileDetail.text = attachment.size > 0 ? ByteCountFormatter.string(fromByteCount: Int64(attachment.size), countStyle: .file) : attachment.mediaType
+            } else {
+                fileDetail.text = attachment.downloadDetail
+            }
             return
         }
-        guard let url = attachment.localURL else { mediaSpinner.startAnimating(); return }
+        guard let url = attachment.localURL else {
+            if attachment.download == .loading { mediaSpinner.startAnimating(); return }
+            let symbol = switch attachment.download {
+            case .failed: "arrow.clockwise.circle"
+            case .mismatch, .tooLarge: "exclamationmark.circle"
+            default: "arrow.down.circle"
+            }
+            mediaStatusIcon.image = UIImage(systemName: symbol)
+            mediaStatusIcon.tintColor = textColor
+            mediaStatusLabel.textColor = textColor.withAlphaComponent(0.75)
+            mediaStatusLabel.text = attachment.downloadDetail
+            mediaStatus.isHidden = false
+            return
+        }
         if let hit = AttachmentThumbnails.cached(for: url) {
             media.image = hit
             media.contentMode = .scaleAspectFill
@@ -1512,7 +1583,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
 
     func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,
                    edit: @escaping () -> Void = {}, unsend: @escaping () -> Void = {}, openEncryption: @escaping () -> Void = {},
-                   presentActions: @escaping (MessageActionsContext) -> Bool, openAttachment: @escaping (URL) -> Void = { _ in }) {
+                   presentActions: @escaping (MessageActionsContext) -> Bool, openAttachment: @escaping (URL) -> Void = { _ in }, download: @escaping () -> Void = {}) {
         let message = row.message
         self.row = row
         self.toggleStar = toggleStar
@@ -1524,6 +1595,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         self.openEncryptionAction = openEncryption
         self.presentActions = presentActions
         self.openAttachment = openAttachment
+        self.download = download
         bubble.cornerConfiguration = .corners(topLeftRadius: .fixed(20), topRightRadius: .fixed(20),
                                               bottomLeftRadius: .fixed(corners.bottomLeft), bottomRightRadius: .fixed(corners.bottomRight))
         if messageID != message.id {
@@ -1587,7 +1659,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         var descriptions = ["\(message.isOutgoing ? "You" : (message.author ?? "Contact")): \(shown)"]
         if message.unreadable != nil { descriptions.append("not readable on this device") }
         if message.isEdited { descriptions.append("edited") }
-        if !message.showsPlaceholder, let attachment = message.attachment { descriptions.append("\(attachment.kindLabel) \(attachment.name)" + (attachment.localURL == nil ? ", downloading" : "")) }
+        if !message.showsPlaceholder, let attachment = message.attachment { descriptions.append("\(attachment.kindLabel) \(attachment.name)" + (attachment.localURL == nil ? ", " + attachment.downloadAccessibility : "")) }
         if let quote = message.reply { descriptions.append("Replying to \(quote.author): \(quote.body)") }
         if message.isStarred { descriptions.append("starred") }
         if let date = message.sentAt { descriptions.append(date.formatted(date: .abbreviated, time: .shortened)) }
@@ -1604,6 +1676,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         textView.accessibilityCustomActions = actions().map { action in UIAccessibilityCustomAction(name: action.title) { _ in action.perform(); return true } }
         if let url = message.attachment?.localURL {
             textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: "Open \(message.attachment?.kindLabel.lowercased() ?? "file")") { [weak self] _ in self?.openAttachment(url); return true })
+        } else if !message.showsPlaceholder, let attachment = message.attachment, attachment.download.canRequest {
+            textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: "Download \(attachment.kindLabel.lowercased())") { [weak self] _ in self?.download(); return true })
         }
         if message.canReact {
             let selected = Set(message.reactions.filter(\.isSelected).map(\.emoji))
