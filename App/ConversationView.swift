@@ -323,8 +323,8 @@ struct ConversationView: View {
                         || id == model.messages.last(where: { !$0.isOutgoing })?.id else { return }
                 Task { await model.markDisplayed(id) }
             }, onRestoreComposerFocus: { composerState.focused = true }, onReachTop: { Task { await model.loadOlderMessages() } },
-            // A group has no "+", so it gets no panel to warm up.
-            attachmentKeyboard: isGroup ? nil : composerState.attachmentKeyboard)
+            // Without "+" (a group, or a server with no upload service) there is no panel to warm up.
+            attachmentKeyboard: isGroup || !model.canSendAttachments ? nil : composerState.attachmentKeyboard)
             // The controller pins the composer to the keyboard itself and insets the messages to match.
             .ignoresSafeArea(.keyboard)
             .ignoresSafeArea(.container, edges: [.top, .bottom])

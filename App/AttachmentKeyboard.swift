@@ -149,8 +149,9 @@ final class AttachmentKeyboardResponder: UIView {
 
     /// Builds and lays out the panel once the chat is on screen, so the first "+" only presents it. Building the
     /// glass chips and the rail, and their first layout, measured 60-100 ms of main-thread time in a Debug build
-    /// when they ran between the tap and the start of the keyboard animation. The first chat after launch also
-    /// reads the recent photos ahead, off the main thread, when the user allowed access before.
+    /// when they ran between the tap and the start of the keyboard animation. Once a panel has asked for photo
+    /// access (in any earlier run), the first chat after launch also reads the recent photos ahead, off the main
+    /// thread, when the user allowed it.
     func warmUp() {
         guard panel == nil, let window = host?.view.window else { return }
         RecentPhotosLibrary.shared.prepare()
@@ -532,13 +533,13 @@ private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, 
 /// The recent photos every chat's panel shows, read once per process. Each chat used to build its own source, so
 /// every chat paid the PhotoKit connection, the observer registration and the first fetch again on its first "+".
 /// The fetch result stays current through the change observer; a panel opening under a different access (limited
-/// to full, or a new grant) reads again. The panel still asks for access on its first open; before that, the
-/// warm-up only reads the access level and reads the library ahead only when the user allowed it earlier.
+/// to full, or a new grant) reads again. The panel asks for access on its first open; until a panel has opened
+/// once on this install, nothing here touches PhotoKit, so a warm-up before that does no photo work at all.
 @MainActor private final class RecentPhotosLibrary {
     static let shared = RecentPhotosLibrary()
     static let limit = 96
-    /// Shared, so a chat opened later does not start with an empty image cache.
-    let imageManager = PHCachingImageManager()
+    /// Shared, so a chat opened later does not start with an empty image cache. Made with the first tile.
+    lazy var imageManager = PHCachingImageManager()
     private let source = RecentPhotosSource()
     /// The last read and the access it was made under; `nil` until the first read lands, or after a denial.
     private(set) var assets: PHFetchResult<PHAsset>?
@@ -553,10 +554,17 @@ private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, 
 
     func attach(_ rail: RecentPhotosRail) { rails.add(rail) }
 
+    /// Set when a panel first opens, which is where access is asked; kept across launches with the install.
+    private static let askedKey = "attachmentKeyboard.photosAsked"
+
+    static func panelOpened() {
+        if !UserDefaults.standard.bool(forKey: askedKey) { UserDefaults.standard.set(true, forKey: askedKey) }
+    }
+
     /// After a chat appears: reads ahead when access was given earlier, so the first "+" finds the tiles. It
-    /// never asks, and a panel that opened meanwhile has the last word.
+    /// never asks, does nothing before a panel has asked, and a panel that opened meanwhile has the last word.
     func prepare() {
-        guard readUnder == nil else { return }
+        guard readUnder == nil, UserDefaults.standard.bool(forKey: Self.askedKey) else { return }
         source.status { [weak self] status in
             guard let self, readUnder == nil, status == .authorized || status == .limited else { return }
             read(under: status)
@@ -655,6 +663,7 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
 
     /// Asked for on first open only, never at launch.
     func present() {
+        RecentPhotosLibrary.panelOpened()
         alpha = 0
         UIView.animate(withDuration: 0.3) { self.alpha = 1 }
         if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined {
