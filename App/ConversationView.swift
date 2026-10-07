@@ -182,11 +182,15 @@ struct ConversationView: View {
         let text = state.draft
         let account = model.accountID
         let reply = replyingTo
+        // Cleared on the tap, not once the send settles: anything typed meanwhile would otherwise leave the sent
+        // text behind. A failure puts the text back if the field is still empty.
+        state.draft = ""
         if let editing {
             Task {
-                if await model.edit(messageID: editing.id, body: text), state.draft == text, model.accountID == account {
-                    state.draft = ""
+                if await model.edit(messageID: editing.id, body: text), model.accountID == account {
                     if self.editing?.id == editing.id { self.editing = nil }
+                } else if state.draft.isEmpty, model.accountID == account {
+                    state.draft = text
                 }
             }
             return
@@ -207,9 +211,11 @@ struct ConversationView: View {
             }, sendCaption: { text in
                 model.accountID == account ? await model.send(text, to: chatID, replyingTo: reply) : false
             })
-            if sent.caption, state.draft == text, model.accountID == account {
-                state.draft = ""
+            guard model.accountID == account else { return }
+            if sent.caption {
                 if replyingTo?.id == reply?.id { replyingTo = nil }
+            } else if state.draft.isEmpty {
+                state.draft = text
             }
         }
     }
