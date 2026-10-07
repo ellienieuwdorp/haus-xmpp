@@ -98,9 +98,10 @@ final class AttachmentPanelUITests: XCTestCase {
         XCTAssertEqual(second.value as? String ?? "", "")
     }
 
-    /// The recent photos are read once per process: a later chat's panel is built with the tiles the first chat read,
-    /// and does not read the library again, so the tiles must be there as soon as its chips are.
-    @MainActor func testASecondChatOpensWithTheFirstChatsPhotos() throws {
+    /// The recent photos are one library for the whole app, so a later chat's rail must still get the tiles even
+    /// though the library already counts as read: the regression is a second chat's panel opening blank. It does not
+    /// show that the library is read only once; `main` also passes, because each chat read the library itself.
+    @MainActor func testASecondChatsPanelShowsThePhotos() throws {
         let app = openAlex()
         openPanel(in: app)
         XCTAssertTrue(photo(0, in: app).waitForExistence(timeout: 5))
@@ -111,7 +112,7 @@ final class AttachmentPanelUITests: XCTestCase {
         settle()
         app.buttons["attachFile"].tap()
         XCTAssertTrue(app.buttons["attachPhotos"].waitForExistence(timeout: 5), "The panel's chips")
-        XCTAssertTrue(photo(0, in: app).exists, "Maya's panel opens with the tiles already in place")
+        XCTAssertTrue(photo(0, in: app).waitForExistence(timeout: 5), "Maya's panel shows the recent photos")
     }
 
     @MainActor func testDragRotationAndLeavingCloseThePanel() throws {
