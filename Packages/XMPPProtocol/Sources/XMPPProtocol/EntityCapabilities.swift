@@ -8,7 +8,8 @@ public enum EntityCapabilities {
     public static let node = "https://xmpp.haus/ios"
     public static let identity = "client/phone//Haus XMPP"
     /// Only what the wire code sends and parses: peers gate reactions, replies and file sharing on this list
-    /// (XEP-0444 §2 makes advertising reactions a MUST).
+    /// (XEP-0444 §2 makes advertising reactions a MUST). The MUC namespace stays out until invitations are parsed
+    /// (MS-094): peers check it (XEP-0045 §6.1) before sending an invitation this client cannot yet show.
     public static var features: [String] {
         ["http://jabber.org/protocol/disco#info", "http://jabber.org/protocol/caps", "urn:xmpp:ping", "urn:xmpp:receipts", "urn:xmpp:chat-markers:0", "urn:xmpp:message-retract:1", "urn:xmpp:message-correct:0", XMPPChatState.namespace, PresenceWire.lastActivityNamespace, AvatarWire.metadataNode + "+notify", DisplayedSync.node + "+notify",
          "urn:xmpp:reactions:0", "urn:xmpp:reply:0", "urn:xmpp:fallback:0", MessageContent.FileSharing.namespace, MessageContent.FileSharing.encryptedNamespace,
