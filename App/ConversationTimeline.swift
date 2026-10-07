@@ -1242,7 +1242,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             let authorWidth = (reply.author as NSString).size(withAttributes: [.font: quoteAuthor.font!]).width
             // A still widens the quote by its own slot only; the bubble's other width rules are unchanged.
             let still: CGFloat = reply.thumbnail == nil ? 0 : TimelineReply.thumbnailSide + 4
-            quoteWidth = min(limit, max(bodyWidth, authorWidth)) + 45 + still
+            // Rounded up: a label given exactly its fractional text width truncates ("Pho…") when the quote is the widest part.
+            quoteWidth = ceil(min(limit, max(bodyWidth, authorWidth))) + 45 + still
         }
         var width = min(maximumTextWidth + 24, max(quoteWidth, max(metadataWidth, max(44, ceil(measured.width) + 25))))
         if let attachment = message?.attachment {
@@ -1605,7 +1606,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         textView.font = message.showsPlaceholder ? UIFont(descriptor: bodyDescriptor.withSymbolicTraits(.traitItalic) ?? bodyDescriptor, size: 0) : .preferredFont(forTextStyle: .body)
         textView.textColor = message.showsPlaceholder ? meta : text
         configureAttachment(message.showsPlaceholder ? nil : message.attachment, isOutgoing: message.isOutgoing, textColor: text)
-        var descriptions = ["\(message.isOutgoing ? "You" : (message.author ?? "Contact")): \(shown)"]
+        let speaker = message.isOutgoing ? "You" : (message.author ?? "Contact")
+        var descriptions = [shown.isEmpty ? speaker : "\(speaker): \(shown)"]
         if message.unreadable != nil { descriptions.append("not readable on this device") }
         if message.isEdited { descriptions.append("edited") }
         if !message.showsPlaceholder, let attachment = message.attachment { descriptions.append("\(attachment.kindLabel) \(attachment.name)" + (attachment.localURL == nil ? ", downloading" : "")) }
@@ -1619,17 +1621,25 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         for reaction in message.reactions {
             reactionRow.addArrangedSubview(ReactionPill(reaction, onTap: message.canReact ? { [weak self] in self?.reactionAction(reaction.emoji) } : nil))
         }
-        textView.accessibilityLabel = descriptions.joined(separator: ", ")
-        textView.accessibilityCustomActions = actions().map { action in UIAccessibilityCustomAction(name: action.title) { _ in action.perform(); return true } }
+        var customActions = actions().map { action in UIAccessibilityCustomAction(name: action.title) { _ in action.perform(); return true } }
         if let url = message.attachment?.localURL {
-            textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: "Open \(message.attachment?.kindLabel.lowercased() ?? "file")") { [weak self] _ in self?.openAttachment(url); return true })
+            customActions.append(UIAccessibilityCustomAction(name: "Open \(message.attachment?.kindLabel.lowercased() ?? "file")") { [weak self] _ in self?.openAttachment(url); return true })
         }
         if message.canReact {
             let selected = Set(message.reactions.filter(\.isSelected).map(\.emoji))
             for emoji in TimelineReaction.choices {
                 let actionName = "\(selected.contains(emoji) ? "Remove" : "Add") \(TimelineReaction.name(for: emoji)) reaction"
-                textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: actionName) { _ in reaction(emoji); return true })
+                customActions.append(UIAccessibilityCustomAction(name: actionName) { _ in reaction(emoji); return true })
             }
+        }
+        // The text view speaks for the message; a file with no caption hides it, so the file itself speaks instead
+        // (otherwise VoiceOver could not reach the message at all).
+        let speaksForMessage: UIView = textView.isHidden ? attachmentArea : textView
+        attachmentArea.isAccessibilityElement = textView.isHidden
+        attachmentArea.accessibilityTraits = textView.isHidden && showsPreview ? .image : .none
+        for view in [textView, attachmentArea] as [UIView] {
+            view.accessibilityLabel = view === speaksForMessage ? descriptions.joined(separator: ", ") : nil
+            view.accessibilityCustomActions = view === speaksForMessage ? customActions : nil
         }
         star.alpha = message.isStarred ? 1 : 0
         time.text = [message.isEdited ? "Edited" : nil, message.securityNotice, message.sentAt?.formatted(date: .omitted, time: .shortened)].compactMap { $0 }.joined(separator: " · ")
