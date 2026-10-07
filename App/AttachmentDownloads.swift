@@ -447,7 +447,7 @@ final class AttachmentDownloadCenter {
         let waiting = queue.finish(key).filter { states[$0] != nil }
         jobs[key] = nil
         if outcome == .state(.failed) || outcome == .state(.mismatch) {
-            Logger(subsystem: "haus.xmpp.ios", category: "attachments").error("Download of \(job.attachment.name, privacy: .public) failed: \(String(describing: outcome), privacy: .public)")
+            Logger(subsystem: "haus.xmpp.ios", category: "attachments").error("Download of \(job.attachment.name, privacy: .private) failed: \(String(describing: outcome), privacy: .public)")
         }
         switch outcome {
         case .saved:
