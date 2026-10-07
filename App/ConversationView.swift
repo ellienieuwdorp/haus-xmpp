@@ -18,7 +18,27 @@ import UniformTypeIdentifiers
     var dispatching = false
     /// Counts Sends, so a rail pick that was still preparing when Send took the tray stays out of the next message.
     @ObservationIgnored var sends = 0
+    /// The draft when a finger last landed on Send. A tap outside the field makes UIKit accept a pending
+    /// autocorrection, and it does so after touch-down but before the button's action runs.
+    @ObservationIgnored var draftAtSendTouch: (text: String, at: Date)?
     static let trayLimit = 10
+
+    /// What Send sends: the draft as typed, when all the tap changed was the word being typed. A suggestion the
+    /// user never picked stays out of the message.
+    func draftForSend() -> String {
+        defer { draftAtSendTouch = nil }
+        guard let touch = draftAtSendTouch, Date.now.timeIntervalSince(touch.at) < 2 else { return draft }
+        return Self.uncorrected(typed: touch.text, current: draft) ?? draft
+    }
+
+    /// `typed` when `current` only rewrites its last word, as an autocorrection does. Added text (dictation
+    /// finishing) or a change reaching past that word returns nil, so it stands.
+    static func uncorrected(typed: String, current: String) -> String? {
+        let shared = zip(typed, current).prefix { $0 == $1 }.count
+        let word = typed.dropFirst(shared)
+        guard !word.isEmpty, !word.contains(where: \.isWhitespace) else { return nil }
+        return typed
+    }
 
     /// Each file as its own message with no body, then the caption last: Conversations shows a file only when the
     /// body is exactly its link. Stops at the first refusal and reports how many files went and whether the caption did.
@@ -179,14 +199,18 @@ struct ConversationView: View {
 
     private func send() {
         let state = composerState
-        let text = state.draft
+        let text = state.draftForSend()
         let account = model.accountID
         let reply = replyingTo
+        // Cleared on the tap, not once the send settles: anything typed meanwhile would otherwise leave the sent
+        // text behind. A failure puts the text back if the field is still empty.
+        state.draft = ""
         if let editing {
             Task {
-                if await model.edit(messageID: editing.id, body: text), state.draft == text, model.accountID == account {
-                    state.draft = ""
+                if await model.edit(messageID: editing.id, body: text), model.accountID == account {
                     if self.editing?.id == editing.id { self.editing = nil }
+                } else if state.draft.isEmpty, model.accountID == account {
+                    state.draft = text
                 }
             }
             return
@@ -207,9 +231,11 @@ struct ConversationView: View {
             }, sendCaption: { text in
                 model.accountID == account ? await model.send(text, to: chatID, replyingTo: reply) : false
             })
-            if sent.caption, state.draft == text, model.accountID == account {
-                state.draft = ""
+            guard model.accountID == account else { return }
+            if sent.caption {
                 if replyingTo?.id == reply?.id { replyingTo = nil }
+            } else if state.draft.isEmpty {
+                state.draft = text
             }
         }
     }
@@ -629,6 +655,7 @@ struct ConversationComposer: View {
                             }
                             .buttonStyle(CircularGlassButtonStyle(diameter: 34))
                             .disabled(!canSend)
+                            .background(TouchDownProbe { [state] in state.draftAtSendTouch = (state.draft, .now) })
                             .accessibilityLabel(editing == nil ? "Send message" : "Save edit").accessibilityIdentifier("sendMessage")
                         }
                         .frame(minHeight: 44)
@@ -725,6 +752,50 @@ struct AttachmentTray: View {
             }
             .disabled(frozen)
             .accessibilityLabel("Remove \(label)").accessibilityIdentifier("removeAttachment")
+        }
+    }
+}
+
+/// Reports a finger landing on its frame before any control there sees the touch. It watches the window and
+/// never takes part in the touch, so the button on top of it behaves as before.
+struct TouchDownProbe: UIViewRepresentable {
+    let onTouchDown: () -> Void
+
+    func makeUIView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.isUserInteractionEnabled = false
+        view.onTouchDown = onTouchDown
+        return view
+    }
+
+    func updateUIView(_ view: ProbeView, context: Context) { view.onTouchDown = onTouchDown }
+
+    final class ProbeView: UIView {
+        var onTouchDown: () -> Void = {}
+        private lazy var watcher = TouchWatcher(probe: self)
+
+        override func willMove(toWindow newWindow: UIWindow?) {
+            super.willMove(toWindow: newWindow)
+            window?.removeGestureRecognizer(watcher)
+            newWindow?.addGestureRecognizer(watcher)
+        }
+    }
+
+    /// Fails on the first touch, so it never delays, cancels or claims one.
+    final class TouchWatcher: UIGestureRecognizer {
+        private unowned let probe: ProbeView
+
+        init(probe: ProbeView) {
+            self.probe = probe
+            super.init(target: nil, action: nil)
+            cancelsTouchesInView = false
+            delaysTouchesBegan = false
+            delaysTouchesEnded = false
+        }
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            if touches.contains(where: { probe.bounds.contains($0.location(in: probe)) }) { probe.onTouchDown() }
+            state = .failed
         }
     }
 }
