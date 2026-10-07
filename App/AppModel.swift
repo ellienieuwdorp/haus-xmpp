@@ -136,10 +136,9 @@ final class AppModel {
     @ObservationIgnored private var acquiringOwnership = false
     @ObservationIgnored private var hasTransportOwnership = false
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
-    @ObservationIgnored private var reconnectAttempt = 0
+    @ObservationIgnored private var reconnection = ReconnectPolicy()
     @ObservationIgnored private var userWantsOffline = false
     @ObservationIgnored private var authenticationRejected = false
-    @ObservationIgnored private var reportedSetupFailure: String?
     @ObservationIgnored private let pathMonitor = NWPathMonitor()
     /// The chat the encryption projection describes. Set as a chat opens, before its store read returns, and kept
     /// across pop-back, disconnect and reconnect; only another chat or account replaces it.
@@ -227,6 +226,9 @@ final class AppModel {
     /// and reconnect. Observed: the composer's attach button follows it.
     private var uploadService: XMPPUploadService?
     private var uploads: UploadServiceMemory { UploadServiceMemory(defaults: preferences) }
+    /// True from the start of a connection's setup until its upload discovery settled; false when a resume skipped it.
+    @ObservationIgnored private var uploadReconciliation = UploadReconciliation()
+    private var serverProfiles: ServerProfileMemory { ServerProfileMemory(defaults: preferences) }
     private var files: AttachmentFiles? { storageDirectory.map { AttachmentFiles(directory: $0, account: accountID) } }
     @ObservationIgnored private var uploader: AttachmentUploader?
     @ObservationIgnored private var storageDirectory: URL?
@@ -484,7 +486,8 @@ final class AppModel {
             return false
         }
         let manual = savedEndpoint == nil
-        if manual { userWantsOffline = false; authenticationRejected = false; reconnectAttempt = 0 }
+        // Signing in (again, or as another account) starts without the backoff or the alert already shown.
+        if manual { userWantsOffline = false; authenticationRejected = false; reconnection = ReconnectPolicy() }
         let fixedEndpoint = server ?? (Self.labDomains.contains(requestedDomain)
             ? XMPPEndpoint(host: requestedDomain == "localhost" ? DevelopmentEndpoint.host : requestedDomain, port: 5223, security: .directTLS) : nil)
         if let sessionAccount, sessionAccount.accountID != username + "@" + requestedDomain {
@@ -592,13 +595,6 @@ final class AppModel {
         }
     }
 
-    /// Reconnect delay for the given consecutive failure count: immediate, then 1, 2, 4 … 60 s with jitter.
-    nonisolated static func reconnectDelay(attempt: Int) -> Duration {
-        guard attempt > 0 else { return .zero }
-        let base = min(60.0, pow(2.0, Double(attempt - 1)))
-        return .seconds(base * Double.random(in: 1.0...1.25))
-    }
-
     /// Desired state: connected whenever the app is in front with an account whose password still works.
     private var wantsConnection: Bool {
         foreground && !quiescing && !userWantsOffline && !authenticationRejected && sessionAccount != nil && !isDemo && upgradeState == .none
@@ -608,21 +604,22 @@ final class AppModel {
     /// change (scene, network path, sign-in, disconnect) only updates state and calls this.
     private func reconcile() {
         guard wantsConnection, session.isConnectable, reconnectTask == nil, let saved = sessionAccount else { return }
-        let delay = Self.reconnectDelay(attempt: reconnectAttempt)
+        let delay = reconnection.nextDelay
+        Self.syncLog.notice("reconnect in \(Int(delay / .milliseconds(1)), privacy: .public) ms attempt=\(self.reconnection.attempt, privacy: .public)")
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(for: delay)
             guard let self, !Task.isCancelled else { return }
             await self.lifecycleTask?.value
             self.reconnectTask = nil
             guard self.wantsConnection, self.session.isConnectable, self.sessionAccount == saved else { return }
-            self.reconnectAttempt += 1
+            self.reconnection.attemptStarted()
             _ = await self.connect(username: saved.username, password: saved.password, savedEndpoint: saved)
         }
     }
 
     private func networkBecameReachable() {
         guard wantsConnection, session.isConnectable else { return }
-        reconnectAttempt = 0
+        reconnection.retryNow()
         reconnectTask?.cancel(); reconnectTask = nil
         reconcile()
     }
@@ -634,6 +631,9 @@ final class AppModel {
         // Replies saved before the upgrade for this account are not sent after it signed out.
         if !account.isEmpty { try? snapshots?.removeSavedReplies(of: account) }
         uploads.forget(account: account)
+        serverProfiles.forget(account: account)
+        // The next account starts without the backoff or the alert this one earned.
+        reconnection = ReconnectPolicy()
         selectAccount("")
         preferences.removeObject(forKey: "lastAccount")
     }
@@ -723,7 +723,7 @@ final class AppModel {
                 guard self.foreground else { return }
                 self.returnedToForegroundForUpgrade()
                 self.refreshNotificationPermission()
-                self.reconnectAttempt = 0
+                self.reconnection.retryNow()
                 self.reconcile()
                 if let client = self.client { try? await client.setClientActive(true) }
                 await self.refresh()
@@ -1469,6 +1469,7 @@ final class AppModel {
             case .online:
                 session = .connected(settingUp: ConnectionSetup.featuresStep)
                 onlineAt = .now
+                reconnection.online()
                 firstMessageLogged = false
                 liveStoredLogged = false
                 catchUpByArchive = [:]
@@ -1502,7 +1503,7 @@ final class AppModel {
                 setupTask = Task { [weak self] in
                     guard let self else { return }
                     await self.runConnectionSetup(account: account, client: client, encryption: encryption, store: store,
-                                                  identityExists: identityExists, token: token)
+                                                  identityExists: identityExists, resumed: resumed, token: token)
                     if self.generation == token { self.setupTask = nil }
                 }
             case .disconnected(let reason):
@@ -1518,6 +1519,7 @@ final class AppModel {
                 resetPresence()
                 drainTask?.cancel()
                 if case .needsAttention = session {} else { session = .offline(reason: reason) }
+                reconnection.ended()
                 reconcile()
             }
         case .chatState(let update):
@@ -1738,13 +1740,32 @@ final class AppModel {
     /// Builds `ConnectionSetup`'s operations from this model's calls and applies its events under the
     /// generation fence. Every operation runs inside the setup task; none spawns an unstructured task.
     private func runConnectionSetup(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore,
-                                    identityExists: Bool, token: UUID) async {
+                                    identityExists: Bool, resumed: Bool, token: UUID) async {
+        let profiles = serverProfiles
+        // The stream this connection runs on, as the SM snapshot names it; nil without resumable stream management.
+        let streamID: @Sendable () async -> String? = {
+            try? await StreamPersistence(store: store, accountID: account, encryption: encryption).load()?.streamID
+        }
+        let memory = profiles.memory(account: account, stream: resumed ? await streamID() : nil,
+                                     uploadsFresh: uploads.isFresh(account: account))
+        let setup = ConnectionSetup(identityExists: identityExists, resumed: resumed, memory: memory)
+        // The stream ID is a store read; a newer connection may have started meanwhile.
+        guard setupIsCurrent(token) else { return }
+        if resumed {
+            Self.syncLog.notice("resume reuses features=\(setup.skipsFeatures, privacy: .public) carbons=\(setup.skipsCarbons, privacy: .public) uploads=\(setup.skipsUploads, privacy: .public)")
+        }
+        uploadReconciliation.setupStarted(discovers: !setup.skipsUploads)
         let operations = ConnectionSetup.Operations(
             features: { [domain = accountDomain] in
-                try await ConnectionSetup.discoverFeatures(server: { try await client.discoveryFeatures(for: domain) },
-                                                           account: { try await client.discoveryFeatures() })
+                let found = try await ConnectionSetup.discoverFeatures(server: { try await client.discoveryFeatures(for: domain) },
+                                                                       account: { try await client.discoveryFeatures() })
+                if found.complete { profiles.discovered(found.features, account: account) }
+                return found.features
             },
-            enableCarbons: { try await client.setCarbonsEnabled() },
+            enableCarbons: {
+                try await client.setCarbonsEnabled()
+                profiles.carbonsEnabled(account: account, stream: await streamID())
+            },
             discoverUploads: { [weak self] in
                 // Optional: a server without XEP-0363 just has no attach button. Only a completed answer changes
                 // what the button remembers; a discovery that throws keeps the last one.
@@ -1771,14 +1792,20 @@ final class AppModel {
                 }
             },
             retryPending: { try? await encryption.retryPendingIncoming(account: account, transport: client) })
-        await ConnectionSetup(identityExists: identityExists).run(operations: operations) { [weak self] event in
+        await setup.run(operations: operations) { [weak self] event in
             await self?.applySetupEvent(event, account: account, client: client, token: token)
         }
     }
 
-    private func settleUploadDiscovery(_ discovery: Result<XMPPUploadService?, any Error>, account: String, token: UUID) {
+    /// Discovery now ends after `.ready`, so `.ready` reconciles stranded uploads only against a known answer; a later
+    /// completed discovery reconciles them when nothing was stored or when it withdraws the stored service.
+    private func settleUploadDiscovery(_ discovery: Result<XMPPUploadService?, any Error>, account: String, token: UUID) async {
         guard generation == token else { return }
-        uploadService = uploads.settle(account: account, previous: uploadService, discovery: discovery)
+        let previous = uploadService
+        uploadService = uploads.settle(account: account, previous: previous, discovery: discovery)
+        if case .failure(let error) = discovery { Self.syncLog.notice("upload discovery kept the stored service: \(ConnectionSetup.detail(error), privacy: .public)") }
+        guard uploadReconciliation.discoverySettled(discovery, previous: previous, ready: session.isReady) else { return }
+        await reconcileUploads()
     }
 
     /// True while this connection's setup may still change state. `.disconnected` cancels the setup task without
@@ -1790,13 +1817,12 @@ final class AppModel {
         // Runs in the setup child's task on the main actor, so a `.disconnected` handled before this job ran has
         // already cancelled it.
         guard setupIsCurrent(token) else { return }
+        reconnection.observe(event)
         switch event {
         case .step(let step):
             if !session.isReady { session = .connected(settingUp: step) }
         case .ready:
             session = .ready
-            reconnectAttempt = 0
-            reportedSetupFailure = nil
             Self.syncLog.notice("ready +\(self.syncElapsed(), privacy: .public) ms")
             // Roster pushes are answered only after a fetch on this stream. Its result arrives as a
             // `.rosterItems` event, which then revokes and asks (see there).
@@ -1806,7 +1832,7 @@ final class AppModel {
             await refresh()
             guard setupIsCurrent(token) else { return }
             startOutbox()
-            await reconcileUploads()
+            if uploadReconciliation.reconcilesAtReady(stored: uploadService) { await reconcileUploads() }
             if let openChatID { await loadEncryptionDetails(for: openChatID) }
             avatarChecked = []
             await loadAvatar(for: account)
@@ -1825,6 +1851,10 @@ final class AppModel {
                 // XEP-0490 after the walk, so the ids other devices published name messages we now hold.
                 syncReadState(account: account, client: client, token: token)
             }
+        case .degraded(let step, let detail):
+            Self.syncLog.notice("setup went on without \(step, privacy: .public): \(detail, privacy: .public)")
+        case .settled:
+            Self.syncLog.notice("settled +\(self.syncElapsed(), privacy: .public) ms")
         case .failed(let step, let detail):
             catchUp = nil
             if step == ConnectionSetup.archiveStep { Self.syncLog.notice("catch-up failed +\(self.syncElapsed(), privacy: .public) ms") }
@@ -1838,8 +1868,7 @@ final class AppModel {
         Logger(subsystem: "haus.xmpp.ios", category: "encryption").error("Encryption setup failed at \(step, privacy: .public): \(detail, privacy: .public)")
         session = .needsAttention(step: step, detail: detail)
         encryptionAttention.note("Setup failed at \(step): \(detail)")
-        if reportedSetupFailure != detail {
-            reportedSetupFailure = detail
+        if reconnection.shouldAlert(detail) {
             self.error = wasReady ? "Could not finish synchronizing (\(step): \(detail))."
                 : "Could not prepare encryption (\(step): \(detail)). Your queued messages have not been sent."
         }
