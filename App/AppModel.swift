@@ -1749,6 +1749,8 @@ final class AppModel {
         let memory = profiles.memory(account: account, stream: resumed ? await streamID() : nil,
                                      uploadsFresh: uploads.isFresh(account: account))
         let setup = ConnectionSetup(identityExists: identityExists, resumed: resumed, memory: memory)
+        // The stream ID is a store read; a newer connection may have started meanwhile.
+        guard setupIsCurrent(token) else { return }
         if resumed {
             Self.syncLog.notice("resume reuses features=\(setup.skipsFeatures, privacy: .public) carbons=\(setup.skipsCarbons, privacy: .public) uploads=\(setup.skipsUploads, privacy: .public)")
         }
