@@ -486,7 +486,8 @@ final class AppModel {
             return false
         }
         let manual = savedEndpoint == nil
-        if manual { userWantsOffline = false; authenticationRejected = false; reconnection.retryNow() }
+        // Signing in (again, or as another account) starts without the backoff or the alert already shown.
+        if manual { userWantsOffline = false; authenticationRejected = false; reconnection = ReconnectPolicy() }
         let fixedEndpoint = server ?? (Self.labDomains.contains(requestedDomain)
             ? XMPPEndpoint(host: requestedDomain == "localhost" ? DevelopmentEndpoint.host : requestedDomain, port: 5223, security: .directTLS) : nil)
         if let sessionAccount, sessionAccount.accountID != username + "@" + requestedDomain {

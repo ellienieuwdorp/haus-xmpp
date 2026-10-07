@@ -75,8 +75,8 @@ struct ReconnectPolicy {
         settled = false
     }
 
-    /// The user acted (sign-in, return to the foreground, network back): retry at once. A failure that then repeats
-    /// is not shown again.
+    /// The app returned to the foreground or the network came back: retry at once. A failure that then repeats is not
+    /// shown again. A sign-in starts from a new policy instead.
     mutating func retryNow() { attempt = 0 }
 
     /// True the first time this failure is seen since the last healthy session.
