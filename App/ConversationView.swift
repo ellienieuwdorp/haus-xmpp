@@ -119,7 +119,8 @@ struct ConversationView: View {
         let canRevise = model.canRevise(message)
         return TimelineMessage(id: message.id, body: message.body, isOutgoing: message.isOutgoing, isStarred: message.isStarred,
                                attachment: message.attachment.map { TimelineAttachment(name: $0.name, mediaType: $0.mediaType, size: $0.size, width: $0.width, height: $0.height,
-                                                                                       localURL: model.attachmentFiles[message.id]) },
+                                                                                       localURL: model.attachmentFiles[message.id],
+                                                                                       download: model.attachmentDownloads[message.id] ?? .loading) },
                                sentAt: message.sentAt, status: status(message),
                                reply: message.reply.map { TimelineReply(author: authorName($0.senderID), body: quotedUnsent ? "Message unsent" : $0.body) },
                                securityNotice: !model.isDemo && message.encryptionProfile == nil ? "Not encrypted" : nil,
@@ -297,6 +298,7 @@ struct ConversationView: View {
                         || id == model.messages.last(where: { !$0.isOutgoing })?.id else { return }
                 Task { await model.markDisplayed(id) }
             }, onRestoreComposerFocus: { composerState.focused = true }, onReachTop: { Task { await model.loadOlderMessages() } },
+            onAttachmentDisplayed: { model.attachmentDisplayed($0) }, onDownloadAttachment: { model.downloadAttachment($0) },
             attachmentKeyboard: composerState.attachmentKeyboard)
             // The controller pins the composer to the keyboard itself and insets the messages to match.
             .ignoresSafeArea(.keyboard)
