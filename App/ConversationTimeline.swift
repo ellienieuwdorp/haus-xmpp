@@ -127,7 +127,7 @@ enum RejectionCopy {
     static func reason(_ rejection: String, isGroup: Bool) -> String {
         switch rejection {
         case "blocked": "You blocked this contact."
-        case "item-not-found", "recipient-unavailable", "service-unavailable", "gone", "jid-malformed", "registration-required", "subscription-required":
+        case "item-not-found", "service-unavailable", "gone", "jid-malformed", "registration-required", "subscription-required":
             isGroup ? "The group isn't available." : "This address doesn't exist or isn't accepting messages."
         case "remote-server-not-found": "Their server couldn't be found."
         case "remote-server-timeout": "Their server didn't answer."

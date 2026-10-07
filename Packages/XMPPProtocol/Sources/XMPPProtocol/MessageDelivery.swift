@@ -45,9 +45,11 @@ public struct XMPPMessageError: Sendable, Equatable {
 
     /// The address whose server returned the stanza: `from` when it is a bare JID (a server bouncing for the address we
     /// sent to, or a room). Nil for an error one of a peer's resources wrote, which says nothing about the peer's other
-    /// resources, and for a bare domain.
+    /// resources, and for a bare domain. Nil for `recipient-unavailable` too: RFC 6120 makes it temporary, and Prosody's
+    /// mod_smacks sends it from the peer's bare JID for each stanza one of the peer's sessions lost unacknowledged,
+    /// while the peer's other sessions may have received the same message.
     public var bouncedAddress: String? {
-        guard let jid = JID(from), jid.resourcepart == nil, jid.localpart != nil else { return nil }
+        guard condition != "recipient-unavailable", let jid = JID(from), jid.resourcepart == nil, jid.localpart != nil else { return nil }
         return jid.bare
     }
 
