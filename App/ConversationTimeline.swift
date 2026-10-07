@@ -55,7 +55,9 @@ struct TimelineAttachment: Sendable, Equatable {
         let parts: [String?] = switch download {
         case .loading: [size, "Downloading…"]
         case .tapToDownload: [size, "Tap to download"]
-        case .failed: ["Couldn’t download", "Tap to retry"]
+        // Short enough for the file card's one detail line.
+        case .failed: ["Failed", "Tap to retry"]
+        case .mismatch: ["Doesn’t match its message"]
         case .tooLarge: [size, "Too large to download"]
         }
         return parts.compactMap { $0 }.joined(separator: " · ")
@@ -65,6 +67,7 @@ struct TimelineAttachment: Sendable, Equatable {
         case .loading: "downloading"
         case .tapToDownload: "not downloaded"
         case .failed: "could not be downloaded"
+        case .mismatch: "does not match its message, not downloaded"
         case .tooLarge: "too large to download"
         }
     }
@@ -1321,7 +1324,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             if attachment.download == .loading { mediaSpinner.startAnimating(); return }
             let symbol = switch attachment.download {
             case .failed: "arrow.clockwise.circle"
-            case .tooLarge: "exclamationmark.circle"
+            case .mismatch, .tooLarge: "exclamationmark.circle"
             default: "arrow.down.circle"
             }
             mediaStatusIcon.image = UIImage(systemName: symbol)

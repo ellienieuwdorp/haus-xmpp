@@ -9,12 +9,13 @@ import XCTest
 /// that opts out of them, the way the loader does on such a path.
 final class AttachmentDownloadTests: XCTestCase {
     private var directory: URL!
+    private var configuration: URLSessionConfiguration!
     private var downloader: AttachmentDownloader!
 
     override func setUpWithError() throws {
         directory = FileManager.default.temporaryDirectory.appending(path: "AttachmentDownloadTests-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let configuration = URLSessionConfiguration.ephemeral
+        configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubServer.self]
         downloader = AttachmentDownloader(configuration: configuration)
     }
@@ -24,15 +25,22 @@ final class AttachmentDownloadTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    func testABodyLongerThanTheDeclaredSizeIsCancelledAndNothingIsSaved() async throws {
+    func testABodyLongerThanTheDeclaredSizeIsCancelledAndNotOfferedAgain() async throws {
         let plain = Data(repeating: 7, count: 1_000)
-        let route = StubServer.serve(.init(body: Data(repeating: 7, count: 8 * 1024 * 1024), announcesLength: false))
-        let destination = directory.appending(path: "file.bin")
-        let outcome = await downloader.download(attachment(declaring: plain.count, hash: Data.sha256(plain), url: route), secret: nil,
-                                                automatic: true, knownSender: true, to: destination)
-        XCTAssertEqual(outcome, .state(.failed))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
-        XCTAssertLessThan(StubServer.delivered(route), 1024 * 1024, "The transfer stops near the cap, not at the end of the body")
+        let body = Data(repeating: 7, count: 8 * 1024 * 1024)
+        for announces in [false, true] {
+            let route = StubServer.serve(.init(body: body, announcesLength: announces))
+            let destination = directory.appending(path: "file.bin")
+            for automatic in [true, false] {
+                let outcome = await downloader.download(attachment(declaring: plain.count, hash: Data.sha256(plain), url: route), secret: nil,
+                                                        automatic: automatic, knownSender: true, to: destination)
+                // A tap would fail the same way: the bubble offers no retry.
+                XCTAssertEqual(outcome, .state(.mismatch), "announced length: \(announces), automatic: \(automatic)")
+                XCTAssertFalse(AttachmentDownloadState.mismatch.canRequest)
+            }
+            XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+            XCTAssertLessThan(StubServer.delivered(route), 2 * 1024 * 1024, "The transfers stop near the cap, not at the end of the body")
+        }
     }
 
     func testAnAnnouncedLengthAboveTheHardLimitIsRefusedBeforeTheBody() async throws {
@@ -82,6 +90,31 @@ final class AttachmentDownloadTests: XCTestCase {
                                                  automatic: true, knownSender: true, to: directory.appending(path: UUID().uuidString))
             XCTAssertEqual(held, .state(.tapToDownload(.size)))
             XCTAssertEqual(StubServer.methods(route), ["HEAD"], "Only the HEAD reaches the server")
+        }
+    }
+
+    func testAServerThatRefusesHeadStillServesSmallFilesOnSight() async throws {
+        let plain = Data(repeating: 5, count: 64 * 1024)
+        let sealed = try AttachmentTransfer.seal(plain)
+        let cases: [(route: StubServer.Route, expected: AttachmentDownloadOutcome, methods: [String])] = [
+            // A presigned GET URL refuses HEAD, and some servers do not implement it: the GET is capped instead.
+            (.init(body: sealed.ciphertext, headStatus: 403), .saved, ["HEAD", "GET"]),
+            (.init(body: sealed.ciphertext, headStatus: 405), .saved, ["HEAD", "GET"]),
+            (.init(body: sealed.ciphertext, headStatus: 405, network: .expensive), .state(.tapToDownload(.network)), ["HEAD", "GET"]),
+            (.init(body: Data(), announcedLength: AttachmentDownloadPolicy.automaticLimit + 1, headStatus: 501), .state(.tapToDownload(.size)), ["HEAD", "GET"]),
+            (.init(body: Data(), announcedLength: AttachmentDownloadPolicy.hardLimit + 1, headStatus: 405), .state(.tooLarge), ["HEAD", "GET"]),
+            // A missing file is not a refused HEAD.
+            (.init(body: sealed.ciphertext, headStatus: 404), .state(.failed), ["HEAD"])
+        ]
+        for (index, item) in cases.enumerated() {
+            let route = StubServer.serve(item.route)
+            let destination = directory.appending(path: "\(index).jpg")
+            let outcome = await downloader.download(attachment(declaring: 0, hash: Data(), url: route), secret: (sealed.key, sealed.iv),
+                                                    automatic: true, knownSender: true, to: destination)
+            XCTAssertEqual(outcome, item.expected, "case \(index)")
+            XCTAssertEqual(StubServer.methods(route), item.methods, "case \(index)")
+            XCTAssertEqual(try? Data(contentsOf: destination), item.expected == .saved ? plain : nil, "case \(index)")
+            XCTAssertEqual(StubServer.delivered(route), item.expected == .saved ? sealed.ciphertext.count : 0, "case \(index)")
         }
     }
 
@@ -145,7 +178,7 @@ final class AttachmentDownloadTests: XCTestCase {
 }
 
 /// An HTTPS server inside the test process. Each `serve` returns a fresh URL; the body is sent in 64 KiB chunks
-/// with a pause between them, so a cancelled transfer visibly stops early.
+/// with a pause between them, so a cancelled transfer visibly stops early and concurrent transfers overlap.
 private final class StubServer: URLProtocol, @unchecked Sendable {
     enum Network: CustomStringConvertible {
         case unconstrained, constrained, expensive
@@ -156,8 +189,13 @@ private final class StubServer: URLProtocol, @unchecked Sendable {
         var announcedLength: Int?
         var announcesLength = true
         var network = Network.unconstrained
-        init(body: Data, announcedLength: Int? = nil, announcesLength: Bool = true, network: Network = .unconstrained) {
+        var headStatus = 200
+        /// Microseconds before each chunk.
+        var pause: useconds_t = 2_000
+        init(body: Data, announcedLength: Int? = nil, announcesLength: Bool = true, headStatus: Int = 200, network: Network = .unconstrained,
+             pause: useconds_t = 2_000) {
             self.body = body; self.announcedLength = announcedLength; self.announcesLength = announcesLength; self.network = network
+            self.headStatus = headStatus; self.pause = pause
         }
     }
 
@@ -165,6 +203,7 @@ private final class StubServer: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var routes: [String: Route] = [:]
     nonisolated(unsafe) private static var sent: [String: Int] = [:]
     nonisolated(unsafe) private static var requests: [String: [String]] = [:]
+    nonisolated(unsafe) private static var sending = 0, peakSending = 0
     private let stopped = NSLock()
     nonisolated(unsafe) private var isStopped = false
 
@@ -175,7 +214,9 @@ private final class StubServer: URLProtocol, @unchecked Sendable {
     }
     static func delivered(_ url: URL) -> Int { lock.withLock { sent[url.path, default: 0] } }
     static func methods(_ url: URL) -> [String] { lock.withLock { requests[url.path, default: []] } }
-    static func reset() { lock.withLock { routes = [:]; sent = [:]; requests = [:] } }
+    /// The most bodies that were being sent at once.
+    static var peakConcurrentBodies: Int { lock.withLock { peakSending } }
+    static func reset() { lock.withLock { routes = [:]; sent = [:]; requests = [:]; sending = 0; peakSending = 0 } }
 
     override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "files.test" }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -197,13 +238,16 @@ private final class StubServer: URLProtocol, @unchecked Sendable {
         }
         var headers = [String: String]()
         if route.announcesLength { headers["Content-Length"] = String(route.announcedLength ?? route.body.count) }
-        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!
+        let status = method == "HEAD" ? route.headStatus : 200
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         guard method == "GET" else { client?.urlProtocolDidFinishLoading(self); return }
+        Self.lock.withLock { Self.sending += 1; Self.peakSending = max(Self.peakSending, Self.sending) }
         DispatchQueue.global().async { [self] in
+            defer { Self.lock.withLock { Self.sending -= 1 } }
             var offset = 0
             while offset < route.body.count {
-                usleep(2_000)
+                usleep(route.pause)
                 guard !stopped.withLock({ isStopped }) else { return }
                 let chunk = route.body.subdata(in: offset..<min(route.body.count, offset + 64 * 1024))
                 offset += chunk.count

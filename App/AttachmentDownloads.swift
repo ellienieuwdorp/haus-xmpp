@@ -20,13 +20,15 @@ enum AttachmentDownloadState: Equatable, Sendable {
     case tapToDownload(AttachmentDownloadHold)
     /// The transfer or its verification failed; a tap tries again.
     case failed
+    /// The body was longer than its message or the server said it would be. Fetching it again cannot succeed.
+    case mismatch
     /// Larger than this app downloads at all; nothing is fetched.
     case tooLarge
 
     var canRequest: Bool {
         switch self {
         case .tapToDownload, .failed: true
-        case .loading, .tooLarge: false
+        case .loading, .mismatch, .tooLarge: false
         }
     }
 }
@@ -46,7 +48,14 @@ enum AttachmentDownloadPolicy {
         let cap: Int
         let allowsExpensive: Bool
         let allowsConstrained: Bool
+        /// What a body past the cap shows, when it is not past the hard limit too. A cap from a declared or announced
+        /// size was a false promise; a cap of the hard limit was a file too large to fetch.
+        var overrun = AttachmentDownloadState.mismatch
     }
+
+    /// A file of unknown size whose server refused the HEAD (a presigned GET URL answers 403, some servers 405): its
+    /// GET is capped at the automatic limit and kept off expensive networks, and a longer body waits for a tap.
+    static let unmeasured = Fetch(cap: automaticLimit, allowsExpensive: false, allowsConstrained: false, overrun: .tapToDownload(.size))
 
     enum Decision: Equatable, Sendable {
         case fetch(Fetch)
@@ -63,7 +72,9 @@ enum AttachmentDownloadPolicy {
     /// `automatic` is a fetch on sight rather than a tap; `knownSender` is false in a stranger's 1:1 chat.
     static func decide(bodyLength: Int?, automatic: Bool, knownSender: Bool) -> Decision {
         if let bodyLength, bodyLength > hardLimit { return .tooLarge }
-        guard automatic else { return .fetch(Fetch(cap: bodyLength ?? hardLimit, allowsExpensive: true, allowsConstrained: true)) }
+        guard automatic else {
+            return .fetch(Fetch(cap: bodyLength ?? hardLimit, allowsExpensive: true, allowsConstrained: true, overrun: bodyLength == nil ? .tooLarge : .mismatch))
+        }
         guard knownSender else { return .hold(.sender) }
         guard let bodyLength else { return .probe }
         guard bodyLength <= automaticLimit else { return .hold(.size) }
@@ -148,9 +159,12 @@ final class AttachmentDownloader: Sendable {
             var decision = AttachmentDownloadPolicy.decide(bodyLength: AttachmentDownloadPolicy.bodyLength(declaredSize: attachment.size),
                                                            automatic: automatic, knownSender: knownSender)
             if decision == .probe {
+                switch try await bodyLength(of: url) {
+                case .announced(let length): decision = AttachmentDownloadPolicy.decide(bodyLength: length, automatic: automatic, knownSender: knownSender)
                 // The server gives no length either: wait for a tap, which downloads under the hard limit.
-                guard let length = try await bodyLength(of: url) else { return .state(.tapToDownload(.size)) }
-                decision = AttachmentDownloadPolicy.decide(bodyLength: length, automatic: automatic, knownSender: knownSender)
+                case .unannounced: return .state(.tapToDownload(.size))
+                case .refused: decision = .fetch(AttachmentDownloadPolicy.unmeasured)
+                }
             }
             let fetch: AttachmentDownloadPolicy.Fetch
             switch decision {
@@ -161,7 +175,9 @@ final class AttachmentDownloader: Sendable {
             }
             let partial = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".download")
             defer { try? FileManager.default.removeItem(at: partial) }
-            let digest = try await body(of: url, fetch, to: partial)
+            let digest: Data
+            do { digest = try await body(of: url, fetch, to: partial) }
+            catch Failure.tooLarge(let atLeast) { return .state(atLeast > AttachmentDownloadPolicy.hardLimit ? .tooLarge : fetch.overrun) }
             try await AttachmentOpener.shared.place(partial, digest: digest, attachment: attachment, secret: secret, at: destination)
             return .saved
         } catch {
@@ -169,15 +185,21 @@ final class AttachmentDownloader: Sendable {
         }
     }
 
-    /// The body length a HEAD announces; nil when the server gives none. Like an automatic fetch, the probe never
-    /// runs on a constrained network.
-    private func bodyLength(of url: URL) async throws -> Int? {
+    private enum Measured { case announced(Int), unannounced, refused }
+
+    /// The body length a HEAD announces. A server may refuse HEAD on a link that serves GET: a presigned URL is
+    /// signed for GET only (403), and some servers do not implement it (405, 501). Like an automatic fetch, the probe
+    /// never runs on a constrained network.
+    private func bodyLength(of url: URL) async throws -> Measured {
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
         request.allowsConstrainedNetworkAccess = false
         let (_, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { throw Failure.badResponse }
-        return http.value(forHTTPHeaderField: "Content-Length").flatMap { Int($0.trimmingCharacters(in: .whitespaces)) }.flatMap { $0 >= 0 ? $0 : nil }
+        guard let http = response as? HTTPURLResponse else { throw Failure.badResponse }
+        if [403, 405, 501].contains(http.statusCode) { return .refused }
+        guard (200...299).contains(http.statusCode) else { throw Failure.badResponse }
+        let length = http.value(forHTTPHeaderField: "Content-Length").flatMap { Int($0.trimmingCharacters(in: .whitespaces)) }.flatMap { $0 >= 0 ? $0 : nil }
+        return length.map(Measured.announced) ?? .unannounced
     }
 
     /// Streams the body to `file`; returns the SHA-256 of what was written.
@@ -202,7 +224,6 @@ final class AttachmentDownloader: Sendable {
             if error.networkUnavailableReason != nil { return .state(.tapToDownload(.network)) }
             if error.code == .cancelled { return .cancelled }
         }
-        if case Failure.tooLarge(let atLeast) = error, atLeast > AttachmentDownloadPolicy.hardLimit { return .state(.tooLarge) }
         return .state(.failed)
     }
 }
@@ -304,3 +325,4 @@ struct AttachmentDownloadJob: Sendable {
     let automatic: Bool
     let knownSender: Bool
 }
+
