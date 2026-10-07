@@ -46,11 +46,15 @@ public enum BackgroundSynchronizationError: Error, Sendable, Equatable {
 public struct BackgroundSynchronizer: Sendable {
     public init() {}
 
+    /// Presents what a run committed, under the lease.
+    public typealias Presentation = @Sendable (MessageStore, PresentationStage) async throws -> Void
+
     /// `leaseWait` is spent inside `timeBudget`: the app or another run may briefly hold the lease (plan D2).
+    /// `presentation` runs early once the own archive committed and rooms follow (`.direct`), and once at the end.
     public func synchronize(databaseURL: URL, wrappingKey: Data, account: BackgroundAccount,
                             timeBudget: Duration = .seconds(20), leaseWait: Duration = .seconds(6),
                             progress: NotificationRunProgress? = nil,
-                            presentation: (@Sendable (MessageStore) async throws -> Void)? = nil) async throws {
+                            presentation: Presentation? = nil) async throws {
         guard timeBudget > .zero, timeBudget <= .seconds(25), leaseWait >= .zero, leaseWait < timeBudget else {
             throw BackgroundSynchronizationError.invalidTimeBudget
         }
@@ -80,59 +84,167 @@ public struct BackgroundSynchronizer: Sendable {
             try await store.recoverInterruptedSubmissions(accountID: account.accountID)
             // Taken before the timer starts, so it is never later than the real deadline.
             let deadline = ContinuousClock.now + timeBudget - waited
-            let caughtUp = CatchUpMark()
-            try await runBackgroundWork(timeBudget: timeBudget - waited, operation: {
-                try await client.connect(route: account.route, domain: account.domain, username: account.username,
-                                         password: account.password, requireSCRAM: account.requiresSCRAM)
-                try Task.checkCancellation()
-                // A fresh bind replaced the session the server pushed for: it must push again and receive room traffic.
-                let fresh = await !client.sessionResumed
-                BackgroundSession.log.notice("background session resumed=\(!fresh, privacy: .public)")
-                async let pushEnabled: Void = fresh ? BackgroundSession.enablePush(account.push, client: client) : ()
-                // Direct messages first: the rejoins start once the own archive is walked (the first room page commits)
-                // or the walk ends, so a long room walk cannot use up their time. Best effort: they never fail the run.
-                let ownArchiveWalked = CatchUpMark()
-                @Sendable func rejoin() async -> Set<String> {
-                    while await !ownArchiveWalked.reached {
-                        guard (try? await Task.sleep(for: .milliseconds(50))) != nil else { return [] }
+            try await BackgroundCatchUp(
+                connect: {
+                    try await client.connect(route: account.route, domain: account.domain, username: account.username,
+                                             password: account.password, requireSCRAM: account.requiresSCRAM)
+                },
+                sessionDuties: { ownArchiveWalked in
+                    // A fresh bind replaced the session the server pushed for: it must push again and receive room traffic.
+                    let fresh = await !client.sessionResumed
+                    BackgroundSession.log.notice("background session resumed=\(!fresh, privacy: .public)")
+                    async let pushEnabled: Void = fresh ? BackgroundSession.enablePush(account.push, client: client) : ()
+                    // Direct messages first: the rejoins start once the own archive is walked, so a long room walk cannot
+                    // use up their time. Best effort: they never fail the run.
+                    @Sendable func rejoin() async -> Set<String> {
+                        while await !ownArchiveWalked.reached {
+                            guard (try? await Task.sleep(for: .milliseconds(50))) != nil else { return [] }
+                        }
+                        return await BackgroundSession.joinRooms(account: account.accountID, client: client, encryption: encryption,
+                                                                 store: store, within: readSyncTimeout(until: deadline))
                     }
-                    return await BackgroundSession.joinRooms(account: account.accountID, client: client, encryption: encryption,
-                                                             store: store, within: readSyncTimeout(until: deadline))
-                }
-                async let joined = fresh ? rejoin() : []
+                    async let joined = fresh ? rejoin() : []
+                    _ = await (pushEnabled, joined)
+                },
                 // No identity initialization, trust acceptance, queued-message preparation or
                 // outbox drain. Resumption may replay only previously authorized exact bytes.
-                let outcome = try await ArchiveSynchronizer(store: store).synchronize(
-                    account: account.accountID, client: client, encryption: encryption,
-                    progress: { if $0.archive != nil { await ownArchiveWalked.reach() } })
-                await ownArchiveWalked.reach()
-                // The own archive holds the direct messages a push is about; without its newest entry the run shows the
-                // fallback, and the next run or the app walks it again. A refused or unreachable room does not fail it.
-                guard outcome.ownArchiveComplete else { throw BackgroundSynchronizationError.ownArchiveIncomplete }
-                await caughtUp.reach()
-                // Best effort from here: the pull, the rejoins and the enable can no longer fail a run whose walk committed.
-                // After catch-up, before the claim: chats read on another device have their pointers moved, which
-                // removes their candidates. Own XEP-0333 markers were applied by the walk and the live consumer.
-                // Best effort within what is left of the budget: a slow or lost server leaves the run a success.
-                if let timeout = readSyncTimeout(until: deadline) {
+                walk: { walkProgress, ownArchiveWalked in
+                    try await ArchiveSynchronizer(store: store).synchronize(account: account.accountID, client: client, encryption: encryption,
+                                                                            progress: walkProgress, ownArchiveWalked: ownArchiveWalked)
+                },
+                pull: { timeout in
                     try await ReadSync(store: store).pull(account: account.accountID, client: client, encryption: encryption, timeout: timeout)
-                }
-                _ = await (pushEnabled, joined)
-            }, consume: {
-                try await consumeUntilDisconnect(after: caughtUp) {
+                },
+                consume: {
                     try await consumeBackgroundEvents(client.events, processor: InboundProcessor(encryption: encryption, client: client, account: account.accountID))
-                }
-            }, stop: { await client.disconnectAndWait() })
-            try Task.checkCancellation()
-            // From here a new push starts the next run: this one's network work is over.
-            progress?.enter(.presenting)
-            try await finishBackgroundPresentation(store: store, presentation: presentation)
+                },
+                stop: { await client.disconnectAndWait() }
+            ).run(store: store, timeBudget: timeBudget - waited, deadline: deadline, progress: progress, presentation: presentation)
         } catch {
             // runBackgroundWork joins crypto, archive and reader work before reaching here.
             // close releases ownership only if this instance acquired it.
             try await store.close()
             throw error
         }
+    }
+}
+
+/// One run's network work and presentations once the lease is held (MS-110). The client sits behind these closures, so
+/// the order can be checked without a server.
+///
+/// Direct messages first: once the own archive committed, the run pulls read state and presents what it has, then walks
+/// the rooms. From then on the deadline only ends the best-effort work (rooms, pull, rejoins, push enable): a slow or
+/// unreachable room can no longer turn committed direct messages into the fallback. The final presentation posts what
+/// the rooms and the live stream committed meanwhile.
+///
+/// Once the early presentation added something, the user may open the app from it, and the app waits for this run's
+/// lease: the rooms then get `roomsAfterPost` more rather than the rest of the budget. Until the final presentation the
+/// run stays joinable, so pushes that arrive meanwhile wait for it instead of queueing a second run.
+struct BackgroundCatchUp: Sendable {
+    let connect: @Sendable () async throws -> Void
+    /// Best-effort work beside the walk (push enable, rejoins once the own archive is walked); never fails the run.
+    let sessionDuties: @Sendable (_ ownArchiveWalked: CatchUpMark) async -> Void
+    /// `ArchiveSynchronizer.synchronize` with its `progress` and `ownArchiveWalked` hooks.
+    let walk: @Sendable (_ progress: @escaping @Sendable (ArchiveSyncProgress) async -> Void,
+                         _ ownArchiveWalked: @escaping @Sendable (_ complete: Bool, _ rooms: Int) async throws -> Void) async throws -> Void
+    /// The XEP-0490 pull, bounded by its argument.
+    let pull: @Sendable (Duration) async throws -> Void
+    let consume: @Sendable () async throws -> Void
+    let stop: @Sendable () async -> Void
+    /// How long rooms may still be walked after the early presentation added something (MS-111 would let the app ask
+    /// for the lease instead).
+    var roomsAfterPost: Duration = .seconds(5)
+
+    func run(store: MessageStore, timeBudget: Duration, deadline: ContinuousClock.Instant, progress: NotificationRunProgress?,
+             presentation: BackgroundSynchronizer.Presentation?) async throws {
+        let caughtUp = CatchUpMark(), ownArchiveWalked = CatchUpMark(), ledger = CatchUpLedger()
+        // Best effort within what is left of the budget: a slow or lost server leaves the run a success.
+        @Sendable func pullReadState() async throws {
+            if let timeout = readSyncTimeout(until: deadline) { try await pull(timeout) }
+            await ledger.notePull()
+        }
+        // The own archive, the early presentation, then the rooms.
+        @Sendable func walkArchives() async throws {
+            try await walk({ if $0.archive != nil, $0.messages > 0 { await ledger.noteRoomMessages() } }, { complete, rooms in
+                await ownArchiveWalked.reach()
+                // The own archive holds the direct messages a push is about; without its newest entry the run shows
+                // the fallback, and the next run or the app walks it again. A refused or unreachable room does not fail it.
+                guard complete else { throw BackgroundSynchronizationError.ownArchiveIncomplete }
+                await caughtUp.reach()
+                guard rooms > 0 else { return }
+                // Before the claim: chats read on another device have their pointers moved, which removes their
+                // candidates. Own XEP-0333 markers were applied by the walk and the live consumer.
+                try await pullReadState()
+                guard let presentation else { return }
+                do { try await presentation(store, .direct) }
+                catch is CancellationError { throw CancellationError() }
+                // The final presentation tries again with everything still pending.
+                catch { BackgroundSession.log.notice("direct presentation failed: \(String(describing: type(of: error)), privacy: .public)") }
+                // Adds are counted as they complete, so one that failed part-way still counts as showing.
+                if (progress?.report.posted ?? 0) > 0 { await ledger.notePostedEarly() }
+            })
+        }
+        try await runBackgroundWork(timeBudget: timeBudget, caughtUp: caughtUp, operation: {
+            try await connect()
+            try Task.checkCancellation()
+            async let duties: Void = sessionDuties(ownArchiveWalked)
+            do {
+                // Once a notification is showing, the rooms get `roomsAfterPost` more: the app may be waiting for the lease.
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    group.addTask { try await walkArchives() }
+                    group.addTask {
+                        while await !ledger.postedEarly { try await Task.sleep(for: .milliseconds(50)) }
+                        try await Task.sleep(for: roomsAfterPost)
+                        throw BackgroundSynchronizationError.deadlineExceeded
+                    }
+                    try await group.next()
+                    group.cancelAll()
+                }
+                await ledger.noteRoomsWalked()
+            } catch {
+                // Rooms are best effort once the own archive committed: their checkpoints stand for the next run. A
+                // storage failure or cancellation still ends the run.
+                guard await caughtUp.reached, !(error is CancellationError), !(error is MessageStoreError) else { throw error }
+                BackgroundSession.log.notice("room walk ended early: \(String(describing: type(of: error)), privacy: .public)")
+                await ledger.noteRoomWalkFailed(error)
+            }
+            // After the rooms, another pull for what their pages brought; with no rooms, the only one.
+            if await ledger.needsPull { try await pullReadState() }
+            await duties
+        }, consume: {
+            try await consumeUntilDisconnect(after: caughtUp) { try await consume() }
+        }, stop: stop)
+        try Task.checkCancellation()
+        // From here a new push starts the next run: this one's network work is over.
+        progress?.enter(.presenting)
+        let stage = await ledger.finalStage(pastDeadline: ContinuousClock.now >= deadline)
+        var final: (@Sendable (MessageStore) async throws -> Void)?
+        if let presentation { final = { try await presentation($0, stage) } }
+        try await finishBackgroundPresentation(store: store, presentation: final)
+    }
+}
+
+/// What one run's catch-up got through, for its final presentation.
+actor CatchUpLedger {
+    /// The early presentation added something: a notification is showing.
+    private(set) var postedEarly = false
+    private var roomsWalked = false, pulled = false, roomMessages = false
+    private var roomError: (any Error)?
+    func notePostedEarly() { postedEarly = true }
+    func noteRoomsWalked() { roomsWalked = true }
+    func noteRoomWalkFailed(_ error: any Error) { roomError = error }
+    func notePull() { pulled = true }
+    func noteRoomMessages() { roomMessages = true }
+    var needsPull: Bool { !pulled || roomMessages }
+    /// Why the rooms were cut short: the deadline, a lost connection (a transport error, or no error when the stream
+    /// ended first), or what the room walk raised (a page that could not be processed).
+    func finalStage(pastDeadline: Bool) -> PresentationStage {
+        guard !roomsWalked else { return .complete }
+        if pastDeadline { return PresentationStage(isFinal: true, unfinished: BackgroundSynchronizationError.deadlineExceeded) }
+        guard let roomError, !(roomError is XMPPClientError) else {
+            return PresentationStage(isFinal: true, unfinished: BackgroundSynchronizationError.connectionEnded)
+        }
+        return PresentationStage(isFinal: true, unfinished: roomError)
     }
 }
 
@@ -209,7 +321,7 @@ public enum BackgroundSession {
     static let log = Logger(subsystem: "haus.xmpp.ios", category: "sync")
 }
 
-/// Set once the archive walk has committed: from then on the run's outcome no longer depends on the connection.
+/// Set once the own archive's walk has committed: from then on the run's outcome no longer depends on the connection.
 actor CatchUpMark {
     private(set) var reached = false
     func reach() { reached = true }
@@ -223,8 +335,8 @@ func readSyncTimeout(until deadline: ContinuousClock.Instant, now: ContinuousClo
     return min(.seconds(5), left)
 }
 
-/// A connection that ends after catch-up committed (while the best-effort pull runs) ends the run as the walk alone
-/// would have: successfully, with the candidates it committed. Before that, a lost connection fails the run as always.
+/// A connection that ends after the own archive committed (while rooms or the best-effort pull run) ends the run
+/// successfully, with the candidates it committed. Before that, a lost connection fails the run as always.
 func consumeUntilDisconnect(after mark: CatchUpMark, _ consume: () async throws -> Void) async throws {
     do { try await consume() }
     catch BackgroundSynchronizationError.connectionEnded {
@@ -276,8 +388,9 @@ func consumeBackgroundEvents(_ events: AsyncStream<XMPPEvent>, processor: Inboun
 }
 
 /// The seam tests lifetime ordering with suspended persistence instead of a fake crypto engine.
-/// Structured children cannot outlive ownership, including when the deadline wins the race.
-func runBackgroundWork(timeBudget: Duration,
+/// Structured children cannot outlive ownership, including when the deadline wins the race. Once `caughtUp` is
+/// reached the deadline ends the work without failing it: what is left is best effort.
+func runBackgroundWork(timeBudget: Duration, caughtUp: CatchUpMark? = nil,
                        operation: @escaping @Sendable () async throws -> Void,
                        consume: @escaping @Sendable () async throws -> Void,
                        stop: @escaping @Sendable () async -> Void) async throws {
@@ -286,6 +399,7 @@ func runBackgroundWork(timeBudget: Duration,
         group.addTask { try await consume() }
         group.addTask {
             try await Task.sleep(for: timeBudget)
+            if let caughtUp, await caughtUp.reached { return }
             throw BackgroundSynchronizationError.deadlineExceeded
         }
         do {

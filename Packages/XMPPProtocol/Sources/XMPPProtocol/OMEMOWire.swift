@@ -73,6 +73,9 @@ public struct XMPPEncryptedMessage: Sendable, Equatable {
     /// XEP-0359 id the account's own archive assigned (`by` = the account's bare JID): the MAM result id, or a live
     /// `<stanza-id/>` from our server. Direct chats' XEP-0490 state refers to messages by it. Nil when unknown.
     public var archiveStanzaID: String? = nil
+    /// When our own server stored a live stanza for this session (offline storage, a hibernated stream's queue): its
+    /// `<delay/>`, clamped to now. Nil for a stanza delivered as it was sent, and for every delay a peer added.
+    public var serverStamp: Date? = nil
 
     public init(id: String, from: String, to: String?, originID: String?, envelope: XMPPOMEMOEnvelope, provenance: XMPPMessageProvenance = .direct,
                 requestsReceipt: Bool = false, markable: Bool = false, hasFallbackBody: Bool = false, replaces: String? = nil) {

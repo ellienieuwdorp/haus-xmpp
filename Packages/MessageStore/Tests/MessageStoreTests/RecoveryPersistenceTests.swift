@@ -250,7 +250,7 @@ private func queue(_ store: MessageStore, account: String = "a", id: String = "m
         CREATE TABLE outbox(sequence INTEGER PRIMARY KEY AUTOINCREMENT,account_id TEXT NOT NULL,message_id TEXT NOT NULL,
         state TEXT NOT NULL CHECK(state IN ('queued','submitting','unconfirmed','failed')),attempt_id TEXT,
         UNIQUE(account_id,message_id),FOREIGN KEY(account_id,message_id) REFERENCES messages(account_id,id));
-        INSERT INTO outbox SELECT * FROM outbox_new;
+        INSERT INTO outbox SELECT sequence,account_id,message_id,state,attempt_id FROM outbox_new;
         DROP TABLE outbox_new;
         CREATE INDEX outbox_queue ON outbox(account_id,state,sequence);
         DROP TABLE stream_management;

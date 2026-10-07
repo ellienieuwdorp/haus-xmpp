@@ -27,11 +27,13 @@ public struct StreamPersistence: XMPPStreamManagementPersistence {
         return true
     }
 
+    /// A row that does not decode to this account's session at the row's revision is unreadable: the connect binds
+    /// fresh and replaces it rather than failing until the resume window ends.
     public func load() async throws -> XMPPStreamManagementSnapshot? {
         guard let saved = try await store.streamManagementState(accountID: accountID) else { return nil }
-        let snapshot = try JSONDecoder().decode(XMPPStreamManagementSnapshot.self, from: saved.data)
-        guard owns(snapshot), snapshot.revision == saved.revision else {
-            throw XMPPStreamManagementError.invalidState
+        guard let snapshot = try? JSONDecoder().decode(XMPPStreamManagementSnapshot.self, from: saved.data),
+              owns(snapshot), snapshot.revision == saved.revision else {
+            throw XMPPStreamManagementUnreadable(revision: saved.revision)
         }
         return snapshot
     }

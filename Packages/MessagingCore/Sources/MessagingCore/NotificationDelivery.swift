@@ -46,6 +46,8 @@ public struct NotificationRunReport: Sendable, Equatable, Codable {
     public var leaseWaitMilliseconds = 0
     /// The icon badge the run computed (a count, not content); nil when it could not.
     public var badge: Int?
+    /// From the start of the run to the first completed add; nil when nothing was posted.
+    public var firstPostMilliseconds: Int?
     public init() {}
 }
 
@@ -71,6 +73,7 @@ public final class NotificationRunProgress: @unchecked Sendable {
     private var currentPhase = NotificationRunPhase.queued
     private var currentReport = NotificationRunReport()
     private var abandoned = false
+    private var soundPlayed = false
     private var joinedCount = 0
     private var expiredCount = 0
     public let started = Date()
@@ -96,6 +99,21 @@ public final class NotificationRunProgress: @unchecked Sendable {
 
     var isJoinable: Bool { lock.withLock { !abandoned && currentPhase < .presenting } }
     func abandon() { lock.withLock { abandoned = true } }
+    /// Whether an add of this run carried the sound, or may still: a run plays one, whichever presentation adds it.
+    var hasPlayedSound: Bool { lock.withLock { soundPlayed } }
+    /// Before an add that carries the sound. One that is cancelled or times out may still land, sound included.
+    func noteAddingSound() { lock.withLock { soundPlayed = true } }
+    /// The add that carried the sound was refused: it shows nothing, so a later presentation plays the sound.
+    func noteSoundRefused() { lock.withLock { soundPlayed = false } }
+    /// One completed add: counted as it happens, so a presentation that fails part-way leaves an exact record.
+    func noteAdded() {
+        lock.withLock {
+            currentReport.posted += 1
+            if currentReport.firstPostMilliseconds == nil {
+                currentReport.firstPostMilliseconds = Int(Date().timeIntervalSince(started) * 1000)
+            }
+        }
+    }
     func noteJoined() { lock.withLock { joinedCount += 1 } }
     func noteExpired() { lock.withLock { expiredCount += 1 } }
 }
@@ -178,6 +196,29 @@ public final class NotificationRunCoordinator: @unchecked Sendable {
     }
 }
 
+/// Which presentation of a run this is. The extension presents direct messages as soon as the own archive committed,
+/// while rooms are still walked, and everything else once its network work ended (MS-110). Each presentation claims
+/// only what it posted; identifiers are stable, so a later one replaces rather than duplicates. A run plays one sound,
+/// on the first add that carries it.
+public struct PresentationStage: Sendable {
+    /// False for the early presentation. It leaves the run's phase alone, so pushes keep joining the run while its
+    /// network work goes on, and it never commits the run: only the final presentation settles it (and an expiring
+    /// request). Cleanup of stale notifications is left to the final one as well.
+    public let isFinal: Bool
+    /// Set on a final presentation whose rooms were not all walked: why they were cut short (the deadline, a lost
+    /// connection, or the error a room page raised). When the run has then added nothing at all, what the push was
+    /// about is unknown: it throws this instead of settling, and the run shows the fallback as it would have before.
+    public let unfinished: (any Error)?
+
+    public init(isFinal: Bool, unfinished: (any Error)? = nil) {
+        self.isFinal = isFinal; self.unfinished = unfinished
+    }
+    /// A run that caught up completely and presents once.
+    public static let complete = PresentationStage(isFinal: true)
+    /// The early presentation after the own archive.
+    public static let direct = PresentationStage(isFinal: false)
+}
+
 /// Posts a batch under the transport lease and then cleans up (plan D1–D4). Every `add` completes before the claimed
 /// rows are deleted and before the run counts as committed; a failed or slow `add` throws, which means fallback.
 public struct NotificationPresenter: Sendable {
@@ -190,25 +231,39 @@ public struct NotificationPresenter: Sendable {
     }
 
     /// `authorize` rereads the protected account after the network work; it throws when the user signed out meanwhile.
-    public func present(store: MessageStore, accountID: String, progress: NotificationRunProgress,
+    public func present(store: MessageStore, accountID: String, progress: NotificationRunProgress, stage: PresentationStage = .complete,
                         authorize: @Sendable () throws -> Void = {}) async throws {
-        progress.enter(.presenting)
+        // An early presentation leaves the phase alone: pushes keep joining the run while it walks rooms.
+        if stage.isFinal { progress.enter(.presenting) }
         try Task.checkCancellation()
         try authorize()
         let batch = try await store.pendingNotifications(accountID: accountID)
         // Best effort: an unknown badge leaves the icon as it is rather than failing the run.
         let badge = try? await NotificationBadge.count(store: store, accountID: accountID)
+        let plan = NotificationPlanner.plan(batch, accountID: accountID, badge: badge, playsSound: !progress.hasPlayedSound)
+        if plan.requests.isEmpty {
+            if progress.report.posted == 0, let unfinished = stage.unfinished { throw unfinished }
+            if !stage.isFinal { return }
+        }
         progress.update { $0.badge = badge }
-        let plan = NotificationPlanner.plan(batch, accountID: accountID, badge: badge)
         for request in plan.requests {
             try Task.checkCancellation()
             // The system add keeps its whole limit; an intent donation before it has its own allowance.
-            try await withTimeout(addTimeout + posting.preparationAllowance(for: request)) { try await posting.add(request) }
+            if request.playsSound { progress.noteAddingSound() }
+            do {
+                try await withTimeout(addTimeout + posting.preparationAllowance(for: request)) { try await posting.add(request) }
+            } catch {
+                // A cancelled or timed-out add keeps running in the system and may still play the sound.
+                if request.playsSound, !(error is CancellationError), error as? NotificationRunError != .postTimedOut {
+                    progress.noteSoundRefused()
+                }
+                throw error
+            }
+            progress.noteAdded()
         }
         try await store.removeNotificationCandidates(accountID: accountID, keys: plan.claimed)
-        progress.update {
-            $0.posted = plan.requests.count; $0.claimed = plan.claimed.count; $0.deferred = batch.deferredCount
-        }
+        progress.update { $0.claimed += plan.claimed.count; $0.deferred = batch.deferredCount }
+        guard stage.isFinal else { return }
         progress.enter(.committed)
         // Settled. Cleanup is best effort and never changes the outcome.
         let removed = try? await withTimeout(cleanupTimeout) {

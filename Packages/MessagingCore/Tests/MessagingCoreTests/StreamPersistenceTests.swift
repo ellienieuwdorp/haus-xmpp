@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import MessageStore
-import XMPPProtocol
+@testable import XMPPProtocol
 import OMEMO
 @testable import MessagingCore
 
@@ -44,11 +44,40 @@ struct StreamPersistenceTests {
         #expect(try await adapter.load()?.revision == 2)
     }
 
-    @Test func corruptInnerRevisionFailsClosed() async throws {
+    /// A saved session that cannot be decoded (corrupt bytes, an inner revision that disagrees with its row, or contents
+    /// naming another account under this account's key) is never resumed, and the fresh bind replaces it. Failing the
+    /// connect instead repeated on every connect.
+    @Test func unreadableSessionBindsFreshAndIsReplaced() async throws {
+        for data in [Data("{".utf8), try JSONEncoder().encode(snapshot(revision: 90)),
+                     try JSONEncoder().encode(snapshot(account: "mallory@localhost"))] {
+            let (store, adapter) = try await fixture()
+            _ = try await store.saveStreamManagement(accountID: "alice@localhost", expectedRevision: nil, data: data)
+            await #expect(throws: XMPPStreamManagementUnreadable(revision: 1)) { _ = try await adapter.load() }
+            let sm = StreamManagement(adapter)
+            #expect(try await sm.restore(accountID: "alice@localhost") == nil)
+            try await sm.enable(accountID: "alice@localhost", fullJID: "alice@localhost/device", streamID: "fresh")
+            #expect(try await adapter.load()?.streamID == "fresh")
+        }
+    }
+
+    /// A chat state is a hint, not a message we must deliver: it never asks the replay policy (which can vouch only
+    /// for durable rows) and is never replayed. One typing notification used to turn the next connect into a bind.
+    @Test func chatStatesNeverRefuseResumption() async throws {
         let (store, adapter) = try await fixture()
-        _ = try await store.saveStreamManagement(accountID: "alice@localhost", expectedRevision: nil,
-                                                 data: JSONEncoder().encode(snapshot(revision: 90)))
-        await #expect(throws: XMPPStreamManagementError.self) { _ = try await adapter.load() }
+        let state = try XMPPChatState.xml(.composing, to: "bob@localhost", id: "typing")
+        let sm = StreamManagement(adapter)
+        _ = try await sm.restore(accountID: "alice@localhost")
+        try await sm.enable(accountID: "alice@localhost", fullJID: "alice@localhost/device", streamID: "opaque")
+        try await sm.record(state)
+        #expect(try await StreamManagement(adapter).restore(accountID: "alice@localhost") != nil)
+
+        // A session saved before hint slots journaled the same state as a message with an ID.
+        let current = try #require(try await store.streamManagementState(accountID: "alice@localhost")).revision
+        let legacy = snapshot(revision: current + 1, journal: [.init(sequence: 1, xml: state, messageID: "typing")])
+        _ = try await store.saveStreamManagement(accountID: "alice@localhost", expectedRevision: current, data: JSONEncoder().encode(legacy))
+        let resumed = StreamManagement(adapter)
+        #expect(try await resumed.restore(accountID: "alice@localhost") != nil)
+        #expect(try await resumed.acknowledge(0, resumed: true).isEmpty)
     }
 
     @Test func plaintextAndUnknownCiphertextNeverResume() async throws {

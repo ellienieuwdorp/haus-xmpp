@@ -432,12 +432,19 @@ public actor OMEMOService {
             var firstFailure: OMEMOError?
             var droppedReplies = Set<String>()
             let (_, currentState) = try await self.load(account)
+            // Several files sent together are one message each: a chat's devices are fetched once per pass, not once per
+            // message, so the first of them is not held behind every other one's refresh.
+            var refreshed = Set<String>()
             for message in queued where currentState.groupRooms[message.chatID] == nil {
                 do {
                     try Task.checkCancellation()
                     let wire = try await self.store.encryptedOutgoing(accountID: account, messageID: message.id)
                     let saved = try wire.map { try JSONDecoder().decode(PreparedEnvelope.self, from: $0) }
-                    _ = try await self.refreshLocked(account: account, peer: message.chatID, profile: saved?.envelope.profile, transport: transport, updateSelection: saved == nil)
+                    let refresh = [message.chatID, saved?.envelope.profile.rawValue ?? "selected"].joined(separator: " ")
+                    if !refreshed.contains(refresh) {
+                        _ = try await self.refreshLocked(account: account, peer: message.chatID, profile: saved?.envelope.profile, transport: transport, updateSelection: saved == nil)
+                        refreshed.insert(refresh)
+                    }
                     if let saved {
                         let (_, state) = try await self.load(account)
                         let candidates = state.devices.filter { $0.profile == saved.envelope.profile && $0.active && ($0.jid == message.chatID || $0.jid == account) }
@@ -772,6 +779,12 @@ public actor OMEMOService {
 
     public func retryUpdate(account: String, updateID: String) async throws {
         try await store.retryUpdate(accountID: account, updateID: updateID)
+    }
+
+    /// Delivery bookkeeping only (`MessageStore.rejectOutgoing`): a returned stanza is never decrypted, and no crypto
+    /// state changes, so this does not take the operation gate.
+    public func rejectOutgoing(account: String, chatID: String, wireID: String, rejection: String, firstOnly: Bool = false) async throws -> RejectedOutgoing? {
+        try await store.rejectOutgoing(accountID: account, chatID: chatID, wireID: wireID, rejection: rejection, firstOnly: firstOnly)
     }
 
     /// Conversations and most deployed clients react unencrypted even in OMEMO chats. The actor is

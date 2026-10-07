@@ -28,11 +28,14 @@ work/push-gateway-venv/bin/python infra/local/create_group_fixture.py work/lab/<
 Start the peer that suite needs from `Packages/OMEMO/Scripts/Interop` with `--credentials work/lab/<suite>/peer.json --state work/lab/<suite>/peer-state.json --ca work/lab/<suite>/ca.crt`, and wait for its ready line. Which peer:
 
 - `peer.py --echo` for Encryption, Outbox, Receipt and Last Seen.
+- `peer.py` without `--echo` for AttachmentSend: echoed photos push the caption off screen, where its state cannot be read.
 - `peer.py --echo --profile modern` for Reaction and the peer half of Revision.
 - `peer.py --echo --typing` for the notification lab, also exporting `TEST_RUNNER_XMPP_NOTIFICATION_ACTION_LAB=1`.
 - `group_peer.py --room <room>` for Group.
 
 Then `export` every runner key with a `TEST_RUNNER_` prefix. Add `TEST_RUNNER_HAUS_LAB_CA_DER`, the base64 DER of `ca.crt`. Run the suite with `test-without-building`. A variable set only as a prefix on the `xcodebuild` command did not reach the runner.
+
+To run a lab suite over a slow link, start `infra/local/slow_link.py` in front of the lab (for example `--listen 15223 --target 5223 --delay 0.1` for a 200 ms round trip) and also export `TEST_RUNNER_HAUS_LAB_PORT=15223`. `connectToLab` then signs in through that port. `AttachmentSendLabUITests` needs it to fail on code that drops an upload request: on loopback the slot round trips are too short to show the bug. `AttachmentDispatchTests.testFilesQueuedDuringAPassGetTheNextPass` in the lifecycle suite catches that bug without the lab.
 
 ## Where the time goes
 

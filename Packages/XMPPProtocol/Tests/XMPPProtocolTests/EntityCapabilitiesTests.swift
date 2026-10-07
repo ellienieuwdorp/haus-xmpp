@@ -27,7 +27,11 @@ private func parsed(_ xml: String) throws -> XMPPProtocol.XMLNode { try XMLNode.
     let identity = "\(a["category"] ?? "")/\(a["type"] ?? "")/\(a["xml:lang"] ?? "")/\(a["name"] ?? "")"
     let features = query.children("feature", namespace: query.namespace).compactMap { $0.attributes["var"] }
     #expect(EntityCapabilities.verification(identity: identity, features: features) == ver)
-    let required = ["http://jabber.org/protocol/caps", "urn:xmpp:avatar:metadata+notify", XMPPChatState.namespace, "jabber:iq:last"]
+    // Duplicates make the hash unverifiable (XEP-0115 §5.4); peers gate reactions, replies and file sharing on these.
+    #expect(Set(features).count == features.count)
+    let required = ["http://jabber.org/protocol/caps", "urn:xmpp:avatar:metadata+notify", XMPPChatState.namespace, "jabber:iq:last",
+                    "urn:xmpp:reactions:0", "urn:xmpp:reply:0", "urn:xmpp:fallback:0", "urn:xmpp:sfs:0", "urn:xmpp:esfs:0",
+                    "urn:xmpp:eme:0", "urn:xmpp:sid:0", "urn:xmpp:idle:1"]
         + XMPPOMEMOProfile.allCases.map { $0.devicesNode + "+notify" }
     for feature in required { #expect(features.contains(feature), "\(feature)") }
     #expect(!EntityCapabilities.discoInfoQuery(node: nil).contains(" node="))

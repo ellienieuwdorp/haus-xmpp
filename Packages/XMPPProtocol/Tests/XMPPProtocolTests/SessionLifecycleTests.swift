@@ -23,6 +23,7 @@ struct SessionLifecycleTests {
                                                     streamID: "s1", expiresAt: nil, inboundHandled: 3, outboundSent: 0,
                                                     outboundAcknowledged: 0, journal: [])
         snapshot.availability = availability
+        snapshot.capabilities = EntityCapabilities.verification
         return snapshot
     }
 
@@ -61,14 +62,29 @@ struct SessionLifecycleTests {
         let persistence = Persistence(Self.saved(availability: .away(since: since)))
         // The extension resumes what the app left away; its own reading of the time carries a fraction.
         var written = try await resume(persistence, availability: .away(since: since.addingTimeInterval(0.4)))
-        #expect(written.map(\.name) == ["inactive", "iq", "a"])
+        #expect(written.map(\.name) == ["inactive", "r", "iq", "a"])
         // Back in front: announced once, and remembered for the next resume.
         written = try await resume(persistence, availability: .active)
-        #expect(written.map(\.name) == ["active", "presence", "iq", "a"])
+        #expect(written.map(\.name) == ["active", "presence", "r", "iq", "a"])
         #expect(written.first { $0.name == "presence" }?.child("idle", namespace: PresenceWire.idleNamespace) == nil)
         #expect(await persistence.value?.availability == .active)
         written = try await resume(persistence, availability: .active)
-        #expect(written.map(\.name) == ["active", "iq", "a"])
+        #expect(written.map(\.name) == ["active", "r", "iq", "a"])
+    }
+
+    /// After an update that changed the feature list, contacts would keep the old caps until the next availability
+    /// change. The first resume repeats presence once with the new `ver`; later resumes stay quiet again.
+    @Test func resumeAfterAnUpdateAnnouncesTheNewCapabilitiesOnce() async throws {
+        var older = Self.saved(availability: .active)
+        older.capabilities = nil
+        let persistence = Persistence(older)
+        var written = try await resume(persistence, availability: .active)
+        #expect(written.map(\.name) == ["active", "presence", "r", "iq", "a"])
+        let caps = written.first { $0.name == "presence" }?.child("c", namespace: "http://jabber.org/protocol/caps")
+        #expect(caps?.attributes["ver"] == EntityCapabilities.verification)
+        #expect(await persistence.value?.capabilities == EntityCapabilities.verification)
+        written = try await resume(persistence, availability: .active)
+        #expect(written.map(\.name) == ["active", "r", "iq", "a"])
     }
 
     /// Resumes the saved session with `availability` and disconnects; returns what the client wrote after `<resume/>`.
@@ -118,6 +134,89 @@ struct SessionLifecycleTests {
         let written = try await server.remainder()
         await closed
         #expect(written.last?.name == "a" && written.last?.attributes["h"] == "1")
+        await server.stop()
+    }
+
+    /// Binds fresh and enables `s2`; returns once the client is online.
+    private func bindFresh(_ client: XMPPClient, on server: LoopbackServer) async throws {
+        async let online: Void = server.connect(client)
+        try await server.authenticate()
+        let bind = try await server.next()
+        try #require(bind.name == "iq" && bind.child("bind", namespace: Self.bindNamespace) != nil)
+        try await server.send("<iq type='result' id='\(bind.attributes["id"] ?? "")'><bind xmlns='\(Self.bindNamespace)'><jid>alice@localhost/r</jid></bind></iq>")
+        #expect(try await server.next().name == "enable")
+        try await server.send("<enabled xmlns='urn:xmpp:sm:3' id='s2' resume='true'/>")
+        #expect(try await server.next().name == "presence")
+        try await online
+    }
+
+    /// The away presence and a chat state written on the way to the background are acknowledged by the farewell, so
+    /// the next resume replays nothing: replaying the presence would reach every contact and push their sessions.
+    @Test func farewellRequestsAnAcknowledgementBeforeItsPing() async throws {
+        let server = try await LoopbackServer.start()
+        let persistence = Persistence(nil)
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: persistence)
+        try await bindFresh(client, on: server)
+        try await client.sendChatState(.paused, to: "bob@localhost")
+        async let away: Void = client.setAvailability(.away(since: Date(timeIntervalSince1970: 1_790_000_000)))
+        #expect(try await server.next().name == "message")
+        #expect(try await server.next().name == "presence")
+        #expect(try await server.next().name == "inactive")
+        try await away
+        async let closed: Void = client.disconnectAndWait()
+        #expect(try await server.next().name == "r")
+        try await server.send("<a xmlns='urn:xmpp:sm:3' h='3'/>")
+        let written = try await server.remainder()
+        await closed
+        #expect(written.map(\.name) == ["iq", "a"])
+        let saved = try #require(await persistence.value)
+        // Only the farewell ping's slot is left, and an IQ is never replayed.
+        #expect(saved.outboundAcknowledged == 3 && saved.journal.map(\.kind) == [.iq])
+        await server.stop()
+    }
+
+    /// A server that counts stanzas we never sent gets the XEP-0198 error, and the session is retired: the next
+    /// connect binds instead of resuming into the same count for the rest of the 72 h window.
+    @Test func acknowledgementAboveWhatWasSentRetiresTheSession() async throws {
+        let persistence = Persistence(nil)
+        do {
+            let server = try await LoopbackServer.start()
+            let client = server.client()
+            try await client.configureStreamManagement(persistence: persistence)
+            try await bindFresh(client, on: server)
+            try await server.send("<a xmlns='urn:xmpp:sm:3' h='5'/>")
+            let error = try await server.next()
+            #expect(error.name == "error" && error.namespace == "http://etherx.jabber.org/streams")
+            let count = error.child("handled-count-too-high", namespace: "urn:xmpp:sm:3")
+            #expect(error.child("undefined-condition", namespace: "urn:ietf:params:xml:ns:xmpp-streams") != nil)
+            #expect(count?.attributes["h"] == "5" && count?.attributes["send-count"] == "1")
+            await server.stop()
+        }
+        #expect(await persistence.value?.streamID == nil)
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: persistence)
+        try await bindFresh(client, on: server)
+        #expect(await persistence.value?.streamID == "s2")
+        await client.disconnect()
+        await server.stop()
+    }
+
+    /// The same count on `<resumed/>` ends that connect; the session is retired so the next one binds.
+    @Test func resumedCountAboveWhatWasSentRetiresTheSession() async throws {
+        let persistence = Persistence(Self.saved(availability: .active))
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: persistence)
+        let online = Task { try await server.connect(client) }
+        try await server.authenticate()
+        #expect(try await server.next().name == "resume")
+        try await server.send("<resumed xmlns='urn:xmpp:sm:3' previd='s1' h='2'/>")
+        let error = try await server.next()
+        #expect(error.child("handled-count-too-high", namespace: "urn:xmpp:sm:3")?.attributes["send-count"] == "0")
+        await #expect(throws: XMPPStreamManagementError.invalidAcknowledgement) { try await online.value }
+        #expect(await persistence.value?.streamID == nil)
         await server.stop()
     }
 }
