@@ -224,6 +224,8 @@ public struct ArchiveSynchronizer: Sendable {
     /// re-anchored query has shown that the archive itself still answers.
     /// Returns false when a query failed without a page (`endsOnlyThisArchive`): the checkpoint stands for the next connection.
     private func synchronizePages(account: String, room: String?, operations: ArchiveSyncOperations) async throws -> Bool {
+        let walk = ArchiveWalkTimings(), operations = operations.timed(by: walk)
+        defer { Self.log.notice("archive walk \(room == nil ? "own" : "room", privacy: .public) \(walk.summary(), privacy: .public)") }
         let archive = room ?? account
         var checkpoint = try await store.archiveCheckpoint(accountID: account, archiveID: archive)
         var bound: XMPPArchiveBound = checkpoint.map { .after($0.cursor) } ?? .before(nil)
@@ -395,4 +397,60 @@ struct ArchiveSyncOperations: Sendable {
     var isOnline: @Sendable () async -> Bool = { true }
     /// After the own archive's walk, before the first room (`synchronize`'s `ownArchiveWalked`).
     var ownArchiveWalked: @Sendable (_ complete: Bool, _ rooms: Int) async throws -> Void = { _, _ in }
+}
+
+/// Durations and counts of one archive's walk, for one `sync` log line: counts and milliseconds only, no addresses or
+/// content. `fetch` is query to `<fin/>` (round trip, server time and parsing the results as they arrive); `process` is
+/// every entry's decrypt, state seal and message commit; `other` is the rest of the wall time, mostly cursor commits.
+/// The same phases are `OSSignposter` intervals (category `SyncPhases`) for Instruments.
+final class ArchiveWalkTimings: Sendable {
+    enum Phase: Int { case fetch, process, acknowledge, progress }
+    static let signposter = OSSignposter(subsystem: "haus.xmpp.ios", category: "SyncPhases")
+    private let started = ContinuousClock.now
+    private let totals = OSAllocatedUnfairLock(initialState: (phases: [Duration](repeating: .zero, count: 4), pages: 0, entries: 0))
+
+    func measure<T>(_ phase: Phase, _ name: StaticString, _ body: () async throws -> T) async rethrows -> T {
+        let interval = Self.signposter.beginInterval(name), start = ContinuousClock.now
+        defer {
+            let elapsed = ContinuousClock.now - start
+            totals.withLock { $0.phases[phase.rawValue] += elapsed }
+            Self.signposter.endInterval(name, interval)
+        }
+        return try await body()
+    }
+
+    func fetched(entries: Int) { totals.withLock { $0.pages += 1; $0.entries += entries } }
+
+    /// `+<wall> ms pages= entries= fetch_ms= process_ms= ack_ms= progress_ms= other_ms= entries_per_s=`.
+    func summary() -> String {
+        let wall = ContinuousClock.now - started, t = totals.withLock { $0 }
+        let phase = { (p: Phase) in t.phases[p.rawValue] }
+        let other = wall - t.phases.reduce(.zero, +)
+        let seconds = Double(wall / .microseconds(1)) / 1_000_000
+        let rate = seconds > 0 ? Int((Double(t.entries) / seconds).rounded()) : 0
+        return "+\(Self.ms(wall)) ms pages=\(t.pages) entries=\(t.entries) fetch_ms=\(Self.ms(phase(.fetch))) "
+            + "process_ms=\(Self.ms(phase(.process))) ack_ms=\(Self.ms(phase(.acknowledge))) "
+            + "progress_ms=\(Self.ms(phase(.progress))) other_ms=\(Self.ms(other)) entries_per_s=\(rate)"
+    }
+
+    static func ms(_ duration: Duration) -> Int { Int(duration / .milliseconds(1)) }
+}
+
+extension ArchiveSyncOperations {
+    /// The same operations, timed into `walk`.
+    func timed(by walk: ArchiveWalkTimings) -> ArchiveSyncOperations {
+        let base = self
+        return ArchiveSyncOperations(
+            knownRooms: base.knownRooms, refreshRoom: base.refreshRoom,
+            fetchPage: { bound, room in
+                let page = try await walk.measure(.fetch, "fetch page") { try await base.fetchPage(bound, room) }
+                walk.fetched(entries: page.messages.count)
+                return page
+            },
+            process: { archived in try await walk.measure(.process, "process entry") { try await base.process(archived) } },
+            acknowledge: { tokens in try await walk.measure(.acknowledge, "acknowledge") { try await base.acknowledge(tokens) } },
+            disconnect: base.disconnect,
+            progress: { progress in await walk.measure(.progress, "progress") { await base.progress(progress) } },
+            isOnline: base.isOnline)
+    }
 }

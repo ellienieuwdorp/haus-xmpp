@@ -181,6 +181,8 @@ final class AppModel {
     @ObservationIgnored private var firstMessageLogged = false
     @ObservationIgnored private var liveStoredLogged = false
     @ObservationIgnored private var catchUpByArchive: [String: CatchUpProgress] = [:]
+    @ObservationIgnored private var connectPhases = SyncPhaseTimings.ConnectPhases()
+    @ObservationIgnored private var syncTimings = SyncPhaseTimings()
     /// Older archive history for one archive (`ArchiveSynchronizer.backfill`); joined like `setupTask`.
     @ObservationIgnored private var backfillTask: Task<Void, Never>?
     /// The archive (account or room JID) a backfill is fetching right now; the open chat shows its header.
@@ -1475,19 +1477,22 @@ final class AppModel {
         let account = accountID
         switch event {
         case .state(let state):
+            connectPhases.mark(state)
             switch state {
             case .connecting: session = .connecting(step: "Connecting…")
             case .authenticating: session = .connecting(step: "Signing in…")
             case .binding: session = .connecting(step: "Opening session…")
             case .online:
                 session = .connected(settingUp: ConnectionSetup.featuresStep)
-                onlineAt = .now
+                let online = ContinuousClock.now
+                onlineAt = online
                 reconnection.online()
+                syncTimings = SyncPhaseTimings()
                 firstMessageLogged = false
                 liveStoredLogged = false
                 catchUpByArchive = [:]
                 let resumed = await client?.sessionResumed ?? false
-                Self.syncLog.notice("online resumed=\(resumed, privacy: .public)")
+                Self.syncLog.notice("online resumed=\(resumed, privacy: .public)\(self.connectPhases.summary(online: online), privacy: .public)")
                 // The client answers XEP-0012 queries to our full address only while the account shares last seen.
                 await client?.setSharesLastActivity(accountPreferences.lastSeen)
                 // A resumed session gets no probe answers: keep who was available on the previous stream.
@@ -1813,8 +1818,12 @@ final class AppModel {
                 }
             },
             retryPending: { try? await encryption.retryPendingIncoming(account: account, transport: client) })
-        await setup.run(operations: operations) { [weak self] event in
+        let timings = syncTimings
+        await setup.run(operations: operations.timed(by: timings)) { [weak self] event in
             await self?.applySetupEvent(event, account: account, client: client, token: token)
+        }
+        if setupIsCurrent(token) {
+            Self.syncLog.notice("setup finished +\(self.syncElapsed(), privacy: .public) ms \(timings.summary([.features, .carbons, .uploads, .keys, .rejoin, .walk, .retry]), privacy: .public)")
         }
     }
 
@@ -1866,7 +1875,8 @@ final class AppModel {
             } else {
                 let pages = catchUpByArchive.values.reduce(0) { $0 + $1.pages }
                 let messages = catchUpByArchive.values.reduce(0) { $0 + $1.messages }
-                Self.syncLog.notice("catch-up finished +\(self.syncElapsed(), privacy: .public) ms pages=\(pages, privacy: .public) messages=\(messages, privacy: .public)")
+                let elapsed = syncElapsed(), rate = elapsed > 0 ? messages * 1000 / elapsed : 0
+                Self.syncLog.notice("catch-up finished +\(elapsed, privacy: .public) ms pages=\(pages, privacy: .public) messages=\(messages, privacy: .public) entries_per_s=\(rate, privacy: .public) \(self.syncTimings.summary([.reload, .notify]), privacy: .public)")
                 archiveWalkFinished = true
                 requestOpportunisticBackfill()
                 // XEP-0490 after the walk, so the ids other devices published name messages we now hold.
@@ -2931,6 +2941,8 @@ final class AppModel {
 
     private func load(_ scope: CoalescedReload.Scope) async {
         guard let store else { return }
+        let started = ContinuousClock.now
+        defer { syncTimings.add(.reload, since: started) }
         let account = accountID
         // Typing that a message ended goes in the same update that shows the message, so the bubble takes its place.
         // ponytail: a load already running when the message was stored flushes early (the indicator then goes a moment
@@ -3379,6 +3391,8 @@ extension AppModel: NotificationActionEnvironment {
 
     /// Claims what this connection committed; banners for other chats when permitted and caught up.
     fileprivate func presentForegroundNotifications(store: MessageStore, account: String) async throws {
+        let started = ContinuousClock.now
+        defer { syncTimings.add(.notify, since: started) }
         let presents = mayPostNotifications && testSessionID == nil && !isDemo && session.isReady && catchUp == nil
             && sessionAccount?.accountID == account
         let posted = try await NotificationPresenter(posting: notificationPoster(account: account))
