@@ -112,7 +112,8 @@ public enum NotificationPlanner {
 
     /// `accountID` names the account for the deferred-chats summary; it defaults to the batch's own candidates.
     /// `badge` (unread outside muted chats) is set on every request; nil leaves the icon badge as it is.
-    public static func plan(_ batch: MessageNotification, accountID: String? = nil, badge: Int? = nil) -> NotificationPlan {
+    /// `playsSound: false` when an earlier presentation of the same run already played its sound.
+    public static func plan(_ batch: MessageNotification, accountID: String? = nil, badge: Int? = nil, playsSound: Bool = true) -> NotificationPlan {
         var requests: [PlannedNotification] = []
         // Chats beyond the cap are older than every selected message, so their summary goes first and never takes the
         // sound from a newer message. Settling without it would hide that those chats have news (plan D2).
@@ -180,7 +181,7 @@ public enum NotificationPlanner {
                 reference: .reaction(accountID: reaction.accountID, targetMessageID: reaction.target.id), badge: badge)))
         }
         requests += timed.enumerated().sorted { ($0.element.at, $0.offset) < ($1.element.at, $1.offset) }.map(\.element.request)
-        if let newest = requests.popLast() { requests.append(newest.withSound()) }
+        if playsSound, let newest = requests.popLast() { requests.append(newest.withSound()) }
         return NotificationPlan(requests: requests, claimed: batch.claimed, summarizesDeferredChats: summarizes)
     }
 

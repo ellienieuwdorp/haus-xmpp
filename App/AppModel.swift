@@ -136,10 +136,9 @@ final class AppModel {
     @ObservationIgnored private var acquiringOwnership = false
     @ObservationIgnored private var hasTransportOwnership = false
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
-    @ObservationIgnored private var reconnectAttempt = 0
+    @ObservationIgnored private var reconnection = ReconnectPolicy()
     @ObservationIgnored private var userWantsOffline = false
     @ObservationIgnored private var authenticationRejected = false
-    @ObservationIgnored private var reportedSetupFailure: String?
     @ObservationIgnored private let pathMonitor = NWPathMonitor()
     /// The chat the encryption projection describes. Set as a chat opens, before its store read returns, and kept
     /// across pop-back, disconnect and reconnect; only another chat or account replaces it.
@@ -182,6 +181,8 @@ final class AppModel {
     @ObservationIgnored private var firstMessageLogged = false
     @ObservationIgnored private var liveStoredLogged = false
     @ObservationIgnored private var catchUpByArchive: [String: CatchUpProgress] = [:]
+    @ObservationIgnored private var connectPhases = SyncPhaseTimings.ConnectPhases()
+    @ObservationIgnored private var syncTimings = SyncPhaseTimings()
     /// Older archive history for one archive (`ArchiveSynchronizer.backfill`); joined like `setupTask`.
     @ObservationIgnored private var backfillTask: Task<Void, Never>?
     /// The archive (account or room JID) a backfill is fetching right now; the open chat shows its header.
@@ -205,6 +206,12 @@ final class AppModel {
     /// details pages cover it.
     private var encryptionShownChatID: String? { openChatID ?? encryptionOverviewChatID }
     @ObservationIgnored private var generation = UUID()
+    /// The connection (`generation`) in which each room was last rejoined after a bounce (`rejoinAfterBounce`).
+    @ObservationIgnored private var bounceRejoins: [String: UUID] = [:]
+    /// Rooms that bounced before setup's own rejoin pass ended, by connection: rejoined after it if it left them out.
+    @ObservationIgnored private var deferredBounceRejoins: [String: UUID] = [:]
+    /// The connection whose setup has finished its pass over the known rooms (`rejoinKnownGroups`).
+    @ObservationIgnored private var groupRejoinsFinished: UUID?
     /// `prepare()` runs once; a notification action on a background launch joins it.
     @ObservationIgnored private var preparation: Task<Void, Never>?
     @ObservationIgnored private var backgroundLaunchObserver: (any NSObjectProtocol)?
@@ -223,16 +230,21 @@ final class AppModel {
     @ObservationIgnored private var readStateChangedWhilePublishing = false
     /// Local plaintext files of the open chat's attachments, by message ID, once downloaded or sent.
     private(set) var attachmentFiles: [String: URL] = [:]
+    /// The open chat's received files that are not on disk: loading, held for a tap, failed or too large.
+    var attachmentDownloads: [String: AttachmentDownloadState] { downloads.states }
     /// The account's upload service as last discovered; persisted per account so the attach button survives launch
     /// and reconnect. Observed: the composer's attach button follows it.
     private var uploadService: XMPPUploadService?
     private var uploads: UploadServiceMemory { UploadServiceMemory(defaults: preferences) }
+    /// True from the start of a connection's setup until its upload discovery settled; false when a resume skipped it.
+    @ObservationIgnored private var uploadReconciliation = UploadReconciliation()
+    private var serverProfiles: ServerProfileMemory { ServerProfileMemory(defaults: preferences) }
     private var files: AttachmentFiles? { storageDirectory.map { AttachmentFiles(directory: $0, account: accountID) } }
     @ObservationIgnored private var uploader: AttachmentUploader?
     @ObservationIgnored private var storageDirectory: URL?
-    @ObservationIgnored private var uploadTask: Task<Void, Never>?
+    @ObservationIgnored private lazy var uploadPasses = RerunningPass { [weak self] in self?.uploadPass() }
     @ObservationIgnored private var uploadFailures = UploadFailureBudget()
-    @ObservationIgnored private var downloading: Set<String> = []
+    @ObservationIgnored private let downloads = AttachmentDownloadCenter(configuration: .ephemeral)
     /// Bytes a chosen file may have before it is refused; the server's limit when it publishes one.
     var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
     /// The server offered uploads on its last completed discovery. Never gated on the socket: a file is sealed and
@@ -263,6 +275,14 @@ final class AppModel {
             await self?.performNotificationAction(request, budget: budget) ?? .rejected
         }
         NotificationActionCenter.shared.abort = { [weak self] in self?.abortNotificationAction() ?? false }
+        downloads.onFile = { [weak self] account, messageIDs, file in
+            guard let self, self.accountID == account else { return }
+            for id in messageIDs { self.attachmentFiles[id] = file }
+        }
+        downloads.openSecret = { [weak self] job in
+            guard let encryption = self?.encryption else { throw OMEMOError.unavailable }
+            return try encryption.openAttachmentSecret(account: job.account, secret: job.attachment.secret, sealedAs: job.attachment.sealedAccount)
+        }
     }
 
     /// Opens storage and the saved account once. Every caller (the root view, a notification action on a background
@@ -484,7 +504,8 @@ final class AppModel {
             return false
         }
         let manual = savedEndpoint == nil
-        if manual { userWantsOffline = false; authenticationRejected = false; reconnectAttempt = 0 }
+        // Signing in (again, or as another account) starts without the backoff or the alert already shown.
+        if manual { userWantsOffline = false; authenticationRejected = false; reconnection = ReconnectPolicy() }
         let fixedEndpoint = server ?? (Self.labDomains.contains(requestedDomain)
             ? XMPPEndpoint(host: requestedDomain == "localhost" ? DevelopmentEndpoint.host : requestedDomain, port: 5223, security: .directTLS) : nil)
         if let sessionAccount, sessionAccount.accountID != username + "@" + requestedDomain {
@@ -592,13 +613,6 @@ final class AppModel {
         }
     }
 
-    /// Reconnect delay for the given consecutive failure count: immediate, then 1, 2, 4 … 60 s with jitter.
-    nonisolated static func reconnectDelay(attempt: Int) -> Duration {
-        guard attempt > 0 else { return .zero }
-        let base = min(60.0, pow(2.0, Double(attempt - 1)))
-        return .seconds(base * Double.random(in: 1.0...1.25))
-    }
-
     /// Desired state: connected whenever the app is in front with an account whose password still works.
     private var wantsConnection: Bool {
         foreground && !quiescing && !userWantsOffline && !authenticationRejected && sessionAccount != nil && !isDemo && upgradeState == .none
@@ -608,21 +622,22 @@ final class AppModel {
     /// change (scene, network path, sign-in, disconnect) only updates state and calls this.
     private func reconcile() {
         guard wantsConnection, session.isConnectable, reconnectTask == nil, let saved = sessionAccount else { return }
-        let delay = Self.reconnectDelay(attempt: reconnectAttempt)
+        let delay = reconnection.nextDelay
+        Self.syncLog.notice("reconnect in \(Int(delay / .milliseconds(1)), privacy: .public) ms attempt=\(self.reconnection.attempt, privacy: .public)")
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(for: delay)
             guard let self, !Task.isCancelled else { return }
             await self.lifecycleTask?.value
             self.reconnectTask = nil
             guard self.wantsConnection, self.session.isConnectable, self.sessionAccount == saved else { return }
-            self.reconnectAttempt += 1
+            self.reconnection.attemptStarted()
             _ = await self.connect(username: saved.username, password: saved.password, savedEndpoint: saved)
         }
     }
 
     private func networkBecameReachable() {
         guard wantsConnection, session.isConnectable else { return }
-        reconnectAttempt = 0
+        reconnection.retryNow()
         reconnectTask?.cancel(); reconnectTask = nil
         reconcile()
     }
@@ -634,6 +649,9 @@ final class AppModel {
         // Replies saved before the upgrade for this account are not sent after it signed out.
         if !account.isEmpty { try? snapshots?.removeSavedReplies(of: account) }
         uploads.forget(account: account)
+        serverProfiles.forget(account: account)
+        // The next account starts without the backoff or the alert this one earned.
+        reconnection = ReconnectPolicy()
         selectAccount("")
         preferences.removeObject(forKey: "lastAccount")
     }
@@ -723,7 +741,7 @@ final class AppModel {
                 guard self.foreground else { return }
                 self.returnedToForegroundForUpgrade()
                 self.refreshNotificationPermission()
-                self.reconnectAttempt = 0
+                self.reconnection.retryNow()
                 self.reconcile()
                 if let client = self.client { try? await client.setClientActive(true) }
                 await self.refresh()
@@ -1260,6 +1278,7 @@ final class AppModel {
         messages = []
         messageReactions = [:]; messageReceipts = [:]
         attachmentFiles = [:]
+        downloads.reset()
         openChatID = nil
         requestedRoute = nil
         encryptionOverviewChatID = nil; encryptionOverview = nil; encryptionDetailsChatID = nil
@@ -1318,16 +1337,21 @@ final class AppModel {
         }
     }
 
-    /// One slot request and one PUT per pending file that has no task in flight.
-    private func startUploads() {
-        guard uploadTask == nil, session.isReady, hasTransportOwnership, foreground, !quiescing,
-              let client, let store, let uploader, let service = uploadService, let files else { return }
+    /// A pass reads the pending files once, so a call while one runs (the next file of a multi-file send) runs
+    /// another pass when it ends.
+    private func startUploads() { uploadPasses.request() }
+
+    /// One slot request and one PUT per pending file that has no task in flight and is not backing off.
+    private func uploadPass() -> (@MainActor () async -> Void)? {
+        guard session.isReady, hasTransportOwnership, foreground, !quiescing,
+              let client, let store, let uploader, let service = uploadService, let files else { return nil }
         let account = accountID, token = generation
-        uploadTask = Task { [weak self] in
-            defer { self?.uploadTask = nil }
+        return { [weak self] in
             guard let pending = try? await store.attachmentsAwaitingUpload(accountID: account) else { return }
             for message in pending where message.attachment?.uploadTaskID == nil {
                 guard let attachment = message.attachment, self?.generation == token else { return }
+                // Its timer starts a pass once the back-off ends.
+                if self?.uploadFailures.isWaiting(message.id) == true { continue }
                 let staged = files.stagingURL(messageID: message.id)
                 guard let size = try? FileManager.default.attributesOfItem(atPath: staged.path)[.size] as? Int else {
                     // The staged ciphertext is gone (a cleared cache); the message can never be sent as is.
@@ -1355,7 +1379,7 @@ final class AppModel {
         guard uploadFailures.recordFailure(message.id) else {
             error = "Could not upload \(name). It will be retried."
             Task { [weak self] in
-                try? await Task.sleep(for: .seconds(5))
+                try? await Task.sleep(for: UploadFailureBudget.backOff)
                 self?.startUploads()
             }
             return
@@ -1404,29 +1428,24 @@ final class AppModel {
         }
     }
 
-    /// Received files of the open chat are fetched on sight and verified before they exist locally.
+    /// Received files of the open chat are fetched on sight and verified before they exist locally; `downloads` decides
+    /// which wait for a tap. A group and a pinned chat are known; a 1:1 chat becomes known once the user writes in it.
     private func loadAttachments(_ storedMessages: [StoredMessage], chat: String) {
-        guard let files, let encryption else { return }
-        for message in storedMessages {
-            guard let attachment = message.attachment, attachmentFiles[message.id] == nil else { continue }
-            if let cached = files.cached(attachment, messageID: message.id) { attachmentFiles[message.id] = cached; continue }
-            guard attachment.url != nil, attachment.uploadState == nil, !downloading.contains(message.id) else { continue }
-            downloading.insert(message.id)
-            let account = accountID
-            Task { [weak self] in
-                defer { self?.downloading.remove(message.id) }
-                do {
-                    let secret = try encryption.openAttachmentSecret(account: account, secret: attachment.secret, sealedAs: attachment.sealedAccount)
-                    let bytes = try await AttachmentDownloader.fetch(attachment, secret: secret)
-                    let destination = files.cacheURL(attachment, messageID: message.id)
-                    try files.write(bytes, to: destination)
-                    guard let self, self.accountID == account, self.openChatID == chat else { return }
-                    attachmentFiles[message.id] = destination
-                } catch {
-                    Logger(subsystem: "haus.xmpp.ios", category: "attachments").error("Download of \(attachment.name, privacy: .public) failed: \(String(describing: error), privacy: .public)")
-                }
-            }
-        }
+        guard let files else { return }
+        downloads.load(storedMessages, known: isGroup(chat) || chats.first { $0.id == chat }?.isPinned == true, files: files, account: accountID,
+                       onDisk: { attachmentFiles[$0] != nil })
+    }
+
+    /// A bubble whose file is not on disk came on screen.
+    func attachmentDisplayed(_ messageID: String) {
+        guard let files else { return }
+        downloads.displayed(messageID, attachment: messages.first { $0.id == messageID }?.attachment, files: files)
+    }
+
+    /// A tap on a file waiting for one, or on a failed one.
+    func downloadAttachment(_ messageID: String) {
+        guard let files, let message = messages.first(where: { $0.id == messageID }) else { return }
+        downloads.request(message, files: files, account: accountID)
     }
 
     private func resetSession() -> XMPPClient? {
@@ -1462,18 +1481,22 @@ final class AppModel {
         let account = accountID
         switch event {
         case .state(let state):
+            connectPhases.mark(state)
             switch state {
             case .connecting: session = .connecting(step: "Connecting…")
             case .authenticating: session = .connecting(step: "Signing in…")
             case .binding: session = .connecting(step: "Opening session…")
             case .online:
                 session = .connected(settingUp: ConnectionSetup.featuresStep)
-                onlineAt = .now
+                let online = ContinuousClock.now
+                onlineAt = online
+                reconnection.online()
+                syncTimings = SyncPhaseTimings()
                 firstMessageLogged = false
                 liveStoredLogged = false
                 catchUpByArchive = [:]
                 let resumed = await client?.sessionResumed ?? false
-                Self.syncLog.notice("online resumed=\(resumed, privacy: .public)")
+                Self.syncLog.notice("online resumed=\(resumed, privacy: .public)\(self.connectPhases.summary(online: online), privacy: .public)")
                 // The client answers XEP-0012 queries to our full address only while the account shares last seen.
                 await client?.setSharesLastActivity(accountPreferences.lastSeen)
                 // A resumed session gets no probe answers: keep who was available on the previous stream.
@@ -1502,7 +1525,7 @@ final class AppModel {
                 setupTask = Task { [weak self] in
                     guard let self else { return }
                     await self.runConnectionSetup(account: account, client: client, encryption: encryption, store: store,
-                                                  identityExists: identityExists, token: token)
+                                                  identityExists: identityExists, resumed: resumed, token: token)
                     if self.generation == token { self.setupTask = nil }
                 }
             case .disconnected(let reason):
@@ -1518,6 +1541,7 @@ final class AppModel {
                 resetPresence()
                 drainTask?.cancel()
                 if case .needsAttention = session {} else { session = .offline(reason: reason) }
+                reconnection.ended()
                 reconcile()
             }
         case .chatState(let update):
@@ -1525,7 +1549,7 @@ final class AppModel {
             guard chats.contains(where: { $0.id == update.chat }) else { return }
             typingTracker.apply(update.state, chat: update.chat, participant: update.participant ?? update.chat, settles: update.ridesOnMessage, now: .now)
             publishTyping()
-        case .reaction, .retraction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier, .displayedSync:
+        case .reaction, .retraction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier, .displayedSync, .messageError:
             guard let encryption, let client else { return }
             if case .encryptedMessage = event { receivedCount += 1 }
             // A real message ends its sender's typing, even from a client that sends no `active` with it.
@@ -1538,6 +1562,7 @@ final class AppModel {
             // One processor per connection: it owns the "may acknowledge" rule for this stream.
             if inbound?.client !== client { inbound = InboundProcessor(encryption: encryption, client: client, account: account) }
             guard let inbound else { return }
+            if case .messageError(let bounce) = event { rejoinAfterBounce(bounce, token: token) }
             do {
                 let outcome = try await inbound.process(event)
                 guard generation == token else { return }
@@ -1560,6 +1585,13 @@ final class AppModel {
                         ? "A message from another device was not encrypted for this iPhone; it is shown as a placeholder."
                         : "An encrypted message could not be read; it is shown as a placeholder.")
                     refreshSoon()
+                case .rejected(let rejected):
+                    // The bubble turns to Not sent with Retry; a message (not a reaction or receipt) also says why, once.
+                    guard rejected.messageID != nil else { refreshSoon(); break }
+                    await refresh()
+                    guard generation == token, foreground else { return }
+                    let name = chats.first { $0.id == rejected.chatID }?.displayTitle ?? AppModel.displayName(for: rejected.chatID, title: nil)
+                    self.error = "A message to \(name) wasn't delivered. \(RejectionCopy.reason(rejected.rejection, isGroup: isGroup(rejected.chatID))) You can retry it from the message."
                 case .acknowledged, .ignored: break
                 }
             } catch InboundProcessor.Failure.unsavedInbound {
@@ -1738,13 +1770,32 @@ final class AppModel {
     /// Builds `ConnectionSetup`'s operations from this model's calls and applies its events under the
     /// generation fence. Every operation runs inside the setup task; none spawns an unstructured task.
     private func runConnectionSetup(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore,
-                                    identityExists: Bool, token: UUID) async {
+                                    identityExists: Bool, resumed: Bool, token: UUID) async {
+        let profiles = serverProfiles
+        // The stream this connection runs on, as the SM snapshot names it; nil without resumable stream management.
+        let streamID: @Sendable () async -> String? = {
+            try? await StreamPersistence(store: store, accountID: account, encryption: encryption).load()?.streamID
+        }
+        let memory = profiles.memory(account: account, stream: resumed ? await streamID() : nil,
+                                     uploadsFresh: uploads.isFresh(account: account))
+        let setup = ConnectionSetup(identityExists: identityExists, resumed: resumed, memory: memory)
+        // The stream ID is a store read; a newer connection may have started meanwhile.
+        guard setupIsCurrent(token) else { return }
+        if resumed {
+            Self.syncLog.notice("resume reuses features=\(setup.skipsFeatures, privacy: .public) carbons=\(setup.skipsCarbons, privacy: .public) uploads=\(setup.skipsUploads, privacy: .public)")
+        }
+        uploadReconciliation.setupStarted(discovers: !setup.skipsUploads)
         let operations = ConnectionSetup.Operations(
             features: { [domain = accountDomain] in
-                try await ConnectionSetup.discoverFeatures(server: { try await client.discoveryFeatures(for: domain) },
-                                                           account: { try await client.discoveryFeatures() })
+                let found = try await ConnectionSetup.discoverFeatures(server: { try await client.discoveryFeatures(for: domain) },
+                                                                       account: { try await client.discoveryFeatures() })
+                if found.complete { profiles.discovered(found.features, account: account) }
+                return found.features
             },
-            enableCarbons: { try await client.setCarbonsEnabled() },
+            enableCarbons: {
+                try await client.setCarbonsEnabled()
+                profiles.carbonsEnabled(account: account, stream: await streamID())
+            },
             discoverUploads: { [weak self] in
                 // Optional: a server without XEP-0363 just has no attach button. Only a completed answer changes
                 // what the button remembers; a discovery that throws keeps the last one.
@@ -1771,14 +1822,24 @@ final class AppModel {
                 }
             },
             retryPending: { try? await encryption.retryPendingIncoming(account: account, transport: client) })
-        await ConnectionSetup(identityExists: identityExists).run(operations: operations) { [weak self] event in
+        let timings = syncTimings
+        await setup.run(operations: operations.timed(by: timings)) { [weak self] event in
             await self?.applySetupEvent(event, account: account, client: client, token: token)
+        }
+        if setupIsCurrent(token) {
+            Self.syncLog.notice("setup finished +\(self.syncElapsed(), privacy: .public) ms \(timings.summary([.features, .carbons, .uploads, .keys, .rejoin, .walk, .retry]), privacy: .public)")
         }
     }
 
-    private func settleUploadDiscovery(_ discovery: Result<XMPPUploadService?, any Error>, account: String, token: UUID) {
+    /// Discovery now ends after `.ready`, so `.ready` reconciles stranded uploads only against a known answer; a later
+    /// completed discovery reconciles them when nothing was stored or when it withdraws the stored service.
+    private func settleUploadDiscovery(_ discovery: Result<XMPPUploadService?, any Error>, account: String, token: UUID) async {
         guard generation == token else { return }
-        uploadService = uploads.settle(account: account, previous: uploadService, discovery: discovery)
+        let previous = uploadService
+        uploadService = uploads.settle(account: account, previous: previous, discovery: discovery)
+        if case .failure(let error) = discovery { Self.syncLog.notice("upload discovery kept the stored service: \(ConnectionSetup.detail(error), privacy: .public)") }
+        guard uploadReconciliation.discoverySettled(discovery, previous: previous, ready: session.isReady) else { return }
+        await reconcileUploads()
     }
 
     /// True while this connection's setup may still change state. `.disconnected` cancels the setup task without
@@ -1790,13 +1851,12 @@ final class AppModel {
         // Runs in the setup child's task on the main actor, so a `.disconnected` handled before this job ran has
         // already cancelled it.
         guard setupIsCurrent(token) else { return }
+        reconnection.observe(event)
         switch event {
         case .step(let step):
             if !session.isReady { session = .connected(settingUp: step) }
         case .ready:
             session = .ready
-            reconnectAttempt = 0
-            reportedSetupFailure = nil
             Self.syncLog.notice("ready +\(self.syncElapsed(), privacy: .public) ms")
             // Roster pushes are answered only after a fetch on this stream. Its result arrives as a
             // `.rosterItems` event, which then revokes and asks (see there).
@@ -1806,7 +1866,7 @@ final class AppModel {
             await refresh()
             guard setupIsCurrent(token) else { return }
             startOutbox()
-            await reconcileUploads()
+            if uploadReconciliation.reconcilesAtReady(stored: uploadService) { await reconcileUploads() }
             if let openChatID { await loadEncryptionDetails(for: openChatID) }
             avatarChecked = []
             await loadAvatar(for: account)
@@ -1819,12 +1879,17 @@ final class AppModel {
             } else {
                 let pages = catchUpByArchive.values.reduce(0) { $0 + $1.pages }
                 let messages = catchUpByArchive.values.reduce(0) { $0 + $1.messages }
-                Self.syncLog.notice("catch-up finished +\(self.syncElapsed(), privacy: .public) ms pages=\(pages, privacy: .public) messages=\(messages, privacy: .public)")
+                let elapsed = syncElapsed(), rate = elapsed > 0 ? messages * 1000 / elapsed : 0
+                Self.syncLog.notice("catch-up finished +\(elapsed, privacy: .public) ms pages=\(pages, privacy: .public) messages=\(messages, privacy: .public) entries_per_s=\(rate, privacy: .public) \(self.syncTimings.summary([.reload, .notify]), privacy: .public)")
                 archiveWalkFinished = true
                 requestOpportunisticBackfill()
                 // XEP-0490 after the walk, so the ids other devices published name messages we now hold.
                 syncReadState(account: account, client: client, token: token)
             }
+        case .degraded(let step, let detail):
+            Self.syncLog.notice("setup went on without \(step, privacy: .public): \(detail, privacy: .public)")
+        case .settled:
+            Self.syncLog.notice("settled +\(self.syncElapsed(), privacy: .public) ms")
         case .failed(let step, let detail):
             catchUp = nil
             if step == ConnectionSetup.archiveStep { Self.syncLog.notice("catch-up failed +\(self.syncElapsed(), privacy: .public) ms") }
@@ -1838,8 +1903,7 @@ final class AppModel {
         Logger(subsystem: "haus.xmpp.ios", category: "encryption").error("Encryption setup failed at \(step, privacy: .public): \(detail, privacy: .public)")
         session = .needsAttention(step: step, detail: detail)
         encryptionAttention.note("Setup failed at \(step): \(detail)")
-        if reportedSetupFailure != detail {
-            reportedSetupFailure = detail
+        if reconnection.shouldAlert(detail) {
             self.error = wasReady ? "Could not finish synchronizing (\(step): \(detail))."
                 : "Could not prepare encryption (\(step): \(detail)). Your queued messages have not been sent."
         }
@@ -1860,6 +1924,9 @@ final class AppModel {
     }
 
     private func rejoinKnownGroups(account: String, client: XMPPClient, encryption: OMEMOService, token: UUID) async throws {
+        // However the pass ends, a room that bounced meanwhile is rejoined now unless the pass just sent it a join.
+        var joined = Set<String>()
+        defer { if setupIsCurrent(token) { groupRejoinsFinished = token; rejoinRoomsThatBouncedDuringSetup(token: token, joinedByPass: joined) } }
         let rooms = try await encryption.knownGroupRooms(account: account)
         for (room, members) in rooms.sorted(by: { $0.key < $1.key }) {
             guard setupIsCurrent(token), foreground, !quiescing else { throw CancellationError() }
@@ -1871,12 +1938,57 @@ final class AppModel {
             do {
                 let snapshot = try await client.joinGroupRoom(room, nickname: nickname)
                 guard setupIsCurrent(token) else { throw CancellationError() }
+                joined.insert(room)
                 groupChats[room]?.joined = snapshot.joined
             } catch {
                 guard setupIsCurrent(token) else { throw CancellationError() }
                 groupChats[room]?.issue = groupFailure(error)
                 // No send is allowed until this room's own authenticated presence is received.
                 // Archive synchronization separately fails closed if room provenance is unavailable.
+            }
+        }
+    }
+
+    /// A room that answered one of our stanzas (usually a chat state) as from a non-occupant: the client marked it not
+    /// joined, and queued group messages wait for a join. One rejoin per room and connection; its self-presence makes
+    /// the room joined again and restarts the outbox. Self-ping and a fuller error policy are MS-089.
+    ///
+    /// Until setup's own pass over the known rooms (`rejoinKnownGroups`, after `.ready`) has ended it joins this one
+    /// too, and a second join beside it would race it (a resumed stream delivers queued bounces right after
+    /// `.online`). So a bounce before then is only noted, and the room rejoined after the pass unless the pass
+    /// joined it.
+    private func rejoinAfterBounce(_ bounce: XMPPMessageError, token: UUID) {
+        let room = bounce.from
+        guard bounce.meansNotInRoom, groupChats[room] != nil, bounceRejoins[room] != token else { return }
+        guard groupRejoinsFinished == token else {
+            Self.syncLog.notice("room bounce during setup: rejoin after its pass if still needed")
+            deferredBounceRejoins[room] = token; return
+        }
+        rejoinBouncedRoom(room, token: token)
+    }
+
+    private func rejoinRoomsThatBouncedDuringSetup(token: UUID, joinedByPass: Set<String>) {
+        let rooms = deferredBounceRejoins.filter { $0.value == token }.keys.sorted()
+        deferredBounceRejoins = [:]
+        // The pass's join answers the bounce; its self-presence may still be on its way, so `joined` cannot tell.
+        let needed = rooms.filter { !joinedByPass.contains($0) && groupChats[$0]?.joined != true && bounceRejoins[$0] != token }
+        if !rooms.isEmpty { Self.syncLog.notice("rooms that bounced during setup: \(rooms.count, privacy: .public), left to rejoin: \(needed.count, privacy: .public)") }
+        for room in needed { rejoinBouncedRoom(room, token: token) }
+    }
+
+    private func rejoinBouncedRoom(_ room: String, token: UUID) {
+        let account = accountID
+        guard generation == token, groupChats[room] != nil, let client, foreground, !quiescing else { return }
+        Self.syncLog.notice("rejoining a room that bounced a stanza")
+        bounceRejoins[room] = token
+        let nickname = preferences.string(forKey: "groupNickname.\(account).\(room)") ?? String(account.prefix { $0 != "@" })
+        Task { [weak self] in
+            // A disconnect, sign-out or background transition since the bounce: that connection is done with.
+            guard let self, self.generation == token, self.foreground, !self.quiescing else { return }
+            do { _ = try await client.joinGroupRoom(room, nickname: nickname) }
+            catch {
+                guard self.generation == token else { return }
+                self.groupChats[room]?.issue = self.groupFailure(error)
             }
         }
     }
@@ -2183,6 +2295,7 @@ final class AppModel {
     func prepareChat(_ chatID: String) {
         guard openChatID != chatID || messagesLoadedFor != chatID else { return }
         openChatID = chatID; timelineWindow = AppModel.timelinePage; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]
+        downloads.reset()
         if let page = timelinePages.page(for: chats.first { $0.id == chatID }, account: accountID) { publishTimeline(page, chat: chatID) }
     }
 
@@ -2459,6 +2572,7 @@ final class AppModel {
                                              reactableGroupMessages: reactableGroupMessages), for: chats.first { $0.id == chatID }, account: accountID)
         }
         openChatID = nil; messages = []; messagesLoadedFor = nil; messageReactions = [:]; messageReceipts = [:]; attachmentFiles = [:]
+        downloads.reset()
     }
 
     // MARK: Typing
@@ -2861,6 +2975,8 @@ final class AppModel {
 
     private func load(_ scope: CoalescedReload.Scope) async {
         guard let store else { return }
+        let started = ContinuousClock.now
+        defer { syncTimings.add(.reload, since: started) }
         let account = accountID
         // Typing that a message ended goes in the same update that shows the message, so the bubble takes its place.
         // ponytail: a load already running when the message was stored flushes early (the indicator then goes a moment
@@ -3309,6 +3425,8 @@ extension AppModel: NotificationActionEnvironment {
 
     /// Claims what this connection committed; banners for other chats when permitted and caught up.
     fileprivate func presentForegroundNotifications(store: MessageStore, account: String) async throws {
+        let started = ContinuousClock.now
+        defer { syncTimings.add(.notify, since: started) }
         let presents = mayPostNotifications && testSessionID == nil && !isDemo && session.isReady && catchUp == nil
             && sessionAccount?.accountID == account
         let posted = try await NotificationPresenter(posting: notificationPoster(account: account))

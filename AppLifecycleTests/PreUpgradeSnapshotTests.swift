@@ -8,7 +8,8 @@ import XMPPProtocol
 
 /// The pre-upgrade snapshot, its restore and the way back, through `PreUpgradeSnapshot` with isolated locations: a
 /// temporary App Group root, throwaway preference domains and Keychain services of their own. Never the app's real
-/// data. The previous build's store is a real schema-21 file (`schema-21.sql`, dumped from the 045ca73 MessageStore).
+/// data. The previous build's store is a real file: schema 21 (`schema-21.sql`, dumped from the 045ca73 MessageStore)
+/// or schema 23 (`schema-23.sql`, from the f563365 MessageStore, the build on the owner's phone).
 @MainActor final class PreUpgradeSnapshotTests: XCTestCase {
     private let typed = "Ellie@Example.org"
     private let account = "ellie@example.org"
@@ -21,6 +22,9 @@ import XMPPProtocol
         let root: URL
         let id = UUID().uuidString
         let locations: PreUpgradeSnapshot.Locations
+        /// The snapshot service as builds up to f563365 named it, with no generation: what that build's own backup
+        /// code reads, tidies and deletes.
+        let olderSnapshotService: String
         var walWriter: OpaquePointer?
 
         init(installation: String = "/install/A", root existing: URL? = nil, keychainID: String? = nil, domains: (String, String)? = nil) throws {
@@ -31,12 +35,13 @@ import XMPPProtocol
             // Preference suites named by a path inside the temporary root keep their plists there, so removing the
             // root removes them (cfprefsd writes a removed suite back when the host app exits).
             let names = domains ?? (root.appending(path: "app-preferences").path, root.appending(path: "group-preferences").path)
+            olderSnapshotService = "haus.xmpp.snapshot-test.\(scope).snapshot"
             locations = PreUpgradeSnapshot.Locations(
                 groupRoot: root, messaging: messaging,
                 appDefaults: .init(defaults: UserDefaults(suiteName: names.0)!, name: names.0),
                 groupDefaults: .init(defaults: UserDefaults(suiteName: names.1)!, name: names.1),
                 keychain: .init(accountService: "haus.xmpp.snapshot-test.\(scope).account", accountKey: "primary",
-                                pushService: "haus.xmpp.snapshot-test.\(scope).push", snapshotService: "haus.xmpp.snapshot-test.\(scope).snapshot"),
+                                pushService: "haus.xmpp.snapshot-test.\(scope).push", snapshotService: olderSnapshotService),
                 accessGate: root.appending(path: "notification-access-disabled"), installation: installation)
         }
 
@@ -56,7 +61,7 @@ import XMPPProtocol
             }
             try? FileManager.default.removeItem(at: root)
             let names = locations.keychain
-            for service in [names.accountService, names.pushService, names.snapshotService] {
+            for service in [names.accountService, names.pushService, names.snapshotService, olderSnapshotService] {
                 SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service] as CFDictionary)
             }
         }
@@ -83,26 +88,68 @@ import XMPPProtocol
                                                        journal: PushRegistrationJournal()))
     }
 
-    private func previousBuildData(in installation: Installation) async throws {
-        let locations = installation.locations
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "schema-21", withExtension: "sql"))
+    /// The spelling a previous build keyed the account by: 045ca73 (schema 21) as typed, f563365 (23) in normal form.
+    private func owner(_ schema: Int) -> String { schema < 23 ? typed : account }
+
+    private func previousBuildData(in installation: Installation, schema: Int = 21) async throws {
+        let locations = installation.locations, owner = owner(schema)
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "schema-\(schema)", withExtension: "sql"))
         XCTAssertEqual(sqliteExec(locations.database, try String(contentsOf: fixture, encoding: .utf8) + "PRAGMA journal_mode=WAL;"), SQLITE_OK)
-        XCTAssertEqual(sqliteRows(locations.database, "PRAGMA user_version"), ["21"])
+        XCTAssertEqual(sqliteRows(locations.database, "PRAGMA user_version"), ["\(schema)"])
         // The previous build's last write, still only in the WAL.
         XCTAssertEqual(sqlite3_open(locations.database.path, &installation.walWriter), SQLITE_OK)
         sqlite3_exec(installation.walWriter, "PRAGMA wal_autocheckpoint=0", nil, nil, nil)
-        XCTAssertEqual(sqlite3_exec(installation.walWriter, "INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing) VALUES('\(typed)','old-wal','bob@example.org','bob@example.org','in the wal',1790000100,0)", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(installation.walWriter, "INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing) VALUES('\(owner)','old-wal','bob@example.org','bob@example.org','in the wal',1790000100,0)", nil, nil, nil), SQLITE_OK)
 
-        locations.appDefaults.defaults.set(typed, forKey: "lastAccount")
-        locations.appDefaults.defaults.set("hash", forKey: "avatar.\(typed)")
+        locations.appDefaults.defaults.set(owner, forKey: "lastAccount")
+        locations.appDefaults.defaults.set("hash", forKey: "avatar.\(owner)")
         locations.groupDefaults.defaults.set(1, forKey: "somethingShared")
-        try keychainAdd(locations.keychain.accountService, "primary", Data("{\"accountID\":\"\(typed)\"}".utf8))
-        try keychainAdd(locations.keychain.pushService, typed, try pushRecord(typed, node: "old-node"))
+        try keychainAdd(locations.keychain.accountService, "primary", Data("{\"accountID\":\"\(owner)\"}".utf8))
+        try keychainAdd(locations.keychain.pushService, owner, try pushRecord(owner, node: "old-node"))
         try Data("disabled\n".utf8).write(to: locations.accessGate)
-        try FileManager.default.createDirectory(at: typedAttachments(installation), withIntermediateDirectories: true)
-        try Data("photo".utf8).write(to: typedAttachments(installation).appending(path: "one.jpg"))
-        try FileManager.default.createDirectory(at: typedAvatars(installation), withIntermediateDirectories: true)
-        try Data("face".utf8).write(to: typedAvatars(installation).appending(path: "avatar.png"))
+        let attachments = AttachmentFiles.root(directory: locations.messaging, account: owner)
+        let avatars = AvatarStore.directory(root: locations.messaging, account: owner)
+        try FileManager.default.createDirectory(at: attachments, withIntermediateDirectories: true)
+        try Data("photo".utf8).write(to: attachments.appending(path: "one.jpg"))
+        try FileManager.default.createDirectory(at: avatars, withIntermediateDirectories: true)
+        try Data("face".utf8).write(to: avatars.appending(path: "avatar.png"))
+    }
+
+    /// The backup the f563365 build took of 045ca73's data, in f563365's own layout: `PreUpgrade/snapshot/` with its
+    /// manifest and preference files, and Keychain copies under the unnumbered snapshot service. Written through the
+    /// same public seams that build used, from a schema-21 store in a scratch folder. Returns the copy's ID.
+    private func olderBuildBackup(in installation: Installation) async throws -> String {
+        let locations = installation.locations
+        let scratch = installation.root.appending(path: "older-store", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let source = scratch.appending(path: "messages.sqlite")
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "schema-21", withExtension: "sql"))
+        XCTAssertEqual(sqliteExec(source, try String(contentsOf: fixture, encoding: .utf8) + "PRAGMA journal_mode=WAL;"), SQLITE_OK)
+        let folder = locations.groupRoot.appending(path: "PreUpgrade/snapshot", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let store = try MessageStore(url: source, schema: .asIs)
+        try await store.acquireTransportOwnership()
+        let summary = try await store.writeSnapshot(to: folder.appending(path: "messages.sqlite"))
+        try await store.close()
+        for file in ["app-defaults.plist", "group-defaults.plist"] {
+            XCTAssertTrue((["lastAccount": typed] as NSDictionary).write(to: folder.appending(path: file), atomically: true))
+        }
+        let id = UUID().uuidString
+        try keychainAdd(installation.olderSnapshotService, "\(id)|account", Data("{\"accountID\":\"\(typed)\"}".utf8))
+        try keychainAdd(installation.olderSnapshotService, "\(id)|push|\(typed)", try pushRecord(typed, node: "older-node"))
+        let manifest = PreUpgradeSnapshot.Manifest(id: id, takenAt: now.addingTimeInterval(-7 * 86_400), database: summary, installation: "/install/f563365",
+                                                   folders: [], notificationsDisabled: false, accountRecord: true, pushRegistrations: [typed])
+        try JSONEncoder().encode(manifest).write(to: folder.appending(path: "snapshot.json"))
+        try FileManager.default.removeItem(at: scratch)
+        return id
+    }
+
+    /// Every row of every table, for comparing two database files by content.
+    private func allRows(_ url: URL, untouched: Bool = false) -> [String] {
+        sqliteRows(url, untouched: untouched, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").flatMap { table -> [String] in
+            let columns = sqliteRows(url, untouched: untouched, "SELECT name FROM pragma_table_info('\(table)')").map { "quote(\($0))" }.joined(separator: "||'|'||")
+            return sqliteRows(url, untouched: untouched, "SELECT \(columns) FROM \(table) ORDER BY 1").map { "\(table): \($0)" }
+        }
     }
 
     /// What the previous build's spellings look like outside the store: untouched, or rewritten by `adopt`.
@@ -257,6 +304,97 @@ import XMPPProtocol
         XCTAssertEqual(installation.snapshots.manifest, manifest)
         XCTAssertEqual(try PreUpgradeSnapshot.keychainAccounts(service: installation.locations.keychain.snapshotService).count, 2)
         XCTAssertLessThan(manifest.suggestDeletionAfter, later)
+    }
+
+    // MARK: The f563365 build (schema 23) as the previous version
+
+    /// The owner's phone runs f563365, whose store is at schema 23: it is copied whole, including what is still only
+    /// in its WAL, before the migration to the current schema.
+    func testAStoreTheSchema23BuildLeftIsSnapshottedBeforeMigrating() async throws {
+        let installation = try makeInstallation()
+        try await previousBuildData(in: installation, schema: 23)
+        let locations = installation.locations
+        guard case let .ready(store) = try await installation.snapshots.open(upgradeAllowed: true, now: now) else { return XCTFail("not ready") }
+        try await store.close()
+        let manifest = try XCTUnwrap(installation.snapshots.manifest)
+        XCTAssertEqual(manifest.database.schemaVersion, 23)
+        let copy = locations.snapshot.appending(path: "messages.sqlite")
+        XCTAssertEqual(sqliteRows(copy, "PRAGMA user_version"), ["23"])
+        XCTAssertEqual(sqliteRows(copy, "SELECT id FROM messages ORDER BY id"), ["group-0", "old-0", "old-1", "old-2", "old-wal"])
+        XCTAssertEqual(manifest.pushRegistrations, [account])
+        XCTAssertEqual(try PreUpgradeSnapshot.keychainData(service: locations.keychain.snapshotService, account: "\(manifest.id)|account"),
+                       Data("{\"accountID\":\"\(account)\"}".utf8))
+        XCTAssertEqual(sqliteRows(locations.database, "PRAGMA user_version"), ["\(MessageStore.currentSchemaVersion)"])
+        XCTAssertEqual(sqliteRows(locations.database, "SELECT count(*) FROM messages"), ["5"])
+    }
+
+    /// The owner's phone also holds f563365's backup of 045ca73's data, in f563365's layout. The backup of the
+    /// schema-23 data replaces it: one backup remains, the old one's Keychain copies are gone with it, and nothing is
+    /// left under the folder and Keychain names f563365's own backup code acts on.
+    func testTheOlderBuildsBackupIsRetiredForTheSchema23One() async throws {
+        let installation = try makeInstallation()
+        try await previousBuildData(in: installation, schema: 23)
+        let older = try await olderBuildBackup(in: installation)
+        let locations = installation.locations
+        guard case let .ready(store) = try await installation.snapshots.open(upgradeAllowed: true, now: now) else { return XCTFail("not ready") }
+        try await store.close()
+        let manifest = try XCTUnwrap(installation.snapshots.manifest)
+        XCTAssertNotEqual(manifest.id, older)
+        XCTAssertEqual(manifest.database.schemaVersion, 23)
+        XCTAssertEqual(try PreUpgradeSnapshot.keychainAccounts(service: locations.keychain.snapshotService).sorted(),
+                       ["\(manifest.id)|account", "\(manifest.id)|push|\(account)"])
+        XCTAssertEqual(try PreUpgradeSnapshot.keychainAccounts(service: installation.olderSnapshotService), [])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: locations.groupRoot.appending(path: "PreUpgrade").path))
+    }
+
+    /// Restoring schema-23 data, for f563365 to be installed over it. f563365 has this backup code too, under the
+    /// unnumbered names: had the restore left its marker and this version's kept copy there, f563365 would show the
+    /// restored screen as if it were the newer build, and either choice there would hand it data it cannot open or
+    /// delete this version's copy. So the restored data is exactly the backup's, in the write-ahead-log mode f563365
+    /// keeps its store in, and nothing of this build's backups is under f563365's names. Then f563365 runs on it, and
+    /// this build, installed again, returns to its own data with the backup now holding what f563365 wrote.
+    func testRestoredSchema23DataIsLeftToThePreviousBuildAndReturnBringsThisVersionBack() async throws {
+        let (installation, appBefore, groupBefore) = try await restoredInstallation(schema: 23)
+        let locations = installation.locations
+        let copy = locations.snapshot.appending(path: "messages.sqlite")
+        try assertSameDatabase(locations.database, copy)
+        XCTAssertEqual(allRows(locations.database, untouched: true), allRows(copy))
+        XCTAssertEqual(sqliteRows(locations.database, untouched: true, "PRAGMA user_version"), ["23"])
+        XCTAssertEqual(sqliteRows(locations.database, untouched: true, "SELECT id FROM messages ORDER BY id"), ["group-0", "old-0", "old-1", "old-2", "old-wal"])
+        XCTAssertEqual(locations.appDefaults.contents as NSDictionary, appBefore)
+        XCTAssertEqual(locations.groupDefaults.contents as NSDictionary, groupBefore)
+        XCTAssertEqual(try PreUpgradeSnapshot.keychainData(service: locations.keychain.accountService, account: "primary"),
+                       Data("{\"accountID\":\"\(account)\"}".utf8))
+        XCTAssertEqual(try PreUpgradeSnapshot.keychainData(service: locations.keychain.pushService, account: account), try pushRecord(account, node: "old-node"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: locations.accessGate.path))
+        // Nothing for f563365's own backup code to find, tidy or act on.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: locations.groupRoot.appending(path: "PreUpgrade").path))
+        XCTAssertEqual(try PreUpgradeSnapshot.keychainAccounts(service: installation.olderSnapshotService), [])
+        // This build still finds its restored state, and its extension stays away.
+        XCTAssertTrue(PreUpgradeHold.isHeld(groupRoot: locations.groupRoot))
+        guard case let .restored(untouched) = try await installation.snapshots.open(upgradeAllowed: true, now: now) else { return XCTFail("reopened") }
+        XCTAssertFalse(untouched.previousVersionRan)
+        XCTAssertNotNil(untouched.thisVersion)
+
+        runPreviousBuild(on: locations.database, schema: 23)
+        let reinstalled = try installation.reinstalled(as: "/install/C")
+        let later = now.addingTimeInterval(86_400)
+        guard case let .restored(state) = try await reinstalled.snapshots.open(upgradeAllowed: true, now: later) else { return XCTFail("upgraded without asking") }
+        XCTAssertTrue(state.previousVersionRan)
+        XCTAssertEqual(state.sentOnPreviousVersion, ["Bob"])
+        let returned = try await reinstalled.snapshots.returnToThisVersion(now: later)
+        XCTAssertEqual(returned, .done)
+        guard case let .ready(store) = try await reinstalled.snapshots.open(upgradeAllowed: true, now: later) else { return XCTFail("not ready") }
+        let ids = try await store.messages(accountID: account, chatID: "bob@example.org").map(\.id)
+        try await store.close()
+        XCTAssertTrue(ids.contains("new-1") && ids.contains("new-reply"))
+        XCTAssertFalse(ids.contains("old-build-again"))
+        XCTAssertEqual(sqliteRows(locations.database, "PRAGMA user_version"), ["\(MessageStore.currentSchemaVersion)"])
+        let backup = try XCTUnwrap(reinstalled.snapshots.manifest)
+        XCTAssertEqual(backup.database.schemaVersion, 23)
+        XCTAssertEqual(sqliteRows(locations.snapshot.appending(path: "messages.sqlite"), "SELECT count(*) FROM messages WHERE id='old-build-again'"), ["1"])
+        XCTAssertEqual(try PreUpgradeSnapshot.keychainAccounts(service: locations.keychain.snapshotService).sorted(),
+                       ["\(backup.id)|account", "\(backup.id)|push|\(account)"])
     }
 
     /// After the new build changed everything in the inventory, restoring keeps the new build's state as its own
@@ -524,9 +662,9 @@ import XMPPProtocol
     private var newAccountRecord: Data { Data("{\"accountID\":\"ellie@example.org\",\"security\":\"directTLS\"}".utf8) }
 
     /// Previous build's data, snapshotted and upgraded, changed as the new build does, then restored.
-    private func restoredInstallation() async throws -> (Installation, NSDictionary, NSDictionary) {
+    private func restoredInstallation(schema: Int = 21) async throws -> (Installation, NSDictionary, NSDictionary) {
         let installation = try makeInstallation()
-        try await previousBuildData(in: installation)
+        try await previousBuildData(in: installation, schema: schema)
         let locations = installation.locations
         let appBefore = locations.appDefaults.contents as NSDictionary, groupBefore = locations.groupDefaults.contents as NSDictionary
         guard case let .ready(store) = try await installation.snapshots.open(upgradeAllowed: true, now: now) else {
@@ -560,19 +698,20 @@ import XMPPProtocol
         try Data("new".utf8).write(to: attachments.appending(path: "two.jpg"))
     }
 
-    /// What 045ca73 does on its first launch over restored data: its open switches the store to write-ahead logging,
-    /// then it writes (here, an encrypted message it sent).
-    private func runPreviousBuild(on database: URL) {
-        XCTAssertEqual(sqliteExec(database, "PRAGMA journal_mode=WAL; INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing,encryption_profile) VALUES('\(typed)','old-build-again','bob@example.org','\(typed)','later',\(now.timeIntervalSince1970 + 3_600),1,'legacy')"), SQLITE_OK)
+    /// What a previous build does on its first launch over restored data: 045ca73's open switches the store to
+    /// write-ahead logging (f563365 opens a store at its own schema as it is), then it writes (here, an encrypted
+    /// message it sent).
+    private func runPreviousBuild(on database: URL, schema: Int = 21) {
+        let owner = owner(schema), mode = schema < 23 ? "PRAGMA journal_mode=WAL; " : ""
+        XCTAssertEqual(sqliteExec(database, mode + "INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing,encryption_profile) VALUES('\(owner)','old-build-again','bob@example.org','\(owner)','later',\(now.timeIntervalSince1970 + 3_600),1,'legacy')"), SQLITE_OK)
     }
 
     private func assertRestored(_ locations: PreUpgradeSnapshot.Locations, appBefore: NSDictionary, groupBefore: NSDictionary,
                                 file: StaticString = #filePath, line: UInt = #line) throws {
-        XCTAssertEqual(try Data(contentsOf: locations.database), try Data(contentsOf: locations.snapshot.appending(path: "messages.sqlite")), file: file, line: line)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: locations.database.path + "-wal"), file: file, line: line)
-        XCTAssertEqual(sqliteRows(locations.database, "SELECT id FROM messages ORDER BY id"), ["old-0", "old-1", "old-2", "old-wal"], file: file, line: line)
-        XCTAssertEqual(sqliteRows(locations.database, "SELECT DISTINCT account_id FROM messages"), [typed], file: file, line: line)
-        XCTAssertEqual(sqliteRows(locations.database, "PRAGMA user_version"), ["21"], file: file, line: line)
+        try assertSameDatabase(locations.database, locations.snapshot.appending(path: "messages.sqlite"), file: file, line: line)
+        XCTAssertEqual(sqliteRows(locations.database, untouched: true, "SELECT id FROM messages ORDER BY id"), ["old-0", "old-1", "old-2", "old-wal"], file: file, line: line)
+        XCTAssertEqual(sqliteRows(locations.database, untouched: true, "SELECT DISTINCT account_id FROM messages"), [typed], file: file, line: line)
+        XCTAssertEqual(sqliteRows(locations.database, untouched: true, "PRAGMA user_version"), ["21"], file: file, line: line)
         XCTAssertEqual(locations.appDefaults.contents as NSDictionary, appBefore, file: file, line: line)
         XCTAssertEqual(locations.groupDefaults.contents as NSDictionary, groupBefore, file: file, line: line)
         XCTAssertEqual(try PreUpgradeSnapshot.keychainData(service: locations.keychain.accountService, account: "primary"),
@@ -590,6 +729,18 @@ import XMPPProtocol
         XCTAssertTrue(PreUpgradeHold.isHeld(groupRoot: locations.groupRoot), file: file, line: line)
     }
 
+    /// The restored file is the backup's, page for page, put back in write-ahead-log mode with no sidecars: only the
+    /// 100-byte file header differs (the journal mode bytes and the change counter the switch bumps).
+    private func assertSameDatabase(_ restored: URL, _ backup: URL, file: StaticString = #filePath, line: UInt = #line) throws {
+        XCTAssertEqual(try Data(contentsOf: restored).dropFirst(100), try Data(contentsOf: backup).dropFirst(100), file: file, line: line)
+        for suffix in ["-wal", "-shm", "-journal"] {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: restored.path + suffix), file: file, line: line)
+        }
+        // Write-ahead logging, read from the header: opening the file would leave the sidecars a previous build's
+        // run is recognised by.
+        XCTAssertEqual(Array(try Data(contentsOf: restored)[18...19]), [2, 2], file: file, line: line)
+    }
+
     private func sqliteExec(_ url: URL, _ sql: String) -> Int32 {
         var db: OpaquePointer?
         guard sqlite3_open(url.path, &db) == SQLITE_OK else { return -1 }
@@ -597,9 +748,13 @@ import XMPPProtocol
         return sqlite3_exec(db, sql, nil, nil, nil)
     }
 
-    private func sqliteRows(_ url: URL, _ sql: String) -> [String] {
+    /// `untouched` reads the main file without opening it as a database (no WAL frames are read and no sidecars are
+    /// left, which a previous build's run is recognised by): for restored data nobody has opened since.
+    private func sqliteRows(_ url: URL, untouched: Bool = false, _ sql: String) -> [String] {
         var db: OpaquePointer?, statement: OpaquePointer?
-        guard sqlite3_open(url.path, &db) == SQLITE_OK else { return [] }
+        let opened = untouched ? sqlite3_open_v2("file:\(url.path)?immutable=1", &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil)
+            : sqlite3_open(url.path, &db)
+        guard opened == SQLITE_OK else { return [] }
         defer { sqlite3_close(db) }
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(statement) }

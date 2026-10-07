@@ -29,9 +29,12 @@ struct IQReplyScope: Sendable {
     static func result(_ node: XMLNode) throws -> XMLNode {
         if node.attributes["type"] == "error" {
             let error = try OMEMOWire.singleton(node, "error", "jabber:client")
-            let conditions = error.children.filter { $0.namespace == "urn:ietf:params:xml:ns:xmpp-stanzas" && $0.name != "text" }
-            guard conditions.count == 1 else { throw XMPPIQError.malformedResponse }
-            throw XMPPIQError.stanza(condition: conditions[0].name)
+            // RFC 6120 §8.3.2 names exactly one condition, but some servers add a second; the first decides, as in other
+            // clients, so a refusal stays a refusal instead of failing the step that asked.
+            guard let condition = error.children.first(where: { $0.namespace == "urn:ietf:params:xml:ns:xmpp-stanzas" && $0.name != "text" }) else {
+                throw XMPPIQError.malformedResponse
+            }
+            throw XMPPIQError.stanza(condition: condition.name)
         }
         return node
     }

@@ -8,10 +8,11 @@ public struct XMPPUploadService: Sendable, Equatable {
     public let maximumFileSize: Int?
     public init(jid: String, maximumFileSize: Int?) { self.jid = jid; self.maximumFileSize = maximumFileSize }
 
-    /// Reads the component's disco#info: the feature plus the optional data form.
+    /// Reads the component's disco#info: the feature plus the optional data form. A MUC service that also offers
+    /// uploads keeps them for its rooms, so it is not the account's service.
     static func decode(jid: String, info query: XMLNode) -> XMPPUploadService? {
         let features = Set(query.children.filter { $0.name == "feature" && $0.namespace == query.namespace }.compactMap { $0.attributes["var"] })
-        guard features.contains(namespace) else { return nil }
+        guard features.contains(namespace), !features.contains("http://jabber.org/protocol/muc") else { return nil }
         var maximum: Int?
         for form in query.children("x", namespace: "jabber:x:data") {
             let fields = form.children("field", namespace: "jabber:x:data")
@@ -50,25 +51,73 @@ public struct XMPPUploadSlot: Sendable, Equatable {
 
 extension XMPPClient {
     /// Entities the server lists under disco#items (components such as the upload service).
-    public func discoveryItems(for jid: String? = nil) async throws -> [String] {
-        let response = try await requestIQ(type: "get", to: jid, payload: "<query xmlns='http://jabber.org/protocol/disco#items'/>")
+    public func discoveryItems(for jid: String? = nil, timeout: Duration = XMPPClient.iqTimeout) async throws -> [String] {
+        let response = try await requestIQ(type: "get", to: jid, payload: "<query xmlns='http://jabber.org/protocol/disco#items'/>", timeout: timeout)
         let query = try OMEMOWire.singleton(response, "query", "http://jabber.org/protocol/disco#items")
         let items = query.children.filter { $0.name == "item" && $0.namespace == query.namespace }
         guard items.count <= 256 else { throw XMPPIQError.malformedResponse }
         return items.compactMap { $0.attributes["jid"] }.filter { MessageContent.validAddress($0) && !$0.contains("/") }
     }
 
-    /// The first server component advertising XEP-0363, or nil when the server offers none.
-    /// Components hang off the server domain (an unaddressed items query returns the account's
-    /// own items); each probe is then addressed to the exact component so the reply scope stays strict.
-    public func uploadService() async throws -> XMPPUploadService? {
+    /// Probes in flight at once; well under the client's limit on outstanding IQs.
+    static let uploadProbeWidth = 8
+
+    /// The server's XEP-0363 service, or nil when the server offers none. The domain itself and every entity it lists
+    /// under disco#items are probed concurrently, each within `timeout`; components hang off the server domain (an
+    /// unaddressed items query returns the account's own items), and each probe is addressed to the exact entity so the
+    /// reply scope stays strict. Of several services the one with the largest `max-file-size` wins (one that states no
+    /// limit counts as largest), then the domain, then list order.
+    ///
+    /// A stanza error means "not this entity". Any other failure (a silent component, a timeout, a malformed answer)
+    /// leaves the question open: when nothing was found, that error is thrown, so the caller keeps what it knew.
+    public func uploadService(timeout: Duration = .seconds(5)) async throws -> XMPPUploadService? {
         guard !domain.isEmpty else { throw XMPPClientError.notConnected }
-        for item in try await discoveryItems(for: domain) {
-            let info: XMLNode
-            do { info = try await discoveryInfo(for: item) } catch XMPPIQError.stanza { continue }
-            if let service = XMPPUploadService.decode(jid: item, info: info) { return service }
+        let server = domain
+        async let listed: Result<[String], any Error> = { () async -> Result<[String], any Error> in
+            do { return .success(try await self.discoveryItems(for: server, timeout: timeout)) } catch { return .failure(error) }
+        }()
+        var open: (any Error)?
+        var found: [(order: Int, service: XMPPUploadService)] = []
+        func record(_ order: Int, _ outcome: Result<XMPPUploadService?, any Error>) {
+            switch outcome {
+            case .success(let service?): found.append((order, service))
+            case .success(nil), .failure(XMPPIQError.stanza): break
+            case .failure(let error): open = open ?? error
+            }
         }
+        record(0, await probeUploadInfo(server, timeout: timeout))
+        switch await listed {
+        case .failure(XMPPIQError.stanza): break
+        case .failure(let error): open = open ?? error
+        case .success(let items):
+            let candidates = Array(items.filter { $0 != server }.enumerated())
+            await withTaskGroup(of: (Int, Result<XMPPUploadService?, any Error>).self) { group in
+                var next = 0
+                func add() {
+                    guard next < candidates.count else { return }
+                    let (index, item) = candidates[next]; next += 1
+                    group.addTask { (index + 1, await self.probeUploadInfo(item, timeout: timeout)) }
+                }
+                for _ in 0..<Self.uploadProbeWidth { add() }
+                for await (order, outcome) in group { record(order, outcome); add() }
+            }
+        }
+        try Task.checkCancellation()
+        let best = found.min { lhs, rhs in
+            let left = lhs.service.maximumFileSize ?? .max, right = rhs.service.maximumFileSize ?? .max
+            return left != right ? left > right : lhs.order < rhs.order
+        }
+        if let best { return best.service }
+        if let open { throw open }
         return nil
+    }
+
+    private func probeUploadInfo(_ jid: String, timeout: Duration) async -> Result<XMPPUploadService?, any Error> {
+        do {
+            let response = try await requestIQ(type: "get", to: jid, payload: "<query xmlns='http://jabber.org/protocol/disco#info'/>", timeout: timeout)
+            let info = try OMEMOWire.singleton(response, "query", "http://jabber.org/protocol/disco#info")
+            return .success(XMPPUploadService.decode(jid: jid, info: info))
+        } catch { return .failure(error) }
     }
 
     public func requestUploadSlot(service: XMPPUploadService, filename: String, size: Int, contentType: String) async throws -> XMPPUploadSlot {

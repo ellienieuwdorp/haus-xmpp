@@ -154,5 +154,5 @@ private func execute(_ url: URL, _ sql: String) -> Bool {
     #expect(try await store.archiveGaps(accountID: "a@x") == [ArchiveGap(archiveID: "a@x", since: stamp, detectedAt: first),
                                                             ArchiveGap(archiveID: "room@rooms.x", since: nil, detectedAt: first.addingTimeInterval(120))])
     try await store.close()
-    #expect(rows(url, "PRAGMA user_version") == [["23"]])
+    #expect(rows(url, "PRAGMA user_version") == [["\(MessageStore.currentSchemaVersion)"]])
 }

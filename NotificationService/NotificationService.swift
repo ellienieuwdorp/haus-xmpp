@@ -99,10 +99,10 @@ private enum ExtensionRun {
                                            push: PushRegistrationState.sessionSubscription(
                                                saved: account.push, state: try? PushRegistrationState.load(accountID: accountID)),
                                            leftForeground: SharedSession.leftForeground()),
-                progress: progress, presentation: { store in
+                progress: progress, presentation: { store, stage in
                     // Keep the transport lease through presentation. Preferences cannot change under this lease;
-                    // logout authorization is reread after the network work.
-                    try await presenter.present(store: store, accountID: accountID, progress: progress, authorize: {
+                    // logout authorization is reread before each presentation (direct messages first, then the rest).
+                    try await presenter.present(store: store, accountID: accountID, progress: progress, stage: stage, authorize: {
                         guard try NotificationAccount.load() == account else { throw CancellationError() }
                     })
                 })

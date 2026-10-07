@@ -7,6 +7,7 @@ private actor SnapshotStore: XMPPStreamManagementPersistence {
     var acknowledged: [String] = []
     var reject = false
     var resumeAllowed = true
+    var policyFails = false
     var saves = 0
     func load() -> XMPPStreamManagementSnapshot? { value }
     func save(_ snapshot: XMPPStreamManagementSnapshot, expectedRevision: Int?, acknowledgedMessageIDs: [String]) throws {
@@ -14,7 +15,11 @@ private actor SnapshotStore: XMPPStreamManagementPersistence {
         guard value?.revision == expectedRevision else { throw XMPPStreamManagementError.invalidState }
         value = snapshot; acknowledged += acknowledgedMessageIDs; saves += 1
     }
-    func permitsResumption(_ snapshot: XMPPStreamManagementSnapshot) -> Bool { resumeAllowed }
+    func permitsResumption(_ snapshot: XMPPStreamManagementSnapshot) throws -> Bool {
+        if policyFails { throw XMPPStreamManagementError.invalidState }
+        return resumeAllowed
+    }
+    func failPolicy() { policyFails = true }
     func setResumeAllowed(_ allowed: Bool) { resumeAllowed = allowed }
     func rejectSaves(_ reject: Bool) { self.reject = reject }
     func seed(_ snapshot: XMPPStreamManagementSnapshot) { value = snapshot }
@@ -150,22 +155,33 @@ private func enabledManager(_ store: SnapshotStore) async throws -> StreamManage
     #expect(await manager.persistedHandledCount() == 3)
 }
 
-@Test func restoreRejectsJournalsOverTheReplayableOrTotalCaps() async throws {
-    func seeded(_ journal: [XMPPStreamJournalEntry]) async throws -> XMPPStreamManagementSnapshot? {
+/// A saved session that fails validation, or whose replay policy throws, is never resumed; the connect binds fresh
+/// and `enable` replaces it. Throwing instead failed every connect for the whole 72 h resume window.
+@Test func restoreBindsFreshForASessionItCannotUse() async throws {
+    func restored(_ journal: [XMPPStreamJournalEntry], policyFails: Bool = false) async throws -> XMPPStreamManagementSnapshot? {
         let store = SnapshotStore()
         await store.seed(.init(revision: 1, accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "resume", expiresAt: nil,
                                inboundHandled: 0, outboundSent: UInt64(journal.count), outboundAcknowledged: 0, journal: journal))
-        return try await StreamManagement(store).restore(accountID: "a@example.org")
+        if policyFails { await store.failPolicy() }
+        let sm = StreamManagement(store)
+        let candidate = try await sm.restore(accountID: "a@example.org")
+        if candidate == nil {
+            try await sm.enable(accountID: "a@example.org", fullJID: "a@example.org/r", streamID: "fresh")
+            let replaced = await store.value
+            #expect(replaced?.streamID == "fresh" && replaced?.journal.isEmpty == true)
+        }
+        return candidate
     }
     let messages = (1...2_001).map { XMPPStreamJournalEntry(sequence: UInt64($0), kind: .message, xml: "<message id='\($0)'/>", messageID: "\($0)") }
-    await #expect(throws: XMPPStreamManagementError.invalidState) { _ = try await seeded(messages) }
+    #expect(try await restored(messages) == nil)
     let iqs = (1...5_001).map { XMPPStreamJournalEntry(sequence: UInt64($0), kind: .iq, xml: nil, messageID: nil) }
-    await #expect(throws: XMPPStreamManagementError.invalidState) { _ = try await seeded(iqs) }
+    #expect(try await restored(iqs) == nil)
     var mixed = Array(iqs.prefix(4_999))
     mixed.append(.init(sequence: 5_000, kind: .message, xml: "<message id='last'/>", messageID: "last"))
-    #expect(try await seeded(mixed) != nil)
+    #expect(try await restored(mixed) != nil)
     let bytesless = [XMPPStreamJournalEntry(sequence: 1, kind: .message, xml: nil, messageID: "m")]
-    await #expect(throws: XMPPStreamManagementError.invalidState) { _ = try await seeded(bytesless) }
+    #expect(try await restored(bytesless) == nil)
+    #expect(try await restored([.init(sequence: 1, xml: "<message id='a'/>", messageID: "a")], policyFails: true) == nil)
 }
 
 @Test func receiveWindowCountsAgainstInMemoryHandled() async throws {

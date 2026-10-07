@@ -38,6 +38,19 @@ private let plain = "<message xmlns='jabber:client' from='bob@localhost/x' to='a
     #expect(try query.finish(fin).lastID == "4")
 }
 
+/// Prosody keeps a stanza returned to one of our resources in the own archive (mod_mam `should_store`, "bounce"). It
+/// echoes our ciphertext; before, that echo failed the envelope parser and became an unreadable message from the peer.
+@Test func archivedBounceIsABounceAndNeverContent() throws {
+    var query = probeQuery()
+    let bounce = "<message xmlns='jabber:client' from='bob@localhost' to='alice@localhost/ios' type='error' id='sent-1'>"
+        + "<encrypted xmlns='eu.siacs.conversations.axolotl'><header sid='7'><key rid='9'>AAAA</key><iv>AAAAAAAAAAAAAAAA</iv></header><payload>AAAA</payload></encrypted>"
+        + "<error type='cancel'><service-unavailable xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></error></message>"
+    try query.receive(recoveryNode(probe("b1", bounce)))
+    let entry = try #require(query.messages.first)
+    #expect(entry.messageError == XMPPMessageError(id: "sent-1", from: "bob@localhost", condition: "service-unavailable", type: "cancel"))
+    #expect(entry.rejectedContent == nil && entry.encryptedMessage == nil && entry.message == nil)
+}
+
 @Test func archiveRejectsOwnSendWithUnsupportedContentAsOutgoing() throws {
     var query = probeQuery()
     let ownEME = "<message xmlns='jabber:client' from='alice@localhost/phone' to='bob@localhost' type='chat' id='o1'><encryption xmlns='urn:xmpp:eme:0' namespace='urn:xmpp:openpgp:0'/><body>locked</body></message>"
