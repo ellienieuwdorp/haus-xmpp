@@ -31,6 +31,20 @@ struct EncryptedContent: Equatable {
                   reply.wireID.map({ !$0.isEmpty && $0.utf8.count <= 1024 && MessageContent.validXMLText($0) }) ?? true
             else { throw OMEMOError.invalidContent }
         }
+        // A file's body must stay exactly its link (Conversations shows the file only then), so a reply on a file
+        // carries no quote: modern sends the reference alone, inside the envelope. Legacy has nowhere private to put
+        // a reference, and a reply without a wire ID has no reference to send. The composer queues a file reply only
+        // for a modern chat and an own sent message; should the chat have fallen back to legacy since, the file goes
+        // without the reply rather than leaking the reference in clear or breaking the link.
+        if fileSharing != nil, let fileReply = reply {
+            guard modern, let target = fileReply.wireID else {
+                return try encode(body: body, reply: nil, sender: sender, recipient: recipient, modern: modern,
+                                  originID: originID, fileSharing: fileSharing, correction: correction)
+            }
+            let content = MessageContent(body: body, reply: .init(id: target, to: fileReply.senderID, quote: ""),
+                                         correction: correction, originID: originID, fileSharing: fileSharing)
+            return try wrap(content, sender: sender, recipient: recipient)
+        }
         let quote = reply.map { "> \($0.senderID)\n" + $0.body.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").split(separator: "\n", omittingEmptySubsequences: false).map { "> \($0)\n" }.joined() + "\n" } ?? ""
         if !modern {
             // Legacy OMEMO has no envelope: the file rides as an `aesgcm://` body (XEP-0454), so it

@@ -444,15 +444,34 @@ public actor XMPPClient {
         return "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(content)<store xmlns='urn:xmpp:hints'/></message>"
     }
 
-    /// Pure preflight for durable enqueueing; does not require a connected session.
-    public static func validateMessage(to: String, body: String, id: String, reply: XMPPReply? = nil) throws {
-        guard MessageContent.validAddress(to), !body.isEmpty, body.utf8.count <= 65_536,
-              MessageContent.validIdentifier(id), MessageContent.validXMLText(body) else { throw XMPPClientError.invalidConfiguration }
+    /// Why a message cannot be sent, so the caller can say which part is wrong.
+    public enum MessageProblem: Sendable, Equatable {
+        /// The recipient, the message ID or the reply's target is not a valid address or identifier.
+        case invalidAddressing
+        case emptyBody, bodyTooLong, bodyUnsupportedCharacters
+        case emptyQuote, quoteTooLong, quoteUnsupportedCharacters
+        /// Each part fits, but the quote and the text together are over the stanza limit.
+        case combinedTooLong
+    }
+
+    /// Pure preflight for durable enqueueing; does not require a connected session. Nil when the message can be sent.
+    public static func messageProblem(to: String, body: String, id: String, reply: XMPPReply? = nil) -> MessageProblem? {
+        guard MessageContent.validAddress(to), MessageContent.validIdentifier(id) else { return .invalidAddressing }
+        guard !body.isEmpty else { return .emptyBody }
+        guard body.utf8.count <= 65_536 else { return .bodyTooLong }
+        guard MessageContent.validXMLText(body) else { return .bodyUnsupportedCharacters }
         if let reply {
-            guard reply.id.map(MessageContent.validIdentifier) ?? true, MessageContent.validAddress(reply.to),
-                  !reply.body.isEmpty, reply.body.utf8.count <= 16_384, MessageContent.validXMLText(reply.body),
-                  replyFallback(reply.body).utf8.count + body.utf8.count <= 65_536 else { throw XMPPClientError.invalidConfiguration }
+            guard reply.id.map(MessageContent.validIdentifier) ?? true, MessageContent.validAddress(reply.to) else { return .invalidAddressing }
+            guard !reply.body.isEmpty else { return .emptyQuote }
+            guard reply.body.utf8.count <= 16_384 else { return .quoteTooLong }
+            guard MessageContent.validXMLText(reply.body) else { return .quoteUnsupportedCharacters }
+            guard replyFallback(reply.body).utf8.count + body.utf8.count <= 65_536 else { return .combinedTooLong }
         }
+        return nil
+    }
+
+    public static func validateMessage(to: String, body: String, id: String, reply: XMPPReply? = nil) throws {
+        if messageProblem(to: to, body: body, id: id, reply: reply) != nil { throw XMPPClientError.invalidConfiguration }
     }
 
     static func messageXML(to: String, body: String, id: String, reply: XMPPReply? = nil, requestReceipt: Bool = false, markable: Bool = false) throws -> String {

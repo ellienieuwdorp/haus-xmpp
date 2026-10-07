@@ -35,3 +35,19 @@ private func replyNode(body: String = "Answer", reply: XMPPReply?) throws -> XMP
     #expect(end != prefix.count)
     #expect(end != prefix.utf16.count)
 }
+
+@Test func messageProblemNamesThePartThatCannotBeSent() {
+    func problem(_ body: String, quote: String?) -> XMPPClient.MessageProblem? {
+        XMPPClient.messageProblem(to: "bob@example.test", body: body, id: "m1", reply: quote.map { XMPPReply(id: "w1", to: "bob@example.test", body: $0) })
+    }
+    #expect(problem("Answer", quote: "Photo") == nil)
+    #expect(problem("Answer", quote: "") == .emptyQuote)
+    #expect(problem("Answer", quote: String(repeating: "a", count: 16_385)) == .quoteTooLong)
+    #expect(problem("Answer", quote: "bad\u{0001}") == .quoteUnsupportedCharacters)
+    #expect(problem("", quote: nil) == .emptyBody)
+    #expect(problem("bad\u{fffe}", quote: nil) == .bodyUnsupportedCharacters)
+    #expect(problem(String(repeating: "a", count: 65_537), quote: nil) == .bodyTooLong)
+    #expect(problem(String(repeating: "a", count: 60_000), quote: String(repeating: "q", count: 16_000)) == .combinedTooLong)
+    #expect(XMPPClient.messageProblem(to: "bob@example.test", body: "Answer", id: "has space") == .invalidAddressing)
+    #expect(throws: (any Error).self) { try XMPPClient.validateMessage(to: "bob@example.test", body: "Answer", id: "m1", reply: XMPPReply(id: "w1", to: "bob@example.test", body: "")) }
+}
