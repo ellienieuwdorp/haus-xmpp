@@ -13,7 +13,7 @@ xcodebuild test-without-building -scheme HausXMPP -destination 'platform=iOS Sim
 
 Rebuild with the scheme you are about to test. If `HausXMPPLifecycle` shares a derived data folder with a later `HausXMPP` build, running it without rebuilding fails about a dozen unrelated tests that compare errors.
 
-Use a simulator no other session drives. The attachment suites need an iOS 26.5 device with the stock photos.
+Use a simulator no other session drives. The attachment suites need an iOS 26.5 device with the stock photos. On a freshly cloned simulator, `AttachmentPanelUITests.testPanelSwapsWithTheKeyboardAtTheSameHeight` fails on `main` too: tapping the field leaves the composer at rest. It passes once the simulator has shown the keyboard.
 
 `-parallel-testing-enabled YES -parallel-testing-worker-count 3` gives each worker a fresh clone of the simulator and splits the suite by class. Each clone boots every simulator daemon, so only use it while no other simulators are booted. On 2026-09-29, with four other simulators running, the load average passed 800 and two clones stalled. There is no measurement yet from an idle machine.
 
