@@ -34,7 +34,7 @@ Start the peer that suite needs from `Packages/OMEMO/Scripts/Interop` with `--cr
 
 Then `export` every runner key with a `TEST_RUNNER_` prefix. Add `TEST_RUNNER_HAUS_LAB_CA_DER`, the base64 DER of `ca.crt`. Run the suite with `test-without-building`. A variable set only as a prefix on the `xcodebuild` command did not reach the runner.
 
-To run a lab suite over a slow link, start `infra/local/slow_link.py` in front of the lab (for example `--listen 15223 --target 5223 --delay 0.1` for a 200 ms round trip) and also export `TEST_RUNNER_HAUS_LAB_PORT=15223`. `connectToLab` then signs in through that port. `AttachmentSendLabUITests` needs it to fail on code that drops an upload request: on loopback the slot round trips are too short to show the bug.
+To run a lab suite over a slow link, start `infra/local/slow_link.py` in front of the lab (for example `--listen 15223 --target 5223 --delay 0.1` for a 200 ms round trip) and also export `TEST_RUNNER_HAUS_LAB_PORT=15223`. `connectToLab` then signs in through that port. `AttachmentSendLabUITests` needs it to fail on code that drops an upload request: on loopback the slot round trips are too short to show the bug. `AttachmentDispatchTests.testFilesQueuedDuringAPassGetTheNextPass` in the lifecycle suite catches that bug without the lab.
 
 ## Where the time goes
 
