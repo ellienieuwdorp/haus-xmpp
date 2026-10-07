@@ -690,8 +690,15 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         assets = latest
         collection.reloadData()
         collection.backgroundView = emptyMessage()
-        // A panel that is not up makes its first cells now, not when "+" presents it.
-        if window == nil { collection.layoutIfNeeded() }
+        // A panel that is not up makes its first cells now, not when "+" presents it. The read can turn the
+        // limited-access row on, which shortens the rail, so the whole panel lays out again first and the cells are
+        // made at the size they are presented at, not sized and reloaded again on the tap. Outside a window the
+        // row's constraint changes do not mark the panel for layout, so it is marked here.
+        if window == nil {
+            superview?.setNeedsLayout()
+            superview?.layoutIfNeeded()
+            collection.layoutIfNeeded()
+        }
     }
 
     /// Access was denied or taken away.
