@@ -227,7 +227,7 @@ final class AppModel {
     private var uploadService: XMPPUploadService?
     private var uploads: UploadServiceMemory { UploadServiceMemory(defaults: preferences) }
     /// True from the start of a connection's setup until its upload discovery settled; false when a resume skipped it.
-    @ObservationIgnored private var uploadDiscoveryPending = false
+    @ObservationIgnored private var uploadReconciliation = UploadReconciliation()
     private var serverProfiles: ServerProfileMemory { ServerProfileMemory(defaults: preferences) }
     private var files: AttachmentFiles? { storageDirectory.map { AttachmentFiles(directory: $0, account: accountID) } }
     @ObservationIgnored private var uploader: AttachmentUploader?
@@ -1751,7 +1751,7 @@ final class AppModel {
         if resumed {
             Self.syncLog.notice("resume reuses features=\(setup.skipsFeatures, privacy: .public) carbons=\(setup.skipsCarbons, privacy: .public) uploads=\(setup.skipsUploads, privacy: .public)")
         }
-        uploadDiscoveryPending = !setup.skipsUploads
+        uploadReconciliation.setupStarted(discovers: !setup.skipsUploads)
         let operations = ConnectionSetup.Operations(
             features: { [domain = accountDomain] in
                 let found = try await ConnectionSetup.discoverFeatures(server: { try await client.discoveryFeatures(for: domain) },
@@ -1800,9 +1800,8 @@ final class AppModel {
         guard generation == token else { return }
         let previous = uploadService
         uploadService = uploads.settle(account: account, previous: previous, discovery: discovery)
-        uploadDiscoveryPending = false
         if case .failure(let error) = discovery { Self.syncLog.notice("upload discovery kept the stored service: \(ConnectionSetup.detail(error), privacy: .public)") }
-        guard session.isReady, UploadServiceMemory.reconcilesAfterReady(previous: previous, discovery: discovery) else { return }
+        guard uploadReconciliation.discoverySettled(discovery, previous: previous, ready: session.isReady) else { return }
         await reconcileUploads()
     }
 
@@ -1830,7 +1829,7 @@ final class AppModel {
             await refresh()
             guard setupIsCurrent(token) else { return }
             startOutbox()
-            if UploadServiceMemory.reconcilesAtReady(stored: uploadService, discoveryPending: uploadDiscoveryPending) { await reconcileUploads() }
+            if uploadReconciliation.reconcilesAtReady(stored: uploadService) { await reconcileUploads() }
             if let openChatID { await loadEncryptionDetails(for: openChatID) }
             avatarChecked = []
             await loadAvatar(for: account)

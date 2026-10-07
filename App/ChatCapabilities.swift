@@ -167,19 +167,6 @@ struct UploadServiceMemory {
         return XMPPUploadService(jid: jid, maximumFileSize: saved["maximumFileSize"] as? Int)
     }
 
-    /// Whether stranded uploads can be reconciled at `.ready`. Failing them as "no longer offered" needs a known
-    /// answer: a stored service, or this connection's discovery already settled.
-    static func reconcilesAtReady(stored: XMPPUploadService?, discoveryPending: Bool) -> Bool {
-        stored != nil || !discoveryPending
-    }
-
-    /// Whether a discovery that settled after `.ready` reconciles stranded uploads: with nothing stored `.ready` left
-    /// them to this answer, and an answer that withdraws the stored service fails them. A thrown discovery knows nothing.
-    static func reconcilesAfterReady(previous: XMPPUploadService?, discovery: Result<XMPPUploadService?, any Error>) -> Bool {
-        guard case .success(let found) = discovery else { return false }
-        return previous == nil || found == nil
-    }
-
     /// A thrown discovery (a dropped stream, a timeout) keeps what was known. A completed one replaces it,
     /// including a completed "none offered", which stands until the next completed answer.
     func settle(account: String, previous: XMPPUploadService?, discovery: Result<XMPPUploadService?, any Error>, now: Date = .now) -> XMPPUploadService? {
@@ -196,6 +183,27 @@ struct UploadServiceMemory {
     func forget(account: String) {
         defaults.removeObject(forKey: Self.key(account))
         defaults.removeObject(forKey: Self.checkedKey(account))
+    }
+}
+
+/// When a connection may reconcile stranded uploads. Discovery can end after `.ready`, and failing them as "no longer
+/// offered" needs a known answer: a stored service, or a discovery of this connection that completed. A thrown
+/// discovery (a timeout, a dropped stream) knows nothing, so it leaves them for a later answer.
+struct UploadReconciliation {
+    private var awaitingAnswer = false
+
+    /// A connection's setup starts; `discovers` is false when a resume trusts the fresh stored answer.
+    mutating func setupStarted(discovers: Bool) { awaitingAnswer = discovers }
+
+    /// Whether `.ready` reconciles them against `stored`.
+    func reconcilesAtReady(stored: XMPPUploadService?) -> Bool { stored != nil || !awaitingAnswer }
+
+    /// This connection's discovery settled. True when a ready session reconciles now: with nothing stored `.ready`
+    /// left them to this answer, and an answer that withdraws the stored service fails them.
+    mutating func discoverySettled(_ discovery: Result<XMPPUploadService?, any Error>, previous: XMPPUploadService?, ready: Bool) -> Bool {
+        guard case .success(let found) = discovery else { return false }
+        awaitingAnswer = false
+        return ready && (previous == nil || found == nil)
     }
 }
 
