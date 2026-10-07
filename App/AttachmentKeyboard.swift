@@ -149,9 +149,11 @@ final class AttachmentKeyboardResponder: UIView {
 
     /// Builds and lays out the panel once the chat is on screen, so the first "+" only presents it. Building the
     /// glass chips and the rail, and their first layout, measured 60-100 ms of main-thread time in a Debug build
-    /// when they ran between the tap and the start of the keyboard animation.
+    /// when they ran between the tap and the start of the keyboard animation. The first chat after launch also
+    /// reads the recent photos ahead, off the main thread, when the user allowed access before.
     func warmUp() {
         guard panel == nil, let window = host?.view.window else { return }
+        RecentPhotosLibrary.shared.prepare()
         let panel = makePanel(in: window)
         panel.frame = CGRect(origin: .zero, size: CGSize(width: window.bounds.width, height: KeyboardHeightCache.height(in: window)))
         panel.layoutIfNeeded()
@@ -449,8 +451,7 @@ private final class LimitedAccessRow: UIView {
 
 /// Reads the library off the main thread. The first PhotoKit call in a process connects to photolibraryd
 /// (measured 60 ms in the simulator, more with a large library and its sorted fetch); on the main thread that ran
-/// between the tap and the start of the keyboard animation. The panel now slides up at once and the tiles land
-/// during the slide.
+/// between the tap and the start of the keyboard animation.
 private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, @unchecked Sendable {
     /// `PHFetchResult` is documented thread-safe; the box carries it back to the main actor.
     struct Batch: @unchecked Sendable { let assets: PHFetchResult<PHAsset> }
@@ -466,6 +467,14 @@ private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, 
 
     /// Outcomes of fetches started before this call are dropped.
     func invalidate() { lock.withLock { generation += 1 } }
+
+    /// The photo access the user gave, read on the queue: it is a PhotoKit call too, and never prompts.
+    func status(_ completion: @escaping @MainActor (PHAuthorizationStatus) -> Void) {
+        queue.async {
+            let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            DispatchQueue.main.async { MainActor.assumeIsolated { completion(status) } }
+        }
+    }
 
     /// The newest `limit` photos and videos of the user library; the change observer is registered on first use.
     func fetch(limit: Int, completion: @escaping @MainActor (Batch) -> Void) {
@@ -498,14 +507,81 @@ private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, 
     }
 }
 
+/// The recent photos every chat's panel shows, read once per process. Each chat used to build its own source, so
+/// every chat paid the PhotoKit connection, the observer registration and the first fetch again on its first "+".
+/// The fetch result stays current through the change observer; a panel opening under a different access (limited
+/// to full, or a new grant) reads again. The panel still asks for access on its first open; before that, the
+/// warm-up only reads the access level and reads the library ahead only when the user allowed it earlier.
+@MainActor private final class RecentPhotosLibrary {
+    static let shared = RecentPhotosLibrary()
+    static let limit = 96
+    /// Shared, so a chat opened later does not start with an empty image cache.
+    let imageManager = PHCachingImageManager()
+    private let source = RecentPhotosSource()
+    /// The last read and the access it was made under; `nil` until the first read lands, or after a denial.
+    private(set) var assets: PHFetchResult<PHAsset>?
+    private var readUnder: PHAuthorizationStatus?
+    private let rails = NSHashTable<RecentPhotosRail>.weakObjects()
+
+    private init() {
+        source.onChange = { [weak self] in self?.libraryChanged() }
+    }
+
+    func attach(_ rail: RecentPhotosRail) { rails.add(rail) }
+
+    /// After a chat appears: reads ahead when access was given earlier, so the first "+" finds the tiles. It
+    /// never asks, and a panel that opened meanwhile has the last word.
+    func prepare() {
+        guard readUnder == nil else { return }
+        source.status { [weak self] status in
+            guard let self, readUnder == nil, status == .authorized || status == .limited else { return }
+            read(under: status)
+        }
+    }
+
+    /// A panel is opening, or a warm-up learned the access. A read under the same access is kept (the observer
+    /// keeps it current) or still on its way; otherwise the library is read again.
+    func refresh(_ status: PHAuthorizationStatus) {
+        guard status == .authorized || status == .limited else { revoke(); return }
+        guard status != readUnder else { return }
+        read(under: status)
+    }
+
+    /// Access is gone: drop the read and any read still on its way.
+    func revoke() {
+        source.invalidate()
+        assets = nil
+        readUnder = nil
+    }
+
+    private func libraryChanged() {
+        // Only a library this process has read has an observer; the access may have changed with it.
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else {
+            revoke()
+            for rail in rails.allObjects { rail.accessChanged() }
+            return
+        }
+        read(under: status)
+    }
+
+    private func read(under status: PHAuthorizationStatus) {
+        readUnder = status
+        source.fetch(limit: Self.limit) { [weak self] batch in
+            guard let self else { return }
+            assets = batch.assets
+            for rail in rails.allObjects { rail.show(batch.assets, limited: status == .limited) }
+        }
+    }
+}
+
 /// Up to 96 of the newest photos and videos, square tiles in one sideways row. Tapping adds to the tray in tap
 /// order; tapping a selected tile takes it back out.
 private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UICollectionViewDelegate {
     private unowned let keyboard: AttachmentKeyboard
     private let layout = UICollectionViewFlowLayout()
     private let collection: UICollectionView
-    private let imageManager = PHCachingImageManager()
-    private let source = RecentPhotosSource()
+    private let library = RecentPhotosLibrary.shared
     private var assets: PHFetchResult<PHAsset>?
     private var selection: [String] = []
     private var trayCount = 0
@@ -520,7 +596,9 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         layout.minimumInteritemSpacing = 12
         collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
         super.init(frame: .zero)
-        source.onChange = { [weak self] in self?.reload() }
+        // A library read by an earlier chat fills the rail during the warm-up's layout, not on the tap.
+        assets = library.assets
+        library.attach(self)
         collection.backgroundColor = .clear
         collection.showsHorizontalScrollIndicator = false
         collection.alwaysBounceHorizontal = true
@@ -569,20 +647,39 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         onAccessChanged(status == .limited)
         guard status == .authorized || status == .limited else {
-            source.invalidate()
-            assets = nil
-            collection.reloadData()
-            showAccessPrompt()
+            library.revoke()
+            accessChanged()
             return
         }
-        // Tiles already up stay while the library is read again; an empty rail shows nothing until the read lands.
-        if assets == nil { collection.backgroundView = nil }
-        source.fetch(limit: 96) { [weak self] batch in
-            guard let self else { return }
-            assets = batch.assets
-            collection.reloadData()
-            collection.backgroundView = batch.assets.count == 0 ? message("No recent photos", button: nil) : nil
+        library.refresh(status)
+        // A read this rail has not shown yet goes up now; with none yet, the rail stays blank until one lands.
+        if let latest = library.assets, latest !== assets {
+            show(latest, limited: status == .limited)
+        } else {
+            collection.backgroundView = assets == nil ? nil : emptyMessage()
         }
+    }
+
+    /// A read landed (this panel's, another chat's, or a library change).
+    func show(_ latest: PHFetchResult<PHAsset>, limited: Bool) {
+        onAccessChanged(limited)
+        assets = latest
+        collection.reloadData()
+        collection.backgroundView = emptyMessage()
+        // A panel that is not up makes its first cells now, not when "+" presents it.
+        if window == nil { collection.layoutIfNeeded() }
+    }
+
+    /// Access was denied or taken away.
+    func accessChanged() {
+        onAccessChanged(false)
+        assets = nil
+        collection.reloadData()
+        showAccessPrompt()
+    }
+
+    private func emptyMessage() -> UIView? {
+        (assets?.count ?? 0) == 0 ? message("No recent photos", button: nil) : nil
     }
 
     func update(selection: [String], trayCount: Int) {
@@ -650,7 +747,7 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "photo", for: indexPath) as! RecentPhotoCell
         guard let asset = assets?.object(at: indexPath.item) else { return cell }
-        cell.show(asset: asset, manager: imageManager, side: itemSide, scale: traitCollection.displayScale)
+        cell.show(asset: asset, manager: library.imageManager, side: itemSide, scale: traitCollection.displayScale)
         configureState(cell, asset: asset, index: indexPath.item)
         return cell
     }
