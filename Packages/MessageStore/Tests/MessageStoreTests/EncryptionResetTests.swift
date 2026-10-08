@@ -51,8 +51,26 @@ struct EncryptionResetTests {
             #expect(sqliteRows(url: url, sql: "SELECT COUNT(*) FROM notification_candidates") == [["0"]])
             #expect(sqliteRows(url: url, sql: "SELECT COUNT(*) FROM pending_notification_candidates") == [["0"]])
             #expect(try await store.unreadCounts(accountID: account)[peer] == 1) // "kept" only
-            #expect(sqliteRows(url: url, sql: "SELECT message_id,state FROM outbox ORDER BY sequence") == [["photo", "failed"], ["text", "queued"]])
             #expect(try await store.encryptionLossCounts(accountID: account) == EncryptionLossCounts(waitingMessages: 0, unsendableFiles: 0))
+            #expect(sqliteRows(url: url, sql: "SELECT message_id,state,rejection FROM outbox ORDER BY sequence")
+                    == [["photo", "failed", MessageStore.encryptionResetRejection], ["text", "queued", "NULL"]])
+        }
+    }
+
+    /// The failed file's key material is still sealed with the lost key: queued again it could never be sealed and
+    /// would sit in the outbox for good, so retry refuses it. A file failed for any other reason can still be retried.
+    @Test func aFileFailedByTheResetCannotBeQueuedAgain() async throws {
+        try await withEncryptedStore(account: account, chats: [(peer, "Bob")]) { store, url in
+            #expect(try await store.enqueueOutgoing(photo("photo")))
+            try await store.resetEncryption(EncryptionReset(discarded: [.init(accountID: account, revision: 1, placeholders: [], consumed: [])], replacement: nil))
+            await #expect(throws: MessageStoreError.invalidTransition) { try await store.retryOutgoing(accountID: account, messageID: "photo") }
+            #expect(sqliteRows(url: url, sql: "SELECT state,rejection FROM outbox") == [["failed", MessageStore.encryptionResetRejection]])
+            #expect(try await store.message(accountID: account, messageID: "photo")?.rejection == MessageStore.encryptionResetRejection)
+
+            #expect(try await store.enqueueOutgoing(photo("other")))
+            #expect(sqliteExecute(url: url, sql: "UPDATE outbox SET state='failed' WHERE message_id='other'"))
+            try await store.retryOutgoing(accountID: account, messageID: "other")
+            #expect(sqliteRows(url: url, sql: "SELECT state FROM outbox WHERE message_id='other'") == [["queued"]])
         }
     }
 

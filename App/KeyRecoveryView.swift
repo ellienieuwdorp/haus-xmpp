@@ -87,8 +87,8 @@ struct KeyRecoveryView: View {
         items.append(Consequence(symbol: "doc", text: "Files you haven’t downloaded yet can’t be opened."))
         if plan.unsendableFiles > 0 {
             items.append(Consequence(symbol: "exclamationmark.circle", text: plan.unsendableFiles == 1
-                ? "1 file waiting to be sent is marked as failed. Send it again afterwards."
-                : "\(plan.unsendableFiles) files waiting to be sent are marked as failed. Send them again afterwards."))
+                ? "1 file waiting to be sent can’t be sent any more. Attach it again to send it."
+                : "\(plan.unsendableFiles) files waiting to be sent can’t be sent any more. Attach them again to send them."))
         }
         if plan.otherAccounts > 0 {
             items.append(Consequence(symbol: "person.crop.circle", text: plan.otherAccounts == 1

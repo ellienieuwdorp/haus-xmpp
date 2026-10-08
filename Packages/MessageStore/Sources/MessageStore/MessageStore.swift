@@ -676,14 +676,15 @@ public actor MessageStore {
         }
     }
 
-    /// Caller must explicitly warn that retry can duplicate a message already accepted remotely.
+    /// Caller must explicitly warn that retry can duplicate a message already accepted remotely. A file failed by
+    /// `resetEncryption` is refused: it would stay queued for good, since its key material can never be opened.
     public func retryOutgoing(accountID: String, messageID: String) throws {
         try requireTransportOwnership()
         return try connection.transaction {
             try connection.execute("""
                 UPDATE outbox SET state='queued',attempt_id=NULL,rejection=NULL WHERE account_id=? AND message_id=?
-                AND state IN ('unconfirmed','failed')
-                """, [.text(accountID), .text(messageID)])
+                AND state IN ('unconfirmed','failed') AND rejection IS NOT ?
+                """, [.text(accountID), .text(messageID), .text(Self.encryptionResetRejection)])
             guard try connection.query("SELECT changes()").first?[0].integer == 1 else {
                 throw MessageStoreError.invalidTransition
             }
@@ -1156,6 +1157,10 @@ public actor MessageStore {
         return EncryptionLossCounts(waitingMessages: waiting, unsendableFiles: files)
     }
 
+    /// `outbox.rejection` of a queued file that `resetEncryption` failed. Its key material was sealed with the lost
+    /// key, so it can never be sealed: `retryOutgoing` refuses it, and only attaching the file again sends it.
+    public static let encryptionResetRejection = "encryption-reset"
+
     /// Queued (never claimed) messages of account `?1` with a file and no prepared ciphertext: sealing them needs the
     /// file's key material, which was sealed with the lost key.
     private static let unsendableFileCondition = """
@@ -1202,7 +1207,8 @@ public actor MessageStore {
                 guard try connection.query("SELECT 1 FROM pending_encrypted_inbox WHERE account_id=? LIMIT 1", [account]).isEmpty else {
                     throw MessageStoreError.invalidTransition
                 }
-                try connection.execute("UPDATE outbox SET state='failed',attempt_id=NULL WHERE sequence IN (SELECT o.sequence FROM outbox o WHERE \(Self.unsendableFileCondition))", [account])
+                try connection.execute("UPDATE outbox SET state='failed',attempt_id=NULL,rejection=?2 WHERE sequence IN (SELECT o.sequence FROM outbox o WHERE \(Self.unsendableFileCondition))",
+                                       [account, .text(Self.encryptionResetRejection)])
             }
             if let replacement = reset.replacement {
                 let account = Value.text(replacement.accountID)

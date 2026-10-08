@@ -157,6 +157,8 @@ enum RejectionCopy {
     static func reason(_ rejection: String, isGroup: Bool) -> String {
         switch rejection {
         case "blocked": "You blocked this contact."
+        // Not a server's answer: `MessageStore.resetEncryption` failed a queued file whose key went with the old encryption.
+        case MessageStore.encryptionResetRejection: "Encryption was set up again before it was sent. Attach the file again to send it."
         case "item-not-found", "service-unavailable", "gone", "jid-malformed", "registration-required", "subscription-required":
             isGroup ? "The group isn't available." : "This address doesn't exist or isn't accepting messages."
         case "remote-server-not-found": "Their server couldn't be found."
