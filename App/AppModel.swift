@@ -1702,7 +1702,7 @@ final class AppModel {
             if let fetched {
                 try AvatarStore.save(fetched.data, root: storageRoot, account: account, hash: fetched.hash)
                 if let image = AvatarStore.image(root: storageRoot, account: account, hash: fetched.hash) {
-                    avatars[chatID] = image
+                    avatars[chatID] = UIImage(cgImage: image)
                     // The communication-notification copy: pre-scaled here, so the extension never decodes an image.
                     AvatarStore.saveNotificationImage(root: storageRoot, account: account, hash: fetched.hash)
                 } else {
@@ -1728,7 +1728,7 @@ final class AppModel {
         if let own = preferences.string(forKey: "avatar.\(account)") { wanted.append((account, own)) }
         // ponytail: decoded on the main actor; the files are ≤512 KiB and become 256 px thumbnails. Move off-main if the list ever stutters.
         for (id, hash) in wanted where avatars[id] == nil {
-            avatars[id] = AvatarStore.image(root: storageRoot, account: account, hash: hash)
+            avatars[id] = AvatarStore.image(root: storageRoot, account: account, hash: hash).map { UIImage(cgImage: $0) }
             // Avatars stored before communication notifications get their pre-scaled copy once (a stat when it exists).
             if avatars[id] != nil { AvatarStore.saveNotificationImage(root: storageRoot, account: account, hash: hash) }
         }
