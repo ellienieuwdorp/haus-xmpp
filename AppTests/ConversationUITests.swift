@@ -3,6 +3,7 @@ import XCTest
 final class ConversationUITests: XCTestCase {
     /// A chat with stored messages must never flash the empty placeholder while its list loads.
     @MainActor func testOpeningChatNeverShowsEmptyPlaceholder() throws {
+        continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]
         app.isolateMessageStorage()
@@ -32,6 +33,7 @@ final class ConversationUITests: XCTestCase {
 
     /// Only the newest page is loaded on open; scrolling up pages the rest in until the first message is reachable.
     @MainActor func testLongChatOpensAtNewestAndPagesBackToTheFirstMessage() throws {
+        continueAfterFailure = false
         let app = openLongChat()
         XCTAssertTrue(bubble(250, in: app).waitForExistence(timeout: 5))
         XCTAssertTrue(bubble(250, in: app).isHittable, "A chat opens on its newest message, above the composer")
@@ -44,6 +46,7 @@ final class ConversationUITests: XCTestCase {
 
     /// Search covers messages older than the newest page.
     @MainActor func testSearchReachesBeyondTheNewestPage() throws {
+        continueAfterFailure = false
         let app = openLongChat()
         XCTAssertTrue(bubble(250, in: app).waitForExistence(timeout: 5))
         app.buttons["Conversation options"].tap()
@@ -63,6 +66,7 @@ final class ConversationUITests: XCTestCase {
 
     /// A long draft wraps and the composer grows upward: send stays above the keyboard, the newest message above the composer.
     @MainActor func testLongDraftGrowsTheComposer() throws {
+        continueAfterFailure = false
         let app = openLongChat()
         let input = composer(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 5))
@@ -77,6 +81,7 @@ final class ConversationUITests: XCTestCase {
     /// Reading history, the keyboard opening must not slide messages under the composer: the bubble resting just
     /// above it keeps its distance.
     @MainActor func testKeyboardKeepsTheHistoryAnchor() throws {
+        continueAfterFailure = false
         let app = openLongChat()
         XCTAssertTrue(bubble(250, in: app).waitForExistence(timeout: 5))
         let timeline = app.collectionViews["conversation.timeline"]

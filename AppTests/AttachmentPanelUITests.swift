@@ -34,6 +34,7 @@ final class AttachmentPanelUITests: XCTestCase {
     private func settle() { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.8)) }
 
     @MainActor func testPanelSwapsWithTheKeyboardAtTheSameHeight() throws {
+        continueAfterFailure = false
         let app = openAlex()
         let attach = app.buttons["attachFile"]
         XCTAssertGreaterThanOrEqual(attach.frame.width, 44)
@@ -70,6 +71,7 @@ final class AttachmentPanelUITests: XCTestCase {
     }
 
     @MainActor func testRailPicksLandInTheTrayInTapOrder() throws {
+        continueAfterFailure = false
         let app = openAlex()
         openPanel(in: app)
         let first = photo(0, in: app), second = photo(1, in: app)
@@ -102,6 +104,7 @@ final class AttachmentPanelUITests: XCTestCase {
     /// though the library already counts as read: the regression is a second chat's panel opening blank. It does not
     /// show that the library is read only once; `main` also passes, because each chat read the library itself.
     @MainActor func testASecondChatsPanelShowsThePhotos() throws {
+        continueAfterFailure = false
         let app = openAlex()
         openPanel(in: app)
         XCTAssertTrue(photo(0, in: app).waitForExistence(timeout: 5))
@@ -116,6 +119,7 @@ final class AttachmentPanelUITests: XCTestCase {
     }
 
     @MainActor func testDragRotationAndLeavingCloseThePanel() throws {
+        continueAfterFailure = false
         let app = openAlex()
         let attach = app.buttons["attachFile"]
         let timeline = app.collectionViews["conversation.timeline"]

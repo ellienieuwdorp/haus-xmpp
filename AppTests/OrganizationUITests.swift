@@ -2,6 +2,7 @@ import XCTest
 
 final class OrganizationUITests: XCTestCase {
     @MainActor func testPinStarAndFilter() throws {
+        continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = ["-demo"]
         app.isolateMessageStorage()

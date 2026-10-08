@@ -56,6 +56,7 @@ final class AttachmentTrayUITests: XCTestCase {
 
     /// Two photos and a caption become three messages: each photo on its own, the caption last and on its own.
     @MainActor func testTwoPhotosAndACaptionSendThreeMessagesCaptionLast() throws {
+        continueAfterFailure = false
         let app = openAlex()
         XCTAssertTrue(app.collectionViews["conversation.timeline"].waitForExistence(timeout: 5))
         app.pickPhotos(2)
