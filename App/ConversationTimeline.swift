@@ -137,6 +137,7 @@ enum UnreadableCopy {
         case .unsupportedEncryption, .malformedContent, .decryptFailed: "Couldn't read this message"
         case .rejectedDevice: isOutgoing ? "Sent from a device you blocked" : "From a device you blocked"
         case .retentionLimit: "Not kept: too many messages waiting for review"
+        case .encryptionReset: "Encrypted for this iPhone before encryption was set up again"
         }
     }
     static func preview(_ reason: UnreadableReason) -> String {
@@ -145,6 +146,7 @@ enum UnreadableCopy {
         case .unsupportedEncryption, .malformedContent, .decryptFailed: "Couldn't read this message"
         case .rejectedDevice: "From a device you blocked"
         case .retentionLimit: "Not kept: too many messages waiting"
+        case .encryptionReset: "Encrypted before encryption was set up again"
         }
     }
 }
