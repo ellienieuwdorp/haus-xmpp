@@ -15,22 +15,21 @@ extension XCTestCase {
 }
 
 extension XCUIApplication {
-    /// Taps `field` and waits for the software keyboard to push it up, failing at once when it does not. A simulator
-    /// that has seen a hardware keyboard keeps the software one minimised below the screen: the field stays at rest,
-    /// and the test used to fail much later on a layout measurement (`467.0 is not equal to 826.0`) that said nothing
-    /// about the cause.
+    /// Taps `field` and waits until the software keyboard is on screen with the field above it, failing at once when
+    /// it is not. A simulator that has seen a hardware keyboard keeps the software one minimised below the screen: the
+    /// field stays at rest, and the test used to fail much later on a layout measurement (`467.0 is not equal to
+    /// 826.0`) that said nothing about the cause.
     @MainActor func showKeyboard(tapping field: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
-        let resting = field.frame.minY
-        field.tap()
-        let raised = NSPredicate { _, _ in field.frame.minY < resting - 150 }
-        guard XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: raised, object: nil)], timeout: 5) != .completed else { return }
         let keyboard = keyboards.firstMatch
-        let frame = keyboard.exists ? keyboard.frame : .null
-        let state = "field at y \(Int(field.frame.minY)), resting at \(Int(resting)); keyboard \(keyboard.exists ? "\(frame)" : "absent")"
-        // A full keyboard on screen with the field still at rest is the app's layout. Anything else is the simulator: a
-        // simulator that has seen a hardware keyboard minimises the software one, which then sits below the screen.
-        if frame.height > 200, frame.minY < resting {
-            XCTFail("The software keyboard showed but the field stayed put (\(state)): the layout did not follow it.", file: file, line: line)
+        let screen = frame
+        // A minimised keyboard still exists, with its frame below the screen.
+        let keyboardUp = { keyboard.exists && keyboard.frame.minY < screen.maxY - 200 }
+        field.tap()
+        let ready = NSPredicate { _, _ in keyboardUp() && field.frame.maxY <= keyboard.frame.minY + 2 }
+        guard XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: ready, object: nil)], timeout: 5) != .completed else { return }
+        let state = "field \(field.frame), keyboard \(keyboard.exists ? "\(keyboard.frame)" : "absent"), screen height \(Int(screen.height))"
+        if keyboardUp() {
+            XCTFail("The software keyboard came up but covers the field (\(state)): the layout did not follow it.", file: file, line: line)
         } else {
             XCTFail("""
                 The software keyboard never came on screen after tapping the field (\(state)). This is the simulator, not the \
