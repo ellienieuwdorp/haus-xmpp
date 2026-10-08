@@ -32,9 +32,9 @@ struct GroupDetailsView: View {
                 Section {
                     let devices = state.devices.filter { $0.jid == member }
                     if member == model.accountID, let deviceID = state.localDeviceID, let fingerprint = state.localFingerprint {
-                        NavigationLink("This iPhone") { GroupLocalFingerprintView(deviceID: deviceID, fingerprint: fingerprint) }
+                        NavigationLink("This \(ThisDevice.noun)") { GroupLocalFingerprintView(deviceID: deviceID, fingerprint: fingerprint) }
                     } else if devices.isEmpty {
-                        Text(member == model.accountID ? "This iPhone" : "No compatible devices found").foregroundStyle(.secondary)
+                        Text(member == model.accountID ? "This \(ThisDevice.noun)" : "No compatible devices found").foregroundStyle(.secondary)
                     }
                     ForEach(devices) { device in
                         Button { selectedDevice = device } label: { DeviceRow(device: device, status: status(device)) }
@@ -87,7 +87,7 @@ private struct GroupLocalFingerprintView: View {
             Section {
                 LabeledContent("Device", value: String(deviceID))
                 FingerprintGrid(value: fingerprint).padding(.vertical, 8)
-            } footer: { Text("Other members verify this iPhone by comparing this fingerprint.") }
+            } footer: { Text("Other members verify this \(ThisDevice.noun) by comparing this fingerprint.") }
         }
         .navigationTitle("Your fingerprint").navigationBarTitleDisplayMode(.inline)
     }

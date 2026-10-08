@@ -66,8 +66,7 @@ struct PushRegistrationState: Codable, Sendable, Equatable {
     /// so a lookup by the normal spelling would miss a pending revocation or disable. Each moves to the normal key once;
     /// one already saved there wins.
     static func normalizeSavedAccounts(service: String = service) {
-        var all = query("", service: service)
-        all[kSecAttrAccount as String] = nil
+        var all = KeychainQuery.genericPassword(service: service, account: nil)
         all[kSecMatchLimit as String] = kSecMatchLimitAll
         all[kSecReturnAttributes as String] = true
         var result: CFTypeRef?
@@ -85,9 +84,7 @@ struct PushRegistrationState: Codable, Sendable, Equatable {
     }
 
     private static func query(_ account: String, service: String) -> [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: service,
-         kSecAttrAccount as String: account, kSecAttrSynchronizable as String: false]
+        KeychainQuery.genericPassword(service: service, account: account)
     }
 }
 

@@ -7,12 +7,7 @@ enum EncryptionKeychain {
     /// Only absence permits creation, and only while the database has no encrypted identity.
     /// Locked/inaccessible/deleted keys never cause identity regeneration.
     static func load(storageID: String, allowCreation: Bool) throws -> Data {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "haus.xmpp.encryption-state",
-            kSecAttrAccount as String: storageID,
-            kSecAttrSynchronizable as String: false
-        ]
+        let query = KeychainQuery.genericPassword(service: "haus.xmpp.encryption-state", account: storageID)
         var lookup = query
         lookup[kSecReturnData as String] = true
         lookup[kSecMatchLimit as String] = kSecMatchLimitOne

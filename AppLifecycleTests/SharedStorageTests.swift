@@ -95,6 +95,25 @@ import XMPPProtocol
         } catch { XCTAssertEqual(error as? SharedStorage.Failure, .unavailable) }
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.destination.path))
     }
+
+    /// macOS returns a container path even without the App Group, so the probe, not nil, decides whether storage and
+    /// the logout tombstone may live there.
+    func testGroupContainerMustBeAWritableDirectory() throws {
+        let fixture = try MigrationFixture()
+        addTeardownBlock { try await fixture.remove() }
+        XCTAssertThrowsError(try SharedStorage.usableContainer(nil))
+        let missing = fixture.root.appending(path: "missing", directoryHint: .isDirectory)
+        XCTAssertEqual(try SharedStorage.usableContainer(missing), missing)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: missing.path))
+        XCTAssertThrowsError(try SharedStorage.usableContainer(fixture.root.appending(path: "absent/nested")))
+        let file = fixture.root.appending(path: "file")
+        try Data().write(to: file)
+        XCTAssertThrowsError(try SharedStorage.usableContainer(file))
+        let readOnly = fixture.root.appending(path: "read-only", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: readOnly, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o555])
+        addTeardownBlock { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: readOnly.path) }
+        XCTAssertThrowsError(try SharedStorage.usableContainer(readOnly))
+    }
 }
 
 @MainActor private final class MigrationFixture {

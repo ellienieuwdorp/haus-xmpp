@@ -98,7 +98,7 @@ struct PreUpgradeSnapshot: Sendable {
 
         /// The app's own: the App Group container, the standard and shared preferences, the real Keychain services.
         static func production(messaging: URL) -> Locations? {
-            guard let root = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedStorage.group),
+            guard let root = try? SharedStorage.groupContainer(),
                   let group = UserDefaults(suiteName: SharedStorage.group), let bundle = Bundle.main.bundleIdentifier else { return nil }
             return Locations(groupRoot: root, messaging: messaging, appDefaults: DefaultsDomain(defaults: .standard, name: bundle),
                              groupDefaults: DefaultsDomain(defaults: group, name: SharedStorage.group), keychain: .production,
@@ -773,9 +773,9 @@ struct PreUpgradeSnapshot: Sendable {
         switch error {
         case Failure.insufficientSpace(let needed, let available):
             let format = ByteCountFormatter()
-            return "There is not enough free space on this iPhone. The backup needs \(format.string(fromByteCount: needed)); \(format.string(fromByteCount: max(available, 0))) is free."
-        case Failure.keychain: return "The saved account could not be read. Unlock your iPhone and try again."
-        case Failure.unreadableBackup: return "A backup made earlier is on this iPhone but could not be read."
+            return "There is not enough free space on this \(ThisDevice.noun). The backup needs \(format.string(fromByteCount: needed)); \(format.string(fromByteCount: max(available, 0))) is free."
+        case Failure.keychain: return "The saved account could not be read. Unlock your \(ThisDevice.noun) and try again."
+        case Failure.unreadableBackup: return "A backup made earlier is on this \(ThisDevice.noun) but could not be read."
         default: return "The backup could not be written and checked."
         }
     }
@@ -827,10 +827,7 @@ struct PreUpgradeSnapshot: Sendable {
     // Keychain records as raw bytes: a copy never decodes, and so never rewrites, what it copies.
 
     private static func query(service: String, account: String?) -> [String: Any] {
-        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                                    kSecAttrSynchronizable as String: false]
-        if let account { query[kSecAttrAccount as String] = account }
-        return query
+        KeychainQuery.genericPassword(service: service, account: account)
     }
 
     static func keychainData(service: String, account: String) throws -> Data? {

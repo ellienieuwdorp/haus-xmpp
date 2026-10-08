@@ -1,6 +1,6 @@
+import CoreGraphics
 import Foundation
 import ImageIO
-import UIKit
 
 /// Verified avatar bytes as files under the shared Messaging directory, one folder per account,
 /// named by their SHA-1. Nothing here trusts the bytes: decoding goes through ImageIO with a
@@ -42,7 +42,7 @@ enum AvatarStore {
         guard isHash(hash) else { return false }
         let target = notificationImageURL(root: root, account: account, hash: hash)
         if FileManager.default.fileExists(atPath: target.path) { return true }
-        guard let image = thumbnail(at: url(root: root, account: account, hash: hash)) else { return false }
+        guard let image = image(at: url(root: root, account: account, hash: hash)) else { return false }
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil) else { return false }
         CGImageDestinationAddImage(destination, image, nil)
@@ -64,16 +64,13 @@ enum AvatarStore {
         hash.utf8.count == 40 && hash.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 
-    /// A ≤256 px thumbnail decoded within the pixel budget; nil for anything ImageIO cannot bound.
-    static func image(root: URL, account: String, hash: String) -> UIImage? {
+    /// A ≤256 px thumbnail decoded within the pixel budget; nil for anything ImageIO cannot bound. A `CGImage` so this
+    /// file builds without UIKit; callers wrap it in their platform's image type.
+    static func image(root: URL, account: String, hash: String) -> CGImage? {
         image(at: url(root: root, account: account, hash: hash))
     }
 
-    static func image(at url: URL) -> UIImage? {
-        thumbnail(at: url).map { UIImage(cgImage: $0) }
-    }
-
-    private static func thumbnail(at url: URL) -> CGImage? {
+    static func image(at url: URL) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               CGImageSourceGetCount(source) >= 1,
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
