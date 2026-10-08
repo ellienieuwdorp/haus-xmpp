@@ -155,8 +155,7 @@ final class ReplyUITests: XCTestCase {
         XCTAssertTrue(short.waitForExistence(timeout: 5))
         let field = app.textFields["messageComposer"]
         let composer = field.exists ? field : app.textViews["messageComposer"]
-        composer.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        app.showKeyboard(tapping: composer)
         XCTAssertGreaterThan(short.frame.minX, app.frame.width / 2, "a short sent message sits on the trailing half")
         let gutter = origin.withOffset(CGVector(dx: app.frame.width * 0.25, dy: short.frame.midY))
         gutter.press(forDuration: 0.05, thenDragTo: gutter.withOffset(CGVector(dx: 18, dy: 0)))

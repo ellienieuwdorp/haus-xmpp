@@ -70,7 +70,7 @@ final class ConversationUITests: XCTestCase {
         let app = openLongChat()
         let input = composer(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 5))
-        input.tap()
+        app.showKeyboard(tapping: input)
         let oneLine = input.frame.height
         input.typeText(String(repeating: "wrapping words ", count: 8))
         XCTAssertGreaterThan(input.frame.height, oneLine * 1.8)
@@ -99,8 +99,7 @@ final class ConversationUITests: XCTestCase {
                 return bubbleFrames(in: timeline).filter { $0.frame.maxY < top - 11 }.max { $0.frame.maxY < $1.frame.maxY }
                     .map { Anchor(text: $0.text, gap: top - $0.frame.maxY) }
             }, "round \(round)")
-            input.tap()
-            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+            app.showKeyboard(tapping: input)
             let moved = app.textViews.containing(NSPredicate(format: "value == %@", anchor.text)).firstMatch
             XCTAssertTrue(moved.exists, "round \(round)")
             XCTAssertEqual(settled { input.frame.minY - moved.frame.maxY }, anchor.gap, accuracy: 4, "round \(round)")

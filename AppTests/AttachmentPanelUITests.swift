@@ -40,8 +40,7 @@ final class AttachmentPanelUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(attach.frame.width, 44)
         XCTAssertGreaterThanOrEqual(attach.frame.height, 44)
         XCTAssertEqual(attach.label, "Add attachment")
-        composer(in: app).tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        app.showKeyboard(tapping: composer(in: app))
         settle()
         let keyboardTop = attach.frame.minY
 
