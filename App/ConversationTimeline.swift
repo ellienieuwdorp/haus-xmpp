@@ -341,7 +341,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     /// now, under the fading blur, and the timeline rides up with it while the snapshot returns to where the press
     /// found the bubble. Returns true in that case: the live bubble lands there again, not where it is this moment.
     private func actionsWillDismiss(chosen: MessageAction.Kind?) -> Bool {
-        let keyboardFree = chosen.map(Self.leavesKeyboardFree) ?? true
+        let keyboardFree = chosen?.returnsFocusToComposer ?? true
         defer { restoresKeyboard = false }
         // The attachment panel reopens itself instead when it was up before the menu.
         if attachmentKeyboard?.menuDismissed(choseAction: !keyboardFree) == true { return true }
@@ -354,13 +354,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         actionsVisible = false
         heldUpdate?()
         heldUpdate = nil
-    }
-
-    private static func leavesKeyboardFree(_ kind: MessageAction.Kind) -> Bool {
-        switch kind {
-        case .copy, .star, .retry: true
-        case .reply, .edit, .selectText, .unsend, .encryptionDetails: false
-        }
     }
 
     /// A rightward swipe that starts on a message row is a reply; at the leading edge, on a day header or where there is
@@ -1194,28 +1187,22 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         }
     }
 
-    /// The one action list; the overlay menu and VoiceOver custom actions both read it.
+    /// The one action list (`MessageActionMenu`); the overlay menu and VoiceOver custom actions both read it.
     private func actions() -> [MessageAction] {
         guard let message else { return [] }
-        // A placeholder is a notice, not content: nothing to quote, copy, star or select; only why it is unreadable.
-        if message.unreadable != nil {
-            return [MessageAction(kind: .encryptionDetails, title: "Encryption details", symbol: "lock.shield", perform: openEncryptionAction)]
+        return MessageActionMenu.items(for: message).map { item in
+            let perform: () -> Void = switch item.kind {
+            case .encryptionDetails: openEncryptionAction
+            case .star: toggleStar
+            case .reply: replyAction
+            case .copy: { UIPasteboard.general.string = message.body }
+            case .selectText: { [weak self] in self?.beginTextSelection() }
+            case .retry: retry
+            case .edit: editAction
+            case .unsend: unsendAction
+            }
+            return MessageAction(item, perform: perform)
         }
-        let star = MessageAction(kind: .star, title: message.isStarred ? "Unstar message" : "Star message", symbol: message.isStarred ? "star.slash" : "star", perform: toggleStar)
-        // An unsent bubble has no text to quote, copy or select.
-        if message.isRetracted { return [star] }
-        var actions: [MessageAction] = [
-            MessageAction(kind: .reply, title: "Reply", symbol: "arrowshape.turn.up.left", perform: replyAction),
-            MessageAction(kind: .copy, title: "Copy", symbol: "doc.on.doc") { UIPasteboard.general.string = message.body },
-            star,
-            MessageAction(kind: .selectText, title: "Select text", symbol: "text.cursor") { [weak self] in self?.beginTextSelection() }
-        ]
-        if message.isOutgoing, message.status?.canRetry == true {
-            actions.append(MessageAction(kind: .retry, title: "Retry message", symbol: "arrow.clockwise", perform: retry))
-        }
-        if message.canEdit { actions.append(MessageAction(kind: .edit, title: "Edit", symbol: "pencil", perform: editAction)) }
-        if message.canUnsend { actions.append(MessageAction(kind: .unsend, title: "Unsend", symbol: "trash", perform: unsendAction)) }
-        return actions
     }
 
     @objc private func handlePress(_ press: UILongPressGestureRecognizer) {
@@ -1489,41 +1476,28 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         star.tintColor = meta
         replyIndicator.tintColor = theme.tint
         // An unsent or unreadable message keeps its bubble and time; the text becomes a quiet italic placeholder.
-        let shown = message.showsPlaceholder ? message.placeholder : message.body
+        let shown = message.displayedText
         if textView.text != shown { textView.text = shown }
         let bodyDescriptor = UIFontDescriptor.preferredFontDescriptor(withTextStyle: .body)
         textView.font = message.showsPlaceholder ? UIFont(descriptor: bodyDescriptor.withSymbolicTraits(.traitItalic) ?? bodyDescriptor, size: 0) : .preferredFont(forTextStyle: .body)
         textView.textColor = message.showsPlaceholder ? meta : text
         configureAttachment(message.showsPlaceholder ? nil : message.attachment, isOutgoing: message.isOutgoing, textColor: text)
-        let speaker = message.isOutgoing ? "You" : (message.author ?? "Contact")
-        var descriptions = [shown.isEmpty ? speaker : "\(speaker): \(shown)"]
-        if message.unreadable != nil { descriptions.append("not readable on this device") }
-        if message.isEdited { descriptions.append("edited") }
-        if !message.showsPlaceholder, let attachment = message.attachment { descriptions.append("\(attachment.kindLabel) \(attachment.name)" + (attachment.localURL == nil ? ", " + attachment.downloadAccessibility : "")) }
-        if let quote = message.reply { descriptions.append("Replying to \(quote.author): \(quote.body)") }
-        if message.isStarred { descriptions.append("starred") }
-        if let date = message.sentAt { descriptions.append(date.formatted(date: .abbreviated, time: .shortened)) }
-        if message.isOutgoing, let state = message.status {
-            descriptions.append(message.failure.flatMap { state == .failed ? "Not delivered: \($0)" : nil } ?? state.accessibilityDescription)
-        }
-        if let notice = message.securityNotice { descriptions.append(notice) }
-        if !message.reactions.isEmpty { descriptions.append(message.reactions.map(\.accessibilityDescription).joined(separator: ", ")) }
         for pill in reactionRow.arrangedSubviews { pill.removeFromSuperview() }
         for reaction in message.reactions {
             reactionRow.addArrangedSubview(ReactionPill(reaction, onTap: message.canReact ? { [weak self] in self?.reactionAction(reaction.emoji) } : nil))
         }
         var customActions = actions().map { action in UIAccessibilityCustomAction(name: action.title) { _ in action.perform(); return true } }
-        if let url = message.attachment?.localURL {
-            customActions.append(UIAccessibilityCustomAction(name: "Open \(message.attachment?.kindLabel.lowercased() ?? "file")") { [weak self] _ in self?.openAttachment(url); return true })
-        } else if !message.showsPlaceholder, let attachment = message.attachment, attachment.download.canRequest {
-            customActions.append(UIAccessibilityCustomAction(name: "Download \(attachment.kindLabel.lowercased())") { [weak self] _ in self?.download(); return true })
+        if let (title, action) = MessageActionMenu.attachmentAction(for: message) {
+            customActions.append(UIAccessibilityCustomAction(name: title) { [weak self] _ in
+                switch action {
+                case .open(let url): self?.openAttachment(url)
+                case .download: self?.download()
+                }
+                return true
+            })
         }
-        if message.canReact {
-            let selected = Set(message.reactions.filter(\.isSelected).map(\.emoji))
-            for emoji in TimelineReaction.choices {
-                let actionName = "\(selected.contains(emoji) ? "Remove" : "Add") \(TimelineReaction.name(for: emoji)) reaction"
-                customActions.append(UIAccessibilityCustomAction(name: actionName) { _ in reaction(emoji); return true })
-            }
+        for (emoji, title) in MessageActionMenu.reactionToggles(for: message) {
+            customActions.append(UIAccessibilityCustomAction(name: title) { _ in reaction(emoji); return true })
         }
         // The text view speaks for the message; a file with no caption hides it, so the file itself speaks instead
         // (otherwise VoiceOver could not reach the message at all).
@@ -1531,16 +1505,16 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         attachmentArea.isAccessibilityElement = textView.isHidden
         attachmentArea.accessibilityTraits = textView.isHidden && showsPreview ? .image : .none
         for view in [textView, attachmentArea] as [UIView] {
-            view.accessibilityLabel = view === speaksForMessage ? descriptions.joined(separator: ", ") : nil
+            view.accessibilityLabel = view === speaksForMessage ? message.accessibilityDescription : nil
             view.accessibilityCustomActions = view === speaksForMessage ? customActions : nil
         }
         star.alpha = message.isStarred ? 1 : 0
-        time.text = [message.isEdited ? "Edited" : nil, message.securityNotice, message.sentAt?.formatted(date: .omitted, time: .shortened)].compactMap { $0 }.joined(separator: " · ")
-        time.isHidden = message.sentAt == nil && message.securityNotice == nil && !message.isEdited
-        status.isHidden = !message.isOutgoing || message.status == nil
+        time.text = message.footerText
+        time.isHidden = !message.showsFooterText
+        status.isHidden = message.statusGlyph == nil
         // Neutral like the time: read is told by the filled rings and failure by the filled exclamation, never by colour.
         status.tintColor = meta
-        status.show(message.isOutgoing ? message.status.map(MessageStatusGlyph.glyph(for:)) : nil)
+        status.show(message.statusGlyph)
         setNeedsLayout()
     }
 }

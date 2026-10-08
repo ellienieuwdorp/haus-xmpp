@@ -110,6 +110,36 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
         return isOutgoing ? "You unsent a message" : "Message unsent"
     }
 
+    /// The bubble's text: the placeholder for an unsent or unreadable message, the body otherwise.
+    var displayedText: String { showsPlaceholder ? placeholder : body }
+
+    /// The quiet line beside the status mark: edited, the security notice and the time, in that order.
+    var footerText: String {
+        [isEdited ? "Edited" : nil, securityNotice, sentAt?.formatted(date: .omitted, time: .shortened)].compactMap { $0 }.joined(separator: " · ")
+    }
+    var showsFooterText: Bool { sentAt != nil || securityNotice != nil || isEdited }
+    /// Only a sent message shows a mark, and only once it has a status.
+    var statusGlyph: MessageStatusGlyph? { isOutgoing ? status.map(MessageStatusGlyph.glyph(for:)) : nil }
+
+    /// What VoiceOver reads for the bubble: who, what, then everything the bubble shows around the text.
+    var accessibilityDescription: String {
+        let shown = displayedText
+        let speaker = isOutgoing ? "You" : (author ?? "Contact")
+        var descriptions = [shown.isEmpty ? speaker : "\(speaker): \(shown)"]
+        if unreadable != nil { descriptions.append("not readable on this device") }
+        if isEdited { descriptions.append("edited") }
+        if !showsPlaceholder, let attachment { descriptions.append("\(attachment.kindLabel) \(attachment.name)" + (attachment.localURL == nil ? ", " + attachment.downloadAccessibility : "")) }
+        if let quote = reply { descriptions.append("Replying to \(quote.author): \(quote.body)") }
+        if isStarred { descriptions.append("starred") }
+        if let date = sentAt { descriptions.append(date.formatted(date: .abbreviated, time: .shortened)) }
+        if isOutgoing, let state = status {
+            descriptions.append(failure.flatMap { state == .failed ? "Not delivered: \($0)" : nil } ?? state.accessibilityDescription)
+        }
+        if let notice = securityNotice { descriptions.append(notice) }
+        if !reactions.isEmpty { descriptions.append(reactions.map(\.accessibilityDescription).joined(separator: ", ")) }
+        return descriptions.joined(separator: ", ")
+    }
+
     enum Status: String, Sendable, Equatable {
         case queued, submitting, unconfirmed, failed, serverAccepted, delivered, displayed
 

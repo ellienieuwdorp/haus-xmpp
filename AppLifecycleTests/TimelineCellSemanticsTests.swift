@@ -98,23 +98,24 @@ final class TimelineCellSemanticsTests: XCTestCase {
         XCTAssertEqual(unsent.maxX, collectionView.bounds.width - 16, accuracy: 0.5)
     }
 
-    func testEachMessageOffersOnlyTheActionsItSupports() throws {
-        let reading = ["Reply", "Copy", "Star message", "Select text"]
-        let cases: [(message: TimelineMessage, actions: [String])] = [
-            (TimelineMessage(id: "received", body: "Ten it is", isOutgoing: false, isStarred: false, sentAt: sentAt), reading),
-            (TimelineMessage(id: "starred", body: "Keep this", isOutgoing: false, isStarred: true, sentAt: sentAt),
-             ["Reply", "Copy", "Unstar message", "Select text"]),
-            (TimelineMessage(id: "own", body: "See you there", isOutgoing: true, isStarred: false, sentAt: sentAt, status: .serverAccepted,
-                             isEdited: true, canEdit: true, canUnsend: true), reading + ["Edit", "Unsend"]),
-            (TimelineMessage(id: "failed", body: "Lost", isOutgoing: true, isStarred: false, sentAt: sentAt, status: .failed), reading + ["Retry message"]),
-        ]
-        show(cases.map(\.message))
-        for (message, expected) in cases {
-            XCTAssertEqual(actions(try speaker(message.id)), expected, message.id)
-        }
-        XCTAssertTrue(try speaker("own").accessibilityLabel?.contains(", edited") == true)
-        XCTAssertFalse(try speaker("received").accessibilityLabel?.contains("edited") == true)
-        XCTAssertTrue(try speaker("starred").accessibilityLabel?.contains(", starred") == true)
+    /// VoiceOver gets the menu's actions (`MessageActionMenuTests` owns which), then the file's, then a toggle per quick
+    /// reaction, and each one does what it says.
+    func testVoiceOverOffersTheMenuThenTheFileThenReactions() throws {
+        var reacted: [String] = []
+        controller.update(messages: [TimelineMessage(id: "own", body: "See you there", isOutgoing: true, isStarred: false,
+                                                     attachment: TimelineAttachment(name: "plan.pdf", mediaType: "application/pdf", size: 2_000, width: nil, height: nil,
+                                                                                    download: .failed),
+                                                     sentAt: sentAt, status: .serverAccepted, canReact: true, isEdited: true, canEdit: true, canUnsend: true)],
+                          onToggleStar: { _ in }, onReaction: { reacted.append("\($0) \($1)") })
+        collectionView.layoutIfNeeded()
+        let own = try speaker("own")
+        XCTAssertEqual(actions(own), ["Reply", "Copy", "Star message", "Select text", "Edit", "Unsend", "Download file",
+                                      "Add heart reaction", "Add thumbs up reaction", "Add tears of joy reaction",
+                                      "Add surprised reaction", "Add sad reaction", "Add folded hands reaction"])
+        let thumbsUp = try XCTUnwrap(own.accessibilityCustomActions?.first { $0.name == "Add thumbs up reaction" })
+        XCTAssertEqual(thumbsUp.actionHandler?(thumbsUp), true)
+        XCTAssertEqual(reacted, ["own 👍"])
+        XCTAssertTrue(own.accessibilityLabel?.hasPrefix("You: See you there, edited, File plan.pdf, could not be downloaded") == true, own.accessibilityLabel ?? "no label")
     }
 
     /// Every message reserves the star's slot, so starring neither widens nor shifts the bubble.
