@@ -13,6 +13,10 @@ public struct UnreadableEncryptionState: Sendable, Equatable {
     public let deviceID: UInt32?
     /// Plain-text counts of what depends on the lost key.
     public let loss: EncryptionLossCounts
+
+    public init(accountID: String, revision: Int, deviceID: UInt32?, loss: EncryptionLossCounts) {
+        self.accountID = accountID; self.revision = revision; self.deviceID = deviceID; self.loss = loss
+    }
 }
 
 extension OMEMOService {

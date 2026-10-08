@@ -90,6 +90,13 @@ final class AppModel {
     @ObservationIgnored private var restoringData = false
     @ObservationIgnored private var snapshots: PreUpgradeSnapshot?
     @ObservationIgnored private var openingStorage = false
+    /// Set while the database holds encryption state the Keychain wrapping key cannot open (the key is gone, or is
+    /// another one): RootView shows the recovery screen, and storage stays closed for everything else until the user
+    /// sets encryption up again (docs/development/key-recovery.md).
+    private(set) var keyRecovery: KeyRecoveryPlan?
+    /// The store opened for that screen alone; nothing else reads or writes it.
+    @ObservationIgnored private var recoveryStore: MessageStore?
+    @ObservationIgnored private var startingEncryptionOver = false
     private(set) var accountID = "" {
         didSet {
             if accountID != oldValue {
@@ -367,21 +374,30 @@ final class AppModel {
                 AccountIdentityMigration.migratePreferences(preferences)
                 AccountIdentityMigration.moveFiles(directory: directory, defaults: preferences)
             }
+            let savedAccount = preferences.string(forKey: "lastAccount") ?? ""
+            switch try await KeyRecovery.open(store: opened, storageID: testSessionID ?? "primary", account: savedAccount) {
+            case .ready(let service): encryption = service
+            case .needed(let plan):
+                // Nothing else may use the store until the user chooses: no sender, no connection, no notification work.
+                Self.syncLog.error("encryption state unreadable: key missing \(plan.keyMissing, privacy: .public), rows \(plan.states.count, privacy: .public)")
+                recoveryStore = opened
+                keyRecovery = plan
+                hasLoadedChats = true
+                return
+            }
             store = opened
             storageDirectory = directory
             let uploader = AttachmentUploader(scope: testSessionID ?? "primary")
             uploader.onFinish = { [weak self] taskID, succeeded in Task { @MainActor in await self?.uploadFinished(taskID: taskID, succeeded: succeeded) } }
             self.uploader = uploader
-            if let store {
-                outboxSender = OutboxSender(store: store)
-                let allowCreation = try await !store.hasAnyEncryptionState()
-                let wrappingKey = try EncryptionKeychain.load(storageID: testSessionID ?? "primary", allowCreation: allowCreation)
-                encryption = OMEMOService(store: store, protection: try StateProtection(key: wrappingKey))
-            }
-            accountID = preferences.string(forKey: "lastAccount") ?? ""
+            outboxSender = OutboxSender(store: opened)
+            accountID = savedAccount
             uploadService = uploads.load(account: accountID)
-            if ProcessInfo.processInfo.arguments.contains("-demo") { await loadDemo() }
-            else {
+            if ProcessInfo.processInfo.arguments.contains("-demo") {
+                await loadDemo()
+                // The recovery screen over the sample data, for captures; nothing touches the Keychain.
+                if ProcessInfo.processInfo.arguments.contains("-demo-key-recovery") { keyRecovery = .sample(account: accountID) }
+            } else {
                 if let store, try await NotificationDiagnostics.exportIfRequested(store: store, directory: directory) {
                     pushStatus = .inspected
                     return
@@ -923,6 +939,56 @@ final class AppModel {
         store = nil
         chats = []
         messages = []
+    }
+
+    // MARK: Missing wrapping key
+
+    /// Recovery screen, after its confirmation: under the transport lease (taken, never by force; nothing else runs on
+    /// this store, so there is no sender to join), creates the wrapping key if it is missing, discards exactly the state
+    /// the screen described and creates the saved account's new identity. Then storage opens the normal way, and the
+    /// saved account's next connection publishes the new device and removes the old one from its device lists.
+    func startEncryptionOver() async {
+        guard let plan = keyRecovery, !startingEncryptionOver else { return }
+        guard !plan.isSample else { keyRecovery = nil; return }
+        guard let store = recoveryStore else { return }
+        startingEncryptionOver = true
+        defer { startingEncryptionOver = false }
+        let background = UIApplication.shared.beginBackgroundTask(withName: "Set up encryption again")
+        defer { if background != .invalid { UIApplication.shared.endBackgroundTask(background) } }
+        var leased = await store.holdsTransportOwnership
+        for _ in 0..<40 where !leased {
+            do { try await store.acquireTransportOwnership(); leased = true }
+            catch MessageStoreError.transportOwnedElsewhere { try? await Task.sleep(for: .milliseconds(250)) }
+            catch { break }
+        }
+        guard leased else {
+            self.error = "A notification is being processed. Try again in a moment."
+            return
+        }
+        do {
+            let deviceID = try await KeyRecovery.startOver(plan, store: store, storageID: testSessionID ?? "primary")
+            Self.syncLog.notice("encryption set up again: new device \(deviceID.map(String.init) ?? "none", privacy: .public), discarded \(plan.states.count, privacy: .public) rows")
+        } catch {
+            Self.syncLog.error("setting up encryption again failed: \(String(describing: error), privacy: .public)")
+            try? await store.releaseTransportOwnership()
+            // Whatever changed since the screen was read (a row written meanwhile) is shown before anything is discarded.
+            switch try? await KeyRecovery.open(store: store, storageID: testSessionID ?? "primary", account: plan.account) {
+            case .needed(let current)?:
+                keyRecovery = current
+                self.error = "Encryption could not be set up again, and nothing was discarded. Try again."
+                return
+            case .ready?: break // nothing is unreadable any more: open normally
+            case nil:
+                self.error = "Encryption could not be set up again, and nothing was discarded. Try again."
+                return
+            }
+        }
+        try? await store.releaseTransportOwnership()
+        try? await store.close()
+        recoveryStore = nil
+        keyRecovery = nil
+        hasLoadedChats = false
+        await openStorage()
     }
 
     /// The scene left the foreground: from now on background sessions report this as the last time the user was here.
