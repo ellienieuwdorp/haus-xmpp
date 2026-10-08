@@ -53,6 +53,8 @@ public enum OMEMOError: Error, Equatable, Sendable, LocalizedError {
     /// ambiguously). Thrown only after the durable outcome exists; nothing is retained for review.
     case undecryptable
     case invalidContent, stateUnavailable, unsupportedProfile, concurrentChange, recipientSetChanged, cannotRetireCurrentDevice, unsupportedEncryptedReactions, unsupportedMessageUpdate
+    /// `startOver` was asked to discard state this key can still open. Nothing was discarded.
+    case stateReadable
     public var errorDescription: String? {
         switch self {
         case .unsupportedEncryptedReactions: "Private reactions require OMEMO 2 and an authenticated message reference. Nothing was sent unencrypted."
@@ -69,6 +71,7 @@ public enum OMEMOError: Error, Equatable, Sendable, LocalizedError {
         case .unsupportedProfile: "These devices do not share the selected encryption version."
         case .recipientSetChanged: "The recipient devices changed after this message was encrypted. Start a new message to include the current devices."
         case .concurrentChange: "Encryption state changed. Please try again."
+        case .stateReadable: "This device can still read its encryption keys. Nothing was reset."
         }
     }
 }

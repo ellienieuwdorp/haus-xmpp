@@ -43,7 +43,8 @@ public actor OMEMOService {
             // State kept under another spelling of this account (a store whose address rewrite could not complete) is
             // this account's identity: never create a second one beside it.
             guard try await !store.encryptionStateAccountIDs().contains(where: { bare($0) == bare(account) }) else { throw OMEMOError.stateUnavailable }
-            let deviceID = try OMEMOEngine.randomDeviceID()
+            // A device ID this account gave up (`startOver`) is never taken again.
+            let deviceID = try Self.newDeviceID(avoiding: try await store.retiredOwnDevices(accountID: account))
             let legacy = try OMEMOEngine(profile: .legacy, deviceID: deviceID)
             let modern = try OMEMOEngine(profile: .modern, sharingIdentityWith: legacy)
             let state = AccountEncryptionState(engines: ["legacy": try legacy.snapshot(), "modern": try modern.snapshot()])
@@ -57,6 +58,8 @@ public actor OMEMOService {
             // Never repair this by silently replacing a published identity or prepared ciphertext.
             throw OMEMOError.stateUnavailable
         }
+        // Kept in plain text so the device can still be retired if the wrapping key is ever lost.
+        try await store.recordEncryptionDeviceID(accountID: account, deviceID: legacyIdentity.deviceID)
         for profile in [XMPPOMEMOProfile.legacy, .modern] {
             let (revision, old) = try await load(account)
             var state = old
@@ -115,6 +118,8 @@ public actor OMEMOService {
         var otherVersionOnly: [String: Int] = [:]
         var unavailable: [String: Int] = [:]
         var advertised: [String: Int] = [:]
+        // This account's own dead devices (`startOver`) are never offered for review while they wait to leave the list.
+        let retired = try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue)
         for owner in Array(Set([account, peer])).sorted() {
             let ids = try validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: profile))
             guard ids.count <= 200 else { throw OMEMOError.invalidContent }
@@ -132,7 +137,7 @@ public actor OMEMOService {
             for index in state.devices.indices where state.devices[index].jid == owner && state.devices[index].profile == profile {
                 state.devices[index].active = false
             }
-            for id in ids where !(owner == account && id == local.deviceID) {
+            for id in ids where !(owner == account && (id == local.deviceID || retired.contains(id))) {
                 let bundle: XMPPOMEMOBundle
                 do { bundle = try await transport.fetchOMEMOBundle(for: owner, deviceID: id, profile: profile) }
                 catch XMPPIQError.stanza(condition: "item-not-found"), XMPPIQError.malformedResponse {
@@ -368,16 +373,24 @@ public actor OMEMOService {
         publishedBundles[account]?.contains(profile) == true
     }
 
+    /// Also takes this account's retired device IDs (`startOver`) out of the list: they are ours and can never decrypt
+    /// again, so they need no fingerprint check. A retired ID is forgotten only once the list read back lacks it.
     private func maintainLocalAdvertisementLocked(account: String, profile: XMPPOMEMOProfile, transport: any OMEMOTransport) async throws {
         let (_, state) = try await load(account)
         let local = try engine(state, profile)
+        let retired = try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue)
+        func settled(_ list: [UInt32]) async throws -> Bool {
+            guard list.contains(local.deviceID), !list.contains(where: retired.contains) else { return false }
+            if !retired.isEmpty { try await store.forgetRetiredOwnDevices(accountID: account, profile: profile.rawValue, deviceIDs: retired) }
+            return true
+        }
         for _ in 0..<3 {
             let latest = try validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))
-            if latest.contains(local.deviceID) { return }
-            guard latest.count < 200 else { throw OMEMOError.invalidContent }
-            try await transport.publishOMEMODevices((latest + [local.deviceID]).sorted(), profile: profile)
-            let confirmed = try validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))
-            if confirmed.contains(local.deviceID) { return }
+            if try await settled(latest) { return }
+            let wanted = Set(latest.filter { !retired.contains($0) }).union([local.deviceID])
+            guard wanted.count <= 200 else { throw OMEMOError.invalidContent }
+            try await transport.publishOMEMODevices(wanted.sorted(), profile: profile)
+            if try await settled(validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))) { return }
         }
         throw OMEMOError.concurrentChange
     }
@@ -1222,8 +1235,8 @@ public actor OMEMOService {
 
     /// Builds the placeholder for a direct envelope: the chat is the peer (the sender, or the recipient of an own send),
     /// the author is the sender's bare JID, and the time is the validated archive stamp or now. Never content.
-    private func placeholder(for message: XMPPEncryptedMessage, account: String, reason: UnreadableReason, sentAt: Date?,
-                             key: UnreadableMessage.Key) -> UnreadableMessage {
+    func placeholder(for message: XMPPEncryptedMessage, account: String, reason: UnreadableReason, sentAt: Date?,
+                     key: UnreadableMessage.Key) -> UnreadableMessage {
         let sender = bare(message.from)
         let outgoing = sender == account
         return UnreadableMessage(accountID: account, chatID: outgoing ? bare(message.to ?? account) : sender, senderID: sender,
@@ -1434,7 +1447,7 @@ private struct EngineHeader: Decodable {
     let deviceID: UInt32
 }
 
-private struct RetainedEnvelope: Codable {
+struct RetainedEnvelope: Codable {
     let from: String
     let to: String?
     let envelope: XMPPOMEMOEnvelope
