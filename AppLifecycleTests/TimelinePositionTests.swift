@@ -70,6 +70,8 @@ final class TimelinePositionTests: XCTestCase {
         let cases: [(dragging: Bool, decelerating: Bool, offset: CGFloat, asks: Bool, line: UInt)] = [
             (true, false, top + 300, true, #line),
             (false, true, top + 300, true, #line),
+            (true, false, top, true, #line),
+            (true, false, top + 3000, false, #line),
             (true, false, bottom, false, #line),
             (false, false, top + 300, false, #line),
         ]

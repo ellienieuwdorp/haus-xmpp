@@ -303,7 +303,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                 sliding = false
                 if followsBottom { scrollToBottom() }
             }
-        case .newestAtOnce, .followNewest:
+        case .newestAtOnce:
+            break // Landed before the diffing apply above.
+        case .followNewest:
             followBottom()
         case .keepAnchor:
             if let anchor, let indexPath = dataSource.indexPath(for: anchor.id),
@@ -499,11 +501,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             dateChipMovingY = scrollView.contentOffset.y
             scheduleDateChipIdle()
         }
-        let readerScrolling = scrollView.isDragging || scrollView.isDecelerating
-        guard readerScrolling else { return }
+        guard scrollView.isDragging || scrollView.isDecelerating else { return }
         followsBottom = isNearBottom
-        if TimelineScrollPolicy.requestsOlderHistory(readerScrolling: readerScrolling,
-                                                     distanceFromTop: scrollView.contentOffset.y + scrollView.adjustedContentInset.top) { onReachTop() }
+        if TimelineScrollPolicy.requestsOlderHistory(in: viewport(of: scrollView)) { onReachTop() }
     }
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -658,9 +658,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         dataSource.indexPath(for: id).flatMap { collectionView.cellForItem(at: $0) as? MessageBubbleCell }
     }
 
-    private var viewport: TimelineViewport {
-        TimelineViewport(offset: collectionView.contentOffset.y, height: collectionView.bounds.height, contentHeight: collectionView.contentSize.height,
-                         insetTop: collectionView.adjustedContentInset.top, insetBottom: collectionView.adjustedContentInset.bottom)
+    private var viewport: TimelineViewport { viewport(of: collectionView) }
+
+    private func viewport(of scrollView: UIScrollView) -> TimelineViewport {
+        TimelineViewport(offset: scrollView.contentOffset.y, height: scrollView.bounds.height, contentHeight: scrollView.contentSize.height,
+                         insetTop: scrollView.adjustedContentInset.top, insetBottom: scrollView.adjustedContentInset.bottom)
     }
 
     private var isNearBottom: Bool { viewport.isNearBottom }

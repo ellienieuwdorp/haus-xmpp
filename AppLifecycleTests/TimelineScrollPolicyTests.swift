@@ -57,12 +57,16 @@ final class TimelineScrollPolicyTests: XCTestCase {
         XCTAssertTrue(stayed.followsAfterwards(isNearBottom: true))
     }
 
-    /// Older history is asked for a few screens before the oldest loaded message, and only by the reader's own scroll.
-    func testOnlyTheReadersScrollNearTheTopAsksForOlderHistory() {
-        XCTAssertTrue(TimelineScrollPolicy.requestsOlderHistory(readerScrolling: true, distanceFromTop: 0))
-        XCTAssertTrue(TimelineScrollPolicy.requestsOlderHistory(readerScrolling: true, distanceFromTop: 1199))
-        XCTAssertFalse(TimelineScrollPolicy.requestsOlderHistory(readerScrolling: true, distanceFromTop: 1200))
-        XCTAssertFalse(TimelineScrollPolicy.requestsOlderHistory(readerScrolling: false, distanceFromTop: 0))
+    /// Older history is asked for a few screens before the oldest loaded message. That only the reader's own scroll
+    /// asks is the caller's part, checked in `TimelinePositionTests`.
+    func testOlderHistoryIsAskedForAFewScreensBeforeTheOldestMessage() {
+        // Measured from the top inset: at offset -100 the oldest loaded message sits right under a 100 pt bar.
+        func asks(atOffset offset: CGFloat) -> Bool {
+            TimelineScrollPolicy.requestsOlderHistory(in: TimelineViewport(offset: offset, height: 800, contentHeight: 20_000, insetTop: 100, insetBottom: 60))
+        }
+        XCTAssertTrue(asks(atOffset: -100))
+        XCTAssertTrue(asks(atOffset: 1099))
+        XCTAssertFalse(asks(atOffset: 1100))
     }
 
     func testTheViewportClampsToItsContentAndKnowsTheBottom() {

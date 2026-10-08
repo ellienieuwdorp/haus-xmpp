@@ -29,10 +29,11 @@ enum TimelineScrollPolicy {
     /// are usually in place before the reader arrives.
     static let olderHistoryLead: CGFloat = 1200
 
-    /// Only the reader's own scroll pages history: opening at the newest message, an inset change or any other
-    /// programmatic move to the top never does.
-    static func requestsOlderHistory(readerScrolling: Bool, distanceFromTop: CGFloat) -> Bool {
-        readerScrolling && distanceFromTop < olderHistoryLead
+    /// Whether the list has come close enough to the oldest loaded message to ask for older history. Ask only while
+    /// the reader's own scroll moves it (dragging or coasting): opening at the newest message, an inset change or any
+    /// other programmatic move to the top never pages.
+    static func requestsOlderHistory(in viewport: TimelineViewport) -> Bool {
+        viewport.distanceFromTop < olderHistoryLead
     }
 
     /// The item the reader's position is kept on across an update: never the loading-earlier cell, whose removal
@@ -68,8 +69,6 @@ enum TimelineScrollPolicy {
         let placement: Placement
         /// Whether this update follows the bottom; afterwards the list follows it while this holds or it ends near it.
         let follows: Bool
-        /// A message arrived after the previous newest one.
-        let appended: Bool
         /// The slide plays back from where the list was before the apply, not from where the apply left it: the typing
         /// bubble left without a message taking its place, and the shrinking content clamped the offset meanwhile.
         let slidesFromPreviousOffset: Bool
@@ -90,7 +89,6 @@ enum TimelineScrollPolicy {
             let sentOwn = rows[tailStart...].contains { $0.message.isOutgoing }
             let firstContent = previousTailID == nil
             follows = firstContent || wasNearBottom || sentOwn
-            self.appended = appended
             slidesFromPreviousOffset = typingLeft && !appended
             // Only a message arriving at the tail moves, and only when the reader is at the tail; nothing else animates.
             // From far up in history a send jumps; a slide would cross cells that were never drawn.
