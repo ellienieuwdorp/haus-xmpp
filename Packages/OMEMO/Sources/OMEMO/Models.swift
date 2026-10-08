@@ -7,6 +7,12 @@ public enum DeviceTrust: String, Codable, Sendable {
     public var permitsEncryption: Bool { self == .accepted || self == .verified }
 }
 
+extension EncryptionDevice {
+    /// One of `account`'s own devices that the user rejected: group sends leave it out instead of waiting, as 1:1 chats
+    /// do. Other members' rejected devices are not covered and keep holding the group.
+    public func isLeftOutOfGroups(account: String) -> Bool { jid == account && trust == .rejected }
+}
+
 public struct EncryptionDevice: Identifiable, Codable, Sendable, Equatable {
     public var id: String { "\(jid)|\(profile.rawValue)|\(deviceID)|\(identityKey.map { String(format: "%02x", $0) }.joined())" }
     public let jid: String
