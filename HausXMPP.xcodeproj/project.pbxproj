@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		028100ACCB75CDF7DD034832 /* ChatListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72CEDFA5595A4C5D13AC3286 /* ChatListView.swift */; };
+		0366ED824C09250C62227F0B /* PlatformSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B324F31F293C431B0B91594D /* PlatformSupport.swift */; };
 		04AF783225090EB9942D1756 /* Intents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AC355ED50ED01A97A49C9030 /* Intents.framework */; };
 		051BE50BBDA14FA050ECD6F9 /* TimelineScrollPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1CBE10482F2CC6B1546794B /* TimelineScrollPolicyTests.swift */; };
 		0557E401D86C1C093F445B63 /* TimelineModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4166F1DF0B9E50FC5796856C /* TimelineModels.swift */; };
@@ -87,6 +88,7 @@
 		939FED17EE4ABC52DAD780BC /* MessageActionMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C1F40DFED008D00FB6F520C /* MessageActionMenu.swift */; };
 		9606DC837981BEE6CBBB1713 /* LabUITestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B77C1DFB059045D551547AF /* LabUITestSupport.swift */; };
 		9662884FF8B2A06C778BD5DF /* NotificationDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6453F2E8354AAD847B7383F8 /* NotificationDiagnostics.swift */; };
+		972BA0FB0311856F62AB20E0 /* ChatRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4053E5EBC94DF0A0EB297556 /* ChatRoute.swift */; };
 		98522509C03F0A2E2EC5DDC8 /* PushTokenCallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5E39D1304108242CD5C4E3 /* PushTokenCallbackTests.swift */; };
 		9948BB61F784F40ABC7A3D6F /* PreviousVersionViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EF039A38BC671DF02393E41 /* PreviousVersionViews.swift */; };
 		997F9133FEBC082A9CE11584 /* AttachmentDispatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E9D1EA17C8008D91B2D600 /* AttachmentDispatchTests.swift */; };
@@ -236,6 +238,7 @@
 		3B95C6EE7F3E7728C7B101AA /* AttachmentPanelUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentPanelUITests.swift; sourceTree = "<group>"; };
 		3BAC3EB28A3AF370298473D3 /* HausXMPPUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = HausXMPPUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3FEA9AED98D6D9D58F880157 /* UITestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestSupport.swift; sourceTree = "<group>"; };
+		4053E5EBC94DF0A0EB297556 /* ChatRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatRoute.swift; sourceTree = "<group>"; };
 		4166F1DF0B9E50FC5796856C /* TimelineModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineModels.swift; sourceTree = "<group>"; };
 		429A77E75FD76C077B26B4D8 /* KeyRecoveryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRecoveryView.swift; sourceTree = "<group>"; };
 		44C680F6A14596B4AE52511C /* schema-21.sql */ = {isa = PBXFileReference; path = "schema-21.sql"; sourceTree = "<group>"; };
@@ -293,6 +296,7 @@
 		AAD47A5646692079DA699298 /* Attachments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Attachments.swift; sourceTree = "<group>"; };
 		AC355ED50ED01A97A49C9030 /* Intents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Intents.framework; path = System/Library/Frameworks/Intents.framework; sourceTree = SDKROOT; };
 		ADA54DF38083C5DFB6D0F5C1 /* RevisionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RevisionUITests.swift; sourceTree = "<group>"; };
+		B324F31F293C431B0B91594D /* PlatformSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformSupport.swift; sourceTree = "<group>"; };
 		B4689E0E3D14BB55262444FA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		BCBE2EE10C63807F3591D2F1 /* NotificationService.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NotificationService.entitlements; sourceTree = "<group>"; };
 		C0177CE11C01DFEB2F32246D /* TimelineCellSemanticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineCellSemanticsTests.swift; sourceTree = "<group>"; };
@@ -522,6 +526,7 @@
 				4749F05E18328FC50A0611E5 /* ChatDetailsView.swift */,
 				72CEDFA5595A4C5D13AC3286 /* ChatListView.swift */,
 				7EE5082F6FC8DC6C22351DAF /* ChatNotifications.swift */,
+				4053E5EBC94DF0A0EB297556 /* ChatRoute.swift */,
 				736643F511B0D31C7102998D /* CircularGlassButtonStyle.swift */,
 				24971C9AFE6065119E87D945 /* CoalescedReload.swift */,
 				219AF3065A8866C0E26F5FFF /* ConnectionSetup.swift */,
@@ -546,6 +551,7 @@
 				879BC5B4DD701F8AEF61EC4F /* NotificationNavigation.swift */,
 				E7E9F16915706C304AAE9D42 /* OutboxDrain.swift */,
 				08DCEB72DB5C954FB177F948 /* OwnDeviceReview.swift */,
+				B324F31F293C431B0B91594D /* PlatformSupport.swift */,
 				D3CC60EB867FA8C2ED3BA522 /* PreUpgradeSnapshot.swift */,
 				8EF039A38BC671DF02393E41 /* PreviousVersionViews.swift */,
 				15074E4EC097CD346A8BE93B /* PushRegistration.swift */,
@@ -790,6 +796,7 @@
 				916F0C5F79286B7F598B2F69 /* ChatDetailsView.swift in Sources */,
 				028100ACCB75CDF7DD034832 /* ChatListView.swift in Sources */,
 				77CD710091E8A7B5DA9CC11D /* ChatNotifications.swift in Sources */,
+				972BA0FB0311856F62AB20E0 /* ChatRoute.swift in Sources */,
 				A2FAE5F989B4A21D149234DC /* CircularGlassButtonStyle.swift in Sources */,
 				9A4CA15E5D87E4F87ED8EB7A /* CoalescedReload.swift in Sources */,
 				BAD829949F27036DE79F2BF4 /* ConnectionSetup.swift in Sources */,
@@ -822,6 +829,7 @@
 				5DC00F7EFBF1219558D1A4F3 /* NotificationNavigation.swift in Sources */,
 				6D99BAA5013AC5727BE47234 /* OutboxDrain.swift in Sources */,
 				06610FE5BA03F55C4EE6F8C9 /* OwnDeviceReview.swift in Sources */,
+				0366ED824C09250C62227F0B /* PlatformSupport.swift in Sources */,
 				B74A6ABCE9CC219D2D819202 /* PreUpgradeHold.swift in Sources */,
 				B45F612CCE7A39DE45E0F196 /* PreUpgradeSnapshot.swift in Sources */,
 				9948BB61F784F40ABC7A3D6F /* PreviousVersionViews.swift in Sources */,

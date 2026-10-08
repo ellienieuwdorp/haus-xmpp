@@ -2,7 +2,9 @@ import Foundation
 import Network
 import os
 import SwiftUI
+#if os(iOS)
 import UIKit
+#endif
 import UserNotifications
 import Observation
 import MessageStore
@@ -69,7 +71,7 @@ final class AppModel {
     @ObservationIgnored private var ownTypingSend: Task<Void, Never>?
     private(set) var reactableGroupMessages: Set<String> = []
     /// Verified avatar thumbnails by chat address, plus the account's own under its address.
-    private(set) var avatars: [String: UIImage] = [:]
+    private(set) var avatars: [String: PlatformImage] = [:]
     /// Addresses whose avatar was checked on this session; a PEP notify clears its entry.
     @ObservationIgnored private var avatarChecked: Set<String> = []
     @ObservationIgnored private var storageRoot: URL?
@@ -320,10 +322,10 @@ final class AppModel {
     private func prepareOnce() async {
         // A launch into the background (a notification action) must not connect: the scene is not in front. Its
         // first activation then counts as a return to the foreground even if the scene phase was never seen to change.
-        let launchedInBackground = UIApplication.shared.applicationState == .background
+        let launchedInBackground = PlatformApplication.isInBackground
         applyLifecycle(lifecycleDriver.updates(for: .launched(inBackground: launchedInBackground)))
         if launchedInBackground {
-            backgroundLaunchObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
+            backgroundLaunchObserver = NotificationCenter.default.addObserver(forName: PlatformApplication.didBecomeActiveNotification,
                                                                               object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self else { return }
@@ -369,7 +371,7 @@ final class AppModel {
                 self.snapshots = snapshots
                 if upgradeState != .restoring { upgradeState = .preparing }
                 // Rewrites the previous build's spellings (preferences, folders, push registrations) only once `ready`.
-                let opening = try await snapshots.open(upgradeAllowed: UIApplication.shared.applicationState != .background,
+                let opening = try await snapshots.open(upgradeAllowed: !PlatformApplication.isInBackground,
                                                        withoutSnapshot: withoutSnapshot, now: Date())
                 readBackupStatus()
                 switch opening {
@@ -491,11 +493,15 @@ final class AppModel {
             // One sample photo, drawn here so no asset ships: exercises the bubble thumbnail and the viewer.
             if let files {
                 let size = CGSize(width: 1200, height: 900)
+                #if os(iOS)
                 let photo = UIGraphicsImageRenderer(size: size).jpegData(withCompressionQuality: 0.8) { context in
                     let colors = [UIColor.systemTeal.cgColor, UIColor.systemIndigo.cgColor] as CFArray
                     guard let gradient = CGGradient(colorsSpace: nil, colors: colors, locations: nil) else { return }
                     context.cgContext.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
                 }
+                #else
+                let photo = try MacImageEncoding.gradientJPEG(size: size, colors: [NSColor.systemTeal.cgColor, NSColor.systemIndigo.cgColor])
+                #endif
                 let attachment = StoredAttachment(name: "waterfront.jpg", mediaType: "image/jpeg", size: photo.count, width: 1200, height: 900,
                                                   hash: Data.sha256(photo).hexString, secret: Data([0])) // never opened: the file is already cached
                 try files.write(photo, to: files.cacheURL(attachment, messageID: "sample-photo"))
@@ -790,11 +796,11 @@ final class AppModel {
             await previous?.value
             guard let self else { return }
             if transition.quiescesTransport {
-                let task = UIApplication.shared.beginBackgroundTask(withName: "Finish encrypted synchronization")
+                let task = BackgroundActivity("Finish encrypted synchronization")
                 // The session hibernates (up to days with push): it must read as away, not "Online", until it resumes.
                 if transition.presence == .away, let client = self.client, self.isConnected { try? await client.setAvailability(self.awayAvailability) }
                 await self.quiesceTransport()
-                if task != .invalid { UIApplication.shared.endBackgroundTask(task) }
+                task.end()
             } else {
                 guard self.transportWanted else { return }
                 // Only when the stream stays up and the user comes or goes; never on iOS, where both follow the transport.
@@ -921,8 +927,8 @@ final class AppModel {
         restoringData = true
         defer { restoringData = false }
         // Copying this version's data can take a moment; leaving the app meanwhile must not suspend it half way.
-        let background = UIApplication.shared.beginBackgroundTask(withName: "Restore previous version's data")
-        defer { if background != .invalid { UIApplication.shared.endBackgroundTask(background) } }
+        let background = BackgroundActivity("Restore previous version's data")
+        defer { background.end() }
         reconnectTask?.cancel(); reconnectTask = nil
         await stopTransportWork()
         quiescing = true
@@ -995,8 +1001,8 @@ final class AppModel {
         guard let store = recoveryStore else { return }
         startingEncryptionOver = true
         defer { startingEncryptionOver = false }
-        let background = UIApplication.shared.beginBackgroundTask(withName: "Set up encryption again")
-        defer { if background != .invalid { UIApplication.shared.endBackgroundTask(background) } }
+        let background = BackgroundActivity("Set up encryption again")
+        defer { background.end() }
         var leased = await store.holdsTransportOwnership
         var busy = false
         for _ in 0..<40 where !leased {
@@ -1186,7 +1192,14 @@ final class AppModel {
                 try await settlePushCleanup(client: client, account: account, token: token)
                 guard generation == token, pushIntent == intent else { return }
                 guard pushWanted else { pushStatus = .off; return }
+                #if os(macOS)
+                // Push is gated off on the Mac until its extension and token registration exist (Phase 3). Stored
+                // cleanup above still runs; nothing registers.
+                pushStatus = .off
+                return
+                #else
                 supported = try await client.supportsPushNotifications()
+                #endif
             }
             guard generation == token, pushIntent == intent else { return }
             guard supported else { pushStatus = .unsupported; return }
@@ -1819,7 +1832,7 @@ final class AppModel {
             if let fetched {
                 try AvatarStore.save(fetched.data, root: storageRoot, account: account, hash: fetched.hash)
                 if let image = AvatarStore.image(root: storageRoot, account: account, hash: fetched.hash) {
-                    avatars[chatID] = UIImage(cgImage: image)
+                    avatars[chatID] = PlatformImage(cgImage: image)
                     // The communication-notification copy: pre-scaled here, so the extension never decodes an image.
                     AvatarStore.saveNotificationImage(root: storageRoot, account: account, hash: fetched.hash)
                 } else {
@@ -1845,7 +1858,7 @@ final class AppModel {
         if let own = preferences.string(forKey: "avatar.\(account)") { wanted.append((account, own)) }
         // ponytail: decoded on the main actor; the files are ≤512 KiB and become 256 px thumbnails. Move off-main if the list ever stutters.
         for (id, hash) in wanted where avatars[id] == nil {
-            avatars[id] = AvatarStore.image(root: storageRoot, account: account, hash: hash).map { UIImage(cgImage: $0) }
+            avatars[id] = AvatarStore.image(root: storageRoot, account: account, hash: hash).map { PlatformImage(cgImage: $0) }
             // Avatars stored before communication notifications get their pre-scaled copy once (a stat when it exists).
             if avatars[id] != nil { AvatarStore.saveNotificationImage(root: storageRoot, account: account, hash: hash) }
         }
@@ -3455,7 +3468,7 @@ extension AppModel: NotificationActionEnvironment {
     func beginNotificationAction(account: String, chatID: String, budget: NotificationActionBudget) async -> Bool {
         guard let store, let encryption, let credentials = sessionAccount, credentials.accountID == account else { return false }
         // In front (or still holding the live session while the scene goes): the app's own connection does the work.
-        if UIApplication.shared.applicationState != .background || (transportWanted && !quiescing && hasTransportOwnership) {
+        if !PlatformApplication.isInBackground || (transportWanted && !quiescing && hasTransportOwnership) {
             actionSession = NotificationActionSession(account: account, isForeground: true, budget: budget)
             return true
         }
@@ -3734,7 +3747,12 @@ extension AppModel: NotificationActionEnvironment {
             #endif
             let status = await Self.notificationAuthorization()
             guard let self else { return }
+            #if os(iOS)
             self.mayPostNotifications = [.authorized, .provisional, .ephemeral].contains(status)
+            #else
+            // App Clips' ephemeral authorization does not exist on macOS.
+            self.mayPostNotifications = [.authorized, .provisional].contains(status)
+            #endif
             // Turned off in iOS Settings while away; turning it back on is picked up by the next connection.
             if status == .denied, [.on, .settingUp].contains(self.pushStatus) { self.pushStatus = .notAllowed }
         }

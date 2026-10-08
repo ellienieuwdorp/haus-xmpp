@@ -25,7 +25,7 @@ struct SettingsView: View {
     /// Every signed-in account (the sample conversations have none); DEBUG's notification harness shows it signed out
     /// too, for captures.
     private var showsNotificationSettings: Bool {
-        #if DEBUG
+        #if DEBUG && os(iOS)
         if NotificationHarness.isRequested { return true }
         #endif
         return !model.accountID.isEmpty && !model.isDemo
@@ -45,6 +45,9 @@ struct SettingsView: View {
             }
             if showsNotificationSettings {
                 Section {
+                    // The Mac registers no push yet (mac-target.md), so it shows only the preferences that also apply to
+                    // the notifications it posts itself.
+                    #if os(iOS)
                     // On while push is on or being set up; a status that reads "Off" shows it off.
                     Toggle(isOn: Binding(get: { model.pushWanted && ![.off, .notAllowed].contains(model.pushStatus) },
                         set: { on in Task { if on { await model.enableNotifications() } else { await model.disableNotifications() } } })) {
@@ -65,13 +68,19 @@ struct SettingsView: View {
                                 .accessibilityIdentifier("retryPushNotifications")
                         case .notAllowed:
                             Button("Open \(ThisDevice.settingsApp)") {
-                                if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
+                                if let url = PlatformApplication.notificationSettingsURL { openURL(url) }
                             }
                             .accessibilityIdentifier("openNotificationSettings")
                         default:
                             EmptyView()
                         }
                     }
+                    #else
+                    Button("Open \(ThisDevice.settingsApp)") {
+                        if let url = PlatformApplication.notificationSettingsURL { openURL(url) }
+                    }
+                    .accessibilityIdentifier("openNotificationSettings")
+                    #endif
                     Toggle("Message previews", isOn: Binding(get: { model.notificationPreviewsEnabled },
                         set: { enabled in Task { await model.setNotificationPreviews(enabled) } }))
                         .accessibilityIdentifier("notificationPreviews")
@@ -102,6 +111,8 @@ struct SettingsView: View {
             } footer: {
                 Text("Tell contacts when their messages reach this \(ThisDevice.noun) and when you read them. You still see what contacts send you, and their messages are still asked for receipts. Last seen lets contacts you chat with see when you were last online. Turning it off stops sharing your online status with everyone; you still see what contacts share.")
             }
+            // The Mac's Settings window has Appearance as a pane of its own.
+            #if os(iOS)
             Section {
                 NavigationLink {
                     AppearanceView()
@@ -114,6 +125,7 @@ struct SettingsView: View {
                 }
                 .accessibilityIdentifier("appearanceRow")
             }
+            #endif
             Section("Development") {
                 HStack(spacing: 12) {
                     SettingsIconTile(systemName: "tray.and.arrow.down.fill", color: .gray)

@@ -13,18 +13,18 @@ struct GroupJoinView: View {
                 LabeledContent("Address") {
                     TextField("group@rooms.server", text: $room)
                         .multilineTextAlignment(.trailing)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.emailAddress)
+                        .noAutocapitalization().autocorrectionDisabled().keyboard(.emailAddress)
                         .accessibilityLabel("Group address").accessibilityIdentifier("groupAddress")
                 }
                 LabeledContent("Nickname") {
                     TextField("Your nickname", text: $nickname)
                         .multilineTextAlignment(.trailing)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .noAutocapitalization().autocorrectionDisabled()
                         .accessibilityIdentifier("groupNickname")
                 }
             } footer: { Text("Members-only, encrypted groups you already belong to.") }
         }
-        .navigationTitle("Join a group").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Join a group").inlineNavigationTitle()
         .safeAreaInset(edge: .bottom) {
             Button {
                 joining = true

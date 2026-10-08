@@ -32,8 +32,8 @@ struct AppearanceView: View {
                                     .overlay {
                                         if selected {
                                             Image(systemName: "checkmark").font(.system(size: 18, weight: .bold))
-                                                .foregroundStyle(Color(uiColor: theme.bubbleText))
-                                            Circle().stroke(Color(uiColor: theme.tint), lineWidth: 2).padding(-4)
+                                                .foregroundStyle(Color(platform: theme.bubbleText))
+                                            Circle().stroke(Color(platform: theme.tint), lineWidth: 2).padding(-4)
                                         }
                                     }
                                 Text(theme.title)
@@ -59,15 +59,15 @@ struct AppearanceView: View {
             }
         }
         .navigationTitle("Appearance")
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
         .themedRoot()
     }
 
     /// The real bubble's footer at preview size: caption2 time and the shared read mark, both in the
     /// meta colour, inside the 20 pt bubble with the timeline's 12/10/8 insets.
     private func bubble(_ text: String, time: String, incoming: Bool) -> some View {
-        let textColor = incoming ? Color.primary : Color(uiColor: accent.bubbleText)
-        let meta = incoming ? Color(uiColor: .secondaryLabel) : Color(uiColor: accent.bubbleText.withAlphaComponent(0.75))
+        let textColor = incoming ? Color.primary : Color(platform: accent.bubbleText)
+        let meta = incoming ? Color.secondaryLabel : Color(platform: accent.bubbleText.withAlphaComponent(0.75))
         return HStack {
             if !incoming { Spacer(minLength: 60) }
             VStack(alignment: .trailing, spacing: 3) {
@@ -75,7 +75,7 @@ struct AppearanceView: View {
                 HStack(spacing: 5) {
                     Text(time).font(.caption2)
                     if !incoming {
-                        Image(uiImage: MessageStatusArt.image(.read, scale: statusScale))
+                        Image(platformImage: MessageStatusArt.image(.read, scale: statusScale))
                             .renderingMode(.template)
                             .frame(width: MessageStatusArt.slotWidth * statusScale,
                                    height: MessageStatusArt.designHeight * statusScale, alignment: .trailing)
@@ -84,7 +84,7 @@ struct AppearanceView: View {
                 .foregroundStyle(meta)
             }
             .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
-            .background(incoming ? Color(uiColor: .tertiarySystemFill) : accent.swatch, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .background(incoming ? Color.tertiaryFill : accent.swatch, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             if incoming { Spacer(minLength: 60) }
         }
     }

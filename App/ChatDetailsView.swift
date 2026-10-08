@@ -126,7 +126,7 @@ struct ChatDetailsView: View {
                 .padding(.bottom, 36)
             }
         }
-        .listStyle(.insetGrouped)
+        .groupedListStyle()
         .toolbarTitleDisplayMode(.inline)
     }
 
@@ -172,7 +172,7 @@ struct ChatDetailsView: View {
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, minHeight: 60)
             .foregroundStyle(.tint)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)

@@ -57,7 +57,10 @@ enum PushStatus: Equatable {
     /// Only a sign-in or a tap in Settings may ask; a reconnect at launch never shows the system prompt.
     static func gate(for authorization: UNAuthorizationStatus, interactive: Bool) -> PushStatus? {
         switch authorization {
-        case .authorized, .provisional, .ephemeral: nil
+        case .authorized, .provisional: nil
+        #if os(iOS)
+        case .ephemeral: nil
+        #endif
         case .denied: .notAllowed
         case .notDetermined: interactive ? nil : .off
         @unknown default: .notAllowed
