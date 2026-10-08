@@ -430,6 +430,7 @@ public actor OMEMOService {
             var ready = Set<String>()
             var blocked: [String: String] = [:]
             var firstFailure: OMEMOError?
+            var droppedReplies = Set<String>()
             let (_, currentState) = try await self.load(account)
             // Several files sent together are one message each: a chat's devices are fetched once per pass, not once per
             // message, so the first of them is not held behind every other one's refresh.
@@ -449,7 +450,7 @@ public actor OMEMOService {
                         let candidates = state.devices.filter { $0.profile == saved.envelope.profile && $0.active && ($0.jid == message.chatID || $0.jid == account) }
                         guard !candidates.contains(where: { $0.trust == .undecided }) else { throw OMEMOError.trustRequired }
                         guard candidates.filter({ $0.trust.permitsEncryption }).map(\.id).sorted() == saved.recipientIdentities.sorted() else { throw OMEMOError.recipientSetChanged }
-                    } else { try await self.sealLocked(message) }
+                    } else if try await self.sealLocked(message) { droppedReplies.insert(message.id) }
                     ready.insert(message.id)
                 } catch {
                     if error is CancellationError { throw error }
@@ -457,11 +458,12 @@ public actor OMEMOService {
                     blocked[message.chatID] = (error as? OMEMOError)?.errorDescription ?? "Encryption preparation failed. This message remains queued."
                 }
             }
-            return EncryptionPreparation(messageIDs: ready, blockedChats: blocked, failure: firstFailure)
+            return EncryptionPreparation(messageIDs: ready, blockedChats: blocked, failure: firstFailure, droppedReplies: droppedReplies)
         }
     }
 
-    private func sealLocked(_ message: StoredMessage) async throws {
+    /// Returns whether a file's reply was left out of the seal (see `EncryptionPreparation.droppedReplies`).
+    private func sealLocked(_ message: StoredMessage) async throws -> Bool {
         let account = message.accountID
         let (revision, old) = try await load(account)
         var state = old
@@ -470,8 +472,13 @@ public actor OMEMOService {
                                                     sender: account, recipient: message.chatID, modern: profile == .modern,
                                                     originID: message.id, fileSharing: message.attachment.map { try fileSharing(for: $0, account: account) })
         let saved = try sealContent(plaintext, account: account, peer: message.chatID, profile: profile, state: &state)
+        // A file whose reply could not ride along (the chat fell back to legacy after it was queued) loses the stored
+        // quote with the seal, so the sender's bubble never shows a reply the peer did not get.
+        let droppedReply = message.attachment != nil && message.reply.map { !EncryptedContent.fileCarries($0, modern: profile == .modern) } == true
         try await store.sealQueuedOutgoing(accountID: account, messageID: message.id, profile: profile.rawValue,
-                                           expectedRevision: revision, state: encode(state, account: account), wire: JSONEncoder().encode(saved))
+                                           expectedRevision: revision, state: encode(state, account: account), wire: JSONEncoder().encode(saved),
+                                           clearReply: droppedReply)
+        return droppedReply
     }
 
     private func sealContent(_ plaintext: Data, account: String, peer: String, profile: XMPPOMEMOProfile,

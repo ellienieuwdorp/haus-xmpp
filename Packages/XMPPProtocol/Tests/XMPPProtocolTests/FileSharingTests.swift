@@ -81,3 +81,19 @@ private func sharing(encrypted: Bool = true) -> MessageContent.FileSharing {
     let insecure = try XMPPProtocol.XMLNode.parse(standalone: Data("<iq xmlns='jabber:client' type='result' id='1'><slot xmlns='urn:xmpp:http:upload:0'><put url='http://u/x'/><get url='https://u/x'/></slot></iq>".utf8))
     #expect(throws: (any Error).self) { try XMPPUploadSlot.decode(insecure) }
 }
+
+@Test func replyOnAFileIsTheReferenceAloneAndLeavesTheLinkAsTheWholeBody() throws {
+    let content = MessageContent(body: "", reply: .init(id: "wire-photo", to: "bob@localhost", quote: ""), originID: "m2", fileSharing: sharing())
+    let node = try parse(try content.xml())
+    let reference = try #require(node.child("reply", namespace: "urn:xmpp:reply:0"))
+    #expect(reference.attributes["id"] == "wire-photo")
+    #expect(reference.attributes["to"] == "bob@localhost")
+    let body = try #require(node.child("body", namespace: "jabber:client")?.text)
+    #expect(body.hasPrefix("aesgcm://uploads.localhost:5281/abc/beach.jpg#"))
+    #expect(node.children("fallback", namespace: "urn:xmpp:fallback:0").map { $0.attributes["for"] } == ["urn:xmpp:sfs:0"])
+    let decoded = try MessageContent.decode(node, strict: true)
+    #expect(decoded.body.isEmpty)
+    #expect(decoded.fileSharing == sharing())
+    // A reply with nothing to show must name its target.
+    #expect(throws: (any Error).self) { try MessageContent(body: "", reply: .init(id: nil, to: "bob@localhost", quote: ""), fileSharing: sharing()).xml() }
+}

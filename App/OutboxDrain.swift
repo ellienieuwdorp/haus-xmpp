@@ -23,6 +23,8 @@ struct OutboxDrain: Sendable {
         var hold: @MainActor @Sendable (_ blocked: [String: String]) -> Set<String> = { Set($0.keys) }
         var groupPrepared: @MainActor @Sendable (_ room: String) -> Void = { _ in }
         var groupFailed: @MainActor @Sendable (_ room: String, _ error: any Error) -> Set<String> = { room, _ in [room] }
+        /// Files queued as a reply that went without it (their chat fell back to legacy OMEMO before sealing).
+        var repliesDropped: @MainActor @Sendable (_ messageIDs: Set<String>) -> Void = { _ in }
         var didChange: @Sendable () async -> Void = {}
     }
 
@@ -32,6 +34,7 @@ struct OutboxDrain: Sendable {
         let preparation = try await encryption.prepareAvailableMessages(account: account, transport: client)
         // Sends held for a fingerprint decision mark their chat for review; any other reason is a footnote.
         var heldForTrust = await hooks.hold(preparation.blockedChats)
+        if !preparation.droppedReplies.isEmpty { await hooks.repliesDropped(preparation.droppedReplies) }
         var preparedIDs = preparation.messageIDs
         for message in try await store.queuedOutgoing(accountID: account) where joinedGroups.contains(message.chatID) {
             do {

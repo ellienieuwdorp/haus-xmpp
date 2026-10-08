@@ -1295,9 +1295,15 @@ final class AppModel {
     /// The message stays unsendable until the background PUT succeeds; nothing is regenerated.
     /// Never with a caption: Conversations shows a file only when the body is exactly its link, so a caption
     /// goes as its own message after the files.
-    func sendAttachment(_ prepared: PreparedAttachment, to chatID: String) async -> Bool {
+    /// `source` is set only when `canReplyWithFilesAlone` allowed it: the file then carries the reply reference and no quote.
+    func sendAttachment(_ prepared: PreparedAttachment, to chatID: String, replyingTo source: ChatMessage? = nil) async -> Bool {
         guard !isSending, let store, let files, !accountID.isEmpty else { return false }
         guard !isGroup(chatID) else { error = "Files can't be sent to groups yet."; return false }
+        if let source, !canReplyWithFilesAlone(to: source, in: chatID) {
+            // The chat's encryption changed after Send was pressed; nothing was queued.
+            error = "This reply can't be sent with files alone in this chat. Add a caption to send it."; return false
+        }
+        let reply = source.map { replySnapshot(of: $0, in: chatID) }
         guard prepared.data.count <= attachmentLimit else {
             error = AttachmentPreparer.Failure.tooLarge(limit: attachmentLimit).localizedDescription; return false
         }
@@ -1311,7 +1317,7 @@ final class AppModel {
                                               height: prepared.height, hash: Data.sha256(prepared.data).hexString, secret: Data([0]))
             do {
                 try files.write(prepared.data, to: files.cacheURL(attachment, messageID: id))
-                try await store.insertMessage(StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: "", isOutgoing: true, attachment: attachment))
+                try await store.insertMessage(StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: "", isOutgoing: true, reply: reply, attachment: attachment))
                 await refresh()
                 return true
             } catch { self.error = "Could not save the file."; return false }
@@ -1326,7 +1332,7 @@ final class AppModel {
             try files.write(sealed.ciphertext, to: files.stagingURL(messageID: id))
             try files.write(prepared.data, to: files.cacheURL(attachment, messageID: id))
             let message = StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: "", isOutgoing: true,
-                                        encryptionProfile: "pending", attachment: attachment)
+                                        reply: reply, encryptionProfile: "pending", attachment: attachment)
             try await store.enqueueOutgoing(message)
             await refresh()
             startUploads()
@@ -2101,13 +2107,10 @@ final class AppModel {
         guard sample || isGroup(chatID) || !isLabAccount || chatID.hasSuffix("@" + accountDomain) else { return false }
         if isGroup(chatID), !canSend(to: chatID) { error = "Wait until this account has joined the group before sending."; return false }
         if let source, source.accountID != account || source.chatID != chatID { return false }
-        let reply = source.map { MessageReply(messageID: $0.id, senderID: $0.senderID, body: $0.body, wireID: !isGroup(chatID) && $0.isOutgoing && $0.transportState != nil ? $0.id : nil) }
         let message = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chatID,
-                                    senderID: account, body: body, isOutgoing: true, reply: reply, encryptionProfile: sample ? nil : "pending")
-        do {
-            try XMPPClient.validateMessage(to: chatID, body: body, id: message.id, reply: Self.wireReply(message.reply))
-        } catch {
-            self.error = "This message or quoted text is too long or contains unsupported characters. Your text is still in the composer."
+                                    senderID: account, body: body, isOutgoing: true, reply: source.map { replySnapshot(of: $0, in: chatID) }, encryptionProfile: sample ? nil : "pending")
+        if let problem = XMPPClient.messageProblem(to: chatID, body: body, id: message.id, reply: Self.wireReply(message.reply)) {
+            self.error = Self.sendFailure(problem)
             return false
         }
         do {
@@ -2136,6 +2139,47 @@ final class AppModel {
 
     private nonisolated static func wireReply(_ reply: MessageReply?) -> XMPPReply? {
         reply.map { XMPPReply(id: $0.wireID, to: $0.senderID, body: $0.body) }
+    }
+
+    /// The stored quote of `source`: its text, or a file's label, so a restart or a queued retry sends the same words.
+    /// Only our own sent direct message has a wire ID we can reference (replies to received messages are quote-only, CX-4).
+    private func replySnapshot(of source: ChatMessage, in chatID: String) -> MessageReply {
+        MessageReply(messageID: source.id, senderID: source.senderID, body: source.quoteText,
+                     wireID: Self.replyWireID(of: source, isGroup: isGroup(chatID)), mediaType: source.attachment?.mediaType)
+    }
+
+    /// The ID a reply can reference: only our own sent direct message has one we know the peer holds.
+    nonisolated static func replyWireID(of source: ChatMessage, isGroup: Bool) -> String? {
+        !isGroup && source.isOutgoing && source.transportState != nil ? source.id : nil
+    }
+
+    /// Whether files sent with no caption can carry a reply to `source`. A file's body must stay exactly its link, so
+    /// the reply can only be the XEP-0461 reference, without a quote: that needs a wire ID to name (an own sent direct
+    /// message) and somewhere private to put it (a modern OMEMO envelope; legacy OMEMO would put it in clear).
+    /// Sample chats send nothing and follow the same own-message rule.
+    func canReplyWithFilesAlone(to source: ChatMessage, in chatID: String) -> Bool {
+        Self.filesAloneCanReply(to: source, accountID: accountID, chatID: chatID, isGroup: isGroup(chatID), isDemo: isDemo,
+                                chatProfile: encryptionOverviewChatID == chatID ? encryptionOverview?.profile : nil)
+    }
+
+    /// `canReplyWithFilesAlone` from its facts. `chatProfile` is the OMEMO version this chat sends with, nil while unknown.
+    nonisolated static func filesAloneCanReply(to source: ChatMessage, accountID: String, chatID: String, isGroup: Bool,
+                                               isDemo: Bool, chatProfile: XMPPOMEMOProfile?) -> Bool {
+        guard source.accountID == accountID, source.chatID == chatID, !isGroup, source.isOutgoing else { return false }
+        if isDemo { return true }
+        return replyWireID(of: source, isGroup: isGroup) != nil && chatProfile == .modern
+    }
+
+    nonisolated static func sendFailure(_ problem: XMPPClient.MessageProblem) -> String {
+        switch problem {
+        case .emptyQuote: "The message you're replying to has nothing to quote. Remove the reply to send your text, which is still in the composer."
+        case .quoteTooLong: "The message you're replying to is too long to quote. Remove the reply to send your text, which is still in the composer."
+        case .quoteUnsupportedCharacters: "The message you're replying to contains characters that can't be quoted. Remove the reply to send your text, which is still in the composer."
+        case .combinedTooLong: "Your text and the quoted message are too long together. Shorten your text or remove the reply; your text is still in the composer."
+        case .bodyTooLong: "This message is too long. Your text is still in the composer."
+        case .bodyUnsupportedCharacters: "This message contains characters that can't be sent. Your text is still in the composer."
+        case .emptyBody, .invalidAddressing: "This message can't be sent to this chat. Your text is still in the composer."
+        }
     }
 
     func canReact(to message: StoredMessage) -> Bool {
@@ -2230,6 +2274,11 @@ final class AppModel {
                         guard let self, self.generation == token else { return [] }
                         self.groupChats[room]?.issue = self.groupFailure(error)
                         return self.encryptionAttention.hold([room: self.groupFailure(error)], shownChat: self.encryptionShownChatID)
+                    },
+                    repliesDropped: { [weak self] _ in
+                        // The composer let these replies go at Send, and the seal has cleared their quotes.
+                        guard let self, self.generation == token else { return }
+                        self.error = "This chat switched to an older encryption version, so a file you sent as a reply goes without it. Reply again with a caption to quote the message."
                     },
                     didChange: { [weak self] in await self?.refresh() }))
                 if let self, self.generation == token { self.encryptionAttention.settlePass(heldForTrust: heldForTrust) }

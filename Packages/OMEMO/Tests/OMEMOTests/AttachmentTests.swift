@@ -31,6 +31,44 @@ final class AttachmentTests: XCTestCase {
         XCTAssertNil(try EncryptedContent.decode(Data("just text".utf8), sender: sender, recipient: recipient, modern: false).fileSharing)
     }
 
+    /// The SCE `<content>` children of a modern payload, for checking what rides inside the envelope.
+    private func envelopeContent(_ data: Data) throws -> XMPPProtocol.XMLNode {
+        let root = try XMPPProtocol.XMLNode.parse(standalone: data)
+        return try XCTUnwrap(root.child("content", namespace: "urn:xmpp:sce:1"))
+    }
+
+    func testModernReplyWithOnlyAFileCarriesTheReferenceInsideTheEnvelopeAndNoQuote() throws {
+        let (sharing, _) = try file()
+        let reply = MessageReply(messageID: "local-photo", senderID: sender, body: "Photo", wireID: "wire-photo")
+        let data = try EncryptedContent.encode(body: "", reply: reply, sender: sender, recipient: recipient, modern: true, originID: "m1", fileSharing: sharing)
+        let content = try envelopeContent(data)
+        let reference = try XCTUnwrap(content.child("reply", namespace: "urn:xmpp:reply:0"))
+        XCTAssertEqual(reference.attributes["id"], "wire-photo")
+        XCTAssertEqual(reference.attributes["to"], sender)
+        // No quote: the body stays exactly the link (MessageContent's tests own the element grammar).
+        let body = try XCTUnwrap(content.child("body", namespace: "jabber:client")?.text)
+        XCTAssertTrue(body.hasPrefix("aesgcm://uploads.localhost:5281/x/photo.jpg#"))
+        XCTAssertFalse(body.contains("Photo"))
+        let decoded = try EncryptedContent.decode(data, sender: sender, recipient: recipient, modern: true)
+        XCTAssertEqual(decoded.body, "")
+        XCTAssertEqual(decoded.fileSharing?.url, sharing.url)
+    }
+
+    func testFileReplyThatCannotCarryAReferenceSendsTheBareFile() throws {
+        let (sharing, _) = try file()
+        let own = MessageReply(messageID: "local-photo", senderID: sender, body: "Photo", wireID: "wire-photo")
+        // Legacy has no envelope: no quote before the link and no reference anywhere in the payload.
+        let legacy = String(decoding: try EncryptedContent.encode(body: "", reply: own, sender: sender, recipient: recipient, modern: false, fileSharing: sharing), as: UTF8.self)
+        XCTAssertTrue(legacy.hasPrefix("aesgcm://uploads.localhost:5281/x/photo.jpg#"))
+        XCTAssertFalse(legacy.contains("Photo"))
+        XCTAssertFalse(legacy.contains("wire-photo"))
+        // A received message has no wire ID to reference, so the file goes alone.
+        let received = MessageReply(messageID: "local-in", senderID: recipient, body: "Photo")
+        let content = try envelopeContent(try EncryptedContent.encode(body: "", reply: received, sender: sender, recipient: recipient, modern: true, fileSharing: sharing))
+        XCTAssertNil(content.child("reply", namespace: "urn:xmpp:reply:0"))
+        XCTAssertFalse(try XCTUnwrap(content.child("body", namespace: "jabber:client")?.text).contains("Photo"))
+    }
+
     func testDownloadedBytesMustAuthenticateAndMatchBothHashes() throws {
         let (sharing, ciphertext) = try file()
         XCTAssertEqual(try AttachmentTransfer.open(ciphertext, key: sharing.key!, iv: sharing.iv!, expectedCipherHash: sharing.cipherHash, expectedPlainHash: sharing.hash), plain)

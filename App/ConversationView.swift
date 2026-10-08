@@ -1,3 +1,4 @@
+import MessageStore
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -110,10 +111,28 @@ struct ConversationView: View {
     private var timelineMessages: [TimelineMessage] {
         // One set per pass keeps the quoted-unsent lookup linear.
         let retracted = Set(model.messages.lazy.filter(\.isRetracted).map(\.id))
-        return messages.map { timelineMessage($0, retracted: retracted) }
+        // Quoted messages that are loaded: their kind and, once on disk, their file, for the quote's still.
+        let quoted = Set(messages.lazy.compactMap { $0.reply?.messageID })
+        var sources: [String: ChatMessage] = [:]
+        if !quoted.isEmpty {
+            for source in model.messages where quoted.contains(source.id) { sources[source.id] = source }
+        }
+        return messages.map { timelineMessage($0, retracted: retracted, sources: sources) }
     }
 
-    private func timelineMessage(_ message: ChatMessage, retracted: Set<String>) -> TimelineMessage {
+    /// The quote's still for a photo or video: its slot is kept from the reply snapshot's media type (or the loaded
+    /// source's), so the bubble does not widen when the file downloads or an earlier page loads; the image itself
+    /// shows once the source is loaded and on disk. Anything else quotes text alone.
+    private func quoteStill(of reply: MessageReply, sources: [String: ChatMessage]) -> TimelineAttachment? {
+        let source = sources[reply.messageID]
+        guard let mediaType = reply.mediaType ?? source?.attachment?.mediaType,
+              mediaType.hasPrefix("image/") || mediaType.hasPrefix("video/") else { return nil }
+        return TimelineAttachment(name: source?.attachment?.name ?? "", mediaType: mediaType, size: source?.attachment?.size ?? 0,
+                                  width: source?.attachment?.width, height: source?.attachment?.height,
+                                  localURL: source?.attachment == nil ? nil : model.attachmentFiles[reply.messageID])
+    }
+
+    private func timelineMessage(_ message: ChatMessage, retracted: Set<String>, sources: [String: ChatMessage]) -> TimelineMessage {
         var counts: [String: Int] = [:]
         var selected: Set<String> = []
         for update in model.messageReactions[message.id] ?? [] {
@@ -143,7 +162,8 @@ struct ConversationView: View {
                                                                                        download: model.attachmentDownloads[message.id] ?? .loading) },
                                sentAt: message.sentAt, status: status(message),
                                failure: message.transportState == .failed ? message.rejection.map { RejectionCopy.reason($0, isGroup: isGroup) } : nil,
-                               reply: message.reply.map { TimelineReply(author: authorName($0.senderID), body: quotedUnsent ? "Message unsent" : $0.body) },
+                               reply: message.reply.map { TimelineReply(author: authorName($0.senderID), body: quotedUnsent ? "Message unsent" : $0.body,
+                                                                        thumbnail: quotedUnsent ? nil : quoteStill(of: $0, sources: sources)) },
                                securityNotice: !model.isDemo && message.encryptionProfile == nil ? "Not encrypted" : nil,
                                reactions: message.isRetracted ? [] : emoji.map { TimelineReaction(emoji: $0, count: counts[$0]!, isSelected: selected.contains($0)) },
                                canReact: !message.isRetracted && model.canReact(to: message),
@@ -222,19 +242,23 @@ struct ConversationView: View {
         state.attachmentsOpen = false
         state.sends += 1
         state.dispatching = true
+        // A quote on a file would put fallback text before its link, so a reply rides on the caption. With no caption,
+        // the first file carries the bare reply reference where the chat allows one (`canReplyWithFilesAlone`);
+        // elsewhere the files go and the reply stays in the composer for a caption.
+        let captionless = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let fileReply = captionless ? reply.flatMap { model.canReplyWithFilesAlone(to: $0, in: chatID) ? $0 : nil } : nil
         Task {
             defer { state.dispatching = false }
-            // A quote on a file would put fallback text before its link, so the reply rides on the caption only;
-            // with no caption it stays in the composer.
             let sent = await ComposerState.dispatch(files, caption: text, sendFile: { item in
-                guard model.accountID == account, await model.sendAttachment(item.prepared, to: chatID) else { return false }
+                guard model.accountID == account,
+                      await model.sendAttachment(item.prepared, to: chatID, replyingTo: item.id == files.first?.id ? fileReply : nil) else { return false }
                 state.tray.removeAll { $0.id == item.id }
                 return true
             }, sendCaption: { text in
                 model.accountID == account ? await model.send(text, to: chatID, replyingTo: reply) : false
             })
             guard model.accountID == account else { return }
-            if sent.caption {
+            if sent.caption || (fileReply != nil && sent.files > 0) {
                 if replyingTo?.id == reply?.id { replyingTo = nil }
             } else if state.draft.isEmpty {
                 state.draft = text
@@ -580,7 +604,10 @@ struct ConversationComposer: View {
 
     private var placeholder: String {
         if !model.isDemo, model.encryptionNeedsReview { return "Sending paused until you review" }
-        return showsTray ? "Add a caption…" : "Message"
+        guard showsTray else { return "Message" }
+        // Files alone go without this reply (see `send()`), so say before Send that the reply needs a caption.
+        if let replyingTo, !model.canReplyWithFilesAlone(to: replyingTo, in: chatID) { return "Add a caption to reply…" }
+        return "Add a caption…"
     }
 
     private var canSend: Bool {
@@ -626,6 +653,12 @@ struct ConversationComposer: View {
         .accessibilityIdentifier("attachFile")
     }
 
+    /// The quoted photo or video, for a small still beside the quote (its file once on disk); nil shows the label alone.
+    private func replyStill(_ source: ChatMessage) -> (url: URL?, mediaType: String)? {
+        guard let attachment = source.attachment, attachment.isImage || attachment.isVideo else { return nil }
+        return (model.attachmentFiles[source.id], attachment.mediaType)
+    }
+
     var body: some View {
         let showsAttach = !isGroup && model.canSendAttachments
         GlassEffectContainer(spacing: 8) {
@@ -637,8 +670,9 @@ struct ConversationComposer: View {
                         RoundedRectangle(cornerRadius: 2).fill(.tint).frame(width: 3)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(isEdit ? "Editing message" : "Replying to \(authorName(reply.senderID))").font(.footnote.weight(.semibold)).foregroundStyle(.tint)
-                            Text(reply.body).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                            Text(reply.quoteText).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                         }.frame(maxWidth: .infinity, alignment: .leading)
+                        if !isEdit, let still = replyStill(reply) { QuoteStill(url: still.url, mediaType: still.mediaType) }
                         Button { if isEdit { onCancelEditing() } else { replyingTo = nil } } label: {
                             Image(systemName: "xmark").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary).frame(width: 44, height: 44)
                         }
@@ -692,6 +726,30 @@ struct ConversationComposer: View {
         .onChange(of: showsAttach) { _, shown in if !shown { state.attachmentsOpen = false } }
         .onChange(of: state.draft) { _, draft in model.draftChanged(draft, in: chatID) }
         .onChange(of: focused) { _, isFocused in state.focused = isFocused }
+    }
+}
+
+/// A small still of the quoted photo or video in the reply strip. The slot is fixed, so the strip does not change
+/// size when the still decodes; until then (while the file downloads, or if it never decodes) the slot shows a quiet
+/// fill with the kind's symbol.
+struct QuoteStill: View {
+    let url: URL?
+    let mediaType: String
+    @State private var image: UIImage?
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.quaternary)
+            .overlay {
+                if let image { Image(uiImage: image).resizable().scaledToFill() }
+                else { Image(systemName: mediaType.hasPrefix("video/") ? "video" : "photo").font(.footnote).foregroundStyle(.secondary) }
+            }
+            .frame(width: TimelineReply.thumbnailSide, height: TimelineReply.thumbnailSide)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .accessibilityHidden(true)
+            .task(id: url) {
+                guard let url else { image = nil; return }
+                if let hit = AttachmentThumbnails.cached(for: url) { image = hit } else { image = nil; image = await AttachmentThumbnails.image(for: url, mediaType: mediaType) }
+            }
     }
 }
 

@@ -7,6 +7,10 @@ import UIKit.UIGestureRecognizerSubclass
 struct TimelineReply: Sendable, Equatable {
     let author: String
     let body: String
+    /// The quoted photo or video on disk, shown as a small still at the quote's trailing edge; nil shows the text alone.
+    var thumbnail: TimelineAttachment? = nil
+    /// Side of that still, in the bubble and in the composer's reply strip.
+    static let thumbnailSide: CGFloat = 36
 }
 
 struct TimelineReaction: Sendable, Equatable {
@@ -1027,6 +1031,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private let quoteBar = UIView()
     private let quoteAuthor = UILabel()
     private let quoteBody = UILabel()
+    private let quoteThumbnail = UIImageView()
+    private var quoteLabelsTrailing: NSLayoutConstraint!
+    private var quoteLabelsBeforeThumbnail: NSLayoutConstraint!
     private var plainTextTop: NSLayoutConstraint!
     private var replyTextTop: NSLayoutConstraint!
     private let bubble = UIView()
@@ -1115,6 +1122,15 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         quoteLabels.axis = .vertical
         quoteLabels.spacing = 1
         quote.addSubview(quoteLabels)
+        quoteThumbnail.translatesAutoresizingMaskIntoConstraints = false
+        quoteThumbnail.contentMode = .scaleAspectFill
+        quoteThumbnail.clipsToBounds = true
+        quoteThumbnail.layer.cornerRadius = 6
+        quoteThumbnail.layer.cornerCurve = .continuous
+        quoteThumbnail.isAccessibilityElement = false
+        quote.addSubview(quoteThumbnail)
+        quoteLabelsTrailing = quoteLabels.trailingAnchor.constraint(equalTo: quote.trailingAnchor, constant: -10)
+        quoteLabelsBeforeThumbnail = quoteLabels.trailingAnchor.constraint(equalTo: quoteThumbnail.leadingAnchor, constant: -8)
         quoteAuthor.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(for: .systemFont(ofSize: 13, weight: .semibold))
         quoteAuthor.numberOfLines = 1
         quoteBody.font = .preferredFont(forTextStyle: .footnote)
@@ -1133,7 +1149,13 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             quoteBar.bottomAnchor.constraint(equalTo: quote.bottomAnchor, constant: -6),
             quoteBar.widthAnchor.constraint(equalToConstant: 3),
             quoteLabels.leadingAnchor.constraint(equalTo: quoteBar.trailingAnchor, constant: 8),
-            quoteLabels.trailingAnchor.constraint(equalTo: quote.trailingAnchor, constant: -10),
+            quoteLabelsTrailing,
+            quoteThumbnail.trailingAnchor.constraint(equalTo: quote.trailingAnchor, constant: -6),
+            quoteThumbnail.centerYAnchor.constraint(equalTo: quote.centerYAnchor),
+            // Square, 36 pt, shrinking rather than growing the quote when small text makes the labels shorter.
+            quoteThumbnail.widthAnchor.constraint(equalTo: quoteThumbnail.heightAnchor),
+            quoteThumbnail.heightAnchor.constraint(lessThanOrEqualTo: quote.heightAnchor, constant: -8),
+            { let side = quoteThumbnail.heightAnchor.constraint(equalToConstant: TimelineReply.thumbnailSide); side.priority = .required - 1; return side }(),
             quoteLabels.topAnchor.constraint(equalTo: quote.topAnchor, constant: 6),
             quoteLabels.bottomAnchor.constraint(equalTo: quote.bottomAnchor, constant: -6)
         ])
@@ -1309,7 +1331,10 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             let limit = min(230, maximumTextWidth - 21)
             let bodyWidth = (reply.body as NSString).size(withAttributes: [.font: quoteBody.font!]).width
             let authorWidth = (reply.author as NSString).size(withAttributes: [.font: quoteAuthor.font!]).width
-            quoteWidth = min(limit, max(bodyWidth, authorWidth)) + 45
+            // A still widens the quote by its own slot only; the bubble's other width rules are unchanged.
+            let still: CGFloat = reply.thumbnail == nil ? 0 : TimelineReply.thumbnailSide + 4
+            // Rounded up: a label given exactly its fractional text width truncates ("Pho…") when the quote is the widest part.
+            quoteWidth = ceil(min(limit, max(bodyWidth, authorWidth))) + 45 + still
         }
         var width = min(maximumTextWidth + 24, max(quoteWidth, max(metadataWidth, max(44, ceil(measured.width) + 25))))
         if let attachment = message?.attachment {
@@ -1383,6 +1408,32 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             mediaSpinner.stopAnimating()
             media.image = image ?? UIImage(systemName: attachment.isVideo ? "video" : "photo")
             media.contentMode = image == nil ? .center : .scaleAspectFill
+        }
+    }
+
+    /// The slot is kept whenever the quote is of a photo or video, so the bubble's width never changes as its file
+    /// downloads, an earlier page loads or the still decodes. Until the still shows (or if it never does) the slot
+    /// holds the kind's symbol on a quiet fill, like the attachment preview itself.
+    private func configureQuoteThumbnail(_ still: TimelineAttachment?) {
+        quoteThumbnail.isHidden = still == nil
+        quoteLabelsTrailing.isActive = still == nil
+        quoteLabelsBeforeThumbnail.isActive = still != nil
+        quoteThumbnail.image = nil
+        guard let still else { return }
+        let placeholder = UIImage(systemName: still.isVideo ? "video" : "photo",
+                                  withConfiguration: UIImage.SymbolConfiguration(textStyle: .footnote))
+        func show(_ image: UIImage?) {
+            quoteThumbnail.image = image ?? placeholder
+            quoteThumbnail.contentMode = image == nil ? .center : .scaleAspectFill
+        }
+        guard let url = still.localURL else { show(nil); return }
+        if let hit = AttachmentThumbnails.cached(for: url) { show(hit); return }
+        show(nil)
+        let id = messageID
+        Task { [weak self] in
+            let image = await AttachmentThumbnails.image(for: url, mediaType: still.mediaType)
+            guard let self, messageID == id, message?.reply?.thumbnail?.localURL == url else { return }
+            show(image)
         }
     }
 
@@ -1650,6 +1701,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         quote.isHidden = message.reply == nil
         quoteAuthor.text = message.reply?.author
         quoteBody.text = message.reply?.body
+        configureQuoteThumbnail(message.reply?.thumbnail)
         NSLayoutConstraint.deactivate([plainTextTop, replyTextTop, plainAttachmentTop, replyAttachmentTop])
         (message.reply == nil ? plainAttachmentTop : replyAttachmentTop)?.isActive = true
         // Under a preview the caption keeps its own inset; under a quote alone the text tucks up as before.
@@ -1674,6 +1726,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         quoteBar.backgroundColor = message.isOutgoing ? theme.bubbleText : theme.tint
         quoteAuthor.textColor = text
         quoteBody.textColor = text
+        quoteThumbnail.tintColor = meta
+        quoteThumbnail.backgroundColor = quote.backgroundColor
         time.textColor = meta
         star.tintColor = meta
         replyIndicator.tintColor = theme.tint
@@ -1684,7 +1738,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         textView.font = message.showsPlaceholder ? UIFont(descriptor: bodyDescriptor.withSymbolicTraits(.traitItalic) ?? bodyDescriptor, size: 0) : .preferredFont(forTextStyle: .body)
         textView.textColor = message.showsPlaceholder ? meta : text
         configureAttachment(message.showsPlaceholder ? nil : message.attachment, isOutgoing: message.isOutgoing, textColor: text)
-        var descriptions = ["\(message.isOutgoing ? "You" : (message.author ?? "Contact")): \(shown)"]
+        let speaker = message.isOutgoing ? "You" : (message.author ?? "Contact")
+        var descriptions = [shown.isEmpty ? speaker : "\(speaker): \(shown)"]
         if message.unreadable != nil { descriptions.append("not readable on this device") }
         if message.isEdited { descriptions.append("edited") }
         if !message.showsPlaceholder, let attachment = message.attachment { descriptions.append("\(attachment.kindLabel) \(attachment.name)" + (attachment.localURL == nil ? ", " + attachment.downloadAccessibility : "")) }
@@ -1700,19 +1755,27 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         for reaction in message.reactions {
             reactionRow.addArrangedSubview(ReactionPill(reaction, onTap: message.canReact ? { [weak self] in self?.reactionAction(reaction.emoji) } : nil))
         }
-        textView.accessibilityLabel = descriptions.joined(separator: ", ")
-        textView.accessibilityCustomActions = actions().map { action in UIAccessibilityCustomAction(name: action.title) { _ in action.perform(); return true } }
+        var customActions = actions().map { action in UIAccessibilityCustomAction(name: action.title) { _ in action.perform(); return true } }
         if let url = message.attachment?.localURL {
-            textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: "Open \(message.attachment?.kindLabel.lowercased() ?? "file")") { [weak self] _ in self?.openAttachment(url); return true })
+            customActions.append(UIAccessibilityCustomAction(name: "Open \(message.attachment?.kindLabel.lowercased() ?? "file")") { [weak self] _ in self?.openAttachment(url); return true })
         } else if !message.showsPlaceholder, let attachment = message.attachment, attachment.download.canRequest {
-            textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: "Download \(attachment.kindLabel.lowercased())") { [weak self] _ in self?.download(); return true })
+            customActions.append(UIAccessibilityCustomAction(name: "Download \(attachment.kindLabel.lowercased())") { [weak self] _ in self?.download(); return true })
         }
         if message.canReact {
             let selected = Set(message.reactions.filter(\.isSelected).map(\.emoji))
             for emoji in TimelineReaction.choices {
                 let actionName = "\(selected.contains(emoji) ? "Remove" : "Add") \(TimelineReaction.name(for: emoji)) reaction"
-                textView.accessibilityCustomActions?.append(UIAccessibilityCustomAction(name: actionName) { _ in reaction(emoji); return true })
+                customActions.append(UIAccessibilityCustomAction(name: actionName) { _ in reaction(emoji); return true })
             }
+        }
+        // The text view speaks for the message; a file with no caption hides it, so the file itself speaks instead
+        // (otherwise VoiceOver could not reach the message at all).
+        let speaksForMessage: UIView = textView.isHidden ? attachmentArea : textView
+        attachmentArea.isAccessibilityElement = textView.isHidden
+        attachmentArea.accessibilityTraits = textView.isHidden && showsPreview ? .image : .none
+        for view in [textView, attachmentArea] as [UIView] {
+            view.accessibilityLabel = view === speaksForMessage ? descriptions.joined(separator: ", ") : nil
+            view.accessibilityCustomActions = view === speaksForMessage ? customActions : nil
         }
         star.alpha = message.isStarred ? 1 : 0
         time.text = [message.isEdited ? "Edited" : nil, message.securityNotice, message.sentAt?.formatted(date: .omitted, time: .shortened)].compactMap { $0 }.joined(separator: " · ")

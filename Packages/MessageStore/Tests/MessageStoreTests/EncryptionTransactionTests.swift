@@ -127,3 +127,23 @@ private func encryptedStoreURL() throws -> URL {
     ])
     #expect(try await store.pendingEncryptedIncomingSummaries(accountID: "nobody").isEmpty)
 }
+
+@Test func sealingCanClearAReplyTheSealedContentLeftOut() async throws {
+    let url = try encryptedStoreURL()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
+    try await store.upsertChat(accountID: "a", chatID: "b", title: "B")
+    let reply = MessageReply(messageID: "earlier", senderID: "a", body: "Ten it is", wireID: "earlier")
+    for id in ["kept", "dropped"] {
+        try await store.enqueueOutgoing(StoredMessage(id: id, accountID: "a", chatID: "b", senderID: "a", body: "ok", isOutgoing: true,
+                                                      reply: reply, encryptionProfile: "pending"))
+    }
+    try await store.saveEncryptionState(accountID: "a", expectedRevision: nil, data: Data([1]))
+    try await store.sealQueuedOutgoing(accountID: "a", messageID: "kept", profile: "modern", expectedRevision: 1, state: Data([2]), wire: Data([1]))
+    try await store.sealQueuedOutgoing(accountID: "a", messageID: "dropped", profile: "legacy", expectedRevision: 2, state: Data([3]), wire: Data([2]), clearReply: true)
+    let messages = try await store.messages(accountID: "a", chatID: "b")
+    #expect(messages.first { $0.id == "kept" }?.reply == reply)
+    #expect(messages.first { $0.id == "dropped" }?.reply == nil)
+    #expect(messages.first { $0.id == "dropped" }?.encryptionProfile == "legacy")
+}

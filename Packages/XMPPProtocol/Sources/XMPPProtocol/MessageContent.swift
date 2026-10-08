@@ -10,7 +10,8 @@ public struct MessageContent: Sendable, Equatable {
         /// Wire identity of the quoted message. Nil emits only the visible quote.
         public let id: String?
         public let to: String
-        /// The exact fallback text prefixed to the body. Callers own its format.
+        /// The exact fallback text prefixed to the body. Callers own its format. Empty sends the reference alone,
+        /// with no fallback: the form a file message takes, whose body must stay exactly its link.
         public let quote: String
         public init(id: String?, to: String, quote: String) { self.id = id; self.to = to; self.quote = quote }
     }
@@ -81,15 +82,16 @@ public struct MessageContent: Sendable, Equatable {
         }
         if let correction { xml += "<replace xmlns='urn:xmpp:message-correct:0' id='\(xmlEscaped(correction))'/>" }
         if let reply {
+            // A reply with nothing visible must at least name its target.
             guard reply.id.map(Self.validIdentifier) ?? true, Self.validAddress(reply.to),
-                  !reply.quote.isEmpty, Self.validXMLText(reply.quote) else { throw XMPPClientError.invalidConfiguration }
+                  !reply.quote.isEmpty || reply.id != nil, Self.validXMLText(reply.quote) else { throw XMPPClientError.invalidConfiguration }
         }
         if !body.isEmpty || reply != nil || fileSharing != nil {
             xml += "<body xmlns='jabber:client'>\(xmlEscaped(text + (fileFallback ?? "")))</body>"
         }
         if let reply, let id = reply.id {
             xml += "<reply xmlns='urn:xmpp:reply:0' to='\(xmlEscaped(reply.to))' id='\(xmlEscaped(id))'/>"
-            xml += "<fallback xmlns='urn:xmpp:fallback:0' for='urn:xmpp:reply:0'><body start='0' end='\(reply.quote.unicodeScalars.count)'/></fallback>"
+            if !reply.quote.isEmpty { xml += "<fallback xmlns='urn:xmpp:fallback:0' for='urn:xmpp:reply:0'><body start='0' end='\(reply.quote.unicodeScalars.count)'/></fallback>" }
         }
         if let fileSharing, let fallback = fileFallback {
             xml += try fileSharing.xml()

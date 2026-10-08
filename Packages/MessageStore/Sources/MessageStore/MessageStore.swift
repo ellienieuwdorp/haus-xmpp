@@ -1200,7 +1200,7 @@ public actor MessageStore {
     /// Converts an already durable queued intention into exact ciphertext and commits the ratchet
     /// advancement in the SAME transaction. Never overwrites an existing encrypted attempt.
     public func sealQueuedOutgoing(accountID: String, messageID: String, profile: String,
-                                   expectedRevision: Int, state: Data, wire: Data, authenticateWireID: Bool = true) throws {
+                                   expectedRevision: Int, state: Data, wire: Data, authenticateWireID: Bool = true, clearReply: Bool = false) throws {
         guard !profile.isEmpty, !wire.isEmpty, wire.count <= 1_048_576 else { throw MessageStoreError.invalidValue }
         try connection.transaction {
             guard try encryptedOutgoing(accountID: accountID, messageID: messageID) == nil,
@@ -1208,6 +1208,8 @@ public actor MessageStore {
             try writeEncryptionState(accountID: accountID, expectedRevision: expectedRevision, data: state)
             try connection.execute("INSERT INTO encrypted_outbox(account_id,message_id,wire) VALUES(?,?,?)", [.text(accountID), .text(messageID), .blob(wire)])
             try connection.execute("UPDATE messages SET encryption_profile=?,wire_id=?,wire_id_authenticated=? WHERE account_id=? AND id=?", [.text(profile), authenticateWireID ? .text(messageID) : .null, .integer(profile == "modern" && authenticateWireID ? 1 : 0), .text(accountID), .text(messageID)])
+            // The sealed content left the reply out; the stored message must not claim one.
+            if clearReply { try connection.execute("UPDATE messages SET reply_json=NULL WHERE account_id=? AND id=?", [.text(accountID), .text(messageID)]) }
         }
     }
 

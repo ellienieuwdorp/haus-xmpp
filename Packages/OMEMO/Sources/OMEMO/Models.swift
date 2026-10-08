@@ -150,6 +150,9 @@ public struct EncryptionPreparation: Sendable {
     public let messageIDs: Set<String>
     public let blockedChats: [String: String]
     let failure: OMEMOError?
+    /// Files queued as a reply that were sealed without it, because their chat fell back to legacy OMEMO first.
+    /// Their stored quote is gone too; the caller tells the user, whose composer no longer holds the reply.
+    public var droppedReplies: Set<String> = []
 }
 
 /// What the transport must write for one claimed update, re-validated against current trust.

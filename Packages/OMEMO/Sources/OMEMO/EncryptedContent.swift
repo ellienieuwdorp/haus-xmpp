@@ -18,6 +18,10 @@ struct EncryptedContent: Equatable {
     var timestamp: Date? = nil
     var fileSharing: MessageContent.FileSharing? = nil
 
+    /// Whether a file message sealed for this profile can carry `reply`: only as a bare reference to a wire ID,
+    /// inside a modern envelope. Otherwise `encode` sends the file without it.
+    static func fileCarries(_ reply: MessageReply, modern: Bool) -> Bool { modern && reply.wireID != nil }
+
     /// `correction` rides inside a modern envelope; for legacy the caller puts it on the outer stanza.
     static func encode(body: String, reply: MessageReply?, sender: String, recipient: String, modern: Bool, originID: String? = nil,
                        fileSharing: MessageContent.FileSharing? = nil, correction: String? = nil) throws -> Data {
@@ -30,6 +34,21 @@ struct EncryptedContent: Equatable {
                   reply.body.utf8.count <= 16_384, MessageContent.validXMLText(reply.body),
                   reply.wireID.map({ !$0.isEmpty && $0.utf8.count <= 1024 && MessageContent.validXMLText($0) }) ?? true
             else { throw OMEMOError.invalidContent }
+        }
+        // A file's body must stay exactly its link (Conversations shows the file only then), so a reply on a file
+        // carries no quote: modern sends the reference alone, inside the envelope. Legacy has nowhere private to put
+        // a reference, and a reply without a wire ID has no reference to send. The composer queues a file reply only
+        // for a modern chat and an own sent message; should the chat have fallen back to legacy since, the file goes
+        // without the reply rather than leaking the reference in clear or breaking the link (the sealer then clears
+        // the stored reply too, so the sender's bubble shows what the peer gets).
+        if fileSharing != nil, let fileReply = reply {
+            guard fileCarries(fileReply, modern: modern), let target = fileReply.wireID else {
+                return try encode(body: body, reply: nil, sender: sender, recipient: recipient, modern: modern,
+                                  originID: originID, fileSharing: fileSharing, correction: correction)
+            }
+            let content = MessageContent(body: body, reply: .init(id: target, to: fileReply.senderID, quote: ""),
+                                         correction: correction, originID: originID, fileSharing: fileSharing)
+            return try wrap(content, sender: sender, recipient: recipient)
         }
         let quote = reply.map { "> \($0.senderID)\n" + $0.body.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").split(separator: "\n", omittingEmptySubsequences: false).map { "> \($0)\n" }.joined() + "\n" } ?? ""
         if !modern {
