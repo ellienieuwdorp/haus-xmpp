@@ -1,12 +1,12 @@
 import XCTest
 
 /// The chat list's trailing swipe actions: Pin, and Mute with its duration dialog, a quiet row glyph and the details
-/// row that ends it. Mute is local. The demo seeds Maya as muted always.
+/// row that ends it. Mute is local. The demo seeds Maya as muted always; `-demo-typing` leaves Alex typing.
 final class ChatListSwipeUITests: XCTestCase {
     @MainActor func testSwipePinAndMuteThenUnmuteFromDetails() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["-demo"]
+        app.launchArguments = ["-demo", "-demo-typing"]
         app.isolateMessageStorage()
         app.launch()
 
@@ -14,6 +14,13 @@ final class ChatListSwipeUITests: XCTestCase {
         XCTAssertTrue(alex.waitForExistence(timeout: 15))
         XCTAssertEqual(maya.value as? String, "Muted", "The demo's muted sample")
         let mute = app.buttons["Mute"]
+
+        XCTContext.runActivity(named: "A typing peer's row says so in place of the preview") { _ in
+            XCTAssertTrue(alex.staticTexts["typing…"].exists)
+            // The hidden preview keeps the row's height: Alex's row matches Maya's.
+            XCTAssertEqual(alex.frame.height, maya.frame.height, accuracy: 1)
+            capture(app, "Typing row")
+        }
 
         XCTContext.runActivity(named: "Pin from the trailing swipe") { _ in
             // Every test starts from its own store, where no sample chat is pinned or muted.
