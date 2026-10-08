@@ -147,14 +147,33 @@ final class AttachmentKeyboardResponder: UIView {
         host = nil
     }
 
+    /// Builds and lays out the panel once the chat is on screen, so the first "+" only presents it. Building the
+    /// glass chips and the rail, and their first layout, measured 60-100 ms of main-thread time in a Debug build
+    /// when they ran between the tap and the start of the keyboard animation. Once a panel has asked for photo
+    /// access (in any earlier run), the first chat after launch also reads the recent photos ahead, off the main
+    /// thread, when the user allowed it.
+    func warmUp() {
+        guard panel == nil, let window = host?.view.window else { return }
+        RecentPhotosLibrary.shared.prepare()
+        let panel = makePanel(in: window)
+        panel.frame = CGRect(origin: .zero, size: CGSize(width: window.bounds.width, height: KeyboardHeightCache.height(in: window)))
+        panel.layoutIfNeeded()
+    }
+
+    private func makePanel(in window: UIWindow) -> AttachmentKeyboardView {
+        let panel = self.panel ?? AttachmentKeyboardView(keyboard: self)
+        self.panel = panel
+        responder.panel = panel
+        panel.prepare(height: KeyboardHeightCache.height(in: window), compact: window.traitCollection.verticalSizeClass == .compact,
+                      safeArea: window.safeAreaInsets)
+        return panel
+    }
+
     func open(actions: AttachmentPanelActions, selection: [String], trayCount: Int) {
         self.actions = actions
         guard !isPresented else { update(selection: selection, trayCount: trayCount); return }
         guard let window = host?.view.window else { actions.dismissed(); return }
-        let panel = self.panel ?? AttachmentKeyboardView(keyboard: self)
-        self.panel = panel
-        responder.panel = panel
-        panel.prepare(height: KeyboardHeightCache.height(in: window), compact: window.traitCollection.verticalSizeClass == .compact)
+        _ = makePanel(in: window)
         update(selection: selection, trayCount: trayCount)
         if !responder.becomeFirstResponder() { actions.dismissed() }
     }
@@ -283,6 +302,9 @@ final class AttachmentKeyboardView: UIInputView {
     private var top: NSLayoutConstraint!
     private var afterBanner: NSLayoutConstraint!
     private var chipHeight: NSLayoutConstraint!
+    /// The parts' side and bottom insets: the safe area, never the view's layout margins (see `followSafeArea`).
+    private var insetConstraints: [(NSLayoutConstraint, (UIEdgeInsets) -> CGFloat)] = []
+    private var insets: UIEdgeInsets?
     private var compact = false
 
     init(keyboard: AttachmentKeyboard) {
@@ -307,30 +329,65 @@ final class AttachmentKeyboardView: UIInputView {
         chipHeight = chips.heightAnchor.constraint(equalToConstant: 122)
         limitedRow.isHidden = true
         limitedRow.collapsed = true
-        NSLayoutConstraint.activate([
-            height, top, afterBanner, chipHeight,
-            limitedRow.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 16),
-            limitedRow.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -16),
-            rail.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor),
-            rail.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor),
-            chips.topAnchor.constraint(equalTo: rail.bottomAnchor),
-            chips.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor),
-            chips.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor),
-            chips.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor),
-        ])
+        // The safe area is physical (left, right), so the sides pin to left and right; the parts lay out their own
+        // content in the reading direction.
+        insetConstraints = [
+            (limitedRow.leftAnchor.constraint(equalTo: leftAnchor), { $0.left + 16 }),
+            (rightAnchor.constraint(equalTo: limitedRow.rightAnchor), { $0.right + 16 }),
+            (rail.leftAnchor.constraint(equalTo: leftAnchor), { $0.left }),
+            (rightAnchor.constraint(equalTo: rail.rightAnchor), { $0.right }),
+            (chips.leftAnchor.constraint(equalTo: leftAnchor), { $0.left }),
+            (rightAnchor.constraint(equalTo: chips.rightAnchor), { $0.right }),
+            (bottomAnchor.constraint(equalTo: chips.bottomAnchor), { $0.bottom }),
+        ]
+        NSLayoutConstraint.activate([height, top, afterBanner, chipHeight, chips.topAnchor.constraint(equalTo: rail.bottomAnchor)]
+                                    + insetConstraints.map(\.0))
+        followSafeArea(.zero)
+        // A rail that starts with an earlier chat's tiles also starts with its access row, so the warm-up lays out
+        // the rail at the height it is presented at.
+        if RecentPhotosLibrary.shared.isLimited { showLimitedRow(true) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func prepare(height value: CGFloat, compact: Bool) {
+    /// `safeArea` is the window's; a presented panel follows its own safe area instead.
+    func prepare(height value: CGFloat, compact: Bool, safeArea: UIEdgeInsets) {
+        if window == nil { followSafeArea(safeArea) }
         height.constant = value
         self.compact = compact
         chips.compact = compact
         applyMetrics()
+        // A panel laid out before it was presented (the warm-up) would otherwise be presented at that size when the
+        // keyboard has since been measured taller.
+        if bounds.height != value {
+            frame.size.height = value
+            invalidateIntrinsicContentSize()
+            setNeedsLayout()
+        }
     }
 
     func update(selection: [String], trayCount: Int) {
         rail.update(selection: selection, trayCount: trayCount)
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        if window != nil { followSafeArea(safeAreaInsets) }
+    }
+
+    /// The parts sit inside the safe area through constraint constants, which `prepare` can set from the window's
+    /// safe area before the panel has one of its own: a warm-up laid out without the home indicator inset made the
+    /// rail 34 pt taller than it is once presented, so the tiles were sized and drawn again on the tap. Layout
+    /// margins cannot carry this: once presented, the panel's side margins read 20 pt whatever was set (iOS 26.5),
+    /// which pulled the rail in from the screen edges.
+    private func followSafeArea(_ safeArea: UIEdgeInsets) {
+        let value = UIEdgeInsets(top: 0, left: safeArea.left, bottom: safeArea.bottom, right: safeArea.right)
+        guard value != insets else { return }
+        insets = value
+        for (constraint, constant) in insetConstraints { constraint.constant = constant(value) }
+        // Outside a window a constant change does not mark the panel for layout, and the warm-up's layout pass
+        // would then keep the old insets.
+        setNeedsLayout()
     }
 
     private func showLimitedRow(_ limited: Bool) {
@@ -425,18 +482,152 @@ private final class LimitedAccessRow: UIView {
 
 // MARK: - Recent photos
 
+/// Reads the library off the main thread. The first PhotoKit call in a process connects to photolibraryd
+/// (measured 60 ms in the simulator, more with a large library and its sorted fetch); on the main thread that ran
+/// between the tap and the start of the keyboard animation.
+private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, @unchecked Sendable {
+    /// `PHFetchResult` is documented thread-safe; the box carries it back to the main actor.
+    struct Batch: @unchecked Sendable { let assets: PHFetchResult<PHAsset> }
+    private let queue = DispatchQueue(label: "haus.xmpp.ios.recentPhotos", qos: .userInitiated)
+    private let lock = NSLock()
+    private var generation = 0
+    /// Touched only on `queue`, and in deinit, which cannot run while a queued block still holds `self`.
+    private var observing = false
+    /// The library changed; called on the main actor.
+    @MainActor var onChange: () -> Void = {}
+
+    deinit { if observing { PHPhotoLibrary.shared().unregisterChangeObserver(self) } }
+
+    /// Outcomes of fetches started before this call are dropped.
+    func invalidate() { lock.withLock { generation += 1 } }
+
+    /// The photo access the user gave, read on the queue: it is a PhotoKit call too, and never prompts.
+    func status(_ completion: @escaping @MainActor (PHAuthorizationStatus) -> Void) {
+        queue.async {
+            let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            DispatchQueue.main.async { MainActor.assumeIsolated { completion(status) } }
+        }
+    }
+
+    /// The newest `limit` photos and videos of the user library; the change observer is registered on first use.
+    func fetch(limit: Int, completion: @escaping @MainActor (Batch) -> Void) {
+        let mine = lock.withLock { generation += 1; return generation }
+        queue.async { [self] in
+            if !observing {
+                PHPhotoLibrary.shared().register(self)
+                observing = true
+            }
+            let options = PHFetchOptions()
+            options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+            options.predicate = NSPredicate(format: "mediaType == %d || mediaType == %d", PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
+            options.fetchLimit = limit
+            let assets: PHFetchResult<PHAsset>
+            if let library = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .smartAlbumUserLibrary, options: nil).firstObject {
+                assets = PHAsset.fetchAssets(in: library, options: options)
+            } else {
+                assets = PHAsset.fetchAssets(with: options)
+            }
+            let batch = Batch(assets: assets)
+            DispatchQueue.main.async {
+                guard self.lock.withLock({ self.generation }) == mine else { return }
+                MainActor.assumeIsolated { completion(batch) }
+            }
+        }
+    }
+
+    nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
+        Task { @MainActor in self.onChange() }
+    }
+}
+
+/// The recent photos every chat's panel shows, read once per process. Each chat used to build its own source, so
+/// every chat paid the PhotoKit connection, the observer registration and the first fetch again on its first "+".
+/// The fetch result stays current through the change observer; a panel opening under a different access (limited
+/// to full, or a new grant) reads again. The panel asks for access on its first open; until a panel has opened
+/// once on this install, nothing here touches PhotoKit, so a warm-up before that does no photo work at all.
+@MainActor private final class RecentPhotosLibrary {
+    static let shared = RecentPhotosLibrary()
+    static let limit = 96
+    /// Shared, so a chat opened later does not start with an empty image cache. Made with the first tile.
+    lazy var imageManager = PHCachingImageManager()
+    private let source = RecentPhotosSource()
+    /// The last read and the access it was made under; `nil` until the first read lands, or after a denial.
+    private(set) var assets: PHFetchResult<PHAsset>?
+    private var readUnder: PHAuthorizationStatus?
+    /// The read on hand was made under limited access.
+    var isLimited: Bool { assets != nil && readUnder == .limited }
+    private let rails = NSHashTable<RecentPhotosRail>.weakObjects()
+
+    private init() {
+        source.onChange = { [weak self] in self?.libraryChanged() }
+    }
+
+    func attach(_ rail: RecentPhotosRail) { rails.add(rail) }
+
+    /// Set when a panel first opens, which is where access is asked; kept across launches with the install.
+    private static let askedKey = "attachmentKeyboard.photosAsked"
+
+    static func panelOpened() {
+        if !UserDefaults.standard.bool(forKey: askedKey) { UserDefaults.standard.set(true, forKey: askedKey) }
+    }
+
+    /// After a chat appears: reads ahead when access was given earlier, so the first "+" finds the tiles. It
+    /// never asks, does nothing before a panel has asked, and a panel that opened meanwhile has the last word.
+    func prepare() {
+        guard readUnder == nil, UserDefaults.standard.bool(forKey: Self.askedKey) else { return }
+        source.status { [weak self] status in
+            guard let self, readUnder == nil, status == .authorized || status == .limited else { return }
+            read(under: status)
+        }
+    }
+
+    /// A panel is opening, or a warm-up learned the access. A read under the same access is kept (the observer
+    /// keeps it current) or still on its way; otherwise the library is read again.
+    func refresh(_ status: PHAuthorizationStatus) {
+        guard status == .authorized || status == .limited else { revoke(); return }
+        guard status != readUnder else { return }
+        read(under: status)
+    }
+
+    /// Access is gone: drop the read and any read still on its way.
+    func revoke() {
+        source.invalidate()
+        assets = nil
+        readUnder = nil
+    }
+
+    private func libraryChanged() {
+        // Only a library this process has read has an observer; the access may have changed with it.
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else {
+            revoke()
+            for rail in rails.allObjects { rail.accessChanged() }
+            return
+        }
+        read(under: status)
+    }
+
+    private func read(under status: PHAuthorizationStatus) {
+        readUnder = status
+        source.fetch(limit: Self.limit) { [weak self] batch in
+            guard let self else { return }
+            assets = batch.assets
+            for rail in rails.allObjects { rail.show(batch.assets, limited: status == .limited) }
+        }
+    }
+}
+
 /// Up to 96 of the newest photos and videos, square tiles in one sideways row. Tapping adds to the tray in tap
 /// order; tapping a selected tile takes it back out.
-private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UICollectionViewDelegate, PHPhotoLibraryChangeObserver {
+private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UICollectionViewDelegate {
     private unowned let keyboard: AttachmentKeyboard
     private let layout = UICollectionViewFlowLayout()
     private let collection: UICollectionView
-    private let imageManager = PHCachingImageManager()
+    private let library = RecentPhotosLibrary.shared
     private var assets: PHFetchResult<PHAsset>?
     private var selection: [String] = []
     private var trayCount = 0
     private var loading: Set<String> = []
-    private var observing = false
     private var itemSide: CGFloat = 0
     var onAccessChanged: (Bool) -> Void = { _ in }
 
@@ -447,6 +638,9 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         layout.minimumInteritemSpacing = 12
         collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
         super.init(frame: .zero)
+        // A library read by an earlier chat fills the rail during the warm-up's layout, not on the tap.
+        assets = library.assets
+        library.attach(self)
         collection.backgroundColor = .clear
         collection.showsHorizontalScrollIndicator = false
         collection.alwaysBounceHorizontal = true
@@ -454,35 +648,35 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         collection.delegate = self
         collection.register(RecentPhotoCell.self, forCellWithReuseIdentifier: "photo")
         collection.accessibilityIdentifier = "recentPhotos"
-        collection.frame = bounds
-        collection.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         addSubview(collection)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    isolated deinit {
-        if observing { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
-    }
-
     override func layoutSubviews() {
         super.layoutSubviews()
         let height = bounds.height
-        guard height > 0 else { return }
+        guard height > 0 else { collection.frame = bounds; return }
         // Two rows only once the rail is tall enough (iPad); a phone keeps one row of full-height squares.
         let side = height > 250 ? floor((height - 12) / 2) : height
         let inset: CGFloat = bounds.width >= 430 ? 20 : 16
-        if abs(side - itemSide) > 0.5 || layout.sectionInset.left != inset {
+        let resized = abs(side - itemSide) > 0.5 || layout.sectionInset.left != inset
+        if resized {
             itemSide = side
             layout.itemSize = CGSize(width: side, height: side)
             layout.sectionInset = UIEdgeInsets(top: 0, left: inset, bottom: 0, right: inset)
             layout.invalidateLayout()
-            collection.reloadData()
         }
+        // The tiles take their size before the collection takes the rail's: the other way round (autoresizing), a
+        // rail shortened by the limited-access row briefly held tiles taller than itself and UIKit logged an
+        // invalid flow layout size.
+        if collection.frame != bounds { collection.frame = bounds }
+        if resized { collection.reloadData() }
     }
 
     /// Asked for on first open only, never at launch.
     func present() {
+        RecentPhotosLibrary.panelOpened()
         alpha = 0
         UIView.animate(withDuration: 0.3) { self.alpha = 1 }
         if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined {
@@ -499,30 +693,46 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         onAccessChanged(status == .limited)
         guard status == .authorized || status == .limited else {
-            assets = nil
-            collection.reloadData()
-            showAccessPrompt()
+            library.revoke()
+            accessChanged()
             return
         }
-        if !observing {
-            PHPhotoLibrary.shared().register(self)
-            observing = true
-        }
-        let options = PHFetchOptions()
-        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        options.predicate = NSPredicate(format: "mediaType == %d || mediaType == %d", PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
-        options.fetchLimit = 96
-        if let library = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .smartAlbumUserLibrary, options: nil).firstObject {
-            assets = PHAsset.fetchAssets(in: library, options: options)
+        library.refresh(status)
+        // A read this rail has not shown yet goes up now; with none yet, the rail stays blank until one lands.
+        if let latest = library.assets, latest !== assets {
+            show(latest, limited: status == .limited)
         } else {
-            assets = PHAsset.fetchAssets(with: options)
+            collection.backgroundView = assets == nil ? nil : emptyMessage()
         }
-        collection.reloadData()
-        collection.backgroundView = (assets?.count ?? 0) == 0 ? message("No recent photos", button: nil) : nil
     }
 
-    nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
-        Task { @MainActor [weak self] in self?.reload() }
+    /// A read landed (this panel's, another chat's, or a library change).
+    func show(_ latest: PHFetchResult<PHAsset>, limited: Bool) {
+        onAccessChanged(limited)
+        assets = latest
+        collection.reloadData()
+        collection.backgroundView = emptyMessage()
+        // A panel that is not up makes its first cells now, not when "+" presents it. The read can turn the
+        // limited-access row on, which shortens the rail, so the whole panel lays out again first and the cells are
+        // made at the size they are presented at, not sized and reloaded again on the tap. Outside a window the
+        // row's constraint changes do not mark the panel for layout, so it is marked here.
+        if window == nil {
+            superview?.setNeedsLayout()
+            superview?.layoutIfNeeded()
+            collection.layoutIfNeeded()
+        }
+    }
+
+    /// Access was denied or taken away.
+    func accessChanged() {
+        onAccessChanged(false)
+        assets = nil
+        collection.reloadData()
+        showAccessPrompt()
+    }
+
+    private func emptyMessage() -> UIView? {
+        (assets?.count ?? 0) == 0 ? message("No recent photos", button: nil) : nil
     }
 
     func update(selection: [String], trayCount: Int) {
@@ -590,7 +800,7 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "photo", for: indexPath) as! RecentPhotoCell
         guard let asset = assets?.object(at: indexPath.item) else { return cell }
-        cell.show(asset: asset, manager: imageManager, side: itemSide, scale: traitCollection.displayScale)
+        cell.show(asset: asset, manager: library.imageManager, side: itemSide, scale: traitCollection.displayScale)
         configureState(cell, asset: asset, index: indexPath.item)
         return cell
     }
@@ -807,7 +1017,10 @@ private final class FormatChipRow: UIView {
         return column
     }
 
-    /// Each chip springs from half size, a third of the duration after the one before it.
+    /// Each chip springs from half size, a third of the duration after the one before it. The chips hide at once,
+    /// so the panel never shows them at full size, but the spring starts on the next turn of the run loop: started
+    /// while UIKit presents the panel, it put about 7 ms (Release, simulator) between the "+" and the start of the
+    /// panel's slide, on every open.
     func animateIn() {
         let reduceMotion = UIAccessibility.isReduceMotionEnabled
         for item in items {
@@ -823,6 +1036,6 @@ private final class FormatChipRow: UIView {
                 item.transform = .identity
             }, delayFactor: reduceMotion ? 0 : CGFloat(index) / CGFloat(items.count))
         }
-        animator.startAnimation()
+        DispatchQueue.main.async { animator.startAnimation() }
     }
 }

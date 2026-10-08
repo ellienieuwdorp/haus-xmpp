@@ -125,6 +125,56 @@ final class ReplyUITests: XCTestCase {
         XCTAssertTrue(app.buttons["removeAttachment"].waitForExistence(timeout: 10))
     }
 
+    /// The whole message row starts a reply, so a short sent message hugging the trailing edge can be swiped from the
+    /// left half of the screen. A day header is not a message: from there, as from the leading edge, the swipe goes back.
+    @MainActor func testGutterSwipeRepliesAndDayHeaderAndEdgeGoBack() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo"]
+        app.isolateMessageStorage()
+        app.launch()
+        let alex = app.staticTexts["Alex"]
+        XCTAssertTrue(alex.waitForExistence(timeout: 15))
+        alex.tap()
+        let first = app.textViews.containing(NSPredicate(format: "value BEGINSWITH %@", "Found a quiet spot")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        // The day header sits just above the first bubble, in the same cell. The demo messages are all sent on one day.
+        let day = Date(timeIntervalSince1970: 1_789_380_000).formatted(date: .abbreviated, time: .omitted)
+        let dayHeader = app.staticTexts.matching(NSPredicate(format: "label == %@", day)).firstMatch
+        XCTAssertTrue(dayHeader.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(dayHeader.frame.maxY, first.frame.minY, "the day header is above the first bubble")
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        // Past half the width, so the back swipe completes at XCTest's drag speed.
+        let header = origin.withOffset(CGVector(dx: app.frame.width * 0.15, dy: dayHeader.frame.midY))
+        header.press(forDuration: 0.05, thenDragTo: header.withOffset(CGVector(dx: app.frame.width * 0.75, dy: 0)))
+        XCTAssertTrue(app.buttons["newConversation"].waitForExistence(timeout: 5), "a day header gives the swipe back")
+        XCTAssertFalse(app.buttons["cancelReply"].exists)
+        alex.tap()
+
+        let short = app.textViews.containing(NSPredicate(format: "value == %@", "See you there!")).firstMatch
+        XCTAssertTrue(short.waitForExistence(timeout: 5))
+        let field = app.textFields["messageComposer"]
+        let composer = field.exists ? field : app.textViews["messageComposer"]
+        composer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(short.frame.minX, app.frame.width / 2, "a short sent message sits on the trailing half")
+        let gutter = origin.withOffset(CGVector(dx: app.frame.width * 0.25, dy: short.frame.midY))
+        gutter.press(forDuration: 0.05, thenDragTo: gutter.withOffset(CGVector(dx: 18, dy: 0)))
+        XCTAssertFalse(app.buttons["cancelReply"].exists, "Small drags must not trigger reply")
+        gutter.press(forDuration: 0.05, thenDragTo: gutter.withOffset(CGVector(dx: 130, dy: 0)))
+        XCTAssertTrue(app.buttons["cancelReply"].waitForExistence(timeout: 4), "a swipe in the gutter replies")
+        XCTAssertTrue(app.keyboards.firstMatch.exists, "the reply swipe keeps the keyboard up")
+        capture(app, "Reply from the gutter")
+        app.buttons["cancelReply"].tap()
+        XCTAssertTrue(app.buttons["cancelReply"].waitForNonExistence(timeout: 2))
+
+        // The leading edge stays the system's swipe back, on a message row too.
+        let edge = origin.withOffset(CGVector(dx: 2, dy: short.frame.midY))
+        edge.press(forDuration: 0.05, thenDragTo: edge.withOffset(CGVector(dx: app.frame.width * 0.8, dy: 0)))
+        XCTAssertTrue(app.buttons["newConversation"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["cancelReply"].exists)
+    }
+
     @MainActor private func capture(_ app: XCUIApplication, _ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name
