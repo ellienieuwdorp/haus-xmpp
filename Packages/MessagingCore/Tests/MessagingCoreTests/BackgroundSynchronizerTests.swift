@@ -254,8 +254,9 @@ struct BackgroundSynchronizerTests {
         let store = try MessageStore(url: url)
         let account = BackgroundAccount(route: .fixed(XMPPEndpoint(host: "localhost", port: 5223, security: .directTLS)), domain: "localhost", username: "alice", password: "private")
         try await store.acquireTransportOwnership()
+        // One attempt is enough to see the refusal; NotificationDeliveryTests owns the bounded wait.
         await #expect(throws: MessageStoreError.transportOwnedElsewhere) {
-            try await BackgroundSynchronizer().synchronize(databaseURL: url, wrappingKey: Data(repeating: 1, count: 32), account: account)
+            try await BackgroundSynchronizer().synchronize(databaseURL: url, wrappingKey: Data(repeating: 1, count: 32), account: account, leaseWait: .zero)
         }
         try await store.releaseTransportOwnership()
         await #expect(throws: BackgroundSynchronizationError.identityUnavailable) {

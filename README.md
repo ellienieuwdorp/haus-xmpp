@@ -17,8 +17,10 @@ swift test --package-path Packages/MessageStore
 swift test --package-path Packages/XMPPProtocol
 swift test --package-path Packages/MessagingCore
 swift test --package-path Packages/OMEMOCrypto
-swift test --package-path Packages/OMEMO
+swift test --package-path Packages/OMEMO --parallel
 ```
+
+The OMEMO suite is XCTest, which runs one class at a time unless `--parallel` is passed (33 s serially, 10 s in parallel). The other packages use Swift Testing, which already runs in parallel.
 
 Run the `HausXMPP` test action in Xcode for simulator UI checks. The optional live lab UI test skips unless provided disposable credentials. See [production-readiness evidence](docs/development/production-readiness.md), [notification previews](docs/development/notification-previews.md), [encrypted groups](docs/development/group-conversations.md) and the [independent interoperability matrix](docs/development/interop-matrix.md).
 

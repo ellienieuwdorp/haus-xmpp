@@ -1,0 +1,29 @@
+{
+  "configurations" : [
+    {
+      "id" : "8496BA1A-4FEC-4B1C-8B9E-DF6CA19C8A45",
+      "name" : "Default",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+
+  },
+  "testTargets" : [
+    {
+      "selectedTests" : [
+        "AttachmentPanelUITests\/testPanelSwapsWithTheKeyboardAtTheSameHeight()",
+        "ConversationUITests\/testKeyboardKeepsTheHistoryAnchorThenPagesAndSearches()",
+        "ReplyUITests\/testReplySwipesKeepTheKeyboardAndLeaveBackToTheSystem()"
+      ],
+      "target" : {
+        "containerPath" : "container:HausXMPP.xcodeproj",
+        "identifier" : "14D3D0CAD76D4336A63D3F9C",
+        "name" : "HausXMPPUITests"
+      }
+    }
+  ],
+  "version" : 1
+}

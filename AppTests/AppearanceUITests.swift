@@ -62,14 +62,8 @@ final class AppearanceUITests: XCTestCase {
         back.tap()
     }
 
-    private func attach(_ app: XCUIApplication, _ name: String) {
-        // Let the colour change and any push finish before capturing.
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.6))
-        let capture = XCTAttachment(screenshot: app.screenshot())
-        capture.name = name
-        capture.lifetime = .keepAlways
-        add(capture)
-    }
+    /// Lets the colour change and any push finish before a review capture.
+    @MainActor private func attach(_ app: XCUIApplication, _ name: String) { capture(app, name, settle: 0.6) }
 
     /// The switch's track just inside its leading edge, and the sheet's grouped background beside it.
     private func sample(_ app: XCUIApplication, _ toggle: XCUIElement) -> (track: RGB, background: RGB) {

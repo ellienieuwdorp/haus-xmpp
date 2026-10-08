@@ -43,6 +43,47 @@ final class TimelinePositionTests: XCTestCase {
         return try XCTUnwrap(collectionView.layoutAttributesForItem(at: path)).frame.minY - collectionView.contentOffset.y
     }
 
+    /// Stands in for the list while the reader's finger moves it, or while it coasts after a fling.
+    private final class ReaderScroll: UIScrollView {
+        var fingerDown = false
+        var coasting = false
+        override var isDragging: Bool { fingerDown }
+        override var isDecelerating: Bool { coasting }
+    }
+
+    /// Older history is asked for a few screens before the reader reaches the oldest loaded message, and only by their
+    /// own scroll: opening at the newest message, or any other programmatic move, never pages.
+    func testOnlyTheReadersScrollNearTheTopAsksForOlderMessages() throws {
+        var asked = 0
+        controller.onReachTop = { asked += 1 }
+        controller.update(messages: messages(1...100), onToggleStar: { _ in })
+        let top = -collectionView.adjustedContentInset.top
+        let bottom = collectionView.contentOffset.y
+        XCTAssertGreaterThan(bottom - top, 3000, "the window is several screens tall")
+        // UIKit reports a programmatic move to the very top as a scroll, with nobody dragging.
+        collectionView.contentOffset.y = top
+        XCTAssertEqual(asked, 0)
+
+        let reader = ReaderScroll()
+        reader.contentInset = collectionView.adjustedContentInset
+        let cases: [(dragging: Bool, decelerating: Bool, offset: CGFloat, asks: Bool, line: UInt)] = [
+            (true, false, top + 300, true, #line),
+            (false, true, top + 300, true, #line),
+            (true, false, top, true, #line),
+            (true, false, top + 3000, false, #line),
+            (true, false, bottom, false, #line),
+            (false, false, top + 300, false, #line),
+        ]
+        for scroll in cases {
+            asked = 0
+            reader.fingerDown = scroll.dragging
+            reader.coasting = scroll.decelerating
+            reader.contentOffset.y = scroll.offset
+            collectionView.delegate?.scrollViewDidScroll?(reader)
+            XCTAssertEqual(asked, scroll.asks ? 1 : 0, line: scroll.line)
+        }
+    }
+
     func testOnlyAnOwnSendReturnsFromHistoryToTheNewestMessage() throws {
         var shown = messages(1...100)
         controller.update(messages: shown, onToggleStar: { _ in })

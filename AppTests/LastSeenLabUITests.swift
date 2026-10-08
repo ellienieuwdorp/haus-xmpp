@@ -20,7 +20,7 @@ final class LastSeenLabUITests: XCTestCase {
         let header = app.buttons["chatDetails"]
         XCTAssertTrue(header.waitForExistence(timeout: 10))
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Online"), object: header)], timeout: 25)
-        let online = XCTAttachment(screenshot: app.screenshot()); online.name = "Peer online"; online.lifetime = .keepAlways; add(online)
+        capture(app, "Peer online")
 
         // Leaving the foreground drops the socket without closing the stream, so coming back resumes the session
         // (XEP-0198). The server sends no probe answers on a resumed stream: the contact must still read "Online".
@@ -36,6 +36,6 @@ final class LastSeenLabUITests: XCTestCase {
         guard let exitsAfter = lab["XMPP_PEER_EXITS_AFTER"].flatMap(TimeInterval.init) else { return }
         let remaining = max(0, exitsAfter - Date().timeIntervalSince(started))
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Last seen"), object: header)], timeout: remaining + 30)
-        let lastSeen = XCTAttachment(screenshot: app.screenshot()); lastSeen.name = "Peer last seen"; lastSeen.lifetime = .keepAlways; add(lastSeen)
+        capture(app, "Peer last seen")
     }
 }

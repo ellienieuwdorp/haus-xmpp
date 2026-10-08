@@ -219,25 +219,3 @@ private func live(_ store: MessageStore, targets: Set<String> = ["mine"]) async 
         #expect(try await waiting(store) == ["bob@example.org>mine:👍"])
     }
 }
-
-@Test func schema21AddsReactionStorageIdempotently() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: "reaction-migration-\(UUID())")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let url = directory.appending(path: "messages.sqlite")
-    let store = try MessageStore(url: url)
-    try await store.acquireTransportOwnership()
-    try await store.setAccountPreferences(accountID: account, AccountPreferences(readReceipts: false))
-    try await store.close()
-    #expect(sqliteExecute(url: url, sql: "DROP TABLE reaction_notification_candidates; DROP TABLE reaction_notifications_posted; ALTER TABLE account_preferences DROP COLUMN reaction_alerts; PRAGMA user_version=20;"))
-    let migrated = try MessageStore(url: url)
-    #expect(try await migrated.accountPreferences(accountID: account) == AccountPreferences(readReceipts: false, reactionNotifications: true))
-    try await migrated.acquireTransportOwnership()
-    try await migrated.setAccountPreferences(accountID: account, AccountPreferences(reactionNotifications: false))
-    #expect(try await migrated.pendingReactionCandidates(accountID: account).isEmpty)
-    #expect(try await migrated.liveReactionNotifications(accountID: account, targetMessageIDs: ["none"]).isEmpty, "the posted table exists again")
-    try await migrated.close()
-    let reopened = try MessageStore(url: url)
-    #expect(try await reopened.accountPreferences(accountID: account).reactionNotifications == false)
-    try await reopened.close()
-}

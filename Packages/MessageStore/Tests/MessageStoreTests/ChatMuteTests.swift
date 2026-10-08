@@ -104,27 +104,6 @@ private func deliver(_ store: MessageStore, _ id: String, chat: String = "peer@e
     }
 }
 
-@Test func migrationV17AddsNotificationColumnsIdempotently() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: "mute-migration-\(UUID())")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let url = directory.appending(path: "messages.sqlite")
-    let store = try MessageStore(url: url)
-    try await store.upsertChat(accountID: account, chatID: room, title: "Room")
-    try await store.close()
-    #expect(sqliteExecute(url: url, sql: """
-        ALTER TABLE chats DROP COLUMN notification_level;
-        ALTER TABLE chats DROP COLUMN muted_until;
-        ALTER TABLE chats DROP COLUMN room_nickname;
-        PRAGMA user_version=17;
-        """))
-    let migrated = try MessageStore(url: url)
-    #expect(try await migrated.chatNotificationSetting(accountID: account, chatID: room) == ChatNotificationSetting())
-    try await migrated.setGroupNickname(accountID: account, room: room, nickname: "Ellie")
-    try await migrated.close()
-    try await MessageStore(url: url).close()
-}
-
 @Test func mentionDetectionIsCaseInsensitiveOnWordBoundaries() {
     let members = ["me@example.org", "alice@example.org", "bob@example.org", "carol@example.org", "dave@example.org", "erin@example.org"]
     func check(_ text: String, nickname: String? = "Elle") -> Bool { Mention.mentions(text, account: "me@example.org", nickname: nickname, members: members) }

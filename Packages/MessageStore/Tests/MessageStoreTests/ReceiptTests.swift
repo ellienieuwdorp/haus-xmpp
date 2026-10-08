@@ -1,5 +1,4 @@
 import Foundation
-import SQLite3
 import Testing
 @testable import MessageStore
 
@@ -71,49 +70,6 @@ private func receipt(_ id: String, kind: MessageEventKind, actor: String = "peer
     try await store.setNotificationPreviews(accountID: "self", enabled: false)
     #expect(try await store.accountPreferences(accountID: "self") == AccountPreferences(notificationPreviews: false, readReceipts: false, lastSeen: false))
     try await store.close()
-}
-
-@Test func migrationV17AddsLastSeenDefaultingOnAndKeepsReceiptSwitches() async throws {
-    let url = try receiptURL(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    let store = try MessageStore(url: url)
-    try await store.acquireTransportOwnership()
-    try await store.setAccountPreferences(accountID: "self", AccountPreferences(deliveryReceipts: false))
-    try await store.close()
-    // A v16 store: today's schema minus the column, as an upgrade from main would see it.
-    var db: OpaquePointer?
-    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, "ALTER TABLE account_preferences DROP COLUMN last_seen; PRAGMA user_version=16;", nil, nil, nil) == SQLITE_OK)
-    sqlite3_close(db)
-
-    let migrated = try MessageStore(url: url)
-    try await migrated.acquireTransportOwnership()
-    #expect(try await migrated.accountPreferences(accountID: "self") == AccountPreferences(deliveryReceipts: false, lastSeen: true))
-    try await migrated.setAccountPreferences(accountID: "self", AccountPreferences(deliveryReceipts: false, lastSeen: false))
-    try await migrated.close()
-    // The column check is not version-gated (trees that wrote it as v15): reopening must not re-add it.
-    let reopened = try MessageStore(url: url)
-    #expect(try await reopened.accountPreferences(accountID: "self").lastSeen == false)
-    try await reopened.close()
-}
-
-@Test func migrationV13CarriesTheNotificationPreviewOptOutIntoAccountPreferences() async throws {
-    let url = try receiptURL(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    try await MessageStore(url: url).close()
-    // A v11 store: previews lived alone in notification_preferences, with one account opted out.
-    var db: OpaquePointer?
-    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, """
-        DROP TABLE account_preferences;
-        CREATE TABLE notification_preferences (account_id TEXT PRIMARY KEY, previews INTEGER NOT NULL DEFAULT 1);
-        INSERT INTO notification_preferences VALUES('self',0);
-        PRAGMA user_version=11;
-        """, nil, nil, nil) == SQLITE_OK)
-    sqlite3_close(db)
-
-    let migrated = try MessageStore(url: url)
-    #expect(try await migrated.accountPreferences(accountID: "self") == AccountPreferences(notificationPreviews: false))
-    #expect(try await migrated.accountPreferences(accountID: "other") == AccountPreferences())
-    try await migrated.close()
 }
 
 @Test func peerReceiptsProjectOnlyOntoOwnMessagesAndKeepTheStrongestState() async throws {

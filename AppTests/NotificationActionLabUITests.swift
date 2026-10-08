@@ -23,7 +23,7 @@ final class NotificationActionLabUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 5))
         let banner = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
         XCTAssertTrue(banner.waitForExistence(timeout: 40), "the echo shows a banner while another chat is open")
-        capture(XCUIScreen.main.screenshot(), "Foreground banner for another chat")
+        capture(XCUIScreen.main, "Foreground banner for another chat")
         XCTAssertTrue(banner.waitForNonExistence(timeout: 15), "the banner goes away on its own")
         backgroundReply(app, springboard: springboard, peer: peer, marker: marker)
     }
@@ -46,12 +46,12 @@ final class NotificationActionLabUITests: XCTestCase {
             .press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.75)))
         let cell = { (text: String) in springboard.buttons.matching(NSPredicate(format: "identifier == 'ListCell' AND label CONTAINS %@", text)).firstMatch }
         XCTAssertTrue(cell(target).waitForExistence(timeout: 10))
-        capture(XCUIScreen.main.screenshot(), "Before Mark as Read")
+        capture(XCUIScreen.main, "Before Mark as Read")
         XCTAssertFalse(cell(expected).exists, "nothing alerted for the second message yet: the app is not running and the lab has no push")
         XCTAssertTrue(revealActions(cell(target), springboard: springboard))
         springboard.buttons["Mark as Read"].tap()
         XCTAssertTrue(cell(expected).waitForExistence(timeout: 30), "the message that arrived on the action's connection alerts")
-        capture(XCUIScreen.main.screenshot(), "Arrival presented by the action")
+        capture(XCUIScreen.main, "Arrival presented by the action")
         XCTAssertTrue(cell(target).waitForNonExistence(timeout: 10), "the read message's notification is removed")
     }
 
@@ -101,23 +101,23 @@ final class NotificationActionLabUITests: XCTestCase {
             .press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.75)))
         let listed = springboard.buttons.matching(NSPredicate(format: "identifier == 'ListCell' AND label CONTAINS %@", marker)).firstMatch
         XCTAssertTrue(listed.waitForExistence(timeout: 10))
-        capture(XCUIScreen.main.screenshot(), "Notification Center")
+        capture(XCUIScreen.main, "Notification Center")
         XCTAssertTrue(revealActions(listed, springboard: springboard), "the message category offers Reply")
         let reply = springboard.buttons["Reply"]
         XCTAssertTrue(springboard.buttons["Mark as Read"].exists)
-        capture(XCUIScreen.main.screenshot(), "Notification actions")
+        capture(XCUIScreen.main, "Notification actions")
         reply.tap()
         let field = springboard.textFields.firstMatch.exists ? springboard.textFields.firstMatch : springboard.textViews.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         let answer = "Reply from notification \(UUID().uuidString.prefix(6))"
         field.typeText(answer)
-        capture(XCUIScreen.main.screenshot(), "Reply typed")
+        capture(XCUIScreen.main, "Reply typed")
         let sendButton = springboard.buttons["Send"]
         if sendButton.exists { sendButton.tap() } else { field.typeText("\n") }
         // The background action connects, marks the message read and sends; it has at most 20 s of network time.
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 25))
         XCTAssertFalse(springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Couldn't send your reply")).firstMatch.exists)
-        capture(XCUIScreen.main.screenshot(), "After the background reply")
+        capture(XCUIScreen.main, "After the background reply")
 
         app.activate()
         let chat = app.buttons["chat.\(peer)"]
@@ -130,7 +130,7 @@ final class NotificationActionLabUITests: XCTestCase {
         // The peer decrypted it: its echo comes back (live or from the archive on this reconnect).
         let echoed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: sent)
         wait(for: [echoed], timeout: 40)
-        capture(app.screenshot(), "Reply and its echo")
+        capture(app, "Reply and its echo")
     }
 
     /// A person long-presses; on the iOS 26.5 simulator a synthesized long press only shrinks the platter, so this
@@ -163,9 +163,5 @@ final class NotificationActionLabUITests: XCTestCase {
         input.tap(); input.typeText(text)
         app.buttons["sendMessage"].tap()
         XCTAssertTrue(app.textViews.containing(NSPredicate(format: "value == %@", text)).firstMatch.waitForExistence(timeout: 5))
-    }
-
-    @MainActor private func capture(_ screenshot: XCUIScreenshot, _ name: String) {
-        let attachment = XCTAttachment(screenshot: screenshot); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
     }
 }

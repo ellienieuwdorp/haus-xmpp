@@ -104,7 +104,8 @@ struct SnapshotTests {
     }
 
     /// Either previous build's real store, frames still in its WAL included, migrates to the current schema under the
-    /// lease with every message readable.
+    /// lease, under the normal account spelling, with every message and the state that build kept. The only upgrades a
+    /// real store can take start here: no store below schema 21 exists.
     @Test(arguments: [21, 23]) func upgradeAfterTheSnapshotNeedsTheLeaseAndReachesTheCurrentSchema(schema: Int) async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -114,7 +115,16 @@ struct SnapshotTests {
         await #expect(throws: MessageStoreError.transportOwnershipRequired) { try await store.upgradeSchema() }
         try await store.acquireTransportOwnership()
         try await store.upgradeSchema()
-        #expect(try await store.messages(accountID: "ellie@example.org", chatID: "bob@example.org").count == 5)
+        let account = "ellie@example.org"
+        #expect(try await store.messages(accountID: account, chatID: "bob@example.org").map(\.id).sorted() == ["old-0", "old-1", "old-2", "wal-0", "wal-1"])
+        #expect(try await store.chats(accountID: account).first { $0.id == "bob@example.org" }?.title == "Bob")
+        if schema == 23 {
+            #expect(try await store.readPointer(accountID: account, chatID: "bob@example.org")?.messageID == "old-1")
+            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)
+                    == ArchiveCheckpoint(revision: 1, cursor: "archive-cursor-1", stamp: Date(timeIntervalSince1970: 1_790_000_002)))
+            #expect(try await store.groupNickname(accountID: account, room: "team@rooms.example.org") == "Ellie")
+            #expect(try await store.messages(accountID: account, chatID: "team@rooms.example.org").map(\.body) == ["in the group"])
+        }
         try await store.close()
         #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["\(MessageStore.currentSchemaVersion)"]])
         try await MessageStore(url: url, schema: .currentOnly).close()

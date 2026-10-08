@@ -54,9 +54,4 @@ final class GroupUITests: XCTestCase {
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 2"), object: resumedBubbles)], timeout: 30)
         capture(app, "Restored group membership and history")
     }
-
-    @MainActor private func capture(_ app: XCUIApplication, _ name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
-    }
 }

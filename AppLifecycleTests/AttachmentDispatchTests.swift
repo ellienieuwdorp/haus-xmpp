@@ -1,3 +1,4 @@
+import MessageStore
 import XCTest
 @testable import HausXMPP
 
@@ -20,6 +21,45 @@ import XCTest
         XCTAssertEqual(sent, ["a.jpg"])
         XCTAssertEqual(result.files, 1)
         XCTAssertFalse(result.caption)
+    }
+
+    /// Which part of a send carries the composer's reply, in a sample chat, where files alone may reply to an own
+    /// message only: a received photo's reply waits for a caption, an own message's rides on the first file.
+    func testTheCaptionCarriesTheReplyAndFilesAloneOnlyWhereTheChatAllows() {
+        let account = "me@preview.local", chat = "alex@preview.local"
+        let received = StoredMessage(id: "photo", accountID: account, chatID: chat, senderID: chat, body: "", isOutgoing: false)
+        let own = StoredMessage(id: "own", accountID: account, chatID: chat, senderID: account, body: "Love this view", isOutgoing: true)
+        let gate = { (source: StoredMessage) in
+            AppModel.filesAloneCanReply(to: source, accountID: account, chatID: chat, isGroup: false, isDemo: true, chatProfile: nil)
+        }
+        let cases: [(caption: String, reply: StoredMessage?, firstFile: String?, captionReply: String?, line: UInt)] = [
+            ("", received, nil, nil, #line),
+            (" \n", received, nil, nil, #line),
+            ("", own, "own", nil, #line),
+            ("Love it", received, nil, "photo", #line),
+            ("Love it", own, nil, "own", #line),
+            ("", nil, nil, nil, #line),
+        ]
+        for row in cases {
+            let plan = ComposerState.ReplyPlan(caption: row.caption, reply: row.reply, filesAloneCanReply: gate)
+            XCTAssertEqual(plan.firstFile?.id, row.firstFile, "first file", line: row.line)
+            XCTAssertEqual(plan.caption?.id, row.captionReply, "caption", line: row.line)
+        }
+
+        // The reply clears once the part carrying it went; otherwise it stays in the composer for a caption.
+        let waits = ComposerState.ReplyPlan(caption: "", reply: received, filesAloneCanReply: gate)
+        XCTAssertFalse(waits.clearsReply(after: (files: 1, caption: false)), "the file went without the reply")
+        let fileCarries = ComposerState.ReplyPlan(caption: "", reply: own, filesAloneCanReply: gate)
+        XCTAssertTrue(fileCarries.clearsReply(after: (files: 1, caption: false)))
+        XCTAssertFalse(fileCarries.clearsReply(after: (files: 0, caption: false)), "the file carrying it was refused")
+        let captionCarries = ComposerState.ReplyPlan(caption: "Love it", reply: received, filesAloneCanReply: gate)
+        XCTAssertTrue(captionCarries.clearsReply(after: (files: 1, caption: true)))
+        XCTAssertFalse(captionCarries.clearsReply(after: (files: 1, caption: false)), "the caption was refused")
+
+        // The field says so before Send.
+        XCTAssertEqual(ComposerState.trayPlaceholder(reply: received, filesAloneCanReply: gate), "Add a caption to reply…")
+        XCTAssertEqual(ComposerState.trayPlaceholder(reply: own, filesAloneCanReply: gate), "Add a caption…")
+        XCTAssertEqual(ComposerState.trayPlaceholder(reply: nil, filesAloneCanReply: gate), "Add a caption…")
     }
 
     func testAnUploadGivesUpAfterItsBudgetAndARetryStartsOver() {

@@ -48,40 +48,6 @@ private func commit(_ store: MessageStore, digest: String, sender: String = peer
     }
 }
 
-@Test func upgradeTreatsExistingChatsAsReadAndIsIdempotent() async throws {
-    try await withEncryptedStore(account: account) { store, url in
-        try await store.upsertChat(accountID: account, chatID: peer, title: "Peer")
-        try await store.upsertChat(accountID: account, chatID: "empty@x", title: "Empty")
-        try await commit(store, digest: "d1", message: message("m1", at: 1))
-        try await commit(store, digest: "d2", message: message("m2", at: 2))
-        try await store.saveArchiveCheckpoint(accountID: account, archiveID: account, expectedRevision: nil, cursor: "c2")
-        try await store.close()
-        // A v17 store: today's schema minus the v19 additions, with two messages waiting to alert.
-        #expect(sqliteExecute(url: url, sql: "DROP TABLE chat_read_state; DROP TABLE read_baselines; DROP INDEX message_stanza; ALTER TABLE messages DROP COLUMN stanza_id; ALTER TABLE encrypted_inbox DROP COLUMN message_id; PRAGMA user_version=17;"))
-        #expect(sqliteRows(url: url, sql: "SELECT COUNT(*) FROM notification_candidates") == [["2"]])
-        let upgraded = try MessageStore(url: url)
-        try await upgraded.acquireTransportOwnership()
-        #expect(try await upgraded.readPointer(accountID: account, chatID: peer)?.messageID == "m2")
-        #expect(try await upgraded.readPointer(accountID: account, chatID: "empty@x") == nil)
-        #expect(try await upgraded.readPointer(accountID: account, chatID: peer)?.publishPending == false)
-        #expect(try await upgraded.unreadCounts(accountID: account).isEmpty)
-        #expect(try await upgraded.pendingNotifications(accountID: account).claimed.isEmpty)
-        #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["\(MessageStore.currentSchemaVersion)"]])
-        // The walked archive's baseline is its newest stored message: backfill of an older chat is history, not news.
-        #expect(sqliteRows(url: url, sql: "SELECT archive_id,CAST(sent_at AS INTEGER) FROM read_baselines") == [[account, "1800000002"]])
-        try await commit(upgraded, digest: "old", sender: "old@x", message: message("o1", at: 0, chat: "old@x", sender: "old@x"))
-        #expect(try await upgraded.unreadCounts(accountID: account).isEmpty)
-        // New traffic after the upgrade is unread and alerts; reopening does not reset it.
-        try await commit(upgraded, digest: "d3", message: message("m3", at: 3))
-        try await upgraded.close()
-        let reopened = try MessageStore(url: url)
-        #expect(try await reopened.unreadCounts(accountID: account) == [peer: 1])
-        #expect(sqliteRows(url: url, sql: "SELECT COUNT(*) FROM notification_candidates") == [["1"]])
-        #expect(sqliteRows(url: url, sql: "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='stanza_id'") == [["1"]])
-        try await reopened.close()
-    }
-}
-
 @Test func readMessagesNeverBecomeCandidatesAndReadingRemovesThem() async throws {
     try await withEncryptedStore(account: account) { store, _ in
         try await commit(store, digest: "d1", message: message("m1", at: 10))

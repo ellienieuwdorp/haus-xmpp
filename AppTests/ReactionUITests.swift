@@ -48,7 +48,4 @@ final class ReactionUITests: XCTestCase {
     @MainActor private func openReactions(_ app: XCUIApplication, message: XCUIElement) {
         message.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1)
     }
-    @MainActor private func capture(_ app: XCUIApplication, _ name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
-    }
 }

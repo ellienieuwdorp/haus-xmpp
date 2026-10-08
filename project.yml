@@ -127,6 +127,12 @@ schemes:
         HausXMPP: all
     test:
       targets: [HausXMPPUITests]
+      # UIFull runs every UI test (once per PR); UISmoke is the three keyboard and gesture keepers to run routinely.
+      # scripts/ui-tests.sh runs either one. See AppTests/README.md.
+      testPlans:
+        - path: TestPlans/UIFull.xctestplan
+          defaultPlan: true
+        - path: TestPlans/UISmoke.xctestplan
   HausXMPPLifecycle:
     build:
       targets:

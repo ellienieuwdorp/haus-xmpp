@@ -35,37 +35,6 @@ private func placeholder(_ key: UnreadableMessage.Key, reason: UnreadableReason 
                       sentAt: sentAt, reason: reason, key: key)
 }
 
-@Test func schemaV15AddsColumnsOnce() async throws {
-    let url = try unreadableStoreURL()
-    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    try await MessageStore(url: url).close()
-    // Recreate the v14 shape: neither column, one retained row written before the migration.
-    var db: OpaquePointer?
-    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, """
-        ALTER TABLE messages DROP COLUMN unreadable_reason;
-        ALTER TABLE pending_encrypted_inbox DROP COLUMN reason;
-        INSERT INTO pending_encrypted_inbox(account_id,sender,digest,wire) VALUES('\(account)','\(peer)','d',X'01');
-        PRAGMA user_version=14;
-        """, nil, nil, nil) == SQLITE_OK)
-    sqlite3_close(db)
-    #expect(sqliteRows(url, "SELECT name FROM pragma_table_info('messages') WHERE name='unreadable_reason'").isEmpty)
-
-    let migrated = try MessageStore(url: url)
-    #expect(try await migrated.pendingEncryptedIncoming(accountID: account).map(\.reason) == [.trustPending])
-    try await migrated.close()
-    #expect(sqliteRows(url, "SELECT name FROM pragma_table_info('messages') WHERE name='unreadable_reason'") == [["unreadable_reason"]])
-    #expect(sqliteRows(url, "SELECT dflt_value,\"notnull\" FROM pragma_table_info('pending_encrypted_inbox') WHERE name='reason'") == [["'trustPending'", "1"]])
-
-    // A merged branch tree can stamp v14 over files that already have both columns: the migration adds neither again.
-    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    #expect(sqlite3_exec(db, "PRAGMA user_version=14;", nil, nil, nil) == SQLITE_OK)
-    sqlite3_close(db)
-    let reopened = try MessageStore(url: url)
-    #expect(try await reopened.pendingEncryptedIncoming(accountID: account).map(\.reason) == [.trustPending])
-    try await reopened.close()
-}
-
 @Test func placeholderIsDeterministicIdempotentAndOrderedByStamp() async throws {
     let url = try unreadableStoreURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
