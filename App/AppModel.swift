@@ -28,8 +28,6 @@ struct ChatSummary: Identifiable {
     var displayTitle: String { AppModel.displayName(for: id, title: title) }
 }
 
-typealias ChatMessage = StoredMessage
-
 @MainActor @Observable
 final class AppModel {
     private(set) var chats: [ChatSummary] = []

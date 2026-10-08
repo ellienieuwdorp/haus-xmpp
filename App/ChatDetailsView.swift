@@ -35,10 +35,9 @@ struct ConversationTrust {
 }
 
 extension AppModel {
-    /// A stored title, unless it is just the address; then the local part reads as the name.
+    /// A stored title, unless it is just the address; then the local part reads as the name (`ContactName`).
     nonisolated static func displayName(for chatID: String, title: String?) -> String {
-        if let title, !title.isEmpty, title != chatID { return title }
-        return chatID.split(separator: "@", maxSplits: 1).first.map(String.init) ?? chatID
+        ContactName.display(for: chatID, title: title)
     }
 
     /// Stored device trust decides, whatever the socket is doing: a chat with usable trusted devices is encrypted

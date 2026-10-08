@@ -151,7 +151,7 @@ struct ConversationPresenter {
     /// Search and the starred filter show a slice of history, so nobody is shown typing at its end.
     var typing: TimelineTyping? {
         guard !showingSearch, !starredOnly, let names = source.openChatTyping, let first = names.first else { return nil }
-        return TimelineTyping(author: isGroup ? names.map { AppModel.displayName(for: $0, title: nil) }.joined(separator: ", ") : nil, colorKey: first,
+        return TimelineTyping(author: isGroup ? names.map { ContactName.display(for: $0, title: nil) }.joined(separator: ", ") : nil, colorKey: first,
                               accessibilityLabel: TypingTracker.description(isGroup ? names : [title]))
     }
 

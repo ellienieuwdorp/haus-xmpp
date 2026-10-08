@@ -4,6 +4,9 @@ import MessageStore
 // The values one timeline row shows. The iPhone's collection view and a Mac timeline draw the same ones, so nothing
 // here may import UIKit or AppKit.
 
+/// The app's name for a message as the store keeps it.
+typealias ChatMessage = StoredMessage
+
 struct TimelineReply: Sendable, Equatable {
     let author: String
     let body: String
