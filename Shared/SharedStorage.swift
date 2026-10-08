@@ -43,8 +43,21 @@ enum SharedStorage {
             do { try manager.createDirectory(at: url, withIntermediateDirectories: false) } catch { throw Failure.unavailable }
             isDirectory = true
         }
-        guard isDirectory.boolValue, manager.isWritableFile(atPath: url.path) else { throw Failure.unavailable }
+        guard isDirectory.boolValue, permitsWriting(url.path) else { throw Failure.unavailable }
         return url
+    }
+
+    private static func permitsWriting(_ path: String) -> Bool {
+        #if os(macOS)
+        // Inside the Mac sandbox, access(2) calls the App Group container read-only although files can be created in
+        // it (measured 2026-10-09 on macOS 27.0.1 with a development-signed build), so the permission bits decide.
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue,
+              let owner = (attributes[.ownerAccountID] as? NSNumber)?.uint32Value else { return false }
+        return owner == getuid() ? permissions & 0o200 != 0 : permissions & 0o002 != 0
+        #else
+        FileManager.default.isWritableFile(atPath: path)
+        #endif
     }
 
     /// Explicit roots keep migration tests isolated from both real app containers. Without a legacy directory there
