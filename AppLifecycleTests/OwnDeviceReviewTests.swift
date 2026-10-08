@@ -56,14 +56,25 @@ final class OwnDeviceReviewTests: XCTestCase {
         XCTAssertEqual(OwnDeviceReview.headline(several), "2 devices on your account need review, one changed its identity")
     }
 
-    /// The review shows an outcome only once every record carries it; accepted stays accepted, never verified.
-    func testDecisionIsReadFromTheStoredRecords() throws {
+    /// The review shows an outcome only once every record carries it; accepted stays accepted, never verified. A device
+    /// taken off the account reads as removed, and removal is offered only for a device the user has not trusted.
+    func testOutcomeIsReadFromTheStoredRecords() throws {
         let candidate = try XCTUnwrap(OwnDeviceReview.candidates([device(5, .legacy), device(5, .modern)]).first)
-        XCTAssertNil(OwnDeviceReview.decision(on: candidate, in: [device(5, .legacy), device(5, .modern)]))
-        XCTAssertNil(OwnDeviceReview.decision(on: candidate, in: [device(5, .legacy, trust: .accepted), device(5, .modern)]))
-        XCTAssertEqual(OwnDeviceReview.decision(on: candidate, in: [device(5, .legacy, trust: .accepted), device(5, .modern, trust: .accepted)]), .accepted)
-        XCTAssertEqual(OwnDeviceReview.decision(on: candidate, in: [device(5, .legacy, trust: .rejected), device(5, .modern, trust: .rejected)]), .rejected)
+        func outcome(_ devices: [EncryptionDevice]) -> OwnDeviceOutcome? { OwnDeviceReview.outcome(of: candidate, in: devices) }
+        XCTAssertNil(outcome([device(5, .legacy), device(5, .modern)]))
+        XCTAssertNil(outcome([device(5, .legacy, trust: .accepted), device(5, .modern)]))
+        XCTAssertEqual(outcome([device(5, .legacy, trust: .accepted), device(5, .modern, trust: .accepted)]), .decided(.accepted))
+        XCTAssertEqual(outcome([device(5, .legacy, trust: .rejected), device(5, .modern, trust: .rejected)]), .decided(.rejected))
         // A record that is gone (replaced by another key) is not an outcome: the next decision reports the change.
-        XCTAssertNil(OwnDeviceReview.decision(on: candidate, in: [device(5, .legacy, trust: .accepted)]))
+        XCTAssertNil(outcome([device(5, .legacy, trust: .accepted)]))
+        // retireOwnDevice stores every record of the device rejected and no longer advertised.
+        let removed = [device(5, .legacy, trust: .rejected, active: false), device(5, .modern, trust: .rejected, active: false)]
+        XCTAssertEqual(outcome(removed), .removed)
+
+        XCTAssertTrue(OwnDeviceReview.offersRemoval(after: nil))
+        XCTAssertTrue(OwnDeviceReview.offersRemoval(after: .decided(.rejected)))
+        XCTAssertFalse(OwnDeviceReview.offersRemoval(after: .decided(.accepted)))
+        XCTAssertFalse(OwnDeviceReview.offersRemoval(after: .decided(.verified)))
+        XCTAssertFalse(OwnDeviceReview.offersRemoval(after: .removed))
     }
 }

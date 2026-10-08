@@ -118,6 +118,52 @@ final class OwnDeviceServiceTests: XCTestCase {
         XCTAssertTrue(envelope.keys.contains { $0.recipientJID == f.bob })
     }
 
+    /// Remove from Account in the review, for a device the user does not recognise: the undecided device leaves the
+    /// account's lists in both versions without a chat, sends held for it go out without it, and if it is still signed in
+    /// and advertises itself again it comes back not trusted rather than asking again.
+    func testRemovingAnUndecidedDeviceReleasesHeldSendsAndAReturnStaysUntrusted() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let store = try f.openStore("alice-second.sqlite")
+        try await store.acquireTransportOwnership()
+        let secondService = OMEMOService(store: store, protection: f.protection)
+        try await secondService.initialize(account: f.alice, transport: f.aTransport)
+        for profile in [XMPPOMEMOProfile.legacy, .modern] {
+            try await f.a.maintainLocalAdvertisement(account: f.alice, profile: profile, transport: f.aTransport)
+        }
+        let second = try await secondService.localIdentity(account: f.alice, profile: .modern).deviceID
+        let local = try await f.a.localIdentity(account: f.alice, profile: .modern).deviceID
+        let devices = try await f.a.refreshOwnDevices(account: f.alice, transport: f.aTransport)
+        let toBob = try await queue(f, to: f.bob)
+        let held = try await f.a.prepareAvailableMessages(account: f.alice, transport: f.aTransport)
+        XCTAssertEqual(Array(held.blockedChats.keys), [f.bob])
+
+        try await f.a.retireOwnDevice(account: f.alice, deviceID: try XCTUnwrap(devices.first).id, transport: f.aTransport)
+        for profile in [XMPPOMEMOProfile.legacy, .modern] {
+            let listed = await f.server.devices(f.alice, profile)
+            XCTAssertEqual(listed, [local], "\(profile) list")
+        }
+        let removed = try await f.a.ownDevices(account: f.alice)
+        XCTAssertTrue(removed.allSatisfy { !$0.active && $0.trust == .rejected })
+        let released = try await f.a.prepareAvailableMessages(account: f.alice, transport: f.aTransport)
+        XCTAssertEqual(released.messageIDs, [toBob])
+        let envelope = try await f.a.outgoingEnvelope(account: f.alice, messageID: toBob)
+        XCTAssertFalse(envelope.keys.contains { $0.deviceID == second })
+
+        // Still signed in: it adds itself back with the same identity.
+        for profile in [XMPPOMEMOProfile.legacy, .modern] {
+            try await secondService.maintainLocalAdvertisement(account: f.alice, profile: profile, transport: f.aTransport)
+        }
+        let returned = try await f.a.refreshOwnDevices(account: f.alice, transport: f.aTransport)
+        XCTAssertEqual(returned.filter(\.active).map(\.trust), [.rejected, .rejected])
+        let next = try await queue(f, to: f.bob)
+        let after = try await f.a.prepareAvailableMessages(account: f.alice, transport: f.aTransport)
+        XCTAssertTrue(after.messageIDs.contains(next))
+        XCTAssertTrue(after.blockedChats.isEmpty)
+        let nextEnvelope = try await f.a.outgoingEnvelope(account: f.alice, messageID: next)
+        XCTAssertFalse(nextEnvelope.keys.contains { $0.deviceID == second })
+    }
+
     /// The multi-record decision is all or nothing: a stale identifier among them changes none of them.
     func testDecisionWithAStaleIdentifierChangesNothing() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }

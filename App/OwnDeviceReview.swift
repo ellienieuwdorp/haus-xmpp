@@ -17,6 +17,13 @@ struct OwnDeviceCandidate: Identifiable, Equatable {
     var versions: String { records.count > 1 ? "Both encryption versions" : records.first?.profile.label ?? "" }
 }
 
+/// What became of a device the review asked about.
+enum OwnDeviceOutcome: Equatable {
+    case decided(DeviceTrust)
+    /// No longer advertised by the account: Remove from Account took it off the device lists.
+    case removed
+}
+
 /// What the account-level review shows, derived from the stored own devices so tests can state it directly.
 enum OwnDeviceReview {
     /// Active, undecided own devices grouped by device ID and fingerprint, in device ID order. A device ID that publishes
@@ -32,14 +39,20 @@ enum OwnDeviceReview {
         }.sorted { ($0.deviceID, $0.fingerprint) < ($1.deviceID, $1.fingerprint) }
     }
 
-    /// The stored decision on every record of `candidate`, once they agree and are no longer undecided; nil while the
-    /// review still has to ask (or a record is gone, which the next decision reports as a changed device).
-    static func decision(on candidate: OwnDeviceCandidate, in devices: [EncryptionDevice]) -> DeviceTrust? {
-        let current = candidate.records.map { record in devices.first { $0.id == record.id }?.trust }
-        guard let first = current.first, let trust = first, trust != .undecided,
-              current.allSatisfy({ $0 == trust }) else { return nil }
-        return trust
+    /// What the stored records of `candidate` say: removed once none of them is advertised, otherwise their decision once
+    /// they agree and are no longer undecided; nil while the review still has to ask (or a record is gone, which the
+    /// next decision reports as a changed device).
+    static func outcome(of candidate: OwnDeviceCandidate, in devices: [EncryptionDevice]) -> OwnDeviceOutcome? {
+        let current = candidate.records.map { record in devices.first { $0.id == record.id } }
+        guard !current.isEmpty, current.allSatisfy({ $0 != nil }) else { return nil }
+        if current.allSatisfy({ $0?.active == false }) { return .removed }
+        guard let trust = current[0]?.trust, trust != .undecided, current.allSatisfy({ $0?.trust == trust }) else { return nil }
+        return .decided(trust)
     }
+
+    /// Remove from Account is for a device the user does not recognise: offered while it is undecided or not trusted,
+    /// never once it is trusted or removed.
+    static func offersRemoval(after outcome: OwnDeviceOutcome?) -> Bool { outcome == nil || outcome == .decided(.rejected) }
 
     /// A changed identity is named even when several devices wait, so it never reads as just another new device.
     static func headline(_ candidates: [OwnDeviceCandidate]) -> String {
@@ -56,6 +69,9 @@ enum OwnDeviceReview {
 
     /// The Don't trust confirmation: what stops and what keeps working. Chats and groups both leave the device out.
     static let rejectionMessage = "New messages in your chats and groups won’t be encrypted for it, and nothing it sends will be opened. Your trusted devices are unaffected."
+
+    /// The Remove from Account confirmation: what removal does, and that it is not a remote sign-out.
+    static let removalMessage = "It stops receiving your encrypted messages, and nothing it sends will be opened. If it’s still signed in, it may add itself back; it stays untrusted unless you trust it."
 }
 
 extension OwnDeviceReview {
@@ -114,8 +130,9 @@ struct OwnDeviceReviewCard: View {
     }
 }
 
-/// Every undecided device of the account at once, each with its fingerprint, Trust and Don't trust, and the fingerprint
-/// comparison that can verify it. A decision applies to every chat.
+/// Every undecided device of the account at once, each with its fingerprint, Trust and Don't trust, the fingerprint
+/// comparison that can verify it, and Remove from Account for one the user does not recognise. A decision applies to
+/// every chat.
 struct OwnDeviceReviewSheet: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -123,6 +140,7 @@ struct OwnDeviceReviewSheet: View {
     @State private var shown: [OwnDeviceCandidate] = []
     @State private var rejecting: OwnDeviceCandidate?
     @State private var comparing: OwnDeviceCandidate?
+    @State private var removing: OwnDeviceCandidate?
 
     var body: some View {
         NavigationStack {
@@ -135,7 +153,7 @@ struct OwnDeviceReviewSheet: View {
                             .background(.orange.opacity(0.15), in: Circle())
                             .accessibilityHidden(true)
                         Text("Do you recognize these devices?").font(.title2.bold()).multilineTextAlignment(.center).padding(.top, 6)
-                        Text("They use your account, \(model.accountID). Trust only devices you know are yours. To be sure, compare each fingerprint with the one shown on that device.")
+                        Text("They use your account, \(model.accountID). Trust only devices you know are yours, and remove any you don’t recognize. To be sure, compare each fingerprint with the one shown on that device.")
                             .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity).padding(.vertical, 4)
@@ -173,7 +191,7 @@ struct OwnDeviceReviewSheet: View {
     }
 
     @ViewBuilder private func device(_ candidate: OwnDeviceCandidate) -> some View {
-        let decision = OwnDeviceReview.decision(on: candidate, in: model.ownDevices)
+        let outcome = OwnDeviceReview.outcome(of: candidate, in: model.ownDevices)
         Section {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
@@ -182,9 +200,9 @@ struct OwnDeviceReviewSheet: View {
                         Text(candidate.versions).font(.footnote).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
-                    if let decision { DecisionLabel(trust: decision) }
+                    if let outcome { OutcomeLabel(outcome: outcome) }
                 }
-                if candidate.identityChanged && decision == nil {
+                if candidate.identityChanged && outcome == nil {
                     // A plain HStack, not a Label: in a List row a Label pads its icon column to body metrics.
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Image(systemName: "exclamationmark.shield")
@@ -194,7 +212,7 @@ struct OwnDeviceReviewSheet: View {
                 }
                 FingerprintGrid(value: candidate.fingerprint, font: .system(.footnote, design: .monospaced))
                     .padding(.vertical, 4)
-                if decision == nil {
+                if outcome == nil {
                     // Styled buttons take their own taps, so both can share the device's row.
                     HStack(spacing: 10) {
                         Button(role: .destructive) { rejecting = candidate } label: { Text("Don’t Trust").frame(maxWidth: .infinity) }
@@ -214,7 +232,7 @@ struct OwnDeviceReviewSheet: View {
                 }
             }
             .padding(.vertical, 4)
-            if decision != .rejected && decision != .verified {
+            if outcome == nil || outcome == .decided(.accepted) {
                 Button { comparing = candidate } label: {
                     HStack {
                         Label("Compare fingerprints", systemImage: "checkmark.shield")
@@ -227,20 +245,40 @@ struct OwnDeviceReviewSheet: View {
                 .frame(minHeight: 44)
                 .accessibilityIdentifier("ownDevice.compare.\(candidate.deviceID)")
             }
+            if OwnDeviceReview.offersRemoval(after: outcome) {
+                Button(role: .destructive) { removing = candidate } label: {
+                    Label("Remove from Account", systemImage: "iphone.slash").foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                // The removal rewrites the account's device lists on the server.
+                .disabled(!(model.isDemo || model.session.isReady))
+                .accessibilityIdentifier("ownDevice.remove.\(candidate.deviceID)")
+                .confirmationDialog("Remove device \(String(candidate.deviceID)) from your account?",
+                                    isPresented: Binding(get: { removing?.id == candidate.id }, set: { if !$0 { removing = nil } }),
+                                    titleVisibility: .visible) {
+                    Button("Remove from Account", role: .destructive) { Task { await model.removeOwnDevice(candidate) } }
+                } message: { Text(OwnDeviceReview.removalMessage) }
+            }
         }
     }
 }
 
-/// A decided device's outcome, in the words the Devices page uses.
-private struct DecisionLabel: View {
-    let trust: DeviceTrust
+/// What became of a device, in the words the Devices page uses.
+private struct OutcomeLabel: View {
+    let outcome: OwnDeviceOutcome
 
     var body: some View {
-        let badge = trust.badge
-        HStack(spacing: 4) {
-            Image(systemName: badge.symbol)
-            Text(trust == .accepted ? "Trusted · not verified" : trust == .rejected ? "Not trusted" : badge.text)
+        let (symbol, text, color): (String, String, Color) = switch outcome {
+        case .removed: ("iphone.slash", "Removed", .secondary)
+        case .decided(let trust):
+            (trust.badge.symbol, trust == .accepted ? "Trusted · not verified" : trust == .rejected ? "Not trusted" : trust.badge.text, trust.badge.color)
         }
-        .font(.footnote.weight(.semibold)).foregroundStyle(badge.color)
+        HStack(spacing: 4) {
+            Image(systemName: symbol)
+            Text(text)
+        }
+        .font(.footnote.weight(.semibold)).foregroundStyle(color)
     }
 }
