@@ -66,10 +66,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
     private var rows: [TimelineRow] = []
     private var rowsByID: [String: TimelineRow] = [:]
-    /// The typing bubble is the last item when someone types; no stored message ID contains a NUL.
-    private static let typingID = "typing\u{0}"
-    /// The loading-earlier cell is the first item while the model backfills this chat's archive.
-    static let loadingEarlierID = "loading-earlier\u{0}"
     private var typing: TimelineTyping?
     private var loadingEarlier = false
     private var typingArrived = false
@@ -182,7 +178,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         composerHost.didMove(toParent: self)
         view = container
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] collection, indexPath, id in
-            if id == Self.typingID {
+            if id == TimelineItems.typingID {
                 // A snapshot can outlive the typing it was built for; the cell then stays empty until the next apply.
                 let cell = collection.dequeueReusableCell(withReuseIdentifier: "typing", for: indexPath)
                 let typing = self?.typing
@@ -190,7 +186,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                 if let typing { (cell as? TypingIndicatorCell)?.configure(typing) }
                 return cell
             }
-            if id == Self.loadingEarlierID {
+            if id == TimelineItems.loadingEarlierID {
                 let cell = collection.dequeueReusableCell(withReuseIdentifier: "loadingEarlier", for: indexPath)
                 (cell as? LoadingEarlierCell)?.startAnimating()
                 return cell
@@ -247,9 +243,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         self.onUnsend = onUnsend
         self.onOpenEncryption = onOpenEncryption
         self.onDisplayed = onDisplayed
-        // The durable store supplies unique IDs. Avoid a diffable crash if a caller repeats an ID.
-        var seen = Set<String>()
-        let uniqueRows = TimelineRow.rows(for: incoming.filter { seen.insert($0.id).inserted })
+        let uniqueRows = TimelineItems.rows(for: incoming)
         let accentChanged = accent != self.accent
         let typingChanged = typing != self.typing
         let loadingChanged = loadingEarlier != self.loadingEarlier
@@ -259,19 +253,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         let typingLeft = self.typing != nil && typing == nil
         typingArrived = self.typing == nil && typing != nil
         self.typing = typing
-        // Only a message arriving at the tail moves, and only when the reader is at the tail; nothing else animates.
-        // Judged from the tail alone: the loaded window is the newest N, so its head moves as messages arrive.
-        let newIDs = uniqueRows.map(\.message.id)
-        let tailStart = rows.last.flatMap { newIDs.lastIndex(of: $0.message.id) }.map { $0 + 1 } ?? newIDs.count
-        let appended = tailStart < newIDs.count
-        // Sending always returns to the newest message, wherever the reader was.
-        let sentOwn = uniqueRows[tailStart...].contains { $0.message.isOutgoing }
-        let wasNearBottom = isNearBottom
-        let firstContent = rows.isEmpty
-        let shouldFollow = firstContent || wasNearBottom || sentOwn
-        // From far up in history a send jumps; a slide would cross cells that were never drawn.
-        // The typing bubble coming or going at the tail moves the same way as a message arriving.
-        let slidesIn = !firstContent && (appended || typingChanged) && wasNearBottom && view.window != nil && !UIAccessibility.isReduceMotionEnabled
+        let plan = TimelineScrollPolicy.Update(previousTailID: rows.last?.message.id, rows: uniqueRows, wasNearBottom: isNearBottom,
+                                               typingChanged: typingChanged, typingLeft: typingLeft,
+                                               canAnimate: view.window != nil && !UIAccessibility.isReduceMotionEnabled)
         let anchor = visibleAnchor()
         let previous = rowsByID
         rows = uniqueRows
@@ -280,22 +264,17 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         let currentRevision = revision
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
-        // Above the oldest message; the anchor below skips it, so it comes and goes without moving the reader.
-        if loadingEarlier { snapshot.appendItems([Self.loadingEarlierID]) }
-        snapshot.appendItems(uniqueRows.map(\.message.id))
-        if typing != nil { snapshot.appendItems([Self.typingID]) }
-        var changed = uniqueRows.compactMap { row -> String? in
-            guard let old = previous[row.message.id], old != row || accentChanged else { return nil }
-            return row.message.id
-        }
-        if typing != nil, !typingArrived, typingChanged { changed.append(Self.typingID) }
-        snapshot.reconfigureItems(changed)
+        // The loading cell sits above the oldest message; the anchor below skips it, so it comes and goes without
+        // moving the reader.
+        snapshot.appendItems(TimelineItems.identifiers(rows: uniqueRows, loadingEarlier: loadingEarlier, typing: typing != nil))
+        snapshot.reconfigureItems(TimelineItems.reconfigured(rows: uniqueRows, previous: previous, accentChanged: accentChanged,
+                                                             typingChangedInPlace: typing != nil && !typingArrived && typingChanged))
         // A shrinking content size clamps the offset during the apply, so a slide back down starts from here.
         let offsetBefore = collectionView.contentOffset.y
         if typingLeft { fadeOutTypingCell() }
         // Every offset decision happens in this call, before the next frame: waiting for an apply's completion let a
         // frame show a first load at the top of its window, or a prepend at the old offset.
-        if firstContent {
+        if plan.placement == .newestAtOnce {
             // Nothing on screen to diff against: load the cells in place and land on the newest message at once.
             dataSource.applySnapshotUsingReloadData(snapshot)
             collectionView.layoutIfNeeded()
@@ -310,9 +289,10 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             dataSource.applySnapshotUsingReloadData(snapshot)
         }
         collectionView.layoutIfNeeded()
-        if slidesIn {
+        switch plan.placement {
+        case .slideToNewest:
             // Settle the final offset first so the new cells exist, then play the distance back.
-            let start = typingLeft && !appended ? offsetBefore : collectionView.contentOffset.y
+            let start = plan.slidesFromPreviousOffset ? offsetBefore : collectionView.contentOffset.y
             scrollToBottom()
             let end = collectionView.contentOffset.y
             collectionView.contentOffset.y = start
@@ -323,19 +303,21 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                 sliding = false
                 if followsBottom { scrollToBottom() }
             }
-        } else if shouldFollow {
+        case .newestAtOnce, .followNewest:
             followBottom()
-        } else if let anchor, let indexPath = dataSource.indexPath(for: anchor.id),
-                  let attributes = collectionView.layoutAttributesForItem(at: indexPath) {
-            collectionView.contentOffset.y = clampedOffset(attributes.frame.minY - anchor.distanceFromTop)
+        case .keepAnchor:
+            if let anchor, let indexPath = dataSource.indexPath(for: anchor.id),
+               let attributes = collectionView.layoutAttributesForItem(at: indexPath) {
+                collectionView.contentOffset.y = TimelineScrollPolicy.offsetKeepingAnchor(itemTop: attributes.frame.minY, distanceFromTop: anchor.distanceFromTop, in: viewport)
+            }
         }
-        followsBottom = shouldFollow || isNearBottom
+        followsBottom = plan.followsAfterwards(isNearBottom: isNearBottom)
         recordBottomEdge()
     }
 
     /// The typing bubble leaves as a fading copy; the cell itself goes with the apply.
     private func fadeOutTypingCell() {
-        guard let path = dataSource.indexPath(for: Self.typingID), let cell = collectionView.cellForItem(at: path),
+        guard let path = dataSource.indexPath(for: TimelineItems.typingID), let cell = collectionView.cellForItem(at: path),
               let ghost = cell.snapshotView(afterScreenUpdates: false) else { return }
         ghost.frame = cell.frame
         ghost.isUserInteractionEnabled = false
@@ -473,7 +455,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         if !collectionView.isTracking {
             if followsBottom { followBottom() }
             // Reading history: keep the same messages above the composer instead of letting it cover them.
-            else { collectionView.contentOffset.y = clampedOffset(bottomEdgeY - collectionView.bounds.height + inset) }
+            else { collectionView.contentOffset.y = TimelineScrollPolicy.offsetKeepingBottomEdge(bottomEdgeY, bottomInset: inset, in: viewport) }
         }
         recordBottomEdge()
     }
@@ -496,7 +478,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         guard abs(top - knownAdjustedTop) > 0.5 else { return }
         knownAdjustedTop = top
         guard followsBottom, !sliding, !scrollView.isTracking else { return }
-        scrollView.contentOffset.y = clampedOffset(.greatestFiniteMagnitude)
+        scrollView.contentOffset.y = viewport.clamped(.greatestFiniteMagnitude)
         recordBottomEdge()
     }
 
@@ -524,10 +506,11 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             dateChipMovingY = scrollView.contentOffset.y
             scheduleDateChipIdle()
         }
-        guard scrollView.isDragging || scrollView.isDecelerating else { return }
+        let readerScrolling = scrollView.isDragging || scrollView.isDecelerating
+        guard readerScrolling else { return }
         followsBottom = isNearBottom
-        // A few screens early, so older messages are usually in place before the reader arrives.
-        if scrollView.contentOffset.y + scrollView.adjustedContentInset.top < 1200 { onReachTop() }
+        if TimelineScrollPolicy.requestsOlderHistory(readerScrolling: readerScrolling,
+                                                     distanceFromTop: scrollView.contentOffset.y + scrollView.adjustedContentInset.top) { onReachTop() }
     }
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -682,24 +665,20 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         dataSource.indexPath(for: id).flatMap { collectionView.cellForItem(at: $0) as? MessageBubbleCell }
     }
 
-    private var isNearBottom: Bool {
-        collectionView.contentSize.height + collectionView.adjustedContentInset.bottom
-            - collectionView.contentOffset.y - collectionView.bounds.height < 80
+    private var viewport: TimelineViewport {
+        TimelineViewport(offset: collectionView.contentOffset.y, height: collectionView.bounds.height, contentHeight: collectionView.contentSize.height,
+                         insetTop: collectionView.adjustedContentInset.top, insetBottom: collectionView.adjustedContentInset.bottom)
     }
+
+    private var isNearBottom: Bool { viewport.isNearBottom }
 
     /// The first visible message. Never the loading-earlier cell: anchored on it, its removal would drop the reader.
     private func visibleAnchor() -> Anchor? {
         let visible = collectionView.indexPathsForVisibleItems.sorted()
-        guard let path = visible.first(where: { dataSource.itemIdentifier(for: $0) != Self.loadingEarlierID }),
+        guard let path = visible.first(where: { TimelineScrollPolicy.canAnchor(on: dataSource.itemIdentifier(for: $0)) }),
               let id = dataSource.itemIdentifier(for: path),
               let attributes = collectionView.layoutAttributesForItem(at: path) else { return nil }
         return Anchor(id: id, distanceFromTop: attributes.frame.minY - collectionView.contentOffset.y)
-    }
-
-    private func clampedOffset(_ value: CGFloat) -> CGFloat {
-        let minimum = -collectionView.adjustedContentInset.top
-        let maximum = max(minimum, collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom)
-        return min(maximum, max(minimum, value))
     }
 
     /// A status tick landing mid-slide must not cut it short; the slide settles at the bottom itself.
@@ -708,12 +687,12 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private func scrollToBottom() {
         // scrollToItem sizes the final cells first; the clamp then lands on the real content height. A cell that
         // self-sizes as it comes on screen changes that height again, so settle until it holds (usually at once).
-        if let last = typing != nil ? Self.typingID : rows.last?.message.id, let path = dataSource.indexPath(for: last) {
+        if let last = typing != nil ? TimelineItems.typingID : rows.last?.message.id, let path = dataSource.indexPath(for: last) {
             collectionView.scrollToItem(at: path, at: .bottom, animated: false)
             collectionView.layoutIfNeeded()
         }
         for _ in 0..<3 {
-            let bottom = clampedOffset(.greatestFiniteMagnitude)
+            let bottom = viewport.clamped(.greatestFiniteMagnitude)
             guard abs(collectionView.contentOffset.y - bottom) > 0.5 else { break }
             collectionView.contentOffset.y = bottom
             collectionView.layoutIfNeeded()
