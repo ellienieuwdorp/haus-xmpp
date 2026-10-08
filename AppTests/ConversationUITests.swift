@@ -44,69 +44,95 @@ final class ConversationUITests: XCTestCase {
         XCTAssertTrue(bubble(1, in: app).exists, "Older pages load as the reader scrolls up")
     }
 
-    /// Search covers messages older than the newest page.
-    @MainActor func testSearchReachesBeyondTheNewestPage() throws {
-        continueAfterFailure = false
-        let app = openLongChat()
-        XCTAssertTrue(bubble(250, in: app).waitForExistence(timeout: 5))
-        app.buttons["Conversation options"].tap()
-        app.buttons["Search messages"].tap()
-        let search = app.searchFields["messageSearch"]
-        XCTAssertTrue(search.waitForExistence(timeout: 4))
-        search.typeText("History message 12")
-        // 12 and 120 through 129, all outside the newest hundred.
-        XCTAssertTrue(app.staticTexts["11 messages found"].waitForExistence(timeout: 5))
-    }
-
     private func composer(in app: XCUIApplication) -> XCUIElement {
         // A multiline SwiftUI TextField is exposed as a text view on some runtimes.
         let field = app.textFields["messageComposer"]
         return field.exists ? field : app.textViews["messageComposer"]
     }
 
-    /// A long draft wraps and the composer grows upward: send stays above the keyboard, the newest message above the composer.
-    @MainActor func testLongDraftGrowsTheComposer() throws {
+    /// The 250-message History chat in one launch. It opens on its newest message without flashing the empty notice.
+    /// Reading history, the keyboard opening (twice, the second time after an interactive dismissal) and a growing draft
+    /// leave the messages above the composer where they were. Scrolling up loads an older page, and search reaches
+    /// past the loaded pages.
+    @MainActor func testKeyboardKeepsTheHistoryAnchorThenPagesAndSearches() throws {
         continueAfterFailure = false
-        let app = openLongChat()
-        let input = composer(in: app)
-        XCTAssertTrue(input.waitForExistence(timeout: 5))
-        app.showKeyboard(tapping: input)
-        let oneLine = input.frame.height
-        input.typeText(String(repeating: "wrapping words ", count: 8))
-        XCTAssertGreaterThan(input.frame.height, oneLine * 1.8)
-        XCTAssertTrue(app.buttons["sendMessage"].isHittable)
-        XCTAssertTrue(bubble(250, in: app).isHittable)
-    }
-
-    /// Reading history, the keyboard opening must not slide messages under the composer: the bubble resting just
-    /// above it keeps its distance.
-    @MainActor func testKeyboardKeepsTheHistoryAnchor() throws {
-        continueAfterFailure = false
-        let app = openLongChat()
-        XCTAssertTrue(bubble(250, in: app).waitForExistence(timeout: 5))
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-demo-long"]
+        app.isolateMessageStorage()
+        app.launch()
         let timeline = app.collectionViews["conversation.timeline"]
-        // Slow drags that end at rest: no deceleration follows, so nothing re-records the position after cells self-size.
-        for _ in 0..<4 {
-            timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
-                .press(forDuration: 0.05, thenDragTo: timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)), withVelocity: .slow, thenHoldForDuration: 0.3)
+
+        XCTContext.runActivity(named: "Opening never shows the empty notice") { _ in
+            let history = app.staticTexts["History"]
+            XCTAssertTrue(history.waitForExistence(timeout: 15))
+            history.tap()
+            let newest = bubble(250, in: app), empty = app.staticTexts["No messages yet"]
+            // Polled while the first page loads; a single negative wait would only sample once.
+            let deadline = Date().addingTimeInterval(10)
+            while !newest.exists, Date() < deadline {
+                XCTAssertFalse(empty.exists, "A chat with stored messages must never flash the empty notice while it loads")
+            }
+            XCTAssertTrue(newest.exists)
+            XCTAssertFalse(empty.exists)
+            XCTAssertTrue(newest.isHittable, "A chat opens on its newest message, above the composer")
         }
+
         let input = composer(in: app)
-        // Twice: the second opening follows an interactive dismissal, which leaves the list wherever the finger put it.
-        for round in 1...2 {
-            // Measure once the drag and any cell self-sizing have settled.
-            let anchor = try XCTUnwrap(settled { () -> Anchor? in
-                let top = input.frame.minY
-                return bubbleFrames(in: timeline).filter { $0.frame.maxY < top - 11 }.max { $0.frame.maxY < $1.frame.maxY }
-                    .map { Anchor(text: $0.text, gap: top - $0.frame.maxY) }
-            }, "round \(round)")
-            app.showKeyboard(tapping: input)
-            let moved = app.textViews.containing(NSPredicate(format: "value == %@", anchor.text)).firstMatch
-            XCTAssertTrue(moved.exists, "round \(round)")
-            XCTAssertEqual(settled { input.frame.minY - moved.frame.maxY }, anchor.gap, accuracy: 4, "round \(round)")
-            guard round == 1 else { break }
-            timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
-                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97)), withVelocity: .slow, thenHoldForDuration: 0.3)
-            XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        let moved = try XCTContext.runActivity(named: "The keyboard keeps the history anchor") { _ -> XCUIElement in
+            // Slow drags that end at rest: no deceleration follows, so nothing re-records the position after cells self-size.
+            for _ in 0..<4 {
+                timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+                    .press(forDuration: 0.05, thenDragTo: timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)), withVelocity: .slow, thenHoldForDuration: 0.3)
+            }
+            var moved = input
+            // Twice: the second opening follows an interactive dismissal, which leaves the list wherever the finger put it.
+            for round in 1...2 {
+                // Measure once the drag and any cell self-sizing have settled.
+                let anchor = try XCTUnwrap(settled { () -> Anchor? in
+                    let top = input.frame.minY
+                    return bubbleFrames(in: timeline).filter { $0.frame.maxY < top - 11 }.max { $0.frame.maxY < $1.frame.maxY }
+                        .map { Anchor(text: $0.text, gap: top - $0.frame.maxY) }
+                }, "round \(round)")
+                app.showKeyboard(tapping: input)
+                moved = app.textViews.containing(NSPredicate(format: "value == %@", anchor.text)).firstMatch
+                XCTAssertTrue(moved.exists, "round \(round)")
+                XCTAssertEqual(settled { input.frame.minY - moved.frame.maxY }, anchor.gap, accuracy: 4, "round \(round)")
+                guard round == 1 else { break }
+                timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
+                    .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97)), withVelocity: .slow, thenHoldForDuration: 0.3)
+                XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+            }
+            return moved
+        }
+
+        XCTContext.runActivity(named: "A long draft grows the composer upward over the same messages") { _ in
+            let oneLine = input.frame.height
+            let gap = settled { input.frame.minY - moved.frame.maxY }
+            input.typeText(String(repeating: "wrapping words ", count: 8))
+            XCTAssertGreaterThan(input.frame.height, oneLine * 1.8)
+            XCTAssertTrue(app.buttons["sendMessage"].isHittable, "Send stays above the keyboard")
+            XCTAssertEqual(settled { input.frame.minY - moved.frame.maxY }, gap, accuracy: 4, "The message above the composer stays above it")
+        }
+
+        XCTContext.runActivity(named: "Scrolling up loads an older page") { _ in
+            // The newest page is messages 151 to 250. Every page arrives through the same reach-top path, so one proves it.
+            @MainActor func oldest() -> Int {
+                bubbleFrames(in: timeline).compactMap { Int($0.text.dropFirst("History message ".count).prefix(while: \.isNumber)) }.min() ?? .max
+            }
+            // A hard fling coasts about three screens; every fling waits for the list to come to rest.
+            var flings = 0
+            while oldest() > 150, flings < 8 { timeline.swipeDown(velocity: 4000); flings += 1 }
+            XCTAssertLessThanOrEqual(oldest(), 150, "An older page loads as the reader scrolls up")
+        }
+
+        XCTContext.runActivity(named: "Search reaches past the loaded pages") { _ in
+            app.buttons["Conversation options"].tap()
+            app.buttons["Search messages"].tap()
+            let search = app.searchFields["messageSearch"]
+            XCTAssertTrue(search.waitForExistence(timeout: 4))
+            search.typeText("History message 12")
+            // 12 and 120 through 129; message 12 is still outside every loaded page.
+            XCTAssertTrue(app.staticTexts["11 messages found"].waitForExistence(timeout: 5))
         }
     }
 
