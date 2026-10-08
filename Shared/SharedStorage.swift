@@ -18,8 +18,8 @@ enum SharedStorage {
         }
         let destination = try groupContainer().appending(path: "Messaging", directoryHint: .isDirectory)
         #if os(macOS)
-        // Outside the sandbox this is the user's shared ~/Library/Application Support/Messaging, which is not ours, and
-        // no Mac build ever kept its store there.
+        // The legacy location only ever held stores from iOS builds before the App Group move. No Mac build kept a store
+        // there, so there is nothing to bring across.
         return try await resolve(legacy: nil, destination: destination, migrate: migrate)
         #else
         return try await resolve(legacy: legacy, destination: destination, migrate: migrate)
