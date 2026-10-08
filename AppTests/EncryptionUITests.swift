@@ -43,7 +43,4 @@ final class EncryptionUITests: XCTestCase {
         XCTAssertFalse(rows.matching(NSPredicate(format: "label CONTAINS %@", "Review required")).firstMatch.exists)
         app.closeEncryptionDetails()
     }
-    @MainActor private func capture(_ app: XCUIApplication, _ name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
-    }
 }

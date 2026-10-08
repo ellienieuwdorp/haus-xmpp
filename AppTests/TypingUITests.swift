@@ -13,7 +13,7 @@ final class TypingUITests: XCTestCase {
         XCTAssertTrue(row.staticTexts["typing…"].exists)
         // The hidden preview keeps the row's height: Alex's row matches Maya's.
         XCTAssertEqual(row.frame.height, app.buttons["chat.maya@preview.local"].frame.height, accuracy: 1)
-        let list = XCTAttachment(screenshot: app.screenshot()); list.name = "Typing row"; list.lifetime = .keepAlways; add(list)
+        capture(app, "Typing row")
 
         row.tap()
         let indicator = app.otherElements["typingIndicator"]
@@ -25,13 +25,13 @@ final class TypingUITests: XCTestCase {
         XCTAssertGreaterThan(indicator.frame.minY, newest.frame.maxY)
         let composer = app.textFields["messageComposer"].exists ? app.textFields["messageComposer"] : app.textViews["messageComposer"]
         XCTAssertLessThan(indicator.frame.maxY, composer.frame.minY)
-        let chat = XCTAttachment(screenshot: app.screenshot()); chat.name = "Typing bubble"; chat.lifetime = .keepAlways; add(chat)
+        capture(app, "Typing bubble")
 
         // Typing our own draft neither moves nor hides it.
         let frame = indicator.frame
         composer.tap(); composer.typeText("On my way")
         XCTAssertTrue(indicator.exists)
-        let keyboard = XCTAttachment(screenshot: app.screenshot()); keyboard.name = "Typing bubble above the keyboard"; keyboard.lifetime = .keepAlways; add(keyboard)
+        capture(app, "Typing bubble above the keyboard")
         XCTAssertLessThan(indicator.frame.maxY, composer.frame.minY)
         XCTAssertEqual(indicator.frame.height, frame.height, accuracy: 1)
     }

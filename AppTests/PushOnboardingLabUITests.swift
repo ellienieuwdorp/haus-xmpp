@@ -37,9 +37,9 @@ final class PushOnboardingLabUITests: XCTestCase {
         XCTAssertTrue(push.waitForExistence(timeout: 10))
         let settled = NSPredicate(format: "label ENDSWITH %@ OR label ENDSWITH %@", ", On", ", Couldn't reach the push service")
         wait(for: [XCTNSPredicateExpectation(predicate: settled, object: push)], timeout: 40)
-        capture(app, "Settings, push \(push.label.hasSuffix(", On") ? "on" : "unreachable"), light")
+        attach(app, "Settings, push \(push.label.hasSuffix(", On") ? "on" : "unreachable"), light")
         setAppearance(app, "Dark")
-        capture(app, "Settings, push, dark")
+        attach(app, "Settings, push, dark")
         setAppearance(app, "Automatic")
         XCTAssertTrue(push.label.hasSuffix(", On"), "Registration and enable must both succeed: \(push.label)")
         XCTAssertEqual(push.value as? String, "1")
@@ -47,7 +47,7 @@ final class PushOnboardingLabUITests: XCTestCase {
         // Turning it off revokes and disables; turning it on again re-registers the same node.
         push.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label ENDSWITH %@", ", Off"), object: push)], timeout: 10)
-        capture(app, "Settings, push off")
+        attach(app, "Settings, push off")
         push.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label ENDSWITH %@", ", On"), object: push)], timeout: 40)
     }
@@ -65,12 +65,6 @@ final class PushOnboardingLabUITests: XCTestCase {
         XCTAssertTrue(push.isHittable)
     }
 
-    @MainActor private func capture(_ app: XCUIApplication, _ name: String) {
-        // Let an appearance change or a toggle animation finish before the screenshot.
-        _ = XCTWaiter.wait(for: [XCTestExpectation(description: "settle")], timeout: 1.5)
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
-    }
+    /// Lets an appearance change or a toggle animation finish before a review capture.
+    @MainActor private func attach(_ app: XCUIApplication, _ name: String) { capture(app, name, settle: 1.5) }
 }

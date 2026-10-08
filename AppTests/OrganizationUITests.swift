@@ -21,16 +21,10 @@ final class OrganizationUITests: XCTestCase {
         app.buttons["Pin"].tap()
         // The pin change lands after the swipe action has closed, so wait for it rather than asserting at once.
         XCTAssertTrue(waitForPinned(row), "Pin must mark the row pinned")
-        let capture = XCTAttachment(screenshot: app.screenshot())
-        capture.name = "Centered pin and larger compose"
-        capture.lifetime = .keepAlways
-        add(capture)
+        capture(app, "Centered pin and larger compose")
         row.swipeLeft()
         XCTAssertTrue(app.buttons["Unpin"].waitForExistence(timeout: 3))
-        let swipe = XCTAttachment(screenshot: app.screenshot())
-        swipe.name = "Trailing pin action"
-        swipe.lifetime = .keepAlways
-        add(swipe)
+        capture(app, "Trailing pin action")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
         alex.tap()
 

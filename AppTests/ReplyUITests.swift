@@ -174,11 +174,4 @@ final class ReplyUITests: XCTestCase {
         XCTAssertTrue(app.buttons["newConversation"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["cancelReply"].exists)
     }
-
-    @MainActor private func capture(_ app: XCUIApplication, _ name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
-    }
 }

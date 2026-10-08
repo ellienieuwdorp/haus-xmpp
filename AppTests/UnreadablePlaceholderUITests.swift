@@ -58,11 +58,4 @@ final class UnreadablePlaceholderUITests: XCTestCase {
         XCTAssertTrue(sent.waitForExistence(timeout: 10))
         XCTAssertGreaterThan(sent.frame.minY, incoming.frame.maxY - 1)
     }
-
-    @MainActor private func capture(_ app: XCUIApplication, _ name: String) {
-        let shot = XCTAttachment(screenshot: app.screenshot())
-        shot.name = name
-        shot.lifetime = .keepAlways
-        add(shot)
-    }
 }

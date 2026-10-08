@@ -71,10 +71,7 @@ final class PushUITests: XCTestCase {
 
         // App-only screenshot stays in the private xcresult. Never capture SpringBoard,
         // print environment values, or attach push-registration.json to the test report.
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = "Private staging push registration"
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        capture(app, "Private staging push registration")
         establishEncryptedRoundTrip(app, peer: environment["XMPP_OMEMO_PEER"]!)
         XCUIDevice.shared.press(.home)
         XCTAssertTrue(app.waitForBackground(),
@@ -112,10 +109,7 @@ final class PushUITests: XCTestCase {
         XCTAssertTrue(serverHeldLabel.evaluate(with: outgoing) || outgoing.label.contains("Sending, not yet confirmed"))
         XCTAssertTrue(bubbles.allElementsBoundByIndex.contains { !$0.label.hasPrefix("You:") },
                       "The independent peer must return an authenticated incoming echo")
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = "Private staging encrypted bootstrap"
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        capture(app, "Private staging encrypted bootstrap")
     }
 
     @MainActor private func allowSystemPermissionIfPresent() {

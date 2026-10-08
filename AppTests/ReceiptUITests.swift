@@ -29,7 +29,7 @@ final class ReceiptUITests: XCTestCase {
         XCTAssertEqual(outgoing.frame.width, acceptedWidth, accuracy: 1)
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Read"), object: outgoing)], timeout: 25)
         XCTAssertEqual(outgoing.frame.width, acceptedWidth, accuracy: 1)
-        let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = "Read receipt inside the bubble"; attachment.lifetime = .keepAlways; add(attachment)
+        capture(app, "Read receipt inside the bubble")
         // The echo reply arrives after our receipt request; the states survive a relaunch because they are projected, not remembered.
         let echoed = app.textViews.containing(NSPredicate(format: "value == %@", marker)).matching(NSPredicate(format: "NOT (label BEGINSWITH %@)", "You:")).firstMatch
         XCTAssertTrue(echoed.waitForExistence(timeout: 25))

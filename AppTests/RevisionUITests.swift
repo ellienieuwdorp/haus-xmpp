@@ -109,11 +109,4 @@ final class RevisionUITests: XCTestCase {
         XCTAssertTrue(app.textViews.containing(NSPredicate(format: "value == %@", "You unsent a message")).firstMatch.waitForExistence(timeout: 10))
         capture(app, "Own edit and unsend in the lab")
     }
-
-    @MainActor private func capture(_ app: XCUIApplication, _ name: String) {
-        let shot = XCTAttachment(screenshot: app.screenshot())
-        shot.name = name
-        shot.lifetime = .keepAlways
-        add(shot)
-    }
 }

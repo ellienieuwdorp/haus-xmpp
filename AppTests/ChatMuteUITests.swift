@@ -21,17 +21,17 @@ final class ChatMuteUITests: XCTestCase {
         let mute = app.buttons["Mute"]
         XCTAssertTrue(mute.waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Pin"].exists || app.buttons["Unpin"].exists)
-        attach(app, "Mute swipe action")
+        capture(app, "Mute swipe action")
         mute.tap()
         let eightHours = app.buttons["For 8 hours"]
         XCTAssertTrue(eightHours.waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["For 1 hour"].exists && app.buttons["For 1 week"].exists && app.buttons["Always"].exists)
-        attach(app, "Mute duration dialog")
+        capture(app, "Mute duration dialog")
         XCTAssertFalse((alex.value as? String ?? "").contains("Muted"), "No change before a duration is picked")
         eightHours.tap()
         XCTAssertTrue(wait(alex, muted: true), "8 hours must mute the row")
         XCTAssertEqual(alex.frame.height, heightBefore, accuracy: 0.5, "The glyph must not change the row")
-        attach(app, "Muted row glyph")
+        capture(app, "Muted row glyph")
 
         // The details row names the mute and ends it.
         alex.tap()
@@ -41,12 +41,12 @@ final class ChatMuteUITests: XCTestCase {
         let row = app.buttons["chatNotifications"]
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         XCTAssertTrue((row.value as? String ?? "").hasPrefix("Muted until"), String(describing: row.value))
-        attach(app, "Details notifications row")
+        capture(app, "Details notifications row")
         row.tap()
         let unmute = app.buttons["Unmute"]
         XCTAssertTrue(unmute.waitForExistence(timeout: 3))
         XCTAssertFalse(app.buttons["Mentions only"].exists, "Mentions only is for groups")
-        attach(app, "Details notifications menu")
+        capture(app, "Details notifications menu")
         unmute.tap()
         XCTAssertTrue(wait(row, value: "All messages"))
         for _ in 0..<2 {
@@ -78,12 +78,5 @@ final class ChatMuteUITests: XCTestCase {
     @MainActor private func wait(_ element: XCUIElement, value: String, timeout: TimeInterval = 5) -> Bool {
         let predicate = NSPredicate(format: "value == %@", value)
         return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: timeout) == .completed
-    }
-
-    @MainActor private func attach(_ app: XCUIApplication, _ name: String) {
-        let shot = XCTAttachment(screenshot: app.screenshot())
-        shot.name = name
-        shot.lifetime = .keepAlways
-        add(shot)
     }
 }
