@@ -117,7 +117,8 @@ final class KeyRecoveryServiceTests: XCTestCase {
         XCTAssertEqual(aliceView.devices.first { $0.jid == f.bob && $0.deviceID == newID }?.trust, .undecided)
     }
 
-    /// The old ID stays listed while the removal has not reached the server: the dead device is never offered for review.
+    /// The old ID stays listed while the removal has not reached the server: the dead device is never offered for review,
+    /// neither in a chat's refresh nor in the account-level own-device refresh.
     func testARetiredDeviceStillListedIsSkippedByRefresh() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         let oldID = try await retainOneMessageForBob(f)
@@ -133,6 +134,9 @@ final class KeyRecoveryServiceTests: XCTestCase {
         let own = overview.devices.filter { $0.jid == f.bob }.map(\.deviceID)
         XCTAssertEqual(own, [4242])
         XCTAssertFalse(own.contains(oldID) || own.contains(newID))
+        // The account-level review (#17) reads the same lists in both versions and skips the dead device too.
+        let reviewed = try await recovered.refreshOwnDevices(account: f.bob, transport: f.bTransport)
+        XCTAssertEqual(reviewed.map(\.deviceID), [4242])
     }
 
     /// Every unreadable row goes, each under its own account; only the current account gets an identity now, the other
