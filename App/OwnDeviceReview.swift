@@ -166,8 +166,16 @@ struct OwnDeviceReviewSheet: View {
         }
         .onAppear { shown = model.ownDeviceReview }
         .onChange(of: model.ownDeviceReview) { _, current in
-            shown += current.filter { candidate in !shown.contains { $0.id == candidate.id } }
+            // A shown device whose other version arrived meanwhile takes the fuller entry, so one decision covers both.
+            shown = shown.map { old in current.first { $0.id == old.id } ?? old }
+                + current.filter { candidate in !shown.contains { $0.id == candidate.id } }
         }
+        // The root's alert cannot show over this sheet; a failed decision is reported here.
+        .alert("Something needs attention", isPresented: Binding(
+            get: { model.error != nil }, set: { if !$0 { model.error = nil } }
+        )) {
+            Button("OK") { model.error = nil }
+        } message: { Text(model.error ?? "") }
     }
 
     @ViewBuilder private func device(_ candidate: OwnDeviceCandidate) -> some View {
