@@ -134,6 +134,15 @@ struct ConversationView: View {
         sender == model.accountID ? "you" : (isGroup ? sender : title)
     }
 
+    /// What an empty timeline says, or nil to leave it blank. Only an actual empty chat says so: while this chat's
+    /// first page is pending, or the loaded page is still another chat's, the timeline stays blank.
+    static func emptyNotice(isEmpty: Bool, loadedFor: String?, chatID: String, searchTerm: String,
+                            starredOnly: Bool) -> (title: String, systemImage: String)? {
+        guard isEmpty, loadedFor == chatID else { return nil }
+        if !searchTerm.isEmpty { return ("No matching messages", "magnifyingglass") }
+        return starredOnly ? ("No starred messages", "star") : ("No messages yet", "bubble.left")
+    }
+
     private var timelineMessages: [TimelineMessage] {
         // One set per pass keeps the quoted-unsent lookup linear.
         let retracted = Set(model.messages.lazy.filter(\.isRetracted).map(\.id))
@@ -378,10 +387,9 @@ struct ConversationView: View {
             .ignoresSafeArea(.keyboard)
             .ignoresSafeArea(.container, edges: [.top, .bottom])
             .overlay {
-                // Only an actual empty chat says so; while a load is pending the timeline stays blank.
-                if messages.isEmpty, model.messagesLoadedFor == chatID {
-                    ContentUnavailableView(!searchTerm.isEmpty ? "No matching messages" : (starredOnly ? "No starred messages" : "No messages yet"),
-                                           systemImage: !searchTerm.isEmpty ? "magnifyingglass" : (starredOnly ? "star" : "bubble.left"))
+                if let notice = Self.emptyNotice(isEmpty: messages.isEmpty, loadedFor: model.messagesLoadedFor, chatID: chatID,
+                                                 searchTerm: searchTerm, starredOnly: starredOnly) {
+                    ContentUnavailableView(LocalizedStringKey(notice.title), systemImage: notice.systemImage)
                 }
             }
             // Banners float over the timeline as a bar, so messages scroll under them and blur like under the navigation
