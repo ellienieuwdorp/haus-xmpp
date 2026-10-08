@@ -124,95 +124,14 @@ struct ConversationView: View {
     }
     private var encryptionRoute: ChatRoute { isGroup ? .groupDetails(chatID) : .encryption(chatID) }
 
-    private var messages: [ChatMessage] {
-        model.messages.filter { message in
-            (!starredOnly || message.isStarred) && (searchTerm.isEmpty || message.body.localizedCaseInsensitiveContains(searchTerm))
-        }
+    /// The timeline's derived state, rebuilt with each update so it reads the model as this view observes it.
+    private var presenter: ConversationPresenter {
+        ConversationPresenter(source: model, chatID: chatID, title: title, searchTerm: searchTerm, starredOnly: starredOnly, showingSearch: showingSearch)
     }
+    private var messages: [ChatMessage] { presenter.messages }
 
-    private func authorName(_ sender: String) -> String {
-        sender == model.accountID ? "you" : (isGroup ? sender : title)
-    }
-
-    /// What an empty timeline says, or nil to leave it blank. Only an actual empty chat says so: while this chat's
-    /// first page is pending, or the loaded page is still another chat's, the timeline stays blank.
-    static func emptyNotice(isEmpty: Bool, loadedFor: String?, chatID: String, searchTerm: String,
-                            starredOnly: Bool) -> (title: String, systemImage: String)? {
-        guard isEmpty, loadedFor == chatID else { return nil }
-        if !searchTerm.isEmpty { return ("No matching messages", "magnifyingglass") }
-        return starredOnly ? ("No starred messages", "star") : ("No messages yet", "bubble.left")
-    }
-
-    private var timelineMessages: [TimelineMessage] {
-        // One set per pass keeps the quoted-unsent lookup linear.
-        let retracted = Set(model.messages.lazy.filter(\.isRetracted).map(\.id))
-        // Quoted messages that are loaded: their kind and, once on disk, their file, for the quote's still.
-        let quoted = Set(messages.lazy.compactMap { $0.reply?.messageID })
-        var sources: [String: ChatMessage] = [:]
-        if !quoted.isEmpty {
-            for source in model.messages where quoted.contains(source.id) { sources[source.id] = source }
-        }
-        return messages.map { timelineMessage($0, retracted: retracted, sources: sources) }
-    }
-
-    /// The quote's still for a photo or video: its slot is kept from the reply snapshot's media type (or the loaded
-    /// source's), so the bubble does not widen when the file downloads or an earlier page loads; the image itself
-    /// shows once the source is loaded and on disk. Anything else quotes text alone.
-    private func quoteStill(of reply: MessageReply, sources: [String: ChatMessage]) -> TimelineAttachment? {
-        let source = sources[reply.messageID]
-        guard let mediaType = reply.mediaType ?? source?.attachment?.mediaType,
-              mediaType.hasPrefix("image/") || mediaType.hasPrefix("video/") else { return nil }
-        return TimelineAttachment(name: source?.attachment?.name ?? "", mediaType: mediaType, size: source?.attachment?.size ?? 0,
-                                  width: source?.attachment?.width, height: source?.attachment?.height,
-                                  localURL: source?.attachment == nil ? nil : model.attachmentFiles[reply.messageID])
-    }
-
-    private func timelineMessage(_ message: ChatMessage, retracted: Set<String>, sources: [String: ChatMessage]) -> TimelineMessage {
-        var counts: [String: Int] = [:]
-        var selected: Set<String> = []
-        for update in model.messageReactions[message.id] ?? [] {
-            for emoji in update.reactions {
-                counts[emoji, default: 0] += 1
-                if update.actorID == model.accountID { selected.insert(emoji) }
-            }
-        }
-        let emoji = counts.keys.sorted {
-            let left = TimelineReaction.choices.firstIndex(of: $0) ?? Int.max
-            let right = TimelineReaction.choices.firstIndex(of: $1) ?? Int.max
-            return left == right ? $0 < $1 : left < right
-        }
-        // A quote keeps its snapshot text unless the quoted message has since been unsent.
-        let quotedUnsent = message.reply.map { retracted.contains($0.messageID) } ?? false
-        if let unreadable = message.unreadableReason {
-            // A notice, not content: no quote, no reactions, no edits. An own send from another device keeps its
-            // server-held check (receipts cannot project onto it); an incoming one shows no status.
-            return TimelineMessage(id: message.id, body: "", isOutgoing: message.isOutgoing, isStarred: message.isStarred,
-                                   sentAt: message.sentAt, status: status(message), author: isGroup && !message.isOutgoing ? message.senderID : nil,
-                                   unreadable: unreadable)
-        }
-        let canRevise = model.canRevise(message)
-        return TimelineMessage(id: message.id, body: message.body, isOutgoing: message.isOutgoing, isStarred: message.isStarred,
-                               attachment: message.attachment.map { TimelineAttachment(name: $0.name, mediaType: $0.mediaType, size: $0.size, width: $0.width, height: $0.height,
-                                                                                       localURL: model.attachmentFiles[message.id],
-                                                                                       download: model.attachmentDownloads[message.id] ?? .loading) },
-                               sentAt: message.sentAt, status: status(message),
-                               failure: message.transportState == .failed ? message.rejection.map { RejectionCopy.reason($0, isGroup: isGroup) } : nil,
-                               reply: message.reply.map { TimelineReply(author: authorName($0.senderID), body: quotedUnsent ? "Message unsent" : $0.body,
-                                                                        thumbnail: quotedUnsent ? nil : quoteStill(of: $0, sources: sources)) },
-                               securityNotice: !model.isDemo && message.encryptionProfile == nil ? "Not encrypted" : nil,
-                               reactions: message.isRetracted ? [] : emoji.map { TimelineReaction(emoji: $0, count: counts[$0]!, isSelected: selected.contains($0)) },
-                               canReact: !message.isRetracted && model.canReact(to: message),
-                               reactionUnavailableReason: message.isRetracted ? nil : reactionUnavailableReason(message),
-                               author: isGroup && !message.isOutgoing ? message.senderID : nil,
-                               isRetracted: message.isRetracted, isEdited: message.isEdited, canEdit: canRevise && !message.body.isEmpty, canUnsend: canRevise)
-    }
-
-    /// Search and the starred filter show a slice of history, so nobody is shown typing at its end.
-    private var timelineTyping: TimelineTyping? {
-        guard !showingSearch, !starredOnly, let names = model.openChatTyping, let first = names.first else { return nil }
-        return TimelineTyping(author: isGroup ? names.map { AppModel.displayName(for: $0, title: nil) }.joined(separator: ", ") : nil, colorKey: first,
-                              accessibilityLabel: TypingTracker.description(isGroup ? names : [title]))
-    }
+    /// Built bare, so the composer's reply strip reads only what the author line needs.
+    private func authorName(_ sender: String) -> String { ConversationPresenter(source: model, chatID: chatID, title: title).authorName(sender) }
 
     private func beginEditing(_ message: ChatMessage) {
         editing = message
@@ -226,32 +145,6 @@ struct ConversationView: View {
     private func cancelEditing() {
         if editing != nil { composerState.draft = "" }
         editing = nil
-    }
-
-    /// A dashed ring while the outbox works, one ringed check once the server holds it, two rings once the
-    /// peer confirmed delivery, filled once read (the glyphs stay the footer's neutral colour). Own messages
-    /// from the archive or a carbon have no outbox row: the server already holds them, so they start at the
-    /// single check.
-    private func status(_ message: ChatMessage) -> TimelineMessage.Status? {
-        guard message.isOutgoing else { return nil }
-        let transport = message.transportState ?? .serverAccepted
-        guard transport == .serverAccepted else { return TimelineMessage.Status(rawValue: transport.rawValue) }
-        switch model.messageReceipts[message.id] {
-        case .displayed?: return .displayed
-        case .delivered?: return .delivered
-        default: return .serverAccepted
-        }
-    }
-
-    /// One line under the disabled reaction row; mirrors the checks in `AppModel.canReact`.
-    private func reactionUnavailableReason(_ message: ChatMessage) -> String? {
-        guard !model.canReact(to: message) else { return nil }
-        if model.isDemo { return "Sample messages can't be reacted to" }
-        guard message.encryptionProfile == "modern" || message.encryptionProfile == "legacy" else { return "This message isn't encrypted" }
-        if isGroup { return model.canSend(to: chatID) ? "This message has no group identity yet" : "Join the group to react" }
-        guard let overview = model.encryptionOverview else { return "Checking \(title)'s encryption version…" }
-        if overview.profile == .modern, !message.wireIDAuthenticated { return "This message has no authenticated identity" }
-        return message.wireID == nil ? "This message has no identity to react to" : "Reactions aren't available for this message"
     }
 
     private func send() {
@@ -359,8 +252,8 @@ struct ConversationView: View {
     var body: some View {
         // One layer: the timeline runs under the navigation bar and the banners; UIKit insets it by that safe area.
         ZStack {
-            ConversationTimeline(messages: timelineMessages, typing: timelineTyping,
-                                 loadingEarlier: !showingSearch && !starredOnly && model.isBackfilling(chat: chatID), topBannerHeight: bannerHeight, composer: showingSearch ? nil : AnyView(composer), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
+            ConversationTimeline(messages: presenter.timelineMessages, typing: presenter.typing,
+                                 loadingEarlier: presenter.loadingEarlier, topBannerHeight: bannerHeight, composer: showingSearch ? nil : AnyView(composer), onToggleStar: { id in Task { await model.toggleStar(id) } }, onRetryMessage: { retryMessageID = $0 }, onReply: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
                 cancelEditing()
                 replyingTo = message
@@ -373,11 +266,7 @@ struct ConversationView: View {
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
                 beginEditing(message)
             }, onUnsend: { composerState.focused = false; unsendMessageID = $0 }, onOpenEncryption: { model.requestRoute(encryptionRoute) }, onDisplayed: { id in
-                // Only the newest received message is marked; XEP-0333 makes a marker cover everything before it.
-                // A placeholder carries no wire ID, so the newest readable received message is the one the peer hears
-                // about; the newest received message of any kind is where this chat's read pointer goes.
-                guard id == model.messages.last(where: { !$0.isOutgoing && $0.unreadableReason == nil })?.id
-                        || id == model.messages.last(where: { !$0.isOutgoing })?.id else { return }
+                guard presenter.marksDisplayed(id) else { return }
                 Task { await model.markDisplayed(id) }
             }, onRestoreComposerFocus: { composerState.focused = true }, onReachTop: { Task { await model.loadOlderMessages() } },
             onAttachmentDisplayed: { model.attachmentDisplayed($0) }, onDownloadAttachment: { model.downloadAttachment($0) },
@@ -387,8 +276,7 @@ struct ConversationView: View {
             .ignoresSafeArea(.keyboard)
             .ignoresSafeArea(.container, edges: [.top, .bottom])
             .overlay {
-                if let notice = Self.emptyNotice(isEmpty: messages.isEmpty, loadedFor: model.messagesLoadedFor, chatID: chatID,
-                                                 searchTerm: searchTerm, starredOnly: starredOnly) {
+                if let notice = presenter.emptyNotice {
                     ContentUnavailableView(LocalizedStringKey(notice.title), systemImage: notice.systemImage)
                 }
             }

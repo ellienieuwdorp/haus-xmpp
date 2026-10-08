@@ -58,7 +58,7 @@ struct TypingTracker {
     /// "Maya is typing…", "Maya and Sam are typing…"; the list row of a direct chat says only "typing…".
     static func description(_ participants: [String], isGroup: Bool = true) -> String {
         guard isGroup else { return "typing…" }
-        let names = participants.map { AppModel.displayName(for: $0, title: nil) }
+        let names = participants.map { ContactName.display(for: $0, title: nil) }
         if names.count > 3 { return "\(names.count) people are typing…" }
         return names.formatted(.list(type: .and)) + (names.count == 1 ? " is typing…" : " are typing…")
     }

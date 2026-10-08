@@ -4,228 +4,6 @@ import SwiftUI
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
 
-struct TimelineReply: Sendable, Equatable {
-    let author: String
-    let body: String
-    /// The quoted photo or video on disk, shown as a small still at the quote's trailing edge; nil shows the text alone.
-    var thumbnail: TimelineAttachment? = nil
-    /// Side of that still, in the bubble and in the composer's reply strip.
-    static let thumbnailSide: CGFloat = 36
-}
-
-struct TimelineReaction: Sendable, Equatable {
-    let emoji: String
-    let count: Int
-    let isSelected: Bool
-
-    static let choices = ["❤️", "👍", "😂", "😮", "😢", "🙏"]
-    static func name(for emoji: String) -> String {
-        switch emoji {
-        case "❤️": "heart"
-        case "👍": "thumbs up"
-        case "😂": "tears of joy"
-        case "😮": "surprised"
-        case "😢": "sad"
-        case "🙏": "folded hands"
-        default: emoji
-        }
-    }
-    var accessibilityDescription: String {
-        "\(count) \(Self.name(for: emoji)) \(count == 1 ? "reaction" : "reactions")" + (isSelected ? ", including you" : "")
-    }
-}
-
-struct TimelineAttachment: Sendable, Equatable {
-    let name: String
-    let mediaType: String
-    let size: Int
-    let width: Int?
-    let height: Int?
-    /// Plaintext on disk once sent or downloaded and verified; nil until then.
-    var localURL: URL? = nil
-    /// Where a file that is not on disk stands; ignored once `localURL` is set.
-    var download: AttachmentDownloadState = .loading
-    var isImage: Bool { mediaType.hasPrefix("image/") }
-    var isVideo: Bool { mediaType.hasPrefix("video/") }
-    var showsPreview: Bool { isImage || isVideo }
-    var aspectRatio: CGFloat {
-        guard let width, let height, width > 0, height > 0 else { return 4 / 3 }
-        return CGFloat(width) / CGFloat(height)
-    }
-    var kindLabel: String { isImage ? "Photo" : isVideo ? "Video" : "File" }
-    /// What a file that is not on disk shows under its name, or under its symbol in a preview.
-    var downloadDetail: String {
-        let size = self.size > 0 ? ByteCountFormatter.string(fromByteCount: Int64(self.size), countStyle: .file) : nil
-        let parts: [String?] = switch download {
-        case .loading: [size, "Downloading…"]
-        case .tapToDownload: [size, "Tap to download"]
-        // Short enough for the file card's one detail line.
-        case .failed: ["Failed", "Tap to retry"]
-        case .mismatch: ["Doesn’t match its message"]
-        case .tooLarge: [size, "Too large to download"]
-        }
-        return parts.compactMap { $0 }.joined(separator: " · ")
-    }
-    var downloadAccessibility: String {
-        switch download {
-        case .loading: "downloading"
-        case .tapToDownload: "not downloaded"
-        case .failed: "could not be downloaded"
-        case .mismatch: "does not match its message, not downloaded"
-        case .tooLarge: "too large to download"
-        }
-    }
-}
-
-struct TimelineMessage: Identifiable, Sendable, Equatable {
-    let id: String
-    let body: String
-    let isOutgoing: Bool
-    let isStarred: Bool
-    var attachment: TimelineAttachment? = nil
-    var sentAt: Date? = nil
-    var status: Status? = nil
-    /// Why a server returned this message (`RejectionCopy`); set only while it shows as failed.
-    var failure: String? = nil
-    var reply: TimelineReply? = nil
-    var securityNotice: String? = nil
-    var reactions: [TimelineReaction] = []
-    var canReact: Bool = false
-    /// Shown under a disabled reaction row; nil when `canReact`.
-    var reactionUnavailableReason: String? = nil
-    var author: String? = nil
-    /// The sender unsent it: `body` is empty and the bubble shows a quiet placeholder.
-    var isRetracted = false
-    /// `body` is the sender's latest correction.
-    var isEdited = false
-    var canEdit = false
-    var canUnsend = false
-    /// This device could not show the message; `body` is empty and the bubble shows the reason as a quiet placeholder.
-    var unreadable: UnreadableReason? = nil
-
-    /// Unsent or unreadable: the bubble keeps its shape and time, and its text is a quiet italic notice.
-    var showsPlaceholder: Bool { isRetracted || unreadable != nil }
-    var placeholder: String {
-        if let unreadable { return UnreadableCopy.bubble(unreadable, isOutgoing: isOutgoing) }
-        return isOutgoing ? "You unsent a message" : "Message unsent"
-    }
-
-    enum Status: String, Sendable, Equatable {
-        case queued, submitting, unconfirmed, failed, serverAccepted, delivered, displayed
-
-        var accessibilityDescription: String {
-            switch self {
-            case .queued: "Waiting to send"
-            case .submitting: "Sending"
-            case .unconfirmed: "Sending, not yet confirmed"
-            case .failed: "Not sent"
-            case .serverAccepted: "Sent"
-            case .delivered: "Delivered"
-            case .displayed: "Read"
-            }
-        }
-
-        var canRetry: Bool { self == .unconfirmed || self == .failed }
-    }
-}
-
-/// One place for the words; the bubble, the chat list and VoiceOver read the same ones.
-enum UnreadableCopy {
-    static func bubble(_ reason: UnreadableReason, isOutgoing: Bool) -> String {
-        switch reason {
-        case .notForThisDevice: isOutgoing ? "Sent from another device and not encrypted for this \(ThisDevice.noun)" : "Not encrypted for this \(ThisDevice.noun)"
-        case .unsupportedEncryption, .malformedContent, .decryptFailed: "Couldn't read this message"
-        case .rejectedDevice: isOutgoing ? "Sent from a device you blocked" : "From a device you blocked"
-        case .retentionLimit: "Not kept: too many messages waiting for review"
-        }
-    }
-    static func preview(_ reason: UnreadableReason) -> String {
-        switch reason {
-        case .notForThisDevice: "Not encrypted for this \(ThisDevice.noun)"
-        case .unsupportedEncryption, .malformedContent, .decryptFailed: "Couldn't read this message"
-        case .rejectedDevice: "From a device you blocked"
-        case .retentionLimit: "Not kept: too many messages waiting"
-        }
-    }
-}
-
-/// Why a server returned a message (`StoredMessage.rejection`), in our words: the error's own text is written by
-/// whoever bounced it and is never shown. The alert, the retry dialog and VoiceOver read the same sentence.
-enum RejectionCopy {
-    static func reason(_ rejection: String, isGroup: Bool) -> String {
-        switch rejection {
-        case "blocked": "You blocked this contact."
-        case "item-not-found", "service-unavailable", "gone", "jid-malformed", "registration-required", "subscription-required":
-            isGroup ? "The group isn't available." : "This address doesn't exist or isn't accepting messages."
-        case "remote-server-not-found": "Their server couldn't be found."
-        case "remote-server-timeout": "Their server didn't answer."
-        case "not-acceptable", "not-allowed": isGroup ? "You weren't in the group when it was sent." : "Their server refused it."
-        case "forbidden", "not-authorized": isGroup ? "You aren't allowed to send to this group." : "Their server refused it."
-        case "policy-violation": "A server refused it under its rules."
-        case "resource-constraint", "internal-server-error": "A server couldn't handle it right now."
-        default: "A server returned it."
-        }
-    }
-}
-
-/// Which status mark a sent message shows. A socket write is not delivery: until the server accepts the
-/// message it keeps the dashed sending ring, spinning only while the outbox is actively working on it.
-enum MessageStatusGlyph: Equatable, Sendable {
-    case sending(spinning: Bool), sent, delivered, read, failed
-
-    static func glyph(for status: TimelineMessage.Status) -> MessageStatusGlyph {
-        switch status {
-        case .queued, .submitting: .sending(spinning: true)
-        case .unconfirmed: .sending(spinning: false)
-        case .failed: .failed
-        case .serverAccepted: .sent
-        case .delivered: .delivered
-        case .displayed: .read
-        }
-    }
-}
-
-/// Someone is typing: a received-style bubble of dots after the newest message.
-struct TimelineTyping: Sendable, Equatable {
-    /// Group only: who, above the bubble like a message author.
-    let author: String?
-    /// The author colour's key, so the line matches that sender's messages.
-    let colorKey: String
-    let accessibilityLabel: String
-}
-
-/// A message plus what its neighbours decide: day header, run start (spacing, sender name) and run end (tail corner).
-struct TimelineRow: Equatable {
-    let message: TimelineMessage
-    let dateHeader: String?
-    let startsRun: Bool
-    let endsRun: Bool
-
-    static func rows(for messages: [TimelineMessage]) -> [TimelineRow] {
-        let calendar = Calendar.current
-        var headers: [String?] = []
-        var starts: [Bool] = []
-        var lastDay: Date?
-        for (index, message) in messages.enumerated() {
-            var header: String?
-            if let date = message.sentAt {
-                if lastDay.map({ !calendar.isDate($0, inSameDayAs: date) }) ?? true {
-                    header = calendar.isDateInToday(date) ? "Today" : calendar.isDateInYesterday(date) ? "Yesterday" : date.formatted(date: .abbreviated, time: .omitted)
-                }
-                lastDay = date
-            }
-            let previous = index > 0 ? messages[index - 1] : nil
-            let continues = previous.map { $0.isOutgoing == message.isOutgoing && $0.author == message.author } ?? false
-            headers.append(header)
-            starts.append(header != nil || !continues)
-        }
-        return messages.indices.map { index in
-            TimelineRow(message: messages[index], dateHeader: headers[index], startsRun: starts[index],
-                        endsRun: index == messages.count - 1 || starts[index + 1])
-        }
-    }
-}
-
 /// Native baseline for the first transport milestone. Composer and message state belong to the parent.
 struct ConversationTimeline: UIViewControllerRepresentable {
     let messages: [TimelineMessage]
@@ -288,10 +66,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
     private var rows: [TimelineRow] = []
     private var rowsByID: [String: TimelineRow] = [:]
-    /// The typing bubble is the last item when someone types; no stored message ID contains a NUL.
-    private static let typingID = "typing\u{0}"
-    /// The loading-earlier cell is the first item while the model backfills this chat's archive.
-    static let loadingEarlierID = "loading-earlier\u{0}"
     private var typing: TimelineTyping?
     private var loadingEarlier = false
     private var typingArrived = false
@@ -404,7 +178,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         composerHost.didMove(toParent: self)
         view = container
         dataSource = UICollectionViewDiffableDataSource<Int, String>(collectionView: collectionView) { [weak self] collection, indexPath, id in
-            if id == Self.typingID {
+            if id == TimelineItems.typingID {
                 // A snapshot can outlive the typing it was built for; the cell then stays empty until the next apply.
                 let cell = collection.dequeueReusableCell(withReuseIdentifier: "typing", for: indexPath)
                 let typing = self?.typing
@@ -412,7 +186,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                 if let typing { (cell as? TypingIndicatorCell)?.configure(typing) }
                 return cell
             }
-            if id == Self.loadingEarlierID {
+            if id == TimelineItems.loadingEarlierID {
                 let cell = collection.dequeueReusableCell(withReuseIdentifier: "loadingEarlier", for: indexPath)
                 (cell as? LoadingEarlierCell)?.startAnimating()
                 return cell
@@ -469,9 +243,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         self.onUnsend = onUnsend
         self.onOpenEncryption = onOpenEncryption
         self.onDisplayed = onDisplayed
-        // The durable store supplies unique IDs. Avoid a diffable crash if a caller repeats an ID.
-        var seen = Set<String>()
-        let uniqueRows = TimelineRow.rows(for: incoming.filter { seen.insert($0.id).inserted })
+        let uniqueRows = TimelineItems.rows(for: incoming)
         let accentChanged = accent != self.accent
         let typingChanged = typing != self.typing
         let loadingChanged = loadingEarlier != self.loadingEarlier
@@ -481,19 +253,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         let typingLeft = self.typing != nil && typing == nil
         typingArrived = self.typing == nil && typing != nil
         self.typing = typing
-        // Only a message arriving at the tail moves, and only when the reader is at the tail; nothing else animates.
-        // Judged from the tail alone: the loaded window is the newest N, so its head moves as messages arrive.
-        let newIDs = uniqueRows.map(\.message.id)
-        let tailStart = rows.last.flatMap { newIDs.lastIndex(of: $0.message.id) }.map { $0 + 1 } ?? newIDs.count
-        let appended = tailStart < newIDs.count
-        // Sending always returns to the newest message, wherever the reader was.
-        let sentOwn = uniqueRows[tailStart...].contains { $0.message.isOutgoing }
-        let wasNearBottom = isNearBottom
-        let firstContent = rows.isEmpty
-        let shouldFollow = firstContent || wasNearBottom || sentOwn
-        // From far up in history a send jumps; a slide would cross cells that were never drawn.
-        // The typing bubble coming or going at the tail moves the same way as a message arriving.
-        let slidesIn = !firstContent && (appended || typingChanged) && wasNearBottom && view.window != nil && !UIAccessibility.isReduceMotionEnabled
+        let plan = TimelineScrollPolicy.Update(previousTailID: rows.last?.message.id, rows: uniqueRows, wasNearBottom: isNearBottom,
+                                               typingChanged: typingChanged, typingLeft: typingLeft,
+                                               canAnimate: view.window != nil && !UIAccessibility.isReduceMotionEnabled)
         let anchor = visibleAnchor()
         let previous = rowsByID
         rows = uniqueRows
@@ -502,22 +264,17 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         let currentRevision = revision
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
-        // Above the oldest message; the anchor below skips it, so it comes and goes without moving the reader.
-        if loadingEarlier { snapshot.appendItems([Self.loadingEarlierID]) }
-        snapshot.appendItems(uniqueRows.map(\.message.id))
-        if typing != nil { snapshot.appendItems([Self.typingID]) }
-        var changed = uniqueRows.compactMap { row -> String? in
-            guard let old = previous[row.message.id], old != row || accentChanged else { return nil }
-            return row.message.id
-        }
-        if typing != nil, !typingArrived, typingChanged { changed.append(Self.typingID) }
-        snapshot.reconfigureItems(changed)
+        // The loading cell sits above the oldest message; the anchor below skips it, so it comes and goes without
+        // moving the reader.
+        snapshot.appendItems(TimelineItems.identifiers(rows: uniqueRows, loadingEarlier: loadingEarlier, typing: typing != nil))
+        snapshot.reconfigureItems(TimelineItems.reconfigured(rows: uniqueRows, previous: previous, accentChanged: accentChanged,
+                                                             typingChangedInPlace: typing != nil && !typingArrived && typingChanged))
         // A shrinking content size clamps the offset during the apply, so a slide back down starts from here.
         let offsetBefore = collectionView.contentOffset.y
         if typingLeft { fadeOutTypingCell() }
         // Every offset decision happens in this call, before the next frame: waiting for an apply's completion let a
         // frame show a first load at the top of its window, or a prepend at the old offset.
-        if firstContent {
+        if plan.placement == .newestAtOnce {
             // Nothing on screen to diff against: load the cells in place and land on the newest message at once.
             dataSource.applySnapshotUsingReloadData(snapshot)
             collectionView.layoutIfNeeded()
@@ -532,9 +289,10 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             dataSource.applySnapshotUsingReloadData(snapshot)
         }
         collectionView.layoutIfNeeded()
-        if slidesIn {
+        switch plan.placement {
+        case .slideToNewest:
             // Settle the final offset first so the new cells exist, then play the distance back.
-            let start = typingLeft && !appended ? offsetBefore : collectionView.contentOffset.y
+            let start = plan.slidesFromPreviousOffset ? offsetBefore : collectionView.contentOffset.y
             scrollToBottom()
             let end = collectionView.contentOffset.y
             collectionView.contentOffset.y = start
@@ -545,19 +303,23 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                 sliding = false
                 if followsBottom { scrollToBottom() }
             }
-        } else if shouldFollow {
+        case .newestAtOnce:
+            break // Landed before the diffing apply above.
+        case .followNewest:
             followBottom()
-        } else if let anchor, let indexPath = dataSource.indexPath(for: anchor.id),
-                  let attributes = collectionView.layoutAttributesForItem(at: indexPath) {
-            collectionView.contentOffset.y = clampedOffset(attributes.frame.minY - anchor.distanceFromTop)
+        case .keepAnchor:
+            if let anchor, let indexPath = dataSource.indexPath(for: anchor.id),
+               let attributes = collectionView.layoutAttributesForItem(at: indexPath) {
+                collectionView.contentOffset.y = TimelineScrollPolicy.offsetKeepingAnchor(itemTop: attributes.frame.minY, distanceFromTop: anchor.distanceFromTop, in: viewport)
+            }
         }
-        followsBottom = shouldFollow || isNearBottom
+        followsBottom = plan.followsAfterwards(isNearBottom: isNearBottom)
         recordBottomEdge()
     }
 
     /// The typing bubble leaves as a fading copy; the cell itself goes with the apply.
     private func fadeOutTypingCell() {
-        guard let path = dataSource.indexPath(for: Self.typingID), let cell = collectionView.cellForItem(at: path),
+        guard let path = dataSource.indexPath(for: TimelineItems.typingID), let cell = collectionView.cellForItem(at: path),
               let ghost = cell.snapshotView(afterScreenUpdates: false) else { return }
         ghost.frame = cell.frame
         ghost.isUserInteractionEnabled = false
@@ -581,7 +343,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     /// now, under the fading blur, and the timeline rides up with it while the snapshot returns to where the press
     /// found the bubble. Returns true in that case: the live bubble lands there again, not where it is this moment.
     private func actionsWillDismiss(chosen: MessageAction.Kind?) -> Bool {
-        let keyboardFree = chosen.map(Self.leavesKeyboardFree) ?? true
+        let keyboardFree = chosen?.returnsFocusToComposer ?? true
         defer { restoresKeyboard = false }
         // The attachment panel reopens itself instead when it was up before the menu.
         if attachmentKeyboard?.menuDismissed(choseAction: !keyboardFree) == true { return true }
@@ -594,13 +356,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         actionsVisible = false
         heldUpdate?()
         heldUpdate = nil
-    }
-
-    private static func leavesKeyboardFree(_ kind: MessageAction.Kind) -> Bool {
-        switch kind {
-        case .copy, .star, .retry: true
-        case .reply, .edit, .selectText, .unsend, .encryptionDetails: false
-        }
     }
 
     /// A rightward swipe that starts on a message row is a reply; at the leading edge, on a day header or where there is
@@ -695,7 +450,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         if !collectionView.isTracking {
             if followsBottom { followBottom() }
             // Reading history: keep the same messages above the composer instead of letting it cover them.
-            else { collectionView.contentOffset.y = clampedOffset(bottomEdgeY - collectionView.bounds.height + inset) }
+            else { collectionView.contentOffset.y = TimelineScrollPolicy.offsetKeepingBottomEdge(bottomEdgeY, bottomInset: inset, in: viewport) }
         }
         recordBottomEdge()
     }
@@ -718,7 +473,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         guard abs(top - knownAdjustedTop) > 0.5 else { return }
         knownAdjustedTop = top
         guard followsBottom, !sliding, !scrollView.isTracking else { return }
-        scrollView.contentOffset.y = clampedOffset(.greatestFiniteMagnitude)
+        scrollView.contentOffset.y = viewport.clamped(.greatestFiniteMagnitude)
         recordBottomEdge()
     }
 
@@ -748,8 +503,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         }
         guard scrollView.isDragging || scrollView.isDecelerating else { return }
         followsBottom = isNearBottom
-        // A few screens early, so older messages are usually in place before the reader arrives.
-        if scrollView.contentOffset.y + scrollView.adjustedContentInset.top < 1200 { onReachTop() }
+        if TimelineScrollPolicy.requestsOlderHistory(in: viewport(of: scrollView)) { onReachTop() }
     }
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -904,24 +658,22 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         dataSource.indexPath(for: id).flatMap { collectionView.cellForItem(at: $0) as? MessageBubbleCell }
     }
 
-    private var isNearBottom: Bool {
-        collectionView.contentSize.height + collectionView.adjustedContentInset.bottom
-            - collectionView.contentOffset.y - collectionView.bounds.height < 80
+    private var viewport: TimelineViewport { viewport(of: collectionView) }
+
+    private func viewport(of scrollView: UIScrollView) -> TimelineViewport {
+        TimelineViewport(offset: scrollView.contentOffset.y, height: scrollView.bounds.height, contentHeight: scrollView.contentSize.height,
+                         insetTop: scrollView.adjustedContentInset.top, insetBottom: scrollView.adjustedContentInset.bottom)
     }
+
+    private var isNearBottom: Bool { viewport.isNearBottom }
 
     /// The first visible message. Never the loading-earlier cell: anchored on it, its removal would drop the reader.
     private func visibleAnchor() -> Anchor? {
         let visible = collectionView.indexPathsForVisibleItems.sorted()
-        guard let path = visible.first(where: { dataSource.itemIdentifier(for: $0) != Self.loadingEarlierID }),
+        guard let path = visible.first(where: { TimelineScrollPolicy.canAnchor(on: dataSource.itemIdentifier(for: $0)) }),
               let id = dataSource.itemIdentifier(for: path),
               let attributes = collectionView.layoutAttributesForItem(at: path) else { return nil }
         return Anchor(id: id, distanceFromTop: attributes.frame.minY - collectionView.contentOffset.y)
-    }
-
-    private func clampedOffset(_ value: CGFloat) -> CGFloat {
-        let minimum = -collectionView.adjustedContentInset.top
-        let maximum = max(minimum, collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom)
-        return min(maximum, max(minimum, value))
     }
 
     /// A status tick landing mid-slide must not cut it short; the slide settles at the bottom itself.
@@ -930,12 +682,12 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private func scrollToBottom() {
         // scrollToItem sizes the final cells first; the clamp then lands on the real content height. A cell that
         // self-sizes as it comes on screen changes that height again, so settle until it holds (usually at once).
-        if let last = typing != nil ? Self.typingID : rows.last?.message.id, let path = dataSource.indexPath(for: last) {
+        if let last = typing != nil ? TimelineItems.typingID : rows.last?.message.id, let path = dataSource.indexPath(for: last) {
             collectionView.scrollToItem(at: path, at: .bottom, animated: false)
             collectionView.layoutIfNeeded()
         }
         for _ in 0..<3 {
-            let bottom = clampedOffset(.greatestFiniteMagnitude)
+            let bottom = viewport.clamped(.greatestFiniteMagnitude)
             guard abs(collectionView.contentOffset.y - bottom) > 0.5 else { break }
             collectionView.contentOffset.y = bottom
             collectionView.layoutIfNeeded()
@@ -1437,28 +1189,22 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         }
     }
 
-    /// The one action list; the overlay menu and VoiceOver custom actions both read it.
+    /// The one action list (`MessageActionMenu`); the overlay menu and VoiceOver custom actions both read it.
     private func actions() -> [MessageAction] {
         guard let message else { return [] }
-        // A placeholder is a notice, not content: nothing to quote, copy, star or select; only why it is unreadable.
-        if message.unreadable != nil {
-            return [MessageAction(kind: .encryptionDetails, title: "Encryption details", symbol: "lock.shield", perform: openEncryptionAction)]
+        return MessageActionMenu.items(for: message).map { item in
+            let perform: () -> Void = switch item.kind {
+            case .encryptionDetails: openEncryptionAction
+            case .star: toggleStar
+            case .reply: replyAction
+            case .copy: { UIPasteboard.general.string = message.body }
+            case .selectText: { [weak self] in self?.beginTextSelection() }
+            case .retry: retry
+            case .edit: editAction
+            case .unsend: unsendAction
+            }
+            return MessageAction(item, perform: perform)
         }
-        let star = MessageAction(kind: .star, title: message.isStarred ? "Unstar message" : "Star message", symbol: message.isStarred ? "star.slash" : "star", perform: toggleStar)
-        // An unsent bubble has no text to quote, copy or select.
-        if message.isRetracted { return [star] }
-        var actions: [MessageAction] = [
-            MessageAction(kind: .reply, title: "Reply", symbol: "arrowshape.turn.up.left", perform: replyAction),
-            MessageAction(kind: .copy, title: "Copy", symbol: "doc.on.doc") { UIPasteboard.general.string = message.body },
-            star,
-            MessageAction(kind: .selectText, title: "Select text", symbol: "text.cursor") { [weak self] in self?.beginTextSelection() }
-        ]
-        if message.isOutgoing, message.status?.canRetry == true {
-            actions.append(MessageAction(kind: .retry, title: "Retry message", symbol: "arrow.clockwise", perform: retry))
-        }
-        if message.canEdit { actions.append(MessageAction(kind: .edit, title: "Edit", symbol: "pencil", perform: editAction)) }
-        if message.canUnsend { actions.append(MessageAction(kind: .unsend, title: "Unsend", symbol: "trash", perform: unsendAction)) }
-        return actions
     }
 
     @objc private func handlePress(_ press: UILongPressGestureRecognizer) {
@@ -1732,41 +1478,28 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         star.tintColor = meta
         replyIndicator.tintColor = theme.tint
         // An unsent or unreadable message keeps its bubble and time; the text becomes a quiet italic placeholder.
-        let shown = message.showsPlaceholder ? message.placeholder : message.body
+        let shown = message.displayedText
         if textView.text != shown { textView.text = shown }
         let bodyDescriptor = UIFontDescriptor.preferredFontDescriptor(withTextStyle: .body)
         textView.font = message.showsPlaceholder ? UIFont(descriptor: bodyDescriptor.withSymbolicTraits(.traitItalic) ?? bodyDescriptor, size: 0) : .preferredFont(forTextStyle: .body)
         textView.textColor = message.showsPlaceholder ? meta : text
         configureAttachment(message.showsPlaceholder ? nil : message.attachment, isOutgoing: message.isOutgoing, textColor: text)
-        let speaker = message.isOutgoing ? "You" : (message.author ?? "Contact")
-        var descriptions = [shown.isEmpty ? speaker : "\(speaker): \(shown)"]
-        if message.unreadable != nil { descriptions.append("not readable on this device") }
-        if message.isEdited { descriptions.append("edited") }
-        if !message.showsPlaceholder, let attachment = message.attachment { descriptions.append("\(attachment.kindLabel) \(attachment.name)" + (attachment.localURL == nil ? ", " + attachment.downloadAccessibility : "")) }
-        if let quote = message.reply { descriptions.append("Replying to \(quote.author): \(quote.body)") }
-        if message.isStarred { descriptions.append("starred") }
-        if let date = message.sentAt { descriptions.append(date.formatted(date: .abbreviated, time: .shortened)) }
-        if message.isOutgoing, let state = message.status {
-            descriptions.append(message.failure.flatMap { state == .failed ? "Not delivered: \($0)" : nil } ?? state.accessibilityDescription)
-        }
-        if let notice = message.securityNotice { descriptions.append(notice) }
-        if !message.reactions.isEmpty { descriptions.append(message.reactions.map(\.accessibilityDescription).joined(separator: ", ")) }
         for pill in reactionRow.arrangedSubviews { pill.removeFromSuperview() }
         for reaction in message.reactions {
             reactionRow.addArrangedSubview(ReactionPill(reaction, onTap: message.canReact ? { [weak self] in self?.reactionAction(reaction.emoji) } : nil))
         }
         var customActions = actions().map { action in UIAccessibilityCustomAction(name: action.title) { _ in action.perform(); return true } }
-        if let url = message.attachment?.localURL {
-            customActions.append(UIAccessibilityCustomAction(name: "Open \(message.attachment?.kindLabel.lowercased() ?? "file")") { [weak self] _ in self?.openAttachment(url); return true })
-        } else if !message.showsPlaceholder, let attachment = message.attachment, attachment.download.canRequest {
-            customActions.append(UIAccessibilityCustomAction(name: "Download \(attachment.kindLabel.lowercased())") { [weak self] _ in self?.download(); return true })
+        if let (title, action) = MessageActionMenu.attachmentAction(for: message) {
+            customActions.append(UIAccessibilityCustomAction(name: title) { [weak self] _ in
+                switch action {
+                case .open(let url): self?.openAttachment(url)
+                case .download: self?.download()
+                }
+                return true
+            })
         }
-        if message.canReact {
-            let selected = Set(message.reactions.filter(\.isSelected).map(\.emoji))
-            for emoji in TimelineReaction.choices {
-                let actionName = "\(selected.contains(emoji) ? "Remove" : "Add") \(TimelineReaction.name(for: emoji)) reaction"
-                customActions.append(UIAccessibilityCustomAction(name: actionName) { _ in reaction(emoji); return true })
-            }
+        for (emoji, title) in MessageActionMenu.reactionToggles(for: message) {
+            customActions.append(UIAccessibilityCustomAction(name: title) { _ in reaction(emoji); return true })
         }
         // The text view speaks for the message; a file with no caption hides it, so the file itself speaks instead
         // (otherwise VoiceOver could not reach the message at all).
@@ -1774,16 +1507,16 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         attachmentArea.isAccessibilityElement = textView.isHidden
         attachmentArea.accessibilityTraits = textView.isHidden && showsPreview ? .image : .none
         for view in [textView, attachmentArea] as [UIView] {
-            view.accessibilityLabel = view === speaksForMessage ? descriptions.joined(separator: ", ") : nil
+            view.accessibilityLabel = view === speaksForMessage ? message.accessibilityDescription : nil
             view.accessibilityCustomActions = view === speaksForMessage ? customActions : nil
         }
         star.alpha = message.isStarred ? 1 : 0
-        time.text = [message.isEdited ? "Edited" : nil, message.securityNotice, message.sentAt?.formatted(date: .omitted, time: .shortened)].compactMap { $0 }.joined(separator: " · ")
-        time.isHidden = message.sentAt == nil && message.securityNotice == nil && !message.isEdited
-        status.isHidden = !message.isOutgoing || message.status == nil
+        time.text = message.footerText
+        time.isHidden = !message.showsFooterText
+        status.isHidden = message.statusGlyph == nil
         // Neutral like the time: read is told by the filled rings and failure by the filled exclamation, never by colour.
         status.tintColor = meta
-        status.show(message.isOutgoing ? message.status.map(MessageStatusGlyph.glyph(for:)) : nil)
+        status.show(message.statusGlyph)
         setNeedsLayout()
     }
 }
