@@ -2648,10 +2648,10 @@ final class AppModel {
     /// One account-level refresh of the account's other devices, or nil when it cannot run now (`ownDevicePasses`
     /// keeps the request for the next one).
     private func ownDevicePass() -> (@MainActor () async -> Void)? {
-        guard foreground, !quiescing, hasTransportOwnership, session.isReady, !isDemo, let client, let encryption else { return nil }
+        guard transportWanted, !quiescing, hasTransportOwnership, session.isReady, !isDemo, let client, let encryption else { return nil }
         let account = accountID, token = generation
         return { [weak self] in
-            guard let self, self.foreground, !self.quiescing, self.generation == token else { return }
+            guard let self, self.transportWanted, !self.quiescing, self.generation == token else { return }
             self.activeEncryptionOperations += 1
             defer { self.activeEncryptionOperations -= 1 }
             do {
@@ -2673,7 +2673,7 @@ final class AppModel {
             changeSampleOwnDevices(candidate) { $0.trust = trust }
             return
         }
-        guard hasTransportOwnership, foreground, !quiescing else { return }
+        guard hasTransportOwnership, transportWanted, !quiescing else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         guard let encryption else { return }
@@ -2701,7 +2701,7 @@ final class AppModel {
             changeSampleOwnDevices(candidate) { $0.trust = .rejected; $0.active = false }
             return
         }
-        guard hasTransportOwnership, foreground, !quiescing, let record = candidate.records.first else { return }
+        guard hasTransportOwnership, transportWanted, !quiescing, let record = candidate.records.first else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         guard let encryption, let client, isConnected else {
