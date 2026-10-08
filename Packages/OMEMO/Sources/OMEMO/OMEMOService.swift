@@ -129,25 +129,11 @@ public actor OMEMOService {
             // side speaks only the other version left messages queued indefinitely.
             let onlyOther = Set(otherIDs).subtracting(ids).count
             if onlyOther > 0 { incompatible = true; otherVersionOnly[owner] = onlyOther }
-            for index in state.devices.indices where state.devices[index].jid == owner && state.devices[index].profile == profile {
-                state.devices[index].active = false
+            let missing = try await mergeAdvertised(ids, owner: owner, profile: profile, skipping: owner == account ? local.deviceID : nil,
+                                                    into: &state) { id in
+                try await self.availableBundle(owner: owner, deviceID: id, profile: profile, transport: transport)
             }
-            for id in ids where !(owner == account && id == local.deviceID) {
-                let bundle: XMPPOMEMOBundle
-                do { bundle = try await transport.fetchOMEMOBundle(for: owner, deviceID: id, profile: profile) }
-                catch XMPPIQError.stanza(condition: "item-not-found"), XMPPIQError.malformedResponse {
-                    // Device lists in the wild carry stale IDs whose bundles are gone or unreadable. A device
-                    // reviewed earlier keeps its stored key rather than vanishing on a server hiccup; an
-                    // unknown one cannot be reviewed yet, so it is counted instead of failing the refresh.
-                    if let index = state.devices.lastIndex(where: { $0.jid == owner && $0.profile == profile && $0.deviceID == id }) {
-                        state.devices[index].active = true
-                    } else { unavailable[owner, default: 0] += 1 }
-                    continue
-                }
-                // A bundle that fails validation still fails closed: it must never deactivate a reviewed key.
-                try validateBundle(bundle, id: id, profile: profile)
-                mergeDevice(bundle, owner: owner, profile: profile, id: id, into: &state)
-            }
+            if missing > 0 { unavailable[owner] = missing }
         }
         // An empty probe (offline server, missing node) must not pin a version the peer never published.
         if updateSelection, !(probedEmpty && !peerAdvertises) { state.profiles[peer] = profile }
@@ -159,6 +145,41 @@ public actor OMEMOService {
         result.advertisedDevices = advertised
         result.otherVersionOnlyDevices = otherVersionOnly
         return result
+    }
+
+    /// Replaces what is stored for `owner` in `profile` with the advertised `ids`: unlisted devices go inactive, listed
+    /// ones are merged (`mergeDevice`) from `bundle`, and `skipping` (this installation) is left out. `bundle` answers nil
+    /// for a listed device whose bundle is gone or unreadable (`availableBundle`). Returns how many such devices were
+    /// never seen before.
+    func mergeAdvertised(_ ids: [UInt32], owner: String, profile: XMPPOMEMOProfile, skipping localDeviceID: UInt32?,
+                         into state: inout AccountEncryptionState,
+                         bundle: (UInt32) async throws -> XMPPOMEMOBundle?) async throws -> Int {
+        var missing = 0
+        for index in state.devices.indices where state.devices[index].jid == owner && state.devices[index].profile == profile {
+            state.devices[index].active = false
+        }
+        for id in ids where id != localDeviceID {
+            guard let bundle = try await bundle(id) else {
+                // A device reviewed earlier keeps its stored key rather than vanishing on a server hiccup; an unknown
+                // one cannot be reviewed yet, so it is counted instead of failing the refresh.
+                if let index = state.devices.lastIndex(where: { $0.jid == owner && $0.profile == profile && $0.deviceID == id }) {
+                    state.devices[index].active = true
+                } else { missing += 1 }
+                continue
+            }
+            // A bundle that fails validation still fails closed: it must never deactivate a reviewed key.
+            try validateBundle(bundle, id: id, profile: profile)
+            mergeDevice(bundle, owner: owner, profile: profile, id: id, into: &state)
+        }
+        return missing
+    }
+
+    /// One listed device's bundle, or nil when it is gone or unreadable: device lists in the wild carry stale IDs. Any
+    /// other failure (timeout, server error) is not proof of absence and fails the caller.
+    func availableBundle(owner: String, deviceID: UInt32, profile: XMPPOMEMOProfile,
+                         transport: any OMEMOTransport) async throws -> XMPPOMEMOBundle? {
+        do { return try await transport.fetchOMEMOBundle(for: owner, deviceID: deviceID, profile: profile) }
+        catch XMPPIQError.stanza(condition: "item-not-found"), XMPPIQError.malformedResponse { return nil }
     }
 
     /// Records one validated bundle for a scoped device, the same way for the full refresh and the receive path's
@@ -252,11 +273,19 @@ public actor OMEMOService {
     /// The UI supplies the full fingerprint-scoped identifier it displayed, preventing a stale
     /// trust sheet from accepting a replacement key under the same numerical device ID.
     public func setTrust(account: String, deviceID: String, trust: DeviceTrust) async throws {
+        try await setTrust(account: account, deviceIDs: [deviceID], trust: trust)
+    }
+
+    /// One decision for several fingerprint-scoped identifiers, saved together or not at all: the account-level review
+    /// decides a device's records in both OMEMO versions at once when they carry the same identity.
+    public func setTrust(account: String, deviceIDs: [String], trust: DeviceTrust) async throws {
         try await gate.run {
             let (revision, old) = try await self.load(account)
             var state = old
-            guard let index = state.devices.firstIndex(where: { $0.id == deviceID }), state.devices[index].active else { throw OMEMOError.identityChanged }
-            state.devices[index].trust = trust
+            for deviceID in deviceIDs {
+                guard let index = state.devices.firstIndex(where: { $0.id == deviceID }), state.devices[index].active else { throw OMEMOError.identityChanged }
+                state.devices[index].trust = trust
+            }
             try await self.save(state, revision: revision, account: account)
         }
     }
@@ -405,7 +434,7 @@ public actor OMEMOService {
         return ids
     }
 
-    private func validateBundle(_ bundle: XMPPOMEMOBundle, id: UInt32, profile: XMPPOMEMOProfile) throws {
+    func validateBundle(_ bundle: XMPPOMEMOBundle, id: UInt32, profile: XMPPOMEMOProfile) throws {
         let width = profile == .legacy ? 33 : 32
         guard bundle.deviceID == id, bundle.profile == profile,
               bundle.signedPreKeyID > 0, bundle.signedPreKeyID <= Int32.max,

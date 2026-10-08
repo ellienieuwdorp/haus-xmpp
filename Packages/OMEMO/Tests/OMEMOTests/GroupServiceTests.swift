@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 import MessageStore
 import XMPPProtocol
+import OMEMOCrypto
 @testable import OMEMO
 
 private actor RoomFixture {
@@ -245,6 +246,56 @@ private struct GroupTransport: OMEMOGroupTransport {
         do { _ = try await f.a.outgoingGroupEnvelope(account: f.alice, messageID: message.id, room: roomID, transport: transport); XCTFail() } catch {}
         let after = try await f.aStore.encryptedOutgoing(accountID: f.alice, messageID: message.id)
         XCTAssertEqual(before, after)
+    }
+
+    /// The user's Don't Trust on another device of their own account leaves it out of group sends, as 1:1 chats leave it
+    /// out. An undecided own device (a changed identity included) and another member's rejected device still hold the group.
+    func testRejectedOwnDeviceIsLeftOutWhileOtherHoldsRemain() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let room = RoomFixture(), roomID = "private@conference.localhost"
+        let transport = GroupTransport(base: f.aTransport, room: room)
+        let secondStore = try f.openStore("alice-second.sqlite")
+        try await secondStore.acquireTransportOwnership()
+        let second = OMEMOService(store: secondStore, protection: f.protection)
+        try await second.initialize(account: f.alice, transport: f.aTransport)
+        try await f.a.maintainLocalAdvertisement(account: f.alice, profile: .modern, transport: f.aTransport)
+        let secondID = try await second.localIdentity(account: f.alice, profile: .modern).deviceID
+        try await f.aStore.upsertChat(accountID: f.alice, chatID: roomID, title: "Private group")
+        func queue() async throws -> String {
+            let message = StoredMessage(id: UUID().uuidString, accountID: f.alice, chatID: roomID, senderID: f.alice, body: "Hi", isOutgoing: true)
+            _ = try await f.aStore.enqueueOutgoing(message)
+            return message.id
+        }
+        func expectHeld(_ id: String, _ reason: String) async throws {
+            do { try await f.a.prepareGroupMessage(account: f.alice, messageID: id, room: roomID, transport: transport); XCTFail(reason) }
+            catch { XCTAssertEqual(error as? OMEMOError, .trustRequired, reason) }
+        }
+
+        let first = try await queue()
+        try await expectHeld(first, "an undecided own device needs review")
+        let own = try await f.a.ownDevices(account: f.alice).filter { $0.deviceID == secondID && $0.profile == .modern && $0.active }
+        XCTAssertEqual(own.map(\.trust), [.undecided])
+        try await f.a.setTrust(account: f.alice, deviceIDs: own.map(\.id), trust: .rejected)
+        let overview = try await f.a.refreshGroupDevices(account: f.alice, room: roomID, transport: transport)
+        XCTAssertFalse(overview.needsTrust)
+        try await f.a.prepareGroupMessage(account: f.alice, messageID: first, room: roomID, transport: transport)
+        let prepared = try await f.a.outgoingGroupEnvelope(account: f.alice, messageID: first, room: roomID, transport: transport)
+        XCTAssertFalse(prepared.envelope.keys.contains { $0.recipientJID == f.alice && $0.deviceID == secondID })
+        XCTAssertTrue(prepared.envelope.keys.contains { $0.recipientJID == f.bob })
+
+        // The exclusion is the account's own decision only: Bob's rejected device keeps holding the group.
+        let bob = try XCTUnwrap(overview.devices.first { $0.jid == f.bob && $0.active })
+        try await f.a.setTrust(account: f.alice, deviceID: bob.id, trust: .rejected)
+        try await expectHeld(try await queue(), "another member's rejected device holds the group")
+        try await f.a.setTrust(account: f.alice, deviceID: bob.id, trust: .accepted)
+
+        // The rejected device publishes a new identity under the same ID: a new undecided record, reviewed again.
+        let replacement = try OMEMOEngine(profile: .modern, deviceID: secondID).bundle()
+        await f.server.publish(f.alice, XMPPOMEMOBundle(profile: .modern, deviceID: secondID, identityKey: replacement.identityKey,
+                                                        signedPreKeyID: replacement.signedPreKeyID, signedPreKey: replacement.signedPreKey,
+                                                        signedPreKeySignature: replacement.signedPreKeySignature, preKeys: replacement.preKeys))
+        try await expectHeld(try await queue(), "a changed own identity needs review")
     }
 
     /// In a room, as in a direct chat: a blocked member device's message is a quiet placeholder in the room on arrival, and

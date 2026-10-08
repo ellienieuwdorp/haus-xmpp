@@ -17,7 +17,9 @@ public struct PreparedGroupMessage: Sendable {
 public struct GroupEncryptionOverview: Sendable {
     public let room: XMPPGroupRoomSnapshot
     public let devices: [EncryptionDevice]
-    public var needsTrust: Bool { devices.contains { !$0.trust.permitsEncryption } }
+    let account: String
+    /// The same rule as `groupRecipients`: a rejected own device is left out, so it does not hold the group.
+    public var needsTrust: Bool { devices.contains { !$0.trust.permitsEncryption && !$0.isLeftOutOfGroups(account: account) } }
 }
 
 struct RetainedGroupEnvelope: Codable {
@@ -77,7 +79,7 @@ extension OMEMOService {
         state.groupRooms[room] = snapshot.members
         try await save(state, revision: revision, account: account)
         let devices = state.devices.filter { snapshot.members.contains($0.jid) && $0.profile == .modern && $0.active }
-        return GroupEncryptionOverview(room: confirmed, devices: devices)
+        return GroupEncryptionOverview(room: confirmed, devices: devices, account: account)
     }
 
     /// Uses an already durable message intention. Group membership and recipient fingerprints
@@ -127,8 +129,12 @@ extension OMEMOService {
 
     func groupRecipients(state: AccountEncryptionState, members: [String], account: String) throws -> [EncryptionDevice] {
         guard members.contains(account), Set(members).count == members.count else { throw XMPPGroupError.incompleteMembership }
-        let recipients = state.devices.filter { members.contains($0.jid) && $0.profile == .modern && $0.active }
-        // Rejected devices block the whole group. No undisclosed partial recipient set.
+        // A device the user rejected on their own account is left out, as every 1:1 chat leaves it out: the other
+        // members' recipient sets are unchanged. Another member's rejected device still blocks the whole group (no
+        // undisclosed partial recipient set), and an undecided device still needs review, own ones included; a changed
+        // own identity is a new undecided record, so it is asked about again.
+        let recipients = state.devices.filter { members.contains($0.jid) && $0.profile == .modern && $0.active
+                                                && !$0.isLeftOutOfGroups(account: account) }
         guard recipients.allSatisfy({ $0.trust.permitsEncryption }) else { throw OMEMOError.trustRequired }
         for member in members where member != account {
             guard recipients.contains(where: { $0.jid == member }) else { throw OMEMOError.noDevices }

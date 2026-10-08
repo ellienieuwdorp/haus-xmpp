@@ -163,12 +163,24 @@ final class AppModel {
     var encryptionStatus: String { encryptionOverviewChatID.map { trustSummary(for: $0).subtitle } ?? "" }
     /// The open chat needs a fingerprint decision: stored undecided devices, retained ciphertext, or a send held for trust.
     var encryptionNeedsReview: Bool { encryptionOverviewChatID.map { chatCapabilities($0).encryption == .needsReview } ?? false }
+    /// The open 1:1 chat's sending waits only on the account's own devices, so its card must not name the contact.
+    var encryptionReviewIsOwnDevice: Bool {
+        guard let chat = encryptionOverviewChatID, !isGroup(chat), let overview = encryptionOverview(for: chat) else { return false }
+        let undecided = overview.devices.filter { $0.profile == overview.profile && $0.active && $0.trust == .undecided }
+        return !undecided.isEmpty && undecided.allSatisfy { $0.jid == accountID }
+    }
     /// The open chat holds messages sent in the other OMEMO version from a device waiting for a fingerprint decision.
     /// Sending is not affected, so this only asks for a review; it never pauses the composer.
     var encryptionIncomingReview: Bool {
         guard let chat = encryptionOverviewChatID, !isGroup(chat) else { return false }
         return encryptionOverview(for: chat)?.needsIncomingReview ?? false
     }
+    /// The account's other devices as stored, both OMEMO versions, read with the chat list and refreshed from the
+    /// server on each connection and when the account's device list changes.
+    private(set) var ownDevices: [EncryptionDevice] = []
+    /// The account's other devices that wait for a decision, one entry per identity: the account-level review.
+    var ownDeviceReview: [OwnDeviceCandidate] { OwnDeviceReview.candidates(ownDevices) }
+    @ObservationIgnored private lazy var ownDevicePasses = RerunningPass { [weak self] in self?.ownDevicePass() }
     @ObservationIgnored private var encryption: OMEMOService?
     var isDemo: Bool { accountID == "preview.local" }
 
@@ -486,6 +498,8 @@ final class AppModel {
                 }
             }
             guard generation == token else { return }
+            // Two own devices waiting for review, so the account-level prompt can be seen without a second client.
+            if ProcessInfo.processInfo.arguments.contains("-demo-own-device") { ownDevices = OwnDeviceReview.sampleDevices(account: account) }
             await refresh()
         } catch { if generation == token { self.error = "Could not load sample conversations." } }
     }
@@ -1313,7 +1327,7 @@ final class AppModel {
         openChatID = nil
         requestedRoute = nil
         encryptionOverviewChatID = nil; encryptionOverview = nil; encryptionDetailsChatID = nil
-        refreshFence = [:]; encryptionAttention = EncryptionAttention()
+        refreshFence = [:]; encryptionAttention = EncryptionAttention(); ownDevices = []
         uploadService = uploads.load(account: account)
         resetTyping()
         lastSeenTracker = LastSeenTracker()
@@ -1644,6 +1658,8 @@ final class AppModel {
         case .omemoDevices(let owner, let profile, _):
             if owner == account, let encryption, let client {
                 try? await encryption.maintainLocalAdvertisement(account: account, profile: profile, transport: client)
+                // A client of this account signed in or out; its bundles are fetched off the event loop.
+                ownDevicePasses.request()
             }
             // A device list is what a keys-pending row waited for; only this owner's rows can be unblocked by it.
             if let encryption, let client, let store, isConnected,
@@ -1905,6 +1921,9 @@ final class AppModel {
             startOutbox()
             if uploadReconciliation.reconcilesAtReady(stored: uploadService) { await reconcileUploads() }
             if let openChatID { await loadEncryptionDetails(for: openChatID) }
+            // Another client may have signed in while this one was away: the account-level review should not wait
+            // for a chat to be opened or a send to be held.
+            ownDevicePasses.request()
             avatarChecked = []
             await loadAvatar(for: account)
         case .catchingUp(let progress):
@@ -2555,6 +2574,113 @@ final class AppModel {
             if generation == token { self.error = (error as? OMEMOError)?.errorDescription ?? "Could not remove this device. Refresh its fingerprint and try again." }
         }
     }
+
+    /// One account-level refresh of the account's other devices, or nil when it cannot run now (`ownDevicePasses`
+    /// keeps the request for the next one).
+    private func ownDevicePass() -> (@MainActor () async -> Void)? {
+        guard foreground, !quiescing, hasTransportOwnership, session.isReady, !isDemo, let client, let encryption else { return nil }
+        let account = accountID, token = generation
+        return { [weak self] in
+            guard let self, self.foreground, !self.quiescing, self.generation == token else { return }
+            self.activeEncryptionOperations += 1
+            defer { self.activeEncryptionOperations -= 1 }
+            do {
+                let devices = try await encryption.refreshOwnDevices(account: account, transport: client)
+                guard self.generation == token, self.accountID == account else { return }
+                self.ownDevices = devices
+            } catch {
+                // The stored devices keep deciding the review; the next connection or device-list change asks again.
+                Logger(subsystem: "haus.xmpp.ios", category: "encryption").error("Own device refresh failed: \(String(describing: error).prefix(80), privacy: .public)")
+            }
+        }
+    }
+
+    /// The account-level review decided one of the account's other devices: its records in every OMEMO version that
+    /// carry the reviewed fingerprint get `trust`, which every chat reads. Held sends and retained messages are retried.
+    func decideOwnDevice(_ candidate: OwnDeviceCandidate, trust: DeviceTrust) async {
+        if isDemo {
+            // Sample devices have no store: the decision changes only what the review shows.
+            changeSampleOwnDevices(candidate) { $0.trust = trust }
+            return
+        }
+        guard hasTransportOwnership, foreground, !quiescing else { return }
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
+        guard let encryption else { return }
+        let account = accountID, token = generation
+        do {
+            try await encryption.setTrust(account: account, deviceIDs: candidate.records.map(\.id), trust: trust)
+            guard generation == token else { return }
+            await ownDeviceChanged(encryption, account: account, token: token)
+        } catch {
+            guard generation == token else { return }
+            let failure = error as? OMEMOError
+            // setTrust saves all of the device's records or none of them.
+            self.error = failure == .identityChanged ? "This device changed. Review its new fingerprint."
+                : failure?.errorDescription ?? "Could not save this decision. Nothing was changed."
+            await refresh()
+        }
+    }
+
+    /// Remove from Account in the account-level review, for a device the user does not recognise: `retireOwnDevice`
+    /// takes it off the account's advertised lists in both versions after checking its fingerprint, and stores it
+    /// rejected and inactive. No chat is involved, unlike `retireDevice`, so the follow-up is the account-wide one a
+    /// decision has. The service refuses this installation's own device, which the review never lists.
+    func removeOwnDevice(_ candidate: OwnDeviceCandidate) async {
+        if isDemo {
+            changeSampleOwnDevices(candidate) { $0.trust = .rejected; $0.active = false }
+            return
+        }
+        guard hasTransportOwnership, foreground, !quiescing, let record = candidate.records.first else { return }
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
+        guard let encryption, let client, isConnected else {
+            error = "Connect to your server to remove this device."
+            return
+        }
+        let account = accountID, token = generation
+        do {
+            try await encryption.retireOwnDevice(account: account, deviceID: record.id, transport: client)
+            guard generation == token else { return }
+            await ownDeviceChanged(encryption, account: account, token: token)
+        } catch {
+            guard generation == token else { return }
+            let failure = error as? OMEMOError
+            self.error = failure == .identityChanged ? "This device changed. Review its new fingerprint."
+                : failure?.errorDescription ?? "Could not remove this device. Try again."
+            await refresh()
+        }
+    }
+
+    /// After a decision on, or the removal of, one of the account's own devices, which every chat sends to: clears the
+    /// hold marks, reloads the open chat and the groups from the store, retries messages kept for trust and restarts
+    /// the outbox. The refresh re-reads the own devices for the review.
+    private func ownDeviceChanged(_ encryption: OMEMOService, account: String, token: UUID) async {
+        // Any chat may have been held for this device; the next outbox pass marks the ones still held.
+        encryptionAttention.trustDecidedForAccount()
+        if let chat = encryptionOverviewChatID { await loadEncryptionDetails(for: chat, refreshFromServer: false) }
+        for room in groupChats.keys where room != encryptionOverviewChatID {
+            await loadGroupDetails(room: room, refreshFromServer: false)
+        }
+        guard generation == token else { return }
+        if let client, isConnected {
+            try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.trustPending])
+            guard generation == token else { return }
+            await flushEncryptionControls(account: account, client: client)
+        }
+        await refresh()
+    }
+
+    /// `-demo-own-device`: sample devices have no store, so a review action changes only what the review shows.
+    private func changeSampleOwnDevices(_ candidate: OwnDeviceCandidate, _ change: (inout EncryptionDevice) -> Void) {
+        let ids = Set(candidate.records.map(\.id))
+        ownDevices = ownDevices.map { device in
+            guard ids.contains(device.id) else { return device }
+            var changed = device
+            change(&changed)
+            return changed
+        }
+    }
     /// `logsLiveStore`: the event loop calls this after every stored live message; during catch-up the first
     /// one is logged for the lab measurement (not a general metric).
     private func flushEncryptionControls(account: String, client: XMPPClient, logsLiveStore: Bool = true) async {
@@ -3081,8 +3207,11 @@ final class AppModel {
         let storedChats = try await store.chats(accountID: account)
         let pending = try await encryption?.pendingConversations(account: account) ?? [:]
         let rooms: [String: [String]]
+        var own: [EncryptionDevice] = []
         if let encryption, !isDemo, !account.isEmpty, try await store.encryptionState(accountID: account) != nil {
             rooms = try await encryption.knownGroupRooms(account: account)
+            // Unreadable own devices only hide the account-level review; sealing still refuses undecided devices.
+            own = (try? await encryption.ownDevices(account: account)) ?? []
         } else { rooms = [:] }
         let existingChatIDs = Set(storedChats.map(\.id))
         for peer in pending.keys where !existingChatIDs.contains(peer) {
@@ -3097,6 +3226,7 @@ final class AppModel {
             try await presentForegroundNotifications(store: store, account: account)
         }
         guard accountID == account else { return }
+        if !isDemo, own != ownDevices { ownDevices = own }
         for (room, members) in rooms {
             var value = groupChats[room] ?? GroupChatState()
             value.members = members

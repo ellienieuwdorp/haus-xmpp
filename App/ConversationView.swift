@@ -582,7 +582,8 @@ struct ConversationView: View {
                     .frame(width: 36, height: 36).background(.orange.opacity(0.15), in: Circle())
                 VStack(alignment: .leading, spacing: 1) {
                     if model.encryptionNeedsReview {
-                        Text(isGroup ? "Devices need review" : "\(title) added a new device").font(.subheadline.weight(.semibold))
+                        Text(isGroup ? "Devices need review" : model.encryptionReviewIsOwnDevice ? "New device on your account" : "\(title) added a new device")
+                            .font(.subheadline.weight(.semibold))
                         Text("Check its fingerprint before sending. Until then, nothing you write here leaves this \(ThisDevice.noun).")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else {
