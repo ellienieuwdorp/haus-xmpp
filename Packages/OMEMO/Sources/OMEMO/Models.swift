@@ -16,6 +16,13 @@ public struct EncryptionDevice: Identifiable, Codable, Sendable, Equatable {
     public var trust: DeviceTrust
     public var active: Bool
     public var identityChanged: Bool
+    /// Public for sample data and app tests. A value made here changes nothing stored: trust is only ever set through
+    /// `OMEMOService.setTrust` by the identifier of a stored record.
+    public init(jid: String, profile: XMPPOMEMOProfile, deviceID: UInt32, identityKey: Data, trust: DeviceTrust,
+                active: Bool, identityChanged: Bool) {
+        self.jid = jid; self.profile = profile; self.deviceID = deviceID; self.identityKey = identityKey
+        self.trust = trust; self.active = active; self.identityChanged = identityChanged
+    }
     public var fingerprint: String {
         guard let bytes = try? OMEMOEngine.fingerprintBytes(for: identityKey, profile: profile.crypto) else { return "Invalid identity" }
         return bytes.map { String(format: "%02x", $0) }.joined()
