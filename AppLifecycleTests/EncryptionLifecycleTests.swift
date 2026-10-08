@@ -25,6 +25,8 @@ import OMEMO
     }
 
     /// Wrapping keys saved before every query named the data protection keychain must still be found, never replaced.
+    /// The flag is a no-op on iOS, so this guards the service, account and synchronizable value the shared query uses;
+    /// whether the app and extension share items on macOS needs a Mac test target.
     func testWrappingKeySavedWithoutDataProtectionFlagIsStillFound() throws {
         let id = "lifecycle-" + UUID().uuidString
         defer { deleteKey(id) }
