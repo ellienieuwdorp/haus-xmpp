@@ -30,7 +30,7 @@ struct DeviceTrustFacts: Equatable {
     init(_ group: GroupChatState, account: String) {
         let active = group.devices.filter { $0.jid != account && $0.active }
         let owners = Set(active.map(\.jid))
-        self.init(peerTrust: active.map(\.trust), needsReview: group.needsReview, peerKnown: true,
+        self.init(peerTrust: active.map(\.trust), needsReview: group.needsReview(account: account), peerKnown: true,
                   everyPeerHasDevice: group.members.allSatisfy { $0 == account || owners.contains($0) })
     }
 }

@@ -20,11 +20,15 @@ struct GroupChatState {
         devicesLoaded = devices != nil
     }
 
-    var needsReview: Bool { devices.contains { $0.active && !$0.trust.permitsEncryption } }
-    var status: String {
+    /// An active device holds group sends: an undecided one, or another member's rejected one. A device rejected on the
+    /// account itself is left out of group sends instead (`groupRecipients`).
+    func needsReview(account: String) -> Bool {
+        devices.contains { $0.active && !$0.trust.permitsEncryption && !$0.isLeftOutOfGroups(account: account) }
+    }
+    func status(account: String) -> String {
         if let issue { return issue }
         if !joined { return "Waiting to join group" }
-        if needsReview { return "Review group encryption devices" }
+        if needsReview(account: account) { return "Review group encryption devices" }
         return "Group messages are end-to-end encrypted"
     }
 }

@@ -15,8 +15,6 @@ struct OwnDeviceCandidate: Identifiable, Equatable {
     /// The device had another key before: the review must say so, never present it as merely new.
     var identityChanged: Bool { records.contains(where: \.identityChanged) }
     var versions: String { records.count > 1 ? "Both encryption versions" : records.first?.profile.label ?? "" }
-    /// Groups send with OMEMO 2 only, and hold every send while any member device, own ones included, is not trusted.
-    var holdsGroupsWhenRejected: Bool { records.contains { $0.profile == .modern } }
 }
 
 /// What the account-level review shows, derived from the stored own devices so tests can state it directly.
@@ -56,12 +54,8 @@ enum OwnDeviceReview {
         return candidates[0].identityChanged ? "A device on your account changed its identity" : "New device on your account"
     }
 
-    /// The Don't trust confirmation: what stops, what keeps working, and what groups do.
-    static func rejectionMessage(_ candidate: OwnDeviceCandidate) -> String {
-        let direct = "New messages won’t be encrypted for it, and nothing it sends will be opened. Your trusted devices are unaffected."
-        guard candidate.holdsGroupsWhenRejected else { return direct }
-        return direct + " Groups can’t send until you remove it from your account, under Devices & Encryption in any one-to-one chat."
-    }
+    /// The Don't trust confirmation: what stops and what keeps working. Chats and groups both leave the device out.
+    static let rejectionMessage = "New messages in your chats and groups won’t be encrypted for it, and nothing it sends will be opened. Your trusted devices are unaffected."
 }
 
 extension OwnDeviceReview {
@@ -158,7 +152,7 @@ struct OwnDeviceReviewSheet: View {
                 // The comparison sheet names one record; a decision there applies to all of this device's records.
                 DeviceFingerprintSheet(model: model, chatID: model.accountID, device: candidate.records[0], name: nil,
                                        versions: candidate.versions,
-                                       rejectionMessage: OwnDeviceReview.rejectionMessage(candidate)) { trust in
+                                       rejectionMessage: OwnDeviceReview.rejectionMessage) { trust in
                     comparing = nil
                     Task { await model.decideOwnDevice(candidate, trust: trust) }
                 }
@@ -211,7 +205,7 @@ struct OwnDeviceReviewSheet: View {
                                                 isPresented: Binding(get: { rejecting?.id == candidate.id }, set: { if !$0 { rejecting = nil } }),
                                                 titleVisibility: .visible) {
                                 Button("Don’t Trust", role: .destructive) { Task { await model.decideOwnDevice(candidate, trust: .rejected) } }
-                            } message: { Text(OwnDeviceReview.rejectionMessage(candidate)) }
+                            } message: { Text(OwnDeviceReview.rejectionMessage) }
                         Button { Task { await model.decideOwnDevice(candidate, trust: .accepted) } } label: { Text("Trust").frame(maxWidth: .infinity) }
                             .buttonStyle(.glassProminent)
                             .accessibilityIdentifier("ownDevice.trust.\(candidate.deviceID)")
