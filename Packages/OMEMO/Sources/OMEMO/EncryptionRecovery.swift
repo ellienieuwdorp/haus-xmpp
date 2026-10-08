@@ -115,10 +115,10 @@ extension OMEMOService {
         return (placeholders, consumed)
     }
 
-    /// A random device ID outside `avoiding`.
-    static func newDeviceID(avoiding used: Set<UInt32>) throws -> UInt32 {
+    /// A device ID from `random` outside `avoiding`.
+    static func newDeviceID(avoiding used: Set<UInt32>, random: () throws -> UInt32 = OMEMOEngine.randomDeviceID) throws -> UInt32 {
         while true {
-            let id = try OMEMOEngine.randomDeviceID()
+            let id = try random()
             if !used.contains(id) { return id }
         }
     }

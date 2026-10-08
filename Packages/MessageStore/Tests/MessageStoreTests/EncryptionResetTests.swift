@@ -123,7 +123,7 @@ struct EncryptionResetTests {
         try await store.close()
     }
 
-    @Test func aRecordedDeviceIDIsNeverRelabelledAndRetiredIDsAreForgottenPerProfile() async throws {
+    @Test func aRecordedDeviceIDIsNeverRelabelled() async throws {
         try await withEncryptedStore(account: account) { store, _ in
             try await store.recordEncryptionDeviceID(accountID: account, deviceID: 111)
             try await store.recordEncryptionDeviceID(accountID: account, deviceID: 111)
@@ -134,8 +134,6 @@ struct EncryptionResetTests {
             #expect(try await store.encryptionState(accountID: account)?.deviceID == 111)
 
             try await store.resetEncryption(EncryptionReset(discarded: [.init(accountID: account, revision: 2, placeholders: [], consumed: [])], replacement: nil))
-            try await store.forgetRetiredOwnDevices(accountID: account, profile: "legacy", deviceIDs: [111])
-            #expect(try await store.retiredOwnDevices(accountID: account, profile: "legacy").isEmpty)
             #expect(try await store.retiredOwnDevices(accountID: account) == [111])
         }
     }

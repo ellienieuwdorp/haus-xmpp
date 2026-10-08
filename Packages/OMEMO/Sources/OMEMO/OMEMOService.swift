@@ -118,7 +118,7 @@ public actor OMEMOService {
         var otherVersionOnly: [String: Int] = [:]
         var unavailable: [String: Int] = [:]
         var advertised: [String: Int] = [:]
-        // This account's own dead devices (`startOver`) are never offered for review while they wait to leave the list.
+        // This account's own dead devices (`startOver`) are never offered for review, even while a list still names them.
         let retired = try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue)
         for owner in Array(Set([account, peer])).sorted() {
             let ids = try validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: profile))
@@ -373,25 +373,26 @@ public actor OMEMOService {
         publishedBundles[account]?.contains(profile) == true
     }
 
-    /// Also takes this account's retired device IDs (`startOver`) out of the list: they are ours and can never decrypt
-    /// again, so they need no fingerprint check. A retired ID is forgotten only once the list read back lacks it.
+    /// Also takes this account's retired device IDs (`startOver`) out of the list whenever it names them: they are ours
+    /// and can never decrypt again, so they need no fingerprint check. That part is best effort: once the local ID is
+    /// listed, a retired ID that something keeps putting back does not fail setup; the next connection removes it again.
     private func maintainLocalAdvertisementLocked(account: String, profile: XMPPOMEMOProfile, transport: any OMEMOTransport) async throws {
         let (_, state) = try await load(account)
         let local = try engine(state, profile)
         let retired = try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue)
-        func settled(_ list: [UInt32]) async throws -> Bool {
-            guard list.contains(local.deviceID), !list.contains(where: retired.contains) else { return false }
-            if !retired.isEmpty { try await store.forgetRetiredOwnDevices(accountID: account, profile: profile.rawValue, deviceIDs: retired) }
-            return true
-        }
+        var localListed = false
         for _ in 0..<3 {
             let latest = try validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))
-            if try await settled(latest) { return }
+            localListed = latest.contains(local.deviceID)
+            if localListed, !latest.contains(where: retired.contains) { return }
             let wanted = Set(latest.filter { !retired.contains($0) }).union([local.deviceID])
             guard wanted.count <= 200 else { throw OMEMOError.invalidContent }
             try await transport.publishOMEMODevices(wanted.sorted(), profile: profile)
-            if try await settled(validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))) { return }
+            let confirmed = try validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))
+            localListed = confirmed.contains(local.deviceID)
+            if localListed, !confirmed.contains(where: retired.contains) { return }
         }
+        if localListed { return }
         throw OMEMOError.concurrentChange
     }
 

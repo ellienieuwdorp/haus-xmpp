@@ -1132,22 +1132,14 @@ public actor MessageStore {
         }
     }
 
-    /// Own device IDs of `accountID` still waiting to leave the published list of `profile` (every profile when nil).
+    /// Own device IDs of `accountID` that can never decrypt again (encryption was set up again), for `profile` (every
+    /// profile when nil). Kept for good: such an ID is never taken again, never offered for review, and taken out of
+    /// the published list whenever that list names it, however often something puts it back.
     public func retiredOwnDevices(accountID: String, profile: String? = nil) throws -> Set<UInt32> {
         var sql = "SELECT device_id FROM retired_own_devices WHERE account_id=?"
         var values: [Value] = [.text(accountID)]
         if let profile { sql += " AND profile=?"; values.append(.text(profile)) }
         return Set(try connection.query(sql, values).compactMap { UInt32(exactly: $0[0].integer) })
-    }
-
-    /// The published list of `profile` was read back without these IDs: nothing more to remove there.
-    public func forgetRetiredOwnDevices(accountID: String, profile: String, deviceIDs: Set<UInt32>) throws {
-        try connection.transaction {
-            for id in deviceIDs {
-                try connection.execute("DELETE FROM retired_own_devices WHERE account_id=? AND profile=? AND device_id=?",
-                                       [.text(accountID), .text(profile), .integer(Int(id))])
-            }
-        }
     }
 
     /// What of `accountID`'s data depends on the wrapping key besides its state row, for the recovery screen.

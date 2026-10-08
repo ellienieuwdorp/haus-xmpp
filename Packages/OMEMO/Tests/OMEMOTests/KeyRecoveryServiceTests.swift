@@ -16,6 +16,18 @@ private func otherClientBundle(_ profile: XMPPOMEMOProfile, deviceID: UInt32) th
                            signedPreKey: bundle.signedPreKey, signedPreKeySignature: bundle.signedPreKeySignature, preKeys: bundle.preKeys)
 }
 
+/// Writes back `putBack` after every device-list publication, as another client with a stale read-modify-write would.
+private struct StaleListTransport: OMEMOTransport {
+    let base: TestTransport
+    let putBack: UInt32
+    func fetchOMEMODevices(for jid: String, profile: XMPPOMEMOProfile) async throws -> [UInt32] { try await base.fetchOMEMODevices(for: jid, profile: profile) }
+    func fetchOMEMOBundle(for jid: String, deviceID: UInt32, profile: XMPPOMEMOProfile) async throws -> XMPPOMEMOBundle { try await base.fetchOMEMOBundle(for: jid, deviceID: deviceID, profile: profile) }
+    func publishOMEMODevices(_ devices: [UInt32], profile: XMPPOMEMOProfile) async throws {
+        try await base.publishOMEMODevices((devices + [putBack]).sorted(), profile: profile)
+    }
+    func publishOMEMOBundle(_ bundle: XMPPOMEMOBundle) async throws { try await base.publishOMEMOBundle(bundle) }
+}
+
 /// Starting encryption over after the wrapping key was lost (docs/development/key-recovery.md): Bob's store keeps its
 /// sealed state, but his device only has a different key now.
 @MainActor
@@ -91,7 +103,8 @@ final class KeyRecoveryServiceTests: XCTestCase {
             XCTAssertFalse(listed.contains(oldID), "\(profile) no longer lists the dead device")
             expectEqual(try await f.server.bundle(f.bob, newID, profile).deviceID, newID)
         }
-        expectEqual(try await f.bStore.retiredOwnDevices(accountID: f.bob), [])
+        // Kept for good: the dead ID is never taken again and is removed whenever a list names it again.
+        expectEqual(try await f.bStore.retiredOwnDevices(accountID: f.bob), [oldID])
         let overview = try await recovered.overview(account: f.bob, peer: f.alice)
         XCTAssertEqual(overview.localDeviceID, newID)
         XCTAssertNotEqual(overview.localFingerprint, oldFingerprint)
@@ -192,6 +205,35 @@ final class KeyRecoveryServiceTests: XCTestCase {
         try await OMEMOService(store: f.bStore, protection: f.protection).recordLocalDeviceIDs()
         expectEqual(try await f.bStore.encryptionState(accountID: f.bob)?.deviceID, oldID)
         expectNil(try await f.bStore.encryptionState(accountID: carol)?.deviceID)
+    }
+
+    /// Another client keeps writing back a stale device list that names the dead device. Setup still succeeds once the
+    /// new device is listed, and the next connection takes the dead ID out again: retired IDs are kept for good.
+    func testARetiredDevicePutBackDoesNotFailSetupAndIsRemovedAgain() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        let oldID = try await retainOneMessageForBob(f)
+        let protection = try StateProtection(key: replacementKey)
+        let recovered = OMEMOService(store: f.bStore, protection: protection)
+        let lost = try await OMEMOService.unreadableStates(store: f.bStore, protection: protection)
+        let started = try await recovered.startOver(account: f.bob, discarding: lost)
+        let newID = try XCTUnwrap(started)
+
+        try await recovered.initialize(account: f.bob, transport: StaleListTransport(base: f.bTransport, putBack: oldID))
+        for profile in XMPPOMEMOProfile.allCases {
+            let listed = await f.server.devices(f.bob, profile)
+            XCTAssertTrue(listed.contains(newID) && listed.contains(oldID), "\(profile) still names the dead device")
+        }
+        try await recovered.initialize(account: f.bob, transport: f.bTransport)
+        for profile in XMPPOMEMOProfile.allCases {
+            let listed = await f.server.devices(f.bob, profile)
+            XCTAssertEqual(listed, [newID], "\(profile)")
+        }
+    }
+
+    func testANewDeviceIDIsNeverOneAlreadyUsed() throws {
+        var draws: [UInt32] = [7, 9, 7, 11]
+        let id = try OMEMOService.newDeviceID(avoiding: [7, 9]) { draws.removeFirst() }
+        XCTAssertEqual(id, 11)
     }
 
     private func execute(_ url: URL, _ sql: String) -> Bool {
