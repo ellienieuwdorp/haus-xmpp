@@ -84,7 +84,7 @@ public actor OMEMOService {
             publishedBundles[account, default: []].insert(profile)
             // Bundle publication can take long enough for another client to register. Read
             // the latest list again before changing it, then confirm our own inclusion.
-            try await maintainLocalAdvertisementLocked(account: account, profile: profile, transport: transport)
+            try await maintainLocalAdvertisementLocked(account: account, profile: profile, transport: transport, removingRetired: true)
             let (publishedRevision, publishedOld) = try await load(account)
             if publishedOld.pendingBundlePublications.contains(profile.rawValue) {
                 var published = publishedOld
@@ -118,8 +118,9 @@ public actor OMEMOService {
         var otherVersionOnly: [String: Int] = [:]
         var unavailable: [String: Int] = [:]
         var advertised: [String: Int] = [:]
-        // This account's own dead devices (`startOver`) are never offered for review, even while a list still names them.
-        let retired = try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue)
+        // This account's own given-up devices (`startOver`) are not offered for review while a list still names them,
+        // unless one was reclaimed: then something still holds its key and it is reviewed like any other device.
+        let retired = try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue, statuses: [.pending, .removed])
         for owner in Array(Set([account, peer])).sorted() {
             let ids = try validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: profile))
             guard ids.count <= 200 else { throw OMEMOError.invalidContent }
@@ -201,6 +202,8 @@ public actor OMEMOService {
                                    transport: any OMEMOTransport) async throws {
         let ids = try validatedDevices(await transport.fetchOMEMODevices(for: owner, profile: profile))
         guard ids.contains(deviceID) else { return }
+        // As in `refreshLocked`: a given-up own device is not added until it was reclaimed; its message waits until then.
+        if owner == account, try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue, statuses: [.pending, .removed]).contains(deviceID) { return }
         let bundle: XMPPOMEMOBundle
         do { bundle = try await transport.fetchOMEMOBundle(for: owner, deviceID: deviceID, profile: profile) }
         catch XMPPIQError.stanza(condition: "item-not-found"), XMPPIQError.malformedResponse { return }
@@ -365,7 +368,7 @@ public actor OMEMOService {
     public func maintainLocalAdvertisement(account: String, profile: XMPPOMEMOProfile, transport: any OMEMOTransport) async throws {
         try await gate.run {
             guard await self.hasPublishedBundle(account: account, profile: profile) else { return }
-            try await self.maintainLocalAdvertisementLocked(account: account, profile: profile, transport: transport)
+            try await self.maintainLocalAdvertisementLocked(account: account, profile: profile, transport: transport, removingRetired: false)
         }
     }
 
@@ -373,27 +376,52 @@ public actor OMEMOService {
         publishedBundles[account]?.contains(profile) == true
     }
 
-    /// Also takes this account's retired device IDs (`startOver`) out of the list whenever it names them: they are ours
-    /// and can never decrypt again, so they need no fingerprint check. That part is best effort: once the local ID is
-    /// listed, a retired ID that something keeps putting back does not fail setup; the next connection removes it again.
-    private func maintainLocalAdvertisementLocked(account: String, profile: XMPPOMEMOProfile, transport: any OMEMOTransport) async throws {
+    /// With `removingRetired` (once per connection, from `initialize`), also takes this account's given-up device IDs
+    /// (`startOver`) out of the list while they are `pending`, and records the removal once a list read back lacks
+    /// them. Every read notes a `removed` ID the list names again as `reclaimed`: something still holds that key,
+    /// typically the old installation after Migration Assistant or a restore to another machine, and it is left alone
+    /// from then on. Removing only at connection setup, never on a PEP update, keeps this from trading publications
+    /// with such an installation. The removal is best effort: once the local ID is listed, an ID still listed after
+    /// three tries does not fail setup and stays `pending` for the next connection.
+    private func maintainLocalAdvertisementLocked(account: String, profile: XMPPOMEMOProfile, transport: any OMEMOTransport,
+                                                  removingRetired: Bool) async throws {
         let (_, state) = try await load(account)
         let local = try engine(state, profile)
-        let retired = try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue)
+        var pending = try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue, statuses: [.pending])
+        var removed = try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue, statuses: [.removed])
         var localListed = false
         for _ in 0..<3 {
-            let latest = try validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))
+            let latest = try await readOwnDevices(account: account, profile: profile, transport: transport, removed: &removed)
             localListed = latest.contains(local.deviceID)
-            if localListed, !latest.contains(where: retired.contains) { return }
-            let wanted = Set(latest.filter { !retired.contains($0) }).union([local.deviceID])
+            let removing = removingRetired ? pending.intersection(latest) : []
+            if localListed, removing.isEmpty { return }
+            let wanted = Set(latest).subtracting(removing).union([local.deviceID])
             guard wanted.count <= 200 else { throw OMEMOError.invalidContent }
             try await transport.publishOMEMODevices(wanted.sorted(), profile: profile)
-            let confirmed = try validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))
+            let confirmed = try await readOwnDevices(account: account, profile: profile, transport: transport, removed: &removed)
+            let gone = removing.subtracting(confirmed)
+            if !gone.isEmpty {
+                try await store.advanceRetiredOwnDevices(accountID: account, profile: profile.rawValue, deviceIDs: gone, to: .removed)
+                pending.subtract(gone)
+                removed.formUnion(gone)
+            }
             localListed = confirmed.contains(local.deviceID)
-            if localListed, !confirmed.contains(where: retired.contains) { return }
+            if localListed, !removingRetired || pending.isDisjoint(with: confirmed) { return }
         }
         if localListed { return }
         throw OMEMOError.concurrentChange
+    }
+
+    /// This account's published list of `profile`; a `removed` ID it names again becomes `reclaimed` and leaves `removed`.
+    private func readOwnDevices(account: String, profile: XMPPOMEMOProfile, transport: any OMEMOTransport,
+                                removed: inout Set<UInt32>) async throws -> [UInt32] {
+        let list = try validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))
+        let back = removed.intersection(list)
+        if !back.isEmpty {
+            try await store.advanceRetiredOwnDevices(accountID: account, profile: profile.rawValue, deviceIDs: back, to: .reclaimed)
+            removed.subtract(back)
+        }
+        return list
     }
 
     public func flushBundlePublications(account: String, transport: any OMEMOTransport) async throws {

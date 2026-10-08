@@ -222,6 +222,18 @@ public struct EncryptionState: Sendable, Equatable {
     public var deviceID: UInt32? = nil
 }
 
+/// Where one retired own device ID stands in one profile's published device list (docs/development/key-recovery.md).
+public enum RetiredDeviceStatus: String, Sendable, CaseIterable {
+    /// Still to be taken out of the list.
+    case pending
+    /// A list read back without it confirmed the removal.
+    case removed
+    /// The list named it again after a confirmed removal: something still holds its key (the old installation itself,
+    /// after Migration Assistant or a restore to another machine). It is no longer removed or hidden, and is reviewed
+    /// like any other device of the account.
+    case reclaimed
+}
+
 /// What `MessageStore.resetEncryption` discards and creates after the wrapping key was lost. The OMEMO layer decides it:
 /// only it can tell which rows its key cannot open, and what each retained envelope would have been.
 public struct EncryptionReset: Sendable {

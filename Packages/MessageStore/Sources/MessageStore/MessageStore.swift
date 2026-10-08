@@ -398,15 +398,16 @@ public actor MessageStore {
                     }
                 }
             }
-            // v25: each encryption state row's device ID in plain text, and own device IDs that must leave the published
-            // device lists after encryption was set up again (docs/development/key-recovery.md). Column and table checks
-            // keep it idempotent in any merge order.
+            // v25: each encryption state row's device ID in plain text, and own device IDs given up when encryption was
+            // set up again, with where each stands in the published device lists (docs/development/key-recovery.md).
+            // Column and table checks keep it idempotent in any merge order.
             if try connection.query("SELECT 1 FROM pragma_table_info('encryption_state') WHERE name='device_id'").isEmpty {
                 try connection.execute("ALTER TABLE encryption_state ADD COLUMN device_id INTEGER")
             }
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS retired_own_devices (
                     account_id TEXT NOT NULL, profile TEXT NOT NULL CHECK(profile IN ('legacy','modern')), device_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','removed','reclaimed')),
                     PRIMARY KEY(account_id, profile, device_id)
                 )
                 """)
@@ -1132,14 +1133,35 @@ public actor MessageStore {
         }
     }
 
-    /// Own device IDs of `accountID` that can never decrypt again (encryption was set up again), for `profile` (every
-    /// profile when nil). Kept for good: such an ID is never taken again, never offered for review, and taken out of
-    /// the published list whenever that list names it, however often something puts it back.
-    public func retiredOwnDevices(accountID: String, profile: String? = nil) throws -> Set<UInt32> {
-        var sql = "SELECT device_id FROM retired_own_devices WHERE account_id=?"
+    /// Own device IDs `accountID` gave up when encryption was set up again, for `profile` (every profile when nil), in
+    /// any of `statuses`. Kept for good, whatever the status: no new identity of the account ever takes one.
+    public func retiredOwnDevices(accountID: String, profile: String? = nil,
+                                  statuses: Set<RetiredDeviceStatus> = Set(RetiredDeviceStatus.allCases)) throws -> Set<UInt32> {
+        var sql = "SELECT device_id,status FROM retired_own_devices WHERE account_id=?"
         var values: [Value] = [.text(accountID)]
         if let profile { sql += " AND profile=?"; values.append(.text(profile)) }
-        return Set(try connection.query(sql, values).compactMap { UInt32(exactly: $0[0].integer) })
+        return Set(try connection.query(sql, values).compactMap { row in
+            guard let status = RetiredDeviceStatus(rawValue: row[1].string), statuses.contains(status) else { return nil }
+            return UInt32(exactly: row[0].integer)
+        })
+    }
+
+    /// Moves retired own device IDs of `accountID` in `profile` on: `pending` to `removed` once a list read back lacks
+    /// them, `removed` to `reclaimed` once a list names them again. IDs not in the expected status are left alone, and
+    /// no other step exists: a reclaimed ID is never removed automatically again.
+    public func advanceRetiredOwnDevices(accountID: String, profile: String, deviceIDs: Set<UInt32>, to status: RetiredDeviceStatus) throws {
+        let from: RetiredDeviceStatus
+        switch status {
+        case .removed: from = .pending
+        case .reclaimed: from = .removed
+        case .pending: throw MessageStoreError.invalidTransition
+        }
+        try connection.transaction {
+            for id in deviceIDs {
+                try connection.execute("UPDATE retired_own_devices SET status=? WHERE account_id=? AND profile=? AND device_id=? AND status=?",
+                                       [.text(status.rawValue), .text(accountID), .text(profile), .integer(Int(id)), .text(from.rawValue)])
+            }
+        }
     }
 
     /// Queued messages of `accountID` whose file can no longer be sealed once the wrapping key is lost, for the

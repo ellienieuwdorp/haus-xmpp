@@ -233,6 +233,55 @@ final class KeyRecoveryServiceTests: XCTestCase {
         }
     }
 
+    /// Migration Assistant or a restore to another machine leaves the source machine working with the old key and the
+    /// old device ID. It puts that ID back after the recovered installation removed it; from then on the recovered side
+    /// leaves the ID alone instead of trading device-list publications with it for as long as both are online, and the
+    /// device is reviewed like any other.
+    func testAnOldInstallationStillUsingTheRetiredIDReclaimsItAndTheListsSettle() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        let oldID = try await retainOneMessageForBob(f)
+        // Bob's store copied to a machine whose Keychain has a different wrapping key.
+        let copyURL = f.directory.appendingPathComponent("bob-copy.sqlite")
+        XCTAssertTrue(execute(f.directory.appendingPathComponent("bob.sqlite"), "VACUUM INTO '\(copyURL.path)'"))
+        let copy = try f.openStore("bob-copy.sqlite")
+        try await copy.acquireTransportOwnership()
+        let protection = try StateProtection(key: replacementKey)
+        let recovered = OMEMOService(store: copy, protection: protection)
+        let lost = try await OMEMOService.unreadableStates(store: copy, protection: protection)
+        let started = try await recovered.startOver(account: f.bob, discarding: lost)
+        let newID = try XCTUnwrap(started)
+        try await recovered.initialize(account: f.bob, transport: f.bTransport)
+        for profile in XMPPOMEMOProfile.allCases {
+            let listed = await f.server.devices(f.bob, profile)
+            XCTAssertEqual(listed, [newID], "\(profile)")
+        }
+        expectEqual(try await copy.retiredOwnDevices(accountID: f.bob, statuses: [.removed]), [oldID])
+
+        // Each installation answers the other's publication (a PEP update) in turn.
+        var publications = 0
+        for step in 0..<10 {
+            let service = step.isMultiple(of: 2) ? f.b : recovered
+            for profile in XMPPOMEMOProfile.allCases {
+                let before = await f.server.devices(f.bob, profile)
+                try await service.maintainLocalAdvertisement(account: f.bob, profile: profile, transport: f.bTransport)
+                if await f.server.devices(f.bob, profile) != before { publications += 1 }
+            }
+        }
+        // Only the old installation putting its ID back, once per profile.
+        XCTAssertEqual(publications, 2)
+        expectEqual(try await copy.retiredOwnDevices(accountID: f.bob, statuses: [.reclaimed]), [oldID])
+        // The next connection leaves it listed too.
+        try await recovered.initialize(account: f.bob, transport: f.bTransport)
+        for profile in XMPPOMEMOProfile.allCases {
+            let listed = await f.server.devices(f.bob, profile)
+            XCTAssertEqual(Set(listed), [oldID, newID], "\(profile)")
+        }
+        let overview = try await recovered.refreshDevices(account: f.bob, peer: f.alice, profile: .modern, transport: f.bTransport)
+        let own = overview.devices.filter { $0.jid == f.bob }
+        XCTAssertEqual(own.map(\.deviceID), [oldID])
+        XCTAssertEqual(own.first?.trust, .undecided)
+    }
+
     func testANewDeviceIDIsNeverOneAlreadyUsed() throws {
         var draws: [UInt32] = [7, 9, 7, 11]
         let id = try OMEMOService.newDeviceID(avoiding: [7, 9]) { draws.removeFirst() }
