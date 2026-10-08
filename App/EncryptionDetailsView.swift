@@ -39,7 +39,7 @@ struct EncryptionDetailsView: View {
                         Text(XMPPOMEMOProfile.modern.label).tag(XMPPOMEMOProfile.modern)
                     }
                     .disabled(!model.session.isReady)
-                } header: { Text("This iPhone") } footer: {
+                } header: { Text("This \(ThisDevice.noun)") } footer: {
                     Text(model.encryptionDiagnostics.isEmpty ? "Changing the version means reviewing its devices again." : "Changing the version means reviewing its devices again.\n\n\(model.encryptionDiagnostics)")
                         .textSelection(.enabled)
                 }

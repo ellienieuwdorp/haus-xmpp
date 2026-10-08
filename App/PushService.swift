@@ -46,7 +46,7 @@ enum PushStatus: Equatable {
         case .off: "Off"
         case .settingUp: "Setting up…"
         case .on: "On"
-        case .notAllowed: "Off (not allowed in iOS Settings)"
+        case .notAllowed: "Off (not allowed in \(ThisDevice.settingsApp))"
         case .unsupported: "Your server doesn't support push notifications"
         case .unreachable: "Couldn't reach the push service"
         case .inspected: "Inspection complete"

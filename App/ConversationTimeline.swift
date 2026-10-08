@@ -133,7 +133,7 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
 enum UnreadableCopy {
     static func bubble(_ reason: UnreadableReason, isOutgoing: Bool) -> String {
         switch reason {
-        case .notForThisDevice: isOutgoing ? "Sent from another device and not encrypted for this iPhone" : "Not encrypted for this iPhone"
+        case .notForThisDevice: isOutgoing ? "Sent from another device and not encrypted for this \(ThisDevice.noun)" : "Not encrypted for this \(ThisDevice.noun)"
         case .unsupportedEncryption, .malformedContent, .decryptFailed: "Couldn't read this message"
         case .rejectedDevice: isOutgoing ? "Sent from a device you blocked" : "From a device you blocked"
         case .retentionLimit: "Not kept: too many messages waiting for review"
@@ -141,7 +141,7 @@ enum UnreadableCopy {
     }
     static func preview(_ reason: UnreadableReason) -> String {
         switch reason {
-        case .notForThisDevice: "Not encrypted for this iPhone"
+        case .notForThisDevice: "Not encrypted for this \(ThisDevice.noun)"
         case .unsupportedEncryption, .malformedContent, .decryptFailed: "Couldn't read this message"
         case .rejectedDevice: "From a device you blocked"
         case .retentionLimit: "Not kept: too many messages waiting"

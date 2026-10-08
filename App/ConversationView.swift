@@ -583,7 +583,7 @@ struct ConversationView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     if model.encryptionNeedsReview {
                         Text(isGroup ? "Devices need review" : "\(title) added a new device").font(.subheadline.weight(.semibold))
-                        Text("Check its fingerprint before sending. Until then, nothing you write here leaves this iPhone.")
+                        Text("Check its fingerprint before sending. Until then, nothing you write here leaves this \(ThisDevice.noun).")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else {
                         // Only reading waits: the messages came from a device in the version this chat does not send with.

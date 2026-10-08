@@ -1588,7 +1588,7 @@ final class AppModel {
                 case .excluded(let reason):
                     // Not content, not review: the placeholder row is the record; the reason is a footnote in Devices.
                     encryptionAttention.note(reason == .notForThisDevice
-                        ? "A message from another device was not encrypted for this iPhone; it is shown as a placeholder."
+                        ? "A message from another device was not encrypted for this \(ThisDevice.noun); it is shown as a placeholder."
                         : "An encrypted message could not be read; it is shown as a placeholder.")
                     refreshSoon()
                 case .rejected(let rejected):
