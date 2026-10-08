@@ -19,6 +19,16 @@ public struct UnreadableEncryptionState: Sendable, Equatable {
     }
 }
 
+/// Plain-text counts for the recovery screen: what of one account's data depends on the lost key.
+public struct EncryptionLossCounts: Sendable, Equatable {
+    /// Retained ciphertext for the old device that would have been a message bubble: each becomes an unreadable
+    /// placeholder. Key transports and other non-bubble rows are only consumed and not counted.
+    public let waitingMessages: Int
+    /// Queued messages with a file and no prepared ciphertext: their key material was sealed, so they cannot be sent.
+    public let unsendableFiles: Int
+    public init(waitingMessages: Int, unsendableFiles: Int) { self.waitingMessages = waitingMessages; self.unsendableFiles = unsendableFiles }
+}
+
 extension OMEMOService {
     /// Every state row `protection` cannot open; every row when there is no key at all. Only a failed AES-GCM open
     /// counts: a row that opens but does not decode is not key loss and is left to the ordinary errors.
@@ -27,8 +37,10 @@ extension OMEMOService {
         for accountID in try await store.encryptionStateAccountIDs().sorted() {
             guard let row = try await store.encryptionState(accountID: accountID) else { continue }
             if let protection, (try? protection.open(row.data, account: accountID, sealedAs: row.sealedAccount)) != nil { continue }
+            let bubbles = try await store.pendingEncryptedIncoming(accountID: accountID).filter { retainedWouldBeBubble($0.wire) }.count
             result.append(UnreadableEncryptionState(accountID: accountID, revision: row.revision, deviceID: row.deviceID,
-                                                    loss: try await store.encryptionLossCounts(accountID: accountID)))
+                                                    loss: EncryptionLossCounts(waitingMessages: bubbles,
+                                                                               unsendableFiles: try await store.unsendableFileCount(accountID: accountID))))
         }
         return result
     }
@@ -97,22 +109,36 @@ extension OMEMOService {
         var consumed: [CiphertextIdentity] = []
         for item in try await store.pendingEncryptedIncoming(accountID: account) {
             let key = UnreadableMessage.Key.ciphertext(sender: item.sender, digest: item.digest)
+            guard Self.retainedWouldBeBubble(item.wire) else {
+                consumed.append(CiphertextIdentity(sender: item.sender, digest: item.digest))
+                continue
+            }
             if let group = try? JSONDecoder().decode(RetainedGroupEnvelope.self, from: item.wire) {
-                if !group.recordsBubbleHint || Self.expectsBubble(group.message) {
-                    placeholders.append(UnreadableMessage(accountID: account, chatID: group.message.room, senderID: group.message.sender,
-                                                          isOutgoing: group.message.sender == account, sentAt: group.sentAt, reason: .encryptionReset, key: key))
-                } else { consumed.append(CiphertextIdentity(sender: item.sender, digest: item.digest)) }
+                placeholders.append(UnreadableMessage(accountID: account, chatID: group.message.room, senderID: group.message.sender,
+                                                      isOutgoing: group.message.sender == account, sentAt: group.sentAt, reason: .encryptionReset, key: key))
             } else if let value = try? JSONDecoder().decode(RetainedEnvelope.self, from: item.wire) {
-                let message = XMPPEncryptedMessage(id: item.digest, from: value.from, to: value.to, originID: nil, envelope: value.envelope,
-                                                   provenance: value.provenance, hasFallbackBody: value.expectsBubble ?? true, replaces: value.replaces)
-                if Self.expectsBubble(message) {
-                    placeholders.append(placeholder(for: message, account: account, reason: .encryptionReset, sentAt: value.sentAt, key: key))
-                } else { consumed.append(CiphertextIdentity(sender: item.sender, digest: item.digest)) }
+                placeholders.append(placeholder(for: Self.retainedMessage(value, digest: item.digest), account: account,
+                                                reason: .encryptionReset, sentAt: value.sentAt, key: key))
             } else {
                 consumed.append(CiphertextIdentity(sender: item.sender, digest: item.digest))
             }
         }
         return (placeholders, consumed)
+    }
+
+    /// Whether a retained ciphertext would have been a message bubble, decided as the retry pass decides one. A row that
+    /// does not decode would not. The recovery screen counts with it, and `retainedOutcomes` decides with it.
+    static func retainedWouldBeBubble(_ wire: Data) -> Bool {
+        if let group = try? JSONDecoder().decode(RetainedGroupEnvelope.self, from: wire) {
+            return !group.recordsBubbleHint || expectsBubble(group.message)
+        }
+        guard let value = try? JSONDecoder().decode(RetainedEnvelope.self, from: wire) else { return false }
+        return expectsBubble(retainedMessage(value, digest: ""))
+    }
+
+    private static func retainedMessage(_ value: RetainedEnvelope, digest: String) -> XMPPEncryptedMessage {
+        XMPPEncryptedMessage(id: digest, from: value.from, to: value.to, originID: nil, envelope: value.envelope,
+                             provenance: value.provenance, hasFallbackBody: value.expectsBubble ?? true, replaces: value.replaces)
     }
 
     /// A device ID from `random` outside `avoiding`.

@@ -79,6 +79,7 @@ struct KeyRecoveryView: View {
             ? "A new encryption device is created the next time you sign in."
             : "A new encryption device is created for \(plan.account)."))
         items.append(Consequence(symbol: "person.2", text: "Your contacts and your other devices will see a new device to review before they can send to it."))
+        items.append(Consequence(symbol: "checkmark.shield", text: "The devices you reviewed or verified are forgotten here. You’ll review your contacts’ devices again before you send."))
         if plan.waitingMessages > 0 {
             items.append(Consequence(symbol: "envelope.badge", text: plan.waitingMessages == 1
                 ? "1 message waiting to be decrypted can’t be read any more and is shown as unreadable."
@@ -97,7 +98,7 @@ struct KeyRecoveryView: View {
         }
         items.append(Consequence(symbol: "iphone.slash", text: plan.retiresOldDevices
             ? "The old device is removed from your account’s device list when you’re next online."
-            : "The old device stays in your account’s device list until you remove it under Devices."))
+            : "The old device stays in your account’s device list until you remove it from a chat’s Devices & Encryption."))
         return items
     }
 

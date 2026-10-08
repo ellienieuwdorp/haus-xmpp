@@ -1142,11 +1142,10 @@ public actor MessageStore {
         return Set(try connection.query(sql, values).compactMap { UInt32(exactly: $0[0].integer) })
     }
 
-    /// What of `accountID`'s data depends on the wrapping key besides its state row, for the recovery screen.
-    public func encryptionLossCounts(accountID: String) throws -> EncryptionLossCounts {
-        let waiting = try connection.query("SELECT COUNT(*) FROM pending_encrypted_inbox WHERE account_id=?", [.text(accountID)]).first?[0].integer ?? 0
-        let files = try connection.query("SELECT COUNT(*) FROM outbox o WHERE \(Self.unsendableFileCondition)", [.text(accountID)]).first?[0].integer ?? 0
-        return EncryptionLossCounts(waitingMessages: waiting, unsendableFiles: files)
+    /// Queued messages of `accountID` whose file can no longer be sealed once the wrapping key is lost, for the
+    /// recovery screen (`unsendableFileCondition`).
+    public func unsendableFileCount(accountID: String) throws -> Int {
+        try connection.query("SELECT COUNT(*) FROM outbox o WHERE \(Self.unsendableFileCondition)", [.text(accountID)]).first?[0].integer ?? 0
     }
 
     /// `outbox.rejection` of a queued file that `resetEncryption` failed. Its key material was sealed with the lost

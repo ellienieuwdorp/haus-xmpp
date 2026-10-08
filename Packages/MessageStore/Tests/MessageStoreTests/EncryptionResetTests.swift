@@ -28,7 +28,7 @@ struct EncryptionResetTests {
             try await store.retainEncryptedIncoming(accountID: account, sender: peer, digest: "transport", wire: Data([2]))
             #expect(try await store.enqueueOutgoing(photo("photo")))
             #expect(try await store.enqueueOutgoing(StoredMessage(id: "text", accountID: account, chatID: "carol@localhost", senderID: account, body: "Hi", isOutgoing: true)))
-            #expect(try await store.encryptionLossCounts(accountID: account) == EncryptionLossCounts(waitingMessages: 2, unsendableFiles: 1))
+            #expect(try await store.unsendableFileCount(accountID: account) == 1)
 
             try await store.resetEncryption(EncryptionReset(
                 discarded: [.init(accountID: account, revision: 1, placeholders: [placeholder("bubble")], consumed: [CiphertextIdentity(sender: peer, digest: "transport")])],
@@ -51,9 +51,9 @@ struct EncryptionResetTests {
             #expect(sqliteRows(url: url, sql: "SELECT COUNT(*) FROM notification_candidates") == [["0"]])
             #expect(sqliteRows(url: url, sql: "SELECT COUNT(*) FROM pending_notification_candidates") == [["0"]])
             #expect(try await store.unreadCounts(accountID: account)[peer] == 1) // "kept" only
-            #expect(try await store.encryptionLossCounts(accountID: account) == EncryptionLossCounts(waitingMessages: 0, unsendableFiles: 0))
             #expect(sqliteRows(url: url, sql: "SELECT message_id,state,rejection FROM outbox ORDER BY sequence")
                     == [["photo", "failed", MessageStore.encryptionResetRejection], ["text", "queued", "NULL"]])
+            #expect(try await store.unsendableFileCount(accountID: account) == 0)
         }
     }
 

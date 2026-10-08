@@ -62,6 +62,9 @@ final class KeyRecoveryServiceTests: XCTestCase {
         let sealed = try await f.bStore.encryptionState(accountID: f.bob)
 
         let protection = try StateProtection(key: replacementKey)
+        // Retained ciphertext that would never have been a bubble (here: one that does not decode) is not counted as a
+        // message that becomes unreadable.
+        try await f.bStore.retainEncryptedIncoming(accountID: f.bob, sender: f.alice, digest: "not-a-bubble", wire: Data([1]))
         let lost = try await OMEMOService.unreadableStates(store: f.bStore, protection: protection)
         XCTAssertEqual(lost, [UnreadableEncryptionState(accountID: f.bob, revision: try XCTUnwrap(sealed).revision, deviceID: oldID,
                                                         loss: EncryptionLossCounts(waitingMessages: 1, unsendableFiles: 0))])

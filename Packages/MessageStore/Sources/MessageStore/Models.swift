@@ -257,15 +257,6 @@ public struct CiphertextIdentity: Sendable, Hashable {
     public init(sender: String, digest: String) { self.sender = sender; self.digest = digest }
 }
 
-/// Plain-text counts for the recovery screen: what of one account's data depends on the lost key.
-public struct EncryptionLossCounts: Sendable, Equatable {
-    /// Retained ciphertext rows, encrypted for the old device.
-    public let waitingMessages: Int
-    /// Queued messages with a file and no prepared ciphertext: their key material was sealed, so they cannot be sent.
-    public let unsendableFiles: Int
-    public init(waitingMessages: Int, unsendableFiles: Int) { self.waitingMessages = waitingMessages; self.unsendableFiles = unsendableFiles }
-}
-
 public struct PendingEncryptedMessage: Sendable {
     public let sender: String
     public let digest: String
