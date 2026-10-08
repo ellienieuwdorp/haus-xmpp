@@ -41,3 +41,39 @@ extension XCUIApplication {
         }
     }
 }
+
+extension XCUIApplication {
+    /// The attachment panel asks for the photo library on its first open; the rail needs full access.
+    @MainActor func allowPhotoAccessIfAsked() {
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow Full Access"]
+        // The prompt comes once per install; after that the rail's first photo shows instead. Stop at whichever is first:
+        // a fixed wait for a prompt that no longer comes cost every later open its whole timeout. The deadline is generous
+        // because a prompt that shows after it is dismissed by the next tap, which denies the rail for the whole run.
+        let railPhoto = descendants(matching: .any).matching(identifier: "recentPhoto-0").firstMatch
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline, !allow.exists, !railPhoto.exists { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1)) }
+        if allow.exists { allow.tap() }
+    }
+
+    /// Picks the first `count` library photos through the system picker, opened from the attachment panel's Photos
+    /// chip, and waits until each has landed in the tray.
+    @MainActor func pickPhotos(_ count: Int) {
+        let attach = buttons["attachFile"]
+        XCTAssertTrue(attach.waitForExistence(timeout: 5))
+        attach.tap()
+        allowPhotoAccessIfAsked()
+        let photos = buttons["attachPhotos"]
+        XCTAssertTrue(photos.waitForExistence(timeout: 5), "The attachment panel's Photos chip")
+        photos.tap()
+        let grid = images.matching(identifier: "PXGGridLayout-Info")
+        XCTAssertTrue(grid.firstMatch.waitForExistence(timeout: 10), "The simulator's stock photos")
+        // The picker runs out of process: its elements are visible but report not hittable, so tap their centres.
+        let centre = CGVector(dx: 0.5, dy: 0.5)
+        for index in 0..<count { grid.element(boundBy: index).coordinate(withNormalizedOffset: centre).tap() }
+        buttons["Done"].coordinate(withNormalizedOffset: centre).tap()
+        let removes = buttons.matching(identifier: "removeAttachment")
+        let filled = NSPredicate { _, _ in removes.count == count }
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: filled, object: nil)], timeout: 15), .completed,
+                       "\(count) photos in the tray")
+    }
+}
