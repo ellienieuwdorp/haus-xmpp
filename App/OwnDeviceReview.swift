@@ -43,8 +43,16 @@ enum OwnDeviceReview {
         return trust
     }
 
+    /// A changed identity is named even when several devices wait, so it never reads as just another new device.
     static func headline(_ candidates: [OwnDeviceCandidate]) -> String {
-        guard candidates.count == 1 else { return "\(candidates.count) devices on your account need review" }
+        guard candidates.count == 1 else {
+            let several = "\(candidates.count) devices on your account need review"
+            switch candidates.filter(\.identityChanged).count {
+            case 0: return several
+            case 1: return several + ", one changed its identity"
+            case let changed: return several + ", \(changed) changed their identity"
+            }
+        }
         return candidates[0].identityChanged ? "A device on your account changed its identity" : "New device on your account"
     }
 

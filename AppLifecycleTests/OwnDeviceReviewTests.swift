@@ -51,6 +51,9 @@ final class OwnDeviceReviewTests: XCTestCase {
         XCTAssertTrue(candidates[0].identityChanged)
         XCTAssertEqual(OwnDeviceReview.headline(candidates), "A device on your account changed its identity")
         XCTAssertEqual(OwnDeviceReview.headline(OwnDeviceReview.candidates([device(5, .modern)])), "New device on your account")
+        // Several waiting devices do not hide the changed one in a count.
+        let several = OwnDeviceReview.candidates([device(5, .modern), device(9, .modern, identity: 1, changed: true)])
+        XCTAssertEqual(OwnDeviceReview.headline(several), "2 devices on your account need review, one changed its identity")
     }
 
     /// The review shows an outcome only once every record carries it; accepted stays accepted, never verified.
