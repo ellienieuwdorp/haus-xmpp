@@ -98,7 +98,7 @@ struct PreUpgradeSnapshot: Sendable {
 
         /// The app's own: the App Group container, the standard and shared preferences, the real Keychain services.
         static func production(messaging: URL) -> Locations? {
-            guard let root = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedStorage.group),
+            guard let root = try? SharedStorage.groupContainer(),
                   let group = UserDefaults(suiteName: SharedStorage.group), let bundle = Bundle.main.bundleIdentifier else { return nil }
             return Locations(groupRoot: root, messaging: messaging, appDefaults: DefaultsDomain(defaults: .standard, name: bundle),
                              groupDefaults: DefaultsDomain(defaults: group, name: SharedStorage.group), keychain: .production,
