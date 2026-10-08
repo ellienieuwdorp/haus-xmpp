@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		028100ACCB75CDF7DD034832 /* ChatListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72CEDFA5595A4C5D13AC3286 /* ChatListView.swift */; };
 		04AF783225090EB9942D1756 /* Intents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AC355ED50ED01A97A49C9030 /* Intents.framework */; };
+		0557E401D86C1C093F445B63 /* TimelineModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4166F1DF0B9E50FC5796856C /* TimelineModels.swift */; };
 		05899B37427714A6C83B82F5 /* Attachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAD47A5646692079DA699298 /* Attachments.swift */; };
 		0621D8301023361A3D2C86F4 /* ConversationTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCEBA3C742AE37C79EB4D6E0 /* ConversationTimeline.swift */; };
 		063FCB17579C88B6DAE8781F /* ReplyUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E92B47FBB2381FF8C35F67FC /* ReplyUITests.swift */; };
@@ -58,6 +59,7 @@
 		701B533528A008A47E940216 /* AvatarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 665ABAF78DE8CC58D961254E /* AvatarStore.swift */; };
 		712D8BC85B0B62C9286202D8 /* MessageActionsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14672731D176DFF45CC7BC6E /* MessageActionsUITests.swift */; };
 		71D6CE56E84802CEAF1665BF /* PreUpgradeSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1FA755E6CFB05C173C4A4C /* PreUpgradeSnapshotTests.swift */; };
+		722EB5F61638A68D81ADB597 /* MessageCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 938A95EE75D3E4F6101F667C /* MessageCopy.swift */; };
 		72C7E7A9558B483CDAC73323 /* NotificationNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0554E0B736A32101FBE1D193 /* NotificationNavigationTests.swift */; };
 		75903C047102BA2ECDC5E97E /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65AE7349FD1FCD92862145CE /* SignInView.swift */; };
 		77CD710091E8A7B5DA9CC11D /* ChatNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE5082F6FC8DC6C22351DAF /* ChatNotifications.swift */; };
@@ -207,6 +209,7 @@
 		3B95C6EE7F3E7728C7B101AA /* AttachmentPanelUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentPanelUITests.swift; sourceTree = "<group>"; };
 		3BAC3EB28A3AF370298473D3 /* HausXMPPUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = HausXMPPUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3FEA9AED98D6D9D58F880157 /* UITestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestSupport.swift; sourceTree = "<group>"; };
+		4166F1DF0B9E50FC5796856C /* TimelineModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineModels.swift; sourceTree = "<group>"; };
 		44C680F6A14596B4AE52511C /* schema-21.sql */ = {isa = PBXFileReference; path = "schema-21.sql"; sourceTree = "<group>"; };
 		44C90062EE37B85EB502A94B /* HausXMPP.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = HausXMPP.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4749F05E18328FC50A0611E5 /* ChatDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDetailsView.swift; sourceTree = "<group>"; };
@@ -247,6 +250,7 @@
 		90337AF076A86319FB692875 /* NotificationActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationActionTests.swift; sourceTree = "<group>"; };
 		921322F2680A7D27A742491B /* DeliveredNotificationCleanerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeliveredNotificationCleanerTests.swift; sourceTree = "<group>"; };
 		926773F781198BFF2F0E2AEC /* AppearanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceView.swift; sourceTree = "<group>"; };
+		938A95EE75D3E4F6101F667C /* MessageCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageCopy.swift; sourceTree = "<group>"; };
 		95271CA1D981A3BB07F06A3C /* OutboxUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutboxUITests.swift; sourceTree = "<group>"; };
 		97458A0AF66A781FDEE95E70 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		99302D954A8AB89926F82FF5 /* DateChipView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DateChipView.swift; sourceTree = "<group>"; };
@@ -441,6 +445,15 @@
 			);
 			sourceTree = "<group>";
 		};
+		9CA0B98782AD4B252D2E4CCF /* Conversation */ = {
+			isa = PBXGroup;
+			children = (
+				938A95EE75D3E4F6101F667C /* MessageCopy.swift */,
+				4166F1DF0B9E50FC5796856C /* TimelineModels.swift */,
+			);
+			path = Conversation;
+			sourceTree = "<group>";
+		};
 		A042954646197F7647B2BBD4 /* App */ = {
 			isa = PBXGroup;
 			children = (
@@ -488,6 +501,7 @@
 				7A6DCB9F398CA0479AED16B7 /* SyncPhaseTimings.swift */,
 				535BE8A1F1E6F1BDCA72435B /* Theme.swift */,
 				8EA646B2D3BEC5BEF134632A /* Typing.swift */,
+				9CA0B98782AD4B252D2E4CCF /* Conversation */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -734,6 +748,7 @@
 				616A12EE27893BF18D827676 /* HausXMPPApp.swift in Sources */,
 				1F4BBC2BA3DB5929DA85B868 /* LastSeen.swift in Sources */,
 				B609ACDCA30A71618D921BAC /* MessageActionsOverlay.swift in Sources */,
+				722EB5F61638A68D81ADB597 /* MessageCopy.swift in Sources */,
 				D74C290BF1ED6052EBC51BF9 /* NotificationAccessGate.swift in Sources */,
 				EDBA7EAFF388CC7F100D65D1 /* NotificationAccount.swift in Sources */,
 				DCCCCA8B4897042F34684899 /* NotificationActions.swift in Sources */,
@@ -755,6 +770,7 @@
 				75903C047102BA2ECDC5E97E /* SignInView.swift in Sources */,
 				39A29FB37A5F1B701D3E2231 /* SyncPhaseTimings.swift in Sources */,
 				364D130D4D94312A5D5DADDE /* Theme.swift in Sources */,
+				0557E401D86C1C093F445B63 /* TimelineModels.swift in Sources */,
 				7CD1E97E364C0BA4BFA357C1 /* Typing.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
