@@ -24,6 +24,18 @@ import OMEMO
         XCTAssertFalse(attributes[kSecAttrSynchronizable as String] as? Bool ?? false)
     }
 
+    /// Wrapping keys saved before every query named the data protection keychain must still be found, never replaced.
+    func testWrappingKeySavedWithoutDataProtectionFlagIsStillFound() throws {
+        let id = "lifecycle-" + UUID().uuidString
+        defer { deleteKey(id) }
+        let saved = Data((0..<32).map { UInt8($0) })
+        var item = keyQuery(id)
+        item[kSecValueData as String] = saved
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        XCTAssertEqual(SecItemAdd(item as CFDictionary, nil), errSecSuccess)
+        XCTAssertEqual(try EncryptionKeychain.load(storageID: id, allowCreation: true), saved)
+    }
+
     func testProtectedSnapshotAndIdentitySurviveStoreReopen() async throws {
         let fixture = try Fixture()
         addTeardownBlock { try await fixture.remove() }

@@ -114,10 +114,7 @@ struct NotificationAccount: Codable, Sendable, Equatable {
     }
 
     private static var keychainQuery: [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: "haus.xmpp.notification-account",
-         kSecAttrAccount as String: "primary",
-         kSecAttrSynchronizable as String: false]
+        KeychainQuery.genericPassword(service: "haus.xmpp.notification-account", account: "primary")
     }
     enum Failure: Error { case unavailable, credentialsRemain(backgroundDisabled: Bool) }
 }

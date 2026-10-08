@@ -827,10 +827,7 @@ struct PreUpgradeSnapshot: Sendable {
     // Keychain records as raw bytes: a copy never decodes, and so never rewrites, what it copies.
 
     private static func query(service: String, account: String?) -> [String: Any] {
-        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                                    kSecAttrSynchronizable as String: false]
-        if let account { query[kSecAttrAccount as String] = account }
-        return query
+        KeychainQuery.genericPassword(service: service, account: account)
     }
 
     static func keychainData(service: String, account: String) throws -> Data? {
