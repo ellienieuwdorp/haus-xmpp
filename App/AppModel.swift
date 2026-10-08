@@ -620,7 +620,8 @@ final class AppModel {
         }
     }
 
-    /// Desired state: connected whenever the app is in front with an account whose password still works.
+    /// Desired state: connected whenever the transport is wanted (the app is in front, on iOS) with an account whose
+    /// password still works.
     private var wantsConnection: Bool {
         transportWanted && !quiescing && !userWantsOffline && !authenticationRejected && sessionAccount != nil && !isDemo && upgradeState == .none
     }
@@ -2799,8 +2800,8 @@ final class AppModel {
         } catch { self.error = "Could not save preferences." }
     }
 
-    /// The timeline showed the newest received message while the app is in front: the chat is read up to it on this
-    /// device (published with XEP-0490), and the peer gets a read marker when the read-receipts switch allows.
+    /// The timeline showed the newest received message while the user is reading the chat: the chat is read up to it
+    /// on this device (published with XEP-0490), and the peer gets a read marker when the read-receipts switch allows.
     func markDisplayed(_ messageID: String) async {
         guard !quiescing, let store, let message = messages.first(where: { $0.id == messageID }), !message.isOutgoing,
               lifecycle.reading(message.chatID, openChatID: openChatID) else { return }
