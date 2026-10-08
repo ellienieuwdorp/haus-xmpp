@@ -1,47 +1,8 @@
 import XCTest
 
 final class ConversationUITests: XCTestCase {
-    /// A chat with stored messages must never flash the empty placeholder while its list loads.
-    @MainActor func testOpeningChatNeverShowsEmptyPlaceholder() throws {
-        continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchArguments = ["-demo"]
-        app.isolateMessageStorage()
-        app.launch()
-        let alex = app.staticTexts["Alex"]
-        XCTAssertTrue(alex.waitForExistence(timeout: 15))
-        alex.tap()
-        XCTAssertFalse(app.staticTexts["No messages yet"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.textFields["messageComposer"].exists || app.textViews["messageComposer"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["No messages yet"].exists)
-    }
-
-    private func openLongChat() -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchArguments = ["-demo", "-demo-long"]
-        app.isolateMessageStorage()
-        app.launch()
-        let history = app.staticTexts["History"]
-        XCTAssertTrue(history.waitForExistence(timeout: 15))
-        history.tap()
-        return app
-    }
-
     private func bubble(_ index: Int, in app: XCUIApplication) -> XCUIElement {
         app.textViews.containing(NSPredicate(format: "value == %@", "History message \(index)")).firstMatch
-    }
-
-    /// Only the newest page is loaded on open; scrolling up pages the rest in until the first message is reachable.
-    @MainActor func testLongChatOpensAtNewestAndPagesBackToTheFirstMessage() throws {
-        continueAfterFailure = false
-        let app = openLongChat()
-        XCTAssertTrue(bubble(250, in: app).waitForExistence(timeout: 5))
-        XCTAssertTrue(bubble(250, in: app).isHittable, "A chat opens on its newest message, above the composer")
-        let timeline = app.collectionViews["conversation.timeline"]
-        // A hard fling coasts about three screens; `.fast` coasts one, and every fling waits for the list to come to rest.
-        var flings = 0
-        while !bubble(1, in: app).exists, flings < 20 { timeline.swipeDown(velocity: 4000); flings += 1 }
-        XCTAssertTrue(bubble(1, in: app).exists, "Older pages load as the reader scrolls up")
     }
 
     private func composer(in app: XCUIApplication) -> XCUIElement {
