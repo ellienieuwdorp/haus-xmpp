@@ -15,17 +15,33 @@ extension OMEMOService {
     /// Re-reads the account's device list and bundles in both versions and stores them as a chat refresh does, without
     /// choosing a version for any chat. A device seen for the first time, or with a new key, is stored `.undecided`:
     /// nothing is trusted here. Returns `ownDevices`.
+    ///
+    /// The lists and bundles are fetched before taking the gate and merged under it, so decrypts and seals do not wait
+    /// behind these round trips; this runs on every connection. The merge reads the state current at that point.
     public func refreshOwnDevices(account: String, transport: any OMEMOTransport) async throws -> [EncryptionDevice] {
-        try await gate.run { try await self.refreshOwnDevicesLocked(account: account, transport: transport) }
+        let (_, snapshot) = try await load(account)
+        var fetched: [AdvertisedOwnDevices] = []
+        for profile in [XMPPOMEMOProfile.legacy, .modern] {
+            let local = try localDeviceID(snapshot, profile)
+            let ids = try validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))
+            // The same bound as a chat refresh: one bundle request per listed device.
+            guard ids.count <= 200 else { throw OMEMOError.invalidContent }
+            var bundles: [UInt32: XMPPOMEMOBundle] = [:]
+            for id in ids where id != local {
+                bundles[id] = try await availableBundle(owner: account, deviceID: id, profile: profile, transport: transport)
+            }
+            fetched.append(AdvertisedOwnDevices(profile: profile, ids: ids, bundles: bundles))
+        }
+        let advertised = fetched
+        return try await gate.run { try await self.mergeOwnDevicesLocked(advertised, account: account) }
     }
 
-    private func refreshOwnDevicesLocked(account: String, transport: any OMEMOTransport) async throws -> [EncryptionDevice] {
+    private func mergeOwnDevicesLocked(_ advertised: [AdvertisedOwnDevices], account: String) async throws -> [EncryptionDevice] {
         let (revision, old) = try await load(account)
         var state = old
-        for profile in [XMPPOMEMOProfile.legacy, .modern] {
-            let ids = try validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))
-            _ = try await mergeAdvertised(ids, owner: account, profile: profile, skipping: try localDeviceID(state, profile),
-                                          transport: transport, into: &state)
+        for list in advertised {
+            _ = try await mergeAdvertised(list.ids, owner: account, profile: list.profile, skipping: try localDeviceID(state, list.profile),
+                                          into: &state) { list.bundles[$0] }
         }
         try await save(state, revision: revision, account: account)
         return try ownDevices(state, account: account)
@@ -36,4 +52,11 @@ extension OMEMOService {
         for profile in [XMPPOMEMOProfile.legacy, .modern] { local[profile] = try localDeviceID(state, profile) }
         return state.devices.filter { $0.jid == account && $0.deviceID != local[$0.profile] }
     }
+}
+
+/// One version's own device list as fetched before the merge; a listed ID without a bundle is gone or unreadable.
+private struct AdvertisedOwnDevices: Sendable {
+    let profile: XMPPOMEMOProfile
+    let ids: [UInt32]
+    let bundles: [UInt32: XMPPOMEMOBundle]
 }

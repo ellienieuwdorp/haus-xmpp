@@ -131,4 +131,33 @@ final class OwnDeviceServiceTests: XCTestCase {
         let unchanged = try await f.a.ownDevices(account: f.alice)
         XCTAssertTrue(unchanged.allSatisfy { $0.trust == .undecided })
     }
+
+    /// The refresh runs on every connection, so its round trips must not hold the service's gate: work that takes the
+    /// gate (here a decision; decrypts and seals in the app) completes while a bundle request is still outstanding.
+    func testRefreshDoesNotHoldTheGateDuringNetworkRequests() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        _ = try await addUnreviewedSecondDevice(f)
+        let probe = GateProbe()
+        let service = f.a, account = f.alice
+        let transport = CountingTransport(base: f.aTransport, log: TransportLog()) { _, _ in
+            guard await probe.start() else { return }
+            _ = Task { try await service.setTrust(account: account, deviceIDs: [], trust: .accepted); await probe.finish() }
+            // Bounded, so a regression fails instead of deadlocking: the gated call cannot run until this returns.
+            for _ in 0..<300 where !(await probe.finished) { try await Task.sleep(for: .milliseconds(10)) }
+            await probe.record()
+        }
+        _ = try await f.a.refreshOwnDevices(account: f.alice, transport: transport)
+        let finishedDuringFetch = await probe.finishedDuringFetch
+        XCTAssertTrue(finishedDuringFetch)
+    }
+}
+
+private actor GateProbe {
+    private var started = false
+    private(set) var finished = false
+    private(set) var finishedDuringFetch = false
+    func start() -> Bool { defer { started = true }; return !started }
+    func finish() { finished = true }
+    func record() { finishedDuringFetch = finished }
 }
