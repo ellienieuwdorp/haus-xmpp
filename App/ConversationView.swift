@@ -51,6 +51,32 @@ import UniformTypeIdentifiers
         guard !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return (files.count, false) }
         return (files.count, await sendCaption(caption))
     }
+
+    /// Which part of a send carries the composer's reply. A quote on a file would put fallback text before its link,
+    /// so a reply rides on the caption. With no caption, the first file carries the bare reply reference where the
+    /// chat allows one (`filesAloneCanReply`); elsewhere the files go and the reply stays in the composer for a caption.
+    struct ReplyPlan {
+        /// What the first file replies to; later files never carry a reply.
+        let firstFile: ChatMessage?
+        /// What the caption replies to; nil when there is no caption to send.
+        let caption: ChatMessage?
+
+        init(caption text: String, reply: ChatMessage?, filesAloneCanReply: (ChatMessage) -> Bool) {
+            let captionless = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            firstFile = captionless ? reply.flatMap { filesAloneCanReply($0) ? $0 : nil } : nil
+            caption = captionless ? nil : reply
+        }
+
+        /// Whether the reply is done once `dispatch` reports what went: its caption, or a file that carried it.
+        func clearsReply(after sent: (files: Int, caption: Bool)) -> Bool { sent.caption || (firstFile != nil && sent.files > 0) }
+    }
+
+    /// The field's prompt while files wait in the tray: files alone go without a reply they cannot carry, so it says
+    /// before Send that the reply needs a caption.
+    static func trayPlaceholder(reply: ChatMessage?, filesAloneCanReply: (ChatMessage) -> Bool) -> String {
+        guard let reply, ReplyPlan(caption: "", reply: reply, filesAloneCanReply: filesAloneCanReply).firstFile == nil else { return "Add a caption…" }
+        return "Add a caption to reply…"
+    }
 }
 
 // ponytail: tray items keep the prepared bytes in memory, up to trayLimit × AttachmentTransfer.maximumBytes;
@@ -242,23 +268,19 @@ struct ConversationView: View {
         state.attachmentsOpen = false
         state.sends += 1
         state.dispatching = true
-        // A quote on a file would put fallback text before its link, so a reply rides on the caption. With no caption,
-        // the first file carries the bare reply reference where the chat allows one (`canReplyWithFilesAlone`);
-        // elsewhere the files go and the reply stays in the composer for a caption.
-        let captionless = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let fileReply = captionless ? reply.flatMap { model.canReplyWithFilesAlone(to: $0, in: chatID) ? $0 : nil } : nil
+        let plan = ComposerState.ReplyPlan(caption: text, reply: reply) { model.canReplyWithFilesAlone(to: $0, in: chatID) }
         Task {
             defer { state.dispatching = false }
             let sent = await ComposerState.dispatch(files, caption: text, sendFile: { item in
                 guard model.accountID == account,
-                      await model.sendAttachment(item.prepared, to: chatID, replyingTo: item.id == files.first?.id ? fileReply : nil) else { return false }
+                      await model.sendAttachment(item.prepared, to: chatID, replyingTo: item.id == files.first?.id ? plan.firstFile : nil) else { return false }
                 state.tray.removeAll { $0.id == item.id }
                 return true
             }, sendCaption: { text in
-                model.accountID == account ? await model.send(text, to: chatID, replyingTo: reply) : false
+                model.accountID == account ? await model.send(text, to: chatID, replyingTo: plan.caption) : false
             })
             guard model.accountID == account else { return }
-            if sent.caption || (fileReply != nil && sent.files > 0) {
+            if plan.clearsReply(after: sent) {
                 if replyingTo?.id == reply?.id { replyingTo = nil }
             } else if state.draft.isEmpty {
                 state.draft = text
@@ -605,9 +627,7 @@ struct ConversationComposer: View {
     private var placeholder: String {
         if !model.isDemo, model.encryptionNeedsReview { return "Sending paused until you review" }
         guard showsTray else { return "Message" }
-        // Files alone go without this reply (see `send()`), so say before Send that the reply needs a caption.
-        if let replyingTo, !model.canReplyWithFilesAlone(to: replyingTo, in: chatID) { return "Add a caption to reply…" }
-        return "Add a caption…"
+        return ComposerState.trayPlaceholder(reply: replyingTo) { model.canReplyWithFilesAlone(to: $0, in: chatID) }
     }
 
     private var canSend: Bool {
