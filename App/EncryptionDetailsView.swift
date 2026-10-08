@@ -198,9 +198,12 @@ struct DeviceFingerprintSheet: View {
     var allowsMaintenance = false
     /// The versions the decision applies to, when it covers more than `device` (the account-level review).
     var versions: String? = nil
+    /// When set, Block asks first with this explanation, as the account-level review's Don't Trust does.
+    var rejectionMessage: String? = nil
     let review: (DeviceTrust) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingRepair = false
+    @State private var confirmingRejection = false
     @State private var confirmingRetirement = false
 
     var body: some View {
@@ -252,10 +255,14 @@ struct DeviceFingerprintSheet: View {
                     } footer: { Text("Use this if messages from this device cannot be opened.") }
                 }
                 Section {
-                    Button(role: .destructive) { review(.rejected) } label: {
+                    Button(role: .destructive) { if rejectionMessage == nil { review(.rejected) } else { confirmingRejection = true } } label: {
                         Label("Block this device", systemImage: "hand.raised").foregroundStyle(.red)
                     }
                     .disabled(!device.active)
+                    // Anchored to its button, so the dialog's popover points at what it confirms.
+                    .confirmationDialog("Don’t trust device \(String(device.deviceID))?", isPresented: $confirmingRejection, titleVisibility: .visible) {
+                        Button("Don’t Trust", role: .destructive) { review(.rejected) }
+                    } message: { Text(rejectionMessage ?? "") }
                     if allowsMaintenance && device.active && device.jid == model.accountID {
                         Button(role: .destructive) { confirmingRetirement = true } label: {
                             Label("Remove old device", systemImage: "iphone.slash").foregroundStyle(.red)

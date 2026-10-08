@@ -60,7 +60,7 @@ enum OwnDeviceReview {
     static func rejectionMessage(_ candidate: OwnDeviceCandidate) -> String {
         let direct = "New messages won’t be encrypted for it, and nothing it sends will be opened. Your trusted devices are unaffected."
         guard candidate.holdsGroupsWhenRejected else { return direct }
-        return direct + " Groups can’t send while it stays on your account; remove it from a chat’s Devices page."
+        return direct + " Groups can’t send until you remove it from your account, under Devices & Encryption in any one-to-one chat."
     }
 }
 
@@ -140,7 +140,7 @@ struct OwnDeviceReviewSheet: View {
                             .frame(width: 64, height: 64)
                             .background(.orange.opacity(0.15), in: Circle())
                             .accessibilityHidden(true)
-                        Text("Do you recognise these devices?").font(.title2.bold()).multilineTextAlignment(.center).padding(.top, 6)
+                        Text("Do you recognize these devices?").font(.title2.bold()).multilineTextAlignment(.center).padding(.top, 6)
                         Text("They use your account, \(model.accountID). Trust only devices you know are yours. To be sure, compare each fingerprint with the one shown on that device.")
                             .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     }
@@ -157,7 +157,8 @@ struct OwnDeviceReviewSheet: View {
             .sheet(item: $comparing) { candidate in
                 // The comparison sheet names one record; a decision there applies to all of this device's records.
                 DeviceFingerprintSheet(model: model, chatID: model.accountID, device: candidate.records[0], name: nil,
-                                       versions: candidate.versions) { trust in
+                                       versions: candidate.versions,
+                                       rejectionMessage: OwnDeviceReview.rejectionMessage(candidate)) { trust in
                     comparing = nil
                     Task { await model.decideOwnDevice(candidate, trust: trust) }
                 }
