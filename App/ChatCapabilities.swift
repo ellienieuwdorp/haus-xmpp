@@ -138,6 +138,10 @@ struct EncryptionAttention: Equatable {
     /// The user decided on a device in this chat; the next pass marks it again if a send is still held.
     mutating func trustDecided(in chatID: String) { heldForTrust.remove(chatID) }
 
+    /// The user decided on one of the account's own devices, which every chat sends to; the next pass marks the chats
+    /// that are still held.
+    mutating func trustDecidedForAccount() { heldForTrust.removeAll() }
+
     /// A group's device read or refresh failed (`problem`) or succeeded (nil).
     mutating func groupDevices(_ room: String, problem: String?) {
         groupProblems[room] = problem

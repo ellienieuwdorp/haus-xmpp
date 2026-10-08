@@ -129,8 +129,12 @@ extension EncryptionDevice {
         }
     }
     /// Trailing coloured status label; doubles as the fingerprint sheet's hero glyph.
+    var badge: DeviceBadge { trust.badge }
+}
+
+extension DeviceTrust {
     var badge: DeviceBadge {
-        switch trust {
+        switch self {
         case .verified: DeviceBadge(text: "Verified", symbol: "checkmark.shield", color: .green)
         case .accepted: DeviceBadge(text: "Accepted", symbol: "lock", color: .secondary)
         case .rejected: DeviceBadge(text: "Blocked", symbol: "hand.raised", color: .red)
@@ -192,6 +196,8 @@ struct DeviceFingerprintSheet: View {
     let name: String?
     /// Repair / remove rows, offered on 1:1 chats only.
     var allowsMaintenance = false
+    /// The versions the decision applies to, when it covers more than `device` (the account-level review).
+    var versions: String? = nil
     let review: (DeviceTrust) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingRepair = false
@@ -266,7 +272,7 @@ struct DeviceFingerprintSheet: View {
             }
             .navigationTitle("Device \(String(device.deviceID))")
             // A device ID can publish in both versions, each with its own fingerprint encoding: name the one being compared.
-            .navigationSubtitle("\(device.jid) · \(device.profile.label)")
+            .navigationSubtitle("\(device.jid) · \(versions ?? device.profile.label)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { dismiss() }.labelStyle(.iconOnly) } }
             .confirmationDialog("Repair this encryption session?", isPresented: $confirmingRepair, titleVisibility: .visible) {
