@@ -164,6 +164,23 @@ final class ChatCapabilitiesTests: XCTestCase {
                        "accepted is not verified")
     }
 
+    /// The group pill follows `groupRecipients`: a rejected device on the account itself is left out and does not ask
+    /// for review, while an undecided own device and another member's rejected device still hold the group.
+    func testRejectedOwnDeviceDoesNotHoldTheGroup() throws {
+        let me = "me@example.org", bob = "bob@example.org"
+        let bobAccepted = try device(bob, 11, .accepted)
+        var room = GroupChatState(members: [me, bob], devices: [try device(me, 1, .rejected), bobAccepted])
+        room.joined = true
+        XCTAssertFalse(room.needsReview(account: me))
+        XCTAssertEqual(group(.stored(DeviceTrustFacts(room, account: me)), joined: true, ready: true).encryption, .encrypted(verified: false))
+
+        room.devices = [try device(me, 1, .undecided), bobAccepted]
+        XCTAssertTrue(room.needsReview(account: me), "an undecided own device needs review")
+        room.devices = [try device(me, 1, .accepted), try device(bob, 11, .rejected)]
+        XCTAssertTrue(room.needsReview(account: me), "another member's rejected device holds the group")
+        XCTAssertEqual(group(.stored(DeviceTrustFacts(room, account: me)), joined: true, ready: true).encryption, .needsReview)
+    }
+
     /// A send held for a fingerprint decision shows the review card for that chat only; other holds are footnotes.
     func testTrustHeldSendShowsReviewForThatChatOnly() throws {
         var attention = EncryptionAttention()

@@ -3,16 +3,6 @@ import SwiftUI
 import UIKit
 import XMPPProtocol
 
-/// One list of what a message can do. The long-press overlay and VoiceOver custom actions both read it.
-struct MessageAction: Identifiable {
-    enum Kind: String { case reply, copy, selectText, star, retry, edit, unsend, encryptionDetails }
-    let kind: Kind
-    let title: String
-    let symbol: String
-    let perform: () -> Void
-    var id: Kind { kind }
-}
-
 /// What the overlay needs from the pressed bubble. Frames are window coordinates and ignore the press squeeze.
 struct MessageActionsContext {
     let message: TimelineMessage
@@ -368,7 +358,7 @@ struct MessageActionsOverlayView: View {
         .buttonStyle(.plain)
         .disabled(!message.canReact)
         .accessibilityIdentifier(emoji)
-        .accessibilityLabel("\(selected ? "Remove" : "Add") \(TimelineReaction.name(for: emoji)) reaction")
+        .accessibilityLabel(MessageActionMenu.reactionTitle(emoji, selected: selected))
     }
 
     private var menu: some View {

@@ -64,8 +64,9 @@ A UI test costs a launch (about 4 s) and one to four seconds per gesture. Write 
 
 Everything else goes in `HausXMPPLifecycleTests` (`AppLifecycleTests/`) or a package:
 
-- Timeline cells: labels, sides, actions, widths, the typing item, placeholders, edited and unsent bubbles. Drive the real controller in a `UIWindow`, as `TimelinePositionTests` does.
-- Timeline positions: anchoring, loading earlier pages, following an own send (`TimelinePositionTests`).
+- Conversation decisions shared with a future Mac timeline (`App/Conversation`): which actions a message offers (`MessageActionMenuTests`), how stored messages become rows (`ConversationPresenterTests`) and where the list scrolls (`TimelineScrollPolicyTests`). Test these types directly, without a window. `scripts/typecheck-conversation-macos.sh` typechecks the folder for macOS on its own, without the `AppModel` conformance, so it catches a UIKit dependency creeping in.
+- Timeline cells: labels, sides, widths, the typing item, placeholders, edited and unsent bubbles, and that the cell wires up the shared actions. Drive the real controller in a `UIWindow`, as `TimelinePositionTests` does.
+- Timeline positions: that the controller carries out the scroll policy: anchoring, loading earlier pages, following an own send (`TimelinePositionTests`).
 - Composer decisions such as which item carries a reply, attachment dispatch order, mute durations.
 - Persistence: pins, stars, mutes, replies and revisions are written to the store and read back before they appear on screen, and MessageStore's tests own that. Don't relaunch the app to prove it.
 

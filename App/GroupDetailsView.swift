@@ -14,12 +14,13 @@ struct GroupDetailsView: View {
                     ChatAvatar(key: room, name: room, isGroup: true, size: 96)
                     Text(String(room.prefix { $0 != "@" })).font(.title2.bold()).padding(.top, 6)
                     Text(room).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
-                    TrustPill(text: state.needsReview ? "Devices need review" : "Encrypted",
-                              systemImage: state.needsReview ? "exclamationmark.shield" : "lock.fill",
-                              color: state.needsReview ? .orange : .green)
+                    let needsReview = state.needsReview(account: model.accountID)
+                    TrustPill(text: needsReview ? "Devices need review" : "Encrypted",
+                              systemImage: needsReview ? "exclamationmark.shield" : "lock.fill",
+                              color: needsReview ? .orange : .green)
                         .padding(.top, 4)
                     // Read-only: the join state and the last failed device refresh. Neither changes the pill.
-                    let notes = [state.issue != nil || !state.joined ? state.status : nil, model.encryptionAttention.groupProblems[room]].compactMap { $0 }
+                    let notes = [state.issue != nil || !state.joined ? state.status(account: model.accountID) : nil, model.encryptionAttention.groupProblems[room]].compactMap { $0 }
                     if !notes.isEmpty {
                         Text(notes.joined(separator: "\n")).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                             .accessibilityIdentifier("groupDetails.status")
@@ -32,9 +33,9 @@ struct GroupDetailsView: View {
                 Section {
                     let devices = state.devices.filter { $0.jid == member }
                     if member == model.accountID, let deviceID = state.localDeviceID, let fingerprint = state.localFingerprint {
-                        NavigationLink("This iPhone") { GroupLocalFingerprintView(deviceID: deviceID, fingerprint: fingerprint) }
+                        NavigationLink("This \(ThisDevice.noun)") { GroupLocalFingerprintView(deviceID: deviceID, fingerprint: fingerprint) }
                     } else if devices.isEmpty {
-                        Text(member == model.accountID ? "This iPhone" : "No compatible devices found").foregroundStyle(.secondary)
+                        Text(member == model.accountID ? "This \(ThisDevice.noun)" : "No compatible devices found").foregroundStyle(.secondary)
                     }
                     ForEach(devices) { device in
                         Button { selectedDevice = device } label: { DeviceRow(device: device, status: status(device)) }
@@ -56,7 +57,7 @@ struct GroupDetailsView: View {
                 } header: { Text("Previous members") }
                 footer: { Text("Reviewing a previous member does not add them to current recipients.") }
             }
-            Section {} footer: { Text("Blocking a device pauses sending to the whole group.") }
+            Section {} footer: { Text("Blocking another member’s device pauses sending to the whole group. Your own blocked devices are left out instead.") }
         }
         .navigationTitle("Group details").navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -75,7 +76,8 @@ struct GroupDetailsView: View {
     }
 
     private func status(_ device: EncryptionDevice) -> String {
-        device.active && device.trust == .rejected ? "Blocked · group sending paused" : device.reviewStatus
+        guard device.active && device.trust == .rejected else { return device.reviewStatus }
+        return device.isLeftOutOfGroups(account: model.accountID) ? "Blocked · left out" : "Blocked · group sending paused"
     }
 }
 
@@ -87,7 +89,7 @@ private struct GroupLocalFingerprintView: View {
             Section {
                 LabeledContent("Device", value: String(deviceID))
                 FingerprintGrid(value: fingerprint).padding(.vertical, 8)
-            } footer: { Text("Other members verify this iPhone by comparing this fingerprint.") }
+            } footer: { Text("Other members verify this \(ThisDevice.noun) by comparing this fingerprint.") }
         }
         .navigationTitle("Your fingerprint").navigationBarTitleDisplayMode(.inline)
     }

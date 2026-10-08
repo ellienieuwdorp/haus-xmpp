@@ -9,7 +9,7 @@ public actor MessageStore {
     private let transportOwnership: TransportOwnership
 
     /// The schema this build writes.
-    public static let currentSchemaVersion = 24
+    public static let currentSchemaVersion = 25
 
     /// How opening treats a file written by an older build.
     public enum SchemaAccess: Sendable {
@@ -398,7 +398,20 @@ public actor MessageStore {
                     }
                 }
             }
-            try connection.execute("PRAGMA user_version = \(addressesMigrated ? 24 : 22)")
+            // v25: each encryption state row's device ID in plain text, and own device IDs given up when encryption was
+            // set up again, with where each stands in the published device lists (docs/development/key-recovery.md).
+            // Column and table checks keep it idempotent in any merge order.
+            if try connection.query("SELECT 1 FROM pragma_table_info('encryption_state') WHERE name='device_id'").isEmpty {
+                try connection.execute("ALTER TABLE encryption_state ADD COLUMN device_id INTEGER")
+            }
+            try connection.execute("""
+                CREATE TABLE IF NOT EXISTS retired_own_devices (
+                    account_id TEXT NOT NULL, profile TEXT NOT NULL CHECK(profile IN ('legacy','modern')), device_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','removed','reclaimed')),
+                    PRIMARY KEY(account_id, profile, device_id)
+                )
+                """)
+            try connection.execute("PRAGMA user_version = \(addressesMigrated ? 25 : 22)")
         }
     }
 
@@ -664,14 +677,15 @@ public actor MessageStore {
         }
     }
 
-    /// Caller must explicitly warn that retry can duplicate a message already accepted remotely.
+    /// Caller must explicitly warn that retry can duplicate a message already accepted remotely. A file failed by
+    /// `resetEncryption` is refused: it would stay queued for good, since its key material can never be opened.
     public func retryOutgoing(accountID: String, messageID: String) throws {
         try requireTransportOwnership()
         return try connection.transaction {
             try connection.execute("""
                 UPDATE outbox SET state='queued',attempt_id=NULL,rejection=NULL WHERE account_id=? AND message_id=?
-                AND state IN ('unconfirmed','failed')
-                """, [.text(accountID), .text(messageID)])
+                AND state IN ('unconfirmed','failed') AND rejection IS NOT ?
+                """, [.text(accountID), .text(messageID), .text(Self.encryptionResetRejection)])
             guard try connection.query("SELECT changes()").first?[0].integer == 1 else {
                 throw MessageStoreError.invalidTransition
             }
@@ -1101,9 +1115,124 @@ public actor MessageStore {
     }
 
     public func encryptionState(accountID: String) throws -> EncryptionState? {
-        guard let row = try connection.query("SELECT revision,snapshot,sealed_account FROM encryption_state WHERE account_id=?", [.text(accountID)]).first else { return nil }
+        guard let row = try connection.query("SELECT revision,snapshot,sealed_account,device_id FROM encryption_state WHERE account_id=?", [.text(accountID)]).first else { return nil }
         guard let data = row[1].data, !data.isEmpty else { throw MessageStoreError.invalidValue }
-        return EncryptionState(revision: row[0].integer, data: data, sealedAccount: row[2].optionalString)
+        return EncryptionState(revision: row[0].integer, data: data, sealedAccount: row[2].optionalString,
+                               deviceID: Self.optionalInteger(row[3]).flatMap(UInt32.init(exactly:)))
+    }
+
+    /// Records the device ID of an account's state row in plain text, once. A row already recorded under another ID is a
+    /// different identity and is never relabelled.
+    public func recordEncryptionDeviceID(accountID: String, deviceID: UInt32) throws {
+        guard deviceID > 0, deviceID <= Int32.max else { throw MessageStoreError.invalidValue }
+        try connection.transaction {
+            try connection.execute("UPDATE encryption_state SET device_id=? WHERE account_id=? AND device_id IS NULL",
+                                   [.integer(Int(deviceID)), .text(accountID)])
+            let row = try connection.query("SELECT device_id FROM encryption_state WHERE account_id=?", [.text(accountID)]).first
+            if let recorded = row.flatMap({ Self.optionalInteger($0[0]) }), recorded != Int(deviceID) { throw MessageStoreError.conflictingIdentity }
+        }
+    }
+
+    /// Own device IDs `accountID` gave up when encryption was set up again, for `profile` (every profile when nil), in
+    /// any of `statuses`. Kept for good, whatever the status: no new identity of the account ever takes one.
+    public func retiredOwnDevices(accountID: String, profile: String? = nil,
+                                  statuses: Set<RetiredDeviceStatus> = Set(RetiredDeviceStatus.allCases)) throws -> Set<UInt32> {
+        var sql = "SELECT device_id,status FROM retired_own_devices WHERE account_id=?"
+        var values: [Value] = [.text(accountID)]
+        if let profile { sql += " AND profile=?"; values.append(.text(profile)) }
+        return Set(try connection.query(sql, values).compactMap { row in
+            guard let status = RetiredDeviceStatus(rawValue: row[1].string), statuses.contains(status) else { return nil }
+            return UInt32(exactly: row[0].integer)
+        })
+    }
+
+    /// Moves retired own device IDs of `accountID` in `profile` on: `pending` to `removed` once a list read back lacks
+    /// them, `removed` to `reclaimed` once a list names them again. IDs not in the expected status are left alone, and
+    /// no other step exists: a reclaimed ID is never removed automatically again.
+    public func advanceRetiredOwnDevices(accountID: String, profile: String, deviceIDs: Set<UInt32>, to status: RetiredDeviceStatus) throws {
+        let from: RetiredDeviceStatus
+        switch status {
+        case .removed: from = .pending
+        case .reclaimed: from = .removed
+        case .pending: throw MessageStoreError.invalidTransition
+        }
+        try connection.transaction {
+            for id in deviceIDs {
+                try connection.execute("UPDATE retired_own_devices SET status=? WHERE account_id=? AND profile=? AND device_id=? AND status=?",
+                                       [.text(status.rawValue), .text(accountID), .text(profile), .integer(Int(id)), .text(from.rawValue)])
+            }
+        }
+    }
+
+    /// Queued messages of `accountID` whose file can no longer be sealed once the wrapping key is lost, for the
+    /// recovery screen (`unsendableFileCondition`).
+    public func unsendableFileCount(accountID: String) throws -> Int {
+        try connection.query("SELECT COUNT(*) FROM outbox o WHERE \(Self.unsendableFileCondition)", [.text(accountID)]).first?[0].integer ?? 0
+    }
+
+    /// `outbox.rejection` of a queued file that `resetEncryption` failed. Its key material was sealed with the lost
+    /// key, so it can never be sealed: `retryOutgoing` refuses it, and only attaching the file again sends it.
+    public static let encryptionResetRejection = "encryption-reset"
+
+    /// Queued (never claimed) messages of account `?1` with a file and no prepared ciphertext: sealing them needs the
+    /// file's key material, which was sealed with the lost key.
+    private static let unsendableFileCondition = """
+        o.account_id=?1 AND o.state='queued'
+        AND EXISTS (SELECT 1 FROM attachments a WHERE a.account_id=o.account_id AND a.message_id=o.message_id)
+        AND NOT EXISTS (SELECT 1 FROM encrypted_outbox e WHERE e.account_id=o.account_id AND e.message_id=o.message_id)
+        """
+
+    /// Starts encryption over after the wrapping key was lost, in one transaction under the lease: each discarded row
+    /// goes (only at the revision it was assessed at), its recorded device ID is retired for both profiles, every one of
+    /// that account's retained ciphertexts gets its final outcome (an `encryptionReset` placeholder, or only its consumed
+    /// replay identity; a placeholder that does not validate is consumed instead), and its queued files that can no
+    /// longer be sealed fail. The replacement identity, if any, is written last under a device ID no discarded or retired
+    /// row of its account used. Nothing else changes: messages, chats, files, preferences and checkpoints stay.
+    public func resetEncryption(_ reset: EncryptionReset) throws {
+        try requireTransportOwnership()
+        guard !reset.discarded.isEmpty, Set(reset.discarded.map(\.accountID)).count == reset.discarded.count else { throw MessageStoreError.invalidValue }
+        try connection.transaction {
+            var revisions: [String: Int] = [:]
+            for item in reset.discarded {
+                let account = Value.text(item.accountID)
+                guard let row = try connection.query("SELECT revision,device_id FROM encryption_state WHERE account_id=?", [account]).first,
+                      row[0].integer == item.revision else { throw MessageStoreError.invalidTransition }
+                revisions[item.accountID] = item.revision
+                try connection.execute("DELETE FROM encryption_state WHERE account_id=?", [account])
+                if let deviceID = Self.optionalInteger(row[1]) {
+                    for profile in ["legacy", "modern"] {
+                        try connection.execute("INSERT OR IGNORE INTO retired_own_devices(account_id,profile,device_id) VALUES(?,?,?)",
+                                               [account, .text(profile), .integer(deviceID)])
+                    }
+                }
+                var consumed = item.consumed
+                for placeholder in item.placeholders {
+                    guard placeholder.accountID == item.accountID, placeholder.reason == .encryptionReset,
+                          case let .ciphertext(sender, digest) = placeholder.key else { throw MessageStoreError.invalidValue }
+                    do { try Self.validate(placeholder) } catch { consumed.append(CiphertextIdentity(sender: sender, digest: digest)); continue }
+                    _ = try insertUnreadableInTransaction(placeholder)
+                }
+                for identity in consumed {
+                    try connection.execute("INSERT OR IGNORE INTO encrypted_inbox(account_id,sender,digest) VALUES(?,?,?)", [account, .text(identity.sender), .text(identity.digest)])
+                    try connection.execute("DELETE FROM pending_encrypted_inbox WHERE account_id=? AND sender=? AND digest=?", [account, .text(identity.sender), .text(identity.digest)])
+                }
+                // Every retained row must have been decided: none of it can ever be decrypted again.
+                guard try connection.query("SELECT 1 FROM pending_encrypted_inbox WHERE account_id=? LIMIT 1", [account]).isEmpty else {
+                    throw MessageStoreError.invalidTransition
+                }
+                try connection.execute("UPDATE outbox SET state='failed',attempt_id=NULL,rejection=?2 WHERE sequence IN (SELECT o.sequence FROM outbox o WHERE \(Self.unsendableFileCondition))",
+                                       [account, .text(Self.encryptionResetRejection)])
+            }
+            if let replacement = reset.replacement {
+                let account = Value.text(replacement.accountID)
+                guard !replacement.data.isEmpty, replacement.data.count <= 16_777_216, replacement.deviceID > 0, replacement.deviceID <= Int32.max,
+                      try connection.query("SELECT 1 FROM encryption_state WHERE account_id=?", [account]).isEmpty,
+                      try !retiredOwnDevices(accountID: replacement.accountID).contains(replacement.deviceID) else { throw MessageStoreError.invalidTransition }
+                // A revision above the discarded row's, so no cache keyed by revision can mistake the new state for the old.
+                try connection.execute("INSERT INTO encryption_state(account_id,revision,snapshot,device_id) VALUES(?,?,?,?)",
+                                       [account, .integer((revisions[replacement.accountID] ?? 0) + 1), .blob(replacement.data), .integer(Int(replacement.deviceID))])
+            }
+        }
     }
 
     /// Every account with saved encryption state, in the spelling its row is keyed by.

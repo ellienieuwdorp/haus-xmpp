@@ -30,7 +30,7 @@ struct DeviceTrustFacts: Equatable {
     init(_ group: GroupChatState, account: String) {
         let active = group.devices.filter { $0.jid != account && $0.active }
         let owners = Set(active.map(\.jid))
-        self.init(peerTrust: active.map(\.trust), needsReview: group.needsReview, peerKnown: true,
+        self.init(peerTrust: active.map(\.trust), needsReview: group.needsReview(account: account), peerKnown: true,
                   everyPeerHasDevice: group.members.allSatisfy { $0 == account || owners.contains($0) })
     }
 }
@@ -137,6 +137,10 @@ struct EncryptionAttention: Equatable {
 
     /// The user decided on a device in this chat; the next pass marks it again if a send is still held.
     mutating func trustDecided(in chatID: String) { heldForTrust.remove(chatID) }
+
+    /// The user decided on one of the account's own devices, which every chat sends to; the next pass marks the chats
+    /// that are still held.
+    mutating func trustDecidedForAccount() { heldForTrust.removeAll() }
 
     /// A group's device read or refresh failed (`problem`) or succeeded (nil).
     mutating func groupDevices(_ room: String, problem: String?) {

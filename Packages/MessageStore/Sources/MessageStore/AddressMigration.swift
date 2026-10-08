@@ -43,6 +43,7 @@ enum AddressMigration {
         ("read_baselines", ["account_id", "archive_id"], .delete),
         ("reaction_notification_candidates", ["account_id", "chat_id", "actor_id"], .keep),
         ("reaction_notifications_posted", ["account_id", "chat_id", "actor_id"], .keep),
+        ("retired_own_devices", ["account_id"], .delete),
     ]
     /// Tables whose blobs are sealed with the row's account as associated data.
     private static let sealed = ["attachments", "encryption_state"]

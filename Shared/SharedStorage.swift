@@ -16,16 +16,43 @@ enum SharedStorage {
             try prepare(testDirectory)
             return testDirectory
         }
-        guard let container = manager.containerURL(forSecurityApplicationGroupIdentifier: group) else { throw Failure.unavailable }
-        let destination = container.appending(path: "Messaging", directoryHint: .isDirectory)
+        let destination = try groupContainer().appending(path: "Messaging", directoryHint: .isDirectory)
+        #if os(macOS)
+        // The legacy location only ever held stores from iOS builds before the App Group move. No Mac build kept a store
+        // there, so there is nothing to bring across.
+        return try await resolve(legacy: nil, destination: destination, migrate: migrate)
+        #else
         return try await resolve(legacy: legacy, destination: destination, migrate: migrate)
+        #endif
     }
 
-    /// Explicit roots keep migration tests isolated from both real app containers.
-    static func resolve(legacy: URL, destination: URL, migrate: Bool) async throws -> URL {
+    /// The App Group container, once this process can use it. A missing entitlement makes `containerURL` nil on iOS,
+    /// but on macOS it always returns a path, so the directory itself is checked too.
+    static func groupContainer() throws -> URL {
+        try usableContainer(FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group))
+    }
+
+    /// The container must be a directory that exists or can be created, and that this process may write to. Checked
+    /// with permissions rather than a probe write, so nothing is written and the answer does not depend on file
+    /// protection before first unlock.
+    static func usableContainer(_ url: URL?) throws -> URL {
+        guard let url else { throw Failure.unavailable }
         let manager = FileManager.default
-        let oldDatabase = legacy.appending(path: "messages.sqlite")
-        if migrate, manager.fileExists(atPath: oldDatabase.path) {
+        var isDirectory: ObjCBool = false
+        if !manager.fileExists(atPath: url.path, isDirectory: &isDirectory) {
+            do { try manager.createDirectory(at: url, withIntermediateDirectories: false) } catch { throw Failure.unavailable }
+            isDirectory = true
+        }
+        guard isDirectory.boolValue, manager.isWritableFile(atPath: url.path) else { throw Failure.unavailable }
+        return url
+    }
+
+    /// Explicit roots keep migration tests isolated from both real app containers. Without a legacy directory there
+    /// is nothing to move.
+    static func resolve(legacy: URL?, destination: URL, migrate: Bool) async throws -> URL {
+        let manager = FileManager.default
+        let oldDatabase = legacy?.appending(path: "messages.sqlite")
+        if migrate, let legacy, let oldDatabase, manager.fileExists(atPath: oldDatabase.path) {
             guard !manager.fileExists(atPath: destination.path) else { throw Failure.conflictingStores }
             // As is: a store an older build left there is moved unchanged; the app snapshots it before migrating.
             let old = try MessageStore(url: oldDatabase, schema: .asIs)

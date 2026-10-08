@@ -64,7 +64,7 @@ struct SettingsView: View {
                                 .disabled(!model.session.isReady)
                                 .accessibilityIdentifier("retryPushNotifications")
                         case .notAllowed:
-                            Button("Open iOS Settings") {
+                            Button("Open \(ThisDevice.settingsApp)") {
                                 if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
                             }
                             .accessibilityIdentifier("openNotificationSettings")
@@ -81,7 +81,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Notifications")
                 } footer: {
-                    Text("Show message text after decryption on this iPhone. Your iOS Show Previews setting still controls when it is revealed.")
+                    Text("Show message text after decryption on this \(ThisDevice.noun). Your \(ThisDevice.systemName) Show Previews setting still controls when it is revealed.")
                 }
             }
             Section {
@@ -100,7 +100,7 @@ struct SettingsView: View {
             } header: {
                 Text("Privacy")
             } footer: {
-                Text("Tell contacts when their messages reach this iPhone and when you read them. You still see what contacts send you, and their messages are still asked for receipts. Last seen lets contacts you chat with see when you were last online. Turning it off stops sharing your online status with everyone; you still see what contacts share.")
+                Text("Tell contacts when their messages reach this \(ThisDevice.noun) and when you read them. You still see what contacts send you, and their messages are still asked for receipts. Last seen lets contacts you chat with see when you were last online. Turning it off stops sharing your online status with everyone; you still see what contacts share.")
             }
             Section {
                 NavigationLink {
@@ -153,12 +153,12 @@ struct SettingsView: View {
                     .foregroundStyle(.primary)
                     .accessibilityIdentifier("previousVersionBackupRow")
                 } footer: {
-                    Text("A backup is on this iPhone but its description could not be read, so it cannot be restored.")
+                    Text("A backup is on this \(ThisDevice.noun) but its description could not be read, so it cannot be restored.")
                 }
                 .confirmationDialog("Delete backup?", isPresented: $confirmingDeleteUnreadable, titleVisibility: .visible) {
                     Button("Delete backup", role: .destructive) { model.deletePreviousVersionBackup() }
                 } message: {
-                    Text("You will no longer be able to go back to the previous version on this iPhone.")
+                    Text("You will no longer be able to go back to the previous version on this \(ThisDevice.noun).")
                 }
             }
             Section {
@@ -176,9 +176,9 @@ struct SettingsView: View {
             }
         } message: {
             if model.previousVersionBackup != nil {
-                Text("You’ll need your password to sign in again. Messages and keys stay on this iPhone. The backup of the previous version’s data stays too, until you delete it; restoring it would sign you back in as you were then.")
+                Text("You’ll need your password to sign in again. Messages and keys stay on this \(ThisDevice.noun). The backup of the previous version’s data stays too, until you delete it; restoring it would sign you back in as you were then.")
             } else {
-                Text("You’ll need your password to sign in again. Messages and keys stay on this iPhone.")
+                Text("You’ll need your password to sign in again. Messages and keys stay on this \(ThisDevice.noun).")
             }
         }
     }

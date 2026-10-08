@@ -33,7 +33,7 @@ final class TimelinePositionTests: XCTestCase {
 
     /// The first visible message and its distance from the top edge.
     private func readerPosition() throws -> (id: String, distance: CGFloat) {
-        let path = try XCTUnwrap(collectionView.indexPathsForVisibleItems.sorted().first { dataSource?.itemIdentifier(for: $0) != ConversationTimelineController.loadingEarlierID })
+        let path = try XCTUnwrap(collectionView.indexPathsForVisibleItems.sorted().first { dataSource?.itemIdentifier(for: $0) != TimelineItems.loadingEarlierID })
         let id = try XCTUnwrap(dataSource?.itemIdentifier(for: path))
         return (id, try XCTUnwrap(collectionView.layoutAttributesForItem(at: path)).frame.minY - collectionView.contentOffset.y)
     }
@@ -52,7 +52,8 @@ final class TimelinePositionTests: XCTestCase {
     }
 
     /// Older history is asked for a few screens before the reader reaches the oldest loaded message, and only by their
-    /// own scroll: opening at the newest message, or any other programmatic move, never pages.
+    /// own scroll: opening at the newest message, or any other programmatic move, never pages. The threshold itself is
+    /// `TimelineScrollPolicyTests`'; this checks the controller asks with the scrolling view's own position and state.
     func testOnlyTheReadersScrollNearTheTopAsksForOlderMessages() throws {
         var asked = 0
         controller.onReachTop = { asked += 1 }
@@ -111,16 +112,16 @@ final class TimelinePositionTests: XCTestCase {
         let before = try readerPosition()
 
         controller.update(messages: messages(1...100), loadingEarlier: true, onToggleStar: { _ in })
-        XCTAssertEqual(dataSource?.snapshot().itemIdentifiers.first, ConversationTimelineController.loadingEarlierID)
+        XCTAssertEqual(dataSource?.snapshot().itemIdentifiers.first, TimelineItems.loadingEarlierID)
         XCTAssertEqual(collectionView.numberOfItems(inSection: 0), 101)
         XCTAssertEqual(try distance(of: before.id), before.distance, accuracy: 0.5)
 
         // The committed page arrives while the cell still shows, then the backfill ends.
         controller.update(messages: messages(-99...100), loadingEarlier: true, onToggleStar: { _ in })
-        XCTAssertEqual(dataSource?.snapshot().itemIdentifiers.prefix(2), [ConversationTimelineController.loadingEarlierID, "m-99"])
+        XCTAssertEqual(dataSource?.snapshot().itemIdentifiers.prefix(2), [TimelineItems.loadingEarlierID, "m-99"])
         XCTAssertEqual(try distance(of: before.id), before.distance, accuracy: 0.5)
         controller.update(messages: messages(-99...100), onToggleStar: { _ in })
-        XCTAssertNil(dataSource?.indexPath(for: ConversationTimelineController.loadingEarlierID))
+        XCTAssertNil(dataSource?.indexPath(for: TimelineItems.loadingEarlierID))
         XCTAssertEqual(try distance(of: before.id), before.distance, accuracy: 0.5)
     }
 
@@ -131,7 +132,7 @@ final class TimelinePositionTests: XCTestCase {
         collectionView.contentOffset.y = top
         collectionView.layoutIfNeeded()
         let first = try XCTUnwrap(collectionView.indexPathsForVisibleItems.sorted().first)
-        XCTAssertEqual(dataSource?.itemIdentifier(for: first), ConversationTimelineController.loadingEarlierID)
+        XCTAssertEqual(dataSource?.itemIdentifier(for: first), TimelineItems.loadingEarlierID)
         XCTAssertEqual(try readerPosition().id, "m1")
 
         // A committed page lands under the cell: the reader stays on m1 and the new history is above, off screen.

@@ -54,7 +54,7 @@ struct UpgradeBlockingView: View {
         .confirmationDialog("Continue without a backup?", isPresented: $confirmingWithoutBackup, titleVisibility: .visible) {
             Button("Continue without a backup", role: .destructive) { run { await model.upgradeWithoutBackup() } }
         } message: {
-            Text("Your data will be upgraded for this version. Without a backup you cannot go back to the previous version on this iPhone.")
+            Text("Your data will be upgraded for this version. Without a backup you cannot go back to the previous version on this \(ThisDevice.noun).")
         }
     }
 
@@ -121,9 +121,9 @@ struct UpgradeChoiceView: View {
         let start = ran ? "The previous version of Haus XMPP used your data after the restore on \(restoredAt)."
                         : "You restored the previous version’s data on \(restoredAt)."
         if state.thisVersionUnreadable {
-            return start + " This version kept a copy of its own data from then, but it can’t be read, so it cannot be put back. It stays on this iPhone until you delete the backup in Settings."
+            return start + " This version kept a copy of its own data from then, but it can’t be read, so it cannot be put back. It stays on this \(ThisDevice.noun) until you delete the backup in Settings."
         }
-        guard state.thisVersion != nil else { return start + " This version’s own data from then is no longer on this iPhone." }
+        guard state.thisVersion != nil else { return start + " This version’s own data from then is no longer on this \(ThisDevice.noun)." }
         return start + " This version kept its own data from that moment. Choose which to continue with."
     }
 
@@ -259,8 +259,8 @@ struct PreviousVersionBackupView: View {
                     Text("Restoring keeps a copy of")
                 } footer: {
                     Text(model.keptCopyUnreadable
-                         ? "A copy of this version’s data kept at an earlier restore can’t be read; restoring replaces it. Both copies, including your saved password, stay on this iPhone until you open this version again and delete them. The previous version cannot delete them."
-                         : "Both copies, including your saved password, stay on this iPhone until you open this version again and delete them. The previous version cannot delete them.")
+                         ? "A copy of this version’s data kept at an earlier restore can’t be read; restoring replaces it. Both copies, including your saved password, stay on this \(ThisDevice.noun) until you open this version again and delete them. The previous version cannot delete them."
+                         : "Both copies, including your saved password, stay on this \(ThisDevice.noun) until you open this version again and delete them. The previous version cannot delete them.")
                 }
                 Section {
                     Button("Restore previous version’s data") { confirmingRestore = true }
@@ -288,7 +288,7 @@ struct PreviousVersionBackupView: View {
                 dismiss()
             }
         } message: {
-            Text("You will no longer be able to go back to the previous version on this iPhone.")
+            Text("You will no longer be able to go back to the previous version on this \(ThisDevice.noun).")
         }
     }
 
@@ -298,6 +298,6 @@ struct PreviousVersionBackupView: View {
             text += "In \(rolledBackList), messages received after your first reply here will be unreadable on the previous version, and group chats cannot be repaired there. "
         }
         if model.keptCopyUnreadable { text += "The unreadable copy of this version’s data from an earlier restore is replaced. " }
-        return text + "This version keeps a copy of its own data. The backups stay on this iPhone until you open this version again and delete them. Then install the previous version."
+        return text + "This version keeps a copy of its own data. The backups stay on this \(ThisDevice.noun) until you open this version again and delete them. Then install the previous version."
     }
 }

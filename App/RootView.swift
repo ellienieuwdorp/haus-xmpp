@@ -13,15 +13,17 @@ struct RootView: View {
     @State private var showingSettings = false
 
     var body: some View {
-        if model.upgradeState == .none {
+        if model.upgradeState == .none, model.keyRecovery == nil {
             chats
         } else {
-            UpgradeBlockingView(model: model)
-                .alert("Something needs attention", isPresented: Binding(
-                    get: { model.error != nil }, set: { if !$0 { model.error = nil } }
-                )) {
-                    Button("OK") { model.error = nil }
-                } message: { Text(model.error ?? "") }
+            Group {
+                if model.upgradeState != .none { UpgradeBlockingView(model: model) } else { KeyRecoveryView(model: model) }
+            }
+            .alert("Something needs attention", isPresented: Binding(
+                get: { model.error != nil }, set: { if !$0 { model.error = nil } }
+            )) {
+                Button("OK") { model.error = nil }
+            } message: { Text(model.error ?? "") }
         }
     }
 

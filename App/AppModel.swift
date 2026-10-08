@@ -28,8 +28,6 @@ struct ChatSummary: Identifiable {
     var displayTitle: String { AppModel.displayName(for: id, title: title) }
 }
 
-typealias ChatMessage = StoredMessage
-
 @MainActor @Observable
 final class AppModel {
     private(set) var chats: [ChatSummary] = []
@@ -90,6 +88,13 @@ final class AppModel {
     @ObservationIgnored private var restoringData = false
     @ObservationIgnored private var snapshots: PreUpgradeSnapshot?
     @ObservationIgnored private var openingStorage = false
+    /// Set while the database holds encryption state the Keychain wrapping key cannot open (the key is gone, or is
+    /// another one): RootView shows the recovery screen, and storage stays closed for everything else until the user
+    /// sets encryption up again (docs/development/key-recovery.md).
+    private(set) var keyRecovery: KeyRecoveryPlan?
+    /// The store opened for that screen alone; nothing else reads or writes it.
+    @ObservationIgnored private var recoveryStore: MessageStore?
+    @ObservationIgnored private var startingEncryptionOver = false
     private(set) var accountID = "" {
         didSet {
             if accountID != oldValue {
@@ -128,7 +133,13 @@ final class AppModel {
     var requestedRoute: ChatRoute?
     @ObservationIgnored private var sessionAccount: NotificationAccount?
     @ObservationIgnored private var lifecycleTask: Task<Void, Never>?
-    @ObservationIgnored private var foreground = true
+    /// The four lifecycle signals (docs/development/lifecycle-signals.md) as last applied. Only `applyLifecycle`
+    /// changes them, from `lifecycleDriver`'s updates.
+    @ObservationIgnored private var lifecycle = LifecycleSignals.inFront
+    @ObservationIgnored private var lifecycleDriver = SceneLifecycleDriver()
+    /// This process should own the transport. With `quiescing`, the guard of every piece of transport, crypto and
+    /// setup work, so a background transition blocks new work at once.
+    private var transportWanted: Bool { lifecycle.transportWanted }
     @ObservationIgnored private var quiescing = false
     /// The icon badge last set by the app; nil after a lifecycle change, so the next load sets it whatever it holds.
     @ObservationIgnored private var appBadge: Int?
@@ -157,12 +168,24 @@ final class AppModel {
     var encryptionStatus: String { encryptionOverviewChatID.map { trustSummary(for: $0).subtitle } ?? "" }
     /// The open chat needs a fingerprint decision: stored undecided devices, retained ciphertext, or a send held for trust.
     var encryptionNeedsReview: Bool { encryptionOverviewChatID.map { chatCapabilities($0).encryption == .needsReview } ?? false }
+    /// The open 1:1 chat's sending waits only on the account's own devices, so its card must not name the contact.
+    var encryptionReviewIsOwnDevice: Bool {
+        guard let chat = encryptionOverviewChatID, !isGroup(chat), let overview = encryptionOverview(for: chat) else { return false }
+        let undecided = overview.devices.filter { $0.profile == overview.profile && $0.active && $0.trust == .undecided }
+        return !undecided.isEmpty && undecided.allSatisfy { $0.jid == accountID }
+    }
     /// The open chat holds messages sent in the other OMEMO version from a device waiting for a fingerprint decision.
     /// Sending is not affected, so this only asks for a review; it never pauses the composer.
     var encryptionIncomingReview: Bool {
         guard let chat = encryptionOverviewChatID, !isGroup(chat) else { return false }
         return encryptionOverview(for: chat)?.needsIncomingReview ?? false
     }
+    /// The account's other devices as stored, both OMEMO versions, read with the chat list and refreshed from the
+    /// server on each connection and when the account's device list changes.
+    private(set) var ownDevices: [EncryptionDevice] = []
+    /// The account's other devices that wait for a decision, one entry per identity: the account-level review.
+    var ownDeviceReview: [OwnDeviceCandidate] { OwnDeviceReview.candidates(ownDevices) }
+    @ObservationIgnored private lazy var ownDevicePasses = RerunningPass { [weak self] in self?.ownDevicePass() }
     @ObservationIgnored private var encryption: OMEMOService?
     var isDemo: Bool { accountID == "preview.local" }
 
@@ -297,15 +320,16 @@ final class AppModel {
     private func prepareOnce() async {
         // A launch into the background (a notification action) must not connect: the scene is not in front. Its
         // first activation then counts as a return to the foreground even if the scene phase was never seen to change.
-        if UIApplication.shared.applicationState == .background {
-            foreground = false
+        let launchedInBackground = UIApplication.shared.applicationState == .background
+        applyLifecycle(lifecycleDriver.updates(for: .launched(inBackground: launchedInBackground)))
+        if launchedInBackground {
             backgroundLaunchObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
                                                                               object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     if let observer = self.backgroundLaunchObserver { NotificationCenter.default.removeObserver(observer) }
                     self.backgroundLaunchObserver = nil
-                    if !self.foreground { self.setForeground(true) }
+                    self.applyLifecycle(self.lifecycleDriver.updates(for: .becameActive))
                 }
             }
         }
@@ -367,21 +391,30 @@ final class AppModel {
                 AccountIdentityMigration.migratePreferences(preferences)
                 AccountIdentityMigration.moveFiles(directory: directory, defaults: preferences)
             }
+            let savedAccount = preferences.string(forKey: "lastAccount") ?? ""
+            switch try await KeyRecovery.open(store: opened, storageID: testSessionID ?? "primary", account: savedAccount) {
+            case .ready(let service): encryption = service
+            case .needed(let plan):
+                // Nothing else may use the store until the user chooses: no sender, no connection, no notification work.
+                Self.syncLog.error("encryption state unreadable: key missing \(plan.keyMissing, privacy: .public), rows \(plan.states.count, privacy: .public)")
+                recoveryStore = opened
+                keyRecovery = plan
+                hasLoadedChats = true
+                return
+            }
             store = opened
             storageDirectory = directory
             let uploader = AttachmentUploader(scope: testSessionID ?? "primary")
             uploader.onFinish = { [weak self] taskID, succeeded in Task { @MainActor in await self?.uploadFinished(taskID: taskID, succeeded: succeeded) } }
             self.uploader = uploader
-            if let store {
-                outboxSender = OutboxSender(store: store)
-                let allowCreation = try await !store.hasAnyEncryptionState()
-                let wrappingKey = try EncryptionKeychain.load(storageID: testSessionID ?? "primary", allowCreation: allowCreation)
-                encryption = OMEMOService(store: store, protection: try StateProtection(key: wrappingKey))
-            }
-            accountID = preferences.string(forKey: "lastAccount") ?? ""
+            outboxSender = OutboxSender(store: opened)
+            accountID = savedAccount
             uploadService = uploads.load(account: accountID)
-            if ProcessInfo.processInfo.arguments.contains("-demo") { await loadDemo() }
-            else {
+            if ProcessInfo.processInfo.arguments.contains("-demo") {
+                await loadDemo()
+                // The recovery screen over the sample data, for captures; nothing touches the Keychain.
+                if ProcessInfo.processInfo.arguments.contains("-demo-key-recovery") { keyRecovery = .sample(account: accountID) }
+            } else {
                 if let store, try await NotificationDiagnostics.exportIfRequested(store: store, directory: directory) {
                     pushStatus = .inspected
                     return
@@ -479,6 +512,8 @@ final class AppModel {
                 }
             }
             guard generation == token else { return }
+            // Two own devices waiting for review, so the account-level prompt can be seen without a second client.
+            if ProcessInfo.processInfo.arguments.contains("-demo-own-device") { ownDevices = OwnDeviceReview.sampleDevices(account: account) }
             await refresh()
         } catch { if generation == token { self.error = "Could not load sample conversations." } }
     }
@@ -497,7 +532,7 @@ final class AppModel {
         let requestedDomain = savedEndpoint?.domain ?? (parts.count == 2 ? JID.normalizedDomainpart(parts[1]) ?? "" : DevelopmentEndpoint.domain)
         let localPattern = parts.count == 2 ? #"^[^@/\s]{1,64}$"# : #"^[a-z0-9][a-z0-9._-]{0,63}$"#
         let domainPattern = #"^(localhost|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+)$"#
-        guard foreground, !quiescing, !session.isConnecting else { return false }
+        guard transportWanted, !quiescing, !session.isConnecting else { return false }
         guard username.range(of: localPattern, options: .regularExpression) != nil,
               requestedDomain.range(of: domainPattern, options: .regularExpression) != nil else {
             error = "Enter an address such as name@example.org."
@@ -510,7 +545,7 @@ final class AppModel {
             ? XMPPEndpoint(host: requestedDomain == "localhost" ? DevelopmentEndpoint.host : requestedDomain, port: 5223, security: .directTLS) : nil)
         if let sessionAccount, sessionAccount.accountID != username + "@" + requestedDomain {
             await forgetAccount()
-            guard foreground, !quiescing else { return false }
+            guard transportWanted, !quiescing else { return false }
         }
         let priorEvents = eventTask
         let priorSetup = setupTask
@@ -613,9 +648,10 @@ final class AppModel {
         }
     }
 
-    /// Desired state: connected whenever the app is in front with an account whose password still works.
+    /// Desired state: connected whenever the transport is wanted (the app is in front, on iOS) with an account whose
+    /// password still works.
     private var wantsConnection: Bool {
-        foreground && !quiescing && !userWantsOffline && !authenticationRejected && sessionAccount != nil && !isDemo && upgradeState == .none
+        transportWanted && !quiescing && !userWantsOffline && !authenticationRejected && sessionAccount != nil && !isDemo && upgradeState == .none
     }
 
     /// The single place that turns "should be connected" into a `connect()` call. Every input
@@ -727,30 +763,52 @@ final class AppModel {
             domain: replacement.domain, username: replacement.username, password: replacement.password, push: replacement.push ?? previous.push)
     }
 
-    /// Serialize scene transitions; never release the lease with a suspended writer alive.
-    func setForeground(_ active: Bool) {
-        foreground = active
+    /// `HausXMPPApp` forwards the app-level scene phase here.
+    func scenePhaseChanged(from previous: SceneLifecycleDriver.Phase, to phase: SceneLifecycleDriver.Phase) {
+        applyLifecycle(lifecycleDriver.updates(for: .phaseChanged(from: previous, to: phase)))
+    }
+
+    private func applyLifecycle(_ updates: [LifecycleUpdate]) {
+        for update in updates {
+            switch update {
+            case .start(let signals): lifecycle = signals
+            case .interactionEnded: recordLastInteraction()
+            case .change(let signals, let activated): changeLifecycle(to: signals, activated: activated)
+            }
+        }
+    }
+
+    /// Serialize lifecycle transitions; never release the lease with a suspended writer alive.
+    private func changeLifecycle(to signals: LifecycleSignals, activated: Bool) {
+        let transition = LifecycleTransition.between(lifecycle, signals, activated: activated)
+        lifecycle = signals
         // The extension may set the icon badge while the app is away: the next chat-list load sets it again.
         appBadge = nil
-        if !active { quiescing = true }
+        if transition.quiescesTransport { quiescing = true }
         let previous = lifecycleTask
         lifecycleTask = Task { [weak self] in
             await previous?.value
             guard let self else { return }
-            if active {
-                guard self.foreground else { return }
-                self.returnedToForegroundForUpgrade()
-                self.refreshNotificationPermission()
-                self.reconnection.retryNow()
-                self.reconcile()
-                if let client = self.client { try? await client.setClientActive(true) }
-                await self.refresh()
-            } else {
+            if transition.quiescesTransport {
                 let task = UIApplication.shared.beginBackgroundTask(withName: "Finish encrypted synchronization")
                 // The session hibernates (up to days with push): it must read as away, not "Online", until it resumes.
-                if let client = self.client, self.isConnected { try? await client.setAvailability(self.awayAvailability) }
+                if transition.presence == .away, let client = self.client, self.isConnected { try? await client.setAvailability(self.awayAvailability) }
                 await self.quiesceTransport()
                 if task != .invalid { UIApplication.shared.endBackgroundTask(task) }
+            } else {
+                guard self.transportWanted else { return }
+                // Only when the stream stays up and the user comes or goes; never on iOS, where both follow the transport.
+                if let presence = transition.presence, let client = self.client, self.isConnected {
+                    try? await client.setAvailability(presence == .available ? .active : self.awayAvailability)
+                }
+                if transition.resumesTransport {
+                    self.returnedToForegroundForUpgrade()
+                    self.refreshNotificationPermission()
+                    self.reconnection.retryNow()
+                    self.reconcile()
+                }
+                if let active = transition.clientActive, let client = self.client { try? await client.setClientActive(active) }
+                if transition.resumesTransport { await self.refresh() }
             }
         }
     }
@@ -775,7 +833,7 @@ final class AppModel {
     private func retryOpeningStorage() {
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(2))
-            guard let self, self.upgradeState == .waitingForLease, self.foreground else { return }
+            guard let self, self.upgradeState == .waitingForLease, self.transportWanted else { return }
             await self.openStorage()
         }
     }
@@ -893,7 +951,7 @@ final class AppModel {
             // Whatever the lease is now, not what it was: a background transition during the restore left it alone,
             // and the restore gives it up here if the app is no longer in front.
             hasTransportOwnership = await store.holdsTransportOwnership
-            if hasTransportOwnership, !foreground {
+            if hasTransportOwnership, !transportWanted {
                 hasTransportOwnership = false
                 try? await store.releaseTransportOwnership()
             }
@@ -925,8 +983,65 @@ final class AppModel {
         messages = []
     }
 
-    /// The scene left the foreground: from now on background sessions report this as the last time the user was here.
-    func leftForeground() {
+    // MARK: Missing wrapping key
+
+    /// Recovery screen, after its confirmation: under the transport lease (taken, never by force; nothing else runs on
+    /// this store, so there is no sender to join), creates the wrapping key if it is missing, discards exactly the state
+    /// the screen described and creates the saved account's new identity. Then storage opens the normal way, and the
+    /// saved account's next connection publishes the new device and removes the old one from its device lists.
+    func startEncryptionOver() async {
+        guard let plan = keyRecovery, !startingEncryptionOver else { return }
+        guard !plan.isSample else { keyRecovery = nil; return }
+        guard let store = recoveryStore else { return }
+        startingEncryptionOver = true
+        defer { startingEncryptionOver = false }
+        let background = UIApplication.shared.beginBackgroundTask(withName: "Set up encryption again")
+        defer { if background != .invalid { UIApplication.shared.endBackgroundTask(background) } }
+        var leased = await store.holdsTransportOwnership
+        var busy = false
+        for _ in 0..<40 where !leased {
+            do { try await store.acquireTransportOwnership(); leased = true }
+            catch MessageStoreError.transportOwnedElsewhere { busy = true; try? await Task.sleep(for: .milliseconds(250)) }
+            catch {
+                Self.syncLog.error("setting up encryption again could not take the lease: \(String(describing: error), privacy: .public)")
+                busy = false
+                break
+            }
+        }
+        guard leased else {
+            self.error = busy ? "A notification is being processed. Try again in a moment."
+                : "Encryption could not be set up again, and nothing was discarded. Try again."
+            return
+        }
+        do {
+            let deviceID = try await KeyRecovery.startOver(plan, store: store, storageID: testSessionID ?? "primary")
+            Self.syncLog.notice("encryption set up again: new device \(deviceID.map(String.init) ?? "none", privacy: .public), discarded \(plan.states.count, privacy: .public) rows")
+        } catch {
+            Self.syncLog.error("setting up encryption again failed: \(String(describing: error), privacy: .public)")
+            try? await store.releaseTransportOwnership()
+            // Whatever changed since the screen was read (a row written meanwhile) is shown before anything is discarded.
+            switch try? await KeyRecovery.open(store: store, storageID: testSessionID ?? "primary", account: plan.account) {
+            case .needed(let current)?:
+                keyRecovery = current
+                self.error = "Encryption could not be set up again, and nothing was discarded. Try again."
+                return
+            case .ready?: break // nothing is unreadable any more: open normally
+            case nil:
+                self.error = "Encryption could not be set up again, and nothing was discarded. Try again."
+                return
+            }
+        }
+        try? await store.releaseTransportOwnership()
+        try? await store.close()
+        recoveryStore = nil
+        keyRecovery = nil
+        hasLoadedChats = false
+        await openStorage()
+    }
+
+    /// The user stopped interacting (the scene left `.active`): from now on away presence reports this as the last
+    /// time the user was here.
+    private func recordLastInteraction() {
         // Nothing the previous build left is rewritten, or added to, before its snapshot exists.
         guard store != nil else { return }
         SharedSession.recordLeftForeground(defaults: sessionDefaults)
@@ -981,10 +1096,10 @@ final class AppModel {
         acquiringOwnership = true
         defer { acquiringOwnership = false }
         for attempt in 0..<120 {
-            guard foreground, !quiescing, generation == token else { throw CancellationError() }
+            guard transportWanted, !quiescing, generation == token else { throw CancellationError() }
             do {
                 try await store.acquireTransportOwnership()
-                guard foreground, !quiescing, generation == token else { throw CancellationError() }
+                guard transportWanted, !quiescing, generation == token else { throw CancellationError() }
                 hasTransportOwnership = true
                 return
             }
@@ -1035,7 +1150,7 @@ final class AppModel {
                 try saved.save()
                 sessionAccount = saved
             }
-            guard let client, isConnected, hasTransportOwnership, foreground, !quiescing, generation == token else { return }
+            guard let client, isConnected, hasTransportOwnership, transportWanted, !quiescing, generation == token else { return }
             activeEncryptionOperations += 1
             defer { activeEncryptionOperations -= 1 }
             try await settlePushCleanup(client: client, account: account, token: token)
@@ -1061,7 +1176,7 @@ final class AppModel {
     /// prompt. Only the transport work counts as an encryption operation, so a background transition never waits for
     /// a prompt the user has not answered, nor for APNs.
     private func reconcilePush(client: XMPPClient, session: NotificationAccount, token: UUID, interactive: Bool) async {
-        guard testSessionID == nil, !isDemo, hasTransportOwnership, foreground, !quiescing, generation == token else { return }
+        guard testSessionID == nil, !isDemo, hasTransportOwnership, transportWanted, !quiescing, generation == token else { return }
         let account = session.accountID, intent = pushIntent
         do {
             let supported: Bool
@@ -1088,7 +1203,7 @@ final class AppModel {
             if pushStatus != .on { pushStatus = .settingUp }
             let deviceToken = try await PushRegistration.request()
             refreshNotificationPermission()
-            guard generation == token, pushIntent == intent, pushWanted, foreground, !quiescing, hasTransportOwnership,
+            guard generation == token, pushIntent == intent, pushWanted, transportWanted, !quiescing, hasTransportOwnership,
                   accountID == account else { return }
             activeEncryptionOperations += 1
             defer { activeEncryptionOperations -= 1 }
@@ -1230,7 +1345,7 @@ final class AppModel {
             // A callback while offline still becomes durable work for this account's next
             // authenticated connection. Logout clears sessionAccount before any suspension.
             try stagePushToken(deviceToken, account: session.accountID, configuration: push)
-            guard foreground, !quiescing, hasTransportOwnership, isConnected, let client else { return }
+            guard transportWanted, !quiescing, hasTransportOwnership, isConnected, let client else { return }
             activeEncryptionOperations += 1
             defer { activeEncryptionOperations -= 1 }
             try await sendPendingPushRegistration(client: client, account: session.accountID, token: token)
@@ -1282,7 +1397,7 @@ final class AppModel {
         openChatID = nil
         requestedRoute = nil
         encryptionOverviewChatID = nil; encryptionOverview = nil; encryptionDetailsChatID = nil
-        refreshFence = [:]; encryptionAttention = EncryptionAttention()
+        refreshFence = [:]; encryptionAttention = EncryptionAttention(); ownDevices = []
         uploadService = uploads.load(account: account)
         resetTyping()
         lastSeenTracker = LastSeenTracker()
@@ -1349,7 +1464,7 @@ final class AppModel {
 
     /// One slot request and one PUT per pending file that has no task in flight and is not backing off.
     private func uploadPass() -> (@MainActor () async -> Void)? {
-        guard session.isReady, hasTransportOwnership, foreground, !quiescing,
+        guard session.isReady, hasTransportOwnership, transportWanted, !quiescing,
               let client, let store, let uploader, let service = uploadService, let files else { return nil }
         let account = accountID, token = generation
         return { [weak self] in
@@ -1588,14 +1703,14 @@ final class AppModel {
                 case .excluded(let reason):
                     // Not content, not review: the placeholder row is the record; the reason is a footnote in Devices.
                     encryptionAttention.note(reason == .notForThisDevice
-                        ? "A message from another device was not encrypted for this iPhone; it is shown as a placeholder."
+                        ? "A message from another device was not encrypted for this \(ThisDevice.noun); it is shown as a placeholder."
                         : "An encrypted message could not be read; it is shown as a placeholder.")
                     refreshSoon()
                 case .rejected(let rejected):
                     // The bubble turns to Not sent with Retry; a message (not a reaction or receipt) also says why, once.
                     guard rejected.messageID != nil else { refreshSoon(); break }
                     await refresh()
-                    guard generation == token, foreground else { return }
+                    guard generation == token, transportWanted else { return }
                     let name = chats.first { $0.id == rejected.chatID }?.displayTitle ?? AppModel.displayName(for: rejected.chatID, title: nil)
                     self.error = "A message to \(name) wasn't delivered. \(RejectionCopy.reason(rejected.rejection, isGroup: isGroup(rejected.chatID))) You can retry it from the message."
                 case .acknowledged, .ignored: break
@@ -1613,6 +1728,8 @@ final class AppModel {
         case .omemoDevices(let owner, let profile, _):
             if owner == account, let encryption, let client {
                 try? await encryption.maintainLocalAdvertisement(account: account, profile: profile, transport: client)
+                // A client of this account signed in or out; its bundles are fetched off the event loop.
+                ownDevicePasses.request()
             }
             // A device list is what a keys-pending row waited for; only this owner's rows can be unblocked by it.
             if let encryption, let client, let store, isConnected,
@@ -1702,7 +1819,7 @@ final class AppModel {
             if let fetched {
                 try AvatarStore.save(fetched.data, root: storageRoot, account: account, hash: fetched.hash)
                 if let image = AvatarStore.image(root: storageRoot, account: account, hash: fetched.hash) {
-                    avatars[chatID] = image
+                    avatars[chatID] = UIImage(cgImage: image)
                     // The communication-notification copy: pre-scaled here, so the extension never decodes an image.
                     AvatarStore.saveNotificationImage(root: storageRoot, account: account, hash: fetched.hash)
                 } else {
@@ -1728,7 +1845,7 @@ final class AppModel {
         if let own = preferences.string(forKey: "avatar.\(account)") { wanted.append((account, own)) }
         // ponytail: decoded on the main actor; the files are ≤512 KiB and become 256 px thumbnails. Move off-main if the list ever stutters.
         for (id, hash) in wanted where avatars[id] == nil {
-            avatars[id] = AvatarStore.image(root: storageRoot, account: account, hash: hash)
+            avatars[id] = AvatarStore.image(root: storageRoot, account: account, hash: hash).map { UIImage(cgImage: $0) }
             // Avatars stored before communication notifications get their pre-scaled copy once (a stat when it exists).
             if avatars[id] != nil { AvatarStore.saveNotificationImage(root: storageRoot, account: account, hash: hash) }
         }
@@ -1740,7 +1857,7 @@ final class AppModel {
 
     /// The room's chat ID (its address in normal form), or nil with `error` set.
     func joinGroup(room: String, nickname: String) async -> String? {
-        guard hasTransportOwnership, foreground, !quiescing, isConnected, encryptionReady,
+        guard hasTransportOwnership, transportWanted, !quiescing, isConnected, encryptionReady,
               let client, let encryption, let store else { error = "Connect before joining a group."; return nil }
         // In normal form, the spelling the room's presence and messages arrive with; not a valid room address fails below.
         let room = JID(room.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.localpart != nil && $0.resourcepart == nil ? $0.bare : nil } ?? ""
@@ -1754,11 +1871,11 @@ final class AppModel {
         let account = accountID, token = generation
         do {
             let overview = try await encryption.refreshGroupDevices(account: account, room: room, transport: client)
-            guard generation == token, foreground, !quiescing else { return nil }
+            guard generation == token, transportWanted, !quiescing else { return nil }
             groupChats[room] = GroupChatState(members: overview.room.members, devices: overview.devices)
             _ = try await client.joinGroupRoom(room, nickname: nickname)
             let confirmed = try await client.groupRoomSnapshot(room)
-            guard generation == token, foreground, !quiescing else { return nil }
+            guard generation == token, transportWanted, !quiescing else { return nil }
             preferences.set(nickname, forKey: "groupNickname.\(account).\(room)")
             groupChats[room]?.joined = confirmed?.joined == true
             try await store.upsertChat(accountID: account, chatID: room, title: String(room.prefix { $0 != "@" }))
@@ -1874,6 +1991,9 @@ final class AppModel {
             startOutbox()
             if uploadReconciliation.reconcilesAtReady(stored: uploadService) { await reconcileUploads() }
             if let openChatID { await loadEncryptionDetails(for: openChatID) }
+            // Another client may have signed in while this one was away: the account-level review should not wait
+            // for a chat to be opened or a send to be held.
+            ownDevicePasses.request()
             avatarChecked = []
             await loadAvatar(for: account)
         case .catchingUp(let progress):
@@ -1935,7 +2055,7 @@ final class AppModel {
         defer { if setupIsCurrent(token) { groupRejoinsFinished = token; rejoinRoomsThatBouncedDuringSetup(token: token, joinedByPass: joined) } }
         let rooms = try await encryption.knownGroupRooms(account: account)
         for (room, members) in rooms.sorted(by: { $0.key < $1.key }) {
-            guard setupIsCurrent(token), foreground, !quiescing else { throw CancellationError() }
+            guard setupIsCurrent(token), transportWanted, !quiescing else { throw CancellationError() }
             // Keep the cached devices (and a past join failure) across the rejoin; only the transport state restarts.
             groupChats[room, default: GroupChatState()].members = members
             let nickname = preferences.string(forKey: "groupNickname.\(account).\(room)") ?? String(account.prefix { $0 != "@" })
@@ -1984,13 +2104,13 @@ final class AppModel {
 
     private func rejoinBouncedRoom(_ room: String, token: UUID) {
         let account = accountID
-        guard generation == token, groupChats[room] != nil, let client, foreground, !quiescing else { return }
+        guard generation == token, groupChats[room] != nil, let client, transportWanted, !quiescing else { return }
         Self.syncLog.notice("rejoining a room that bounced a stanza")
         bounceRejoins[room] = token
         let nickname = preferences.string(forKey: "groupNickname.\(account).\(room)") ?? String(account.prefix { $0 != "@" })
         Task { [weak self] in
             // A disconnect, sign-out or background transition since the bounce: that connection is done with.
-            guard let self, self.generation == token, self.foreground, !self.quiescing else { return }
+            guard let self, self.generation == token, self.transportWanted, !self.quiescing else { return }
             do { _ = try await client.joinGroupRoom(room, nickname: nickname) }
             catch {
                 guard self.generation == token else { return }
@@ -2022,7 +2142,7 @@ final class AppModel {
     /// false, so pop-back reuses this connection's refresh and a reconnect fetches once more. A failed refresh
     /// writes the diagnostics footer only.
     func loadGroupDetails(room: String, refreshFromServer: Bool = true, force: Bool = true) async {
-        guard foreground, !quiescing, let encryption, isGroup(room) else { return }
+        guard transportWanted, !quiescing, let encryption, isGroup(room) else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         let account = accountID, token = generation
@@ -2192,7 +2312,7 @@ final class AppModel {
     }
 
     func toggleReaction(_ emoji: String, messageID: String) async {
-        guard hasTransportOwnership, foreground, !quiescing else { return }
+        guard hasTransportOwnership, transportWanted, !quiescing else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         guard let encryption, let message = messages.first(where: { $0.id == messageID }), canReact(to: message) else { return }
@@ -2234,7 +2354,7 @@ final class AppModel {
                 try await store.recordEvent(accountID: account, event: MessageEvent(id: UUID().uuidString, chatID: message.chatID, actorID: account, targetWireID: wireID,
                     kind: kind, payload: body.map { try MessageEvent.correctionPayload($0) } ?? "{}", updatedAt: Date()))
             } else {
-                guard hasTransportOwnership, foreground, !quiescing, let encryption else { return false }
+                guard hasTransportOwnership, transportWanted, !quiescing, let encryption else { return false }
                 activeEncryptionOperations += 1
                 defer { activeEncryptionOperations -= 1 }
                 if let body { _ = try await encryption.queueCorrection(account: account, chatID: message.chatID, messageID: messageID, body: body) }
@@ -2252,7 +2372,7 @@ final class AppModel {
 
     private func startOutbox() {
         outboxRequested = true
-        guard hasTransportOwnership, foreground, !quiescing, drainTask == nil, session.isReady, !isDemo,
+        guard hasTransportOwnership, transportWanted, !quiescing, drainTask == nil, session.isReady, !isDemo,
               let client, let outboxSender, let encryption, let store else { return }
         outboxRequested = false
         let joinedGroups = Set(groupChats.filter { $0.value.joined }.map(\.key))
@@ -2305,7 +2425,7 @@ final class AppModel {
     /// Once per connection, after the archive walk and while no outbox drain is running: fetch a few pages of
     /// older history so a new install shows more than the newest page without a scroll.
     private func requestOpportunisticBackfill() {
-        guard archiveWalkFinished, !opportunisticBackfillDone, foreground, !quiescing, drainTask == nil else { return }
+        guard archiveWalkFinished, !opportunisticBackfillDone, transportWanted, !quiescing, drainTask == nil else { return }
         opportunisticBackfillDone = true
         requestBackfill(archive: nil, pages: AppModel.opportunisticBackfillPages)
     }
@@ -2355,7 +2475,7 @@ final class AppModel {
         // Reactions have no read state: an opened chat shows them, so waiting reaction alerts go (plan D8). Only under the
         // transport lease: without it an extension run may be posting them right now, and the lease acquisition repeats
         // this for the open chat once that run is over (`dismissOpenChatNotifications`).
-        if foreground, hasTransportOwnership, !quiescing, let store {
+        if transportWanted, hasTransportOwnership, !quiescing, let store {
             let account = accountID
             Task { try? await store.dismissReactionNotifications(accountID: account, chatID: chatID) }
         }
@@ -2379,7 +2499,7 @@ final class AppModel {
     /// once more. `force` (the Refresh button, a server device-list push) and a version switch always fetch.
     /// A failed fetch writes the diagnostics footer only; the stored trust keeps deciding the pill.
     func loadEncryptionDetails(for chatID: String, refreshFromServer: Bool = true, profile: XMPPOMEMOProfile? = nil, force: Bool = false) async {
-        guard foreground, !quiescing else { return }
+        guard transportWanted, !quiescing else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         guard let encryption, !isDemo else { return }
@@ -2466,7 +2586,7 @@ final class AppModel {
     }
 
     func setDeviceTrust(_ device: EncryptionDevice, trust: DeviceTrust, chatID: String) async {
-        guard hasTransportOwnership, foreground, !quiescing else { return }
+        guard hasTransportOwnership, transportWanted, !quiescing else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         guard let encryption else { return }
@@ -2493,7 +2613,7 @@ final class AppModel {
     }
 
     func repairDeviceSession(_ device: EncryptionDevice, chatID: String) async {
-        guard hasTransportOwnership, foreground, !quiescing else { return }
+        guard hasTransportOwnership, transportWanted, !quiescing else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         guard let encryption, let client, isConnected else { return }
@@ -2510,7 +2630,7 @@ final class AppModel {
     }
 
     func retireDevice(_ device: EncryptionDevice, chatID: String) async {
-        guard hasTransportOwnership, foreground, !quiescing else { return }
+        guard hasTransportOwnership, transportWanted, !quiescing else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         guard let encryption, let client, isConnected else { return }
@@ -2522,6 +2642,113 @@ final class AppModel {
             await loadEncryptionDetails(for: chatID, force: true)
         } catch {
             if generation == token { self.error = (error as? OMEMOError)?.errorDescription ?? "Could not remove this device. Refresh its fingerprint and try again." }
+        }
+    }
+
+    /// One account-level refresh of the account's other devices, or nil when it cannot run now (`ownDevicePasses`
+    /// keeps the request for the next one).
+    private func ownDevicePass() -> (@MainActor () async -> Void)? {
+        guard transportWanted, !quiescing, hasTransportOwnership, session.isReady, !isDemo, let client, let encryption else { return nil }
+        let account = accountID, token = generation
+        return { [weak self] in
+            guard let self, self.transportWanted, !self.quiescing, self.generation == token else { return }
+            self.activeEncryptionOperations += 1
+            defer { self.activeEncryptionOperations -= 1 }
+            do {
+                let devices = try await encryption.refreshOwnDevices(account: account, transport: client)
+                guard self.generation == token, self.accountID == account else { return }
+                self.ownDevices = devices
+            } catch {
+                // The stored devices keep deciding the review; the next connection or device-list change asks again.
+                Logger(subsystem: "haus.xmpp.ios", category: "encryption").error("Own device refresh failed: \(String(describing: error).prefix(80), privacy: .public)")
+            }
+        }
+    }
+
+    /// The account-level review decided one of the account's other devices: its records in every OMEMO version that
+    /// carry the reviewed fingerprint get `trust`, which every chat reads. Held sends and retained messages are retried.
+    func decideOwnDevice(_ candidate: OwnDeviceCandidate, trust: DeviceTrust) async {
+        if isDemo {
+            // Sample devices have no store: the decision changes only what the review shows.
+            changeSampleOwnDevices(candidate) { $0.trust = trust }
+            return
+        }
+        guard hasTransportOwnership, transportWanted, !quiescing else { return }
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
+        guard let encryption else { return }
+        let account = accountID, token = generation
+        do {
+            try await encryption.setTrust(account: account, deviceIDs: candidate.records.map(\.id), trust: trust)
+            guard generation == token else { return }
+            await ownDeviceChanged(encryption, account: account, token: token)
+        } catch {
+            guard generation == token else { return }
+            let failure = error as? OMEMOError
+            // setTrust saves all of the device's records or none of them.
+            self.error = failure == .identityChanged ? "This device changed. Review its new fingerprint."
+                : failure?.errorDescription ?? "Could not save this decision. Nothing was changed."
+            await refresh()
+        }
+    }
+
+    /// Remove from Account in the account-level review, for a device the user does not recognise: `retireOwnDevice`
+    /// takes it off the account's advertised lists in both versions after checking its fingerprint, and stores it
+    /// rejected and inactive. No chat is involved, unlike `retireDevice`, so the follow-up is the account-wide one a
+    /// decision has. The service refuses this installation's own device, which the review never lists.
+    func removeOwnDevice(_ candidate: OwnDeviceCandidate) async {
+        if isDemo {
+            changeSampleOwnDevices(candidate) { $0.trust = .rejected; $0.active = false }
+            return
+        }
+        guard hasTransportOwnership, transportWanted, !quiescing, let record = candidate.records.first else { return }
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
+        guard let encryption, let client, isConnected else {
+            error = "Connect to your server to remove this device."
+            return
+        }
+        let account = accountID, token = generation
+        do {
+            try await encryption.retireOwnDevice(account: account, deviceID: record.id, transport: client)
+            guard generation == token else { return }
+            await ownDeviceChanged(encryption, account: account, token: token)
+        } catch {
+            guard generation == token else { return }
+            let failure = error as? OMEMOError
+            self.error = failure == .identityChanged ? "This device changed. Review its new fingerprint."
+                : failure?.errorDescription ?? "Could not remove this device. Try again."
+            await refresh()
+        }
+    }
+
+    /// After a decision on, or the removal of, one of the account's own devices, which every chat sends to: clears the
+    /// hold marks, reloads the open chat and the groups from the store, retries messages kept for trust and restarts
+    /// the outbox. The refresh re-reads the own devices for the review.
+    private func ownDeviceChanged(_ encryption: OMEMOService, account: String, token: UUID) async {
+        // Any chat may have been held for this device; the next outbox pass marks the ones still held.
+        encryptionAttention.trustDecidedForAccount()
+        if let chat = encryptionOverviewChatID { await loadEncryptionDetails(for: chat, refreshFromServer: false) }
+        for room in groupChats.keys where room != encryptionOverviewChatID {
+            await loadGroupDetails(room: room, refreshFromServer: false)
+        }
+        guard generation == token else { return }
+        if let client, isConnected {
+            try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.trustPending])
+            guard generation == token else { return }
+            await flushEncryptionControls(account: account, client: client)
+        }
+        await refresh()
+    }
+
+    /// `-demo-own-device`: sample devices have no store, so a review action changes only what the review shows.
+    private func changeSampleOwnDevices(_ candidate: OwnDeviceCandidate, _ change: (inout EncryptionDevice) -> Void) {
+        let ids = Set(candidate.records.map(\.id))
+        ownDevices = ownDevices.map { device in
+            guard ids.contains(device.id) else { return device }
+            var changed = device
+            change(&changed)
+            return changed
         }
     }
     /// `logsLiveStore`: the event loop calls this after every stored live message; during catch-up the first
@@ -2564,7 +2791,7 @@ final class AppModel {
     /// only once the store says there is something to fetch, so a chat with no older history never flashes it.
     private func requestBackfill(archive: String?, pages: Int) {
         let archiveID = archive ?? accountID
-        guard foreground, !quiescing, hasTransportOwnership, session.isReady, archiveWalkFinished, catchUp == nil, backfillTask == nil, !isDemo,
+        guard transportWanted, !quiescing, hasTransportOwnership, session.isReady, archiveWalkFinished, catchUp == nil, backfillTask == nil, !isDemo,
               !backfillSettled.contains(archiveID), backfillResumesAt.map({ ContinuousClock.now >= $0 }) ?? true,
               let client, let encryption, let store else { return }
         let account = accountID
@@ -2643,7 +2870,7 @@ final class AppModel {
 
     /// Only a listed chat we could send a message to right now; never the sample data, and not while sending is paused for review.
     private func canSendChatState(to chatID: String) -> Bool {
-        !isDemo && session.isReady && hasTransportOwnership && foreground && !quiescing && chatCapabilities(chatID).encryption != .needsReview
+        !isDemo && session.isReady && hasTransportOwnership && transportWanted && !quiescing && chatCapabilities(chatID).encryption != .needsReview
             && chatID != accountID && chats.contains(where: { $0.id == chatID }) && canSend(to: chatID)
             && (isGroup(chatID) || !isLabAccount || chatID.hasSuffix("@" + accountDomain))
     }
@@ -2703,7 +2930,7 @@ final class AppModel {
     /// XEP-0012 query at most once a minute while the contact shows no available resource. Asking does not depend
     /// on our own switch. A refused or failed query leaves the header unknown and shows no error.
     private func requestLastSeen(for chatID: String) {
-        guard !isDemo, session.isReady, foreground, !quiescing, let client, isDirectChat(chatID) else { return }
+        guard !isDemo, session.isReady, transportWanted, !quiescing, let client, isDirectChat(chatID) else { return }
         let token = generation
         switch lastSeenTracker.askStep(for: chatID, now: .now) {
         case .nothing: return
@@ -2742,7 +2969,7 @@ final class AppModel {
 
     /// Every per-account switch is one row written under the transport lease; the store enforces the receipt switches.
     func updatePreferences(_ change: (inout AccountPreferences) -> Void) async {
-        guard foreground, !quiescing, let store, !accountID.isEmpty else { return }
+        guard transportWanted, !quiescing, let store, !accountID.isEmpty else { return }
         let account = accountID
         let token = generation
         activeEncryptionOperations += 1
@@ -2769,11 +2996,11 @@ final class AppModel {
         } catch { self.error = "Could not save preferences." }
     }
 
-    /// The timeline showed the newest received message while the app is in front: the chat is read up to it on this
-    /// device (published with XEP-0490), and the peer gets a read marker when the read-receipts switch allows.
+    /// The timeline showed the newest received message while the user is reading the chat: the chat is read up to it
+    /// on this device (published with XEP-0490), and the peer gets a read marker when the read-receipts switch allows.
     func markDisplayed(_ messageID: String) async {
-        guard foreground, !quiescing, let store,
-              let message = messages.first(where: { $0.id == messageID }), !message.isOutgoing, message.chatID == openChatID else { return }
+        guard !quiescing, let store, let message = messages.first(where: { $0.id == messageID }), !message.isOutgoing,
+              lifecycle.reading(message.chatID, openChatID: openChatID) else { return }
         let account = accountID, token = generation
         // Local-first and independent of the read-receipts switch, which governs only what the peer is told.
         if (try? await store.markRead(accountID: account, chatID: message.chatID, throughMessageID: messageID)) == true, generation == token {
@@ -3000,7 +3227,7 @@ final class AppModel {
     /// After a chat-list load, the top chats' newest pages, one chat at a time so an open waits on at most one read.
     /// Counted as an operation so a background transition joins it; it stops at the next chat once quiescing.
     private func prefetchTimelinePages(store: MessageStore, account: String) {
-        guard !prefetchingPages, foreground, !quiescing, accountID == account else { return }
+        guard !prefetchingPages, transportWanted, !quiescing, accountID == account else { return }
         let wanted = timelinePages.missing(from: chats, account: account, excluding: openChatID)
         guard !wanted.isEmpty else { return }
         prefetchingPages = true
@@ -3008,7 +3235,7 @@ final class AppModel {
         Task {
             defer { prefetchingPages = false; activeEncryptionOperations -= 1 }
             for chat in wanted {
-                guard foreground, !quiescing, accountID == account, openChatID != chat.id else { continue }
+                guard transportWanted, !quiescing, accountID == account, openChatID != chat.id else { continue }
                 guard let page = try? await loadTimeline(store: store, account: account, chat: chat.id, isGroup: isGroup(chat.id), limit: AppModel.timelinePage),
                       accountID == account else { continue }
                 timelinePages.store(page, for: chat, account: account)
@@ -3050,8 +3277,11 @@ final class AppModel {
         let storedChats = try await store.chats(accountID: account)
         let pending = try await encryption?.pendingConversations(account: account) ?? [:]
         let rooms: [String: [String]]
+        var own: [EncryptionDevice] = []
         if let encryption, !isDemo, !account.isEmpty, try await store.encryptionState(accountID: account) != nil {
             rooms = try await encryption.knownGroupRooms(account: account)
+            // Unreadable own devices only hide the account-level review; sealing still refuses undecided devices.
+            own = (try? await encryption.ownDevices(account: account)) ?? []
         } else { rooms = [:] }
         let existingChatIDs = Set(storedChats.map(\.id))
         for peer in pending.keys where !existingChatIDs.contains(peer) {
@@ -3062,10 +3292,11 @@ final class AppModel {
         guard accountID == account else { return }
         accountPreferences = try await store.accountPreferences(accountID: account)
         notificationPreviewsEnabled = accountPreferences.notificationPreviews
-        if foreground, hasTransportOwnership, !quiescing {
+        if transportWanted, hasTransportOwnership, !quiescing {
             try await presentForegroundNotifications(store: store, account: account)
         }
         guard accountID == account else { return }
+        if !isDemo, own != ownDevices { ownDevices = own }
         for (room, members) in rooms {
             var value = groupChats[room] ?? GroupChatState()
             value.members = members
@@ -3224,7 +3455,7 @@ extension AppModel: NotificationActionEnvironment {
     func beginNotificationAction(account: String, chatID: String, budget: NotificationActionBudget) async -> Bool {
         guard let store, let encryption, let credentials = sessionAccount, credentials.accountID == account else { return false }
         // In front (or still holding the live session while the scene goes): the app's own connection does the work.
-        if UIApplication.shared.applicationState != .background || (foreground && !quiescing && hasTransportOwnership) {
+        if UIApplication.shared.applicationState != .background || (transportWanted && !quiescing && hasTransportOwnership) {
             actionSession = NotificationActionSession(account: account, isForeground: true, budget: budget)
             return true
         }
@@ -3479,7 +3710,7 @@ extension AppModel: NotificationActionEnvironment {
         let presents = mayPostNotifications && testSessionID == nil && !isDemo && session.isReady && catchUp == nil
             && sessionAccount?.accountID == account
         let posted = try await NotificationPresenter(posting: notificationPoster(account: account))
-            .presentForeground(store: store, accountID: account, openChatID: openChatID, presents: presents)
+            .presentForeground(store: store, accountID: account, readingChatID: lifecycle.readingChat(openChatID: openChatID), presents: presents)
         if posted > 0 { Self.syncLog.notice("foreground notifications posted=\(posted, privacy: .public)") }
     }
 

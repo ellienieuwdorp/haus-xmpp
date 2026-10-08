@@ -4,9 +4,8 @@ import Foundation
 /// from reusing saved credentials when deletion fails; an explicit successful sign-in clears it.
 enum NotificationAccessGate {
     static func location() throws -> URL {
-        guard let root = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedStorage.group) else {
-            throw NotificationAccount.Failure.unavailable
-        }
+        let root: URL
+        do { root = try SharedStorage.groupContainer() } catch { throw NotificationAccount.Failure.unavailable }
         return root.appending(path: "notification-access-disabled")
     }
 

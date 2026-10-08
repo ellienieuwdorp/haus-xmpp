@@ -38,6 +38,12 @@ targets:
         NSUserActivityTypes: [INSendMessageIntent]
         # APNs environment the push gateway sends this build's tokens to (see HAUS_PUSH_ENVIRONMENT below).
         HausPushEnvironment: $(HAUS_PUSH_ENVIRONMENT)
+        # One window until AppModel can serve several (macos-desktop-app.md, Phase 4); a second iPad window would share
+        # the one AppModel, open chat and scenePhase handler. This is the whole manifest: the generated one (turned
+        # off below) says true and wins over a partial manifest here.
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations: {}
     dependencies:
       - package: XMPPProtocol
       - package: MessageStore
@@ -53,7 +59,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Haus XMPP
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: NO
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Connect to your local XMPP development server.
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Save photos you receive to your library.
         # Files dropped into the app's Documents folder show up in the Files app for attaching.
@@ -61,6 +67,8 @@ targets:
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         TARGETED_DEVICE_FAMILY: '1,2'
         SUPPORTS_MACCATALYST: NO
+        # The Mac gets a native target; keep this iOS build off Apple silicon Macs as an untested iPad app.
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         MARKETING_VERSION: '0.1.0'
         CURRENT_PROJECT_VERSION: '1'
       # Debug is development-signed (App/App.entitlements says aps-environment development) and receives sandbox
@@ -88,6 +96,7 @@ targets:
         INFOPLIST_FILE: NotificationService/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         APPLICATION_EXTENSION_API_ONLY: YES
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         MARKETING_VERSION: '0.1.0'
         CURRENT_PROJECT_VERSION: '1'
   HausXMPPLifecycleTests:
@@ -95,11 +104,13 @@ targets:
     platform: iOS
     sources:
       - AppLifecycleTests
-      # The 045ca73 build's schema-21 store and the f563365 build's schema-23 store, shared with the MessageStore
-      # package tests.
+      # The 045ca73 build's schema-21 store, the f563365 build's schema-23 store and main's (4df394a) schema-24
+      # store, shared with the MessageStore package tests.
       - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/schema-21.sql
         buildPhase: resources
       - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/schema-23.sql
+        buildPhase: resources
+      - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/schema-24.sql
         buildPhase: resources
     dependencies:
       - target: HausXMPP

@@ -103,24 +103,6 @@ final class TimelinePageCacheTests: XCTestCase {
     }
 }
 
-/// Opening a chat never flashes "No messages yet" while its first page is on the way.
-@MainActor
-final class ConversationEmptyNoticeTests: XCTestCase {
-    private func notice(isEmpty: Bool = true, loadedFor: String?, search: String = "", starred: Bool = false) -> String? {
-        ConversationView.emptyNotice(isEmpty: isEmpty, loadedFor: loadedFor, chatID: "alex", searchTerm: search, starredOnly: starred)?.title
-    }
-
-    func testOnlyALoadedEmptyChatSaysSo() {
-        XCTAssertNil(notice(loadedFor: nil), "the first page is still loading")
-        XCTAssertNil(notice(loadedFor: "maya"), "the loaded page is the previous chat's")
-        XCTAssertNil(notice(isEmpty: false, loadedFor: "alex"))
-        XCTAssertEqual(notice(loadedFor: "alex"), "No messages yet")
-        XCTAssertEqual(notice(loadedFor: "alex", starred: true), "No starred messages")
-        XCTAssertEqual(notice(loadedFor: "alex", search: "ten", starred: true), "No matching messages")
-        XCTAssertNil(notice(loadedFor: nil, search: "ten"), "a search waits for the load too")
-    }
-}
-
 /// Offsets are decided inside `update`, so no frame can show a window at the wrong position.
 @MainActor
 final class TimelineOffsetTests: XCTestCase {

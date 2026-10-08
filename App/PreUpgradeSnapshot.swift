@@ -17,13 +17,14 @@ import os
 /// `restore-journal.json` and `return-journal.json` while a restore or a return runs; `restored.json` while the
 /// previous version's data is in place; `saved-replies.json` for notification replies typed before the upgrade.
 /// Secrets stay in the Keychain as separate copy items, under a service named for the same generation. Builds up to
-/// f563365 have this code too, under the unnumbered names: they never see a newer generation's backups, and this build
-/// takes theirs over when it opens (`adoptOlderGeneration`).
+/// f563365 have this code too, under the unnumbered names, and main at 4df394a under generation 24: neither sees a
+/// newer generation's backups, and this build takes theirs over when it opens (`adoptOlderGeneration`).
 struct PreUpgradeSnapshot: Sendable {
-    /// The newest schema the build this one replaces can open: f563365 (the owner's build) refuses anything above 23;
-    /// 045ca73 stops at 21 and opens nothing newer. A store at or below it is copied before migrating, whichever of the
-    /// two left it; one above it (a migration that stopped part way) holds nothing a previous build could read back.
-    static let previousReleaseSchema = 23
+    /// The newest schema the build this one replaces can open: main since 4df394a refuses anything above 24, f563365
+    /// (the owner's build) anything above 23, and 045ca73 stops at 21. A store at or below it is copied before
+    /// migrating, whichever of them left it; one above it (a migration that stopped part way) holds nothing a previous
+    /// build could read back.
+    static let previousReleaseSchema = 24
     /// After this long Settings suggests deleting the backup. Nothing is ever deleted on a clock reading: the wall
     /// clock can jump, and no monotonic clock survives a restart.
     static let suggestedLifetime: TimeInterval = 14 * 24 * 60 * 60
@@ -98,7 +99,7 @@ struct PreUpgradeSnapshot: Sendable {
 
         /// The app's own: the App Group container, the standard and shared preferences, the real Keychain services.
         static func production(messaging: URL) -> Locations? {
-            guard let root = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedStorage.group),
+            guard let root = try? SharedStorage.groupContainer(),
                   let group = UserDefaults(suiteName: SharedStorage.group), let bundle = Bundle.main.bundleIdentifier else { return nil }
             return Locations(groupRoot: root, messaging: messaging, appDefaults: DefaultsDomain(defaults: .standard, name: bundle),
                              groupDefaults: DefaultsDomain(defaults: group, name: SharedStorage.group), keychain: .production,
@@ -424,10 +425,11 @@ struct PreUpgradeSnapshot: Sendable {
     /// True once an older build opened the restored database. The restored file is put back in write-ahead-log mode
     /// with no sidecars and its digest recorded. An older build (app or extension) that opens it leaves `-wal`/`-shm`
     /// beside it (the system SQLite keeps them after closing), and anything it writes changes the file or the WAL.
-    /// f563365 opens a store at its own schema as it is, so the journal mode alone cannot tell. Reinstalling this
-    /// build changes none of that, so a reinstall still finds the data untouched. A restore an older build made was
-    /// in rollback-journal mode, which 045ca73 switched on open; its header is checked too. When it cannot tell, it
-    /// answers true: the choices then keep the data the previous build may have written as the new backup.
+    /// f563365 and main at 4df394a open a store at their own schema as it is, so the journal mode alone cannot tell.
+    /// Reinstalling this build changes none of that, so a reinstall still finds the data untouched. A restore an older
+    /// build made was in rollback-journal mode, which 045ca73 switched on open; its header is checked too. When it
+    /// cannot tell, it answers true: the choices then keep the data the previous build may have written as the new
+    /// backup.
     func previousVersionRan(_ restored: Restored) -> Bool {
         let files = FileManager.default, path = locations.database.path
         if ["-wal", "-shm", "-journal"].contains(where: { files.fileExists(atPath: path + $0) }) { return true }
@@ -559,8 +561,9 @@ struct PreUpgradeSnapshot: Sendable {
 
     /// Runs with SQLite closed and the lease held. The database is replaced by one rename, after the sidecars of the
     /// file it replaces are gone; the folders, the tombstone, the Keychain records and the preferences follow. Every
-    /// copy goes back in write-ahead-log mode, as each build keeps its live store: f563365 and this build open a store
-    /// at their own schema as it is, so a copy left in the snapshot's rollback-journal mode would stay in it.
+    /// copy goes back in write-ahead-log mode, as each build keeps its live store: f563365, main at 4df394a and this
+    /// build open a store at their own schema as it is, so a copy left in the snapshot's rollback-journal mode would
+    /// stay in it.
     private func putBack(_ manifest: Manifest, _ captured: Captured, from copy: Copy) throws {
         let files = FileManager.default
         let source = locations.folder(copy)
@@ -773,9 +776,9 @@ struct PreUpgradeSnapshot: Sendable {
         switch error {
         case Failure.insufficientSpace(let needed, let available):
             let format = ByteCountFormatter()
-            return "There is not enough free space on this iPhone. The backup needs \(format.string(fromByteCount: needed)); \(format.string(fromByteCount: max(available, 0))) is free."
-        case Failure.keychain: return "The saved account could not be read. Unlock your iPhone and try again."
-        case Failure.unreadableBackup: return "A backup made earlier is on this iPhone but could not be read."
+            return "There is not enough free space on this \(ThisDevice.noun). The backup needs \(format.string(fromByteCount: needed)); \(format.string(fromByteCount: max(available, 0))) is free."
+        case Failure.keychain: return "The saved account could not be read. Unlock your \(ThisDevice.noun) and try again."
+        case Failure.unreadableBackup: return "A backup made earlier is on this \(ThisDevice.noun) but could not be read."
         default: return "The backup could not be written and checked."
         }
     }
@@ -827,10 +830,7 @@ struct PreUpgradeSnapshot: Sendable {
     // Keychain records as raw bytes: a copy never decodes, and so never rewrites, what it copies.
 
     private static func query(service: String, account: String?) -> [String: Any] {
-        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                                    kSecAttrSynchronizable as String: false]
-        if let account { query[kSecAttrAccount as String] = account }
-        return query
+        KeychainQuery.genericPassword(service: service, account: account)
     }
 
     static func keychainData(service: String, account: String) throws -> Data? {

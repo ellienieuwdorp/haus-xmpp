@@ -11,6 +11,9 @@ struct ChatListView: View {
     @State private var newChatDetent: PresentationDetent = .medium
     /// The chat whose Mute swipe action asked for a duration.
     @State private var muting: String?
+    @State private var reviewingOwnDevices = false
+    /// Own devices the card was put off for with Later; a device not in here brings the card back.
+    @State private var ownDevicesLater: Set<String> = []
 
     private var searchTerm: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -33,6 +36,10 @@ struct ChatListView: View {
         return local.isEmpty ? nil : String(local.prefix(1)).uppercased()
     }
 
+    private var showsOwnDeviceReview: Bool {
+        searchTerm.isEmpty && model.ownDeviceReview.contains { !ownDevicesLater.contains($0.id) }
+    }
+
     var body: some View {
         // The list is always the content, with the empty states as overlays: swapping the content view would
         // crossfade the title bar and toolbar along with it whenever the first rows arrive.
@@ -42,6 +49,15 @@ struct ChatListView: View {
                     .font(.footnote).foregroundStyle(.secondary)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 4, trailing: 16))
+            }
+            // Account-level, so it sits above every chat: one decision here reaches all of them.
+            if showsOwnDeviceReview {
+                OwnDeviceReviewCard(candidates: model.ownDeviceReview,
+                                    review: { reviewingOwnDevices = true },
+                                    later: { withAnimation { ownDevicesLater.formUnion(model.ownDeviceReview.map(\.id)) } })
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
             }
             // The row identity includes the pin state, so a pin change is a delete + insert (Signal's
             // same-section rule): List animates that as a fade in place, whereas a real move to the top
@@ -157,6 +173,7 @@ struct ChatListView: View {
             }
         }
         .sheet(isPresented: $showingNewChat) { newChatSheet }
+        .sheet(isPresented: $reviewingOwnDevices) { OwnDeviceReviewSheet(model: model) }
     }
 
     private var recipientTerm: String { recipient.trimmingCharacters(in: .whitespacesAndNewlines) }
