@@ -15,26 +15,28 @@ extension XCTestCase {
 }
 
 extension XCUIApplication {
-    /// Taps `field` and waits for the software keyboard to push it up, failing at once when it does not. Some freshly
-    /// cloned simulators never show the keyboard: the field stays at rest, and the test then fails much later on a
-    /// layout measurement (`467.0 is not equal to 826.0`) that says nothing about the cause.
+    /// Taps `field` and waits for the software keyboard to push it up, failing at once when it does not. A simulator
+    /// that has seen a hardware keyboard keeps the software one minimised below the screen: the field stays at rest,
+    /// and the test used to fail much later on a layout measurement (`467.0 is not equal to 826.0`) that said nothing
+    /// about the cause.
     @MainActor func showKeyboard(tapping field: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         let resting = field.frame.minY
         field.tap()
-        let keyboard = keyboards.firstMatch
-        // A connected hardware keyboard leaves only a short bar on screen, so the height tells the two apart.
-        let raised = NSPredicate { _, _ in keyboard.exists && keyboard.frame.height > 200 && field.frame.minY < resting - 150 }
+        let raised = NSPredicate { _, _ in field.frame.minY < resting - 150 }
         guard XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: raised, object: nil)], timeout: 5) != .completed else { return }
-        let height = keyboard.exists ? keyboard.frame.height : 0
-        let position = "at y \(Int(field.frame.minY)), resting at \(Int(resting))"
-        if height > 200 {
-            XCTFail("A \(Int(height)) pt software keyboard showed but the field stayed put (\(position)): the layout did not follow the keyboard.",
-                    file: file, line: line)
+        let keyboard = keyboards.firstMatch
+        let frame = keyboard.exists ? keyboard.frame : .null
+        let state = "field at y \(Int(field.frame.minY)), resting at \(Int(resting)); keyboard \(keyboard.exists ? "\(frame)" : "absent")"
+        // A full keyboard on screen with the field still at rest is the app's layout. Anything else is the simulator: a
+        // simulator that has seen a hardware keyboard minimises the software one, which then sits below the screen.
+        if frame.height > 200, frame.minY < resting {
+            XCTFail("The software keyboard showed but the field stayed put (\(state)): the layout did not follow it.", file: file, line: line)
         } else {
             XCTFail("""
-                The software keyboard never showed after tapping the field (\(height > 0 ? "only a \(Int(height)) pt bar" : "no keyboard"), field \(position)). \
-                Likely the simulator, not the app: a hardware keyboard is connected to it, or a freshly cloned simulator has not \
-                shown its keyboard yet. Disconnect the hardware keyboard, or show the keyboard there once by hand, then run again.
+                The software keyboard never came on screen after tapping the field (\(state)). This is the simulator, not the \
+                app: it minimises the keyboard because it has seen a hardware keyboard. Turn that off and run again: \
+                xcrun simctl spawn <udid> defaults write com.apple.keyboard.preferences AutomaticMinimizationEnabled -bool NO \
+                (see AppTests/README.md).
                 """, file: file, line: line)
         }
     }
