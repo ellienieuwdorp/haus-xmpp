@@ -38,8 +38,8 @@ private struct Harness {
             switch update {
             case .start(let signals): applied = signals
             case .interactionEnded: calls.append(.leftForeground)
-            case .change(let signals):
-                let transition = LifecycleTransition.between(applied, signals)
+            case .change(let signals, let activated):
+                let transition = LifecycleTransition.between(applied, signals, activated: activated)
                 applied = signals
                 let active = !transition.quiescesTransport
                 #expect(transition == Legacy.effects(active), "the transition runs exactly what setForeground(\(active)) ran")
@@ -113,7 +113,7 @@ struct SceneLifecycleDriverTests {
     @Test func aBackgroundLaunchSeenActiveByTheSceneFirstDoesNotRepeat() {
         var driver = SceneLifecycleDriver()
         _ = driver.updates(for: .launched(inBackground: true))
-        #expect(driver.updates(for: .phaseChanged(from: .background, to: .active)) == [.change(.inFront)])
+        #expect(driver.updates(for: .phaseChanged(from: .background, to: .active)) == [.change(.inFront, activated: true)])
         #expect(driver.updates(for: .becameActive) == [])
     }
 
@@ -146,28 +146,37 @@ struct LifecycleTransitionTests {
                 == LifecycleTransition(resumesTransport: true))
     }
 
+    @Test func activationRepeatsTheReturnWorkAndNothingElseDoes() {
+        let back = LifecycleTransition(resumesTransport: true, clientActive: true)
+        #expect(LifecycleTransition.between(.inFront, .inFront, activated: true) == back)
+        #expect(LifecycleTransition.between(.inFront, .inFront) == LifecycleTransition())
+    }
+
     @Test func windowVisibilityDrivesCSIOnly() {
         let hidden = signals(window: false, reading: false)
         #expect(LifecycleTransition.between(.inFront, hidden) == LifecycleTransition(clientActive: false))
-        #expect(LifecycleTransition.between(hidden, .inFront) == LifecycleTransition(resumesTransport: true, clientActive: true))
+        // Uncovered (occlusion) without the app becoming active: CSI only.
+        #expect(LifecycleTransition.between(hidden, signals(reading: false)) == LifecycleTransition(clientActive: true))
+        #expect(LifecycleTransition.between(hidden, .inFront, activated: true) == LifecycleTransition(resumesTransport: true, clientActive: true))
         #expect(LifecycleTransition.between(hidden, hidden) == LifecycleTransition(), "nothing to repeat while hidden")
     }
 
     @Test func readingChangesNoTransportOrPresence() {
         let elsewhere = signals(reading: false)
-        // Another app in front with the window still visible: CSI stays active and nothing is announced.
-        #expect(LifecycleTransition.between(.inFront, elsewhere) == LifecycleTransition(resumesTransport: true, clientActive: true))
-        #expect(LifecycleTransition.between(elsewhere, .inFront) == LifecycleTransition(resumesTransport: true, clientActive: true))
+        // Focus moving to another app or window and back: no CSI, no presence, no reconnect or refresh.
+        #expect(LifecycleTransition.between(.inFront, elsewhere) == LifecycleTransition())
+        #expect(LifecycleTransition.between(elsewhere, .inFront) == LifecycleTransition())
     }
 
     @Test func presenceFollowsTheUserWhileTheStreamStays() {
         let idle = signals(window: false, reading: false, present: false)
         let hidden = signals(window: false, reading: false)
         #expect(LifecycleTransition.between(hidden, idle) == LifecycleTransition(presence: .away))
-        #expect(LifecycleTransition.between(idle, hidden) == LifecycleTransition(presence: .available))
-        // Idle with the window visible: away presence carries CSI inactive on the wire, so CSI active is restated.
-        #expect(LifecycleTransition.between(.inFront, signals(present: false))
-                == LifecycleTransition(resumesTransport: true, clientActive: true, presence: .away))
+        // Available presence carries CSI active on the wire, so a hidden window restates inactive after it.
+        #expect(LifecycleTransition.between(idle, hidden) == LifecycleTransition(clientActive: false, presence: .available))
+        // Idle with the window visible: away presence carries CSI inactive, so CSI active is restated.
+        #expect(LifecycleTransition.between(.inFront, signals(present: false)) == LifecycleTransition(clientActive: true, presence: .away))
+        #expect(LifecycleTransition.between(signals(present: false), .inFront) == LifecycleTransition(presence: .available))
     }
 
     @Test func onlyTheOpenChatIsReadAndOnlyWhileReadable() {

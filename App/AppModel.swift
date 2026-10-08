@@ -744,14 +744,14 @@ final class AppModel {
             switch update {
             case .start(let signals): lifecycle = signals
             case .interactionEnded: recordLastInteraction()
-            case .change(let signals): changeLifecycle(to: signals)
+            case .change(let signals, let activated): changeLifecycle(to: signals, activated: activated)
             }
         }
     }
 
     /// Serialize lifecycle transitions; never release the lease with a suspended writer alive.
-    private func changeLifecycle(to signals: LifecycleSignals) {
-        let transition = LifecycleTransition.between(lifecycle, signals)
+    private func changeLifecycle(to signals: LifecycleSignals, activated: Bool) {
+        let transition = LifecycleTransition.between(lifecycle, signals, activated: activated)
         lifecycle = signals
         // The extension may set the icon badge while the app is away: the next chat-list load sets it again.
         appBadge = nil

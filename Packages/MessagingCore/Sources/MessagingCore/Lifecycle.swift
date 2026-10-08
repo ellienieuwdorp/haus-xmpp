@@ -40,9 +40,10 @@ public enum LifecycleUpdate: Sendable, Equatable {
     /// The user stopped interacting (iOS: the scene left `.active`). That moment becomes the last-seen time, sent as
     /// XEP-0319 idle by every away presence until the next one.
     case interactionEnded
-    /// New signals. The app runs `LifecycleTransition.between(current, new)`, also when they equal the current
-    /// ones: every iOS activation repeats the return-to-front work.
-    case change(LifecycleSignals)
+    /// New signals. The app runs `LifecycleTransition.between(current, new, activated:)`, also when they equal the
+    /// current ones. `activated`: the user brought the app forward (iOS: the scene reached `.active`), which repeats
+    /// the return-to-front work; a focus or occlusion change alone does not.
+    case change(LifecycleSignals, activated: Bool)
 }
 
 /// What the app does when the signals change. Pure policy; `AppModel.applyLifecycle` carries it out.
@@ -65,17 +66,25 @@ public struct LifecycleTransition: Sendable, Equatable {
         self.clientActive = clientActive; self.presence = presence
     }
 
-    public static func between(_ old: LifecycleSignals, _ new: LifecycleSignals) -> LifecycleTransition {
+    public static func between(_ old: LifecycleSignals, _ new: LifecycleSignals, activated: Bool = false) -> LifecycleTransition {
         // The session hibernates (up to days with push), so it must read as away before it goes, whatever `present`
         // says. Away presence carries CSI <inactive/> and the disconnect follows, so no separate CSI.
         guard new.transportWanted else { return LifecycleTransition(quiescesTransport: true, presence: .away) }
         var transition = LifecycleTransition()
-        // The transport (re)starting, or a window showing, which on iOS is every activation.
-        transition.resumesTransport = !old.transportWanted || new.windowVisible
-        if new.windowVisible { transition.clientActive = true }
-        else if old.transportWanted, old.windowVisible { transition.clientActive = false }
+        // The transport (re)starting, or the user bringing the app forward, which on iOS is every activation.
+        transition.resumesTransport = !old.transportWanted || activated
         // A stream that stays up announces the user coming and going. A new one announces itself when it binds.
         if old.transportWanted, old.present != new.present { transition.presence = new.present ? .available : .away }
+        // XMPPClient writes CSI with every presence on a live stream: <active/> with available, <inactive/> with
+        // away. Restate the window's state when the presence just said the opposite.
+        let csiSentWithPresence = transition.presence.map { $0 == .available }
+        if new.windowVisible {
+            if activated || !old.transportWanted || !old.windowVisible || csiSentWithPresence == false {
+                transition.clientActive = true
+            }
+        } else if old.transportWanted, old.windowVisible || csiSentWithPresence == true {
+            transition.clientActive = false
+        }
         return transition
     }
 }
@@ -118,12 +127,12 @@ public struct SceneLifecycleDriver: LifecycleDriver {
             updates.append(.start(.away))
         case .phaseChanged(let previous, let phase):
             if previous == .active, phase != .active { updates.append(.interactionEnded) }
-            if phase == .active { signals = .inFront; updates.append(.change(.inFront)) }
-            else if phase == .background { signals = .away; updates.append(.change(.away)) }
+            if phase == .active { signals = .inFront; updates.append(.change(.inFront, activated: true)) }
+            else if phase == .background { signals = .away; updates.append(.change(.away, activated: false)) }
         case .becameActive:
             guard !signals.transportWanted else { break }
             signals = .inFront
-            updates.append(.change(.inFront))
+            updates.append(.change(.inFront, activated: true))
         }
         return updates
     }
