@@ -1,0 +1,24 @@
+{
+  "configurations" : [
+    {
+      "id" : "189ACD59-69EC-447F-8B2C-42A507DFBD8B",
+      "name" : "Default",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:HausXMPP.xcodeproj",
+        "identifier" : "14D3D0CAD76D4336A63D3F9C",
+        "name" : "HausXMPPUITests"
+      }
+    }
+  ],
+  "version" : 1
+}
