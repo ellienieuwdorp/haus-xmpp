@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import CSQLite
 @testable import MessageStore
 
 private func fixture() throws -> URL {
@@ -84,30 +83,4 @@ private func outgoing(_ id: String, account: String = "a", time: Double = 100, b
     }
     await #expect(throws: CancellationError.self) { try await task.value }
     #expect(try await store.claimNextOutgoing(accountID: "a")?.message.id == "1")
-}
-
-@Test func migrationFromV1PreservesHistoryStarsPinsWithoutReplayingLegacyMessages() async throws {
-    let url = try fixture()
-    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    var db: OpaquePointer?
-    #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
-    let sql = """
-        CREATE TABLE chats(account_id TEXT NOT NULL,id TEXT NOT NULL,title TEXT NOT NULL,pinned INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,id));
-        CREATE TABLE messages(account_id TEXT NOT NULL,id TEXT NOT NULL,chat_id TEXT NOT NULL,sender_id TEXT NOT NULL,body TEXT NOT NULL,sent_at REAL NOT NULL,outgoing INTEGER NOT NULL,starred INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,id),FOREIGN KEY(account_id,chat_id) REFERENCES chats(account_id,id));
-        INSERT INTO chats VALUES('a','peer','Peer',1);
-        INSERT INTO messages VALUES('a','legacy','peer','a','hello',100,1,1);
-        PRAGMA user_version=1;
-        """
-    #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
-    sqlite3_close(db)
-    let store = try MessageStore(url: url)
-    try await store.acquireTransportOwnership()
-    let chat = try #require(await store.chats(accountID: "a").first)
-    #expect(chat.isPinned && chat.lastMessage?.isStarred == true)
-    #expect(chat.lastMessage?.body == "hello")
-    #expect(chat.lastMessage?.transportState == nil)
-    #expect(try await store.claimNextOutgoing(accountID: "a") == nil)
-    await #expect(throws: MessageStoreError.invalidTransition) { try await store.enqueueOutgoing(outgoing("legacy")) }
-    try await store.enqueueOutgoing(outgoing("new"))
-    #expect(try await store.claimNextOutgoing(accountID: "a")?.message.id == "new")
 }

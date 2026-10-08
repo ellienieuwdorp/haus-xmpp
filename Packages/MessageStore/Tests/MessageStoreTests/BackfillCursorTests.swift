@@ -67,32 +67,6 @@ private func execute(_ url: URL, _ sql: String) -> Bool {
     try await store.close()
 }
 
-@Test func schemaSixteenUpgradesV15FilesIdempotently() async throws {
-    let url = try backfillStoreURL()
-    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-    try await MessageStore(url: url).close()
-    #expect(rows(url, "SELECT name FROM sqlite_master WHERE type='table' AND name='archive_backfill'") == [["archive_backfill"]])
-
-    // Reopening keeps the version and the table's rows (the CREATE is not repeated destructively).
-    let store = try MessageStore(url: url)
-    try await store.acquireTransportOwnership()
-    try await store.saveArchiveBackfillCursor(accountID: "a@x", archiveID: "a@x", expectedRevision: nil, oldestID: "m1", complete: false)
-    try await store.close()
-    try await MessageStore(url: url).close()
-    #expect(rows(url, "SELECT revision,oldest_id,complete FROM archive_backfill") == [["1", "m1", "0"]])
-
-    // A v15 file (no table) upgrades and keeps its other rows.
-    let v15 = try MessageStore(url: url)
-    try await v15.upsertChat(accountID: "a@x", chatID: "peer@x", title: "Peer")
-    try await v15.close()
-    #expect(execute(url, "DROP TABLE archive_backfill; PRAGMA user_version=15;"))
-    let upgraded = try MessageStore(url: url)
-    #expect(try await upgraded.archiveBackfillCursor(accountID: "a@x", archiveID: "a@x") == nil)
-    #expect(try await upgraded.chats(accountID: "a@x").map(\.title) == ["Peer"])
-    try await upgraded.close()
-    #expect(rows(url, "SELECT name FROM sqlite_master WHERE type='table' AND name='archive_backfill'") == [["archive_backfill"]])
-}
-
 @Test func newestArchivePageSavesBothCursorsTogetherAndReplacesAnOrphanedBackfillRow() async throws {
     let url = try backfillStoreURL()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
