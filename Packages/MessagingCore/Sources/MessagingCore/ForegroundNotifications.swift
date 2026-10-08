@@ -11,12 +11,13 @@ extension NotificationPlanner {
     public static let foregroundWindow: TimeInterval = 600
 
     /// The extension's plan for the candidates a foreground banner may show, messages and reactions (plan D8) alike:
-    /// not the open chat (it is on screen), and nothing older than `window`. Claims the whole batch; what is not posted
-    /// is dismissed. There is no deferred-chats summary in front of the app.
-    public static func foreground(_ batch: MessageNotification, accountID: String, openChatID: String?, now: Date,
+    /// not the chat the user is reading (`LifecycleSignals.readingChat`: it is on screen), and nothing older than
+    /// `window`. Claims the whole batch; what is not posted is dismissed. There is no deferred-chats summary in front
+    /// of the app.
+    public static func foreground(_ batch: MessageNotification, accountID: String, readingChatID: String?, now: Date,
                                   window: TimeInterval = foregroundWindow) -> NotificationPlan {
-        let shown = batch.candidates.filter { $0.chatID != openChatID && now.timeIntervalSince($0.sentAt) <= window }
-        let reactions = batch.reactions.filter { $0.chatID != openChatID && now.timeIntervalSince($0.reactedAt) <= window }
+        let shown = batch.candidates.filter { $0.chatID != readingChatID && now.timeIntervalSince($0.sentAt) <= window }
+        let reactions = batch.reactions.filter { $0.chatID != readingChatID && now.timeIntervalSince($0.reactedAt) <= window }
         let plan = plan(MessageNotification(candidates: shown, claimed: [], previewsEnabled: batch.previewsEnabled, reactions: reactions),
                         accountID: accountID)
         return NotificationPlan(requests: plan.requests, claimed: batch.claimed, summarizesDeferredChats: false)
@@ -29,7 +30,7 @@ extension NotificationPresenter {
     /// and then exactly the claimed rows are deleted; a burst beyond the per-run cap dismisses the rest. Returns how
     /// many requests were posted.
     @discardableResult
-    public func presentForeground(store: MessageStore, accountID: String, openChatID: String?, presents: Bool,
+    public func presentForeground(store: MessageStore, accountID: String, readingChatID: String?, presents: Bool,
                                   now: Date = Date()) async throws -> Int {
         guard presents else {
             try await store.dismissPendingMessageNotifications(accountID: accountID)
@@ -37,7 +38,7 @@ extension NotificationPresenter {
         }
         let batch = try await store.pendingNotifications(accountID: accountID)
         guard !batch.claimed.isEmpty || batch.deferredCount > 0 else { return 0 }
-        let plan = NotificationPlanner.foreground(batch, accountID: accountID, openChatID: openChatID, now: now)
+        let plan = NotificationPlanner.foreground(batch, accountID: accountID, readingChatID: readingChatID, now: now)
         var posted = 0
         for request in plan.requests {
             // The message is in the app already: a banner that fails to post is not worth keeping the candidate for.

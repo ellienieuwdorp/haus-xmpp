@@ -22,7 +22,7 @@ struct ForegroundNotificationTests {
         let edge = candidate("dave@example.org", at: 10_000 - 600)
         let outside = candidate("erin@example.org", at: 10_000 - 601)
         let batch = MessageNotification(candidates: [inside, edge, outside], claimed: [inside.key, edge.key, outside.key], previewsEnabled: true)
-        let plan = NotificationPlanner.foreground(batch, accountID: account, openChatID: nil, now: now)
+        let plan = NotificationPlanner.foreground(batch, accountID: account, readingChatID: nil, now: now)
         #expect(Set(plan.requests.map(\.identifier)) == Set([inside, edge].map { NotificationPlanner.identifier(for: $0) }))
         #expect(Set(plan.claimed) == Set([inside.key, edge.key, outside.key]), "the old one is dismissed, not left behind")
     }
@@ -41,7 +41,7 @@ struct ForegroundNotificationTests {
                 .requests.filter { $0.destination?.messageID == carol.id }
             let posting = FakePosting()
             let posted = try await NotificationPresenter(posting: posting)
-                .presentForeground(store: store, accountID: account, openChatID: "bob@example.org", presents: true, now: now)
+                .presentForeground(store: store, accountID: account, readingChatID: "bob@example.org", presents: true, now: now)
             let added = await posting.added
             #expect(posted == 1)
             #expect(added.map(\.identifier) == expected.map(\.identifier))
@@ -81,7 +81,7 @@ struct ForegroundNotificationTests {
             try await react("erin@example.org", at: now.addingTimeInterval(-3_600))
             let posting = FakePosting()
             let posted = try await NotificationPresenter(posting: posting)
-                .presentForeground(store: store, accountID: account, openChatID: "bob@example.org", presents: true, now: now)
+                .presentForeground(store: store, accountID: account, readingChatID: "bob@example.org", presents: true, now: now)
             let added = await posting.added
             #expect(posted == 1)
             #expect(added.map(\.identifier) == [NotificationIdentity.reaction(accountID: account, chatID: "carol@example.org",
@@ -97,7 +97,7 @@ struct ForegroundNotificationTests {
             try await store.setNotificationPreviews(accountID: account, enabled: false)
             try await receive(store, chat: "carol@example.org", body: "Secret", at: Date().timeIntervalSince1970)
             let posting = FakePosting()
-            try await NotificationPresenter(posting: posting).presentForeground(store: store, accountID: account, openChatID: nil, presents: true)
+            try await NotificationPresenter(posting: posting).presentForeground(store: store, accountID: account, readingChatID: nil, presents: true)
             let added = await posting.added
             #expect(added.map(\.title) == [""] && added.map(\.body) == [NotificationPlanner.hiddenBody])
         }
@@ -110,7 +110,7 @@ struct ForegroundNotificationTests {
             try await receive(store, chat: "erin@example.org", at: Date().timeIntervalSince1970)
             let posting = FakePosting()
             // Catching up (or no permission): dismissed, as the foreground always did.
-            #expect(try await NotificationPresenter(posting: posting).presentForeground(store: store, accountID: account, openChatID: nil, presents: false) == 0)
+            #expect(try await NotificationPresenter(posting: posting).presentForeground(store: store, accountID: account, readingChatID: nil, presents: false) == 0)
             #expect(await posting.added.isEmpty)
             #expect(try await store.pendingNotifications(accountID: account).claimed.isEmpty)
         }

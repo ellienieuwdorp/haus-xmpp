@@ -1,3 +1,4 @@
+import MessagingCore
 import SwiftUI
 
 @main
@@ -13,11 +14,21 @@ struct HausXMPPApp: App {
                 .themedRoot()
                 .environment(\.appearance, appearance)
                 .task { await model.prepare() }
+                // The iOS lifecycle driver (`SceneLifecycleDriver`) turns the phase into the four lifecycle signals.
                 .onChange(of: scenePhase) { previous, phase in
-                    if previous == .active, phase != .active { model.leftForeground() }
-                    if phase == .active { model.setForeground(true) }
-                    else if phase == .background { model.setForeground(false) }
+                    model.scenePhaseChanged(from: .init(previous), to: .init(phase))
                 }
+        }
+    }
+}
+
+private extension SceneLifecycleDriver.Phase {
+    init(_ phase: ScenePhase) {
+        switch phase {
+        case .active: self = .active
+        case .background: self = .background
+        // `.inactive`, and any future phase: neither turns the signals on nor off.
+        default: self = .inactive
         }
     }
 }
