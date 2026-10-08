@@ -21,7 +21,6 @@
 		179229871776D4F1408E3684 /* PushOnboardingLabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB0603B06B31C83D97163794 /* PushOnboardingLabUITests.swift */; };
 		18AA62DDFE6CB52388CD6626 /* AttachmentTrayUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BF9C3A91E2A2B0A58EBE071 /* AttachmentTrayUITests.swift */; };
 		1C72888FC2E46A6675F5C432 /* ConnectionSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F0025C0DF5307FD02F11B55 /* ConnectionSetupTests.swift */; };
-		1D84656566A3B9EEABC6A133 /* PolishUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27BC97417DDD10121F5DD5AC /* PolishUITests.swift */; };
 		1DDF31583511C1603C68A8A6 /* SharedStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E3E88F1465023725C99969B /* SharedStorageTests.swift */; };
 		1ECC9981CD306392B0B90743 /* AttachmentSendLabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1855DE3A5B4667032083D97 /* AttachmentSendLabUITests.swift */; };
 		1F4BBC2BA3DB5929DA85B868 /* LastSeen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0B97AF3403EEDD27A52DA9 /* LastSeen.swift */; };
@@ -54,11 +53,11 @@
 		61C0E7505FC9C539AE274A1B /* EncryptionKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68FF6093D4D7789019FDED79 /* EncryptionKeychain.swift */; };
 		635371EDB084E437A9E61D68 /* PreUpgradeHold.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78ECA4DBDACE97E7A0AA2EE /* PreUpgradeHold.swift */; };
 		65E05ACD7F3C3A37B23D0921 /* PushSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2232019E106C6E1BF8B39092 /* PushSetupTests.swift */; };
-		6964A48D8B3885B4336A2F5E /* OrganizationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C8D5B118A7A8265703C0701 /* OrganizationUITests.swift */; };
 		6CA2FA182DA14FAD3D3A6D4F /* AccountIdentityMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36AF6AA9413439022B1456D1 /* AccountIdentityMigration.swift */; };
 		6CD66E39F6B66B34D6923F66 /* PushRegistrationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A804ED5CE56EF792DB11C29 /* PushRegistrationState.swift */; };
 		6D99BAA5013AC5727BE47234 /* OutboxDrain.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E9F16915706C304AAE9D42 /* OutboxDrain.swift */; };
 		701B533528A008A47E940216 /* AvatarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 665ABAF78DE8CC58D961254E /* AvatarStore.swift */; };
+		712D8BC85B0B62C9286202D8 /* MessageActionsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14672731D176DFF45CC7BC6E /* MessageActionsUITests.swift */; };
 		71C07A7A7BFC3DCF6C197C31 /* UnreadablePlaceholderUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE515A70164915088E16B82C /* UnreadablePlaceholderUITests.swift */; };
 		71D6CE56E84802CEAF1665BF /* PreUpgradeSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1FA755E6CFB05C173C4A4C /* PreUpgradeSnapshotTests.swift */; };
 		72C7E7A9558B483CDAC73323 /* NotificationNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0554E0B736A32101FBE1D193 /* NotificationNavigationTests.swift */; };
@@ -188,6 +187,7 @@
 		0E4BDD7622BCAF05D8A18ACF /* XMPPProtocol */ = {isa = PBXFileReference; lastKnownFileType = folder; name = XMPPProtocol; path = Packages/XMPPProtocol; sourceTree = SOURCE_ROOT; };
 		0F0E44F860DD39928F7313B2 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		0F2C755607B4E88953748B70 /* LastSeenTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LastSeenTests.swift; sourceTree = "<group>"; };
+		14672731D176DFF45CC7BC6E /* MessageActionsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageActionsUITests.swift; sourceTree = "<group>"; };
 		15074E4EC097CD346A8BE93B /* PushRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistration.swift; sourceTree = "<group>"; };
 		174D8D2CD8272853B0A9593D /* NotificationAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationAccount.swift; sourceTree = "<group>"; };
 		175366071B61DD1E158B1B82 /* ChatCapabilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCapabilities.swift; sourceTree = "<group>"; };
@@ -198,7 +198,6 @@
 		2232019E106C6E1BF8B39092 /* PushSetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushSetupTests.swift; sourceTree = "<group>"; };
 		2444BE96E62C6A76EDE00EDC /* GroupUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupUITests.swift; sourceTree = "<group>"; };
 		24971C9AFE6065119E87D945 /* CoalescedReload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoalescedReload.swift; sourceTree = "<group>"; };
-		27BC97417DDD10121F5DD5AC /* PolishUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PolishUITests.swift; sourceTree = "<group>"; };
 		2816754130CFCCD50BC0B19E /* HausXMPPApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HausXMPPApp.swift; sourceTree = "<group>"; };
 		2899AB2C75D3ED5F81F7097D /* AttachmentKeyboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentKeyboard.swift; sourceTree = "<group>"; };
 		2AC8B2A7BBFCEA0E69E72232 /* PushUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushUITests.swift; sourceTree = "<group>"; };
@@ -256,7 +255,6 @@
 		97458A0AF66A781FDEE95E70 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		99302D954A8AB89926F82FF5 /* DateChipView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DateChipView.swift; sourceTree = "<group>"; };
 		9BF9C3A91E2A2B0A58EBE071 /* AttachmentTrayUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentTrayUITests.swift; sourceTree = "<group>"; };
-		9C8D5B118A7A8265703C0701 /* OrganizationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrganizationUITests.swift; sourceTree = "<group>"; };
 		9F0025C0DF5307FD02F11B55 /* ConnectionSetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionSetupTests.swift; sourceTree = "<group>"; };
 		A6BF0339B117304DCA097DFF /* AppearanceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceStoreTests.swift; sourceTree = "<group>"; };
 		AAD47A5646692079DA699298 /* Attachments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Attachments.swift; sourceTree = "<group>"; };
@@ -513,10 +511,9 @@
 				2444BE96E62C6A76EDE00EDC /* GroupUITests.swift */,
 				5B77C1DFB059045D551547AF /* LabUITestSupport.swift */,
 				718556D6FAE3A23B682B97B6 /* LastSeenLabUITests.swift */,
+				14672731D176DFF45CC7BC6E /* MessageActionsUITests.swift */,
 				CEC3F808F1FD60E661FFD064 /* NotificationActionLabUITests.swift */,
-				9C8D5B118A7A8265703C0701 /* OrganizationUITests.swift */,
 				95271CA1D981A3BB07F06A3C /* OutboxUITests.swift */,
-				27BC97417DDD10121F5DD5AC /* PolishUITests.swift */,
 				EB0603B06B31C83D97163794 /* PushOnboardingLabUITests.swift */,
 				2AC8B2A7BBFCEA0E69E72232 /* PushUITests.swift */,
 				C54E2339C1602A48D70E197E /* ReactionUITests.swift */,
@@ -802,10 +799,9 @@
 				B105FC24BC2881265A27920E /* GroupUITests.swift in Sources */,
 				9606DC837981BEE6CBBB1713 /* LabUITestSupport.swift in Sources */,
 				F4607661E7B355B618B91201 /* LastSeenLabUITests.swift in Sources */,
+				712D8BC85B0B62C9286202D8 /* MessageActionsUITests.swift in Sources */,
 				EDF87CFE84890B04217C06DB /* NotificationActionLabUITests.swift in Sources */,
-				6964A48D8B3885B4336A2F5E /* OrganizationUITests.swift in Sources */,
 				F40B2D7649A8D5F218621045 /* OutboxUITests.swift in Sources */,
-				1D84656566A3B9EEABC6A133 /* PolishUITests.swift in Sources */,
 				179229871776D4F1408E3684 /* PushOnboardingLabUITests.swift in Sources */,
 				9EE6076ADE31F6322AC800C1 /* PushUITests.swift in Sources */,
 				08BE9F110EA7558C05048773 /* ReactionUITests.swift in Sources */,
