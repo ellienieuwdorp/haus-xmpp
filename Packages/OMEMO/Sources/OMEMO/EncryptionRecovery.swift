@@ -34,13 +34,17 @@ extension OMEMOService {
     }
 
     /// Records the plain-text device ID of every row that has none yet, so a later key loss can still retire it.
-    /// Opens each such row once; rows already recorded are not read.
+    /// Opens each such row once; rows already recorded are not read. Best effort per row: this runs at every launch for
+    /// every account, so a row that opens but does not decode is skipped and left to that account's own encryption
+    /// errors instead of keeping storage closed for all of them.
     public func recordLocalDeviceIDs() async throws {
         try await gate.run {
             for accountID in try await self.store.encryptionStateAccountIDs() {
                 guard let row = try await self.store.encryptionState(accountID: accountID), row.deviceID == nil else { continue }
-                let (_, state) = try await self.load(accountID)
-                try await self.store.recordEncryptionDeviceID(accountID: accountID, deviceID: try self.localDeviceID(state, .legacy))
+                do {
+                    let (_, state) = try await self.load(accountID)
+                    try await self.store.recordEncryptionDeviceID(accountID: accountID, deviceID: try self.localDeviceID(state, .legacy))
+                } catch is CancellationError { throw CancellationError() } catch { continue }
             }
         }
     }

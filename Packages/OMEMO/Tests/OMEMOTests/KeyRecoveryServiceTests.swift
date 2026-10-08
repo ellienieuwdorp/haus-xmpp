@@ -178,6 +178,22 @@ final class KeyRecoveryServiceTests: XCTestCase {
         expectEqual(try await f.bStore.encryptionState(accountID: f.bob)?.deviceID, oldID)
     }
 
+    /// Recording runs at every launch for every account: a row that opens but does not decode is that account's own
+    /// problem and must not keep storage closed (or stop the other rows from being recorded).
+    func testRecordLocalDeviceIDsSkipsARowThatOpensButDoesNotDecode() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        let oldID = try await retainOneMessageForBob(f)
+        XCTAssertTrue(execute(f.directory.appendingPathComponent("bob.sqlite"), "UPDATE encryption_state SET device_id=NULL"))
+        let carol = "carol@localhost"
+        try await f.bStore.saveEncryptionState(accountID: carol, expectedRevision: nil, data: try f.protection.seal(Data("{}".utf8), account: carol))
+        // Not key loss: the key opens both rows.
+        let lost = try await OMEMOService.unreadableStates(store: f.bStore, protection: f.protection)
+        XCTAssertEqual(lost, [])
+        try await OMEMOService(store: f.bStore, protection: f.protection).recordLocalDeviceIDs()
+        expectEqual(try await f.bStore.encryptionState(accountID: f.bob)?.deviceID, oldID)
+        expectNil(try await f.bStore.encryptionState(accountID: carol)?.deviceID)
+    }
+
     private func execute(_ url: URL, _ sql: String) -> Bool {
         var db: OpaquePointer?
         guard sqlite3_open(url.path, &db) == SQLITE_OK else { return false }
