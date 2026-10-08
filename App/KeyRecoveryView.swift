@@ -97,7 +97,7 @@ struct KeyRecoveryView: View {
                 : "Encryption is also reset for \(plan.otherAccounts) other accounts used on this \(ThisDevice.noun)."))
         }
         items.append(Consequence(symbol: "iphone.slash", text: plan.retiresOldDevices
-            ? "The old device is removed from your account’s device list when you’re next online. If another iPhone or Mac still uses it, it comes back as a device to review."
+            ? "The old device is removed from your account’s device list when you’re next online. If another device still uses it, it comes back as a device to review."
             : "The old device stays in your account’s device list until you remove it from a chat’s Devices & Encryption."))
         return items
     }
