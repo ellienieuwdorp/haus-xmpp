@@ -97,12 +97,17 @@ struct KeyRecoveryView: View {
                 : "Encryption is also reset for \(plan.otherAccounts) other accounts used on this iPhone."))
         }
         items.append(Consequence(symbol: "iphone.slash", text: plan.retiresOldDevices
-            ? "The old device is removed from your account’s device list when you’re next online."
+            ? "The old device is removed from your account’s device list when you’re next online. If another iPhone or Mac still uses it, it comes back as a device to review."
             : "The old device stays in your account’s device list until you remove it from a chat’s Devices & Encryption."))
         return items
     }
 
     static func confirmation(_ plan: KeyRecoveryPlan) -> String {
-        "This iPhone’s old encryption keys are discarded and a new encryption device is created. Messages encrypted for the old keys can never be read here. This cannot be undone."
+        let others = switch plan.otherAccounts {
+        case 0: ""
+        case 1: " This also applies to 1 other account."
+        default: " This also applies to \(plan.otherAccounts) other accounts."
+        }
+        return "This iPhone’s old encryption keys are discarded and a new encryption device is created.\(others) Messages encrypted for the old keys can never be read here. This cannot be undone."
     }
 }

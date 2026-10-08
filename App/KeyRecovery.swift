@@ -27,9 +27,12 @@ struct KeyRecoveryPlan: Equatable {
     /// Every lost device's ID was recorded, so each leaves its account's device lists on the next connection.
     var retiresOldDevices: Bool { states.allSatisfy { $0.deviceID != nil } }
 
+    /// The saved account and one other, so the screen and the confirmation show every line that depends on the plan.
     static func sample(account: String) -> KeyRecoveryPlan {
         KeyRecoveryPlan(keyMissing: true, states: [UnreadableEncryptionState(accountID: account, revision: 1, deviceID: 1_234_567,
-                                                                               loss: EncryptionLossCounts(waitingMessages: 2, unsendableFiles: 0))],
+                                                                               loss: EncryptionLossCounts(waitingMessages: 2, unsendableFiles: 0)),
+                                                   UnreadableEncryptionState(accountID: "work@example.org", revision: 1, deviceID: 7_654_321,
+                                                                               loss: EncryptionLossCounts(waitingMessages: 0, unsendableFiles: 0))],
                         account: account, isSample: true)
     }
 }
