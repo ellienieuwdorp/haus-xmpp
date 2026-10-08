@@ -41,6 +41,7 @@
 		346851E8F1AB356F12B683AF /* GroupJoinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64553F11D282035E206DBCE1 /* GroupJoinView.swift */; };
 		34AA5ED12B9611519291857D /* LastSeenTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EE701CB57B7105AB84D9504 /* LastSeenTrackerTests.swift */; };
 		364D130D4D94312A5D5DADDE /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 535BE8A1F1E6F1BDCA72435B /* Theme.swift */; };
+		373F493D6B6C09282C8B286C /* ChatRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A4DB06AECC4926F0E8AB2ED /* ChatRow.swift */; };
 		37D42445AA64631EC1258F5E /* AttachmentDownloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7CA84D23B5006C989C0C253 /* AttachmentDownloads.swift */; };
 		38007AB9C7A5BDF2716F7FAD /* ConversationSearchBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7867D06A08D4C485E2B463D5 /* ConversationSearchBar.swift */; };
 		39A29FB37A5F1B701D3E2231 /* SyncPhaseTimings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A6DCB9F398CA0479AED16B7 /* SyncPhaseTimings.swift */; };
@@ -207,6 +208,7 @@
 		08AB25F55ECA4190D03927E7 /* MessageActionsOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageActionsOverlay.swift; sourceTree = "<group>"; };
 		08DCEB72DB5C954FB177F948 /* OwnDeviceReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwnDeviceReview.swift; sourceTree = "<group>"; };
 		0947D89080553653EC6040CF /* DeliveredNotificationCleaner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeliveredNotificationCleaner.swift; sourceTree = "<group>"; };
+		0A4DB06AECC4926F0E8AB2ED /* ChatRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatRow.swift; sourceTree = "<group>"; };
 		0E3E88F1465023725C99969B /* SharedStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedStorageTests.swift; sourceTree = "<group>"; };
 		0E4BDD7622BCAF05D8A18ACF /* XMPPProtocol */ = {isa = PBXFileReference; lastKnownFileType = folder; name = XMPPProtocol; path = Packages/XMPPProtocol; sourceTree = SOURCE_ROOT; };
 		0F0E44F860DD39928F7313B2 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
@@ -527,6 +529,7 @@
 				72CEDFA5595A4C5D13AC3286 /* ChatListView.swift */,
 				7EE5082F6FC8DC6C22351DAF /* ChatNotifications.swift */,
 				4053E5EBC94DF0A0EB297556 /* ChatRoute.swift */,
+				0A4DB06AECC4926F0E8AB2ED /* ChatRow.swift */,
 				736643F511B0D31C7102998D /* CircularGlassButtonStyle.swift */,
 				24971C9AFE6065119E87D945 /* CoalescedReload.swift */,
 				219AF3065A8866C0E26F5FFF /* ConnectionSetup.swift */,
@@ -797,6 +800,7 @@
 				028100ACCB75CDF7DD034832 /* ChatListView.swift in Sources */,
 				77CD710091E8A7B5DA9CC11D /* ChatNotifications.swift in Sources */,
 				972BA0FB0311856F62AB20E0 /* ChatRoute.swift in Sources */,
+				373F493D6B6C09282C8B286C /* ChatRow.swift in Sources */,
 				A2FAE5F989B4A21D149234DC /* CircularGlassButtonStyle.swift in Sources */,
 				9A4CA15E5D87E4F87ED8EB7A /* CoalescedReload.swift in Sources */,
 				BAD829949F27036DE79F2BF4 /* ConnectionSetup.swift in Sources */,
