@@ -956,13 +956,19 @@ final class AppModel {
         let background = UIApplication.shared.beginBackgroundTask(withName: "Set up encryption again")
         defer { if background != .invalid { UIApplication.shared.endBackgroundTask(background) } }
         var leased = await store.holdsTransportOwnership
+        var busy = false
         for _ in 0..<40 where !leased {
             do { try await store.acquireTransportOwnership(); leased = true }
-            catch MessageStoreError.transportOwnedElsewhere { try? await Task.sleep(for: .milliseconds(250)) }
-            catch { break }
+            catch MessageStoreError.transportOwnedElsewhere { busy = true; try? await Task.sleep(for: .milliseconds(250)) }
+            catch {
+                Self.syncLog.error("setting up encryption again could not take the lease: \(String(describing: error), privacy: .public)")
+                busy = false
+                break
+            }
         }
         guard leased else {
-            self.error = "A notification is being processed. Try again in a moment."
+            self.error = busy ? "A notification is being processed. Try again in a moment."
+                : "Encryption could not be set up again, and nothing was discarded. Try again."
             return
         }
         do {
