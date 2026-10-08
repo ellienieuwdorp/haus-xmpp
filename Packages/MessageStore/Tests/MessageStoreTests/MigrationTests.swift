@@ -5,7 +5,7 @@ import Testing
 @testable import MessageStore
 
 /// The schema this build writes. A schema bump changes this one literal.
-private let currentSchemaVersion: Int32 = 24
+private let currentSchemaVersion: Int32 = 25
 
 struct MigrationTests {
     @Test func openingStampsTheCurrentSchemaAndRefusesANewerOne() async throws {
@@ -45,6 +45,26 @@ struct MigrationTests {
         #expect(try await store.message(accountID: "self", messageID: "m")?.transportState == .unconfirmed)
         #expect(try await store.rejectOutgoing(accountID: "self", chatID: "peer", wireID: "m", rejection: "item-not-found") != nil)
         #expect(try await store.message(accountID: "self", messageID: "m")?.rejection == "item-not-found")
+        try await store.close()
+    }
+
+    /// v25 adds the plain-text device ID of each state row and the retired own devices; a v24 row keeps its state and
+    /// has no recorded ID until a build reads it.
+    @Test func aVersion24StateRowGainsADeviceIDColumnAndTheRetiredTable() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "device-id-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "messages.sqlite")
+        let old = try MessageStore(url: url)
+        try await old.saveEncryptionState(accountID: "self", expectedRevision: nil, data: Data([1, 2]))
+        try await old.close()
+        #expect(sqliteExecute(url: url, sql: "ALTER TABLE encryption_state DROP COLUMN device_id; DROP TABLE retired_own_devices; PRAGMA user_version=24"))
+
+        let store = try MessageStore(url: url)
+        #expect(try await store.encryptionState(accountID: "self") == EncryptionState(revision: 1, data: Data([1, 2])))
+        #expect(try await store.retiredOwnDevices(accountID: "self").isEmpty)
+        try await store.recordEncryptionDeviceID(accountID: "self", deviceID: 42)
+        #expect(try await store.encryptionState(accountID: "self")?.deviceID == 42)
         try await store.close()
     }
 

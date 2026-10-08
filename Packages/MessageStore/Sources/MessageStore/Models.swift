@@ -217,6 +217,56 @@ public struct EncryptionState: Sendable, Equatable {
     /// The account spelling `data` was sealed under when that differs from the row's key: set by the v23 address
     /// migration for state saved under the typed spelling, cleared by the next save.
     public var sealedAccount: String? = nil
+    /// The device ID the sealed identity is published under, kept in plain text so that it is still known when the
+    /// wrapping key is lost (docs/development/key-recovery.md). Nil for a row no build has recorded yet.
+    public var deviceID: UInt32? = nil
+}
+
+/// Where one retired own device ID stands in one profile's published device list (docs/development/key-recovery.md).
+public enum RetiredDeviceStatus: String, Sendable, CaseIterable {
+    /// Still to be taken out of the list.
+    case pending
+    /// A list read back without it confirmed the removal.
+    case removed
+    /// The list named it again after a confirmed removal: something still holds its key (the old installation itself,
+    /// after Migration Assistant or a restore to another machine). It is no longer removed or hidden, and is reviewed
+    /// like any other device of the account.
+    case reclaimed
+}
+
+/// What `MessageStore.resetEncryption` discards and creates after the wrapping key was lost. The OMEMO layer decides it:
+/// only it can tell which rows its key cannot open, and what each retained envelope would have been.
+public struct EncryptionReset: Sendable {
+    public struct Discarded: Sendable {
+        public let accountID: String
+        /// The revision the row was assessed at; a row written since is never discarded.
+        public let revision: Int
+        /// `encryptionReset` placeholders for retained ciphertext that would have been message bubbles.
+        public let placeholders: [UnreadableMessage]
+        /// Retained ciphertext that was never a bubble (key transports, updates, rows that do not decode): only its
+        /// replay identity is consumed.
+        public let consumed: [CiphertextIdentity]
+        public init(accountID: String, revision: Int, placeholders: [UnreadableMessage], consumed: [CiphertextIdentity]) {
+            self.accountID = accountID; self.revision = revision; self.placeholders = placeholders; self.consumed = consumed
+        }
+    }
+    /// A new identity for one account, sealed with the key that replaces the lost one.
+    public struct Replacement: Sendable {
+        public let accountID: String
+        public let deviceID: UInt32
+        public let data: Data
+        public init(accountID: String, deviceID: UInt32, data: Data) { self.accountID = accountID; self.deviceID = deviceID; self.data = data }
+    }
+    public let discarded: [Discarded]
+    public let replacement: Replacement?
+    public init(discarded: [Discarded], replacement: Replacement?) { self.discarded = discarded; self.replacement = replacement }
+}
+
+/// A retained ciphertext's primary key.
+public struct CiphertextIdentity: Sendable, Hashable {
+    public let sender: String
+    public let digest: String
+    public init(sender: String, digest: String) { self.sender = sender; self.digest = digest }
 }
 
 public struct PendingEncryptedMessage: Sendable {
@@ -260,10 +310,14 @@ public enum UnreadableReason: String, Sendable, Equatable, CaseIterable {
     /// Not kept for review because its sender, or the account, already had as much ciphertext waiting as
     /// `MessageStore.pendingLimits` allows.
     case retentionLimit
+    /// Retained for this device, which lost its wrapping key before it could be read; encryption was set up again
+    /// (`MessageStore.resetEncryption`), so the keys that could open it are gone.
+    case encryptionReset
 
     /// Whether an incoming placeholder may alert (plan D5). A blocked device was the user's own decision, and a limit is
-    /// reached only by a sender whose earlier waiting messages already alerted, or by a flood: both stay quiet.
-    public var alerts: Bool { self != .rejectedDevice && self != .retentionLimit }
+    /// reached only by a sender whose earlier waiting messages already alerted, or by a flood: both stay quiet. So does
+    /// ciphertext converted by a reset: it arrived (and may have alerted) long before.
+    public var alerts: Bool { self != .rejectedDevice && self != .retentionLimit && self != .encryptionReset }
 }
 
 /// What `MessageStore.retainEncryptedIncoming` records instead of a pending row when a retention limit leaves no room.

@@ -133,6 +133,12 @@ struct ConversationView: View {
     /// Built bare, so the composer's reply strip reads only what the author line needs.
     private func authorName(_ sender: String) -> String { ConversationPresenter(source: model, chatID: chatID, title: title).authorName(sender) }
 
+    /// The failed message the retry dialog is for was a file failed when encryption was set up again: its key is gone,
+    /// so the store refuses a retry and the dialog only explains.
+    private var retryIsImpossible: Bool {
+        retryMessageID.flatMap { id in messages.first { $0.id == id }?.rejection } == MessageStore.encryptionResetRejection
+    }
+
     private func beginEditing(_ message: ChatMessage) {
         editing = message
         replyingTo = nil
@@ -342,16 +348,22 @@ struct ConversationView: View {
                 .accessibilityLabel("Conversation options")
             }
         }
-        .confirmationDialog("Send this message again?", isPresented: Binding(
+        .confirmationDialog(retryIsImpossible ? "This file can’t be sent" : "Send this message again?", isPresented: Binding(
             get: { retryMessageID != nil }, set: { if !$0 { retryMessageID = nil } }
         ), titleVisibility: .visible, presenting: retryMessageID) { id in
-            Button("Send again") {
-                Task { await model.retryMessage(id) }
-                retryMessageID = nil
+            if retryIsImpossible {
+                Button("OK", role: .cancel) { retryMessageID = nil }
+            } else {
+                Button("Send again") {
+                    Task { await model.retryMessage(id) }
+                    retryMessageID = nil
+                }
+                Button("Cancel", role: .cancel) { retryMessageID = nil }
             }
-            Button("Cancel", role: .cancel) { retryMessageID = nil }
         } message: { id in
-            if let rejection = messages.first(where: { $0.id == id })?.rejection {
+            if retryIsImpossible {
+                Text(RejectionCopy.reason(MessageStore.encryptionResetRejection, isGroup: isGroup))
+            } else if let rejection = messages.first(where: { $0.id == id })?.rejection {
                 Text("It wasn't delivered. \(RejectionCopy.reason(rejection, isGroup: isGroup)) Sending again only helps once that has changed.")
             } else {
                 Text("The recipient may already have it. Sending again could create a duplicate.")

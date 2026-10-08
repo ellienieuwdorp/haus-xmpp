@@ -22,12 +22,12 @@ extension OMEMOService {
         let (_, snapshot) = try await load(account)
         var fetched: [AdvertisedOwnDevices] = []
         for profile in [XMPPOMEMOProfile.legacy, .modern] {
-            let local = try localDeviceID(snapshot, profile)
+            let skipping = try await skippedOwnDevices(snapshot, account: account, profile: profile)
             let ids = try validatedDevices(await transport.fetchOMEMODevices(for: account, profile: profile))
             // The same bound as a chat refresh: one bundle request per listed device.
             guard ids.count <= 200 else { throw OMEMOError.invalidContent }
             var bundles: [UInt32: XMPPOMEMOBundle] = [:]
-            for id in ids where id != local {
+            for id in ids where !skipping.contains(id) {
                 bundles[id] = try await availableBundle(owner: account, deviceID: id, profile: profile, transport: transport)
             }
             fetched.append(AdvertisedOwnDevices(profile: profile, ids: ids, bundles: bundles))
@@ -40,11 +40,22 @@ extension OMEMOService {
         let (revision, old) = try await load(account)
         var state = old
         for list in advertised {
-            _ = try await mergeAdvertised(list.ids, owner: account, profile: list.profile, skipping: try localDeviceID(state, list.profile),
+            // Read again under the gate: a device reclaimed since the fetch has no bundle here and is kept as stored
+            // until the next refresh.
+            let skipping = try await skippedOwnDevices(state, account: account, profile: list.profile)
+            _ = try await mergeAdvertised(list.ids, owner: account, profile: list.profile, skipping: skipping,
                                           into: &state) { list.bundles[$0] }
         }
         try await save(state, revision: revision, account: account)
         return try ownDevices(state, account: account)
+    }
+
+    /// This installation and, as in `refreshLocked`, the devices this account gave up (`startOver`) and has not seen
+    /// reclaimed: those are not offered for review while a list still names them.
+    private func skippedOwnDevices(_ state: AccountEncryptionState, account: String,
+                                   profile: XMPPOMEMOProfile) async throws -> Set<UInt32> {
+        let retired = try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue, statuses: [.pending, .removed])
+        return retired.union([try localDeviceID(state, profile)])
     }
 
     private func ownDevices(_ state: AccountEncryptionState, account: String) throws -> [EncryptionDevice] {
