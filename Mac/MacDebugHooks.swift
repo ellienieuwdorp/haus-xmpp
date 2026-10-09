@@ -12,7 +12,11 @@ import SwiftUI
 ///
 /// - `-haus-capture <dir>`: once the chats (and a selected chat's messages) are loaded and laid out, every visible
 ///   window as `<n>-<name>.png`, rendered from its own views (`cacheDisplay`), at the screen's scale.
-/// - `-haus-capture-frames <dir> <seconds>`: the main window at about 10 frames a second, `frame-0001.png` onwards.
+/// - `-haus-capture-frames <dir> <seconds>`: the main window at about 10 frames a second, `frame-0001.png` onwards,
+///   with any other open window (Settings) drawn over its centre.
+/// - `-haus-tour "<step>; …"`: with `-haus-capture-frames`, starts the frames as soon as the main window exists and plays
+///   the steps while they run, for a recording: `wait <seconds>`, `select <chat>`, `deselect`, `inspector on|off`,
+///   `settings general|appearance`, `close-settings`.
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-sheet account|new-chat|own-devices`,
 ///   `-haus-settings general|appearance`, `-haus-close-window <seconds>`: what the window shows.
@@ -107,6 +111,10 @@ import SwiftUI
             } else if NSApp.windows.isEmpty {
                 log("no window after launch and no openWindow action")
             }
+            if let tour = value(after: "-haus-tour") {
+                await runTour(tour, window: window, model: model)
+                return
+            }
             if let chat = value(after: "-haus-select") {
                 window.selection = chat
                 await waitUntil(seconds: 10) { model.messagesLoadedFor == chat }
@@ -140,6 +148,56 @@ import SwiftUI
 
     // MARK: Captures
 
+    /// Opens the Settings window; captured from the main window's content by `MacDebugPresentation`.
+    static var openSettings: OpenSettingsAction?
+
+    /// The Settings pane a tour asks for; `MacSettingsView` follows it.
+    @Observable @MainActor final class Tour {
+        var settingsPane: MacSettingsView.Pane?
+    }
+
+    static let tour = Tour()
+
+    /// `-haus-tour`: frames from the moment the main window exists, while the steps change what it shows.
+    private static func runTour(_ script: String, window: MacWindowState, model: AppModel) async {
+        guard let directory = value(after: "-haus-capture-frames"),
+              let seconds = value(after: "-haus-capture-frames", offset: 2).flatMap(Double.init) else {
+            log("tour: needs -haus-capture-frames <dir> <seconds>")
+            return
+        }
+        let frames = Task { await captureFrames(to: directory, seconds: seconds) }
+        for step in script.split(separator: ";").map({ $0.trimmingCharacters(in: .whitespaces) }).filter({ !$0.isEmpty }) {
+            let words = step.split(separator: " ", maxSplits: 1).map(String.init)
+            let argument = words.count > 1 ? words[1] : ""
+            if words[0] != "wait" { log("tour \(step)") }
+            switch words[0] {
+            case "wait": try? await Task.sleep(for: .seconds(Double(argument) ?? 1))
+            case "select": window.selection = argument
+            case "deselect": window.selection = nil
+            case "inspector": window.inspectorShown = argument != "off"
+            case "settings":
+                tour.settingsPane = MacSettingsView.Pane(rawValue: argument) ?? .general
+                if otherWindows.isEmpty { openSettings?() }
+            case "close-settings": otherWindows.forEach { $0.close() }
+            default: log("tour \(step): unknown")
+            }
+        }
+        await frames.value
+        log("tour done; selected \(window.selection ?? "none"), messages loaded for \(model.messagesLoadedFor ?? "none")")
+    }
+
+    private static var mainWindow: NSWindow? {
+        NSApp.windows.first { $0.isVisible && $0.identifier?.rawValue.hasPrefix(MacAppDelegate.mainWindowID) == true }
+    }
+
+    /// Visible windows other than the main window and its sheets: the Settings window.
+    private static var otherWindows: [NSWindow] {
+        NSApp.windows.filter { window in
+            window.isVisible && !window.isSheet && !(window is NSPanel) && window.contentView != nil
+                && window.identifier?.rawValue.hasPrefix(MacAppDelegate.mainWindowID) != true
+        }
+    }
+
     private static func captureWindows(to directory: String) {
         let windows = NSApp.windows.filter { $0.isVisible && $0.contentView != nil }
         for (index, window) in windows.enumerated() {
@@ -157,8 +215,7 @@ import SwiftUI
         var frame = 0
         while clock.now < end {
             let started = clock.now
-            if let window = NSApp.windows.first(where: { $0.isVisible && $0.identifier?.rawValue.hasPrefix(MacAppDelegate.mainWindowID) == true }),
-               let png = render(window) {
+            if let window = mainWindow, let png = renderWithOverlays(window) {
                 frame += 1
                 emit(png, directory: directory, file: String(format: "frame-%04d.png", frame))
             }
@@ -172,6 +229,46 @@ import SwiftUI
     /// its content missing. Each one is painted over with a flat stand-in for its material, and its content is
     /// rendered on top of that; glass therefore reads as a flat fill in captures.
     private static func render(_ window: NSWindow) -> Data? {
+        renderRep(window)?.representation(using: .png, properties: [:])
+    }
+
+    /// The main window with any other open window (Settings) drawn over its centre with a shadow, roughly where it
+    /// would sit in front of the main window. Both are rendered from their own views.
+    private static func renderWithOverlays(_ window: NSWindow) -> Data? {
+        guard let main = renderRep(window) else { return nil }
+        let overlays = otherWindows.compactMap { renderRep($0) }
+        guard !overlays.isEmpty else { return main.representation(using: .png, properties: [:]) }
+        guard let output = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: main.pixelsWide, pixelsHigh: main.pixelsHigh,
+                                            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: output) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        let canvas = NSRect(x: 0, y: 0, width: main.pixelsWide, height: main.pixelsHigh)
+        main.draw(in: canvas)
+        for overlay in overlays {
+            let size = NSSize(width: overlay.pixelsWide, height: overlay.pixelsHigh)
+            let frame = NSRect(x: ((canvas.width - size.width) / 2).rounded(), y: max(0, ((canvas.height - size.height) / 2).rounded()),
+                               width: size.width, height: size.height)
+            NSGraphicsContext.saveGraphicsState()
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor.black.withAlphaComponent(0.35)
+            shadow.shadowBlurRadius = 40
+            shadow.shadowOffset = NSSize(width: 0, height: -12)
+            shadow.set()
+            NSColor.windowBackgroundColor.setFill()
+            NSBezierPath(roundedRect: frame, xRadius: 24, yRadius: 24).fill()
+            NSGraphicsContext.restoreGraphicsState()
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(roundedRect: frame, xRadius: 24, yRadius: 24).addClip()
+            overlay.draw(in: frame)
+            NSGraphicsContext.restoreGraphicsState()
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        return output.representation(using: .png, properties: [:])
+    }
+
+    private static func renderRep(_ window: NSWindow) -> NSBitmapImageRep? {
         guard let view = window.contentView?.superview ?? window.contentView else { return nil }
         view.layoutSubtreeIfNeeded()
         guard let base = view.bitmapImageRepForCachingDisplay(in: view.bounds),
@@ -210,7 +307,7 @@ import SwiftUI
             }
         }
         NSGraphicsContext.restoreGraphicsState()
-        return output.representation(using: .png, properties: [:])
+        return output
     }
 
     private static func draw(_ part: NSView, into view: NSView) {
@@ -358,6 +455,7 @@ struct MacDebugPresentation: ViewModifier {
 
     func body(content: Content) -> some View {
         content.task {
+            MacDebugHooks.openSettings = openSettings
             guard MacDebugHooks.has("-haus-settings") else { return }
             try? await Task.sleep(for: .milliseconds(300))
             openSettings()

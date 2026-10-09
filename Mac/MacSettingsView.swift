@@ -33,6 +33,7 @@ struct MacSettingsView: View {
         #if DEBUG
         .background(MacUnobtrusive.Anchor())
         .onAppear { if let value = MacDebugHooks.value(after: "-haus-settings"), let pane = Pane(rawValue: value) { self.pane = pane } }
+        .onChange(of: MacDebugHooks.tour.settingsPane, initial: true) { _, pane in if let pane { self.pane = pane } }
         #endif
     }
 }
