@@ -22,5 +22,9 @@
 	<string>$(HAUS_PUSH_ENVIRONMENT)</string>
 	<key>LSMultipleInstancesProhibited</key>
 	<true/>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INSendMessageIntent</string>
+	</array>
 </dict>
 </plist>

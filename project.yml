@@ -105,12 +105,16 @@ targets:
           - App.entitlements
       - Shared
       - Mac
+      # Debug-only: the app arms and reads the extension's storage probe.
+      - NotificationServiceMac/MacExtensionProbe.swift
     info:
       path: Mac/Info.plist
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         HausPushEnvironment: $(HAUS_PUSH_ENVIRONMENT)
+        # Communication notifications, as on iOS: the app declares the intent its extension donates.
+        NSUserActivityTypes: [INSendMessageIntent]
         # One process per user: a second copy would contend for the store's transport lease.
         LSMultipleInstancesProhibited: true
     dependencies:
@@ -118,6 +122,7 @@ targets:
       - package: MessageStore
       - package: MessagingCore
       - package: OMEMO
+      - target: XMPPNotificationServiceMac
     settings:
       base:
         PRODUCT_NAME: Haus XMPP
@@ -155,6 +160,40 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         APPLICATION_EXTENSION_API_ONLY: YES
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        MARKETING_VERSION: '0.1.0'
+        CURRENT_PROJECT_VERSION: '1'
+  # The Mac's notification service extension (docs/development/mac-notification-extension.md): the iOS extension's code
+  # under the same App ID, built for macOS with the sandbox entitlements a Mac extension needs. Embedded in HausXMPPMac.
+  # Its Info.plist is the iOS one plus `Subsystems: [EXService_Subsystem]`: without it macOS 27 launches the extension
+  # but never hands it the request, and kills it for a sluggish startup two seconds later.
+  XMPPNotificationServiceMac:
+    type: app-extension
+    platform: macOS
+    deploymentTarget: '26.0'
+    sources:
+      - path: NotificationService
+        excludes:
+          - NotificationService.entitlements
+          - Info.plist
+      - Shared
+      - NotificationServiceMac
+    dependencies:
+      - package: MessageStore
+      - package: MessagingCore
+      - package: OMEMO
+      - package: XMPPProtocol
+      - sdk: Intents.framework
+    settings:
+      base:
+        PRODUCT_NAME: XMPPNotificationService
+        PRODUCT_MODULE_NAME: XMPPNotificationService
+        PRODUCT_BUNDLE_IDENTIFIER: haus.xmpp.ios.notifications
+        CODE_SIGN_ENTITLEMENTS: NotificationServiceMac/NotificationServiceMac.entitlements
+        INFOPLIST_FILE: NotificationServiceMac/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
+        ARCHS: arm64
+        ENABLE_HARDENED_RUNTIME: YES
         MARKETING_VERSION: '0.1.0'
         CURRENT_PROJECT_VERSION: '1'
   HausXMPPLifecycleTests:

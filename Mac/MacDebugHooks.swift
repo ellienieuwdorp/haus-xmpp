@@ -27,6 +27,7 @@ import SwiftUI
 /// - `-haus-unobtrusive`: see `MacUnobtrusive`.
 /// - `-haus-lifecycle-steps "<step>; …"`: a lifecycle scenario after the hooks above (`MacLifecycleDebug`).
 /// - `-haus-log-notifications`: logs the notifications the model would post instead of posting them.
+/// - Push and notification extension checks: see `MacPushProbe`.
 @MainActor enum MacDebugHooks {
     private static let arguments = ProcessInfo.processInfo.arguments
 
@@ -81,6 +82,7 @@ import SwiftUI
                 quit()
             }
         }
+        MacPushProbe.start()
         if has("-haus-dump-menus") {
             Task {
                 try? await Task.sleep(for: .seconds(1))
