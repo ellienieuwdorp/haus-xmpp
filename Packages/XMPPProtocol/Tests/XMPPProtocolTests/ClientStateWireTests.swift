@@ -18,6 +18,30 @@ struct ClientStateWireTests {
         }
     }
 
+    /// Holds the commit that journals the first presence until released, so a test can act while the client is
+    /// inside its bind announcement.
+    private actor HeldPersistence: XMPPStreamManagementPersistence {
+        private var value: XMPPStreamManagementSnapshot?
+        private var held = false
+        private var holding: [CheckedContinuation<Void, Never>] = []
+        private var release: CheckedContinuation<Void, Never>?
+        func load() -> XMPPStreamManagementSnapshot? { value }
+        func save(_ snapshot: XMPPStreamManagementSnapshot, expectedRevision: Int?, acknowledgedMessageIDs: [String]) async throws {
+            guard value?.revision == expectedRevision else { throw XMPPStreamManagementError.invalidState }
+            if !held, snapshot.journal.contains(where: { $0.kind == .presence }) {
+                held = true
+                holding.forEach { $0.resume() }; holding = []
+                await withCheckedContinuation { release = $0 }
+            }
+            value = snapshot
+        }
+        func waitUntilHeld() async {
+            if held { return }
+            await withCheckedContinuation { holding.append($0) }
+        }
+        func resume() { release?.resume(); release = nil }
+    }
+
     private static let since = Date(timeIntervalSince1970: 1_790_000_000)
     private static let active = "<active xmlns='urn:xmpp:csi:0'/>"
     private static let inactive = "<inactive xmlns='urn:xmpp:csi:0'/>"
@@ -213,6 +237,58 @@ struct ClientStateWireTests {
         try await client.setAvailability(.away(since: Self.since), clientActive: true)
         let mark = try await resume(client, on: server, saved: .active)
         #expect(try await announced(client, on: server, since: mark) == Self.active + Self.idle)
+    }
+
+    // MARK: Changes while the stream binds
+
+    /// What AppModel.connect() records before every iPhone connect: the defaults, so the bind is unchanged.
+    @Test func explicitDefaultsBeforeBindingSendPlainPresenceOnly() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.setAvailability(.active, clientActive: true)
+        let mark = try await bindFresh(client, on: server)
+        #expect(try await announced(client, on: server, since: mark) == Self.available)
+    }
+
+    /// A Mac that woke with the screen locked reconnects away; the user unlocks before the bind completes.
+    @Test func aChangeBeforeTheBindCompletesIsWhatTheStreamStartsWith() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.setAvailability(.away(since: Self.since), clientActive: false)
+        try await client.configureStreamManagement(persistence: Persistence(nil))
+        async let online: Void = server.connect(client)
+        try await server.authenticate()
+        let bind = try await server.next()
+        try #require(bind.child("bind", namespace: Self.bindNamespace) != nil)
+        try await client.setAvailability(.active, clientActive: true)
+        try await server.send("<iq type='result' id='\(bind.attributes["id"] ?? "")'><bind xmlns='\(Self.bindNamespace)'><jid>alice@localhost/r</jid></bind></iq>")
+        #expect(try await server.next().name == "enable")
+        let mark = await server.mark()
+        try await server.send("<enabled xmlns='urn:xmpp:sm:3' id='s2' resume='true'/>")
+        try await online
+        #expect(try await announced(client, on: server, since: mark) == Self.available)
+    }
+
+    /// The unlock lands while the bind's own away announcement is being written, when the stream is not online yet
+    /// and the change is only recorded: it goes out right after, before the stream counts as online.
+    @Test func aChangeDuringTheBindAnnouncementFollowsIt() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        let persistence = HeldPersistence()
+        try await client.setAvailability(.away(since: Self.since), clientActive: false)
+        try await client.configureStreamManagement(persistence: persistence)
+        async let online: Void = server.connect(client)
+        try await server.authenticate()
+        let bind = try await server.next()
+        try await server.send("<iq type='result' id='\(bind.attributes["id"] ?? "")'><bind xmlns='\(Self.bindNamespace)'><jid>alice@localhost/r</jid></bind></iq>")
+        #expect(try await server.next().name == "enable")
+        let mark = await server.mark()
+        try await server.send("<enabled xmlns='urn:xmpp:sm:3' id='s2' resume='true'/>")
+        await persistence.waitUntilHeld()
+        try await client.setAvailability(.active, clientActive: true)
+        await persistence.resume()
+        try await online
+        #expect(try await announced(client, on: server, since: mark) == Self.idle + Self.inactive + Self.active + Self.available)
     }
 
     // MARK: A server without CSI

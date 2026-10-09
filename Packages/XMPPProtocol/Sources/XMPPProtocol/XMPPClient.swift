@@ -207,6 +207,8 @@ public actor XMPPClient {
     private var clientActive = true
     /// What the server holds for this session: nil until initial presence; on a resume, what the snapshot recorded.
     private var announced: XMPPAvailability?
+    /// The XEP-0352 state last announced on this stream.
+    private var announcedClientActive = true
     /// Counts emitted events, so the reader can tell whether a stanza produced any.
     private var emittedEvents: UInt64 = 0
     private struct IQRequest {
@@ -861,6 +863,11 @@ public actor XMPPClient {
         // Presence from an earlier build carried other caps: announce once so contacts see the current features.
         announced = resumed && resumeSnapshot?.capabilities == EntityCapabilities.verification ? resumeSnapshot?.availability : nil
         try await announceAvailability(initial: !resumed)
+        // A change made while that announcement was being written found the stream not online yet, so it was only
+        // recorded: it goes out now, before anything else can see the stream online. Never runs when nothing changed.
+        while generation == token, announced != availability || announcedClientActive != clientActive {
+            try await announceAvailability(initial: false)
+        }
         guard generation == token else { throw XMPPClientError.connectionClosed }
         sessionResumed = resumed
         stampWindow = ServerStampWindow(floor: stampFloor)
@@ -876,12 +883,16 @@ public actor XMPPClient {
     /// goes nowhere else, so it is always restated, except `<active/>` on a fresh stream, where it is the default.
     /// `<active/>` goes before presence, so the server stops holding traffic back first; `<inactive/>` goes after it,
     /// which would otherwise let the server hold the presence back.
+    /// The values are read once, before the first write: `announced` is what went out, even if a newer value was
+    /// recorded while it was being written.
     private func announceAvailability(initial: Bool) async throws {
+        let availability = availability, clientActive = clientActive
         let presence = initial || announced != availability
         if clientActive, !initial, csiOffered { try await write(PushNotifications.clientStateXML(active: true)) }
         if presence { try await write(Self.presenceXML(availability)) }
         if !clientActive, csiOffered { try await write(PushNotifications.clientStateXML(active: false)) }
         announced = availability
+        announcedClientActive = clientActive
         if presence { try await streamManagement?.recordAvailability(availability) }
     }
 
@@ -1036,6 +1047,7 @@ public actor XMPPClient {
         guard phase == .online else { return }
         guard csiOffered else { throw XMPPNotificationError.clientStateUnavailable }
         try await write(PushNotifications.clientStateXML(active: active))
+        announcedClientActive = active
     }
 
     public func supportsPushNotifications() async throws -> Bool {
