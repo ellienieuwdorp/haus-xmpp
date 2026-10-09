@@ -39,7 +39,7 @@ struct ResumeLabTests {
         let client = XMPPClient(labCertificateAuthority: try certificateAuthority())
         try await client.configureStreamManagement(persistence: persistence)
         try await client.configureResource(resource)
-        try await client.setAvailability(availability)
+        try await client.setAvailability(availability, clientActive: availability == .active)
         try await client.connect(host: "localhost", port: env["HAUS_LAB_DIRECT_TLS_PORT"].flatMap(UInt16.init) ?? 5223, domain: parts[1], username: parts[0], password: account.password)
         return client
     }
@@ -149,7 +149,7 @@ struct ResumeLabTests {
         let first = try await connect(persistence, resource: resource)
         try await first.sendChatState(.composing, to: "nobody@localhost")
         try await first.sendChatState(.paused, to: "nobody@localhost")
-        try await first.setAvailability(.away(since: Date()))
+        try await first.setAvailability(.away(since: Date()), clientActive: false)
         await first.disconnectAndWait()
         let saved = try #require(await persistence.value)
         #expect(saved.journal.allSatisfy { $0.kind == .iq && $0.xml == nil })

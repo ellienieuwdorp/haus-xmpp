@@ -23,6 +23,9 @@ struct HausXMPPMacApp: App {
             MacSettingsView(model: delegate.model)
                 .themedRoot()
                 .environment(\.appearance, appearance)
+                #if DEBUG
+                .modifier(MacScenePhaseLog(window: "settings"))
+                #endif
         }
     }
 }

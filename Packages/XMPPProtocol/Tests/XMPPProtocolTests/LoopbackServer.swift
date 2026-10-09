@@ -22,6 +22,8 @@ actor LoopbackServer {
     private var frames: [XMLStreamFrame] = []
     private var restartPending = false
     private var ended = false
+    /// Every byte the client wrote, in order, for tests that pin the exact wire text.
+    private var received = Data()
 
     static func start() async throws -> LoopbackServer {
         let (identity, certificate) = try credentials.get()
@@ -83,12 +85,19 @@ actor LoopbackServer {
 
     private func ingest(_ data: Data, ended: Bool) {
         if !data.isEmpty {
+            received.append(data)
             // The client restarts the stream only after it read `<success/>`, so its next bytes open a new one.
             if restartPending { framer = XMLStreamFramer(); restartPending = false }
             do { frames += try framer.feed(data) } catch { self.ended = true }
         }
         if ended { self.ended = true }
     }
+
+    /// How many bytes the client has written so far; pass it to `written(since:)`.
+    func mark() -> Int { received.count }
+
+    /// The client's bytes since `mark`, as text.
+    func written(since mark: Int) -> String { String(decoding: received.suffix(from: mark), as: UTF8.self) }
 
     func send(_ xml: String) async throws {
         guard let connection else { throw Failure(description: "no connection") }
