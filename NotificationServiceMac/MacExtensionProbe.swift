@@ -10,22 +10,16 @@ import UserNotifications
 ///
 /// The app arms it (`-haus-arm-extension-probe suppress|pass`): it saves a random nonce as a data-protection Keychain
 /// item and writes the same nonce, with the mode, to `Debug/extension-probe.json` in the App Group container. The
-/// extension, on every remote request, records what it can reach (the App Group container, the store, the access gate,
-/// the wrapping key, the notification account and the app's nonce item) as one line in
-/// `Debug/extension-probe-results.jsonl`. An armed `suppress` request is then delivered with empty content and nothing
-/// else runs, so the filtering entitlement can be seen to hide it; the arm file is used once. Without an arm file, or in
-/// `pass` mode, the request continues to the normal extension run. Records hold paths, statuses and counts, never an
+/// extension takes the arm file on the next remote request (it is used once) and records what it can reach (the App
+/// Group container, the store, the access gate, the wrapping key, the notification account and the app's nonce item) as
+/// one line in `Debug/extension-probe-results.jsonl`. An armed `suppress` request is then delivered with empty content
+/// and nothing else runs, so the filtering entitlement can be seen to hide it; in `pass` mode the request continues to
+/// the normal extension run. Without an arm file nothing is recorded. Records hold paths, statuses and counts, never an
 /// address, password, key or token.
 enum MacExtensionProbe {
     enum Mode: String, Codable { case suppress, pass }
 
     struct Arm: Codable { let mode: Mode; let nonce: String; let armedAt: Date }
-
-    /// The request and its handler, carried into the probe's task.
-    struct Delivery: @unchecked Sendable {
-        let request: UNNotificationRequest
-        let handler: (UNNotificationContent) -> Void
-    }
 
     static let keychainService = "haus.xmpp.extension-probe"
     private static let log = Logger(subsystem: "haus.xmpp.ios", category: "extension-probe")
@@ -70,8 +64,16 @@ enum MacExtensionProbe {
 
     // MARK: Extension side
 
-    /// Records what this process can reach and returns the armed mode, if any (taking the arm file).
-    static func record(_ request: UNNotificationRequest) async -> Mode? {
+    /// Takes the arm file, if the app left one: nil means this request is not probed.
+    static func takeArm() -> Arm? {
+        guard let file = try? armFile, let data = try? Data(contentsOf: file) else { return nil }
+        try? FileManager.default.removeItem(at: file)
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(Arm.self, from: data)
+    }
+
+    /// Records what this process can reach for an armed request and returns the armed mode.
+    static func record(_ request: UNNotificationRequest, arm: Arm) async -> Mode {
         var fields: [String: String] = [
             "at": ISO8601DateFormatter().string(from: Date()),
             "process": Bundle.main.bundleIdentifier ?? "?",
@@ -81,18 +83,11 @@ enum MacExtensionProbe {
             "request.body": request.content.body == "New message" ? "gateway generic" : "\(request.content.body.count) characters",
             "request.thread": request.content.threadIdentifier.isEmpty ? "none" : "set"
         ]
-        var arm: Arm?
         do {
             let container = try SharedStorage.groupContainer()
             fields["group container"] = "ok \(container.path)"
-            let file = try armFile
-            if let data = try? Data(contentsOf: file) {
-                let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-                arm = try? decoder.decode(Arm.self, from: data)
-                try? FileManager.default.removeItem(at: file)
-            }
         } catch { fields["group container"] = "FAILED \(error)" }
-        fields["armed"] = arm.map { "\($0.mode.rawValue), \(Int(Date().timeIntervalSince($0.armedAt))) s ago" } ?? "no"
+        fields["armed"] = "\(arm.mode.rawValue), \(Int(Date().timeIntervalSince(arm.armedAt))) s ago"
 
         do {
             let root = try await SharedStorage.directory(migrate: false)
@@ -131,11 +126,10 @@ enum MacExtensionProbe {
         let status = SecItemCopyMatching(lookup as CFDictionary, &result)
         if status == errSecSuccess, let data = result as? Data {
             let nonce = String(decoding: data, as: UTF8.self)
-            fields["app nonce item"] = arm.map { $0.nonce == nonce ? "read, matches the arm file" : "read, does NOT match the arm file" }
-                ?? "read (not armed)"
+            fields["app nonce item"] = arm.nonce == nonce ? "read, matches the arm file" : "read, does NOT match the arm file"
         } else { fields["app nonce item"] = status == errSecItemNotFound ? "none" : "FAILED \(status)" }
 
-        fields["delivers"] = arm?.mode == .suppress ? "empty content (suppress)" : "normal run"
+        fields["delivers"] = arm.mode == .suppress ? "empty content (suppress)" : "normal run"
         if let line = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]),
            let file = try? resultsFile {
             if let handle = try? FileHandle(forWritingTo: file) {
@@ -145,7 +139,7 @@ enum MacExtensionProbe {
             }
             log.notice("probe \(String(decoding: line, as: UTF8.self), privacy: .public)")
         }
-        return arm?.mode
+        return arm.mode
     }
 
     private static func accessGroup(service: String, account: String) -> String {

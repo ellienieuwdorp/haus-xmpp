@@ -13,23 +13,21 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     private var deliveries: [UUID: RemoteDelivery] = [:]
 
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
-        #if DEBUG && os(macOS)
-        // The Mac extension's storage probe (NotificationServiceMac/MacExtensionProbe.swift); never in a release build.
-        let probed = MacExtensionProbe.Delivery(request: request, handler: contentHandler)
-        Task {
-            if await MacExtensionProbe.record(probed.request) == .suppress { probed.handler(UNMutableNotificationContent()); return }
-            self.run(probed.request, contentHandler: probed.handler)
-        }
-        #else
-        run(request, contentHandler: contentHandler)
-        #endif
-    }
-
-    private func run(_ request: UNNotificationRequest, contentHandler: @escaping (UNNotificationContent) -> Void) {
         let ticket = UUID()
         let delivery = RemoteDelivery(request: request, handler: contentHandler)
         lock.withLock { deliveries[ticket] = delivery }
         Task {
+            #if DEBUG && os(macOS)
+            // The Mac extension's storage probe (NotificationServiceMac/MacExtensionProbe.swift), only when the app armed
+            // it; never in a release build. The delivery is registered first, so an expiry during the probe still answers.
+            if let arm = MacExtensionProbe.takeArm() {
+                if await MacExtensionProbe.record(delivery.probedRequest, arm: arm) == .suppress { delivery.suppress() }
+                guard !delivery.isFinished else {
+                    _ = lock.withLock { deliveries.removeValue(forKey: ticket) }
+                    return
+                }
+            }
+            #endif
             let outcome = await Self.coordinator.deliver(ticket: ticket)
             delivery.finish(outcome)
             _ = lock.withLock { deliveries.removeValue(forKey: ticket) }
@@ -83,6 +81,23 @@ private final class RemoteDelivery: @unchecked Sendable {
         callback(content)
     }
 }
+
+#if DEBUG && os(macOS)
+/// For the Mac extension's storage probe only.
+extension RemoteDelivery {
+    var probedRequest: UNNotificationRequest { request }
+    var isFinished: Bool { lock.withLock { handler == nil } }
+
+    /// Empty content, so the filtering entitlement hides the remote alert.
+    func suppress() {
+        guard let callback = lock.withLock({ () -> ((UNNotificationContent) -> Void)? in
+            defer { handler = nil }
+            return handler
+        }) else { return }
+        callback(UNMutableNotificationContent())
+    }
+}
+#endif
 
 /// One run in this process: load the protected account, catch up under the lease, post, settle, and record counts.
 private enum ExtensionRun {
