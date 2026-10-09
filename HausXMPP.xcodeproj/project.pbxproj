@@ -45,6 +45,7 @@
 		2306BADF98012E71E113755E /* TimelineScrollPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03474B6E9D0B48EE5C4FC942 /* TimelineScrollPolicy.swift */; };
 		25322A9E1808973855DE6B10 /* KeyRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429A77E75FD76C077B26B4D8 /* KeyRecoveryView.swift */; };
 		266F17B43A7421C54AAA3CFC /* CoalescedReloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5F90485C4526281BAF76DD6 /* CoalescedReloadTests.swift */; };
+		267CEC631E56DBC1EBE98E9B /* MacLifecycleDebug.swift in Sources */ = {isa = PBXBuildFile; fileRef = C330E74F87D4C44D0C45570E /* MacLifecycleDebug.swift */; };
 		2851A08BBCAE4361516AB371 /* PushService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 676414A9C32CD62D47B379B7 /* PushService.swift */; };
 		2B10F6DBD7A3501384360B82 /* ChatRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4053E5EBC94DF0A0EB297556 /* ChatRoute.swift */; };
 		2B6F6EE21CB1902B7965ADC6 /* AttachmentKeyboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2899AB2C75D3ED5F81F7097D /* AttachmentKeyboard.swift */; };
@@ -386,6 +387,7 @@
 		C0177CE11C01DFEB2F32246D /* TimelineCellSemanticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineCellSemanticsTests.swift; sourceTree = "<group>"; };
 		C173CF664784D46CDDD2530B /* NotificationAccountTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationAccountTests.swift; sourceTree = "<group>"; };
 		C1855DE3A5B4667032083D97 /* AttachmentSendLabUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentSendLabUITests.swift; sourceTree = "<group>"; };
+		C330E74F87D4C44D0C45570E /* MacLifecycleDebug.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLifecycleDebug.swift; sourceTree = "<group>"; };
 		C54E2339C1602A48D70E197E /* ReactionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReactionUITests.swift; sourceTree = "<group>"; };
 		CB0B97AF3403EEDD27A52DA9 /* LastSeen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LastSeen.swift; sourceTree = "<group>"; };
 		CC30C3C5ADBCDBC64B174C60 /* HausXMPPLifecycleTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = HausXMPPLifecycleTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -491,6 +493,7 @@
 				E5E34D508A44BE27F0D182FD /* MacDebugHooks.swift */,
 				9E8B694210C22F9137AC0711 /* MacImageEncoding.swift */,
 				F7D7B0F60E83D75595B85518 /* MacLifecycle.swift */,
+				C330E74F87D4C44D0C45570E /* MacLifecycleDebug.swift */,
 				3DC7D740F62B973A8BC6B7E0 /* MacRootView.swift */,
 				E370F3025375AED97F4C8529 /* MacSettingsView.swift */,
 				7C1A42A483252B5B191A14F0 /* MacUnobtrusive.swift */,
@@ -1138,6 +1141,7 @@
 				0039E3C2A70F59E9C7A04141 /* MacDebugHooks.swift in Sources */,
 				7EF13805E692A99C6CE1BF26 /* MacImageEncoding.swift in Sources */,
 				0D04946520F10F50787A02A8 /* MacLifecycle.swift in Sources */,
+				267CEC631E56DBC1EBE98E9B /* MacLifecycleDebug.swift in Sources */,
 				9553722566FB8DACF9AC6DBD /* MacRootView.swift in Sources */,
 				658DBFA69EBDFC4C303E4C0E /* MacSettingsView.swift in Sources */,
 				495805F5E3BB258A5204B52F /* MacUnobtrusive.swift in Sources */,

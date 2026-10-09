@@ -25,6 +25,8 @@ import SwiftUI
 ///   run starts as a new install would (`scripts/mac-app.sh run --fresh-store`). The shared App Group store is left
 ///   alone.
 /// - `-haus-unobtrusive`: see `MacUnobtrusive`.
+/// - `-haus-lifecycle-steps "<step>; …"`: a lifecycle scenario after the hooks above (`MacLifecycleDebug`).
+/// - `-haus-log-notifications`: logs the notifications the model would post instead of posting them.
 @MainActor enum MacDebugHooks {
     private static let arguments = ProcessInfo.processInfo.arguments
 
@@ -64,7 +66,7 @@ import SwiftUI
         log("fresh store: session \(id)")
     }
 
-    static func start(model: AppModel, window: MacWindowState) {
+    static func start(model: AppModel, window: MacWindowState, lifecycle: MacLifecycle) {
         // An earlier build wrote relative capture directories into the container; take them out again.
         if sandboxed {
             for flag in ["-haus-capture", "-haus-capture-frames"] {
@@ -120,6 +122,9 @@ import SwiftUI
                 let main = NSApp.windows.filter { $0.identifier?.rawValue.hasPrefix(MacAppDelegate.mainWindowID) == true }
                 log("closing \(main.count) main window(s)")
                 main.forEach { $0.performClose(nil) }
+            }
+            if let steps = value(after: "-haus-lifecycle-steps") {
+                await MacLifecycleDebug.run(steps, lifecycle: lifecycle, model: model, window: window)
             }
             // Layout, avatar loads and the sheet's presentation settle.
             try? await Task.sleep(for: .seconds(value(after: "-haus-capture-delay").flatMap(Double.init) ?? 1.5))
@@ -329,9 +334,18 @@ import SwiftUI
         while !condition(), clock.now < end { try? await Task.sleep(for: .milliseconds(100)) }
     }
 
+    /// One `HAUS` line, stamped with the UTC time so it lines up with a lab peer's and the server's logs.
     static func log(_ text: String) {
-        FileHandle.standardOutput.write(Data("HAUS \(text)\n".utf8))
+        FileHandle.standardOutput.write(Data("HAUS \(stamp.string(from: Date())) \(text)\n".utf8))
     }
+
+    private static let stamp: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "HH:mm:ss.SSS"
+        return formatter
+    }()
 }
 
 /// Opens the Settings window when `-haus-settings` asks for it; Settings is opened through the environment, so this

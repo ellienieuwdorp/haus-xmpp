@@ -3791,6 +3791,10 @@ extension AppModel: NotificationActionEnvironment {
 
     /// The extension's poster, with the app's pre-scaled notification avatars, so banners match the extension's requests.
     private func notificationPoster(account: String) -> any NotificationPosting {
+        #if DEBUG && os(macOS)
+        // `-haus-log-notifications`: a lab run logs what would be posted, without asking for permission.
+        if let poster = MacDebugNotificationLog.poster { return poster }
+        #endif
         let root = storageRoot
         return UserNotificationPoster(avatarData: { hash in
             guard let root else { return nil }
@@ -3814,6 +3818,9 @@ extension AppModel: NotificationActionEnvironment {
             #else
             // App Clips' ephemeral authorization does not exist on macOS.
             self.mayPostNotifications = [.authorized, .provisional].contains(status)
+            #if DEBUG
+            if MacDebugNotificationLog.poster != nil { self.mayPostNotifications = true }
+            #endif
             #endif
             // Turned off in iOS Settings while away; turning it back on is picked up by the next connection.
             if status == .denied, [.on, .settingUp].contains(self.pushStatus) { self.pushStatus = .notAllowed }
@@ -3831,6 +3838,16 @@ extension AppModel: NotificationActionEnvironment {
         let held = await store?.holdsTransportOwnership
         let stored = held.map { $0 ? "held" : "free" } ?? "closed"
         return "lease store \(stored) model \(hasTransportOwnership ? "held" : "free"), session \(session.label), quiescing \(quiescing ? 1 : 0)"
+    }
+
+    /// Holds one UI crypto operation open for `duration`, so a quiesce that starts meanwhile cannot finish before it:
+    /// the Mac's simulated missed sleep deadline.
+    func debugHoldEncryptionOperation(for duration: Duration) {
+        activeEncryptionOperations += 1
+        Task { [weak self] in
+            try? await Task.sleep(for: duration)
+            self?.activeEncryptionOperations -= 1
+        }
     }
     #endif
 }

@@ -24,6 +24,7 @@ struct MacRootView: View {
         } message: { Text(model.error ?? "") }
         #if DEBUG
         .modifier(MacDebugPresentation(window: window))
+        .modifier(MacScenePhaseLog(window: "main"))
         .background(MacUnobtrusive.Anchor())
         #endif
     }

@@ -36,10 +36,13 @@ import SwiftUI
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         PushRegistration.shared.installNotificationDelegate()
+        #if DEBUG
+        MacLifecycleDebug.attach(to: lifecycle)
+        #endif
         lifecycle.install()
         Task { await model.prepare() }
         #if DEBUG
-        MacDebugHooks.start(model: model, window: window)
+        MacDebugHooks.start(model: model, window: window, lifecycle: lifecycle)
         #endif
     }
 
