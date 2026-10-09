@@ -105,6 +105,8 @@ targets:
           - App.entitlements
       - Shared
       - Mac
+      # Debug-only: the app arms and reads the extension's storage probe.
+      - NotificationServiceMac/MacExtensionProbe.swift
     info:
       path: Mac/Info.plist
       properties:

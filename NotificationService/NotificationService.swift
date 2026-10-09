@@ -13,6 +13,19 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     private var deliveries: [UUID: RemoteDelivery] = [:]
 
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
+        #if DEBUG && os(macOS)
+        // The Mac extension's storage probe (NotificationServiceMac/MacExtensionProbe.swift); never in a release build.
+        let probed = MacExtensionProbe.Delivery(request: request, handler: contentHandler)
+        Task {
+            if await MacExtensionProbe.record(probed.request) == .suppress { probed.handler(UNMutableNotificationContent()); return }
+            self.run(probed.request, contentHandler: probed.handler)
+        }
+        #else
+        run(request, contentHandler: contentHandler)
+        #endif
+    }
+
+    private func run(_ request: UNNotificationRequest, contentHandler: @escaping (UNNotificationContent) -> Void) {
         let ticket = UUID()
         let delivery = RemoteDelivery(request: request, handler: contentHandler)
         lock.withLock { deliveries[ticket] = delivery }

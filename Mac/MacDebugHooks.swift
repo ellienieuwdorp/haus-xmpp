@@ -25,6 +25,7 @@ import SwiftUI
 ///   run starts as a new install would (`scripts/mac-app.sh run --fresh-store`). The shared App Group store is left
 ///   alone.
 /// - `-haus-unobtrusive`: see `MacUnobtrusive`.
+/// - Push and notification extension checks: see `MacPushProbe`.
 @MainActor enum MacDebugHooks {
     private static let arguments = ProcessInfo.processInfo.arguments
 
@@ -71,6 +72,7 @@ import SwiftUI
                 NSApp.terminate(nil)
             }
         }
+        MacPushProbe.start()
         if has("-haus-dump-menus") {
             Task {
                 try? await Task.sleep(for: .seconds(1))
