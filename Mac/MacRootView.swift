@@ -134,5 +134,6 @@ struct MacChatInspector: View {
                     }
                 }
         }
+        .labelStyle(.listRow)
     }
 }

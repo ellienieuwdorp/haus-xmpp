@@ -14,11 +14,13 @@ struct MacSettingsView: View {
                 NavigationStack {
                     SettingsView(model: model, showingConnection: $showingConnection)
                 }
+                .labelStyle(.listRow)
             }
             Tab("Appearance", systemImage: "paintpalette", value: .appearance) {
                 NavigationStack {
                     AppearanceView()
                 }
+                .labelStyle(.listRow)
             }
         }
         .toggleStyle(.switch)
@@ -33,4 +35,19 @@ struct MacSettingsView: View {
         .onAppear { if let value = MacDebugHooks.value(after: "-haus-settings"), let pane = Pane(rawValue: value) { self.pane = pane } }
         #endif
     }
+}
+
+/// A list row's `Label` on the Mac: its icon (the shared screens' coloured tiles) and title 12 points apart, as the
+/// iPhone's rows space them. The Mac's own list label set the tiles flush against their titles.
+struct ListRowLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 12) {
+            configuration.icon
+            configuration.title
+        }
+    }
+}
+
+extension LabelStyle where Self == ListRowLabelStyle {
+    static var listRow: ListRowLabelStyle { ListRowLabelStyle() }
 }
