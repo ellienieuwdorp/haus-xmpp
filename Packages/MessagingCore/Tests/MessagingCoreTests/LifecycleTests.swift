@@ -17,10 +17,11 @@ private enum Legacy: Equatable {
         return calls
     }
 
-    /// On: return-to-front work and CSI active on the client. Off: away presence while connected, then the quiesce.
+    /// On: return-to-front work and CSI active on the client. Off: away presence while connected, which carried CSI
+    /// inactive (now stated explicitly, with the same bytes: ClientStateWireTests), then the quiesce.
     static func effects(_ active: Bool) -> LifecycleTransition {
         active ? LifecycleTransition(resumesTransport: true, clientActive: true)
-            : LifecycleTransition(quiescesTransport: true, presence: .away)
+            : LifecycleTransition(quiescesTransport: true, clientActive: false, presence: .away)
     }
 }
 
@@ -37,7 +38,9 @@ private struct Harness {
         for update in driver.updates(for: event) {
             switch update {
             case .start(let signals): applied = signals
-            case .interactionEnded: calls.append(.leftForeground)
+            case .interactionEnded(let at):
+                #expect(at == nil, "iOS records the moment the scene leaves .active, as before")
+                calls.append(.leftForeground)
             case .change(let signals, let activated):
                 let transition = LifecycleTransition.between(applied, signals, activated: activated)
                 applied = signals
@@ -131,7 +134,7 @@ struct LifecycleTransitionTests {
     }
 
     @Test func transportOffQuiescesAfterAwayPresenceWhateverTheUserDoes() {
-        let off = LifecycleTransition(quiescesTransport: true, presence: .away)
+        let off = LifecycleTransition(quiescesTransport: true, clientActive: false, presence: .away)
         #expect(LifecycleTransition.between(.inFront, .away) == off)
         // Quit or sleep with the window open and the user at the machine: the hibernating session still reads away.
         #expect(LifecycleTransition.between(.inFront, signals(transport: false)) == off)
@@ -168,15 +171,26 @@ struct LifecycleTransitionTests {
         #expect(LifecycleTransition.between(elsewhere, .inFront) == LifecycleTransition())
     }
 
-    @Test func presenceFollowsTheUserWhileTheStreamStays() {
+    @Test func presenceFollowsTheUserWhileTheStreamStaysAndCarriesTheWindowsCSI() {
         let idle = signals(window: false, reading: false, present: false)
         let hidden = signals(window: false, reading: false)
-        #expect(LifecycleTransition.between(hidden, idle) == LifecycleTransition(presence: .away))
-        // Available presence carries CSI active on the wire, so a hidden window restates inactive after it.
+        #expect(LifecycleTransition.between(hidden, idle) == LifecycleTransition(clientActive: false, presence: .away))
         #expect(LifecycleTransition.between(idle, hidden) == LifecycleTransition(clientActive: false, presence: .available))
-        // Idle with the window visible: away presence carries CSI inactive, so CSI active is restated.
+        // Idle with the window visible: away presence, and CSI stays active.
         #expect(LifecycleTransition.between(.inFront, signals(present: false)) == LifecycleTransition(clientActive: true, presence: .away))
-        #expect(LifecycleTransition.between(signals(present: false), .inFront) == LifecycleTransition(presence: .available))
+        #expect(LifecycleTransition.between(signals(present: false), .inFront) == LifecycleTransition(clientActive: true, presence: .available))
+        // The window hides as the user goes idle (the screen locks): one presence, with CSI inactive.
+        #expect(LifecycleTransition.between(.inFront, idle) == LifecycleTransition(clientActive: false, presence: .away))
+    }
+
+    @Test func aNewStreamBindsWithTheCurrentSignals() {
+        #expect(LifecycleSignals.inFront.streamBinding == StreamBinding(presence: .available, clientActive: true))
+        // A Mac launched with no window while the user is at it, and one nobody is at.
+        #expect(signals(window: false, reading: false).streamBinding == StreamBinding(presence: .available, clientActive: false))
+        #expect(signals(window: false, reading: false, present: false).streamBinding == StreamBinding(presence: .away, clientActive: false))
+        #expect(signals(reading: false, present: false).streamBinding == StreamBinding(presence: .away, clientActive: true))
+        // Going away: the quiesce closes the stream and says away itself; iOS's race keeps the defaults.
+        #expect(LifecycleSignals.away.streamBinding == StreamBinding(presence: .available, clientActive: true))
     }
 
     @Test func onlyTheOpenChatIsReadAndOnlyWhileReadable() {
