@@ -88,7 +88,11 @@ import SwiftUI
             case "unhide": NSApp.unhideWithoutActivation()
             case "minimise": mainWindow?.miniaturize(nil)
             case "close": mainWindow?.performClose(nil)
-            case "open": window.openWindow?(id: MacAppDelegate.mainWindowID)
+            case "open":
+                window.openWindow?(id: MacAppDelegate.mainWindowID)
+                // An unobtrusive window posts no key or occlusion change when it comes back, so tell the driver.
+                try? await Task.sleep(for: .milliseconds(200))
+                lifecycle.windowsChanged()
             case "lock": lifecycle.screenLocked(true)
             case "unlock": lifecycle.screenLocked(false)
             case "idle": lifecycle.simulatedLastInput = Date().addingTimeInterval(-(Double(argument) ?? 6) * 60)
