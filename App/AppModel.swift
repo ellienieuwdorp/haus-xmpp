@@ -838,8 +838,9 @@ final class AppModel {
             } else {
                 guard self.transportWanted else { return }
                 // Only when the stream stays up and the user comes or goes; never on iOS, where both follow the
-                // transport. The window's CSI state goes with it.
-                if let presence = transition.presence, let client = self.client, self.isConnected {
+                // transport. The window's CSI state goes with it. A stream still binding records both and announces
+                // them once online (`XMPPClient.setAvailability`), so a change made mid-connect is not lost.
+                if let presence = transition.presence, let client = self.client {
                     try? await client.setAvailability(presence == .available ? .active : self.awayAvailability,
                                                       clientActive: transition.clientActive ?? signals.windowVisible)
                 }
