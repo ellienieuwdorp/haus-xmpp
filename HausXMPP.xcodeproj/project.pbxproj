@@ -66,6 +66,7 @@
 		4252187DDA2F36C261ED55C1 /* schema-23.sql in Resources */ = {isa = PBXBuildFile; fileRef = 344DD29BDD09CBA5CC731137 /* schema-23.sql */; };
 		439AA2B03241D3866DF90D86 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0E44F860DD39928F7313B2 /* AppModel.swift */; };
 		46B3F57898EAFB33D54852D2 /* DeliveredNotificationCleaner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0947D89080553653EC6040CF /* DeliveredNotificationCleaner.swift */; };
+		495805F5E3BB258A5204B52F /* MacUnobtrusive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1A42A483252B5B191A14F0 /* MacUnobtrusive.swift */; };
 		49DA94B7059AA5366789D503 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = E89DDE5B5B265C75D0C06C29 /* README.md */; };
 		4AFD18FF078C33AD827D4A9A /* Typing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EA646B2D3BEC5BEF134632A /* Typing.swift */; };
 		4BC45A96C471D73C719C628B /* EncryptionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B16B2BDD3A5B351589430FC /* EncryptionUITests.swift */; };
@@ -353,6 +354,7 @@
 		7867D06A08D4C485E2B463D5 /* ConversationSearchBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSearchBar.swift; sourceTree = "<group>"; };
 		79318867472966FE7C1CE331 /* ConversationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationUITests.swift; sourceTree = "<group>"; };
 		7A6DCB9F398CA0479AED16B7 /* SyncPhaseTimings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncPhaseTimings.swift; sourceTree = "<group>"; };
+		7C1A42A483252B5B191A14F0 /* MacUnobtrusive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacUnobtrusive.swift; sourceTree = "<group>"; };
 		7EE5082F6FC8DC6C22351DAF /* ChatNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatNotifications.swift; sourceTree = "<group>"; };
 		7EFCD06FF2B22E21D6446586 /* MessageActionMenuTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageActionMenuTests.swift; sourceTree = "<group>"; };
 		82A37AE4DB1C65BDCB4BD991 /* OMEMO */ = {isa = PBXFileReference; lastKnownFileType = folder; name = OMEMO; path = Packages/OMEMO; sourceTree = SOURCE_ROOT; };
@@ -488,6 +490,7 @@
 				9E8B694210C22F9137AC0711 /* MacImageEncoding.swift */,
 				3DC7D740F62B973A8BC6B7E0 /* MacRootView.swift */,
 				E370F3025375AED97F4C8529 /* MacSettingsView.swift */,
+				7C1A42A483252B5B191A14F0 /* MacUnobtrusive.swift */,
 			);
 			path = Mac;
 			sourceTree = "<group>";
@@ -1133,6 +1136,7 @@
 				7EF13805E692A99C6CE1BF26 /* MacImageEncoding.swift in Sources */,
 				9553722566FB8DACF9AC6DBD /* MacRootView.swift in Sources */,
 				658DBFA69EBDFC4C303E4C0E /* MacSettingsView.swift in Sources */,
+				495805F5E3BB258A5204B52F /* MacUnobtrusive.swift in Sources */,
 				C1CEF8D084CE9B92F4F8C347 /* MessageActionMenu.swift in Sources */,
 				AA75A0E2BD837B7FF7533A91 /* MessageCopy.swift in Sources */,
 				0E7A1E0164B8F3D0CF972C0A /* NotificationAccessGate.swift in Sources */,

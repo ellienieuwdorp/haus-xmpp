@@ -24,6 +24,7 @@ struct MacRootView: View {
         } message: { Text(model.error ?? "") }
         #if DEBUG
         .modifier(MacDebugPresentation(window: window))
+        .background(MacUnobtrusive.Anchor())
         #endif
     }
 

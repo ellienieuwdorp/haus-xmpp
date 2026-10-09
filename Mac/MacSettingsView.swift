@@ -29,6 +29,7 @@ struct MacSettingsView: View {
                 .themedRoot()
         }
         #if DEBUG
+        .background(MacUnobtrusive.Anchor())
         .onAppear { if let value = MacDebugHooks.value(after: "-haus-settings"), let pane = Pane(rawValue: value) { self.pane = pane } }
         #endif
     }

@@ -21,6 +21,7 @@ import SwiftUI
 ///   `-lab-ui-test` and `HAUS_LAB_CA_DER` for the lab's certificate authority, as the iPhone's lab tests do).
 /// - `-haus-sign-out`: signs the saved account out after launch, to leave a lab run's Mac clean.
 /// - `-haus-dump-menus`: the main menu's items and shortcuts.
+/// - `-haus-unobtrusive`: see `MacUnobtrusive`.
 @MainActor enum MacDebugHooks {
     private static let arguments = ProcessInfo.processInfo.arguments
 

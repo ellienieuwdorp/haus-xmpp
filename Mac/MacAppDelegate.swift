@@ -25,6 +25,15 @@ import SwiftUI
     let window = MacWindowState()
     private var observers: [any NSObjectProtocol] = []
 
+    #if DEBUG
+    override init() {
+        MacUnobtrusive.setPolicy()
+        super.init()
+    }
+
+    func applicationWillFinishLaunching(_ notification: Notification) { MacUnobtrusive.install() }
+    #endif
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         PushRegistration.shared.installNotificationDelegate()
         observeActivation()
