@@ -31,7 +31,8 @@ import MessagingCore
     /// Debug runs keep every window off-screen, where AppKit reports none as key or visible: `MacLifecycleDebug` sets
     /// this to model the user's focus instead. The window's own state (closed, minimised, the app hidden) stays real.
     var simulatedActive: Bool? { didSet { windowsChanged() } }
-    /// `idle <minutes>`: the input clock reads at least this much since the given moment.
+    /// `idle <minutes>`: the input clock reads the time since this moment instead of the real last input, so `idle 0`
+    /// means input just now even while the Mac's user is away; `input` sets it back to nil (the real clock).
     var simulatedLastInput: Date? { didSet { apply(.idleChecked) } }
     /// Each applied event and the signals it produced, for the debug log.
     var onApply: ((String, MacLifecycleDriver, [LifecycleUpdate]) -> Void)?
@@ -156,7 +157,8 @@ import MessagingCore
     private func secondsSinceInput() -> TimeInterval {
         var seconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
         #if DEBUG
-        if let simulatedLastInput { seconds = max(seconds, Date().timeIntervalSince(simulatedLastInput)) }
+        // In place of the real clock, so a check can also mean "input just now" while the Mac's user is away.
+        if let simulatedLastInput { seconds = Date().timeIntervalSince(simulatedLastInput) }
         #endif
         return seconds
     }

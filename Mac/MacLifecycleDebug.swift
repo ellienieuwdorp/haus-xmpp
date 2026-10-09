@@ -12,8 +12,9 @@ import SwiftUI
 /// (an unobtrusive window is never key and always occluded). Closing, minimising and hiding are real.
 ///
 /// Steps: `wait <seconds>`, `activate` / `deactivate` (simulated focus; the first one turns simulation on), `real`
-/// (AppKit's own focus again), `hide`, `unhide`, `minimise`, `close`, `open`, `lock`, `unlock`, `idle <minutes>`,
-/// `input`, `sleep` (a fake acknowledgement), `sleep-miss` (a UI crypto operation held past the sleep deadline first),
+/// (AppKit's own focus again), `hide`, `unhide`, `minimise`, `close`, `open`, `lock`, `unlock`, `idle <minutes>` (the last
+/// input that long ago, in place of the real input clock; `idle 0` is input just now), `input` (the real clock again),
+/// `sleep` (a fake acknowledgement), `sleep-miss` (a UI crypto operation held past the sleep deadline first),
 /// `wake`, `select <chat>`, `accept <jid>` (accepts that lab contact's undecided devices, as the Devices page would),
 /// `draft <text>` (the open chat's composer changed), `report` (lease and session), `quit`.
 @MainActor enum MacLifecycleDebug {
