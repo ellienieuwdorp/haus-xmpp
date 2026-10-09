@@ -51,10 +51,10 @@ import SwiftUI
     private func observeActivation() {
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.model.scenePhaseChanged(from: .inactive, to: .active) }
+            MainActor.assumeIsolated { self?.model.applyLifecycle([.change(.inFront, activated: true)]) }
         })
         observers.append(center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.model.scenePhaseChanged(from: .active, to: .inactive) }
+            MainActor.assumeIsolated { self?.model.applyLifecycle([.interactionEnded(at: nil)]) }
         })
     }
 

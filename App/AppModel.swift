@@ -136,9 +136,23 @@ final class AppModel {
     @ObservationIgnored private var sessionAccount: NotificationAccount?
     @ObservationIgnored private var lifecycleTask: Task<Void, Never>?
     /// The four lifecycle signals (docs/development/lifecycle-signals.md) as last applied. Only `applyLifecycle`
-    /// changes them, from `lifecycleDriver`'s updates.
-    @ObservationIgnored private var lifecycle = LifecycleSignals.inFront
-    @ObservationIgnored private var lifecycleDriver = SceneLifecycleDriver()
+    /// changes them, from the updates of the platform's driver, which the process owns (iOS: `SceneLifecycle` in
+    /// `HausXMPPApp`; the Mac: `MacLifecycle`, owned by the app delegate).
+    @ObservationIgnored private(set) var lifecycle = LifecycleSignals.inFront
+    /// Set once by the lifecycle owner before `prepare()`, and called at the start of preparation: the updates the
+    /// launch starts with (on iOS, `.start(.away)` after a launch into the background).
+    @ObservationIgnored var lifecycleAtLaunch: @MainActor () -> [LifecycleUpdate] = { [] }
+    /// Where the attention-dependent guards look: iOS keeps the transport (the scene) for each, the Mac its own signal.
+    private static let attention: AttentionRules = {
+        #if os(macOS)
+        .desktop
+        #else
+        .phone
+        #endif
+    }()
+    /// Bumped each time the user starts reading the open chat (Mac only): the conversation then marks its newest
+    /// visible message, which on iOS cells do as they appear (critique G3).
+    private(set) var readingStarts = 0
     /// This process should own the transport. With `quiescing`, the guard of every piece of transport, crypto and
     /// setup work, so a background transition blocks new work at once.
     private var transportWanted: Bool { lifecycle.transportWanted }
@@ -198,7 +212,14 @@ final class AppModel {
     /// One connection's setup after `.online` (`ConnectionSetup`), off the event loop; joined like `drainTask`.
     @ObservationIgnored private var setupTask: Task<Void, Never>?
     /// Non-nil while a connection's archive walk runs after `.ready`; the Chats bar keeps its spinner.
-    private(set) var catchUp: CatchUpProgress?
+    private(set) var catchUp: CatchUpProgress? {
+        didSet {
+            if catchUp == nil { catchUpActivity?.end(); catchUpActivity = nil }
+            else if catchUpActivity == nil { catchUpActivity = BackgroundActivity.burst("Catch up with the archive") }
+        }
+    }
+    /// Mac only: keeps App Nap off the archive walk while it runs (nil on iOS).
+    @ObservationIgnored private var catchUpActivity: BackgroundActivity?
     var isCatchingUp: Bool { catchUp != nil }
     /// Numbers-only timings of the current connection's setup, for the lab measurement.
     private static let syncLog = Logger(subsystem: "haus.xmpp.ios", category: "sync")
@@ -224,7 +245,7 @@ final class AppModel {
     @ObservationIgnored private var client: XMPPClient?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var openChatID: String? {
-        didSet { syncOpenChatTyping(); syncOpenChatLastSeen(); ForegroundNotificationState.shared.openChatID = openChatID }
+        didSet { syncOpenChatTyping(); syncOpenChatLastSeen(); syncForegroundNotificationChat() }
     }
     @ObservationIgnored private var encryptionDetailsChatID: String?
     /// The chat whose Devices footer a held send's reason belongs to: the open conversation, or the chat whose
@@ -239,7 +260,6 @@ final class AppModel {
     @ObservationIgnored private var groupRejoinsFinished: UUID?
     /// `prepare()` runs once; a notification action on a background launch joins it.
     @ObservationIgnored private var preparation: Task<Void, Never>?
-    @ObservationIgnored private var backgroundLaunchObserver: (any NSObjectProtocol)?
     /// Notification permission as last read; foreground banners are posted only with it.
     @ObservationIgnored private var mayPostNotifications = false
     /// The transport a Reply or Mark as Read took; nil when no action runs.
@@ -320,21 +340,9 @@ final class AppModel {
     }
 
     private func prepareOnce() async {
-        // A launch into the background (a notification action) must not connect: the scene is not in front. Its
-        // first activation then counts as a return to the foreground even if the scene phase was never seen to change.
-        let launchedInBackground = PlatformApplication.isInBackground
-        applyLifecycle(lifecycleDriver.updates(for: .launched(inBackground: launchedInBackground)))
-        if launchedInBackground {
-            backgroundLaunchObserver = NotificationCenter.default.addObserver(forName: PlatformApplication.didBecomeActiveNotification,
-                                                                              object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    if let observer = self.backgroundLaunchObserver { NotificationCenter.default.removeObserver(observer) }
-                    self.backgroundLaunchObserver = nil
-                    self.applyLifecycle(self.lifecycleDriver.updates(for: .becameActive))
-                }
-            }
-        }
+        // On iOS a launch into the background (a notification action) must not connect: the scene is not in front.
+        // The owner reads that here, before anything opens, as `prepare()` always did.
+        applyLifecycle(lifecycleAtLaunch())
         refreshNotificationPermission()
         if testSessionID == nil {
             let tokens = PushRegistration.unsolicitedTokens()
@@ -597,6 +605,10 @@ final class AppModel {
             guard generation == token else { return false }
             try await connection.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
             try await connection.configureResource(SharedSession.resource(accountID: account, defaults: sessionDefaults))
+            // The stream binds with the user's state as of now: on iOS always available and active (the defaults); a
+            // Mac launched with no window, or with nobody at it, binds inactive or away.
+            let binding = lifecycle.streamBinding
+            try await connection.setAvailability(binding.presence == .available ? .active : awayAvailability, clientActive: binding.clientActive)
             guard generation == token else { return false }
             let connectedSession = try await connection.connect(route: endpoint.route, domain: endpoint.domain, username: username,
                                                                 password: password, requireSCRAM: endpoint.requiresSCRAM)
@@ -769,25 +781,44 @@ final class AppModel {
             domain: replacement.domain, username: replacement.username, password: replacement.password, push: replacement.push ?? previous.push)
     }
 
-    /// `HausXMPPApp` forwards the app-level scene phase here.
-    func scenePhaseChanged(from previous: SceneLifecycleDriver.Phase, to phase: SceneLifecycleDriver.Phase) {
-        applyLifecycle(lifecycleDriver.updates(for: .phaseChanged(from: previous, to: phase)))
-    }
-
-    private func applyLifecycle(_ updates: [LifecycleUpdate]) {
+    /// The platform's lifecycle owner hands its driver's updates here, in order; nothing else changes the signals.
+    func applyLifecycle(_ updates: [LifecycleUpdate]) {
         for update in updates {
             switch update {
-            case .start(let signals): lifecycle = signals
-            case .interactionEnded: recordLastInteraction()
+            case .start(let signals):
+                lifecycle = signals
+                syncForegroundNotificationChat()
+            case .interactionEnded(let at): recordLastInteraction(at: at ?? Date())
             case .change(let signals, let activated): changeLifecycle(to: signals, activated: activated)
             }
         }
     }
 
+    /// Returns once every lifecycle transition queued so far, and any queued behind them meanwhile, has run: the Mac
+    /// waits for it before acknowledging sleep or replying to a quit.
+    func lifecycleSettled() async {
+        while let task = lifecycleTask {
+            await task.value
+            if lifecycleTask == task { return }
+        }
+    }
+
     /// Serialize lifecycle transitions; never release the lease with a suspended writer alive.
     private func changeLifecycle(to signals: LifecycleSignals, activated: Bool) {
-        let transition = LifecycleTransition.between(lifecycle, signals, activated: activated)
+        let old = lifecycle
+        let transition = LifecycleTransition.between(old, signals, activated: activated)
+        // A Mac user who stops reading leaves no composing or paused state behind; checked under the old signals, and
+        // sent before a quiesce's away presence and disconnect.
+        var typingEnd: Task<Void, Never>?
+        if Self.attention.endsChatState(from: old, to: signals), let typing = ownTyping {
+            sendOwnTyping(ownTyping?.sender.left(), to: typing.chat)
+            ownTyping = nil
+            ownTypingPause?.cancel()
+            typingEnd = ownTypingSend
+        }
         lifecycle = signals
+        syncForegroundNotificationChat()
+        if Self.attention.startsReading(from: old, to: signals), let chatID = openChatID { startedReading(chatID) }
         // The extension may set the icon badge while the app is away: the next chat-list load sets it again.
         appBadge = nil
         if transition.quiescesTransport { quiescing = true }
@@ -799,15 +830,18 @@ final class AppModel {
                 let task = BackgroundActivity("Finish encrypted synchronization")
                 // The session hibernates (up to days with push): it must read as away, not "Online", until it resumes.
                 if transition.presence == .away, let client = self.client, self.isConnected {
-                    try? await client.setAvailability(self.awayAvailability, clientActive: false)
+                    await typingEnd?.value
+                    try? await client.setAvailability(self.awayAvailability, clientActive: transition.clientActive ?? false)
                 }
                 await self.quiesceTransport()
                 task.end()
             } else {
                 guard self.transportWanted else { return }
-                // Only when the stream stays up and the user comes or goes; never on iOS, where both follow the transport.
+                // Only when the stream stays up and the user comes or goes; never on iOS, where both follow the
+                // transport. The window's CSI state goes with it.
                 if let presence = transition.presence, let client = self.client, self.isConnected {
-                    try? await client.setAvailability(presence == .available ? .active : self.awayAvailability, clientActive: presence == .available)
+                    try? await client.setAvailability(presence == .available ? .active : self.awayAvailability,
+                                                      clientActive: transition.clientActive ?? signals.windowVisible)
                 }
                 if transition.resumesTransport {
                     self.returnedToForegroundForUpgrade()
@@ -815,9 +849,28 @@ final class AppModel {
                     self.reconnection.retryNow()
                     self.reconcile()
                 }
-                if let active = transition.clientActive, let client = self.client { try? await client.setClientActive(active) }
+                if transition.presence == nil, let active = transition.clientActive, let client = self.client {
+                    try? await client.setClientActive(active)
+                }
                 if transition.resumesTransport { await self.refresh() }
             }
+        }
+    }
+
+    /// `willPresent` hides banners for this chat (`ForegroundNotificationState`).
+    private func syncForegroundNotificationChat() {
+        ForegroundNotificationState.shared.openChatID = Self.attention.bannerHiddenChat(lifecycle, openChatID: openChatID)
+    }
+
+    /// Mac only (`AttentionRules.startsReading`): the open chat is read from now on, so its notifications have done
+    /// their job, and the conversation marks its newest visible message (`readingStarts`).
+    private func startedReading(_ chatID: String) {
+        readingStarts += 1
+        guard !isDemo else { return }
+        let account = accountID
+        Task { await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID) }
+        if transportWanted, hasTransportOwnership, !quiescing, let store {
+            Task { try? await store.dismissReactionNotifications(accountID: account, chatID: chatID) }
         }
     }
 
@@ -1047,12 +1100,12 @@ final class AppModel {
         await openStorage()
     }
 
-    /// The user stopped interacting (the scene left `.active`): from now on away presence reports this as the last
-    /// time the user was here.
-    private func recordLastInteraction() {
+    /// The user stopped interacting (iOS: the scene left `.active`, now; the Mac: the last input before going idle,
+    /// locking, sleeping or quitting): from now on away presence reports this as the last time the user was here.
+    private func recordLastInteraction(at moment: Date) {
         // Nothing the previous build left is rewritten, or added to, before its snapshot exists.
         guard store != nil else { return }
-        SharedSession.recordLeftForeground(defaults: sessionDefaults)
+        SharedSession.recordLeftForeground(moment, defaults: sessionDefaults)
     }
 
     /// How a session this app runs away from the foreground (going to the background, a notification action) presents.
@@ -1095,7 +1148,8 @@ final class AppModel {
     /// Right after the lease is ours: an extension run that held it may have posted for the chat already on screen
     /// (its candidates were read before the chat opened). Every such run is over now, so what it posted is delivered.
     private func dismissOpenChatNotifications(store: MessageStore, account: String) async {
-        guard let chatID = openChatID, !isDemo, accountID == account, hasTransportOwnership else { return }
+        guard let chatID = openChatID, Self.attention.clearsNotifications(of: chatID, lifecycle, openChatID: openChatID),
+              !isDemo, accountID == account, hasTransportOwnership else { return }
         try? await store.dismissReactionNotifications(accountID: account, chatID: chatID)
         await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID)
     }
@@ -1725,7 +1779,8 @@ final class AppModel {
                     // The bubble turns to Not sent with Retry; a message (not a reaction or receipt) also says why, once.
                     guard rejected.messageID != nil else { refreshSoon(); break }
                     await refresh()
-                    guard generation == token, transportWanted else { return }
+                    // Only where it can be seen: iOS in front; a Mac with a window on screen.
+                    guard generation == token, Self.attention.showsDeliveryAlert(lifecycle) else { return }
                     let name = chats.first { $0.id == rejected.chatID }?.displayTitle ?? AppModel.displayName(for: rejected.chatID, title: nil)
                     self.error = "A message to \(name) wasn't delivered. \(RejectionCopy.reason(rejected.rejection, isGroup: isGroup(rejected.chatID))) You can retry it from the message."
                 case .acknowledged, .ignored: break
@@ -2393,7 +2448,9 @@ final class AppModel {
         let joinedGroups = Set(groupChats.filter { $0.value.joined }.map(\.key))
         let account = accountID
         let token = generation
+        let activity = BackgroundActivity.burst("Send the outbox")
         drainTask = Task { [weak self] in
+            defer { activity?.end() }
             do {
                 let drain = OutboxDrain(account: account, client: client, encryption: encryption, store: store,
                                         sender: outboxSender, joinedGroups: joinedGroups)
@@ -2485,12 +2542,14 @@ final class AppModel {
 
     func openChat(_ chatID: String) async {
         prepareChat(chatID)
-        // The chat is on screen: its delivered notifications have done their job.
-        if !isDemo { let account = accountID; Task { await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID) } }
+        // The chat is on screen: its delivered notifications have done their job. On a Mac only once it is read; the
+        // start of reading clears them then (`startedReading`).
+        let onScreen = Self.attention.clearsNotifications(of: chatID, lifecycle, openChatID: openChatID)
+        if !isDemo, onScreen { let account = accountID; Task { await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID) } }
         // Reactions have no read state: an opened chat shows them, so waiting reaction alerts go (plan D8). Only under the
         // transport lease: without it an extension run may be posting them right now, and the lease acquisition repeats
         // this for the open chat once that run is over (`dismissOpenChatNotifications`).
-        if transportWanted, hasTransportOwnership, !quiescing, let store {
+        if onScreen, transportWanted, hasTransportOwnership, !quiescing, let store {
             let account = accountID
             Task { try? await store.dismissReactionNotifications(accountID: account, chatID: chatID) }
         }
@@ -2885,7 +2944,8 @@ final class AppModel {
 
     /// Only a listed chat we could send a message to right now; never the sample data, and not while sending is paused for review.
     private func canSendChatState(to chatID: String) -> Bool {
-        !isDemo && session.isReady && hasTransportOwnership && transportWanted && !quiescing && chatCapabilities(chatID).encryption != .needsReview
+        !isDemo && session.isReady && hasTransportOwnership && Self.attention.sendsChatStates(lifecycle) && !quiescing
+            && chatCapabilities(chatID).encryption != .needsReview
             && chatID != accountID && chats.contains(where: { $0.id == chatID }) && canSend(to: chatID)
             && (isGroup(chatID) || !isLabAccount || chatID.hasSuffix("@" + accountDomain))
     }
@@ -3730,7 +3790,7 @@ extension AppModel: NotificationActionEnvironment {
     }
 
     /// The extension's poster, with the app's pre-scaled notification avatars, so banners match the extension's requests.
-    private func notificationPoster(account: String) -> UserNotificationPoster {
+    private func notificationPoster(account: String) -> any NotificationPosting {
         let root = storageRoot
         return UserNotificationPoster(avatarData: { hash in
             guard let root else { return nil }

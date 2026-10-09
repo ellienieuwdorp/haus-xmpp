@@ -240,6 +240,17 @@ extension ToolbarItemPlacement {
         #endif
     }
 
+    /// Mac only: an activity for work that should finish promptly once started but needs no protection from
+    /// suspension (archive catch-up, the outbox drain). nil on iOS, where the scene's own lifetime covers that work
+    /// and no background task is begun for it.
+    static func burst(_ name: String) -> BackgroundActivity? {
+        #if os(macOS)
+        BackgroundActivity(name)
+        #else
+        nil
+        #endif
+    }
+
     /// Ends the activity; later calls do nothing.
     func end() {
         #if os(iOS)
