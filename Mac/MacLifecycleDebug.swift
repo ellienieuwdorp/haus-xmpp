@@ -80,7 +80,10 @@ import SwiftUI
             case "activate": lifecycle.simulatedActive = true
             case "deactivate": lifecycle.simulatedActive = false
             case "real": lifecycle.simulatedActive = nil
-            case "hide": NSApp.hide(nil)
+            case "hide":
+                // A real hide deactivates the app, and `unhide` (without activation) does not bring it back.
+                if lifecycle.simulatedActive != nil { lifecycle.simulatedActive = false }
+                NSApp.hide(nil)
             case "unhide": NSApp.unhideWithoutActivation()
             case "minimise": mainWindow?.miniaturize(nil)
             case "close": mainWindow?.performClose(nil)
