@@ -10,8 +10,10 @@ struct MacConversationView: View {
     /// Opens the chat's details, where its devices are reviewed.
     var showDetails: () -> Void = {}
     @State private var nearBottom = true
-    /// Rows laid out in the viewport now, so the start of reading marks the newest one the user can see.
-    @State private var visibleRows: Set<String> = []
+    /// Rows laid out in the viewport now (LazyVStack's prefetch may add a row just past the edge), so the start of
+    /// reading marks the newest one the user can see. Not observed: rows scrolling in and out must not rebuild the
+    /// whole timeline, and only the `readingStarts` change reads it.
+    @State private var visibleRows = VisibleRows()
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -66,10 +68,10 @@ struct MacConversationView: View {
                         MacTimelineRow(row: row, isGroup: presenter.isGroup)
                             .id(row.message.id)
                             .onAppear {
-                                visibleRows.insert(row.message.id)
+                                visibleRows.ids.insert(row.message.id)
                                 markIfReading(row.message.id, presenter: presenter)
                             }
-                            .onDisappear { visibleRows.remove(row.message.id) }
+                            .onDisappear { visibleRows.ids.remove(row.message.id) }
                     }
                     if let typing {
                         MacTypingRow(typing: typing).id(TimelineItems.typingID)
@@ -93,7 +95,7 @@ struct MacConversationView: View {
             // The user started reading this chat (the app active, its window key and visible, the screen unlocked,
             // the user not idle): what was already on screen counts as seen now (critique G3).
             .onChange(of: model.readingStarts) { _, _ in
-                guard let shown = rows.last(where: { visibleRows.contains($0.message.id) && presenter.marksDisplayed($0.message.id) }) else { return }
+                guard let shown = rows.last(where: { visibleRows.ids.contains($0.message.id) && presenter.marksDisplayed($0.message.id) }) else { return }
                 markIfReading(shown.message.id, presenter: presenter)
             }
         }
@@ -264,4 +266,9 @@ private struct MacTypingRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(typing.accessibilityLabel)
     }
+}
+
+/// A plain reference holder, so changing it never invalidates the view that owns it.
+@MainActor private final class VisibleRows {
+    var ids: Set<String> = []
 }
