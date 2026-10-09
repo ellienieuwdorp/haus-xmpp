@@ -798,14 +798,16 @@ final class AppModel {
             if transition.quiescesTransport {
                 let task = BackgroundActivity("Finish encrypted synchronization")
                 // The session hibernates (up to days with push): it must read as away, not "Online", until it resumes.
-                if transition.presence == .away, let client = self.client, self.isConnected { try? await client.setAvailability(self.awayAvailability) }
+                if transition.presence == .away, let client = self.client, self.isConnected {
+                    try? await client.setAvailability(self.awayAvailability, clientActive: false)
+                }
                 await self.quiesceTransport()
                 task.end()
             } else {
                 guard self.transportWanted else { return }
                 // Only when the stream stays up and the user comes or goes; never on iOS, where both follow the transport.
                 if let presence = transition.presence, let client = self.client, self.isConnected {
-                    try? await client.setAvailability(presence == .available ? .active : self.awayAvailability)
+                    try? await client.setAvailability(presence == .available ? .active : self.awayAvailability, clientActive: presence == .available)
                 }
                 if transition.resumesTransport {
                     self.returnedToForegroundForUpgrade()
@@ -3496,7 +3498,7 @@ extension AppModel: NotificationActionEnvironment {
             try await client.configureStreamManagement(persistence: StreamPersistence(store: store, accountID: account, encryption: encryption))
             try await client.configureResource(SharedSession.resource(accountID: account, defaults: sessionDefaults))
             // The user is not in front: the action's session must not make them look online.
-            try await client.setAvailability(awayAvailability)
+            try await client.setAvailability(awayAvailability, clientActive: false)
             session.client = client
             // From here an abort closes this client; one that came before it was set is honoured here.
             guard !session.isOver else { throw CancellationError() }

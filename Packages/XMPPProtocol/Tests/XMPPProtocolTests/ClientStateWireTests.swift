@@ -3,8 +3,9 @@ import Testing
 @testable import XMPPProtocol
 
 /// The exact presence and XEP-0352 client-state text the iPhone app, its notification extension and its notification
-/// actions write, for every way they announce the user. Pinned byte for byte, so separating client state from presence
-/// can be shown to leave the iOS wire unchanged.
+/// actions write, for every way they announce the user. The iOS cases were pinned byte for byte on the client from
+/// before client state was separated from presence (they passed unchanged there, with `.away` implying `<inactive/>`),
+/// so they show the iOS wire did not change. The desktop cases at the end pair the two the other ways.
 @Suite(.serialized)
 struct ClientStateWireTests {
     private actor Persistence: XMPPStreamManagementPersistence {
@@ -89,18 +90,18 @@ struct ClientStateWireTests {
         _ = try await bindFresh(client, on: server)
         try await drain(server, ["presence"])
         let mark = await server.mark()
-        try await client.setAvailability(.away(since: Self.since))
+        try await client.setAvailability(.away(since: Self.since), clientActive: false)
         #expect(try await announced(client, on: server, since: mark) == Self.idle + Self.inactive)
     }
 
     @Test func returningToTheFrontSendsActiveThenPlainPresence() async throws {
         let server = try await LoopbackServer.start()
         let client = server.client()
-        try await client.setAvailability(.away(since: Self.since))
+        try await client.setAvailability(.away(since: Self.since), clientActive: false)
         _ = try await bindFresh(client, on: server)
         try await drain(server, ["presence", "inactive"])
         let mark = await server.mark()
-        try await client.setAvailability(.active)
+        try await client.setAvailability(.active, clientActive: true)
         #expect(try await announced(client, on: server, since: mark) == Self.active + Self.available)
     }
 
@@ -120,7 +121,7 @@ struct ClientStateWireTests {
     @Test func aFreshStreamAwaySendsIdlePresenceThenInactive() async throws {
         let server = try await LoopbackServer.start()
         let client = server.client()
-        try await client.setAvailability(.away(since: Self.since))
+        try await client.setAvailability(.away(since: Self.since), clientActive: false)
         let mark = try await bindFresh(client, on: server)
         #expect(try await announced(client, on: server, since: mark) == Self.idle + Self.inactive)
     }
@@ -128,7 +129,7 @@ struct ClientStateWireTests {
     @Test func aFreshStreamAwayWithoutLastSeenOmitsTheIdleTime() async throws {
         let server = try await LoopbackServer.start()
         let client = server.client()
-        try await client.setAvailability(.away(since: nil))
+        try await client.setAvailability(.away(since: nil), clientActive: false)
         let mark = try await bindFresh(client, on: server)
         #expect(try await announced(client, on: server, since: mark) == Self.available + Self.inactive)
     }
@@ -138,7 +139,7 @@ struct ClientStateWireTests {
     @Test func resumingAwayOverAwayRestatesOnlyInactive() async throws {
         let server = try await LoopbackServer.start()
         let client = server.client()
-        try await client.setAvailability(.away(since: Self.since))
+        try await client.setAvailability(.away(since: Self.since), clientActive: false)
         let mark = try await resume(client, on: server, saved: .away(since: Self.since))
         #expect(try await announced(client, on: server, since: mark) == Self.inactive)
     }
@@ -146,7 +147,7 @@ struct ClientStateWireTests {
     @Test func resumingAwayOverActiveSendsIdlePresenceThenInactive() async throws {
         let server = try await LoopbackServer.start()
         let client = server.client()
-        try await client.setAvailability(.away(since: Self.since))
+        try await client.setAvailability(.away(since: Self.since), clientActive: false)
         let mark = try await resume(client, on: server, saved: .active)
         #expect(try await announced(client, on: server, since: mark) == Self.idle + Self.inactive)
     }
@@ -165,17 +166,66 @@ struct ClientStateWireTests {
         #expect(try await announced(client, on: server, since: mark) == Self.active)
     }
 
+    // MARK: The desktop's other pairings
+
+    @Test func idleWithAWindowOnScreenSendsActiveThenIdlePresence() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        _ = try await bindFresh(client, on: server)
+        try await drain(server, ["presence"])
+        let mark = await server.mark()
+        try await client.setAvailability(.away(since: Self.since), clientActive: true)
+        #expect(try await announced(client, on: server, since: mark) == Self.active + Self.idle)
+    }
+
+    @Test func presentWithNoWindowSendsPlainPresenceThenInactive() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.setAvailability(.away(since: Self.since), clientActive: false)
+        _ = try await bindFresh(client, on: server)
+        try await drain(server, ["presence", "inactive"])
+        let mark = await server.mark()
+        try await client.setAvailability(.active, clientActive: false)
+        #expect(try await announced(client, on: server, since: mark) == Self.available + Self.inactive)
+    }
+
+    /// A Mac launched with no window binds inactive while the user is at the machine.
+    @Test func aFreshStreamWithNoWindowBindsAvailableThenInactive() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.setAvailability(.active, clientActive: false)
+        let mark = try await bindFresh(client, on: server)
+        #expect(try await announced(client, on: server, since: mark) == Self.available + Self.inactive)
+    }
+
+    /// The window hid while the stream was still binding: the new stream starts with it.
+    @Test func clientStateSetBeforeBindingIsWhatTheStreamStartsWith() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.setClientActive(false)
+        let mark = try await bindFresh(client, on: server)
+        #expect(try await announced(client, on: server, since: mark) == Self.available + Self.inactive)
+    }
+
+    @Test func resumingIdleWithAWindowRestatesActiveAndSendsTheIdlePresence() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.setAvailability(.away(since: Self.since), clientActive: true)
+        let mark = try await resume(client, on: server, saved: .active)
+        #expect(try await announced(client, on: server, since: mark) == Self.active + Self.idle)
+    }
+
     // MARK: A server without CSI
 
     @Test func withoutClientStateIndicationOnlyPresenceIsWritten() async throws {
         let server = try await LoopbackServer.start()
         let client = server.client()
-        try await client.setAvailability(.away(since: Self.since))
+        try await client.setAvailability(.away(since: Self.since), clientActive: false)
         let mark = try await bindFresh(client, on: server, features: Self.smOnly)
         try await drain(server, ["presence"])
         await #expect(throws: XMPPNotificationError.clientStateUnavailable) { try await client.setClientActive(true) }
         let back = await server.mark()
-        try await client.setAvailability(.active)
+        try await client.setAvailability(.active, clientActive: true)
         #expect(try await announced(client, on: server, since: back) == Self.available)
         #expect(await server.written(since: mark).hasPrefix(Self.idle + Self.available))
     }
