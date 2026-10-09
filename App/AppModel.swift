@@ -3783,7 +3783,7 @@ extension AppModel: NotificationActionEnvironment {
     fileprivate func presentForegroundNotifications(store: MessageStore, account: String) async throws {
         let started = ContinuousClock.now
         defer { syncTimings.add(.notify, since: started) }
-        let presents = mayPostNotifications && testSessionID == nil && !isDemo && session.isReady && catchUp == nil
+        let presents = mayPostNotifications && postsNotificationsInThisSession && !isDemo && session.isReady && catchUp == nil
             && sessionAccount?.accountID == account
         let posted = try await NotificationPresenter(posting: notificationPoster(account: account))
             .presentForeground(store: store, accountID: account, readingChatID: lifecycle.readingChat(openChatID: openChatID), presents: presents)
@@ -3803,8 +3803,17 @@ extension AppModel: NotificationActionEnvironment {
         })
     }
 
+    /// A test session posts nothing, except a DEBUG Mac run that only logs its notifications (`-haus-log-notifications`):
+    /// banner checks can then use a private test store and leave the shared App Group store alone.
+    private var postsNotificationsInThisSession: Bool {
+        #if DEBUG && os(macOS)
+        if MacDebugNotificationLog.poster != nil { return true }
+        #endif
+        return testSessionID == nil
+    }
+
     fileprivate func refreshNotificationPermission() {
-        guard testSessionID == nil else { return }
+        guard postsNotificationsInThisSession else { return }
         Task { [weak self] in
             #if DEBUG
             // Simulator lab runs only: the lab account has no staging push, which is what normally asks.
