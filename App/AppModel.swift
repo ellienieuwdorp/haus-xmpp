@@ -3823,6 +3823,16 @@ extension AppModel: NotificationActionEnvironment {
     private nonisolated static func notificationAuthorization() async -> UNAuthorizationStatus {
         await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
+
+    #if DEBUG
+    /// For the Mac's lifecycle checks (`MacLifecycleDebug`): whether this process holds the transport lease, by the
+    /// store's own account and by the model's.
+    func debugLeaseReport() async -> String {
+        let held = await store?.holdsTransportOwnership
+        let stored = held.map { $0 ? "held" : "free" } ?? "closed"
+        return "lease store \(stored) model \(hasTransportOwnership ? "held" : "free"), session \(session.label), quiescing \(quiescing ? 1 : 0)"
+    }
+    #endif
 }
 
 /// Where a launch stands with the previous version's data. Every state but `none` shows a blocking screen.

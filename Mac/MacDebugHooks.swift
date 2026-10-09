@@ -35,6 +35,14 @@ import SwiftUI
 
     static func has(_ flag: String) -> Bool { arguments.contains(flag) }
 
+    /// Quits as the menu's Quit does. `NSApp.terminate` called inside a main-actor job would keep that job, and with it
+    /// the main queue, waiting in AppKit's loop for `reply(toApplicationShouldTerminate:)`, so the quiesce that sends
+    /// the reply could never run (seen: the app hung until killed). The menu's Quit comes from an event, outside any
+    /// job; this asks for it from the run loop the same way.
+    static func quit() {
+        NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
+    }
+
     /// From `applicationWillFinishLaunching`, before any window exists and before the model opens its store.
     static func prepareLaunch() {
         MacUnobtrusive.install()
@@ -68,7 +76,7 @@ import SwiftUI
                 try? await Task.sleep(for: .seconds(seconds))
                 log("quit after \(seconds) s; windows \(NSApp.windows.filter(\.isVisible).map { $0.identifier?.rawValue ?? $0.title }), "
                     + "Dock badge \(NSApp.dockTile.badgeLabel ?? "none"), connected \(model.session.isReady)")
-                NSApp.terminate(nil)
+                quit()
             }
         }
         if has("-haus-dump-menus") {

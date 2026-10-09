@@ -9,9 +9,9 @@ struct MacConversationView: View {
     let chatID: String
     /// Opens the chat's details, where its devices are reviewed.
     var showDetails: () -> Void = {}
-    /// The window is key and the app is active, the closest this phase gets to "the user is reading this chat".
-    @Environment(\.appearsActive) private var appearsActive
     @State private var nearBottom = true
+    /// Rows laid out in the viewport now, so the start of reading marks the newest one the user can see.
+    @State private var visibleRows: Set<String> = []
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -65,7 +65,11 @@ struct MacConversationView: View {
                     ForEach(rows, id: \.message.id) { row in
                         MacTimelineRow(row: row, isGroup: presenter.isGroup)
                             .id(row.message.id)
-                            .onAppear { markIfReading(row.message.id, presenter: presenter) }
+                            .onAppear {
+                                visibleRows.insert(row.message.id)
+                                markIfReading(row.message.id, presenter: presenter)
+                            }
+                            .onDisappear { visibleRows.remove(row.message.id) }
                     }
                     if let typing {
                         MacTypingRow(typing: typing).id(TimelineItems.typingID)
@@ -86,17 +90,20 @@ struct MacConversationView: View {
                 let target = typing == nil ? tail : TimelineItems.typingID
                 if let target { proxy.scrollTo(target, anchor: .bottom) }
             }
-            .onChange(of: appearsActive) { _, active in
-                guard active, nearBottom, let tail else { return }
-                markIfReading(tail, presenter: presenter)
+            // The user started reading this chat (the app active, its window key and visible, the screen unlocked,
+            // the user not idle): what was already on screen counts as seen now (critique G3).
+            .onChange(of: model.readingStarts) { _, _ in
+                guard let shown = rows.last(where: { visibleRows.contains($0.message.id) && presenter.marksDisplayed($0.message.id) }) else { return }
+                markIfReading(shown.message.id, presenter: presenter)
             }
         }
     }
 
-    /// The newest received message marks the chat read when it shows while the window is the user's focus. The
-    /// model checks the reading signal as well.
+    /// The newest received message marks the chat read when it shows. The model marks it only while the user reads
+    /// this chat (`LifecycleSignals.readsOpenChat`, from `MacLifecycle`), so a row appearing in a window behind other
+    /// apps marks nothing; the start of reading marks it then.
     private func markIfReading(_ id: String, presenter: ConversationPresenter) {
-        guard appearsActive, presenter.marksDisplayed(id) else { return }
+        guard presenter.marksDisplayed(id) else { return }
         Task { await model.markDisplayed(id) }
     }
 }

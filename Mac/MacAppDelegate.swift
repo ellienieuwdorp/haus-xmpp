@@ -16,14 +16,14 @@ import SwiftUI
     @ObservationIgnored var openWindow: OpenWindowAction?
 }
 
-/// The process's side of the Mac app: it owns the model, so the connection outlives the window, and it turns
-/// application events into the model's lifecycle.
+/// The process's side of the Mac app: it owns the model, so the connection outlives the window, and its lifecycle
+/// owner (`MacLifecycle`), so application, window, power and idle events reach the model once per process.
 @MainActor final class MacAppDelegate: NSObject, NSApplicationDelegate {
     static let mainWindowID = "main"
 
     let model = AppModel()
     let window = MacWindowState()
-    private var observers: [any NSObjectProtocol] = []
+    private(set) lazy var lifecycle = MacLifecycle(model: model)
 
     #if DEBUG
     override init() {
@@ -36,30 +36,18 @@ import SwiftUI
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         PushRegistration.shared.installNotificationDelegate()
-        observeActivation()
+        lifecycle.install()
         Task { await model.prepare() }
         #if DEBUG
         MacDebugHooks.start(model: model, window: window)
         #endif
     }
 
-    /// Phase 1 stand-in for the Mac lifecycle driver (lifecycle-signals.md, "Left for the Mac"): the transport stays
-    /// wanted for as long as the process runs. Activating the app counts as an iOS activation (reconnect now, refresh),
-    /// and leaving it records the last-seen time, as an iOS scene going `.inactive` does. Nothing here turns the
-    /// transport off; quitting and sleeping without the bounded quiesce, and reading only while a window is key, are
-    /// for the Mac lifecycle work.
-    private func observeActivation() {
-        let center = NotificationCenter.default
-        observers.append(center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.model.applyLifecycle([.change(.inFront, activated: true)]) }
-        })
-        observers.append(center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.model.applyLifecycle([.interactionEnded(at: nil)]) }
-        })
-    }
-
     /// The app stays running, and connected, with no window open.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// Quit, log out and shut down: the transport quiesces first (a final `<a/>`), bounded, then the app goes.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { lifecycle.shouldTerminate() }
 
     /// The Dock icon (or opening the app again) with no window on screen brings the main window back.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
