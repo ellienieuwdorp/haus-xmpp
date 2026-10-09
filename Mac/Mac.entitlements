@@ -7,4 +7,5 @@
 <key>com.apple.security.application-groups</key><array><string>group.haus.xmpp.ios</string></array>
 <key>keychain-access-groups</key><array><string>$(AppIdentifierPrefix)haus.xmpp.ios</string></array>
 <key>com.apple.developer.aps-environment</key><string>development</string>
+<key>com.apple.developer.usernotifications.communication</key><true/>
 </dict></plist>
