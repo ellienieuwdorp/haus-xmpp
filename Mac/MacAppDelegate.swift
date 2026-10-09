@@ -31,7 +31,7 @@ import SwiftUI
         super.init()
     }
 
-    func applicationWillFinishLaunching(_ notification: Notification) { MacUnobtrusive.install() }
+    func applicationWillFinishLaunching(_ notification: Notification) { MacDebugHooks.prepareLaunch() }
     #endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {

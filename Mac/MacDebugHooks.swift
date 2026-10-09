@@ -21,6 +21,9 @@ import SwiftUI
 ///   `-lab-ui-test` and `HAUS_LAB_CA_DER` for the lab's certificate authority, as the iPhone's lab tests do).
 /// - `-haus-sign-out`: signs the saved account out after launch, to leave a lab run's Mac clean.
 /// - `-haus-dump-menus`: the main menu's items and shortcuts.
+/// - `-haus-fresh-store`: with `XMPP_UI_TEST_STORE` set, empties that session's store and preferences at launch, so a
+///   run starts as a new install would (`scripts/mac-app.sh run --fresh-store`). The shared App Group store is left
+///   alone.
 /// - `-haus-unobtrusive`: see `MacUnobtrusive`.
 @MainActor enum MacDebugHooks {
     private static let arguments = ProcessInfo.processInfo.arguments
@@ -31,6 +34,27 @@ import SwiftUI
     }
 
     static func has(_ flag: String) -> Bool { arguments.contains(flag) }
+
+    /// From `applicationWillFinishLaunching`, before any window exists and before the model opens its store.
+    static func prepareLaunch() {
+        MacUnobtrusive.install()
+        if has("-haus-fresh-store") { emptyTestStore() }
+    }
+
+    /// The UI test session's own store (`SharedStorage.directory(testSessionID:)`) and preferences suite.
+    private static func emptyTestStore() {
+        guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"], let id = UUID(uuidString: value)?.uuidString,
+              let support = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false) else {
+            log("fresh store: XMPP_UI_TEST_STORE is not a session ID; nothing emptied")
+            return
+        }
+        let directory = support.appending(path: "Messaging/UITests/" + id, directoryHint: .isDirectory)
+        if FileManager.default.fileExists(atPath: directory.path) {
+            do { try FileManager.default.removeItem(at: directory) } catch { log("fresh store: could not empty the session's store: \(error)") }
+        }
+        UserDefaults.standard.removePersistentDomain(forName: "haus.xmpp.uitest." + id)
+        log("fresh store: session \(id)")
+    }
 
     static func start(model: AppModel, window: MacWindowState) {
         // An earlier build wrote relative capture directories into the container; take them out again.
