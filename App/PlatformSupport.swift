@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 #if os(iOS)
 import UIKit
 #else
@@ -192,6 +193,16 @@ extension ToolbarItemPlacement {
         URL(string: UIApplication.openNotificationSettingsURLString)
         #else
         URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=" + (Bundle.main.bundleIdentifier ?? ""))
+        #endif
+    }
+
+    /// The unread badge on the app's icon. iOS sets it through the notification centre, which needs badge permission;
+    /// the Mac sets its Dock tile, which needs none (and the Mac asks for no notification permission yet).
+    static func setBadgeCount(_ count: Int) async {
+        #if os(iOS)
+        try? await UNUserNotificationCenter.current().setBadgeCount(count)
+        #else
+        NSApp.dockTile.badgeLabel = count > 0 ? String(count) : nil
         #endif
     }
 

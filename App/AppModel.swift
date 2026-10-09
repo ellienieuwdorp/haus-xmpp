@@ -3351,7 +3351,7 @@ final class AppModel {
     private func setAppBadge(_ count: Int) {
         guard appBadge != count else { return }
         appBadge = count
-        Task { try? await UNUserNotificationCenter.current().setBadgeCount(count) }
+        Task { await PlatformApplication.setBadgeCount(count) }
     }
 }
 
