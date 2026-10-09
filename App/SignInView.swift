@@ -70,8 +70,8 @@ struct SignInView: View {
                 Section {
                     row("Address") {
                         TextField("name@example.org", text: $address)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
-                            .keyboardType(.emailAddress)
+                            .noAutocapitalization().autocorrectionDisabled()
+                            .keyboard(.emailAddress)
                             .textContentType(.username)
                             .accessibilityIdentifier("labUsername")
                     }
@@ -91,8 +91,8 @@ struct SignInView: View {
                     DisclosureGroup("Advanced", isExpanded: $showingAdvanced) {
                         row("Server") {
                             TextField("Automatic", text: $server)
-                                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                                .keyboardType(.URL)
+                                .noAutocapitalization().autocorrectionDisabled()
+                                .keyboard(.URL)
                                 .accessibilityIdentifier("serverHost")
                         }
                         if !serverHost.isEmpty {
@@ -107,7 +107,7 @@ struct SignInView: View {
                             }
                             row("Port") {
                                 TextField(String(security.defaultPort), text: $port)
-                                    .keyboardType(.numberPad)
+                                    .keyboard(.numberPad)
                                     .accessibilityIdentifier("serverPort")
                             }
                         }

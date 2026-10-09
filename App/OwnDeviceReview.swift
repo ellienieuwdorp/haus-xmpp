@@ -162,7 +162,7 @@ struct OwnDeviceReviewSheet: View {
                 ForEach(shown) { candidate in device(candidate) }
             }
             .navigationTitle("Your Devices")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { dismiss() }.labelStyle(.iconOnly) }
             }

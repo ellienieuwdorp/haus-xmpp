@@ -1,5 +1,7 @@
 import Foundation
+#if os(iOS)
 import UIKit
+#endif
 import UserNotifications
 import MessageStore
 import MessagingCore
@@ -215,16 +217,28 @@ enum NotificationActionHandler {
     }
 }
 
+#if os(iOS)
+typealias BackgroundTaskID = UIBackgroundTaskIdentifier
+#else
+/// The Mac has no background tasks; an action there runs in a process that keeps running, under a `ProcessInfo`
+/// activity so App Nap does not slow it.
+struct BackgroundTaskID: Equatable {
+    let rawValue: Int
+    static let invalid = BackgroundTaskID(rawValue: 0)
+}
+#endif
+
 /// The system's background time, behind a seam so the center's task handling is testable.
 @MainActor protocol NotificationActionBackgroundTime: AnyObject {
     /// Begins a background task. The system calls `expiration` on the main thread when the time runs out; a task
     /// still not ended when it returns gets the process terminated.
-    func begin(expiration: @escaping @MainActor () -> Void) -> UIBackgroundTaskIdentifier
-    func end(_ task: UIBackgroundTaskIdentifier)
+    func begin(expiration: @escaping @MainActor () -> Void) -> BackgroundTaskID
+    func end(_ task: BackgroundTaskID)
     /// `UIApplication.backgroundTimeRemaining`: effectively unlimited in front of the app.
     var remaining: TimeInterval { get }
 }
 
+#if os(iOS)
 @MainActor final class UIKitBackgroundTime: NotificationActionBackgroundTime {
     func begin(expiration: @escaping @MainActor () -> Void) -> UIBackgroundTaskIdentifier {
         UIApplication.shared.beginBackgroundTask(withName: "Notification action") { MainActor.assumeIsolated { expiration() } }
@@ -232,12 +246,32 @@ enum NotificationActionHandler {
     func end(_ task: UIBackgroundTaskIdentifier) { UIApplication.shared.endBackgroundTask(task) }
     var remaining: TimeInterval { UIApplication.shared.backgroundTimeRemaining }
 }
+#else
+/// A Mac action never expires: its own budget's cap bounds it, and the activity keeps App Nap away meanwhile.
+@MainActor final class ProcessActivityBackgroundTime: NotificationActionBackgroundTime {
+    private var activities: [Int: BackgroundActivity] = [:]
+    private var next = 1
+
+    func begin(expiration: @escaping @MainActor () -> Void) -> BackgroundTaskID {
+        let id = next
+        next += 1
+        activities[id] = BackgroundActivity("Notification action")
+        return BackgroundTaskID(rawValue: id)
+    }
+    func end(_ task: BackgroundTaskID) { activities.removeValue(forKey: task.rawValue)?.end() }
+    var remaining: TimeInterval { .greatestFiniteMagnitude }
+}
+#endif
 
 /// Lets the delegate reach the model, which may still be starting after a background launch. The latest model to
 /// register handles actions, one at a time. Each request runs inside its own background task, begun the moment the
 /// delegate hands it over; the action's budget is measured from there.
 @MainActor final class NotificationActionCenter {
+    #if os(iOS)
     static let shared = NotificationActionCenter(time: UIKitBackgroundTime(), reportRejectedReply: postRejectedReply)
+    #else
+    static let shared = NotificationActionCenter(time: ProcessActivityBackgroundTime(), reportRejectedReply: postRejectedReply)
+    #endif
     var handler: (@MainActor (NotificationActionRequest, NotificationActionBudget) async -> NotificationActionOutcome)?
     /// The system is ending the background time: closes the running action's connection and answers whether the action
     /// still holds, or is acquiring, the store's transport lease.
@@ -303,7 +337,7 @@ enum NotificationActionHandler {
 /// Ends one background task exactly once, from the expiration handler or when the action returned.
 @MainActor private final class ActionBackgroundTask {
     private let time: any NotificationActionBackgroundTime
-    private var id = UIBackgroundTaskIdentifier.invalid
+    private var id = BackgroundTaskID.invalid
     init(time: any NotificationActionBackgroundTime) { self.time = time }
     func begin(expiration: @escaping @MainActor () -> Void) { id = time.begin(expiration: expiration) }
     func end() {

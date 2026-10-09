@@ -113,10 +113,13 @@ struct ChatDetailsView: View {
             } header: {
                 VStack(spacing: 0) {
                     hero
+                    // The Mac's read-only conversation (Phase 1) has no search or starred view to open yet.
+                    #if os(iOS)
                     HStack(spacing: 8) {
                         tile("Search", systemImage: "magnifyingglass") { leave(with: .search(chatID: chatID)) }
                         tile("Starred", systemImage: "star") { leave(with: .starred(chatID: chatID)) }
                     }
+                    #endif
                 }
                 // Undo the header's secondary caption styling, and keep the old sections' spacing.
                 .foregroundStyle(.primary)
@@ -126,7 +129,7 @@ struct ChatDetailsView: View {
                 .padding(.bottom, 36)
             }
         }
-        .listStyle(.insetGrouped)
+        .groupedListStyle()
         .toolbarTitleDisplayMode(.inline)
     }
 
@@ -172,7 +175,7 @@ struct ChatDetailsView: View {
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, minHeight: 60)
             .foregroundStyle(.tint)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)

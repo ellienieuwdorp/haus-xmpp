@@ -59,9 +59,9 @@ struct GroupDetailsView: View {
             }
             Section {} footer: { Text("Blocking another member’s device pauses sending to the whole group. Your own blocked devices are left out instead.") }
         }
-        .navigationTitle("Group details").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Group details").inlineNavigationTitle()
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .barTrailing) {
                 Button("Refresh group", systemImage: "arrow.clockwise") { Task { await model.loadGroupDetails(room: room) } }
                     .labelStyle(.iconOnly).disabled(!model.session.isReady)
             }
@@ -91,6 +91,6 @@ private struct GroupLocalFingerprintView: View {
                 FingerprintGrid(value: fingerprint).padding(.vertical, 8)
             } footer: { Text("Other members verify this \(ThisDevice.noun) by comparing this fingerprint.") }
         }
-        .navigationTitle("Your fingerprint").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Your fingerprint").inlineNavigationTitle()
     }
 }
