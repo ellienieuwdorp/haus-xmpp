@@ -32,9 +32,9 @@ enum SharedStorage {
         try usableContainer(FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group))
     }
 
-    /// The container must be a directory that exists or can be created, and that this process may write to. Checked
-    /// with permissions rather than a probe write, so nothing is written and the answer does not depend on file
-    /// protection before first unlock.
+    /// The container must be a directory that exists or can be created, and that this process may write to. On iOS
+    /// that is checked with permissions rather than a probe write, so nothing is written and the answer does not
+    /// depend on file protection before first unlock. On macOS a probe file is written and removed (`permitsWriting`).
     static func usableContainer(_ url: URL?) throws -> URL {
         guard let url else { throw Failure.unavailable }
         let manager = FileManager.default
@@ -43,20 +43,23 @@ enum SharedStorage {
             do { try manager.createDirectory(at: url, withIntermediateDirectories: false) } catch { throw Failure.unavailable }
             isDirectory = true
         }
-        guard isDirectory.boolValue, permitsWriting(url.path) else { throw Failure.unavailable }
+        guard isDirectory.boolValue, permitsWriting(url) else { throw Failure.unavailable }
         return url
     }
 
-    private static func permitsWriting(_ path: String) -> Bool {
+    private static func permitsWriting(_ url: URL) -> Bool {
         #if os(macOS)
         // Inside the Mac sandbox, access(2) calls the App Group container read-only although files can be created in
-        // it (measured 2026-10-09 on macOS 27.0.1 with a development-signed build), so the permission bits decide.
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-              let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue,
-              let owner = (attributes[.ownerAccountID] as? NSNumber)?.uint32Value else { return false }
-        return owner == getuid() ? permissions & 0o200 != 0 : permissions & 0o002 != 0
+        // it (measured 2026-10-09 on macOS 27.0.1 with a development-signed build: EPERM from access, success from a
+        // write), and permission bits cannot see a sandbox that denies writes (a build without the App Group
+        // entitlement, where containerURL still returns a path). Only a real write answers both. A Mac has no data
+        // protection classes that could refuse it before first unlock.
+        let probe = url.appending(path: ".write-probe-\(UUID().uuidString)")
+        guard FileManager.default.createFile(atPath: probe.path, contents: nil) else { return false }
+        try? FileManager.default.removeItem(at: probe)
+        return true
         #else
-        FileManager.default.isWritableFile(atPath: path)
+        FileManager.default.isWritableFile(atPath: url.path)
         #endif
     }
 
