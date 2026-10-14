@@ -166,7 +166,7 @@ struct ConversationPresenter {
         guard let first = links.first else { return (nil, false) }
         if let carried = message.linkPreview, let url = links.first(where: { $0.absoluteString == carried.url }),
            let host = LinkDetection.displayHost(for: url) {
-            let size = carried.imageData.flatMap { LinkScan.pixelSize(of: $0, key: message.id) }
+            let size = carried.imageData.flatMap { LinkScan.pixelSize(of: $0) }
             // Neither a title nor a readable image: nothing to draw, and nothing to fetch either, since it carried one.
             guard carried.title != nil || size != nil else { return (nil, false) }
             return (TimelineLinkPreview(url: url, host: host, title: carried.title, summary: carried.summary,

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import ImageIO
 import XMPPProtocol
@@ -59,18 +60,42 @@ enum LinkScan {
         return found
     }
 
+    /// The most pixels a preview image may declare. Decoding inflates the whole canvas before thumbnailing it, and a
+    /// 48 KB 1-bit PNG can declare 20,000 x 20,000 px (400 MB to decode, measured 2026-10-14). Embedded thumbnails are
+    /// at most 64 KiB and ours are fitted within 400 px, fetched images are already downsampled to 1024 px, so 4 MP
+    /// (16 MB as RGBA) leaves room for any honest image.
+    static let imagePixelBudget = 4_000_000
+
     /// Pixel size of an embedded preview image as it displays (EXIF orientation applied), read from its header without
-    /// decoding it. `key` names the bytes (a message ID) so the header is read once.
-    static func pixelSize(of data: Data, key: String) -> (width: Int, height: Int)? {
-        let cacheKey = "\(key)\u{0}\(data.count)" as NSString
-        if let hit = sizes.object(forKey: cacheKey) { return (hit.width, hit.height) }
-        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }
+    /// decoding it; nil when unreadable or over `imagePixelBudget`, so the card falls back to text. Cached by the
+    /// bytes' digest, since a correction can replace an image under the same message ID.
+    static func pixelSize(of data: Data) -> (width: Int, height: Int)? {
+        let cacheKey = digest(of: data) as NSString
+        if let hit = sizes.object(forKey: cacheKey) { return hit.width > 0 ? (hit.width, hit.height) : nil }
+        let size = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary).flatMap(boundedSize(of:))
+        sizes.setObject(PixelSize(width: size?.width ?? 0, height: size?.height ?? 0), forKey: cacheKey)
+        return size
+    }
+
+    /// A preview image decoded at most `maxPixelSize` on its longer side, first frame only; nil when unreadable or when
+    /// its header declares more than `imagePixelBudget` pixels, which is checked before anything is decoded.
+    static func thumbnail(of source: CGImageSource, maxPixelSize: Int) -> CGImage? {
+        guard boundedSize(of: source) != nil else { return nil }
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize] as CFDictionary)
+    }
+
+    /// Hex SHA-256 of `data`: the cache key for an embedded image.
+    static func digest(of data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+
+    private static func boundedSize(of source: CGImageSource) -> (width: Int, height: Int)? {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              width > 0, height > 0, case let (pixels, overflow) = width.multipliedReportingOverflow(by: height),
+              !overflow, pixels <= imagePixelBudget else { return nil }
         // Orientations 5-8 turn the image a quarter.
         let turned = ((properties[kCGImagePropertyOrientation] as? Int) ?? 1) >= 5
-        let size = turned ? (height, width) : (width, height)
-        sizes.setObject(PixelSize(width: size.0, height: size.1), forKey: cacheKey)
-        return size
+        return turned ? (height, width) : (width, height)
     }
 }

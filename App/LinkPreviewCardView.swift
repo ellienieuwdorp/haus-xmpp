@@ -1,5 +1,4 @@
 #if os(iOS)
-import CryptoKit
 import ImageIO
 import UIKit
 
@@ -135,14 +134,15 @@ final class LinkPreviewCardView: UIView {
     private nonisolated static func key(_ source: TimelineLinkPreview.Image) -> NSString {
         switch source {
         case .file(let url): "file:" + url.path as NSString
-        case .data(let data): "data:" + SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() as NSString
+        case .data(let data): "data:" + LinkScan.digest(of: data) as NSString
         }
     }
 
     private static func cached(_ source: TimelineLinkPreview.Image) -> UIImage? { decoded.object(forKey: key(source)) }
 
     /// Bounded decoding: an embedded image is at most 64 KiB and a fetched one is already downsampled, but neither is
-    /// ever inflated beyond what a 280 pt card can show.
+    /// ever inflated beyond what a 280 pt card can show, and one whose header declares more pixels than
+    /// `LinkScan.imagePixelBudget` is never decoded at all.
     private static func decode(_ source: TimelineLinkPreview.Image) async -> UIImage? {
         await Task.detached(priority: .userInitiated) {
             let options = [kCGImageSourceShouldCache: false] as CFDictionary
@@ -150,9 +150,7 @@ final class LinkPreviewCardView: UIView {
             case .file(let url): CGImageSourceCreateWithURL(url as CFURL, options)
             case .data(let data): CGImageSourceCreateWithData(data as CFData, options)
             }
-            guard let imageSource, let cg = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, [
-                kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: 840] as CFDictionary) else { return nil }
+            guard let imageSource, let cg = LinkScan.thumbnail(of: imageSource, maxPixelSize: 840) else { return nil }
             let image = UIImage(cgImage: cg)
             decoded.setObject(image, forKey: key(source))
             return image
