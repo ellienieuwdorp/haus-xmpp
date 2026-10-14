@@ -1,0 +1,49 @@
+Haus XMPP: Additional Permission for Apple Distribution Services
+=================================================================
+
+Copyright (C) 2026 Ellie Nieuwdorp and the Haus XMPP contributors
+
+Haus XMPP is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version ("the GPL"). The text of the GPL is in the file LICENSE.
+
+Additional permission under section 7 of the GPL, version 3:
+
+  Provided that you are otherwise in compliance with the GPL for each
+  covered work you convey (including without limitation making the
+  Corresponding Source available in compliance with section 6 of the GPL,
+  version 3), the copyright holders of Haus XMPP also grant you the
+  additional permission to convey through an Apple Distribution Service
+  non-source executable versions of the Program as incorporated into each
+  applicable covered work as Executable Versions only under the Mozilla
+  Public License version 2.0 (https://www.mozilla.org/en-US/MPL/2.0/).
+
+  "Apple Distribution Service" means each of the following, including any
+  successor or renamed version of it:
+
+    (a) the App Store for iPhone and iPad (the "Apple App Store");
+    (b) the App Store for Mac (the "Mac App Store");
+    (c) TestFlight, for both internal and external testing, including
+        builds delivered through App Store Connect for that purpose;
+    (d) any other app marketplace, beta-testing or installation channel
+        operated by Apple Inc. or its affiliates whose terms of service or
+        usage rules apply to recipients of the executable.
+
+  "Executable Versions" has the meaning given to "Executable Form" in the
+  Mozilla Public License version 2.0.
+
+This additional permission applies to every file in this repository except
+the third-party components listed in THIRD_PARTY_LICENSES.md, which keep
+their own terms, and to the contributions of every contributor who
+submitted work under CONTRIBUTING.md. Its SPDX expression is
+"GPL-3.0-or-later WITH AdditionRef-Haus-Apple-Distribution". libomemo-c
+carries its own, separately granted permission for the Apple App Store (see
+Packages/OMEMOCrypto/NOTICE.libomemo-c).
+
+If you modify Haus XMPP, you may extend this additional permission to your
+version, but you are not obliged to. If you do not wish to, delete it from
+your version, as section 7 of the GPL permits.
+
+Nothing in this permission or in the GPL grants rights to use the names,
+logos or icons of Haus XMPP; see TRADEMARKS.md (section 7(e) of the GPL).

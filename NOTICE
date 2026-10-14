@@ -1,0 +1,18 @@
+Haus XMPP
+Copyright (C) 2026 Ellie Nieuwdorp and the Haus XMPP contributors
+
+Licence: GPL-3.0-or-later WITH AdditionRef-Haus-Apple-Distribution
+  - LICENSE                         GNU General Public License, version 3
+  - LICENSE-ADDITIONAL-PERMISSION   permission to ship through the App Store,
+                                    Mac App Store and TestFlight
+
+Because Haus XMPP links libomemo-c, which is licensed under the GPL version 3
+only, the combined program as built and distributed is covered by the GPL
+version 3.
+
+This program comes with ABSOLUTELY NO WARRANTY. See sections 15 and 16 of
+the GPL.
+
+Third-party components and their notices: THIRD_PARTY_LICENSES.md
+Names, logo and icon: TRADEMARKS.md
+Source code: https://github.com/ellienieuwdorp/haus-xmpp
