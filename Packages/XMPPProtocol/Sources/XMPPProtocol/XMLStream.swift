@@ -6,10 +6,29 @@ public struct XMLNode: Sendable, Equatable {
     public let attributes: [String: String]
     public var text = ""
     public var children: [XMLNode] = []
+    /// The namespace each prefix of a prefixed attribute in `attributes` was bound to where the parser met this element.
+    /// `xml` (fixed by the XML namespaces spec) and `xmlns` declarations are not recorded, so it is empty for every
+    /// element without a prefixed attribute of its own. Read attributes by namespace with `attribute(_:namespace:)`.
+    public let attributePrefixes: [String: String]
 
-    public init(name: String, namespace: String, attributes: [String: String], text: String = "", children: [XMLNode] = []) {
+    public init(name: String, namespace: String, attributes: [String: String], text: String = "", children: [XMLNode] = [],
+                attributePrefixes: [String: String] = [:]) {
         self.name = name; self.namespace = namespace; self.attributes = attributes; self.text = text; self.children = children
+        self.attributePrefixes = attributePrefixes
     }
+
+    /// The attribute with local name `localName` in `namespace`, whatever prefix the sender bound to it. An unprefixed
+    /// attribute is in no namespace, so it never matches; two attributes with the same expanded name give nil.
+    public func attribute(_ localName: String, namespace: String) -> String? {
+        if namespace == Self.xmlNamespace { return attributes["xml:" + localName] }
+        let matches = attributes.filter { key, _ in
+            guard let colon = key.firstIndex(of: ":"), key[key.index(after: colon)...] == localName else { return false }
+            return attributePrefixes[String(key[..<colon])] == namespace
+        }
+        return matches.count == 1 ? matches.first?.value : nil
+    }
+
+    static let xmlNamespace = "http://www.w3.org/XML/1998/namespace"
 
     public func child(_ name: String, namespace: String) -> XMLNode? {
         children.first { $0.name == name && $0.namespace == namespace }
@@ -153,7 +172,7 @@ private final class NodeParser: NSObject, XMLParserDelegate {
     private var stack: [XMLNode] = []
     private var root: XMLNode?
     private var invalid = false
-    private var prefixes: [String: [String]] = ["xml": ["http://www.w3.org/XML/1998/namespace"]]
+    private var prefixes: [String: [String]] = ["xml": [XMLNode.xmlNamespace]]
     private let maxDepth: Int
     private let singleRoot: Bool
     private init(maxDepth: Int, singleRoot: Bool) { self.maxDepth = maxDepth; self.singleRoot = singleRoot }
@@ -171,12 +190,14 @@ private final class NodeParser: NSObject, XMLParserDelegate {
 
     func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {
         if qualifiedName?.contains(":") == true && (namespaceURI ?? "").isEmpty { invalid = true; parser.abortParsing(); return }
+        var attributePrefixes: [String: String] = [:]
         for key in attributes.keys where key.contains(":") {
             let prefix = String(key.prefix { $0 != ":" })
             guard prefix == "xmlns" || prefixes[prefix]?.last?.isEmpty == false else { invalid = true; parser.abortParsing(); return }
+            if prefix != "xmlns" && prefix != "xml" { attributePrefixes[prefix] = prefixes[prefix]?.last }
         }
         guard stack.count < maxDepth, attributes.count <= 128 else { invalid = true; parser.abortParsing(); return }
-        stack.append(XMLNode(name: name, namespace: namespaceURI ?? "", attributes: attributes))
+        stack.append(XMLNode(name: name, namespace: namespaceURI ?? "", attributes: attributes, attributePrefixes: attributePrefixes))
     }
     func parser(_ parser: XMLParser, didStartMappingPrefix prefix: String, toURI namespaceURI: String) { prefixes[prefix, default: []].append(namespaceURI) }
     func parser(_ parser: XMLParser, didEndMappingPrefix prefix: String) { _ = prefixes[prefix]?.popLast() }

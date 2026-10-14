@@ -502,7 +502,7 @@ public actor OMEMOService {
             var ready = Set<String>()
             var blocked: [String: String] = [:]
             var firstFailure: OMEMOError?
-            var droppedReplies = Set<String>()
+            var droppedReplies = Set<String>(), droppedLinkPreviews = Set<String>()
             let (_, currentState) = try await self.load(account)
             // Several files sent together are one message each: a chat's devices are fetched once per pass, not once per
             // message, so the first of them is not held behind every other one's refresh.
@@ -522,7 +522,11 @@ public actor OMEMOService {
                         let candidates = state.devices.filter { $0.profile == saved.envelope.profile && $0.active && ($0.jid == message.chatID || $0.jid == account) }
                         guard !candidates.contains(where: { $0.trust == .undecided }) else { throw OMEMOError.trustRequired }
                         guard candidates.filter({ $0.trust.permitsEncryption }).map(\.id).sorted() == saved.recipientIdentities.sorted() else { throw OMEMOError.recipientSetChanged }
-                    } else if try await self.sealLocked(message) { droppedReplies.insert(message.id) }
+                    } else {
+                        let dropped = try await self.sealLocked(message)
+                        if dropped.reply { droppedReplies.insert(message.id) }
+                        if dropped.linkPreview { droppedLinkPreviews.insert(message.id) }
+                    }
                     ready.insert(message.id)
                 } catch {
                     if error is CancellationError { throw error }
@@ -530,27 +534,33 @@ public actor OMEMOService {
                     blocked[message.chatID] = (error as? OMEMOError)?.errorDescription ?? "Encryption preparation failed. This message remains queued."
                 }
             }
-            return EncryptionPreparation(messageIDs: ready, blockedChats: blocked, failure: firstFailure, droppedReplies: droppedReplies)
+            return EncryptionPreparation(messageIDs: ready, blockedChats: blocked, failure: firstFailure, droppedReplies: droppedReplies,
+                                         droppedLinkPreviews: droppedLinkPreviews)
         }
     }
 
-    /// Returns whether a file's reply was left out of the seal (see `EncryptionPreparation.droppedReplies`).
-    private func sealLocked(_ message: StoredMessage) async throws -> Bool {
+    /// Returns whether a file's reply or the link preview was left out of the seal (see `EncryptionPreparation`).
+    private func sealLocked(_ message: StoredMessage) async throws -> (reply: Bool, linkPreview: Bool) {
         let account = message.accountID
         let (revision, old) = try await load(account)
         var state = old
         guard let profile = state.profiles[message.chatID] else { throw OMEMOError.unavailable }
         let plaintext = try EncryptedContent.encode(body: message.body, reply: message.reply,
                                                     sender: account, recipient: message.chatID, modern: profile == .modern,
-                                                    originID: message.id, fileSharing: message.attachment.map { try fileSharing(for: $0, account: account) })
+                                                    originID: message.id, fileSharing: message.attachment.map { try fileSharing(for: $0, account: account) },
+                                                    linkMetadata: message.linkPreview?.metadata)
         let saved = try sealContent(plaintext, account: account, peer: message.chatID, profile: profile, state: &state)
         // A file whose reply could not ride along (the chat fell back to legacy after it was queued) loses the stored
         // quote with the seal, so the sender's bubble never shows a reply the peer did not get.
         let droppedReply = message.attachment != nil && message.reply.map { !EncryptedContent.fileCarries($0, modern: profile == .modern) } == true
+        // Likewise our own link preview when the chat fell back to legacy OMEMO, which has nowhere private to carry it.
+        let droppedLinkPreview = message.linkPreview.map {
+            !EncryptedContent.linkMetadataRides($0.metadata, body: message.body, modern: profile == .modern, fileSharing: message.attachment != nil)
+        } ?? false
         try await store.sealQueuedOutgoing(accountID: account, messageID: message.id, profile: profile.rawValue,
                                            expectedRevision: revision, state: encode(state, account: account), wire: JSONEncoder().encode(saved),
-                                           clearReply: droppedReply)
-        return droppedReply
+                                           clearReply: droppedReply, clearLinkPreview: droppedLinkPreview)
+        return (droppedReply, droppedLinkPreview)
     }
 
     private func sealContent(_ plaintext: Data, account: String, peer: String, profile: XMPPOMEMOProfile,
@@ -639,7 +649,16 @@ public actor OMEMOService {
               try await store.reactionTarget(accountID: account, chatID: chatID, wireID: wireID)?.id == target.id
         else { throw OMEMOError.unsupportedMessageUpdate }
         let id = UUID().uuidString
-        _ = try await store.enqueueMessageUpdate(accountID: account, id: id, kind: kind, chatID: chatID, targetMessageID: messageID, body: body)
+        // An edit sends the whole new message: the preview shown now goes along while its link is still in the text and
+        // the chat is modern; otherwise the correction has none, which removes it on both sides.
+        var preview: StoredLinkPreview?
+        if kind == .correction, profile == .modern,
+           let shown = try await target.applying(store.events(accountID: account, chatID: chatID, messageID: messageID)).linkPreview,
+           EncryptedContent.linkMetadataRides(shown.metadata, body: body, modern: true, fileSharing: target.attachment != nil) {
+            preview = StoredLinkPreview(shown.metadata, source: .own)
+        }
+        _ = try await store.enqueueMessageUpdate(accountID: account, id: id, kind: kind, chatID: chatID, targetMessageID: messageID, body: body,
+                                                 linkPreview: preview)
         return id
     }
 
@@ -687,14 +706,16 @@ public actor OMEMOService {
                            plaintext: { _ in try EncryptedContent.encodeRetraction(targetWireID: target, sender: account, recipient: update.chatID, originID: update.id, modern: true) })
         }
         for update in try await store.queuedUpdates(accountID: account, kind: .correction) {
-            guard let target = update.targetWireID, let body = update.payload.flatMap(MessageEvent.correctionBody) else { continue }
+            guard let target = update.targetWireID, let payload = update.payload, let body = MessageEvent.correctionBody(payload) else { continue }
+            let linkMetadata = MessageEvent.correctionLinkPreview(payload)?.metadata
             // Editing a caption re-sends the same file reference: a peer that replaces the whole message keeps the attachment.
             var attachment: StoredAttachment?
             if let id = update.targetMessageID { attachment = try await store.message(accountID: account, messageID: id)?.attachment }
             let file = try attachment.map { try fileSharing(for: $0, account: account) }
             queued.append(Pending(id: update.id, chatID: update.chatID, kind: .correction, plain: nil,
                                   plaintext: { modern in try EncryptedContent.encode(body: body, reply: nil, sender: account, recipient: update.chatID,
-                                                                                     modern: modern, originID: update.id, fileSharing: file, correction: target) }))
+                                                                                     modern: modern, originID: update.id, fileSharing: file, correction: target,
+                                                                                     linkMetadata: linkMetadata) }))
         }
         var ready = Set(try await store.queuedUpdates(accountID: account, kind: .keyTransport).map(\.id)), blocked: [String: String] = [:]
         var failure: OMEMOError?
@@ -1150,15 +1171,21 @@ public actor OMEMOService {
                     } else if let target = correction, !content.body.isEmpty {
                         // An edit is a projection on the original bubble, never a second bubble.
                         guard sender == account || sender == peer else { throw OMEMOError.invalidContent }
+                        // It carries the whole new message: its link preview replaces the old one, and none removes it.
                         event = MessageEvent(id: content.originID ?? message.originID ?? message.id, chatID: peer, actorID: sender, targetWireID: target,
-                                             kind: .correction, payload: try MessageEvent.correctionPayload(content.body), updatedAt: date)
+                                             kind: .correction, payload: try MessageEvent.correctionPayload(
+                                                content.body, linkPreview: content.linkMetadata.map { StoredLinkPreview($0, source: .sender) }),
+                                             updatedAt: date)
                     } else if !content.body.isEmpty || content.fileSharing != nil {
                         stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: peer, senderID: sender,
                                                body: content.body, sentAt: retained.sentAt ?? Date(), isOutgoing: sender == account,
                                                reply: content.reply, encryptionProfile: profile.rawValue,
                                                // XEP-0444 targets the stanza id in 1:1 chats; peers without origin-id (Conversations) still get one.
                                                wireID: content.originID ?? message.originID ?? message.id, wireIDAuthenticated: content.originID != nil,
-                                               attachment: try content.fileSharing.map { try storedAttachment($0, account: account) })
+                                               attachment: try content.fileSharing.map { try storedAttachment($0, account: account) },
+                                               // Authenticated sender metadata, committed with the message (also in the
+                                               // notification extension, which never fetches anything).
+                                               linkPreview: content.linkMetadata.map { StoredLinkPreview($0, source: .sender) })
                     }
                     if let update = content.reaction, event == nil {
                         guard profile == .modern, sender == account || sender == peer else { throw OMEMOError.invalidContent }

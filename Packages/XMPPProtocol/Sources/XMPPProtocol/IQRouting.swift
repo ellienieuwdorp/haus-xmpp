@@ -54,7 +54,8 @@ extension XMPPClient {
         let elements = frames.compactMap { frame -> XMLNode? in if case .element(let node) = frame { node } else { nil } }
         guard elements.count == 1, let original = elements.first, original.attributes["from"] == nil || original.attributes["from"] == account else { return nil }
         var attributes = original.attributes; attributes["from"] = account
-        return parsedRetraction(XMLNode(name: original.name, namespace: original.namespace, attributes: attributes, text: original.text, children: original.children))
+        return parsedRetraction(XMLNode(name: original.name, namespace: original.namespace, attributes: attributes, text: original.text, children: original.children,
+                                attributePrefixes: original.attributePrefixes))
     }
 
     /// Decode saved outgoing ciphertext for fingerprint-scoped replay authorization.
@@ -69,7 +70,8 @@ extension XMPPClient {
               original.attributes["from"] == nil || original.attributes["from"] == account,
               !Carbons.containsWrapper(original), !ArchiveQuery.containsWrapper(original) else { throw XMPPIQError.malformedResponse }
         var attributes = original.attributes; attributes["from"] = account
-        let node = XMLNode(name: original.name, namespace: original.namespace, attributes: attributes, text: original.text, children: original.children)
+        let node = XMLNode(name: original.name, namespace: original.namespace, attributes: attributes, text: original.text, children: original.children,
+                                attributePrefixes: original.attributePrefixes)
         return try OMEMOWire.parseMessage(node)
     }
 
@@ -81,7 +83,8 @@ extension XMPPClient {
         let elements = frames.compactMap { frame -> XMLNode? in if case .element(let node) = frame { node } else { nil } }
         guard elements.count == 1, let original = elements.first, original.attributes["from"] == nil || original.attributes["from"] == account else { return nil }
         var attributes = original.attributes; attributes["from"] = account
-        return parsedReaction(XMLNode(name: original.name, namespace: original.namespace, attributes: attributes, text: original.text, children: original.children))
+        return parsedReaction(XMLNode(name: original.name, namespace: original.namespace, attributes: attributes, text: original.text, children: original.children,
+                                attributePrefixes: original.attributePrefixes))
     }
 
     /// The plain receipt/marker twin of `decodeOutgoingReactionXML`.
@@ -92,6 +95,7 @@ extension XMPPClient {
         let elements = frames.compactMap { frame -> XMLNode? in if case .element(let node) = frame { node } else { nil } }
         guard elements.count == 1, let original = elements.first, original.attributes["from"] == nil || original.attributes["from"] == account else { return nil }
         var attributes = original.attributes; attributes["from"] = account
-        return parsedReceipt(XMLNode(name: original.name, namespace: original.namespace, attributes: attributes, text: original.text, children: original.children))
+        return parsedReceipt(XMLNode(name: original.name, namespace: original.namespace, attributes: attributes, text: original.text, children: original.children,
+                                attributePrefixes: original.attributePrefixes))
     }
 }

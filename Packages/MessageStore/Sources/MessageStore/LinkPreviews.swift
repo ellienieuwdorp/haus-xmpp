@@ -1,11 +1,12 @@
 import Foundation
+import XMPPProtocol
 
 /// The preview a message carries: the XEP-0511 metadata an authenticated sender attached (`sender`), or the preview we
 /// froze into our own outgoing message when it was queued (`own`), so a retry re-seals the same bytes and our bubble
 /// shows what the peer got. Kept with the message and never expires; a retraction removes it. Our own fetches for
 /// links in other messages live in the fetch cache (`LinkPreviewCacheEntry`) instead.
-public struct StoredLinkPreview: Sendable, Equatable {
-    public enum Source: String, Sendable, Equatable { case sender, own }
+public struct StoredLinkPreview: Sendable, Equatable, Codable {
+    public enum Source: String, Sendable, Equatable, Codable { case sender, own }
 
     /// The described link exactly as detected in the body (`rdf:about`): http or https.
     public var url: String
@@ -25,7 +26,32 @@ public struct StoredLinkPreview: Sendable, Equatable {
         self.url = url; self.title = title; self.summary = summary; self.imageData = imageData; self.imageType = imageType
         self.imageAlt = imageAlt; self.source = source
     }
+
+    /// The wire's metadata for this preview, and the reverse: the store keeps exactly what was sent or received.
+    public init(_ metadata: MessageContent.LinkMetadata, source: Source) {
+        var data: Data?, type: String?
+        if case let .data(imageType, bytes)? = metadata.image { data = bytes; type = imageType }
+        self.init(url: metadata.about, title: metadata.title, summary: metadata.description, imageData: data, imageType: type,
+                  imageAlt: data == nil ? nil : metadata.imageAlt, source: source)
+    }
+    public var metadata: MessageContent.LinkMetadata {
+        MessageContent.LinkMetadata(about: url, title: title, description: summary,
+                                    image: zip(imageType, imageData).map { .data(type: $0, bytes: $1) }, imageAlt: imageAlt)
+    }
+
+    /// Rows the store accepts: an http(s) link, texts and image within the wire's receive bounds.
+    func validate() throws {
+        typealias Bounds = MessageContent.LinkMetadata
+        let scheme = url.prefix { $0 != ":" }.lowercased()
+        guard !url.isEmpty, url.utf8.count <= 2_048, scheme == "http" || scheme == "https",
+              (title?.utf8.count ?? 0) <= Bounds.maximumTitleBytes, (summary?.utf8.count ?? 0) <= Bounds.maximumDescriptionBytes,
+              (imageAlt?.utf8.count ?? 0) <= Bounds.maximumImageAltBytes,
+              (imageData == nil) == (imageType == nil), (imageData?.count ?? 1) > 0, (imageData?.count ?? 0) <= Bounds.maximumImageBytes,
+              (imageType?.utf8.count ?? 0) <= 128 else { throw MessageStoreError.invalidValue }
+    }
 }
+
+private func zip<A, B>(_ a: A?, _ b: B?) -> (A, B)? { if let a, let b { (a, b) } else { nil } }
 
 /// One result of our own fetch, per account and link (`LinkDetection.cacheKey`). The image is a downsampled file the
 /// app wrote under the account's attachment folder; the store keeps only its path.
@@ -65,6 +91,19 @@ public struct LinkPreviewCacheEntry: Sendable, Equatable {
     public func isFresh(at date: Date) -> Bool {
         let age = date.timeIntervalSince(fetchedAt)
         return age >= 0 && age < (status == .ok ? Self.successLifetime : Self.failureLifetime)
+    }
+
+    /// Rows the store accepts: the wire's text bounds, and an image path that stays inside `link-previews/`.
+    func validate() throws {
+        typealias Bounds = MessageContent.LinkMetadata
+        let path = imagePath.map { $0.split(separator: "/", omittingEmptySubsequences: false) }
+        guard !accountID.isEmpty, !url.isEmpty, url.utf8.count <= 2_048, fetchedAt.timeIntervalSince1970.isFinite,
+              (title?.utf8.count ?? 0) <= Bounds.maximumTitleBytes, (summary?.utf8.count ?? 0) <= Bounds.maximumDescriptionBytes,
+              (imageAlt?.utf8.count ?? 0) <= Bounds.maximumImageAltBytes,
+              path.map({ $0.count >= 2 && $0[0] == "link-previews" && !$0.dropFirst().contains { $0.isEmpty || $0 == "." || $0 == ".." } }) ?? true,
+              (imagePath?.utf8.count ?? 0) <= 512,
+              (imagePath == nil) == (imageWidth == nil), (imagePath == nil) == (imageHeight == nil),
+              (imageWidth ?? 1) > 0, (imageHeight ?? 1) > 0 else { throw MessageStoreError.invalidValue }
     }
 }
 

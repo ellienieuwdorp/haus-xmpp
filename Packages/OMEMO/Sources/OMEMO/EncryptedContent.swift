@@ -17,14 +17,24 @@ struct EncryptedContent: Equatable {
     var originID: String? = nil
     var timestamp: Date? = nil
     var fileSharing: MessageContent.FileSharing? = nil
+    /// XEP-0511 metadata about the first described link of `body`; only ever from a modern envelope.
+    var linkMetadata: MessageContent.LinkMetadata? = nil
 
     /// Whether a file message sealed for this profile can carry `reply`: only as a bare reference to a wire ID,
     /// inside a modern envelope. Otherwise `encode` sends the file without it.
     static func fileCarries(_ reply: MessageReply, modern: Bool) -> Bool { modern && reply.wireID != nil }
 
+    /// Whether `encode` sends `metadata` with this text: only inside a modern envelope, never with a file, and only
+    /// when a receiver would keep it (`MessageContent.LinkMetadata.validated`). Legacy OMEMO has no envelope to carry
+    /// it in, and it never goes in clear; the sealer then clears the stored preview, as for a dropped reply.
+    static func linkMetadataRides(_ metadata: MessageContent.LinkMetadata, body: String, modern: Bool, fileSharing: Bool) -> Bool {
+        modern && !fileSharing && !MessageContent(body: body, linkMetadata: [metadata]).sendableLinkMetadata.isEmpty
+    }
+
     /// `correction` rides inside a modern envelope; for legacy the caller puts it on the outer stanza.
     static func encode(body: String, reply: MessageReply?, sender: String, recipient: String, modern: Bool, originID: String? = nil,
-                       fileSharing: MessageContent.FileSharing? = nil, correction: String? = nil) throws -> Data {
+                       fileSharing: MessageContent.FileSharing? = nil, correction: String? = nil,
+                       linkMetadata: MessageContent.LinkMetadata? = nil) throws -> Data {
         guard !body.isEmpty || fileSharing != nil, body.utf8.count <= 16_384, MessageContent.validXMLText(body),
               MessageContent.validAddress(sender), MessageContent.validAddress(recipient),
               correction.map(MessageContent.validIdentifier) ?? true, correction == nil || !body.isEmpty else { throw OMEMOError.invalidContent }
@@ -58,7 +68,9 @@ struct EncryptedContent: Equatable {
             guard let link = fileSharing.aesgcmURL else { throw OMEMOError.invalidContent }
             return Data((quote + (body.isEmpty ? "" : body + "\n") + link).utf8)
         }
-        let content = MessageContent(body: body, reply: reply.map { .init(id: $0.wireID, to: $0.senderID, quote: quote) }, correction: correction, originID: originID, fileSharing: fileSharing)
+        let metadata = linkMetadata.flatMap { linkMetadataRides($0, body: body, modern: modern, fileSharing: fileSharing != nil) ? [$0] : nil } ?? []
+        let content = MessageContent(body: body, reply: reply.map { .init(id: $0.wireID, to: $0.senderID, quote: quote) }, correction: correction,
+                                     originID: originID, fileSharing: fileSharing, linkMetadata: metadata)
         return try wrap(content, sender: sender, recipient: recipient)
     }
 
@@ -135,7 +147,8 @@ struct EncryptedContent: Equatable {
         return EncryptedContent(body: content.body, reply: reply,
                                 reaction: content.reaction.map { ReactionContent(targetWireID: $0.targetID, reactions: $0.reactions) },
                                 retraction: content.retraction, correction: content.correction, receipt: content.receipt,
-                                originID: content.originID, timestamp: timestamp, fileSharing: content.fileSharing)
+                                originID: content.originID, timestamp: timestamp, fileSharing: content.fileSharing,
+                                linkMetadata: content.linkMetadata.first)
     }
 
     // Remove only the exact quotation syntax emitted by this adapter. Foreign fallback

@@ -68,3 +68,21 @@ private let opening = "<s:stream xmlns:s='http://etherx.jabber.org/streams' xmln
     var iterator = client.events.makeAsyncIterator()
     #expect(await iterator.next() == .state(.disconnected(nil)))
 }
+
+/// XEP-0511's `rdf:about` may come with any prefix bound to the RDF namespace. Attributes are still keyed by qualified
+/// name, as every existing reader expects, and an element without prefixed attributes compares equal to a built one.
+@Test func prefixedAttributesResolveByNamespace() throws {
+    let rdf = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    let node = try XMLNode.parse(standalone: Data("""
+        <x xmlns='urn:test' xmlns:r='\(rdf)' xmlns:o='urn:other' r:about='by-r' about='bare' xml:lang='en'><y xmlns:q='\(rdf)' q:about='by-q' o:about='other'/></x>
+        """.utf8))
+    #expect(node.attributes["r:about"] == "by-r")
+    #expect(node.attribute("about", namespace: rdf) == "by-r")
+    #expect(node.attribute("lang", namespace: "http://www.w3.org/XML/1998/namespace") == "en")
+    #expect(node.children[0].attribute("about", namespace: rdf) == "by-q")
+    #expect(node.children[0].attribute("about", namespace: "urn:other") == "other")
+    // An unprefixed attribute is in no namespace.
+    #expect(try XMLNode.parse(standalone: Data("<x xmlns='\(rdf)' about='bare'/>".utf8)).attribute("about", namespace: rdf) == nil)
+    let plain = try XMLNode.parse(standalone: Data("<x xmlns='urn:test' xml:lang='en' a='1'/>".utf8))
+    #expect(plain == XMLNode(name: "x", namespace: "urn:test", attributes: ["xml:lang": "en", "a": "1"]))
+}

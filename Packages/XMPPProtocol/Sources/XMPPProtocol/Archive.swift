@@ -140,7 +140,7 @@ struct ArchiveQuery {
             // This normalization is permitted only after the own-archive wrapper is authenticated. Both shapes are
             // covered by `archiveNormalizesOnlyTrustedMissingRecipientAndAcceptsRedactedPositions` and `ArchiveContentTests`.
             var attributes = inner.attributes; attributes["to"] = accountBareJID
-            inner = XMLNode(name: inner.name, namespace: inner.namespace, attributes: attributes, text: inner.text, children: inner.children)
+            inner = XMLNode(name: inner.name, namespace: inner.namespace, attributes: attributes, text: inner.text, children: inner.children, attributePrefixes: inner.attributePrefixes)
         }
         func reject(_ reason: XMPPArchiveRejection, peer: String? = nil, outgoing: Bool = false) {
             messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil, rejectedContent: reason,
