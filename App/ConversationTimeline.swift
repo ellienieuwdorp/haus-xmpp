@@ -38,7 +38,7 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     var onLinkPreviewDisplayed: (String) -> Void = { _ in }
     /// An `xmpp:` link to a person was opened: open or start that chat.
     var onOpenChat: (String) -> Void = { _ in }
-    /// An `xmpp:…?join` link was opened: open the group if it is joined and return true, else return false.
+    /// An `xmpp:…?join` link was opened: open the group, or its join flow, and return true; false copies the address.
     var onOpenGroup: (String) -> Bool = { _ in false }
     /// Its hidden responder is installed in the controller's view, so the attachment panel is the keyboard here.
     var attachmentKeyboard: AttachmentKeyboard? = nil
@@ -284,7 +284,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         case (.open, .chat(let address)):
             onOpenChat(address)
         case (.open, .group(let room)):
-            if !onOpenGroup(room) { copied(room, because: "You haven’t joined this group, so its address was copied.") }
+            if !onOpenGroup(room) { copied(room, because: "This group can’t be joined here, so its address was copied.") }
         case (.open, .unsupported):
             copied(LinkOpening.copyText(for: url), because: "This link can’t be opened here, so it was copied.")
         default:

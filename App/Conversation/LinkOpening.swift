@@ -12,7 +12,8 @@ enum LinkDestination: Equatable, Sendable {
     case mail(URL, address: String)
     /// Open, or start, the direct chat with this bare address.
     case chat(String)
-    /// An invitation to the group at this bare address (`?join`): open it when already joined, else copy it.
+    /// An invitation to the group at this bare address (`?join`): open it when already joined, else the join flow
+    /// with the address filled in; copy it where there is no join flow.
     case group(String)
     /// Apple Maps at the place.
     case map(URL)
