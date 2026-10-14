@@ -71,7 +71,10 @@ targets:
         # Files dropped into the app's Documents folder show up in the Files app for attaching.
         INFOPLIST_KEY_UIFileSharingEnabled: YES
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
-        TARGETED_DEVICE_FAMILY: '1,2'
+        # iPhone only until the layout is tested on iPad; on an iPad it runs as an iPhone app.
+        TARGETED_DEVICE_FAMILY: '1'
+        # Portrait and both landscapes, as the iPhone allowed before this was declared; never upside down.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         SUPPORTS_MACCATALYST: NO
         # The Mac gets a native target; keep this iOS build off Apple silicon Macs as an untested iPad app.
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
@@ -162,6 +165,8 @@ targets:
         INFOPLIST_FILE: NotificationService/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         APPLICATION_EXTENSION_API_ONLY: YES
+        # Matches the app's device family.
+        TARGETED_DEVICE_FAMILY: '1'
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
   # The Mac's notification service extension: the iOS extension's code under the same App ID, built for macOS with the
   # sandbox entitlements a Mac extension needs. Embedded in HausXMPPMac. Its Info.plist is the iOS one plus
