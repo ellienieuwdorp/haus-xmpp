@@ -22,6 +22,7 @@
 <ul>
   <li>There is no Haus XMPP account. You sign in with an account on an XMPP server you choose, and the app talks to that server directly.</li>
   <li>We never receive your messages, contacts, encryption keys or password.</li>
+  <li>Link previews are fetched by your device directly from the website, never through us.</li>
   <li>If you turn on notifications, our push service stores your XMPP address and an Apple device token so it can wake the app. Nothing else.</li>
   <li>No ads, no tracking, no analytics, nothing sold.</li>
 </ul>
@@ -41,6 +42,9 @@
 <p>When you turn notifications off or sign out, the app tells the push service to delete the registration. Registrations that are revoked, whose token Apple reports as invalid, or that were never used are deleted 60 days after their last change. Pending wake-ups expire after one hour. The service's logs contain counters only, never addresses, tokens or messages. Nightly backups of the registration database are kept for seven days.</p>
 <p>The push service runs on a server rented from Hetzner Online GmbH in Helsinki, Finland. Notifications are delivered by Apple's Push Notification service, under <a href="https://www.apple.com/legal/privacy/">Apple's privacy policy</a>.</p>
 <p>We use this data only to deliver notifications you asked for. The legal basis is providing the service you requested (Article 6(1)(b) GDPR).</p>
+
+<h2>Link previews</h2>
+<p>When a message from one of your contacts contains a link and you look at it, the app fetches that web page over HTTPS to show a preview with its title and image. The website sees your IP address and a request from Haus XMPP, as it would if you opened the link; no cookies or account details are sent. Links in messages from people who are not your contacts are never fetched. When you send a link in an encrypted chat, the app fetches the preview once and sends the title, description and a small image to the other person inside the encrypted message. Previews are cached on your device for up to a week. You can turn link previews off in Settings › Privacy.</p>
 
 <h2>TestFlight and the App Store</h2>
 <p>If you install the app through TestFlight, Apple shares the feedback, screenshots and crash reports you choose to send with us, along with your device model and OS version, as described in Apple's TestFlight terms. App Store and TestFlight usage statistics reach us only if you allow sharing with app developers in your device settings. We use these only to fix problems.</p>
