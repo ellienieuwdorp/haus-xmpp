@@ -1,3 +1,4 @@
+import CoreText
 import MessageStore
 import QuickLook
 import SafariServices
@@ -1349,18 +1350,27 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     }
 
     /// Links are underlined, in the accent on received bubbles and in the text colour on the accent-filled sent ones.
-    /// Only colour and underline change: the font, and so the measured width, stays the body's.
+    /// Only colour, underline and language change: the font, and so the measured width, stays the body's.
+    ///
+    /// A link never gets a hyphen. At large Dynamic Type sizes a URL longer than the line breaks inside a word, and
+    /// TextKit draws a hyphen there even with hyphenation off (measured on iOS 27: neither a paragraph style nor the
+    /// layout manager's switch removes it), which then reads as part of the address. Marking the link's run as having
+    /// no linguistic content (`zxx`) leaves nothing to hyphenate with, so it breaks at a character without a hyphen;
+    /// the prose around it keeps its usual breaks.
     private func drawLinks(base: UIColor, link color: UIColor) {
         let storage = textView.textStorage
         let whole = NSRange(location: 0, length: storage.length)
         storage.beginEditing()
         storage.removeAttribute(.underlineStyle, range: whole)
+        storage.removeAttribute(Self.language, range: whole)
         storage.addAttribute(.foregroundColor, value: base, range: whole)
         for link in links where NSMaxRange(link.range) <= whole.length {
-            storage.addAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue, .foregroundColor: color], range: link.range)
+            storage.addAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue, .foregroundColor: color, Self.language: "zxx"], range: link.range)
         }
         storage.endEditing()
     }
+
+    private static let language = NSAttributedString.Key(kCTLanguageAttributeName as String)
 
     /// VoiceOver's Links rotor walks the links in the text; activating the text then opens the one it moved to.
     private func linkRotor() -> UIAccessibilityCustomRotor {
