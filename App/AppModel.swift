@@ -494,6 +494,15 @@ final class AppModel {
                     }
                 }
             }
+            // Links and previews that came with their messages, so the sample needs no fetch (DemoLinkSamples).
+            try await store.upsertChat(accountID: account, chatID: DemoLinkSamples.chatID, title: DemoLinkSamples.title)
+            for message in DemoLinkSamples.messages(account: account) {
+                try await store.insertMessage(message)
+                guard message.isOutgoing else { continue }
+                try await store.recordReceipt(accountID: account, event: MessageEvent(id: message.id + "-receipt", chatID: message.chatID, actorID: message.chatID,
+                                                                                    targetWireID: message.id, kind: .displayed, payload: "{}",
+                                                                                    updatedAt: message.sentAt.addingTimeInterval(10)))
+            }
             // Long enough to cross several timeline pages; only tests and scroll checks ask for it.
             if ProcessInfo.processInfo.arguments.contains("-demo-long") {
                 let chatID = "history@preview.local"

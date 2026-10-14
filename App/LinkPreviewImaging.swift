@@ -78,7 +78,7 @@ enum LinkPreviewImaging {
     }
 
     /// Only the pixels: no properties are given, so no EXIF, GPS or other metadata is written.
-    private static func encode(_ image: CGImage, type: UTType, quality: Double) -> Data? {
+    static func encode(_ image: CGImage, type: UTType, quality: Double) -> Data? {
         let output = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(output as CFMutableData, type.identifier as CFString, 1, nil) else { return nil }
         CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
