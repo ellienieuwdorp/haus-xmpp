@@ -65,8 +65,16 @@ a:hover { text-decoration: underline; }
   height: auto;
 }
 
-.shots .phone { width: 260px; }
-.shots .mac { width: min(720px, 100%); border-radius: 12px; }
+.shots .phone {
+  width: 260px;
+  border-radius: 36px;
+  box-shadow: 0 0 0 1px var(--rule), 0 20px 50px rgba(0, 0, 0, 0.12);
+}
+.shots .mac {
+  width: min(720px, 100%);
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px var(--rule), 0 20px 50px rgba(0, 0, 0, 0.12);
+}
 
 .links {
   margin-top: 56px;
