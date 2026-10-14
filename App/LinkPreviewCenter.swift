@@ -5,7 +5,7 @@ import OSLog
 import XMPPProtocol
 
 /// Our own link preview fetches for the signed-in account (docs/development/link-previews.md, Fetcher): one in
-/// flight per link (`LinkDetection.cacheKey`), at most `concurrent` at once, only while the app is in front.
+/// flight per link (`LinkDetection.cacheKey`), at most `concurrentFetches` at once, only while the app is in front.
 /// Results go to the fetch cache (`LinkPreviewCaching`, 7 days on success and 1 on failure) with the downsampled
 /// image as a file under the account's attachment folder, `link-previews/`, and are published in `results`.
 /// The policy (setting, contact, demo) is the caller's; this only fetches what it is asked for.
@@ -18,7 +18,6 @@ final class LinkPreviewCenter {
     @ObservationIgnored private var folder: URL?
     @ObservationIgnored private var cache: any LinkPreviewCaching
     @ObservationIgnored private let fetcher: LinkPreviewFetcher
-    @ObservationIgnored private let concurrent: Int
     @ObservationIgnored private var isForeground = true
     /// The device has a usable network path (the app model's path monitor). A name that does not resolve while it has
     /// none is asked again later instead of standing as a failure for a day.
@@ -35,12 +34,12 @@ final class LinkPreviewCenter {
 
     /// How many cache entries an account keeps besides the age limit.
     static let cacheEntries = 2_000
+    static let concurrentFetches = 2
     nonisolated static let folderName = "link-previews"
 
-    init(fetcher: LinkPreviewFetcher = LinkPreviewFetcher(), cache: any LinkPreviewCaching = InMemoryLinkPreviewCache(), concurrent: Int = 2) {
+    init(fetcher: LinkPreviewFetcher = LinkPreviewFetcher(), cache: any LinkPreviewCaching = InMemoryLinkPreviewCache()) {
         self.fetcher = fetcher
         self.cache = cache
-        self.concurrent = concurrent
     }
 
     /// The account fetches are for, its attachment folder and the cache that keeps its results; a change drops
@@ -140,7 +139,7 @@ final class LinkPreviewCenter {
     }
 
     private func acquireSlot() async -> Bool {
-        if running < concurrent { running += 1; return true }
+        if running < Self.concurrentFetches { running += 1; return true }
         return await withCheckedContinuation { waiting.append($0) }
     }
 
