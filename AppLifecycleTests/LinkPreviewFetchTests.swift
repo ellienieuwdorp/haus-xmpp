@@ -319,6 +319,37 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertEqual(stale?.title, "New")
     }
 
+    /// A refetch after the entry expired that brings a different image writes it to a new file and removes the old
+    /// one: the cards cache decoded images by file, so reusing the name would keep showing the old picture.
+    @MainActor func testARefetchedImageNeverReusesTheOldFile() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "LinkPreviewFetchTests-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let cache = try makeCache()
+        resolver.set("pics.example", Self.publicV4)
+        let url = URL(string: "https://pics.example/today")!
+        PreviewStubServer.serve(url.absoluteString, .page(page(#"<meta property="og:title" content="Today"><meta property="og:image" content="/today.png">"#)))
+        PreviewStubServer.serve("https://pics.example/today.png", .image(Self.png(width: 400, height: 300)))
+        let first = LinkPreviewCenter(fetcher: fetcher())
+        first.use(account: "me@example.org", folder: folder, cache: cache)
+        let firstPreview = await first.preview(for: url)
+        let old = try XCTUnwrap(firstPreview?.imageFile)
+
+        // A week later the page shows another picture.
+        let saved = try await cache.linkPreviewCacheEntry(accountID: "me@example.org", url: LinkDetection.cacheKey(for: url))
+        var entry = try XCTUnwrap(saved)
+        entry.fetchedAt = .now - 8 * 24 * 60 * 60
+        try await cache.saveLinkPreviewCacheEntry(entry)
+        PreviewStubServer.serve("https://pics.example/today.png", .image(Self.png(width: 400, height: 200)))
+        let second = LinkPreviewCenter(fetcher: fetcher())
+        second.use(account: "me@example.org", folder: folder, cache: cache)
+        let secondPreview = await second.preview(for: url)
+        let new = try XCTUnwrap(secondPreview?.imageFile)
+
+        XCTAssertNotEqual(new, old)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: new.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: old.path), "The replaced image is removed")
+    }
+
     /// Away from the foreground nothing is fetched, and a fetch cut short by leaving is not recorded as a failure.
     @MainActor func testTheCenterFetchesOnlyInFront() async throws {
         resolver.set("away.example", Self.publicV4)

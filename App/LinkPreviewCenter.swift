@@ -176,10 +176,12 @@ final class LinkPreviewCenter {
                                   imageWidth: file == nil ? nil : entry.imageWidth, imageHeight: file == nil ? nil : entry.imageHeight)
     }
 
-    /// Writes the image off the main thread; returns its path relative to `folder`.
+    /// Writes the image off the main thread; returns its path relative to `folder`. The name is the link's and the
+    /// image's digest: a refetch that brings a different image writes a new file (the old one goes with the replaced
+    /// entry), so the cards' decoded-image caches, keyed by path, never show the old picture for it.
     private static func write(_ image: LinkPreviewImage, key: String, folder: URL) async -> String? {
-        let name = SHA256.hash(data: Data(key.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
-        let path = folderName + "/" + name + "." + image.fileExtension
+        func hex(_ data: Data, _ bytes: Int) -> String { SHA256.hash(data: data).prefix(bytes).map { String(format: "%02x", $0) }.joined() }
+        let path = folderName + "/" + hex(Data(key.utf8), 16) + "-" + hex(image.data, 8) + "." + image.fileExtension
         return await Task.detached(priority: .utility) { () -> String? in
             let directory = folder.appending(path: folderName, directoryHint: .isDirectory)
             do {
