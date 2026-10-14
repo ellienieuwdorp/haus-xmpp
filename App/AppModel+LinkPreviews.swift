@@ -4,9 +4,10 @@ import XMPPProtocol
 
 // MARK: Link previews
 
-// What the conversation asks of the model for link previews (docs/development/link-previews.md): fetches through
-// `linkPreviewCenter` under `LinkPreviewPolicy`.
-extension AppModel {
+// What the conversation and the composer ask of the model for link previews (docs/development/link-previews.md):
+// fetches through `linkPreviewCenter` under `LinkPreviewPolicy`, and the composer's preview with the image reduced to
+// what we send.
+extension AppModel: ComposerLinkPreviewSource {
     /// Our own fetch results for the signed-in account, keyed by `LinkDetection.cacheKey`.
     var linkPreviews: [String: FetchedLinkPreview] {
         linkPreviewCenter.account == accountID ? linkPreviewCenter.results : [:]
@@ -28,6 +29,29 @@ extension AppModel {
                                          roster: linkPreviewRosterEntry) else { return }
         useLinkPreviewAccount()
         linkPreviewCenter.request(url)
+    }
+
+    func composerLinkPreview(for url: URL) async -> ComposerLinkPreview.Content? {
+        guard !isDemo, LinkSettings.shared.fetchPreviews, let host = LinkDetection.displayHost(for: url) else { return nil }
+        useLinkPreviewAccount()
+        guard let fetched = await linkPreviewCenter.preview(for: url) else { return nil }
+        let thumbnail = await Task.detached(priority: .userInitiated) { () -> Data? in
+            guard let file = fetched.imageFile, let data = try? Data(contentsOf: file) else { return nil }
+            return LinkPreviewImaging.sentThumbnail(from: data, maximumBytes: MessageContent.LinkMetadata.maximumSentImageBytes)
+        }.value
+        return ComposerLinkPreview.Content(url: url, host: host, title: fetched.title, summary: fetched.summary,
+                                           imageAlt: fetched.imageAlt, thumbnail: thumbnail)
+    }
+
+    /// The own preview `send` may store with `body`: ours, for the first previewable link of the body, within the
+    /// bounds we send. Anything else is dropped rather than sent.
+    func acceptedOwnLinkPreview(_ preview: StoredLinkPreview?, body: String) -> StoredLinkPreview? {
+        guard let preview, preview.source == .own,
+              LinkDetection.previewableURLs(in: body, uploadHosts: linkPreviewUploadHosts).first?.absoluteString == preview.url,
+              preview.title != nil || preview.imageData != nil,
+              (preview.imageData?.count ?? 0) <= MessageContent.LinkMetadata.maximumSentImageBytes,
+              (preview.imageData == nil) == (preview.imageType == nil) else { return nil }
+        return preview
     }
 
     private func useLinkPreviewAccount() {

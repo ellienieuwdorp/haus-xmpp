@@ -2297,7 +2297,9 @@ final class AppModel {
         } catch { self.error = "Could not create conversation."; return nil }
     }
 
-    func send(_ body: String, to chatID: String, replyingTo source: ChatMessage? = nil) async -> Bool {
+    /// `linkPreview` is the composer's frozen own preview (`ComposerLinkPreview.frozen`), stored with the message so
+    /// every retry seals the same bytes. Only modern OMEMO carries it; a legacy seal clears it (link-previews.md, Wire).
+    func send(_ body: String, to chatID: String, replyingTo source: ChatMessage? = nil, linkPreview: StoredLinkPreview? = nil) async -> Bool {
         guard !isSending, let store, !accountID.isEmpty,
               !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               body.utf8.count <= 16_384 else { return false }
@@ -2309,7 +2311,8 @@ final class AppModel {
         if isGroup(chatID), !canSend(to: chatID) { error = "Wait until this account has joined the group before sending."; return false }
         if let source, source.accountID != account || source.chatID != chatID { return false }
         let message = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chatID,
-                                    senderID: account, body: body, isOutgoing: true, reply: source.map { replySnapshot(of: $0, in: chatID) }, encryptionProfile: sample ? nil : "pending")
+                                    senderID: account, body: body, isOutgoing: true, reply: source.map { replySnapshot(of: $0, in: chatID) }, encryptionProfile: sample ? nil : "pending",
+                                    linkPreview: acceptedOwnLinkPreview(linkPreview, body: body))
         if let problem = XMPPClient.messageProblem(to: chatID, body: body, id: message.id, reply: Self.wireReply(message.reply)) {
             self.error = Self.sendFailure(problem)
             return false
