@@ -195,7 +195,7 @@ final class TimelineCellSemanticsTests: XCTestCase {
         let chat = try XCTUnwrap(linked.accessibilityCustomActions?.last)
         XCTAssertEqual(chat.actionHandler?(chat), true)
         XCTAssertEqual(chats, ["romeo@montague.lit"])
-        // Web links open in the in-app browser unless "Open Links in Safari" is on (off by default).
+        // Web links open in the in-app browser unless "Open links in Safari" is on (off by default).
         XCTAssertFalse(LinkSettings.shared.openInSafari)
         let open = try XCTUnwrap(carded.accessibilityCustomActions?.last)
         XCTAssertEqual(open.actionHandler?(open), true)

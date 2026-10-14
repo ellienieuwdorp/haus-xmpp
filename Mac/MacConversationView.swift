@@ -67,7 +67,7 @@ struct MacConversationView: View {
         .confirmationDialog(phoneLink?.number ?? "", isPresented: Binding(get: { phoneLink != nil }, set: { if !$0 { phoneLink = nil } }),
                             titleVisibility: .visible, presenting: phoneLink) { link in
             Button("Call") { NSWorkspace.shared.open(link.call) }
-            Button("Send Message") { NSWorkspace.shared.open(link.message) }
+            Button("Send message") { NSWorkspace.shared.open(link.message) }
             Button("Copy") { copy(link.number) }
         }
         .alert("Copied", isPresented: Binding(get: { copiedReason != nil }, set: { if !$0 { copiedReason = nil } }), presenting: copiedReason) { _ in

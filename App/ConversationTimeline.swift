@@ -265,7 +265,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         case (.open, .phone(let number, let call, let message)):
             let sheet = UIAlertController(title: number, message: nil, preferredStyle: .actionSheet)
             sheet.addAction(UIAlertAction(title: "Call", style: .default) { _ in UIApplication.shared.open(call) })
-            sheet.addAction(UIAlertAction(title: "Send Message", style: .default) { _ in UIApplication.shared.open(message) })
+            sheet.addAction(UIAlertAction(title: "Send message", style: .default) { _ in UIApplication.shared.open(message) })
             sheet.addAction(UIAlertAction(title: "Copy", style: .default) { _ in UIPasteboard.general.string = number })
             sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
             sheet.popoverPresentationController?.sourceView = source

@@ -32,12 +32,12 @@ struct MacLinkPreviewCard: View {
         .buttonStyle(.plain)
         .help(preview.url.absoluteString)
         .contextMenu {
-            Button("Open Link") { openURL(preview.url) }
-            Button("Copy Link") {
+            Button("Open link") { openURL(preview.url) }
+            Button("Copy link") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(LinkOpening.copyText(for: preview.url), forType: .string)
             }
-            ShareLink("Share…", item: preview.url)
+            ShareLink("Share link", item: preview.url)
         }
         .task(id: preview.image) { image = await Self.decode(preview.image) }
     }

@@ -22,7 +22,7 @@ enum LinkDestination: Equatable, Sendable {
 }
 
 enum LinkOpening {
-    /// `inAppBrowser`: web pages open in the in-app browser (iOS with "Open Links in Safari" off). The Mac passes false.
+    /// `inAppBrowser`: web pages open in the in-app browser (iOS with "Open links in Safari" off). The Mac passes false.
     static func destination(for url: URL, inAppBrowser: Bool) -> LinkDestination {
         switch url.scheme?.lowercased() {
         case "http", "https":

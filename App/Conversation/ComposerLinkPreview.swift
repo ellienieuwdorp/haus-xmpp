@@ -54,7 +54,7 @@ final class ComposerLinkPreview {
 
     init(debounce: Duration = .milliseconds(400)) { self.debounce = debounce }
 
-    /// The draft or what it may carry changed. `enabled` is the Link Previews setting (and never in the sample
+    /// The draft or what it may carry changed. `enabled` is the Link previews setting (and never in the sample
     /// conversations); `suppressed` is a message that carries no preview: files in the tray, or an edit.
     /// Runs on every keystroke, so it only schedules: links are detected once typing pauses. A card or fetch for the
     /// link still first stays meanwhile.
