@@ -86,6 +86,8 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     let isOutgoing: Bool
     let isStarred: Bool
     var attachment: TimelineAttachment? = nil
+    /// The card above the text: the sender's or our own sent preview, else our fetch for the first previewable link.
+    var linkPreview: TimelineLinkPreview? = nil
     var sentAt: Date? = nil
     var status: Status? = nil
     /// Why a server returned this message (`RejectionCopy`); set only while it shows as failed.

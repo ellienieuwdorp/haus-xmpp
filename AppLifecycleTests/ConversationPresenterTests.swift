@@ -19,6 +19,8 @@ final class ConversationPresenterTests: XCTestCase {
         var messageReceipts: [String: MessageEventKind] = [:]
         var attachmentFiles: [String: URL] = [:]
         var attachmentDownloads: [String: AttachmentDownloadState] = [:]
+        var linkPreviews: [String: FetchedLinkPreview] = [:]
+        var linkPreviewUploadHosts: Set<String> = []
         var encryptionOverview: EncryptionOverview?
         var openChatTyping: [String]?
         var groups: Set<String> = []
@@ -28,6 +30,7 @@ final class ConversationPresenterTests: XCTestCase {
         func canReact(to message: StoredMessage) -> Bool { reactable }
         func canRevise(_ message: StoredMessage) -> Bool { false }
         func isBackfilling(chat: String) -> Bool { false }
+        func linkPreviewDisplayed(_ messageID: String) {}
     }
 
     private let source = Source()

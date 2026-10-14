@@ -16,6 +16,10 @@ protocol ConversationSource: AnyObject {
     var messageReceipts: [String: MessageEventKind] { get }
     var attachmentFiles: [String: URL] { get }
     var attachmentDownloads: [String: AttachmentDownloadState] { get }
+    /// Our own link preview fetches, keyed by `LinkDetection.cacheKey`.
+    var linkPreviews: [String: FetchedLinkPreview] { get }
+    /// GET hosts of our upload slots, which never get a preview (`StoredMessage.linkPreviewCandidate`).
+    var linkPreviewUploadHosts: Set<String> { get }
     var encryptionOverview: EncryptionOverview? { get }
     var openChatTyping: [String]? { get }
     func isGroup(_ chatID: String) -> Bool
@@ -23,6 +27,8 @@ protocol ConversationSource: AnyObject {
     func canReact(to message: StoredMessage) -> Bool
     func canRevise(_ message: StoredMessage) -> Bool
     func isBackfilling(chat: String) -> Bool
+    /// A message is on screen: fetch its link preview if policy allows. Never called at insert time.
+    func linkPreviewDisplayed(_ messageID: String)
 }
 
 /// Everything the open conversation shows that is derived from the model: which messages are listed under the current

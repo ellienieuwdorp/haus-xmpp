@@ -24,6 +24,8 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public var attachment: StoredAttachment?
     /// Set only on a placeholder row (`encryptionProfile == "unreadable"`, empty body): why this device cannot show it.
     public var unreadableReason: UnreadableReason?
+    /// The link preview the sender attached or we sent with it (`StoredLinkPreview`); nil for most messages.
+    public var linkPreview: StoredLinkPreview?
     /// Projection flags, set only by `applying(_:)`; never persisted.
     public var isRetracted = false
     public var isEdited = false
@@ -45,8 +47,9 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public init(id: String, accountID: String, chatID: String, senderID: String, body: String,
                 sentAt: Date = Date(), isOutgoing: Bool = false, isStarred: Bool = false,
                 transportState: OutgoingTransportState? = nil, reply: MessageReply? = nil, encryptionProfile: String? = nil, wireID: String? = nil, wireIDAuthenticated: Bool = false,
-                attachment: StoredAttachment? = nil, unreadableReason: UnreadableReason? = nil) {
+                attachment: StoredAttachment? = nil, unreadableReason: UnreadableReason? = nil, linkPreview: StoredLinkPreview? = nil) {
         self.attachment = attachment
+        self.linkPreview = linkPreview
         self.unreadableReason = unreadableReason
         self.id = id
         self.accountID = accountID
