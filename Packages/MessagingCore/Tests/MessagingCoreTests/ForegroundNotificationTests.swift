@@ -116,3 +116,76 @@ struct ForegroundNotificationTests {
         }
     }
 }
+
+private func reaction(_ chat: String, sequence: Int, at: TimeInterval) -> ReactionNotificationCandidate {
+    let target = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chat, senderID: account, body: "Lunch?",
+                               sentAt: Date(timeIntervalSince1970: at - 60), isOutgoing: true, encryptionProfile: "modern")
+    return ReactionNotificationCandidate(key: .reaction(sequence: sequence), accountID: account, chatID: chat, chatTitle: nil,
+                                         actor: NotificationParticipant(id: chat, title: nil, avatarHash: nil), isGroup: false, target: target,
+                                         reactions: ["👍"], reactedAt: Date(timeIntervalSince1970: at))
+}
+
+/// What a desktop app caught up on after waking or launching: one banner per chat, held until the catch-up is in.
+struct CaughtUpNotificationTests {
+    @Test func oneBannerPerChatWhateverItsAgeButNotForTheChatBeingRead() async throws {
+        try await withStore { store in
+            let now = Date().timeIntervalSince1970
+            try await receive(store, chat: "erin@example.org", body: "Two days ago", at: now - 2 * 86_400)
+            try await receive(store, chat: "carol@example.org", body: "First", at: now - 3_600)
+            try await receive(store, chat: "carol@example.org", body: "Second", at: now - 3_500)
+            let carol = try await receive(store, chat: "carol@example.org", body: "Third", at: now - 3_400)
+            try await receive(store, chat: "bob@example.org", body: "Being read", at: now - 60)
+            let posting = FakePosting()
+            let posted = try await NotificationPresenter(posting: posting)
+                .presentCaughtUp(store: store, accountID: account, readingChatID: "bob@example.org", presents: true)
+            let added = await posting.added
+            #expect(posted == 2)
+            #expect(added.map(\.threadIdentifier) == ["erin@example.org", "carol@example.org"].map { NotificationIdentity.thread(accountID: account, chatID: $0) })
+            #expect(added.map(\.body) == ["Two days ago", "Third\nand 2 more"])
+            #expect(added.last?.destination == NotificationDestination(accountID: account, messageID: carol.id), "a tap opens the newest message's chat")
+            #expect(added.map(\.playsSound) == [false, true], "one sound for the whole catch-up")
+            // Everything is claimed, the chat being read included: a later catch-up cannot alert for any of it again.
+            #expect(try await store.pendingNotifications(accountID: account).claimed.isEmpty)
+        }
+    }
+
+    @Test func withoutPermissionEverythingHeldIsDismissed() async throws {
+        try await withStore { store in
+            try await receive(store, chat: "carol@example.org", at: Date().timeIntervalSince1970 - 3_600)
+            let posting = FakePosting()
+            #expect(try await NotificationPresenter(posting: posting)
+                .presentCaughtUp(store: store, accountID: account, readingChatID: nil, presents: false) == 0)
+            #expect(await posting.added.isEmpty)
+            #expect(try await store.pendingNotifications(accountID: account).claimed.isEmpty)
+        }
+    }
+
+    /// The caught-up batch is rebuilt for the planner: the device's preview setting must come through.
+    @Test func previewsOffHideTitleAndText() {
+        let hidden = NotificationPlanner.caughtUp(
+            MessageNotification(candidates: [candidate("carol@example.org", at: 1)], claimed: [], previewsEnabled: false),
+            accountID: account, readingChatID: nil)
+        #expect(hidden.requests.map(\.title) == [""] && hidden.requests.map(\.body) == [NotificationPlanner.hiddenBody])
+        #expect(hidden.requests.allSatisfy { $0.communication == nil })
+    }
+
+    @Test func reactionsAlertOnlyInChatsWithoutAMessageBannerAndOnlyTheNewest() {
+        let message = candidate("carol@example.org", at: 10)
+        let reactions = [reaction("carol@example.org", sequence: 1, at: 11), reaction("erin@example.org", sequence: 2, at: 12),
+                         reaction("erin@example.org", sequence: 3, at: 13), reaction("bob@example.org", sequence: 4, at: 14)]
+        let batch = MessageNotification(candidates: [message], claimed: [message.key] + reactions.map(\.key), previewsEnabled: true, reactions: reactions)
+        let plan = NotificationPlanner.caughtUp(batch, accountID: account, readingChatID: "bob@example.org")
+        #expect(plan.requests.map(\.categoryIdentifier) == [NotificationIdentity.messageCategory, NotificationIdentity.reactionCategory])
+        #expect(plan.requests.last?.identifier == NotificationIdentity.reaction(accountID: account, chatID: "erin@example.org",
+                                                                                actorID: "erin@example.org", targetMessageID: reactions[2].target.id))
+        #expect(plan.claimed == batch.claimed, "the reactions without a banner are claimed with the rest")
+    }
+
+    @Test func chatsPastTheCapGetTheDeferredChatsSummary() {
+        let shown = candidate("carol@example.org", at: 10)
+        let batch = MessageNotification(candidates: [shown], claimed: [shown.key], deferredCount: 5, deferredChatCount: 3, previewsEnabled: true)
+        let plan = NotificationPlanner.caughtUp(batch, accountID: account, readingChatID: nil)
+        #expect(plan.requests.map(\.body) == [NotificationPlanner.overflowBody(chats: 3), "Hi"])
+        #expect(plan.summarizesDeferredChats)
+    }
+}

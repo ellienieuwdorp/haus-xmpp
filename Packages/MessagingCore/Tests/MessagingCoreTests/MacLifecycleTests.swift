@@ -15,6 +15,7 @@ struct AttentionRulesTests {
 
     @Test func thePhoneDecidesEveryGuardAsTheForegroundFlagDid() {
         let rules = AttentionRules.phone
+        #expect(!rules.holdsCatchUpBanners, "what a connection caught up on in front is dismissed, as before")
         for foreground in [true, false] {
             let state = foreground ? LifecycleSignals.inFront : .away
             for open in [chat, nil] as [String?] {

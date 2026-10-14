@@ -78,10 +78,7 @@ struct SettingsView: View {
                         }
                     }
                     #else
-                    Button("Open \(ThisDevice.settingsApp)") {
-                        if let url = PlatformApplication.notificationSettingsURL { openURL(url) }
-                    }
-                    .accessibilityIdentifier("openNotificationSettings")
+                    MacNotificationPermissionRow(model: model)
                     #endif
                     Toggle("Message previews", isOn: Binding(get: { model.notificationPreviewsEnabled },
                         set: { enabled in Task { await model.setNotificationPreviews(enabled) } }))
@@ -113,6 +110,9 @@ struct SettingsView: View {
             } footer: {
                 Text("Tell contacts when their messages reach this \(ThisDevice.noun) and when you read them. You still see what contacts send you, and their messages are still asked for receipts. Last seen lets contacts you chat with see when you were last online. Turning it off stops sharing your online status with everyone; you still see what contacts share.")
             }
+            #if os(macOS)
+            MacLoginItemSection()
+            #endif
             // The Mac's Settings window has Appearance as a pane of its own.
             #if os(iOS)
             Section {

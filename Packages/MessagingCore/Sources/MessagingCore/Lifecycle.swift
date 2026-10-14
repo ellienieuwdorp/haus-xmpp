@@ -196,6 +196,12 @@ public struct AttentionRules: Sendable, Equatable {
         desktop && sendsChatStates(old) && !sendsChatStates(new)
     }
 
+    /// Whether banners wait for the catch-up. iOS catches up only in front, where the chat list shows what arrived,
+    /// so what a connection caught up on is dismissed without banners. A desktop app catches up after waking or
+    /// launching, often with nobody at it: it keeps those candidates until the walk and the other devices' read state
+    /// are in, then posts one banner per chat (`NotificationPresenter.presentCaughtUp`).
+    public var holdsCatchUpBanners: Bool { desktop }
+
     /// Whether the user just started reading the open chat: on a Mac the newest visible message is then marked read
     /// and the chat's notifications go (critique G3). On iOS cells mark messages as they appear and nothing else runs.
     public func startsReading(from old: LifecycleSignals, to new: LifecycleSignals) -> Bool {

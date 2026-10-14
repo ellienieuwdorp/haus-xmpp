@@ -22,6 +22,25 @@ extension NotificationPlanner {
                         accountID: accountID)
         return NotificationPlan(requests: plan.requests, claimed: batch.claimed, summarizesDeferredChats: false)
     }
+
+    /// What a desktop app caught up on after waking or launching (`AttentionRules.holdsCatchUpBanners`): the batch
+    /// holds one candidate per chat (`MessageStore.pendingNotifications(perChat: 1)`), its newest with "and N more",
+    /// and each becomes one request whatever its age, so a night's messages are one banner per chat and not one per
+    /// message. Not the chat the user is reading. A chat's reactions alert only when none of its messages does, and
+    /// then only the newest. Chats past the run's cap get the deferred-chats summary, as an extension run's would.
+    /// Claims the whole batch.
+    public static func caughtUp(_ batch: MessageNotification, accountID: String, readingChatID: String?) -> NotificationPlan {
+        let shown = batch.candidates.filter { $0.chatID != readingChatID }
+        let alerting = Set(shown.map(\.chatID))
+        var newestReaction: [String: Int] = [:]
+        for (index, reaction) in batch.reactions.enumerated() where reaction.chatID != readingChatID && !alerting.contains(reaction.chatID) {
+            newestReaction[reaction.chatID] = index
+        }
+        let reactions = batch.reactions.enumerated().filter { newestReaction[$0.element.chatID] == $0.offset }.map(\.element)
+        return plan(MessageNotification(candidates: shown, claimed: batch.claimed, deferredCount: batch.deferredCount,
+                                        deferredChatCount: batch.deferredChatCount, previewsEnabled: batch.previewsEnabled, reactions: reactions),
+                    accountID: accountID)
+    }
 }
 
 extension NotificationPresenter {
@@ -39,6 +58,27 @@ extension NotificationPresenter {
         let batch = try await store.pendingNotifications(accountID: accountID)
         guard !batch.claimed.isEmpty || batch.deferredCount > 0 else { return 0 }
         let plan = NotificationPlanner.foreground(batch, accountID: accountID, readingChatID: readingChatID, now: now)
+        return try await post(plan, batch: batch, store: store, accountID: accountID)
+    }
+
+    /// A desktop app's claim once a connection's catch-up and read-state sync are in: one banner per chat for
+    /// everything held meanwhile (`NotificationPlanner.caughtUp`), under the transport lease. With `presents` false (no
+    /// notification permission) every candidate is dismissed. Returns how many requests were posted.
+    @discardableResult
+    public func presentCaughtUp(store: MessageStore, accountID: String, readingChatID: String?, presents: Bool) async throws -> Int {
+        guard presents else {
+            try await store.dismissPendingMessageNotifications(accountID: accountID)
+            return 0
+        }
+        let batch = try await store.pendingNotifications(accountID: accountID, perChat: 1)
+        guard !batch.claimed.isEmpty || batch.deferredCount > 0 else { return 0 }
+        let plan = NotificationPlanner.caughtUp(batch, accountID: accountID, readingChatID: readingChatID)
+        return try await post(plan, batch: batch, store: store, accountID: accountID)
+    }
+
+    /// Posts a claim's plan, best effort, then deletes exactly the claimed rows; anything the batch deferred is
+    /// dismissed.
+    private func post(_ plan: NotificationPlan, batch: MessageNotification, store: MessageStore, accountID: String) async throws -> Int {
         var posted = 0
         for request in plan.requests {
             // The message is in the app already: a banner that fails to post is not worth keeping the candidate for.
