@@ -19,7 +19,7 @@ final class PushOnboardingLabUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 10))
         app.buttons["Settings"].tap()
-        app.buttons["Connect to local lab"].tap()
+        app.buttons["accountSignIn"].tap()
         let consent = app.switches["labConsent"]
         XCTAssertTrue(consent.waitForExistence(timeout: 5))
         consent.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()

@@ -420,10 +420,12 @@ final class AppModel {
             outboxSender = OutboxSender(store: opened)
             accountID = savedAccount
             uploadService = uploads.load(account: accountID)
-            if ProcessInfo.processInfo.arguments.contains("-demo") {
+            if Self.launchesWithSamples {
                 await loadDemo()
+                #if DEBUG
                 // The recovery screen over the sample data, for captures; nothing touches the Keychain.
                 if ProcessInfo.processInfo.arguments.contains("-demo-key-recovery") { keyRecovery = .sample(account: accountID) }
+                #endif
             } else {
                 if let store, try await NotificationDiagnostics.exportIfRequested(store: store, directory: directory) {
                     pushStatus = .inspected
@@ -445,6 +447,17 @@ final class AppModel {
         }
     }
 
+    /// `-demo` (DEBUG only, for tests and captures) opens the sample conversations at launch.
+    private static var launchesWithSamples: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-demo")
+        #else
+        false
+        #endif
+    }
+
+    /// Signs out (messages and keys stay) and shows sample conversations stored on this device; nothing is sent. The
+    /// `-demo-*` launch arguments (DEBUG only) add extras for tests and captures.
     func loadDemo() async {
         await forgetAccount()
         let token = generation
@@ -475,6 +488,7 @@ final class AppModel {
                     }
                 }
             }
+            #if DEBUG
             // Long enough to cross several timeline pages; only tests and scroll checks ask for it.
             if ProcessInfo.processInfo.arguments.contains("-demo-long") {
                 let chatID = "history@preview.local"
@@ -485,6 +499,8 @@ final class AppModel {
                                                                 sentAt: Date(timeIntervalSince1970: 1_789_300_000 + Double(index) * 60), isOutgoing: index.isMultiple(of: 3)))
                 }
             }
+            #endif
+            #if DEBUG
             // Two placeholders in Alex's chat, for tests and screenshots: an own send from another device that did
             // not encrypt for this one, and an incoming message that could not be read. Recorded exactly as the
             // receive path records them, so they are never content, never reactable and never counted.
@@ -494,10 +510,13 @@ final class AppModel {
                 try await store.recordUnreadableMessage(UnreadableMessage(accountID: account, chatID: "alex@preview.local", senderID: "alex@preview.local", isOutgoing: false,
                     sentAt: Date(timeIntervalSince1970: 1_789_380_005), reason: .decryptFailed, key: .archive(archive: account, id: "sample-unreadable-2")))
             }
+            #endif
             // One muted chat, so the list's muted glyph shows in sample captures.
             try await store.setChatNotificationSetting(accountID: account, chatID: "maya@preview.local", ChatNotificationSetting(mutedUntil: ChatNotificationSetting.always))
+            #if DEBUG
             // A peer who is typing, for tests and screenshots; nothing expires it.
             if ProcessInfo.processInfo.arguments.contains("-demo-typing") { typing = ["alex@preview.local": ["alex@preview.local"]] }
+            #endif
             // One sample photo, drawn here so no asset ships: exercises the bubble thumbnail and the viewer.
             if let files {
                 let size = CGSize(width: 1200, height: 900)
@@ -516,8 +535,9 @@ final class AppModel {
                 try await store.insertMessage(StoredMessage(id: "sample-photo", accountID: account, chatID: "alex@preview.local", senderID: "alex@preview.local", body: "",
                                                             sentAt: Date(timeIntervalSince1970: 1_789_380_000.5), isOutgoing: false, attachment: attachment))
             }
-            // Sample history is read history; only `-demo-unread` leaves something new, for screenshots of the count pill.
+            // Sample history is read history; only `-demo-unread` (DEBUG) leaves something new, for screenshots of the count pill.
             for chat in try await store.chats(accountID: account) { try await store.markChatRead(accountID: account, chatID: chat.id) }
+            #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-demo-unread") {
                 let unread = [("maya@preview.local", "Also, bring the map 🗺️"), ("maya@preview.local", "The trail opens at nine."), ("alex@preview.local", "Bringing pastries 🥐")]
                 for (index, (chatID, body)) in unread.enumerated() {
@@ -525,29 +545,45 @@ final class AppModel {
                                                                 sentAt: Date(timeIntervalSince1970: 1_789_380_100 + Double(index)), isOutgoing: false))
                 }
             }
+            #endif
             guard generation == token else { return }
+            #if DEBUG
             // Two own devices waiting for review, so the account-level prompt can be seen without a second client.
             if ProcessInfo.processInfo.arguments.contains("-demo-own-device") { ownDevices = OwnDeviceReview.sampleDevices(account: account) }
+            #endif
             await refresh()
         } catch { if generation == token { self.error = "Could not load sample conversations." } }
     }
 
+    #if DEBUG
     /// Domains served by the development lab (localhost, plus the configured staging domain, if any); they keep the
     /// disposable-account safeguards.
     static let labDomains: Set<String> = Set(["localhost"] + [DevelopmentEndpoint.stagingDomain].compactMap { $0 })
-    var accountDomain: String { accountID.split(separator: "@", maxSplits: 1).last.map(String.init) ?? DevelopmentEndpoint.domain }
+    /// The domain a bare username signs in to: the lab's.
+    static var bareUsernameDomain: String? { DevelopmentEndpoint.domain }
     var isLabAccount: Bool { Self.labDomains.contains(accountDomain) }
+    #else
+    /// Release builds take full addresses only.
+    static var bareUsernameDomain: String? { nil }
+    /// Release builds treat every server alike.
+    var isLabAccount: Bool { false }
+    #endif
+    var accountDomain: String { accountID.split(separator: "@", maxSplits: 1).last.map(String.init) ?? Self.bareUsernameDomain ?? "" }
 
-    /// `address` is a lab username or a full `name@domain`. Without `server` the domain's SRV records choose the endpoint
-    /// (lab domains keep their direct-TLS endpoint on 5223); with one, only that endpoint is used.
+    /// `address` is a full `name@domain` (or, in DEBUG, a lab username). Without `server` the domain's SRV records choose
+    /// the endpoint (lab domains keep their direct-TLS endpoint on 5223); with one, only that endpoint is used.
     func connect(username address: String, password: String, server: XMPPEndpoint? = nil, savedEndpoint: NotificationAccount? = nil) async -> Bool {
         let parts = address.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "@", maxSplits: 1).map(String.init)
         // One spelling for the account from here on (RFC 7622 normal form): the bound JID, every key and comparison.
         let username = parts.first.flatMap(JID.normalizedLocalpart) ?? ""
-        let requestedDomain = savedEndpoint?.domain ?? (parts.count == 2 ? JID.normalizedDomainpart(parts[1]) ?? "" : DevelopmentEndpoint.domain)
+        let requestedDomain = savedEndpoint?.domain ?? (parts.count == 2 ? JID.normalizedDomainpart(parts[1]) ?? "" : Self.bareUsernameDomain ?? "")
         let localPattern = parts.count == 2 ? #"^[^@/\s]{1,64}$"# : #"^[a-z0-9][a-z0-9._-]{0,63}$"#
         let domainPattern = #"^(localhost|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+)$"#
         guard transportWanted, !quiescing, !session.isConnecting else { return false }
+        guard savedEndpoint != nil || parts.count == 2 || Self.bareUsernameDomain != nil else {
+            error = "Enter your full address, including the server, such as name@example.org."
+            return false
+        }
         guard username.range(of: localPattern, options: .regularExpression) != nil,
               requestedDomain.range(of: domainPattern, options: .regularExpression) != nil else {
             error = "Enter an address such as name@example.org."
@@ -556,8 +592,12 @@ final class AppModel {
         let manual = savedEndpoint == nil
         // Signing in (again, or as another account) starts without the backoff or the alert already shown.
         if manual { userWantsOffline = false; authenticationRejected = false; reconnection = ReconnectPolicy() }
+        #if DEBUG
         let fixedEndpoint = server ?? (Self.labDomains.contains(requestedDomain)
             ? XMPPEndpoint(host: requestedDomain == "localhost" ? DevelopmentEndpoint.host : requestedDomain, port: 5223, security: .directTLS) : nil)
+        #else
+        let fixedEndpoint = server
+        #endif
         if let sessionAccount, sessionAccount.accountID != username + "@" + requestedDomain {
             await forgetAccount()
             guard transportWanted, !quiescing else { return false }
@@ -2273,7 +2313,7 @@ final class AppModel {
         // `Bob@Example.org` is the chat the server's `bob@example.org` replies land in.
         let address = JID(recipient.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !accountID.isEmpty, let address, address.localpart != nil, address.resourcepart == nil, let store else {
-            error = "Enter a contact address such as bob@localhost."
+            error = "Enter a contact address such as name@example.org."
             return nil
         }
         let recipient = address.bare

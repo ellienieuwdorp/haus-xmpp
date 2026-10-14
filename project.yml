@@ -33,6 +33,8 @@ targets:
         CADisableMinimumFrameDurationOnPhone: true
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Export compliance: the app encrypts messages itself (OMEMO), beyond the encryption the OS provides.
+        ITSAppUsesNonExemptEncryption: true
         NSCameraUsageDescription: Take a photo or video to send.
         NSMicrophoneUsageDescription: Record sound with videos you take to send.
         NSPhotoLibraryUsageDescription: Pick recent photos and videos to send.
@@ -42,7 +44,7 @@ targets:
         NSUserActivityTypes: [INSendMessageIntent]
         # APNs environment the push gateway sends this build's tokens to (see HAUS_PUSH_ENVIRONMENT below).
         HausPushEnvironment: $(HAUS_PUSH_ENVIRONMENT)
-        # Optional test server for `-staging` (Config/Base.xcconfig). Empty in a plain checkout.
+        # Optional test server for `-staging` (Config/Base.xcconfig). Empty in a plain checkout and in Release.
         HausStagingDomain: $(HAUS_STAGING_DOMAIN)
         # One window until AppModel can serve several; a second iPad window would share the one AppModel, open chat and
         # scenePhase handler. This is the whole manifest: the generated one (turned off below) says true and wins over a
@@ -66,17 +68,18 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: NO
-        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Connect to your local XMPP development server.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Connect to an XMPP server on your local network.
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Save photos you receive to your library.
         # Files dropped into the app's Documents folder show up in the Files app for attaching.
         INFOPLIST_KEY_UIFileSharingEnabled: YES
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
-        TARGETED_DEVICE_FAMILY: '1,2'
+        # iPhone only until the layout is tested on iPad; on an iPad it runs as an iPhone app.
+        TARGETED_DEVICE_FAMILY: '1'
+        # Portrait and both landscapes, as the iPhone allowed before this was declared; never upside down.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         SUPPORTS_MACCATALYST: NO
         # The Mac gets a native target; keep this iOS build off Apple silicon Macs as an untested iPad app.
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
-        MARKETING_VERSION: '0.1.0'
-        CURRENT_PROJECT_VERSION: '1'
       # Debug is development-signed (App/App.entitlements says aps-environment development) and receives sandbox
       # tokens. Release is what gets archived for TestFlight/App Store, where distribution signing makes the
       # entitlement production. A Release build installed with development signing would still get sandbox tokens.
@@ -85,6 +88,8 @@ targets:
           HAUS_PUSH_ENVIRONMENT: sandbox
         Release:
           HAUS_PUSH_ENVIRONMENT: production
+          # Release has no staging mode, so a local staging domain stays out of its Info.plist.
+          HAUS_STAGING_DOMAIN: ''
   # The native Mac app. A separate target rather than a second destination of HausXMPP, so the iOS target's sources,
   # Info.plist and entitlements stay exactly as they were: the UIKit-only views are left out here instead of being
   # wrapped in #if, and the Mac keeps its own plist keys and sandbox entitlements.
@@ -109,6 +114,10 @@ targets:
           - NotificationHarness.swift
           - Info.plist
           - App.entitlements
+          # The Mac has its own (Mac/PrivacyInfo.xcprivacy): no keyboard APIs.
+          - PrivacyInfo.xcprivacy
+          # The Mac's icon is the iPhone art in the macOS shape, in Mac/Assets.xcassets.
+          - Assets.xcassets
       - Shared
       - Mac
       # Debug-only: the app arms and reads the extension's storage probe.
@@ -118,6 +127,8 @@ targets:
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # As on iOS: the app does its own message encryption (OMEMO).
+        ITSAppUsesNonExemptEncryption: true
         HausPushEnvironment: $(HAUS_PUSH_ENVIRONMENT)
         HausStagingDomain: $(HAUS_STAGING_DOMAIN)
         # Communication notifications, as on iOS: the app declares the intent its extension donates.
@@ -139,16 +150,17 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Haus XMPP
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.social-networking
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Connect to an XMPP server on your local network.
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ARCHS: arm64
         ENABLE_HARDENED_RUNTIME: YES
-        MARKETING_VERSION: '0.1.0'
-        CURRENT_PROJECT_VERSION: '1'
       configs:
         Debug:
           HAUS_PUSH_ENVIRONMENT: sandbox
         Release:
           HAUS_PUSH_ENVIRONMENT: production
+          # Release has no staging mode, so a local staging domain stays out of its Info.plist.
+          HAUS_STAGING_DOMAIN: ''
   XMPPNotificationService:
     type: app-extension
     platform: iOS
@@ -166,9 +178,9 @@ targets:
         INFOPLIST_FILE: NotificationService/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         APPLICATION_EXTENSION_API_ONLY: YES
+        # Matches the app's device family.
+        TARGETED_DEVICE_FAMILY: '1'
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
-        MARKETING_VERSION: '0.1.0'
-        CURRENT_PROJECT_VERSION: '1'
   # The Mac's notification service extension: the iOS extension's code under the same App ID, built for macOS with the
   # sandbox entitlements a Mac extension needs. Embedded in HausXMPPMac. Its Info.plist is the iOS one plus
   # `Subsystems: [EXService_Subsystem]`: without it macOS 27 launches the extension but never hands it the request, and
@@ -179,6 +191,7 @@ targets:
     deploymentTarget: '26.0'
     sources:
       - path: NotificationService
+        # Its PrivacyInfo.xcprivacy is shared with the iOS extension: the same code, the same APIs.
         excludes:
           - NotificationService.entitlements
           - Info.plist
@@ -201,8 +214,6 @@ targets:
         APPLICATION_EXTENSION_API_ONLY: YES
         ARCHS: arm64
         ENABLE_HARDENED_RUNTIME: YES
-        MARKETING_VERSION: '0.1.0'
-        CURRENT_PROJECT_VERSION: '1'
   HausXMPPLifecycleTests:
     type: bundle.unit-test
     platform: iOS

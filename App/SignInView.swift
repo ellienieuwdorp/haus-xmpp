@@ -22,12 +22,19 @@ struct SignInView: View {
         #endif
     }
 
-    private var domain: String {
+    /// The address's domain. A bare username has one only in DEBUG, the lab's; Release takes full addresses only.
+    private var domain: String? {
         let parts = address.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "@", maxSplits: 1)
-        return parts.count == 2 ? String(parts[1]).lowercased() : DevelopmentEndpoint.domain
+        return parts.count == 2 ? String(parts[1]).lowercased() : AppModel.bareUsernameDomain
     }
-    /// A bare username, or an address on a lab domain, keeps the disposable-account safeguard.
-    private var isLab: Bool { AppModel.labDomains.contains(domain) }
+    /// A bare username, or an address on a lab domain, keeps the disposable-account safeguard (DEBUG only).
+    private var isLab: Bool {
+        #if DEBUG
+        domain.map(AppModel.labDomains.contains) ?? false
+        #else
+        false
+        #endif
+    }
     private var serverHost: String { server.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
     private var serverPort: UInt16? {
         let text = port.trimmingCharacters(in: .whitespaces)
@@ -41,12 +48,16 @@ struct SignInView: View {
     private var route: String {
         let name = { (security: XMPPTransportSecurity) in security == .directTLS ? "Direct TLS" : "STARTTLS" }
         if !serverHost.isEmpty, serverPort == nil { return "Port must be a number from 1 to 65535." }
+        guard let domain else { return address.isEmpty ? "" : "Enter your full address, such as name@example.org." }
         if let manualServer { return "\(manualServer.host):\(manualServer.port) · \(name(manualServer.security))" }
+        #if DEBUG
         if isLab { return "\(domain == "localhost" ? DevelopmentEndpoint.host : domain):5223 · Direct TLS" }
+        #endif
         return "\(domain) · Server found automatically"
     }
     private var canConnect: Bool {
-        (!isLab || consent) && !address.isEmpty && !password.isEmpty && !model.session.isConnecting && (serverHost.isEmpty || serverPort != nil)
+        (!isLab || consent) && domain != nil && !address.isEmpty && !password.isEmpty && !model.session.isConnecting
+            && (serverHost.isEmpty || serverPort != nil)
     }
 
     var body: some View {
@@ -80,10 +91,12 @@ struct SignInView: View {
                             .textContentType(.password)
                             .accessibilityIdentifier("labPassword")
                     }
+                    #if DEBUG
                     if isLab {
                         Toggle("Use a disposable lab account", isOn: $consent)
                             .accessibilityIdentifier("labConsent")
                     }
+                    #endif
                 } footer: {
                     Text(route)
                 }

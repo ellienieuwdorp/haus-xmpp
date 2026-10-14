@@ -22,7 +22,7 @@ struct LabFixture {
     /// The echo peer's address; present whenever the default `required` passed.
     var peer: String { environment["XMPP_OMEMO_PEER"] ?? "" }
 
-    /// The app on its own isolated store, signed out, with the lab account filled in for "Connect to local lab".
+    /// The app on its own isolated store, signed out, with the lab account filled in for the Settings sign-in button.
     @MainActor func launch(arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-lab-ui-test"] + arguments
@@ -37,7 +37,7 @@ extension XCUIApplication {
     /// Signs in to the lab from Settings (opening it if needed) and leaves the sheet open once it reads "Connected".
     func connectToLab(timeout: TimeInterval = 30) {
         if !navigationBars["Settings"].exists { buttons["Settings"].tap() }
-        buttons["Connect to local lab"].tap()
+        buttons["accountSignIn"].tap()
         let consent = switches["labConsent"]
         XCTAssertTrue(consent.waitForExistence(timeout: 5))
         consent.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()

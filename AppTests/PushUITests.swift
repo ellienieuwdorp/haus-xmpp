@@ -54,7 +54,7 @@ final class PushUITests: XCTestCase {
         let settings = app.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 10))
         settings.tap()
-        app.buttons["Connect to local lab"].tap()
+        app.buttons["accountSignIn"].tap()
         let consent = app.switches["labConsent"]
         XCTAssertTrue(consent.waitForExistence(timeout: 5))
         consent.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()

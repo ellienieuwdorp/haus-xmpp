@@ -35,6 +35,15 @@ struct MacChatList: View {
         String((model.accountID.split(separator: "@").first ?? "").prefix(1)).uppercased()
     }
 
+    /// A quiet line under sample chats (and, in DEBUG, lab chats).
+    private var listCaption: String? {
+        if model.isDemo { return "Sample conversations · stored on this Mac" }
+        #if DEBUG
+        if model.isLabAccount { return "Local development lab" }
+        #endif
+        return nil
+    }
+
     var body: some View {
         List(selection: $window.selection) {
             // Account-level, so it sits above every chat: one decision here reaches all of them.
@@ -68,8 +77,8 @@ struct MacChatList: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if model.isDemo || model.isLabAccount, !model.chats.isEmpty {
-                Text(model.isDemo ? "Sample conversations · stored on this Mac" : "Local development lab")
+            if let listCaption, !model.chats.isEmpty {
+                Text(listCaption)
                     .font(.footnote).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
