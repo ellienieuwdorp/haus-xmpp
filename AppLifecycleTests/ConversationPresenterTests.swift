@@ -1,5 +1,6 @@
 import MessageStore
 import OMEMO
+import UIKit
 import XCTest
 @testable import HausXMPP
 
@@ -115,6 +116,47 @@ final class ConversationPresenterTests: XCTestCase {
         XCTAssertEqual(photo.author, "you")
         XCTAssertEqual(photo.thumbnail?.mediaType, "image/jpeg")
         XCTAssertNil(photo.thumbnail?.localURL, "not loaded, so nothing to show in the slot yet")
+    }
+
+    /// One card per message: the preview it carries while that link is still in the body (whatever the fetch setting;
+    /// a corrected body that dropped the link drops it), else our fetch for its first previewable link, else none and
+    /// a request for one. Never on a file, an unsent or an unreadable message. The host is always the body link's.
+    func testACardShowsTheCarriedPreviewElseOurFetchForTheFirstLink() throws {
+        let wide = UIGraphicsImageRenderer(size: CGSize(width: 600, height: 300), format: { let format = UIGraphicsImageRendererFormat(); format.scale = 1; return format }())
+            .pngData { $0.fill(CGRect(x: 0, y: 0, width: 600, height: 300)) }
+        let fetchedImage = URL(fileURLWithPath: "/tmp/link-previews/news.jpg")
+        source.linkPreviews = ["https://news.example/b": FetchedLinkPreview(title: "Fetched", summary: "From the page", imageFile: fetchedImage,
+                                                                            imageWidth: 1200, imageHeight: 630)]
+        var carried = message("carried", body: "see example.org/a and https://news.example/b")
+        carried.linkPreview = StoredLinkPreview(url: "https://example.org/a", title: "Carried", summary: "From the sender", imageData: wide,
+                                                imageType: "image/png", imageAlt: "A bridge", source: .sender)
+        var corrected = message("corrected", body: "now https://News.example/b instead")
+        corrected.linkPreview = StoredLinkPreview(url: "https://gone.example/", title: "Gone", source: .sender)
+        var file = message("file", body: "https://news.example/b")
+        file.attachment = StoredAttachment(name: "photo.jpg", mediaType: "image/jpeg", size: 1, hash: "", secret: Data())
+        source.messages = [carried, corrected, message("waiting", body: "https://other.example/c"), message("plain", body: "No links here"), file,
+                           message("unsent", body: "https://news.example/b", retracted: true)]
+
+        let first = try XCTUnwrap(try shown("carried").linkPreview)
+        XCTAssertEqual(first, TimelineLinkPreview(url: URL(string: "https://example.org/a")!, host: "example.org", title: "Carried", summary: "From the sender",
+                                                  image: .data(wide), imageAlt: "A bridge", variant: .large, imageAspectRatio: 2))
+        XCTAssertFalse(try shown("carried").wantsLinkPreview)
+
+        // The cache is keyed by the normalised link; the card keeps the link as the body writes it.
+        let fetched = try XCTUnwrap(try shown("corrected").linkPreview)
+        XCTAssertEqual(fetched.url.absoluteString, "https://News.example/b")
+        XCTAssertEqual(fetched.host, "news.example")
+        XCTAssertEqual(fetched.title, "Fetched")
+        XCTAssertEqual(fetched.image, .file(fetchedImage))
+        XCTAssertEqual(fetched.variant, .large)
+        XCTAssertEqual(try XCTUnwrap(fetched.imageAspectRatio), 1200.0 / 630, accuracy: 0.001)
+
+        XCTAssertNil(try shown("waiting").linkPreview)
+        XCTAssertTrue(try shown("waiting").wantsLinkPreview, "no card yet: the bubble asks for one when shown")
+        for id in ["plain", "file", "unsent"] {
+            XCTAssertNil(try shown(id).linkPreview, id)
+            XCTAssertFalse(try shown(id).wantsLinkPreview, id)
+        }
     }
 
     func testTypingShowsAtTheEndOfTheWholeChatOnly() {

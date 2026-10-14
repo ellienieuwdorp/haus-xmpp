@@ -1,3 +1,4 @@
+import SafariServices
 import UIKit
 import XCTest
 @testable import HausXMPP
@@ -148,6 +149,57 @@ final class TimelineCellSemanticsTests: XCTestCase {
         XCTAssertTrue(photo.accessibilityTraits.contains(.image))
         XCTAssertEqual(actions(photo).prefix(1), ["Reply"])
         XCTAssertTrue(actions(photo).contains("Open photo"))
+    }
+
+    /// A link message still has one element speaking for it: the card adds its phrase to that label, every link gets
+    /// an action after the menu's, the Links rotor walks them, and each opens where `LinkOpening` sends it. The card
+    /// takes the media width rule and sits above the text.
+    func testLinksAndTheCardSpeakThroughTheBubblesOneElement() throws {
+        var chats: [String] = []
+        controller.onOpenChat = { chats.append($0) }
+        let card = TimelineLinkPreview(url: URL(string: "https://example.org/a")!, host: "example.org", title: "Council approves the bridge",
+                                       summary: "Construction starts in spring.", variant: .text)
+        show([TimelineMessage(id: "card", body: "See example.org/a", isOutgoing: false, isStarred: false, linkPreview: card, sentAt: sentAt),
+              TimelineMessage(id: "links", body: "Ring +31 6 12345678 or write xmpp:romeo@montague.lit", isOutgoing: true, isStarred: false,
+                              sentAt: sentAt, status: .serverAccepted)])
+
+        let carded = try speaker("card")
+        XCTAssertEqual(carded.accessibilityLabel?.hasPrefix("Contact: See example.org/a, Link preview: Council approves the bridge, example.org"), true,
+                       carded.accessibilityLabel ?? "no label")
+        XCTAssertEqual(actions(carded), ["Reply", "Copy", "Star message", "Select text", "Open link example.org/a"])
+        let bubble = try XCTUnwrap(carded.superview)
+        let cardView = try XCTUnwrap(descendants(of: bubble).first { $0 is LinkPreviewCardView })
+        XCTAssertTrue(cardView.accessibilityElementsHidden, "the card's labels are read in the bubble's label, not on their own")
+        XCTAssertEqual(bubble.bounds.width, 280, accuracy: 0.5, "a short message with a card takes the media width")
+        XCTAssertEqual(cardView.convert(cardView.bounds, to: bubble).width, 280 - 16, accuracy: 0.5)
+        XCTAssertLessThanOrEqual(cardView.convert(cardView.bounds, to: bubble).maxY, carded.frame.minY + 0.5, "the card sits above the text")
+
+        let linked = try speaker("links")
+        XCTAssertEqual(actions(linked).suffix(2), ["Call +31 6 12345678", "Open chat xmpp:romeo@montague.lit"])
+        let rotor = try XCTUnwrap(linked.accessibilityCustomRotors?.first)
+        XCTAssertEqual(rotor.systemRotorType, .link)
+        let textView = try XCTUnwrap(linked as? UITextView)
+        var walked: [String] = []
+        let search = UIAccessibilityCustomRotorSearchPredicate()
+        search.searchDirection = .next
+        search.currentItem = UIAccessibilityCustomRotorItemResult(targetElement: linked, targetRange: nil)
+        while let item = rotor.itemSearchBlock(search), let range = item.targetRange {
+            walked.append(textView.text(in: range) ?? "")
+            search.currentItem = item
+        }
+        XCTAssertEqual(walked, ["+31 6 12345678", "xmpp:romeo@montague.lit"])
+        search.searchDirection = .previous
+        XCTAssertEqual(rotor.itemSearchBlock(search)?.targetRange.flatMap(textView.text(in:)), "+31 6 12345678")
+
+        let chat = try XCTUnwrap(linked.accessibilityCustomActions?.last)
+        XCTAssertEqual(chat.actionHandler?(chat), true)
+        XCTAssertEqual(chats, ["romeo@montague.lit"])
+        // Web links open in the in-app browser unless "Open Links in Safari" is on (off by default).
+        XCTAssertFalse(LinkSettings.shared.openInSafari)
+        let open = try XCTUnwrap(carded.accessibilityCustomActions?.last)
+        XCTAssertEqual(open.actionHandler?(open), true)
+        let browser = try XCTUnwrap(controller.presentedViewController as? SFSafariViewController)
+        browser.dismiss(animated: false)
     }
 
     func testTypingIsTheLastItemBelowTheNewestMessage() throws {

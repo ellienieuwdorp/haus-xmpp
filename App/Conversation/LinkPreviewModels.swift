@@ -33,6 +33,8 @@ struct TimelineLinkPreview: Sendable, Equatable {
     var image: Image? = nil
     var imageAlt: String? = nil
     let variant: Variant
+    /// The image's width over its height, which sizes the large variant's image; nil without an image.
+    var imageAspectRatio: Double? = nil
 
     /// Large for an image at least 300 px wide whose aspect is between 1:1 and 2.2:1, small for any other image,
     /// text without one.
@@ -64,6 +66,6 @@ extension StoredMessage {
     /// previewable link. `uploadHosts` are the GET hosts of our upload slots.
     func linkPreviewCandidate(uploadHosts: Set<String>) -> URL? {
         guard attachment == nil, !isRetracted, unreadableReason == nil else { return nil }
-        return LinkDetection.previewableURLs(in: body, uploadHosts: uploadHosts).first
+        return LinkScan.previewableURLs(in: body, uploadHosts: uploadHosts).first
     }
 }

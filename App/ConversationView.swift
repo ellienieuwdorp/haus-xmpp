@@ -276,6 +276,16 @@ struct ConversationView: View {
                 Task { await model.markDisplayed(id) }
             }, onRestoreComposerFocus: { composerState.focused = true }, onReachTop: { Task { await model.loadOlderMessages() } },
             onAttachmentDisplayed: { model.attachmentDisplayed($0) }, onDownloadAttachment: { model.downloadAttachment($0) },
+            onLinkPreviewDisplayed: { model.linkPreviewDisplayed($0) },
+            onOpenChat: { address in
+                guard address != chatID else { return }
+                if model.isGroup(address) { model.requestRoute(.chat(address)); return }
+                Task { if let chat = await model.createChat(address) { model.requestRoute(.chat(chat)) } }
+            }, onOpenGroup: { room in
+                guard model.isGroup(room) else { return false }
+                if room != chatID { model.requestRoute(.chat(room)) }
+                return true
+            },
             // Without "+" (a group, or a server with no upload service) there is no panel to warm up.
             attachmentKeyboard: isGroup || !model.canSendAttachments ? nil : composerState.attachmentKeyboard)
             // The controller pins the composer to the keyboard itself and insets the messages to match.

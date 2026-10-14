@@ -1,5 +1,6 @@
 import Foundation
 import MessageStore
+import XMPPProtocol
 
 // The values one timeline row shows. The iPhone's collection view and a Mac timeline draw the same ones, so nothing
 // here may import UIKit or AppKit.
@@ -88,6 +89,8 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     var attachment: TimelineAttachment? = nil
     /// The card above the text: the sender's or our own sent preview, else our fetch for the first previewable link.
     var linkPreview: TimelineLinkPreview? = nil
+    /// The first previewable link has no card yet: the bubble asks the model for one when it comes on screen.
+    var wantsLinkPreview = false
     var sentAt: Date? = nil
     var status: Status? = nil
     /// Why a server returned this message (`RejectionCopy`); set only while it shows as failed.
@@ -118,6 +121,9 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     /// The bubble's text: the placeholder for an unsent or unreadable message, the body otherwise.
     var displayedText: String { showsPlaceholder ? placeholder : body }
 
+    /// The links drawn in the text and opened on a tap; a placeholder has none.
+    var links: [DetectedLink] { showsPlaceholder ? [] : LinkScan.links(in: body) }
+
     /// The quiet line beside the status mark: edited, the security notice and the time, in that order.
     var footerText: String {
         [isEdited ? "Edited" : nil, securityNotice, sentAt?.formatted(date: .omitted, time: .shortened)].compactMap { $0 }.joined(separator: " · ")
@@ -134,6 +140,7 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
         if unreadable != nil { descriptions.append("not readable on this device") }
         if isEdited { descriptions.append("edited") }
         if !showsPlaceholder, let attachment { descriptions.append("\(attachment.kindLabel) \(attachment.name)" + (attachment.localURL == nil ? ", " + attachment.downloadAccessibility : "")) }
+        if !showsPlaceholder, let linkPreview { descriptions.append(linkPreview.accessibilityDescription) }
         if let quote = reply { descriptions.append("Replying to \(quote.author): \(quote.body)") }
         if isStarred { descriptions.append("starred") }
         if let date = sentAt { descriptions.append(date.formatted(date: .abbreviated, time: .shortened)) }
