@@ -146,6 +146,25 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertEqual(control.map(\.title), .success("Outside"))
     }
 
+    /// After the transfer, the addresses the connections used are checked again (a DNS rebinding between our check
+    /// and the connection): one private address discards the result. The stub server reports none, so the table runs
+    /// on the check itself.
+    func testAConnectionToAPrivateAddressDiscardsTheResult() {
+        let cases: [(addresses: [String?], allowed: Bool, line: UInt)] = [
+            ([nil], true, #line),
+            (["93.184.216.34"], true, #line),
+            (["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"], true, #line),
+            (["127.0.0.1"], false, #line),
+            (["93.184.216.34", "192.168.1.10"], false, #line),
+            ([nil, "::1"], false, #line),
+            (["::ffff:10.0.0.1"], false, #line),
+            (["not an address"], false, #line),
+        ]
+        for (addresses, allowed, line) in cases {
+            XCTAssertEqual(LinkPreviewDestination.allowsConnections(to: addresses), allowed, "\(addresses)", line: line)
+        }
+    }
+
     /// Every redirect hop is checked like the first request, and a sixth hop is refused.
     func testRedirectsAreCheckedAtEveryHopAndLimitedToFive() async throws {
         resolver.set("short.example", Self.publicV4)

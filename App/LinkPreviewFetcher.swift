@@ -96,6 +96,13 @@ extension LinkPreviewFetchFailure {
 
 /// Which hosts and addresses a preview fetch may reach: public unicast only.
 enum LinkPreviewDestination {
+    /// The addresses a request's connections actually used (`URLSessionTaskTransactionMetrics.remoteAddress`), checked
+    /// after the transfer: a name that resolved to public addresses for our check but connected elsewhere (a DNS
+    /// rebinding) went out, but nothing it returned is used. No address (a proxy, an in-process loader) passes.
+    static func allowsConnections(to remoteAddresses: [String?]) -> Bool {
+        remoteAddresses.allSatisfy { address in address.map { literal($0).map(isAllowed) ?? false } ?? true }
+    }
+
     /// Names refused before resolving: `localhost`, `.localhost`, `.local`, `.home.arpa` and single-label names.
     /// `host` is without brackets and may end in a dot.
     static func isAllowedName(_ host: String) -> Bool {
@@ -458,12 +465,7 @@ private final class BoundedLoad: NSObject, URLSessionDataDelegate, @unchecked Se
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
-        // A name that resolved to public addresses for our check but connected elsewhere (a DNS rebinding): the
-        // request went out, but nothing it returned is used. No address (a proxy, an in-process loader) passes.
-        for transaction in metrics.transactionMetrics {
-            guard let address = transaction.remoteAddress else { continue }
-            if !(LinkPreviewDestination.literal(address).map(LinkPreviewDestination.isAllowed) ?? false) { refusedAddress = true }
-        }
+        if !LinkPreviewDestination.allowsConnections(to: metrics.transactionMetrics.map(\.remoteAddress)) { refusedAddress = true }
         metricsArrived = true
         settleIfDone()
     }
