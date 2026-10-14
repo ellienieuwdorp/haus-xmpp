@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import XMPPProtocol
 
-/// Microbenchmarks for the per-page parse path of archive catch-up (docs/development/sync-performance.md). They only
+/// Microbenchmarks for the per-page parse path of archive catch-up. They only
 /// run with HAUS_BENCHMARKS=1, so the default suite stays fast:
 ///   HAUS_BENCHMARKS=1 swift test --package-path Packages/XMPPProtocol [-c release] --filter SyncPathBenchmarks
 /// The page is synthetic: legacy OMEMO messages from one peer device to eight recipient devices, as Prosody returns

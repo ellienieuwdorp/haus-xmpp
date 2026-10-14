@@ -2,7 +2,7 @@ import Foundation
 
 /// An RFC 7622 address in normal form: the one spelling every key and comparison in this client uses. Parse input once
 /// at the boundary (sign-in, a typed contact or room, a stanza off the wire) and keep the result; two addresses name
-/// the same entity exactly when their normal forms are equal. docs/development/jid-normalisation.md has the details.
+/// the same entity exactly when their normal forms are equal.
 ///
 /// - Localpart: the PRECIS UsernameCaseMapped rules of RFC 8265 §3.3 without the bidi rule and without the
 ///   IdentifierClass letter/digit restriction. Fullwidth and halfwidth forms are width-mapped, the result lowercased

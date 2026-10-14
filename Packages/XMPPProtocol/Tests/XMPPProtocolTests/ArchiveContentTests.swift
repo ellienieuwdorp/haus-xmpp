@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import XMPPProtocol
 
-// The four inner shapes from docs/development/sync-review.md "Verification": each used to throw out of the page
-// parser and wedge catch-up (F2). Outer provenance still throws; inner content becomes a rejected entry.
+// Four malformed inner shapes in archive results: each used to throw out of the page parser and wedge
+// catch-up. Outer provenance still throws; inner content becomes a rejected entry.
 // Inner messages carry xmlns='jabber:client' as servers send them: inside <forwarded/> an unqualified
 // <message/> would inherit urn:xmpp:forward:0 and be an unknown child, not archived content.
 

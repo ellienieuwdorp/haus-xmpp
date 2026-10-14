@@ -75,8 +75,8 @@ final class AppModel {
     /// Addresses whose avatar was checked on this session; a PEP notify clears its entry.
     @ObservationIgnored private var avatarChecked: Set<String> = []
     @ObservationIgnored private var storageRoot: URL?
-    /// Where this launch stands with the previous version's data (docs/development/pre-upgrade-snapshot.md). Anything
-    /// but `.none` replaces the app with a blocking screen and keeps storage closed.
+    /// Where this launch stands with the previous version's data (see `PreUpgradeSnapshot`). Anything but `.none`
+    /// replaces the app with a blocking screen and keeps storage closed.
     private(set) var upgradeState: UpgradeState = .none
     /// The snapshot of the previous version's data, while one exists: Settings offers restoring or deleting it.
     private(set) var previousVersionBackup: PreUpgradeSnapshot.Manifest?
@@ -92,7 +92,7 @@ final class AppModel {
     @ObservationIgnored private var openingStorage = false
     /// Set while the database holds encryption state the Keychain wrapping key cannot open (the key is gone, or is
     /// another one): RootView shows the recovery screen, and storage stays closed for everything else until the user
-    /// sets encryption up again (docs/development/key-recovery.md).
+    /// sets encryption up again (see `KeyRecoveryPlan`).
     private(set) var keyRecovery: KeyRecoveryPlan?
     /// The store opened for that screen alone; nothing else reads or writes it.
     @ObservationIgnored private var recoveryStore: MessageStore?
@@ -135,7 +135,7 @@ final class AppModel {
     var requestedRoute: ChatRoute?
     @ObservationIgnored private var sessionAccount: NotificationAccount?
     @ObservationIgnored private var lifecycleTask: Task<Void, Never>?
-    /// The four lifecycle signals (docs/development/lifecycle-signals.md) as last applied. Only `applyLifecycle`
+    /// The four lifecycle signals (`LifecycleSignals` in MessagingCore) as last applied. Only `applyLifecycle`
     /// changes them, from the updates of the platform's driver, which the process owns (iOS: `SceneLifecycle` in
     /// `HausXMPPApp`; the Mac: `MacLifecycle`, owned by the app delegate).
     @ObservationIgnored private(set) var lifecycle = LifecycleSignals.inFront
@@ -1251,7 +1251,7 @@ final class AppModel {
                 guard generation == token, pushIntent == intent else { return }
                 guard pushWanted else { pushStatus = .off; return }
                 #if os(macOS)
-                // Push is gated off on the Mac until its extension and token registration exist (Phase 3). Stored
+                // Push is gated off on the Mac until its extension and token registration exist. Stored
                 // cleanup above still runs; nothing registers.
                 pushStatus = .off
                 return
@@ -2149,7 +2149,7 @@ final class AppModel {
 
     /// A room that answered one of our stanzas (usually a chat state) as from a non-occupant: the client marked it not
     /// joined, and queued group messages wait for a join. One rejoin per room and connection; its self-presence makes
-    /// the room joined again and restarts the outbox. Self-ping and a fuller error policy are MS-089.
+    /// the room joined again and restarts the outbox. Self-ping and a fuller error policy are not done yet.
     ///
     /// Until setup's own pass over the known rooms (`rejoinKnownGroups`, after `.ready`) has ended it joins this one
     /// too, and a second join beside it would race it (a resumed stream delivers queued bounces right after
@@ -2334,7 +2334,8 @@ final class AppModel {
     }
 
     /// The stored quote of `source`: its text, or a file's label, so a restart or a queued retry sends the same words.
-    /// Only our own sent direct message has a wire ID we can reference (replies to received messages are quote-only, CX-4).
+    /// Only our own sent direct message has a wire ID we can reference (replies to received messages are quote-only
+    /// for now).
     private func replySnapshot(of source: ChatMessage, in chatID: String) -> MessageReply {
         MessageReply(messageID: source.id, senderID: source.senderID, body: source.quoteText,
                      wireID: Self.replyWireID(of: source, isGroup: isGroup(chatID)), mediaType: source.attachment?.mediaType)
@@ -3419,7 +3420,7 @@ final class AppModel {
     }
 }
 
-// MARK: Notification actions and foreground banners (wave 2, stream E; docs/development/notification-actions.md)
+// MARK: Notification actions and foreground banners
 
 /// The transport one Reply or Mark as Read took. In front of the app it is the app's own live session; in the
 /// background it is the store's lease plus a short-lived connection of its own, which the watchdog ends at the

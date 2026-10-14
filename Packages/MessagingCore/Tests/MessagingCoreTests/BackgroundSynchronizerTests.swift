@@ -125,7 +125,7 @@ struct BackgroundSynchronizerTests {
         }
     }
 
-    /// MS-110: a room that never answers, a connection lost during the room walk, or a room page that cannot be
+    /// A room that never answers, a connection lost during the room walk, or a room page that cannot be
     /// processed, once the own archive committed. The direct message is posted at once and the run ends as a success,
     /// the stalled room cut short soon after the post (the app may be waiting for the lease); with nothing direct to
     /// post, what the push was about is unknown and the run fails with what cut the rooms short, so the extension shows

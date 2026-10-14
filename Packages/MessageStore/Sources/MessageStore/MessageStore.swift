@@ -399,7 +399,7 @@ public actor MessageStore {
                 }
             }
             // v25: each encryption state row's device ID in plain text, and own device IDs given up when encryption was
-            // set up again, with where each stands in the published device lists (docs/development/key-recovery.md).
+            // set up again, with where each stands in the published device lists.
             // Column and table checks keep it idempotent in any merge order.
             if try connection.query("SELECT 1 FROM pragma_table_info('encryption_state') WHERE name='device_id'").isEmpty {
                 try connection.execute("ALTER TABLE encryption_state ADD COLUMN device_id INTEGER")

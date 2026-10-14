@@ -6,7 +6,7 @@ Create a protected directory before initializing `MessageStore(url:)`. Upsert a 
 
 `messages` returns the latest bounded page in chronological order, using timestamp plus ID for pagination. `search` performs literal substring matching with SQLite's ASCII case folding, with account and optional chat filtering. It is an initial query API, not the planned ranked, multilingual full-text search. Pins and stars are local only.
 
-This database stores plaintext messages and sensitive serialized OMEMO state under OS file protection, not database-level encryption. WAL sidecars contain the same sensitive data. The application owns protected-directory configuration, backup exclusion, account/key lifecycle and notification orchestration. Schema version 6 preserves history, organization, encrypted payloads and transport state, and refuses unknown future versions.
+This database stores plaintext messages and sensitive serialized OMEMO state under OS file protection, not database-level encryption. WAL sidecars contain the same sensitive data. The application owns protected-directory configuration, backup exclusion, account/key lifecycle and notification coordination. Schema version 6 preserves history, organization, encrypted payloads and transport state, and refuses unknown future versions.
 
 Run `swift test --package-path Packages/MessageStore` from the repository root. Tests include real subprocess contention/SIGKILL ownership recovery, acknowledgement races, archive CAS, and reopening, account isolation, duplicate/conflicting inserts, literal search, pagination ties, transaction rollback, version-1 migration, durable FIFO work, interrupted submissions, explicit retry and stale callback fencing.
 
@@ -49,7 +49,7 @@ Tests verify atomic sealing failure, persistence-before-claim, exact retry bytes
 
 ## Chat list query
 
-`chats(accountID:)` is one SQL statement (review item R8 in `docs/development/sync-review.md`). It returns what the earlier per-chat loop returned: `messages(limit: 1)` plus `events(...)` per chat, projected with `applying(_:)`, with the strongest peer receipt on an outgoing last message. `ChatListQueryTests` compares it against that loop, rebuilt from public API, on seeded data that covers ties, sender-only retraction and correction, attachments, ambiguous and authenticated wire IDs, room stanza-id references, outbox state, pins, avatars and a decoy account.
+`chats(accountID:)` is one SQL statement. It returns what the earlier per-chat loop returned: `messages(limit: 1)` plus `events(...)` per chat, projected with `applying(_:)`, with the strongest peer receipt on an outgoing last message. `ChatListQueryTests` compares it against that loop, rebuilt from public API, on seeded data that covers ties, sender-only retraction and correction, attachments, ambiguous and authenticated wire IDs, room stanza-id references, outbox state, pins, avatars and a decoy account.
 
 Every step is an index seek per chat. The newest message comes from the `timeline` index (`ORDER BY sent_at DESC, id DESC LIMIT 1`) and is joined by primary key. The reaction target is resolved through a rowid `UNION` of the `message_wire` and `group_reference_target` lookups; the equivalent `OR` scans the chat. Events come from `event_target`. The store never runs `ANALYZE`, so the plan has to be good without statistics. A `ROW_NUMBER()` window over all of the account's messages, the first design, took 59 s for 100 chats of 1,000 messages in that state: the planner nested-loops the materialized window once per chat.
 

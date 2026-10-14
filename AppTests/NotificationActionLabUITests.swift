@@ -1,6 +1,6 @@
 import XCTest
 
-/// Stream E on the local lab (docs/development/notification-actions.md): a trusted peer's message banners while another
+/// Notification actions on the local lab: a trusted peer's message banners while another
 /// chat is open, and Reply from Notification Center, with the app in the background, sends an encrypted answer the peer
 /// decrypts and echoes. Uses the app's primary storage, because notification actions are off in isolated UI-test stores,
 /// so it runs only when explicitly selected on a disposable simulator with disposable lab accounts.

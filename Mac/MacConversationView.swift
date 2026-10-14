@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// The open chat, read-only. A placeholder until Phase 2 builds the Mac timeline and composer: it shows the rows the
-/// shared presenter builds, in a SwiftUI `LazyVStack` that opens at the newest message in its first frame
-/// (mac-timeline-spike.md, rule 4) and follows the bottom while the reader is there. No paging, no prepend hold, no
-/// composer, no message menus yet.
+/// The open chat, read-only. A placeholder until the Mac has its own timeline and composer: it shows the rows the
+/// shared presenter builds, in a SwiftUI `LazyVStack` that opens at the newest message in its first frame (scrolling
+/// there after layout shows a visible jump) and follows the bottom while the reader is there. No paging, no prepend
+/// hold, no composer, no message menus yet.
 struct MacConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -145,7 +145,7 @@ private struct MacTimelineRow: View {
     }
 }
 
-/// Caps the bubble at `min(560, 0.84 × width, width − 32)` (mac-timeline-spike.md), letting shorter bubbles hug
+/// Caps the bubble at `min(560, 0.84 × width, width − 32)`, letting shorter bubbles hug
 /// their text.
 private struct BubbleWidth: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {

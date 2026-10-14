@@ -19,7 +19,7 @@ struct TimelineViewport: Equatable {
     func clamped(_ value: CGFloat) -> CGFloat { min(maximumOffset, max(minimumOffset, value)) }
 }
 
-/// The timeline's scrolling decisions, measured on the iPhone (docs/development/timeline-responsiveness.md): a chat
+/// The timeline's scrolling decisions, measured on the iPhone: a chat
 /// opens at the newest message, the list follows the bottom while the reader is there, an own send returns to it from
 /// anywhere, and everything else keeps the message the reader is looking at where it is.
 enum TimelineScrollPolicy {

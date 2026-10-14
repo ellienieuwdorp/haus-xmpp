@@ -7,8 +7,8 @@ import OMEMO
 
 /// The forward walk against the local lab Prosody when the server no longer holds a checkpoint's cursor, through the
 /// notification extension's entry point (`BackgroundSynchronizer`). Runs only when the lab is configured:
-///   HAUS_LAB_CURSOR_ACCOUNT / HAUS_LAB_CURSOR_PEER  fixture JSON files ({"jid", "password", "room"}) from
-///   `infra/local/create_group_fixture.py` under work/; the account owns the room and the peer is its other member.
+///   HAUS_LAB_CURSOR_ACCOUNT / HAUS_LAB_CURSOR_PEER  fixture JSON files ({"jid", "password", "room"}) for two
+///   disposable accounts and a members-only room; the account owns the room and the peer is its other member.
 ///   HAUS_LAB_CA (PEM)
 /// The peer sends OMEMO envelopes with no key for this account, so every archived entry becomes a durable
 /// "not for this device" outcome without a trust setup: the check is about archive positions, not decryption.

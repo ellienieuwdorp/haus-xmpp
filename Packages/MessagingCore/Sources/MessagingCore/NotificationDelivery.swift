@@ -197,7 +197,7 @@ public final class NotificationRunCoordinator: @unchecked Sendable {
 }
 
 /// Which presentation of a run this is. The extension presents direct messages as soon as the own archive committed,
-/// while rooms are still walked, and everything else once its network work ended (MS-110). Each presentation claims
+/// while rooms are still walked, and everything else once its network work ended. Each presentation claims
 /// only what it posted; identifiers are stable, so a later one replaces rather than duplicates. A run plays one sound,
 /// on the first add that carries it.
 public struct PresentationStage: Sendable {

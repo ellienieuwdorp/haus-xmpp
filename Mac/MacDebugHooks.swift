@@ -8,7 +8,7 @@ import SwiftUI
 ///
 /// The app is sandboxed, so it cannot write to a directory named on the command line. Captures go there when it can
 /// (an unsandboxed run); otherwise each file is written to standard output as one line,
-/// `HAUS-FILE <relative path> <base64>`, which `scripts/mac-app.sh` unpacks into the directory.
+/// `HAUS-FILE <relative path> <base64>`, for whatever launched the app to decode into the directory.
 ///
 /// - `-haus-capture <dir>`: once the chats (and a selected chat's messages) are loaded and laid out, every visible
 ///   window as `<n>-<name>.png`, rendered from its own views (`cacheDisplay`), at the screen's scale.
@@ -26,8 +26,7 @@ import SwiftUI
 /// - `-haus-sign-out`: signs the saved account out after launch, to leave a lab run's Mac clean.
 /// - `-haus-dump-menus`: the main menu's items and shortcuts.
 /// - `-haus-fresh-store`: with `XMPP_UI_TEST_STORE` set, empties that session's store and preferences at launch, so a
-///   run starts as a new install would (`scripts/mac-app.sh run --fresh-store`). The shared App Group store is left
-///   alone.
+///   run starts as a new install would. The shared App Group store is left alone.
 /// - `-haus-unobtrusive`: see `MacUnobtrusive`.
 /// - `-haus-lifecycle-steps "<step>; …"`: a lifecycle scenario after the hooks above (`MacLifecycleDebug`).
 /// - `-haus-log-notifications`: logs the notifications the model would post instead of posting them.

@@ -45,7 +45,7 @@ struct SettingsView: View {
             }
             if showsNotificationSettings {
                 Section {
-                    // The Mac registers no push yet (mac-target.md), so it shows only the preferences that also apply to
+                    // The Mac registers no push yet, so it shows only the preferences that also apply to
                     // the notifications it posts itself.
                     #if os(iOS)
                     // On while push is on or being set up; a status that reads "Off" shows it off.

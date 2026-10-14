@@ -7,7 +7,7 @@ import MessagingCore
 import UniformTypeIdentifiers
 import UserNotifications
 
-/// Debug-only launch arguments for the notification extension checks in mac-notification-extension.md. Push stays
+/// Debug-only launch arguments for checking the Mac notification extension with real remote notifications. Push stays
 /// gated off in the app itself (`PushRegistration.request()` throws on the Mac); these hooks register for a token only
 /// when asked, and nothing here ships.
 ///
@@ -15,7 +15,7 @@ import UserNotifications
 /// - `-haus-request-provisional`: asks for provisional authorization, which the system grants without a prompt and which
 ///   delivers quietly to Notification Center.
 /// - `-haus-register-push`: registers for remote notifications. The token goes to standard output as the file
-///   `push-token.hex` (`HAUS-FILE`), which `scripts/mac-app.sh run --out` writes under work/; it is never logged.
+///   `push-token.hex` (`HAUS-FILE`, see `MacDebugHooks`); it is never logged.
 /// - `-haus-arm-extension-probe suppress|pass`: arms `MacExtensionProbe` for the next remote request.
 /// - `-haus-extension-probe-results`: the extension's probe records; `-haus-extension-probe-clear` removes them.
 /// - `-haus-delivered-notifications`: what Notification Center holds for the app (category, which fields are set,

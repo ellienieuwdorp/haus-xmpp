@@ -3,7 +3,7 @@ import Foundation
 /// The Mac: the transport stays for as long as the app runs and the Mac is awake, closing a window never drops it, and
 /// attention comes from the app, its windows, the screen lock and the time since the last input. Pure: the AppKit,
 /// IOKit and Quartz glue (`Mac/MacLifecycle.swift`) only reads those facts and forwards them with the input clock, so
-/// every mapping below is unit-tested on its own (docs/development/lifecycle-signals.md, "What the Mac does").
+/// every mapping below is unit-tested on its own.
 ///
 /// - `transportWanted`: the app runs, the Mac is not going to sleep, the app is not quitting, and the user's login
 ///   session is the active one (not switched away from). Whether an account is signed in is the model's own

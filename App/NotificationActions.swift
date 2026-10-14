@@ -6,7 +6,7 @@ import UserNotifications
 import MessageStore
 import MessagingCore
 
-/// Reply and Mark as Read on a message notification (wave 2, stream E; docs/development/notification-actions.md).
+/// Reply and Mark as Read on a message notification.
 enum NotificationActionIdentifier {
     static let reply = "reply"
     static let markRead = "mark-read"
@@ -347,7 +347,7 @@ struct BackgroundTaskID: Equatable {
     }
 }
 
-/// Which foreground notifications show (wave 2, stream E). Only local requests the app or the extension posted for
+/// Which foreground notifications show. Only local requests the app or the extension posted for
 /// this account's messages, and never for the chat that is open; a remote request (the gateway's placeholder or the
 /// extension's fallback) and anything unknown stays hidden, as before.
 enum ForegroundPresentation {

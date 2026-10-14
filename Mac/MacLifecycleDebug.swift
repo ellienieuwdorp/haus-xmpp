@@ -3,7 +3,7 @@ import AppKit
 import MessagingCore
 import SwiftUI
 
-/// Debug checks of the Mac lifecycle (docs/development/lifecycle-signals.md, "What the Mac does"). Debug builds only.
+/// Debug checks of the Mac lifecycle (`MacLifecycle`, `MacLifecycleDriver`). Debug builds only.
 ///
 /// Every event `MacLifecycle` applies is logged with the four signals, what AppKit reported, the transition it runs and
 /// the scene phase each window's content last reported. `-haus-lifecycle-steps "<step>; <step>; …"` then plays a

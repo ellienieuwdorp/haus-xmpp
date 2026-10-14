@@ -6,7 +6,7 @@ import SwiftUI
 /// `-haus-unobtrusive`: keeps a check run out of the way of whoever is using this Mac. The app gets no Dock icon or
 /// menu bar, never stays active, and every window it opens is transparent, click-through, ordered behind everything
 /// and moved far off-screen before it is first shown. The capture hooks still render those windows (`cacheDisplay`
-/// draws the views, not the screen). `scripts/mac-app.sh` passes it on every run. Debug builds only.
+/// draws the views, not the screen). Pass it on every scripted run. Debug builds only.
 ///
 /// Anything the checks need from real focus (key window, activation, lock, idle) is simulated through the debug hooks
 /// instead, since a window here is never key and always reports as occluded.

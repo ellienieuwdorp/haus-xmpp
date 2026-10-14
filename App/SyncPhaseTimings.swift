@@ -5,7 +5,6 @@ import XMPPProtocol
 /// Where one connection's time goes, for the `sync` log: durations and counts only, never addresses or content.
 /// A new instance starts at `.online`. Setup steps report from their own tasks, reloads and foreground notification
 /// work from the main actor; `ArchiveWalkTimings` in MessagingCore splits each archive's walk further.
-/// See docs/development/sync-performance.md.
 final class SyncPhaseTimings: Sendable {
     enum Phase: String {
         case features, carbons, uploads, keys, rejoin, walk, retry, reload, notify

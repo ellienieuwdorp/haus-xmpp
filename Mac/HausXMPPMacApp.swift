@@ -9,7 +9,7 @@ struct HausXMPPMacApp: App {
     @State private var appearance = AppearanceStore.shared
 
     var body: some Scene {
-        // `Window`, not `WindowGroup`: one main window until the model can serve several (Phase 4), and no File > New
+        // `Window`, not `WindowGroup`: one main window until the model can serve several, and no File > New
         // Window.
         Window("Haus XMPP", id: MacAppDelegate.mainWindowID) {
             MacRootView(model: delegate.model, window: delegate.window)

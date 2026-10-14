@@ -2,8 +2,7 @@ import Foundation
 import Testing
 @testable import MessageStore
 
-/// `resetEncryption`: what starting encryption over after a lost wrapping key discards, keeps and creates
-/// (docs/development/key-recovery.md).
+/// `resetEncryption`: what starting encryption over after a lost wrapping key discards, keeps and creates.
 struct EncryptionResetTests {
     private let account = "alice@localhost"
     private let peer = "bob@localhost"

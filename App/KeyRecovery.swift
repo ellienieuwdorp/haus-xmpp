@@ -5,7 +5,8 @@ import XMPPProtocol
 
 /// The database still holds encryption state that the Keychain wrapping key cannot open: the key is gone (a move to
 /// another device, a Keychain reset) or is another one. Shown on the recovery screen; nothing changes until the user
-/// confirms (docs/development/key-recovery.md).
+/// confirms. Starting over keeps messages and chats, gives the saved account a new identity under a new device ID,
+/// and takes the old device IDs out of the published device lists on the next connection.
 struct KeyRecoveryPlan: Equatable {
     /// The Keychain item is gone, so starting over creates one. False: a key is there but opens none of `states`.
     let keyMissing: Bool

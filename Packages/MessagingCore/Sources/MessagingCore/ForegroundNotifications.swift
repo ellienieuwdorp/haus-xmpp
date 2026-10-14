@@ -1,7 +1,7 @@
 import Foundation
 import MessageStore
 
-/// Foreground banners (wave 2, stream E). While the app is in front and holds the transport lease it claims every
+/// Foreground banners. While the app is in front and holds the transport lease it claims every
 /// candidate its own connection committed, exactly as it always dismissed them, but first posts the extension's own
 /// requests for the ones that are news somewhere else: same identifiers, threads, categories and text, so a banner and
 /// a later extension run can never both show one message. Mute and read state need no rule here: a muted chat or a

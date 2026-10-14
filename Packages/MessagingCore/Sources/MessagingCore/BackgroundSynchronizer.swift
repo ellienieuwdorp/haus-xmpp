@@ -130,7 +130,7 @@ public struct BackgroundSynchronizer: Sendable {
     }
 }
 
-/// One run's network work and presentations once the lease is held (MS-110). The client sits behind these closures, so
+/// One run's network work and presentations once the lease is held. The client sits behind these closures, so
 /// the order can be checked without a server.
 ///
 /// Direct messages first: once the own archive committed, the run pulls read state and presents what it has, then walks
@@ -152,8 +152,8 @@ struct BackgroundCatchUp: Sendable {
     let pull: @Sendable (Duration) async throws -> Void
     let consume: @Sendable () async throws -> Void
     let stop: @Sendable () async -> Void
-    /// How long rooms may still be walked after the early presentation added something (MS-111 would let the app ask
-    /// for the lease instead).
+    /// How long rooms may still be walked after the early presentation added something (letting the app ask for the
+    /// lease instead would remove this limit).
     var roomsAfterPost: Duration = .seconds(5)
 
     func run(store: MessageStore, timeBudget: Duration, deadline: ContinuousClock.Instant, progress: NotificationRunProgress?,

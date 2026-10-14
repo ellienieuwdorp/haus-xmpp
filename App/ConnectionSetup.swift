@@ -102,8 +102,8 @@ struct ConnectionSetup: Sendable {
     /// - uploads: a discovery under a day old stands; the attach button already follows the stored service.
     /// A fresh bind skips nothing.
     /// Identity publication, the rejoins and the walk always run: the identity check is the fail-closed guard against
-    /// another device under our ID (MS-055), and the walk catches what a resumed extension run acknowledged without
-    /// storing (live room messages) and what the server dropped from the hibernated queue.
+    /// another device publishing under our device ID, and the walk catches what a resumed extension run acknowledged
+    /// without storing (live room messages) and what the server dropped from the hibernated queue.
     var skipsFeatures: Bool { resumed && memory.featuresFresh && memory.features != nil }
     var skipsCarbons: Bool { resumed && memory.carbonsOnStream }
     var skipsUploads: Bool { resumed && memory.uploadsFresh }

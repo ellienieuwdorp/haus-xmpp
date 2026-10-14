@@ -5,7 +5,7 @@ import XMPPProtocol
 import OMEMO
 @testable import HausXMPP
 
-/// Detection and the start-over flow below the screen (docs/development/key-recovery.md). Each test uses its own
+/// Detection and the start-over flow below the key recovery screen (`KeyRecoveryPlan`). Each test uses its own
 /// `lifecycle-key-<uuid>` Keychain item and store and deletes only those; no real Keychain item is touched.
 @MainActor final class KeyRecoveryTests: XCTestCase {
     private let account = "recovery@localhost"

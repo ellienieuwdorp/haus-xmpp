@@ -16,7 +16,7 @@ struct MacCommands: Commands {
             }
             .keyboardShortcut("n")
         }
-        // Find searches the chat list for now; Phase 2's conversation view takes ⌘F inside a chat.
+        // Find searches the chat list for now; the full Mac conversation view will take ⌘F inside a chat.
         CommandGroup(after: .textEditing) {
             Button("Find Chat…") {
                 showMainWindow()

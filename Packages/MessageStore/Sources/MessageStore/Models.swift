@@ -218,11 +218,11 @@ public struct EncryptionState: Sendable, Equatable {
     /// migration for state saved under the typed spelling, cleared by the next save.
     public var sealedAccount: String? = nil
     /// The device ID the sealed identity is published under, kept in plain text so that it is still known when the
-    /// wrapping key is lost (docs/development/key-recovery.md). Nil for a row no build has recorded yet.
+    /// wrapping key is lost and encryption is set up again. Nil for a row no build has recorded yet.
     public var deviceID: UInt32? = nil
 }
 
-/// Where one retired own device ID stands in one profile's published device list (docs/development/key-recovery.md).
+/// Where one retired own device ID stands in one profile's published device list, after encryption was set up again.
 public enum RetiredDeviceStatus: String, Sendable, CaseIterable {
     /// Still to be taken out of the list.
     case pending

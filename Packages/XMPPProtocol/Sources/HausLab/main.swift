@@ -96,7 +96,7 @@ import XMPPProtocol
         print("PUSH_REGISTRATION_AND_CSI_VERIFIED")
     }
 
-    /// The app's onboarding against a gateway component (infra/local/push-lab): self-service register of a freshly
+    /// The app's onboarding against a gateway component on a test server: self-service register of a freshly
     /// generated node, the environment attribute, then the XEP-0357 enable. Synthetic token; nothing reaches APNs.
     private static func verifyGatewayOnboarding(client: XMPPClient, service: String) async throws {
         guard try await client.supportsPushNotifications() else { throw XMPPNotificationError.pushUnavailable }

@@ -1,6 +1,6 @@
 # OMEMO business logic
 
-This package owns encrypted messaging policy and orchestration. The restricted modern private-group path is documented in [GROUPS.md](GROUPS.md). It is independent of SwiftUI/UIKit, Keychain APIs, sockets and any hosted service. It depends on three focused packages: `OMEMOCrypto` for vetted cryptography, `XMPPProtocol` for typed wire values and the transport adapter, and `MessageStore` for atomic persistence.
+This package owns encrypted messaging policy and coordinates the steps around it. The restricted modern private-group path is documented in [GROUPS.md](GROUPS.md). It is independent of SwiftUI/UIKit, Keychain APIs, sockets and any hosted service. It depends on three focused packages: `OMEMOCrypto` for vetted cryptography, `XMPPProtocol` for typed wire values and the transport adapter, and `MessageStore` for atomic persistence.
 
 `OMEMOService` coordinates device discovery, explicit fingerprint trust, profile selection, encrypted outbox preparation, incoming authentication, replay suppression and key-exchange acknowledgments. `StateProtection` accepts a device-local wrapping key supplied by the app. A mock `OMEMOTransport` runs the same logic in tests; the real adapter uses our own XMPP implementation.
 
@@ -35,9 +35,9 @@ Swift actors serialize in-process work. SQLite revision checks reject stale comm
 swift test --package-path Packages/OMEMO
 ```
 
-See `Scripts/Interop/README.md` for independent upstream Python ratchet/payload checks and live local-peer testing. `omemo-lab` is a separate test executable, excluded from the iOS app product. It requires explicit fixture-trust authorization and generated localhost accounts; its automatic test trust policy is never used by the application.
+Interoperability with independent implementations (the upstream Python oldmemo/twomemo ratchet and payload code, and live peers on a local server) was checked with a harness that is not part of this repository. `omemo-lab` is a separate test executable, excluded from the iOS app product. It requires explicit fixture-trust authorization and generated localhost accounts; its automatic test trust policy is never used by the application.
 
-The [milestone report](../../docs/development/omemo-milestone.md) records verified capabilities and remaining release work. This is a development direct-messaging milestone, not a claim of full production OMEMO support across groups, archives, devices and notifications.
+This is development-quality direct messaging, not a claim of full production OMEMO support across groups, archives, devices and notifications.
 
 ## Recovery and private reactions
 

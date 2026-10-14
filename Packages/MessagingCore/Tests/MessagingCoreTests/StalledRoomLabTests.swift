@@ -5,9 +5,9 @@ import OMEMO
 import XMPPProtocol
 @testable import MessagingCore
 
-/// MS-110 against a real server: the extension's entry point with rooms whose MUC component never answers. Needs the
-/// disposable server in infra/local/stalled-room (its own Compose project, not the shared lab) and its component
-/// script. Runs only when configured:
+/// The extension's entry point against a real server with rooms whose MUC component never answers: catch-up must not
+/// hang on them. Needs a separate disposable server with such a component, which is not part of this repository. Runs
+/// only when configured:
 ///   HAUS_LAB_STALLED_ACCOUNT / HAUS_LAB_STALLED_PEER  credential JSON ({"jid", "password"}) of two accounts there
 ///   HAUS_LAB_STALLED_ROOMS  comma-separated rooms on the component (answering only resources named "setup…")
 ///   HAUS_LAB_STALLED_PORT   the server's direct TLS port on 127.0.0.1 (default 45223)

@@ -3,7 +3,7 @@ import CoreGraphics
 import IOKit.pwr_mgt
 import MessagingCore
 
-/// The Mac's lifecycle owner (docs/development/lifecycle-signals.md, "What the Mac does"). It reads what AppKit, IOKit
+/// The Mac's lifecycle owner (the rules are in `MacLifecycleDriver`). It reads what AppKit, IOKit
 /// and the input clock report, hands `MacLifecycleDriver` one event at a time and gives the model the driver's updates.
 /// The app delegate owns it, so it observes once per process however many windows there are.
 ///

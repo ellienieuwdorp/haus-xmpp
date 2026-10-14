@@ -183,7 +183,7 @@ extension NotificationCandidate {
     }
 }
 
-// MARK: Communication notifications, badge and reactions (wave 2, stream D)
+// MARK: Communication notifications, badge and reactions
 
 @Test func groupCommunicationNamesTheSenderTheRoomAndOtherMembers() throws {
     let members = [NotificationParticipant(id: "carol@x", title: "Carol", avatarHash: "c"), NotificationParticipant(id: account, title: nil, avatarHash: nil),

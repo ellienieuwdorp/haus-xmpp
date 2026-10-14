@@ -76,8 +76,8 @@ final class PushUITests: XCTestCase {
         XCUIDevice.shared.press(.home)
         XCTAssertTrue(app.waitForBackground(),
                       "App must enter the background so its scene releases transport ownership")
-        // The orchestrator now sends synthetic encrypted traffic and verifies actual APNs/NSE
-        // output separately. Registration alone is not evidence of notification delivery.
+        // The peer now sends synthetic encrypted traffic, and APNs and notification extension
+        // output are verified separately. Registration alone is not evidence of notification delivery.
         #endif
     }
 

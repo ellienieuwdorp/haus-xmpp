@@ -5,7 +5,6 @@ import XMPPProtocol
 /// message store too: preference keys, the attachment and avatar folders. Each is moved once to the normal spelling
 /// the rest of the app now uses (the store migrates itself, the saved credentials and push registrations are read in
 /// normal form). Moves never overwrite: what the normal spelling already has wins, the rest is carried over.
-/// docs/development/jid-normalisation.md has the full list.
 enum AccountIdentityMigration {
     /// Preference keys that end in an account address.
     static let accountKeyPrefixes = ["pushOff.", "avatar.", "uploadService."]

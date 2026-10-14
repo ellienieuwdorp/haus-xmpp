@@ -9,7 +9,6 @@ import os
 /// back: restoring it puts that build's data, preferences and Keychain records back exactly as they were, so the
 /// previous build can be installed again. Restoring first keeps this build's own data as a second copy, because only
 /// that copy holds the encryption sessions contacts used since; coming back offers to return to it.
-/// docs/development/pre-upgrade-snapshot.md has the inventory, the choices and the reasons.
 ///
 /// Layout, in the App Group container beside `Messaging/`, in this build's generation folder `PreUpgrade-<schema>/`
 /// (`PreUpgradeHold`): `snapshot/` (the previous version's data) and `post-upgrade/` (this version's data as it was at

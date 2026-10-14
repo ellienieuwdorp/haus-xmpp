@@ -14,7 +14,7 @@ import XMPPProtocol
 ///
 /// Sealed blobs (encryption state, attachment secrets) use the account as associated data, and the store cannot
 /// reseal them. A renamed row keeps the spelling it was sealed under in `sealed_account`; the reader opens with it and
-/// the next save of the state reseals under the normal spelling. docs/development/jid-normalisation.md has the reasoning.
+/// the next save of the state reseals under the normal spelling.
 enum AddressMigration {
     private enum Duplicate { case keep, delete, mergeChat, keepLaterReadPointer }
 

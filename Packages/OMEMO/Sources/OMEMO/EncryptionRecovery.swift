@@ -3,7 +3,7 @@ import MessageStore
 import OMEMOCrypto
 import XMPPProtocol
 
-/// One account's encryption state that the current wrapping key cannot open (docs/development/key-recovery.md).
+/// One account's encryption state that the current wrapping key cannot open.
 public struct UnreadableEncryptionState: Sendable, Equatable {
     public let accountID: String
     /// The row's revision when it was assessed; `startOver` discards it only at this revision.

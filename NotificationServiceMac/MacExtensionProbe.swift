@@ -5,7 +5,7 @@ import Security
 import UserNotifications
 
 /// Debug-only check that the signed Mac app and its signed notification extension share their storage, run inside the
-/// extension process for a real remote notification (mac-notification-extension.md). Compiled into the Mac app and the
+/// extension process for a real remote notification. Compiled into the Mac app and the
 /// Mac extension only; nothing here ships.
 ///
 /// The app arms it (`-haus-arm-extension-probe suppress|pass`): it saves a random nonce as a data-protection Keychain

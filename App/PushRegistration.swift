@@ -5,7 +5,7 @@ import UserNotifications
 import MessagingCore
 
 /// The notification center's delegate on both platforms, and on iOS the application delegate that receives APNs tokens.
-/// The Mac registers no token yet (push is gated off there until Phase 3; see mac-target.md).
+/// The Mac registers no token yet: push stays gated off there until the extension-to-app liveness check exists.
 @MainActor
 final class PushRegistration: NSObject, UNUserNotificationCenterDelegate {
     static let shared = PushRegistration()

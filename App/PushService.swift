@@ -3,7 +3,7 @@ import UserNotifications
 import XMPPProtocol
 
 /// The Haus push gateway every account registers with. Account servers reach it over federation, so any server with
-/// XEP-0357 push, s2s, MAM, carbons and stream management works (docs/development/push-onboarding.md).
+/// XEP-0357 push, s2s, MAM, carbons and stream management works.
 enum PushService {
     static let defaultServiceJID = "push.xmpp.haus"
 

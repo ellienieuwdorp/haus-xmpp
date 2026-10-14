@@ -1,16 +1,16 @@
 import XCTest
 
-/// Opt-in drill against infra/local/push-lab: a disposable account on a Prosody with cloud_notify and a stand-in
-/// gateway component, which the DEBUG build reaches through `XMPP_PUSH_SERVICE`. Signing in must ask for notification
-/// permission once, then register a freshly generated node and enable it without any other step. Uses the primary
-/// store on purpose (UI-test stores skip push), so run it only on a disposable simulator.
+/// Opt-in drill against a push lab that is not part of this repository: a disposable account on a Prosody with
+/// cloud_notify and a stand-in gateway component, which the DEBUG build reaches through `XMPP_PUSH_SERVICE`. Signing
+/// in must ask for notification permission once, then register a freshly generated node and enable it without any
+/// other step. Uses the primary store on purpose (UI-test stores skip push), so run it only on a disposable simulator.
 final class PushOnboardingLabUITests: XCTestCase {
     @MainActor func testSignInRegistersAndEnablesPushByItself() throws {
         continueAfterFailure = false
         let env = ProcessInfo.processInfo.environment
         guard env["HAUS_PUSH_LAB"] == "1", let user = env["HAUS_LAB_USERNAME"], let password = env["HAUS_LAB_PASSWORD"],
               let service = env["XMPP_PUSH_SERVICE"], let ca = env["HAUS_LAB_CA_DER"] else {
-            throw XCTSkip("Opt-in push-lab drill: see infra/local/push-lab/README.md")
+            throw XCTSkip("Opt-in push-lab drill: needs HAUS_PUSH_LAB=1 and a push gateway lab; see AppTests/README.md")
         }
         let app = XCUIApplication()
         app.launchArguments = ["-lab-ui-test"]

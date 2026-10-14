@@ -1,6 +1,8 @@
 import XCTest
 
-/// The disposable lab fixture exported to the test runner as `HAUS_LAB_*` and `XMPP_*` (see infra/local/README.md).
+/// The disposable lab fixture exported to the test runner as `HAUS_LAB_*` and `XMPP_*`: a local XMPP server reached as
+/// `localhost` with direct TLS on port 5223, its CA certificate (`HAUS_LAB_CA_DER`, base64 DER) and throwaway accounts.
+/// See AppTests/README.md.
 struct LabFixture {
     let username: String
     let password: String
@@ -39,7 +41,8 @@ extension XCUIApplication {
         let consent = switches["labConsent"]
         XCTAssertTrue(consent.waitForExistence(timeout: 5))
         consent.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        // A lab reached through a local proxy (for example `infra/local/slow_link.py`, a slow link) on another port.
+        // A lab reached through a local proxy on another port (for example one that adds latency, to simulate a slow
+        // link).
         if let port = ProcessInfo.processInfo.environment["HAUS_LAB_PORT"] {
             buttons["Advanced"].tap()
             let host = textFields["serverHost"]

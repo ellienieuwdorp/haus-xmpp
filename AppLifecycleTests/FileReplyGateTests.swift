@@ -25,7 +25,7 @@ final class FileReplyGateTests: XCTestCase {
         XCTAssertFalse(gate(message(), profile: .legacy))
         // Not known yet, or the loaded overview belongs to another chat (the caller passes nil then).
         XCTAssertFalse(gate(message(), profile: nil))
-        // A received message has no wire ID we may reference until CX-4.
+        // A received message has no wire ID we may reference yet.
         XCTAssertFalse(gate(message(outgoing: false), profile: .modern))
         // An own message with no transport state was never sent, so the peer does not hold its ID.
         XCTAssertFalse(gate(message(sent: false), profile: .modern))

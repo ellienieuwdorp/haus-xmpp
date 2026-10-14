@@ -96,7 +96,7 @@ targets:
       - path: App
         excludes:
           # The iPhone's app entry, root list, conversation screen and the UIKit views under it. The Mac has its own
-          # entry, split view and (from Phase 2) conversation view in Mac/.
+          # entry, split view and conversation view in Mac/.
           - HausXMPPApp.swift
           - RootView.swift
           - ChatListView.swift

@@ -28,7 +28,7 @@ private struct StaleListTransport: OMEMOTransport {
     func publishOMEMOBundle(_ bundle: XMPPOMEMOBundle) async throws { try await base.publishOMEMOBundle(bundle) }
 }
 
-/// Starting encryption over after the wrapping key was lost (docs/development/key-recovery.md): Bob's store keeps its
+/// Starting encryption over after the wrapping key was lost: Bob's store keeps its
 /// sealed state, but his device only has a different key now.
 @MainActor
 final class KeyRecoveryServiceTests: XCTestCase {

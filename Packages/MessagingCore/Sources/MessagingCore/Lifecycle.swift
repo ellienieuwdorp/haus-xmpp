@@ -1,7 +1,7 @@
 import Foundation
 
-/// What the app process should do and what the user can see, as four separate signals
-/// (docs/development/lifecycle-signals.md). On iOS all four follow the scene: on at `.active`, off at `.background`.
+/// What the app process should do and what the user can see, as four separate signals. On iOS all four follow the
+/// scene: on at `.active`, off at `.background`.
 /// A desktop needs them apart, because the app stays connected while nobody looks at it.
 public struct LifecycleSignals: Sendable, Equatable {
     /// This process should own the transport: hold the lease, connect, synchronize, send. Off quiesces the transport
