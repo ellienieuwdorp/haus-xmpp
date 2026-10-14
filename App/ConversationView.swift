@@ -687,10 +687,12 @@ private struct ComposerLinkPreviewInput: Equatable {
 struct ComposerLinkPreviewCard: View {
     let state: ComposerLinkPreview.State
     let onRemove: () -> Void
+    /// Decoded once per card image, not on every composer render; its slot is held from the start.
+    @State private var thumbnail: UIImage?
 
-    private var thumbnail: UIImage? {
+    private var thumbnailData: Data? {
         guard case .ready(let content) = state else { return nil }
-        return content.thumbnail.flatMap(UIImage.init(data:))
+        return content.thumbnail
     }
 
     var body: some View {
@@ -703,9 +705,9 @@ struct ComposerLinkPreviewCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityLabel("Loading link preview for \(LinkDetection.displayHost(for: url) ?? url.absoluteString)")
             case .ready(let content):
-                if let thumbnail {
+                if content.thumbnail != nil {
                     Color.clear.frame(width: 44, height: 44)
-                        .overlay { Image(uiImage: thumbnail).resizable().scaledToFill() }
+                        .overlay { if let thumbnail { Image(uiImage: thumbnail).resizable().scaledToFill() } }
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         .accessibilityHidden(true)
                 }
@@ -730,6 +732,7 @@ struct ComposerLinkPreviewCard: View {
         .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .padding(.horizontal, 8).padding(.top, 8)
         .accessibilityIdentifier("composerLinkPreview")
+        .onChange(of: thumbnailData, initial: true) { _, data in thumbnail = data.flatMap(UIImage.init(data:)) }
     }
 }
 
