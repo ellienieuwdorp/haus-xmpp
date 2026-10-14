@@ -111,7 +111,7 @@ public struct JID: Hashable, Sendable, CustomStringConvertible {
             for key in ["from", "to"] { if let value = attributes[key], let normal = normalized(value) { attributes[key] = normal } }
         }
         return XMLNode(name: node.name, namespace: node.namespace, attributes: attributes, text: node.text,
-                       children: node.children.map(normalizingAddresses))
+                       children: node.children.map(normalizingAddresses), attributePrefixes: node.attributePrefixes)
     }
 }
 

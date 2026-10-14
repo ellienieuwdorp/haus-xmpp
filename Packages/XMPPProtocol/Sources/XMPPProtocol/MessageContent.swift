@@ -44,12 +44,17 @@ public struct MessageContent: Sendable, Equatable {
     public var originID: String?
     /// One shared file. `body` is then its caption, which may be empty.
     public var fileSharing: FileSharing?
+    /// XEP-0511 metadata about links in `body`, in body order. Read only from strict (authenticated) content of a text
+    /// message (`LinkMetadata.decode`); written only when valid for `body` (`LinkMetadata.validated`). A file, reaction,
+    /// receipt or retraction never carries it.
+    public var linkMetadata: [LinkMetadata]
 
     public static let retractionFallback = "This person attempted to retract a previous message, but it's unsupported by your client."
 
     public init(body: String, reply: Reply? = nil, reaction: Reaction? = nil, receipt: Receipt? = nil, retraction: String? = nil, correction: String? = nil,
-                requestsReceipt: Bool = false, markable: Bool = false, originID: String? = nil, fileSharing: FileSharing? = nil) {
-        self.body = body; self.reply = reply; self.reaction = reaction; self.receipt = receipt
+                requestsReceipt: Bool = false, markable: Bool = false, originID: String? = nil, fileSharing: FileSharing? = nil,
+                linkMetadata: [LinkMetadata] = []) {
+        self.body = body; self.reply = reply; self.reaction = reaction; self.receipt = receipt; self.linkMetadata = linkMetadata
         self.retraction = retraction; self.correction = correction
         self.requestsReceipt = requestsReceipt; self.markable = markable; self.originID = originID; self.fileSharing = fileSharing
     }
@@ -67,6 +72,12 @@ public struct MessageContent: Sendable, Equatable {
 
     public static let maximumDepth = 16
     public static let maximumReactionCount = 12
+
+    /// What of `linkMetadata` the encoder writes: all of it when valid for this text message, else nothing.
+    public var sendableLinkMetadata: [LinkMetadata] {
+        guard fileSharing == nil, reaction == nil, receipt == nil, retraction == nil else { return [] }
+        return LinkMetadata.validated(linkMetadata, body: body)
+    }
 
     public func xml() throws -> String {
         guard Self.validXMLText(body), (!body.isEmpty || reaction != nil || receipt != nil || fileSharing != nil || retraction != nil),
@@ -93,6 +104,7 @@ public struct MessageContent: Sendable, Equatable {
             xml += "<reply xmlns='urn:xmpp:reply:0' to='\(xmlEscaped(reply.to))' id='\(xmlEscaped(id))'/>"
             if !reply.quote.isEmpty { xml += "<fallback xmlns='urn:xmpp:fallback:0' for='urn:xmpp:reply:0'><body start='0' end='\(reply.quote.unicodeScalars.count)'/></fallback>" }
         }
+        xml += sendableLinkMetadata.map { $0.xml() }.joined()
         if let fileSharing, let fallback = fileFallback {
             xml += try fileSharing.xml()
             let start = text.unicodeScalars.count
@@ -213,8 +225,13 @@ public struct MessageContent: Sendable, Equatable {
             if reaction != nil || correction != nil || receipt != nil || fileSharing != nil { try ambiguous() }
             body = ""; reply = nil; reaction = nil; correction = nil; receipt = nil
         }
+        // Link metadata is decorative: only authenticated content of a text message carries it, and a broken
+        // Description drops the metadata, never the message (`LinkMetadata.decode`). Outer stanzas never yield it.
+        let linkMetadata = strict && retraction == nil && reaction == nil && receipt == nil && fileSharing == nil
+            ? LinkMetadata.decode(in: node, body: body) : []
         return MessageContent(body: body, reply: reply, reaction: reaction, receipt: receipt, retraction: retraction, correction: correction,
-                              requestsReceipt: requestsReceipt, markable: markable, originID: originID, fileSharing: retraction == nil ? fileSharing : nil)
+                              requestsReceipt: requestsReceipt, markable: markable, originID: originID, fileSharing: retraction == nil ? fileSharing : nil,
+                              linkMetadata: linkMetadata)
     }
 
     /// Complete set, deduplicated and sorted, so equal intentions produce equal bytes.
