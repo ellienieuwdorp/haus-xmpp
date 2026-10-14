@@ -2,7 +2,7 @@ import Foundation
 import MessageStore
 import XMPPProtocol
 
-/// Why a run could not settle. Every one of them shows the generic fallback (plan D2): unknown is never suppressed.
+/// Why a run could not settle. Every one of them shows the generic fallback: unknown is never suppressed.
 public enum NotificationFallbackReason: String, Sendable, Equatable, Codable {
     case leaseBusy, network, deadline, expired, protectedData, noAccount, identityUnavailable, postFailed, cancelled, failed
     /// The store is older than this build, or a restore of the previous version's data is under way or done: only
@@ -52,7 +52,7 @@ public struct NotificationRunReport: Sendable, Equatable, Codable {
     public init() {}
 }
 
-/// A settled run suppresses the remote alert; anything else shows the fallback (plan D1, D2).
+/// A settled run suppresses the remote alert; anything else shows the fallback.
 public enum NotificationRunOutcome: Sendable, Equatable {
     case settled(NotificationRunReport)
     case fallback(NotificationFallbackReason)
@@ -220,7 +220,7 @@ public struct PresentationStage: Sendable {
     public static let direct = PresentationStage(isFinal: false)
 }
 
-/// Posts a batch under the transport lease and then cleans up (plan D1–D4). Every `add` completes before the claimed
+/// Posts a batch under the transport lease and then cleans up. Every `add` completes before the claimed
 /// rows are deleted and before the run counts as committed; a failed or slow `add` throws, which means fallback.
 public struct NotificationPresenter: Sendable {
     public let posting: any NotificationPosting
@@ -312,7 +312,7 @@ public struct NotificationPresenter: Sendable {
     }
 }
 
-/// Delivered reaction notifications that are no longer current (plan D8): withdrawn in part or whole, the target gone,
+/// Delivered reaction notifications that are no longer current: withdrawn in part or whole, the target gone,
 /// or the chat read or opened since they were posted (`MessageStore.liveReactionNotifications`). Shared by the
 /// extension's end-of-run cleanup and the app's cleanup after a read pointer moved.
 public enum ReactionNotificationCleanup {

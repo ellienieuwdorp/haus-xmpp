@@ -182,7 +182,7 @@ private func commit(_ store: MessageStore, digest: String, sender: String = peer
     }
 }
 
-/// Retained ciphertext waiting for trust or keys (plan D5) is held to the same history rule as a message row: what the
+/// Retained ciphertext waiting for trust or keys is held to the same history rule as a message row: what the
 /// first archive page or a later backfill brings from before the baseline never asks for review, and a candidate the
 /// first page retained before its baseline existed goes when the baseline is recorded. Newer ciphertext still alerts.
 @Test func retainedHistoryCiphertextDoesNotAlert() async throws {

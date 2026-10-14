@@ -2679,7 +2679,7 @@ final class AppModel {
         // start of reading clears them then (`startedReading`).
         let onScreen = Self.attention.clearsNotifications(of: chatID, lifecycle, openChatID: openChatID)
         if !isDemo, onScreen { let account = accountID; Task { await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID) } }
-        // Reactions have no read state: an opened chat shows them, so waiting reaction alerts go (plan D8). Only under the
+        // Reactions have no read state: an opened chat shows them, so waiting reaction alerts go. Only under the
         // transport lease: without it an extension run may be posting them right now, and the lease acquisition repeats
         // this for the open chat once that run is over (`dismissOpenChatNotifications`).
         if onScreen, transportWanted, hasTransportOwnership, !quiescing, let store {
@@ -3308,7 +3308,7 @@ final class AppModel {
         chats.first { $0.id == chatID }?.notification ?? ChatNotificationSetting()
     }
 
-    /// Local only (plan D7): the store keeps it and the notification commit reads it; nothing reaches the server.
+    /// Local only: the store keeps it and the notification commit reads it; nothing reaches the server.
     private func setChatNotifications(_ chatID: String, _ setting: ChatNotificationSetting) async {
         guard let store else { return }
         do {

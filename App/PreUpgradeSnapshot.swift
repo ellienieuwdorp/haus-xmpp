@@ -16,12 +16,12 @@ import os
 /// `restore-journal.json` and `return-journal.json` while a restore or a return runs; `restored.json` while the
 /// previous version's data is in place; `saved-replies.json` for notification replies typed before the upgrade.
 /// Secrets stay in the Keychain as separate copy items, under a service named for the same generation. Builds up to
-/// f563365 have this code too, under the unnumbered names, main at 4df394a under generation 24 and main at 7159f37
+/// 6664869 have this code too, under the unnumbered names, main at 58b543a under generation 24 and main at 7159f37
 /// under generation 25: none sees a newer generation's backups, and this build takes theirs over when it opens
 /// (`adoptOlderGeneration`).
 struct PreUpgradeSnapshot: Sendable {
     /// The newest schema the build this one replaces can open: main since 7159f37 refuses anything above 25, main
-    /// since 4df394a anything above 24, f563365 (the owner's build) anything above 23, and 045ca73 stops at 21. A store
+    /// since 58b543a anything above 24, 6664869 anything above 23, and 21ba6b0 stops at 21. A store
     /// at or below it is copied before migrating, whichever of them left it; one above it (a migration that stopped
     /// part way) holds nothing a previous build could read back.
     static let previousReleaseSchema = 25
@@ -55,7 +55,7 @@ struct PreUpgradeSnapshot: Sendable {
         let accountService: String
         let accountKey: String
         let pushService: String
-        /// The snapshot service's name without a generation, where builds up to f563365 keep their copies.
+        /// The snapshot service's name without a generation, where builds up to 6664869 keep their copies.
         let unnumberedSnapshotService: String
 
         init(accountService: String, accountKey: String, pushService: String, snapshotService: String) {
@@ -141,7 +141,7 @@ struct PreUpgradeSnapshot: Sendable {
         /// since.
         var database: String?
         /// Put back in write-ahead-log mode, as every build keeps its live store (every restore by this build). Nil:
-        /// restored by an older build, in rollback-journal mode, which 045ca73 switched to write-ahead logging on open.
+        /// restored by an older build, in rollback-journal mode, which 21ba6b0 switched to write-ahead logging on open.
         var writeAheadLog: Bool?
     }
 
@@ -425,9 +425,9 @@ struct PreUpgradeSnapshot: Sendable {
     /// True once an older build opened the restored database. The restored file is put back in write-ahead-log mode
     /// with no sidecars and its digest recorded. An older build (app or extension) that opens it leaves `-wal`/`-shm`
     /// beside it (the system SQLite keeps them after closing), and anything it writes changes the file or the WAL.
-    /// f563365 and main at 4df394a open a store at their own schema as it is, so the journal mode alone cannot tell.
+    /// 6664869 and main at 58b543a open a store at their own schema as it is, so the journal mode alone cannot tell.
     /// Reinstalling this build changes none of that, so a reinstall still finds the data untouched. A restore an older
-    /// build made was in rollback-journal mode, which 045ca73 switched on open; its header is checked too. When it
+    /// build made was in rollback-journal mode, which 21ba6b0 switched on open; its header is checked too. When it
     /// cannot tell, it answers true: the choices then keep the data the previous build may have written as the new
     /// backup.
     func previousVersionRan(_ restored: Restored) -> Bool {
@@ -561,7 +561,7 @@ struct PreUpgradeSnapshot: Sendable {
 
     /// Runs with SQLite closed and the lease held. The database is replaced by one rename, after the sidecars of the
     /// file it replaces are gone; the folders, the tombstone, the Keychain records and the preferences follow. Every
-    /// copy goes back in write-ahead-log mode, as each build keeps its live store: f563365, main at 4df394a and this
+    /// copy goes back in write-ahead-log mode, as each build keeps its live store: 6664869, main at 58b543a and this
     /// build open a store at their own schema as it is, so a copy left in the snapshot's rollback-journal mode would
     /// stay in it.
     private func putBack(_ manifest: Manifest, _ captured: Captured, from copy: Copy) throws {

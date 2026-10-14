@@ -7,7 +7,7 @@ import MessageStore
 public struct NotificationDestination: Sendable, Equatable, CustomStringConvertible {
     public static let userInfoKey = "xmpp_local_destination"
     /// What `messageID` names: an incoming message (every message notification), or this account's own message that
-    /// someone reacted to (plan D8). Only `.message` stands for something unread; read-state cleanup and message
+    /// someone reacted to. Only `.message` stands for something unread; read-state cleanup and message
     /// actions ignore `.reaction`.
     public enum Kind: String, Sendable { case message, reaction }
     public let accountScope: String
@@ -68,9 +68,9 @@ public struct NotificationDestination: Sendable, Equatable, CustomStringConverti
     }
 }
 
-/// Cleanup-only marker for a notification that has no tap destination (plan D5): an unreadable placeholder, which
+/// Cleanup-only marker for a notification that has no tap destination: an unreadable placeholder, which
 /// is named by its opaque `unreadable-<digest>` row ID, retained ciphertext, which carries no ID at all (cleanup
-/// recomputes the identifiers of what is still retained), or a reaction to one of this account's messages (plan D8),
+/// recomputes the identifiers of what is still retained), or a reaction to one of this account's messages,
 /// named by the reacted-to message's local UUID. It never routes a tap and holds no address or content.
 public struct NotificationReference: Sendable, Equatable, CustomStringConvertible {
     public static let userInfoKey = "xmpp_local_reference"

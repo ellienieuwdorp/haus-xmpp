@@ -6,7 +6,7 @@ import MessageStore
 /// that build or for the user's choice), or a return to this version's kept data under way. The app writes them
 /// (`PreUpgradeSnapshot`); the notification extension only checks for them.
 ///
-/// Each build keeps its backups in a folder named after the schema it writes (`PreUpgrade-24/`). Builds up to f563365
+/// Each build keeps its backups in a folder named after the schema it writes (`PreUpgrade-24/`). Builds up to 6664869
 /// used `PreUpgrade/` and carry the same backup code: with one shared folder, the previous build installed after a
 /// restore would take this build's restored marker and kept copy for its own, and offer to put back data it cannot
 /// open or to delete it. An older build never looks at a newer generation's folder; the app moves an older
@@ -20,7 +20,7 @@ enum PreUpgradeHold {
     static let returnJournalName = "return-journal.json"
     static let restoredName = "restored.json"
 
-    /// Older generations, newest first; nil is the unnumbered folder of builds up to f563365.
+    /// Older generations, newest first; nil is the unnumbered folder of builds up to 6664869.
     static var olderGenerations: [Int?] { (firstNumberedGeneration..<generation).reversed().map(Optional.some) + [nil] }
 
     static func directoryName(generation: Int?) -> String { generation.map { "PreUpgrade-\($0)" } ?? "PreUpgrade" }

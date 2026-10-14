@@ -6,7 +6,7 @@ public enum NotificationCandidateKey: Hashable, Sendable {
     case message(String)
     /// Retained ciphertext still waiting for trust or keys; it has no message row yet.
     case pending(sender: String, digest: String)
-    /// Another person's authenticated reaction to one of this account's messages (plan D8). The sequence names exactly
+    /// Another person's authenticated reaction to one of this account's messages. The sequence names exactly
     /// the version that was claimed: a replacement that arrives later is a new row and stays for the next run.
     case reaction(sequence: Int)
 }
@@ -23,7 +23,7 @@ public struct NotificationParticipant: Sendable, Equatable, CustomStringConverti
     public var description: String { "NotificationParticipant(<redacted>)" }
 }
 
-/// Another person reacted to one of this account's messages, through the authenticated (SCE) path only (plan D8).
+/// Another person reacted to one of this account's messages, through the authenticated (SCE) path only.
 /// One per actor and target message; never serialize this into gateway traffic or logs.
 public struct ReactionNotificationCandidate: Sendable, Equatable, CustomStringConvertible {
     public let key: NotificationCandidateKey
@@ -63,7 +63,7 @@ public struct LiveReactionNotification: Sendable, Hashable {
 }
 
 /// Where an incoming ciphertext that is being retained would appear, so that waiting for trust or
-/// keys can still alert (plan D5). Never carries content: the ciphertext is unreadable until then.
+/// keys can still alert. Never carries content: the ciphertext is unreadable until then.
 public struct PendingNotificationContext: Sendable, Equatable {
     public let chatID: String
     public let sentAt: Date
@@ -121,7 +121,7 @@ public struct NotificationCandidate: Sendable, Equatable, CustomStringConvertibl
     }
 }
 
-/// A bounded, per-message claim (plan D4): at most `perChat` newest candidates per chat and `total` overall,
+/// A bounded, per-message claim: at most `perChat` newest candidates per chat and `total` overall,
 /// oldest first. Nothing is deleted by reading it; the run deletes `claimed` after its posts completed.
 public struct MessageNotification: Sendable, Equatable, CustomStringConvertible {
     /// Selected candidates, oldest first. The store leaves out retracted messages (it claims them silently); the

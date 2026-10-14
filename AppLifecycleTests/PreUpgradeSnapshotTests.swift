@@ -8,9 +8,9 @@ import XMPPProtocol
 
 /// The pre-upgrade snapshot, its restore and the way back, through `PreUpgradeSnapshot` with isolated locations: a
 /// temporary App Group root, throwaway preference domains and Keychain services of their own. Never the app's real
-/// data. The previous build's store is a real file: schema 21 (`schema-21.sql`, dumped from the 045ca73 MessageStore),
-/// schema 23 (`schema-23.sql`, from the f563365 MessageStore, the build on the owner's phone), schema 24
-/// (`schema-24.sql`, that store as main at 4df394a migrates it) or schema 25 (`schema-25.sql`, as main at 7159f37
+/// data. The previous build's store is a real file: schema 21 (`schema-21.sql`, dumped from the 21ba6b0 MessageStore),
+/// schema 23 (`schema-23.sql`, from the 6664869 MessageStore), schema 24
+/// (`schema-24.sql`, that store as main at 58b543a migrates it) or schema 25 (`schema-25.sql`, as main at 7159f37
 /// migrates that).
 @MainActor final class PreUpgradeSnapshotTests: XCTestCase {
     private let typed = "Ellie@Example.org"
@@ -87,12 +87,12 @@ import XMPPProtocol
                                                        journal: PushRegistrationJournal()))
     }
 
-    /// The spelling a previous build keyed the account by: 045ca73 (schema 21) as typed, f563365 (23) and main at
-    /// 4df394a (24) and 7159f37 (25) in normal form.
+    /// The spelling a previous build keyed the account by: 21ba6b0 (schema 21) as typed, 6664869 (23) and main at
+    /// 58b543a (24) and 7159f37 (25) in normal form.
     private func owner(_ schema: Int) -> String { schema < 23 ? typed : account }
 
-    /// The generation whose names a previous build's backup code uses: nil (the unnumbered names) up to f563365 (23),
-    /// the schema it writes from main at 4df394a (24) on.
+    /// The generation whose names a previous build's backup code uses: nil (the unnumbered names) up to 6664869 (23),
+    /// the schema it writes from main at 58b543a (24) on.
     private func generation(ofBuildAt schema: Int) -> Int? { schema >= PreUpgradeHold.firstNumberedGeneration ? schema : nil }
 
     private func previousBuildData(in installation: Installation, schema: Int = 21) async throws {
@@ -119,9 +119,9 @@ import XMPPProtocol
         try Data("face".utf8).write(to: avatars.appending(path: "avatar.png"))
     }
 
-    /// The backup an older build took of its predecessor's data, in that build's own layout: by default f563365's
-    /// backup of 045ca73's schema-21 data in `PreUpgrade/snapshot/` with Keychain copies under the unnumbered snapshot
-    /// service; with `generation` 24 and `schema` 23, main's (4df394a) backup of f563365's data in `PreUpgrade-24/`
+    /// The backup an older build took of its predecessor's data, in that build's own layout: by default 6664869's
+    /// backup of 21ba6b0's schema-21 data in `PreUpgrade/snapshot/` with Keychain copies under the unnumbered snapshot
+    /// service; with `generation` 24 and `schema` 23, main's (58b543a) backup of 6664869's data in `PreUpgrade-24/`
     /// under the service of generation 24; with `generation` 25 and `schema` 24, main's (7159f37) backup of that data in
     /// `PreUpgrade-25/`. Manifest and preference files included, written through the same public
     /// seams those builds used, from a fixture store in a scratch folder. Returns the copy's ID.
@@ -145,7 +145,7 @@ import XMPPProtocol
         try keychainAdd(service, "\(id)|account", Data("{\"accountID\":\"\(owner)\"}".utf8))
         try keychainAdd(service, "\(id)|push|\(owner)", try pushRecord(owner, node: "older-node"))
         let manifest = PreUpgradeSnapshot.Manifest(id: id, takenAt: now.addingTimeInterval(-7 * 86_400), database: summary,
-                                                   installation: generation == nil ? "/install/f563365" : generation == 24 ? "/install/4df394a" : "/install/7159f37",
+                                                   installation: generation == nil ? "/install/6664869" : generation == 24 ? "/install/58b543a" : "/install/7159f37",
                                                    folders: [], notificationsDisabled: false, accountRecord: true, pushRegistrations: [owner])
         try JSONEncoder().encode(manifest).write(to: folder.appending(path: "snapshot.json"))
         try FileManager.default.removeItem(at: scratch)
@@ -337,15 +337,15 @@ import XMPPProtocol
         XCTAssertLessThan(manifest.suggestDeletionAfter, later)
     }
 
-    // MARK: The f563365 build (schema 23) and main at 4df394a (24) and 7159f37 (25) as the previous version
+    // MARK: The 6664869 build (schema 23) and main at 58b543a (24) and 7159f37 (25) as the previous version
 
-    /// The owner's phone runs f563365, whose store is at schema 23: it is copied whole, including what is still only
+    /// A device still running 6664869 has a store, whose store is at schema 23: it is copied whole, including what is still only
     /// in its WAL, before the migration to the current schema.
     func testAStoreTheSchema23BuildLeftIsSnapshottedBeforeMigrating() async throws {
         try await assertSnapshottedBeforeMigrating(schema: 23)
     }
 
-    /// A store a build of main between 4df394a and 7159f37 left at schema 24 is copied whole before migrating, so that
+    /// A store a build of main between 58b543a and 7159f37 left at schema 24 is copied whole before migrating, so that
     /// build can be installed again over a restore.
     func testAStoreTheSchema24BuildLeftIsSnapshottedBeforeMigrating() async throws {
         try await assertSnapshottedBeforeMigrating(schema: 24)
@@ -377,14 +377,14 @@ import XMPPProtocol
         XCTAssertEqual(sqliteRows(locations.database, "SELECT count(*) FROM messages"), ["5"], file: file, line: line)
     }
 
-    /// The owner's phone also holds f563365's backup of 045ca73's data, in f563365's layout. The backup of the
+    /// Such a device also holds 6664869's backup of 21ba6b0's data, in 6664869's layout. The backup of the
     /// schema-23 data replaces it: one backup remains, the old one's Keychain copies are gone with it, and nothing is
-    /// left under the folder and Keychain names f563365's own backup code acts on.
+    /// left under the folder and Keychain names 6664869's own backup code acts on.
     func testTheOlderBuildsBackupIsRetiredForTheSchema23One() async throws {
         try await assertOlderBackupRetired(schema: 23, olderGeneration: nil, olderSchema: 21)
     }
 
-    /// The same for a build of main since 4df394a, which keeps its backup (of f563365's schema-23 data) under
+    /// The same for a build of main since 58b543a, which keeps its backup (of 6664869's schema-23 data) under
     /// generation 24: the backup of the schema-24 data replaces it, and nothing is left under generation 24's names.
     func testMainsBackupIsRetiredForTheSchema24One() async throws {
         try await assertOlderBackupRetired(schema: 24, olderGeneration: 24, olderSchema: 23)
@@ -415,17 +415,17 @@ import XMPPProtocol
         XCTAssertFalse(FileManager.default.fileExists(atPath: locations.directory(generation: olderGeneration).path), file: file, line: line)
     }
 
-    /// Restoring schema-23 data, for f563365 to be installed over it. f563365 has this backup code too, under the
-    /// unnumbered names: had the restore left its marker and this version's kept copy there, f563365 would show the
+    /// Restoring schema-23 data, for 6664869 to be installed over it. 6664869 has this backup code too, under the
+    /// unnumbered names: had the restore left its marker and this version's kept copy there, 6664869 would show the
     /// restored screen as if it were the newer build, and either choice there would hand it data it cannot open or
-    /// delete this version's copy. So the restored data is exactly the backup's, in the write-ahead-log mode f563365
-    /// keeps its store in, and nothing of this build's backups is under f563365's names. Then f563365 runs on it, and
-    /// this build, installed again, returns to its own data with the backup now holding what f563365 wrote.
+    /// delete this version's copy. So the restored data is exactly the backup's, in the write-ahead-log mode 6664869
+    /// keeps its store in, and nothing of this build's backups is under 6664869's names. Then 6664869 runs on it, and
+    /// this build, installed again, returns to its own data with the backup now holding what 6664869 wrote.
     func testRestoredSchema23DataIsLeftToThePreviousBuildAndReturnBringsThisVersionBack() async throws {
         try await assertRestoredDataIsLeftToThePreviousBuild(schema: 23)
     }
 
-    /// The same for schema-24 data and a build of main since 4df394a, whose backup code uses generation 24's names.
+    /// The same for schema-24 data and a build of main since 58b543a, whose backup code uses generation 24's names.
     func testRestoredSchema24DataIsLeftToThePreviousBuildAndReturnBringsThisVersionBack() async throws {
         try await assertRestoredDataIsLeftToThePreviousBuild(schema: 24)
     }
@@ -791,8 +791,8 @@ import XMPPProtocol
         try Data("new".utf8).write(to: attachments.appending(path: "two.jpg"))
     }
 
-    /// What a previous build does on its first launch over restored data: 045ca73's open switches the store to
-    /// write-ahead logging (f563365 opens a store at its own schema as it is), then it writes (here, an encrypted
+    /// What a previous build does on its first launch over restored data: 21ba6b0's open switches the store to
+    /// write-ahead logging (6664869 opens a store at its own schema as it is), then it writes (here, an encrypted
     /// message it sent).
     private func runPreviousBuild(on database: URL, schema: Int = 21) {
         let owner = owner(schema), mode = schema < 23 ? "PRAGMA journal_mode=WAL; " : ""

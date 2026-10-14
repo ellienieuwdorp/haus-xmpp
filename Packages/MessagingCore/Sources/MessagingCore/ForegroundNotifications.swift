@@ -11,7 +11,7 @@ extension NotificationPlanner {
     /// How old a message may be and still show a banner. Older candidates are history the connection caught up on.
     public static let foregroundWindow: TimeInterval = 600
 
-    /// The extension's plan for the candidates a foreground banner may show, messages and reactions (plan D8) alike:
+    /// The extension's plan for the candidates a foreground banner may show, messages and reactions alike:
     /// not the chat the user is reading (`LifecycleSignals.readingChat`: it is on screen), and nothing older than
     /// `window`. Claims the whole batch; what is not posted is dismissed. There is no deferred-chats summary in front
     /// of the app.

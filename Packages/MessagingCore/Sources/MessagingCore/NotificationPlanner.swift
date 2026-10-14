@@ -17,7 +17,7 @@ public struct PlannedNotification: Sendable, Equatable, CustomStringConvertible 
     /// Who the notification is from, for a communication notification (`INSendMessageIntent`). Only when previews are
     /// shown: with previews off no name or avatar reaches the system.
     public let communication: NotificationCommunication?
-    /// Lets cleanup find placeholder, retained-ciphertext and reaction notifications, which have no destination (plan D5, D8).
+    /// Lets cleanup find placeholder, retained-ciphertext and reaction notifications, which have no destination.
     public let reference: NotificationReference?
     /// The app icon badge: unread messages outside muted chats, when the run knows it.
     public let badge: Int?
@@ -90,24 +90,24 @@ public struct NotificationPlan: Sendable, Equatable {
     public let summarizesDeferredChats: Bool
 }
 
-/// Pure: store snapshot in, ordered requests out (plan D1, D3–D5). Oldest first, so the newest is added last and sits on top.
+/// Pure: store snapshot in, ordered requests out. Oldest first, so the newest is added last and sits on top.
 public enum NotificationPlanner {
-    /// The visible alert whenever a run cannot settle (plan D2). It never carries message content.
+    /// The visible alert whenever a run cannot settle. It never carries message content.
     public static let fallbackBody = "You may have new messages"
-    /// Retained ciphertext waiting for trust or keys: the wording plan D5 fixes. The app's chat list says "Encrypted
+    /// Retained ciphertext waiting for trust or keys: the fixed wording. The app's chat list says "Encrypted
     /// message needs attention" for the same state; the two are not the same string.
     public static let reviewBody = "Sent an encrypted message. Open the chat to review."
-    /// An incoming placeholder this device cannot read (plan D5).
+    /// An incoming placeholder this device cannot read.
     public static let unreadableBody = "Sent a message this device can't read"
     /// Every body when previews are off.
     public static let hiddenBody = "New message"
 
-    /// The summary for chats a run had no room for (plan D4): a count only, so it is the same with previews off.
+    /// The summary for chats a run had no room for: a count only, so it is the same with previews off.
     public static func overflowBody(chats: Int) -> String {
         chats == 1 ? "New messages in 1 more chat" : "New messages in \(chats) more chats"
     }
 
-    /// A reaction to one of this account's messages, with previews off (plan D8).
+    /// A reaction to one of this account's messages, with previews off.
     public static let hiddenReactionBody = "Reacted to your message"
 
     /// `accountID` names the account for the deferred-chats summary; it defaults to the batch's own candidates.
@@ -116,7 +116,7 @@ public enum NotificationPlanner {
     public static func plan(_ batch: MessageNotification, accountID: String? = nil, badge: Int? = nil, playsSound: Bool = true) -> NotificationPlan {
         var requests: [PlannedNotification] = []
         // Chats beyond the cap are older than every selected message, so their summary goes first and never takes the
-        // sound from a newer message. Settling without it would hide that those chats have news (plan D2).
+        // sound from a newer message. Settling without it would hide that those chats have news.
         let account = accountID ?? batch.candidates.first?.accountID ?? batch.reactions.first?.accountID
         var summarizes = false
         if batch.deferredChatCount > 0, let account, !account.isEmpty {
@@ -214,7 +214,7 @@ public enum NotificationPlanner {
                                          otherRecipients: members.filter { $0.id != sender.id && $0.id != accountID }.prefix(8).map(person), body: body)
     }
 
-    /// Stable per message, so posting again replaces rather than duplicates (plan D3). Retained ciphertext has no
+    /// Stable per message, so posting again replaces rather than duplicates. Retained ciphertext has no
     /// message row yet; its identity is derived from its ciphertext key instead, inside the same opaque digest.
     public static func identifier(for candidate: NotificationCandidate) -> String {
         identifier(accountID: candidate.accountID, key: candidate.key)

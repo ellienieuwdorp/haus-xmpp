@@ -2,7 +2,7 @@ import Foundation
 import MessageStore
 import XMPPProtocol
 
-/// The app icon badge: unread messages (read state, plan D6) outside muted chats (plan D7). One pure rule, used by the
+/// The app icon badge: unread messages (read state) outside muted chats. One pure rule, used by the
 /// extension on its empty suppression content and posted requests, and by the app whenever unread totals change.
 public enum NotificationBadge {
     /// Chats muted at `now` do not count, nor chats with an address the account blocked; a mentions-only chat counts all

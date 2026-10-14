@@ -106,7 +106,7 @@ private struct GroupTransport: OMEMOGroupTransport {
                                                      provenance: .roomArchive, hasFallbackBody: true)
         do { _ = try await c.receiveGroup(account: carol, message: received, transport: ct); XCTFail("Unknown fingerprint") }
         catch { XCTAssertEqual(error as? OMEMOError, .trustRequired) }
-        // An unapproved sender's room message alerts once in the room, without content (plan D5).
+        // An unapproved sender's room message alerts once in the room, without content.
         let review = try await cStore.pendingNotifications(accountID: carol)
         XCTAssertEqual(review.candidates.map(\.content), [.pendingEncrypted])
         XCTAssertEqual(review.candidates.first?.chatID, roomID)
@@ -520,7 +520,7 @@ private struct GroupTransport: OMEMOGroupTransport {
         }
         var pending = try await f.bStore.pendingEncryptedIncoming(accountID: f.bob)
         XCTAssertEqual(pending.count, 2)
-        // The sender device is trusted; only the room read is missing. Nothing here needs the user's review (plan D5).
+        // The sender device is trusted; only the room read is missing. Nothing here needs the user's review.
         let alerts = try await f.bStore.pendingNotifications(accountID: f.bob)
         XCTAssertTrue(alerts.candidates.isEmpty)
         // One retry pass reads the still-unreadable room once, not once per row, and reports the failure.

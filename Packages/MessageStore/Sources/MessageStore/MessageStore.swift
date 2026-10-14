@@ -277,7 +277,7 @@ public actor MessageStore {
             if try connection.query("SELECT 1 FROM pragma_table_info('account_preferences') WHERE name='last_seen'").isEmpty {
                 try connection.execute("ALTER TABLE account_preferences ADD COLUMN last_seen INTEGER NOT NULL DEFAULT 1")
             }
-            // v18: retained ciphertext waiting for trust or keys may alert (plan D5). It has no message row, so its
+            // v18: retained ciphertext waiting for trust or keys may alert. It has no message row, so its
             // candidate lives beside the pending row and disappears with it. IF NOT EXISTS keeps it idempotent.
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS pending_notification_candidates (
@@ -346,7 +346,7 @@ public actor MessageStore {
             if try connection.query("SELECT 1 FROM pragma_table_info('chats') WHERE name='room_nickname'").isEmpty {
                 try connection.execute("ALTER TABLE chats ADD COLUMN room_nickname TEXT")
             }
-            // v21: others' authenticated reactions to this account's own messages may alert (plan D8), behind a per-account
+            // v21: others' authenticated reactions to this account's own messages may alert, behind a per-account
             // switch that defaults on. One row per actor and target: a replacement updates it, a removal deletes it.
             // Column and table checks keep it idempotent in any merge order.
             if try connection.query("SELECT 1 FROM pragma_table_info('account_preferences') WHERE name='reaction_alerts'").isEmpty {
@@ -361,7 +361,7 @@ public actor MessageStore {
                 )
                 """)
             // What a run posted per actor and target, so cleanup can tell a delivered reaction notification that still
-            // matches the actor's reaction from one that was withdrawn (in part or whole) or seen since (plan D8).
+            // matches the actor's reaction from one that was withdrawn (in part or whole) or seen since.
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS reaction_notifications_posted (
                     account_id TEXT NOT NULL, chat_id TEXT NOT NULL, actor_id TEXT NOT NULL, target_message_id TEXT NOT NULL,
@@ -973,7 +973,7 @@ public actor MessageStore {
 
     /// Keeps ciphertext that may still decrypt later. An existing row keeps its reason: classification is explicit.
     /// `notification` names the chat of an incoming message that is waiting for trust or keys: the new row then also
-    /// becomes a notification candidate (plan D5), which is removed with the row when it commits or is converted.
+    /// becomes a notification candidate, which is removed with the row when it commits or is converted.
     /// A new row beyond `pendingLimits` is not kept: `overflow` is recorded in the same transaction instead (its quiet
     /// placeholder, or only the consumed replay identity), so a full table still yields a durable final outcome and the
     /// stream and archive walk keep moving. Without `overflow` the conversation is taken to be the sender's direct chat
@@ -1039,7 +1039,7 @@ public actor MessageStore {
     }
 
     /// Re-labels a retained row; a no-op when the row no longer exists (it may have been committed or converted meanwhile).
-    /// `notification` makes an existing row a notification candidate (plan D5) when it was retained without one because
+    /// `notification` makes an existing row a notification candidate when it was retained without one because
     /// only later work (a room read) showed it waits for trust or keys. Pass it on the ciphertext's first observation
     /// only: a candidate that was already posted is gone, and a retry must not alert again.
     public func classifyPendingEncryptedIncoming(accountID: String, sender: String, digest: String, reason: PendingEncryptedReason,
@@ -1055,7 +1055,7 @@ public actor MessageStore {
     }
 
     /// The keys of every retained ciphertext row (at most `pendingLimits.perAccount`), without wires. Notification cleanup
-    /// keeps a delivered review notification (plan D5) only while its ciphertext is still retained here.
+    /// keeps a delivered review notification only while its ciphertext is still retained here.
     public func retainedEncryptedIncomingKeys(accountID: String) throws -> [NotificationCandidateKey] {
         try connection.query("SELECT sender,digest FROM pending_encrypted_inbox WHERE account_id=? ORDER BY rowid LIMIT ?",
                              [.text(accountID), .integer(Self.pendingLimits.perAccount)])
@@ -1067,7 +1067,7 @@ public actor MessageStore {
     /// and removes the pending row. Returns true when the row was inserted now. Does not require transport ownership
     /// (the extension's archive walk and the app's live path both call it, exactly like `commitEncryptedIncoming`).
     /// The row is never plaintext, never authenticated and never an event target. An incoming placeholder from someone
-    /// else is a notification candidate (plan D5: "Sent a message this device can't read") when its reason `alerts`; an
+    /// else is a notification candidate ("Sent a message this device can't read") when its reason `alerts`; an
     /// own-device one never is.
     @discardableResult public func recordUnreadableMessage(_ placeholder: UnreadableMessage) throws -> Bool {
         try Self.validate(placeholder)
@@ -1458,7 +1458,7 @@ public actor MessageStore {
         return try chatNotificationAllows(accountID: accountID, message: message, groupMembers: groupMembers)
     }
 
-    /// Mute and mentions (plan D7): a muted chat queues nothing; a mentions-only chat queues a message whose
+    /// Mute and mentions: a muted chat queues nothing; a mentions-only chat queues a message whose
     /// decrypted body mentions this account. Reads only local state; nothing here reaches the server.
     private func chatNotificationAllows(accountID: String, message: StoredMessage, groupMembers: [String], now: Date = Date()) throws -> Bool {
         guard let row = try connection.query("SELECT notification_level,muted_until,room_nickname FROM chats WHERE account_id=? AND id=?",
@@ -1540,7 +1540,7 @@ public actor MessageStore {
     /// or another (MAM catch-up of history an other device displayed), so it never alerts. The row exists already.
     private func isAfterReadPointer(accountID: String, message: StoredMessage) throws -> Bool {
         if try connection.query("SELECT 1 FROM messages WHERE account_id=? AND id=?", [.text(accountID), .text(message.id)]).isEmpty {
-            // Retained ciphertext (plan D5) has no row yet: compare its time with the chat's pointer and with the history
+            // Retained ciphertext has no row yet: compare its time with the chat's pointer and with the history
             // baseline of the archive that holds the chat, the same two rules a message row is held to.
             guard try connection.query("SELECT 1 FROM chat_read_state WHERE account_id=? AND chat_id=? AND read_sent_at>=?",
                                        [.text(accountID), .text(message.chatID), .real(message.sentAt.timeIntervalSince1970)]).isEmpty else { return false }
@@ -1590,7 +1590,7 @@ public actor MessageStore {
     }
 
     /// The chat was opened: its reactions are on screen, so none of them may still alert, and none that was delivered is
-    /// current any more (plan D8). Reactions have no read pointer of their own. Delivered ones go with the chat's thread
+    /// current any more. Reactions have no read pointer of their own. Delivered ones go with the chat's thread
     /// (`DeliveredNotificationCleaner.removeThread`). Like `dismissPendingMessageNotifications` it needs the transport
     /// lease, so it cannot race an extension run that already read the candidates it is about to post.
     public func dismissReactionNotifications(accountID: String, chatID: String) throws {
@@ -1608,7 +1608,7 @@ public actor MessageStore {
     public static let notificationsPerChat = 8
     public static let notificationsPerRun = 20
 
-    /// A bounded, read-only claim of the account's notification candidates (plan D4). The newest `perChat` of each chat
+    /// A bounded, read-only claim of the account's notification candidates. The newest `perChat` of each chat
     /// and the newest `total` overall are selected and returned oldest first; older candidates of a selected chat are
     /// folded into that chat's "and N more" and claimed with it; chats beyond the total cap stay for a later run and are
     /// counted in `deferredChatCount`, which the planner turns into one visible summary request. Messages their sender
@@ -1701,7 +1701,7 @@ public actor MessageStore {
             """, [.text(accountID), .text(room), .text(author)]).map { try participant(accountID: accountID, id: $0[0].string) }
     }
 
-    // MARK: Reaction notifications (plan D8)
+    // MARK: Reaction notifications
 
     /// This actor's newest stored reaction set on the same target wire ID, before a new event is inserted.
     private func latestReaction(accountID: String, reaction: AuthenticatedReaction) throws -> (id: String, reactions: [String])? {
@@ -1845,7 +1845,7 @@ public actor MessageStore {
     }
 
     /// Of the messages behind delivered notifications, those that should no longer be shown: missing, or retracted by
-    /// their sender. Read state is a separate rule (plan D6).
+    /// their sender. Read state is a separate rule.
     public func staleNotificationMessageIDs(accountID: String, messageIDs: [String]) throws -> Set<String> {
         guard messageIDs.count <= 1000 else { throw MessageStoreError.invalidValue }
         var stale = Set<String>()
@@ -2272,7 +2272,7 @@ public actor MessageStore {
                 SELECT m.id FROM notification_candidates n JOIN messages m ON m.account_id=n.account_id AND m.id=n.message_id
                 \(Self.readJoins) WHERE n.account_id=?1 AND NOT \(Self.unreadCondition))
             """, [.text(accountID)])
-        // Retained ciphertext from the same history page was retained before the baseline existed (plan D5 review alerts).
+        // Retained ciphertext from the same history page was retained before the baseline existed.
         try connection.execute("""
             DELETE FROM pending_notification_candidates WHERE account_id=?1 AND sent_at <= COALESCE(
                 (SELECT sent_at FROM read_baselines WHERE account_id=?1 AND archive_id=pending_notification_candidates.chat_id),
@@ -2314,7 +2314,7 @@ public actor MessageStore {
             DELETE FROM pending_notification_candidates WHERE account_id=?1 AND chat_id=?2
             AND sent_at <= (SELECT read_sent_at FROM chat_read_state WHERE account_id=?1 AND chat_id=?2)
             """, Array(values.prefix(2)))
-        // Reactions have no read state of their own: the chat was read after they arrived, so they were seen (plan D8), and
+        // Reactions have no read state of their own: the chat was read after they arrived, so they were seen, and
         // delivered ones are no longer current (cleanup removes them, here or on the next extension run).
         try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=? AND chat_id=?", Array(values.prefix(2)))
         try connection.execute("DELETE FROM reaction_notifications_posted WHERE account_id=? AND chat_id=?", Array(values.prefix(2)))

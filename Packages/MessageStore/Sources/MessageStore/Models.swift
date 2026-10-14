@@ -321,7 +321,7 @@ public enum UnreadableReason: String, Sendable, Equatable, CaseIterable {
     /// (`MessageStore.resetEncryption`), so the keys that could open it are gone.
     case encryptionReset
 
-    /// Whether an incoming placeholder may alert (plan D5). A blocked device was the user's own decision, and a limit is
+    /// Whether an incoming placeholder may alert. A blocked device was the user's own decision, and a limit is
     /// reached only by a sender whose earlier waiting messages already alerted, or by a flood: both stay quiet. So does
     /// ciphertext converted by a reset: it arrived (and may have alerted) long before.
     public var alerts: Bool { self != .rejectedDevice && self != .retentionLimit && self != .encryptionReset }
@@ -558,7 +558,7 @@ public struct AccountPreferences: Sendable, Equatable {
     public var deliveryReceipts = true
     public var readReceipts = true
     public var lastSeen = true
-    /// Others' authenticated reactions to this account's messages alert (plan D8). Defaults on.
+    /// Others' authenticated reactions to this account's messages alert. Defaults on.
     public var reactionNotifications = true
     public init(notificationPreviews: Bool = true, deliveryReceipts: Bool = true, readReceipts: Bool = true, lastSeen: Bool = true,
                 reactionNotifications: Bool = true) {

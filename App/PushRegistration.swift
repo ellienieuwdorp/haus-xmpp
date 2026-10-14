@@ -20,8 +20,7 @@ final class PushRegistration: NSObject, UNUserNotificationCenterDelegate {
     /// Becomes the notification center's delegate. Called once at launch by the platform's application delegate.
     func installNotificationDelegate() {
         UNUserNotificationCenter.current().delegate = self
-        // `message` offers Reply and Mark as Read; `notice`, `reaction` and the extension's `fallback` have none
-        // (plan D2, D3, D8, E).
+        // `message` offers Reply and Mark as Read; `notice`, `reaction` and the extension's `fallback` have none.
         UNUserNotificationCenter.current().setNotificationCategories(NotificationCategories.all)
         #if DEBUG && os(iOS)
         NotificationHarness.install()

@@ -49,7 +49,7 @@ public struct BackgroundSynchronizer: Sendable {
     /// Presents what a run committed, under the lease.
     public typealias Presentation = @Sendable (MessageStore, PresentationStage) async throws -> Void
 
-    /// `leaseWait` is spent inside `timeBudget`: the app or another run may briefly hold the lease (plan D2).
+    /// `leaseWait` is spent inside `timeBudget`: the app or another run may briefly hold the lease.
     /// `presentation` runs early once the own archive committed and rooms follow (`.direct`), and once at the end.
     public func synchronize(databaseURL: URL, wrappingKey: Data, account: BackgroundAccount,
                             timeBudget: Duration = .seconds(20), leaseWait: Duration = .seconds(6),

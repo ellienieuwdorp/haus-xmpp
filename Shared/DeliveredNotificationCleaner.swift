@@ -13,7 +13,7 @@ enum DeliveredNotificationCleaner {
         let identifier: String
         let threadIdentifier: String
         /// The message a `NotificationDestination` names, when the request carries one for this account, or the
-        /// placeholder row an unreadable message's cleanup `NotificationReference` names (plan D5).
+        /// placeholder row an unreadable message's cleanup `NotificationReference` names.
         let messageID: String?
 
         init(identifier: String, threadIdentifier: String, messageID: String?) {

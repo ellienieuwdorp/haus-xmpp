@@ -357,7 +357,7 @@ import MessagingCore
             (banner(chat: carol), account, nil, all, "on the chat list every chat banners"),
             (banner(chat: carol, sound: false), account, nil, [.banner, .list], "without sound"),
             (banner(chat: carol, category: NotificationIdentity.noticeCategory), account, nil, all, "a review or failed-reply notice is about its chat"),
-            (banner(chat: carol, category: NotificationIdentity.reactionCategory), account, bob, all, "a reaction in another chat (plan D8)"),
+            (banner(chat: carol, category: NotificationIdentity.reactionCategory), account, bob, all, "a reaction in another chat"),
             (banner(chat: bob, category: NotificationIdentity.reactionCategory), account, bob, [], "never a reaction in the open chat"),
             (banner(chat: carol, remote: true), account, nil, [], "the gateway placeholder and the extension's remote content"),
             (banner(chat: carol, category: NotificationIdentity.fallbackCategory), account, nil, [], "the fallback"),
