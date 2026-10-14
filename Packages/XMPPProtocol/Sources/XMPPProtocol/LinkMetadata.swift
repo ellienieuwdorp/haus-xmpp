@@ -17,6 +17,11 @@ extension MessageContent {
         public static let maximumImageAltBytes = 512
         /// Decoded bytes of an embedded image we accept. The base64 length is checked against this before decoding.
         public static let maximumImageBytes = 65_536
+        /// Send bounds, tighter than what we accept: card text as the fetcher shortens it, and the thumbnail we make.
+        /// The encoder sends nothing that breaks one.
+        public static let maximumSentTitle = (characters: 200, bytes: 512)
+        public static let maximumSentDescription = (characters: 300, bytes: 1_024)
+        public static let maximumSentImageAlt = (characters: 200, bytes: 512)
         /// Decoded bytes of the thumbnail we send (JPEG, within 400 px, else 256 px, else no image).
         public static let maximumSentImageBytes = 24_576
         /// `data:image/<subtype>;base64,` subtypes accepted on receive. We send only `image/jpeg`.
@@ -93,8 +98,9 @@ extension MessageContent.LinkMetadata {
     }
 
     /// `metadata` as it may be sent with `body` (the text after any reply quote): texts as `plainText`, an alt only with
-    /// its image, and only when every entry passes the rules a receiver applies (`decode`). Anything else gives `[]`,
-    /// so a peer never receives metadata it would drop, and the caller can tell the preview did not ride along.
+    /// its image, and only when every entry passes the rules a receiver applies (`decode`) and our send bounds
+    /// (`maximumSent…`). Anything else gives `[]`, so a peer never receives metadata it would drop or more than we
+    /// send, and the caller can tell the preview did not ride along.
     static func validated(_ metadata: [Self], body: String) -> [Self] {
         guard !metadata.isEmpty, !body.isEmpty, metadata.count <= maximumDescriptions,
               Set(metadata.map(\.about)).count == metadata.count else { return [] }
@@ -106,13 +112,16 @@ extension MessageContent.LinkMetadata {
             clean.title = entry.title.flatMap(Self.plainText)
             clean.description = entry.description.flatMap(Self.plainText)
             if case let .data(type, bytes)? = entry.image {
-                guard imageMediaTypes.contains(type), !bytes.isEmpty, bytes.count <= maximumImageBytes else { return [] }
+                guard imageMediaTypes.contains(type), !bytes.isEmpty, bytes.count <= maximumSentImageBytes else { return [] }
                 clean.image = entry.image
                 clean.imageAlt = entry.imageAlt.flatMap(Self.plainText)
             }
+            func within(_ text: String?, _ cap: (characters: Int, bytes: Int)) -> Bool {
+                text.map { $0.count <= cap.characters && $0.utf8.count <= cap.bytes } ?? true
+            }
             guard clean.title != nil || clean.image != nil,
-                  (clean.title?.utf8.count ?? 0) <= maximumTitleBytes, (clean.description?.utf8.count ?? 0) <= maximumDescriptionBytes,
-                  (clean.imageAlt?.utf8.count ?? 0) <= maximumImageAltBytes,
+                  within(clean.title, maximumSentTitle), within(clean.description, maximumSentDescription),
+                  within(clean.imageAlt, maximumSentImageAlt),
                   [clean.title, clean.description, clean.imageAlt].allSatisfy({ $0.map(MessageContent.validXMLText) ?? true }) else { return [] }
             result.append(clean)
         }

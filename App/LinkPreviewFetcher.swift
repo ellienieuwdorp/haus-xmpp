@@ -219,8 +219,8 @@ final class LinkPreviewFetcher: Sendable {
             page.image = LinkPreviewImaging.downsample(first.body, maximumPixels: limits.imagePixels, side: limits.imageSide)
         case .page:
             let head = LinkPreviewHead.parse(first.body, charset: first.charset)
-            page = LinkPreviewPage(title: head.title.flatMap { Self.shorten($0, characters: 200, bytes: 512) },
-                                   summary: head.description.flatMap { Self.shorten($0, characters: 300, bytes: 1_024) })
+            page = LinkPreviewPage(title: head.title.flatMap { Self.shorten($0, to: MessageContent.LinkMetadata.maximumSentTitle) },
+                                   summary: head.description.flatMap { Self.shorten($0, to: MessageContent.LinkMetadata.maximumSentDescription) })
             // A missing, oversized or refused image leaves a text card.
             if let source = head.image, let imageURL = URL(string: source, relativeTo: first.finalURL)?.absoluteURL,
                LinkDetection.isFetchable(imageURL) {
@@ -230,7 +230,7 @@ final class LinkPreviewFetcher: Sendable {
                 } catch {
                     if error == .cancelled { throw .cancelled }
                 }
-                if page.image != nil { page.imageAlt = head.imageAlt.flatMap { Self.shorten($0, characters: 200, bytes: 512) } }
+                if page.image != nil { page.imageAlt = head.imageAlt.flatMap { Self.shorten($0, to: MessageContent.LinkMetadata.maximumSentImageAlt) } }
             }
         }
         guard page.title != nil || page.image != nil else { throw .nothingToShow }
@@ -304,9 +304,10 @@ final class LinkPreviewFetcher: Sendable {
 
     // MARK: Text
 
-    /// Plain text (`LinkMetadata.plainText`) of at most `characters` characters and `bytes` UTF-8 bytes, cut at a
-    /// character with an ellipsis.
-    static func shorten(_ text: String, characters: Int, bytes: Int) -> String? {
+    /// Plain text (`LinkMetadata.plainText`) within `cap` (characters and UTF-8 bytes, one of the send bounds), cut at
+    /// a character with an ellipsis.
+    static func shorten(_ text: String, to cap: (characters: Int, bytes: Int)) -> String? {
+        let (characters, bytes) = cap
         guard let text = MessageContent.LinkMetadata.plainText(text) else { return nil }
         if text.count <= characters, text.utf8.count <= bytes { return text }
         var result = ""
@@ -325,7 +326,7 @@ final class LinkPreviewFetcher: Sendable {
     static func fileTitle(of url: URL) -> String? {
         let name = url.lastPathComponent
         guard !name.isEmpty, name != "/" else { return nil }
-        return shorten(name.removingPercentEncoding ?? name, characters: 200, bytes: 512)
+        return shorten(name.removingPercentEncoding ?? name, to: MessageContent.LinkMetadata.maximumSentTitle)
     }
 }
 

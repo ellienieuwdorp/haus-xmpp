@@ -124,3 +124,25 @@ private func description(about: String = xmlEscaped(link), _ children: String = 
     }
     #expect(try MessageContent(body: "Read \(link)", linkMetadata: [preview]).xml().contains("rdf:about='\(xmlEscaped(link))'"))
 }
+
+/// We send within our own bounds, which are tighter than what we accept: a 24 KiB thumbnail, a title of 200 characters
+/// and 512 bytes, a description of 300 characters and 1,024 bytes, an alt of 200 characters. One field over its bound
+/// sends no metadata; every field at its bound sends.
+@Test func encoderKeepsToTheSendBounds() throws {
+    let jpeg = { (count: Int) in MessageContent.LinkMetadata.Image.data(type: "image/jpeg", bytes: Data(repeating: 0xFF, count: count)) }
+    let wide = String(repeating: "日", count: 171) // 171 characters, 513 bytes
+    let over = [
+        LinkMetadata(about: link, title: "Bridge", image: jpeg(LinkMetadata.maximumSentImageBytes + 1)),
+        LinkMetadata(about: link, title: String(repeating: "a", count: 201)),
+        LinkMetadata(about: link, title: wide),
+        LinkMetadata(about: link, title: "Bridge", description: String(repeating: "a", count: 301)),
+        LinkMetadata(about: link, title: "Bridge", description: String(repeating: "😀", count: 257)), // 1,028 bytes
+        LinkMetadata(about: link, title: "Bridge", image: jpeg(16), imageAlt: String(repeating: "a", count: 201)),
+    ]
+    for metadata in over {
+        #expect(MessageContent(body: "Read \(link)", linkMetadata: [metadata]).sendableLinkMetadata.isEmpty, "\(metadata)")
+    }
+    let atBounds = LinkMetadata(about: link, title: String(repeating: "a", count: 200), description: String(repeating: "é", count: 300),
+                                image: jpeg(LinkMetadata.maximumSentImageBytes), imageAlt: String(repeating: "日", count: 170))
+    #expect(MessageContent(body: "Read \(link)", linkMetadata: [atBounds]).sendableLinkMetadata == [atBounds])
+}
