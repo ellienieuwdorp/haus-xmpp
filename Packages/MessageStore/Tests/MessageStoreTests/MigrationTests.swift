@@ -5,7 +5,7 @@ import Testing
 @testable import MessageStore
 
 /// The schema this build writes. A schema bump changes this one literal.
-private let currentSchemaVersion: Int32 = 25
+private let currentSchemaVersion: Int32 = 26
 
 struct MigrationTests {
     @Test func openingStampsTheCurrentSchemaAndRefusesANewerOne() async throws {
@@ -66,6 +66,32 @@ struct MigrationTests {
         try await store.recordEncryptionDeviceID(accountID: "self", deviceID: 42)
         #expect(try await store.encryptionState(accountID: "self")?.deviceID == 42)
         try await store.close()
+    }
+
+    /// v26 adds link previews: a v25 store (or a branch that stamped 25 again) gains both tables, and its messages can
+    /// then carry a preview and the account a fetch cache.
+    @Test func aVersion25StoreGainsTheLinkPreviewTables() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "link-previews-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "messages.sqlite")
+        let old = try MessageStore(url: url)
+        try await old.upsertChat(accountID: "self", chatID: "peer", title: "Peer")
+        try await old.insertMessage(StoredMessage(id: "m", accountID: "self", chatID: "peer", senderID: "peer", body: "https://example.org"))
+        try await old.close()
+        #expect(sqliteExecute(url: url, sql: "DROP TABLE message_link_previews; DROP TABLE link_preview_cache; PRAGMA user_version=25"))
+
+        // The second open is already at 26 and changes nothing.
+        for _ in 0..<2 {
+            let store = try MessageStore(url: url)
+            #expect(try await store.message(accountID: "self", messageID: "m")?.linkPreview == nil)
+            try await store.insertMessage(StoredMessage(id: "n", accountID: "self", chatID: "peer", senderID: "peer", body: "https://example.org",
+                                                        sentAt: Date(timeIntervalSince1970: 100), linkPreview: StoredLinkPreview(url: "https://example.org", title: "Example", source: .sender)))
+            #expect(try await store.message(accountID: "self", messageID: "n")?.linkPreview?.title == "Example")
+            try await store.saveLinkPreviewCacheEntry(LinkPreviewCacheEntry(accountID: "self", url: "https://example.org/", fetchedAt: Date(), status: .failed))
+            try await store.close()
+        }
+        #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["26"]])
     }
 
     /// A v21 store written by a build that kept typed capitals: the account `Ellie@Example.org`, and chats with

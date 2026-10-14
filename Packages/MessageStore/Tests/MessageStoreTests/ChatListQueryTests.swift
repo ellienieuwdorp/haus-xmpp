@@ -213,6 +213,28 @@ private func seedAccountA(_ store: MessageStore) async throws -> [String: ChatSe
     try await store.insertMessage(message("un-1", "unreadable", body: "Readable", sentAt: 1700))
     try await store.recordUnreadableMessage(UnreadableMessage(accountID: "a", chatID: "unreadable", senderID: "a", isOutgoing: true, sentAt: at(1800),
                                                               reason: .notForThisDevice, key: .ciphertext(sender: "a", digest: "abc")))
+
+    // 20. linkPreview: an incoming message with the sender's preview, image included.
+    try await chat("linkPreview")
+    var previewed = message("lp-1", "linkPreview", body: "See https://example.org/a", sentAt: 1900, wireID: "w-lp")
+    previewed.linkPreview = StoredLinkPreview(url: "https://example.org/a", title: "A", imageData: Data([1, 2]), imageType: "image/png", source: .sender)
+    try await store.insertMessage(previewed)
+
+    // 21. linkPreviewCorrected: our own previewed message, corrected to another link with its own preview.
+    try await chat("linkPreviewCorrected")
+    var own = message("lpc-1", "linkPreviewCorrected", body: "See https://example.org/a", sentAt: 1910, outgoing: true, wireID: "w-lpc")
+    own.linkPreview = StoredLinkPreview(url: "https://example.org/a", title: "A", source: .own)
+    try await store.insertMessage(own)
+    try await store.enqueueMessageUpdate(accountID: "a", id: "lpc-c", kind: .correction, chatID: "linkPreviewCorrected", targetMessageID: "lpc-1",
+                                         body: "See https://example.org/b", linkPreview: StoredLinkPreview(url: "https://example.org/b", title: "B", source: .own),
+                                         createdAt: at(1915))
+
+    // 22. linkPreviewRetracted: our own previewed message, unsent.
+    try await chat("linkPreviewRetracted")
+    var unsent = message("lpr-1", "linkPreviewRetracted", body: "See https://example.org/a", sentAt: 1920, outgoing: true, wireID: "w-lpr")
+    unsent.linkPreview = StoredLinkPreview(url: "https://example.org/a", title: "A", source: .own)
+    try await store.insertMessage(unsent)
+    try await store.enqueueMessageUpdate(accountID: "a", id: "lpr-r", kind: .retraction, chatID: "linkPreviewRetracted", targetMessageID: "lpr-1", createdAt: at(1925))
     return seeds
 }
 
@@ -252,10 +274,13 @@ private func seedDecoyAccountB(_ store: MessageStore) async throws -> [String: C
 
         // The loop's contract, stated directly so a shared mistake in the reference cannot hide.
         let byID = Dictionary(uniqueKeysWithValues: chats.map { ($0.id, $0) })
-        #expect(chats.map(\.id) == ["pinnedOld", "pinnedEmpty", "unreadable", "reply", "avatar", "queued", incomingRoom, room,
+        #expect(chats.map(\.id) == ["pinnedOld", "pinnedEmpty", "linkPreviewRetracted", "linkPreviewCorrected", "linkPreview", "unreadable", "reply", "avatar", "queued", incomingRoom, room,
                                     "authenticatedElsewhere", "authenticatedWins", "ambiguous", "incomingReceiptIgnored",
                                     "delivered", "displayed", "attachmentRetracted", "attachment", "peerCorrectionIgnored",
                                     "corrected", "retracted", "tie", "plain", "empty"])
+        #expect(byID["linkPreview"]?.lastMessage?.linkPreview?.imageData == Data([1, 2]))
+        #expect(byID["linkPreviewCorrected"]?.lastMessage?.linkPreview?.title == "B")
+        #expect(byID["linkPreviewRetracted"]?.lastMessage.map { $0.isRetracted && $0.linkPreview == nil } == true)
         let plain = try #require(byID["plain"]?.lastMessage)
         #expect(plain.id == "plain-3" && plain.body == "Three" && plain.attachment == nil && !plain.isOutgoing)
         #expect(byID["plain"]?.lastMessageReceipt == nil)
