@@ -103,6 +103,8 @@ final class AppModel {
                 timelinePages.removeAll()
                 pushWanted = accountID.isEmpty || !preferences.bool(forKey: "pushOff." + accountID)
                 pushStatus = .off
+                // At once, not at the next displayed link: the previous account's fetches stop and record nothing.
+                useLinkPreviewAccount()
             }
             ForegroundNotificationState.shared.accountID = isDemo ? "" : accountID
         }
@@ -748,6 +750,8 @@ final class AppModel {
     /// Erase credentials and the push subscription for the current account.
     private func forgetAccount() async {
         quiescing = true
+        // No preview fetch of this account runs on, or lands in its cache, while its data is being removed.
+        linkPreviewCenter.use(account: "", folder: nil, cache: nil)
         generation = UUID() // Invalidate pending permission/registration before removing credentials.
         let token = generation
         let account = accountID
