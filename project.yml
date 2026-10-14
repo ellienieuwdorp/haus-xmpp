@@ -3,6 +3,10 @@ options:
   bundleIdPrefix: haus.xmpp
   deploymentTarget:
     iOS: '26.0'
+# DEVELOPMENT_TEAM and HAUS_STAGING_DOMAIN come from here, and from the optional, gitignored Config/Local.xcconfig.
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
 settings:
   base:
     SWIFT_VERSION: '6.0'
@@ -38,9 +42,11 @@ targets:
         NSUserActivityTypes: [INSendMessageIntent]
         # APNs environment the push gateway sends this build's tokens to (see HAUS_PUSH_ENVIRONMENT below).
         HausPushEnvironment: $(HAUS_PUSH_ENVIRONMENT)
-        # One window until AppModel can serve several (macos-desktop-app.md, Phase 4); a second iPad window would share
-        # the one AppModel, open chat and scenePhase handler. This is the whole manifest: the generated one (turned
-        # off below) says true and wins over a partial manifest here.
+        # Optional test server for `-staging` (Config/Base.xcconfig). Empty in a plain checkout.
+        HausStagingDomain: $(HAUS_STAGING_DOMAIN)
+        # One window until AppModel can serve several; a second iPad window would share the one AppModel, open chat and
+        # scenePhase handler. This is the whole manifest: the generated one (turned off below) says true and wins over a
+        # partial manifest here.
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
           UISceneConfigurations: {}
@@ -79,9 +85,9 @@ targets:
           HAUS_PUSH_ENVIRONMENT: sandbox
         Release:
           HAUS_PUSH_ENVIRONMENT: production
-  # The native Mac app (docs/development/mac-target.md). A separate target rather than a second destination of
-  # HausXMPP, so the iOS target's sources, Info.plist and entitlements stay exactly as they were: the UIKit-only views
-  # are left out here instead of being wrapped in #if, and the Mac keeps its own plist keys and sandbox entitlements.
+  # The native Mac app. A separate target rather than a second destination of HausXMPP, so the iOS target's sources,
+  # Info.plist and entitlements stay exactly as they were: the UIKit-only views are left out here instead of being
+  # wrapped in #if, and the Mac keeps its own plist keys and sandbox entitlements.
   HausXMPPMac:
     type: application
     platform: macOS
@@ -113,6 +119,7 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         HausPushEnvironment: $(HAUS_PUSH_ENVIRONMENT)
+        HausStagingDomain: $(HAUS_STAGING_DOMAIN)
         # Communication notifications, as on iOS: the app declares the intent its extension donates.
         NSUserActivityTypes: [INSendMessageIntent]
         # One process per user: a second copy would contend for the store's transport lease.
@@ -162,10 +169,10 @@ targets:
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         MARKETING_VERSION: '0.1.0'
         CURRENT_PROJECT_VERSION: '1'
-  # The Mac's notification service extension (docs/development/mac-notification-extension.md): the iOS extension's code
-  # under the same App ID, built for macOS with the sandbox entitlements a Mac extension needs. Embedded in HausXMPPMac.
-  # Its Info.plist is the iOS one plus `Subsystems: [EXService_Subsystem]`: without it macOS 27 launches the extension
-  # but never hands it the request, and kills it for a sluggish startup two seconds later.
+  # The Mac's notification service extension: the iOS extension's code under the same App ID, built for macOS with the
+  # sandbox entitlements a Mac extension needs. Embedded in HausXMPPMac. Its Info.plist is the iOS one plus
+  # `Subsystems: [EXService_Subsystem]`: without it macOS 27 launches the extension but never hands it the request, and
+  # kills it for a sluggish startup two seconds later.
   XMPPNotificationServiceMac:
     type: app-extension
     platform: macOS
@@ -236,7 +243,7 @@ schemes:
     test:
       targets: [HausXMPPUITests]
       # UIFull runs every UI test (once per PR); UISmoke is the three keyboard and gesture keepers to run routinely.
-      # scripts/ui-tests.sh runs either one. See AppTests/README.md.
+      # See AppTests/README.md.
       testPlans:
         - path: TestPlans/UIFull.xctestplan
           defaultPlan: true

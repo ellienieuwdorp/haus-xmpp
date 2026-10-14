@@ -532,8 +532,9 @@ final class AppModel {
         } catch { if generation == token { self.error = "Could not load sample conversations." } }
     }
 
-    /// Domains served by the development lab; they keep the disposable-account safeguards.
-    static let labDomains: Set<String> = ["localhost", "staging.example.net"]
+    /// Domains served by the development lab (localhost, plus the configured staging domain, if any); they keep the
+    /// disposable-account safeguards.
+    static let labDomains: Set<String> = Set(["localhost"] + [DevelopmentEndpoint.stagingDomain].compactMap { $0 })
     var accountDomain: String { accountID.split(separator: "@", maxSplits: 1).last.map(String.init) ?? DevelopmentEndpoint.domain }
     var isLabAccount: Bool { Self.labDomains.contains(accountDomain) }
 

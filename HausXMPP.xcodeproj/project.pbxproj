@@ -462,6 +462,7 @@
 		EB0603B06B31C83D97163794 /* PushOnboardingLabUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushOnboardingLabUITests.swift; sourceTree = "<group>"; };
 		EB9DE78DDB637C851451A0A9 /* XMPPNotificationServiceMac.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = XMPPNotificationServiceMac.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		EBC631EB74C9ED026E987E17 /* KeyRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRecoveryTests.swift; sourceTree = "<group>"; };
+		EC9D516974B02587CFBD9852 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		ECB57CE3D62350BCA14A7C97 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		ECE35FFDB91D6C5604DB273F /* SharedSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedSession.swift; sourceTree = "<group>"; };
 		F1CBE10482F2CC6B1546794B /* TimelineScrollPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineScrollPolicyTests.swift; sourceTree = "<group>"; };
@@ -608,6 +609,14 @@
 			path = NotificationService;
 			sourceTree = "<group>";
 		};
+		56680ECA49EFEDE4F90BD640 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				EC9D516974B02587CFBD9852 /* Base.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
 		5B156E3113B98C03AF371575 /* AppLifecycleTests */ = {
 			isa = PBXGroup;
 			children = (
@@ -668,6 +677,7 @@
 				A042954646197F7647B2BBD4 /* App */,
 				5B156E3113B98C03AF371575 /* AppLifecycleTests */,
 				ABDF495EABC56E1D407EF2B0 /* AppTests */,
+				56680ECA49EFEDE4F90BD640 /* Config */,
 				226B395E0F4E82C9F218EEAB /* Fixtures */,
 				1731328C2EF4FB2AD2B00018 /* Mac */,
 				4A958325B6F78B0E2E3101CB /* NotificationService */,
@@ -948,22 +958,28 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					07B447C3F34236371B40FE69 = {
+						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 					14D3D0CAD76D4336A63D3F9C = {
+						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 						TestTargetID = DBD356337FC2BB66123E6D2D;
 					};
 					4A77021075A58939E1A7D758 = {
+						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 					6E3A7EB349BF16963504BFB8 = {
+						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 					9525E4CDE92299DCF5C51564 = {
+						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 					DBD356337FC2BB66123E6D2D = {
+						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -1515,6 +1531,7 @@
 		};
 		D1E5B06A70095C289806FC8F /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = EC9D516974B02587CFBD9852 /* Base.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -1606,6 +1623,7 @@
 		};
 		EA1576DD7BC43920FE9B09C1 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = EC9D516974B02587CFBD9852 /* Base.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;

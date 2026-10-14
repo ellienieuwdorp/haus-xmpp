@@ -20,6 +20,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>HausPushEnvironment</key>
 	<string>$(HAUS_PUSH_ENVIRONMENT)</string>
+	<key>HausStagingDomain</key>
+	<string>$(HAUS_STAGING_DOMAIN)</string>
 	<key>LSMultipleInstancesProhibited</key>
 	<true/>
 	<key>NSUserActivityTypes</key>

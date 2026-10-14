@@ -1,0 +1,11 @@
+// Build settings shared by every target. Machine-specific values go in Config/Local.xcconfig, which is
+// gitignored and included last so it overrides this file. See Config/Local.xcconfig.example.
+
+// The Apple developer team for device builds. Empty works for the simulator.
+DEVELOPMENT_TEAM =
+
+// Domain of an optional hosted test server (Debug builds: the `-staging` launch argument). Empty turns the
+// staging mode off.
+HAUS_STAGING_DOMAIN =
+
+#include? "Local.xcconfig"

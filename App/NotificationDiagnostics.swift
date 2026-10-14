@@ -3,7 +3,8 @@ import MessageStore
 import MessagingCore
 import UserNotifications
 
-/// Opt-in, synthetic staging inspection through the containing app's regular data container.
+/// Opt-in, synthetic inspection of a run on the staging server (`DevelopmentEndpoint.stagingDomain`) through the
+/// containing app's regular data container.
 /// The caller must return from prepare before starting any foreground network synchronization.
 enum NotificationDiagnostics {
     enum Failure: Error { case invalidFixture, invalidMarker }
@@ -20,15 +21,18 @@ enum NotificationDiagnostics {
         // A rejected inspection must not leave an earlier successful result masquerading as
         // this run's evidence. No real conversation or identity data is deleted here.
         if FileManager.default.fileExists(atPath: output.path) { try FileManager.default.removeItem(at: output) }
-        guard let account = try NotificationAccount.load(),
-              account.accountID == "alice@staging.example.net", account.username == "alice",
-              account.domain == "staging.example.net",
+        // Only the `alice` fixture account on the configured staging domain. Without a staging domain, every request
+        // fails here.
+        guard let staging = DevelopmentEndpoint.stagingDomain,
+              let account = try NotificationAccount.load(),
+              account.accountID == "alice@\(staging)", account.username == "alice",
+              account.domain == staging,
               let expected = process.environment["XMPP_EXPECTED_MESSAGE"],
               expected.hasPrefix("Synthetic"), expected.utf8.count <= 100,
               !expected.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
             throw Failure.invalidFixture
         }
-        let peer = "peer@staging.example.net"
+        let peer = "peer@\(staging)"
         let messages = try await store.messages(accountID: account.accountID, chatID: peer, limit: 1000)
         let matches = messages.filter {
             $0.body == expected && !$0.isOutgoing && $0.senderID == peer

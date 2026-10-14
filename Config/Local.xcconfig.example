@@ -1,0 +1,8 @@
+// Copy to Config/Local.xcconfig (gitignored) and fill in what you need.
+
+// Your team ID, needed to run on a device (Xcode > Settings > Accounts, or developer.apple.com > Membership).
+DEVELOPMENT_TEAM = ABCDE12345
+
+// Optional: the domain of your own test XMPP server. Debug builds launched with `-staging` sign in there
+// on port 5223 (direct TLS), and accounts on it get the same disposable-account safeguards as localhost.
+// HAUS_STAGING_DOMAIN = xmpp.example.org
