@@ -114,6 +114,8 @@ targets:
           - App.entitlements
           # The Mac has its own (Mac/PrivacyInfo.xcprivacy): no keyboard APIs.
           - PrivacyInfo.xcprivacy
+          # The Mac's icon is the iPhone art in the macOS shape, in Mac/Assets.xcassets.
+          - Assets.xcassets
       - Shared
       - Mac
       # Debug-only: the app arms and reads the extension's storage probe.

@@ -44,7 +44,6 @@
 		1ECC9981CD306392B0B90743 /* AttachmentSendLabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1855DE3A5B4667032083D97 /* AttachmentSendLabUITests.swift */; };
 		1F4BBC2BA3DB5929DA85B868 /* LastSeen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0B97AF3403EEDD27A52DA9 /* LastSeen.swift */; };
 		1F579E46241650F3955C2FAE /* KeyRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429A77E75FD76C077B26B4D8 /* KeyRecoveryView.swift */; };
-		2239B26AD30FE1BA838C2E4A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B4689E0E3D14BB55262444FA /* Assets.xcassets */; };
 		227180A6D4CDF96952C57D53 /* AppearanceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ED6559AE6FDE78A5F7E53EA /* AppearanceUITests.swift */; };
 		22C964A2DDE8AA3A54B8E693 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97458A0AF66A781FDEE95E70 /* SettingsView.swift */; };
 		2306BADF98012E71E113755E /* TimelineScrollPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03474B6E9D0B48EE5C4FC942 /* TimelineScrollPolicy.swift */; };
@@ -166,6 +165,7 @@
 		A0032C901046F44199817EED /* OutboxDrain.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E9F16915706C304AAE9D42 /* OutboxDrain.swift */; };
 		A0920557A279DC90E4FEB750 /* PushRegistrationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A804ED5CE56EF792DB11C29 /* PushRegistrationState.swift */; };
 		A2FAE5F989B4A21D149234DC /* CircularGlassButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 736643F511B0D31C7102998D /* CircularGlassButtonStyle.swift */; };
+		A4DB873C61416049C83C54BA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 464421A26724B3E5A1ED4034 /* Assets.xcassets */; };
 		A51A8DBD3054B191CB4671D8 /* ChatCapabilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175366071B61DD1E158B1B82 /* ChatCapabilities.swift */; };
 		A5D0DBF84BDC794A0E12CDE2 /* AttachmentDownloadState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24457939D26275779CFB05C1 /* AttachmentDownloadState.swift */; };
 		A5E4F824FE81D10D17BC1562 /* TimelinePositionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D79B0F9D17AAB865512526A1 /* TimelinePositionTests.swift */; };
@@ -371,6 +371,7 @@
 		429A77E75FD76C077B26B4D8 /* KeyRecoveryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRecoveryView.swift; sourceTree = "<group>"; };
 		44C680F6A14596B4AE52511C /* schema-21.sql */ = {isa = PBXFileReference; path = "schema-21.sql"; sourceTree = "<group>"; };
 		44C90062EE37B85EB502A94B /* HausXMPP.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = HausXMPP.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		464421A26724B3E5A1ED4034 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		4749F05E18328FC50A0611E5 /* ChatDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDetailsView.swift; sourceTree = "<group>"; };
 		4AE59BD38D134F3C88543871 /* SessionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionState.swift; sourceTree = "<group>"; };
 		4C1F40DFED008D00FB6F520C /* MessageActionMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageActionMenu.swift; sourceTree = "<group>"; };
@@ -547,6 +548,7 @@
 		1731328C2EF4FB2AD2B00018 /* Mac */ = {
 			isa = PBXGroup;
 			children = (
+				464421A26724B3E5A1ED4034 /* Assets.xcassets */,
 				27EB646C31DA3A5FDA4C1EFF /* HausXMPPMacApp.swift */,
 				BEAD4399D0695E094E453425 /* Info.plist */,
 				6D54E8053F6733211E434A65 /* Mac.entitlements */,
@@ -1031,7 +1033,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				2239B26AD30FE1BA838C2E4A /* Assets.xcassets in Resources */,
+				A4DB873C61416049C83C54BA /* Assets.xcassets in Resources */,
 				5DC539E6F723D71871E95832 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
