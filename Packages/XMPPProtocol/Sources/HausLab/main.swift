@@ -45,6 +45,13 @@ import XMPPProtocol
             await client.disconnectAndWait()
             return
         }
+        if env["HAUS_LAB_BLOCKING_SMOKE"] == "1" {
+            guard let to = env["HAUS_LAB_TO"] else { throw XMPPClientError.invalidConfiguration }
+            try await verifyBlocking(client: client, address: to, domain: domain, ownJID: user + "@" + domain)
+            timeout.cancel()
+            await client.disconnectAndWait()
+            return
+        }
         if env["HAUS_LAB_REPLY_SMOKE"] == "1" {
             guard let to = env["HAUS_LAB_TO"], let sourceID = env["HAUS_LAB_ID"] else { throw XMPPClientError.invalidConfiguration }
             try await verifyReply(client: client, to: to, sourceID: sourceID)
@@ -73,7 +80,7 @@ import XMPPProtocol
                 }
             case .avatarMetadata(let owner, let metadata): print("AVATAR \(owner) \(metadata?.id ?? "removed")")
             case .encryptedMessage, .omemoDevices, .encryptionFailure, .messageError, .streamAcknowledged: break
-            case .state, .encryptedGroupMessage, .groupPresence, .reaction, .retraction, .receipt, .chatState, .contactPresence, .subscription, .rosterItems, .displayedSync: break
+            case .state, .encryptedGroupMessage, .groupPresence, .reaction, .retraction, .receipt, .chatState, .contactPresence, .subscription, .rosterItems, .displayedSync, .blocklist: break
             case .message(let message):
                 if let expected = env["HAUS_LAB_EXPECT_BODY"], message.body != expected { throw XMPPClientError.unexpectedProtocol }
                 if let expectedID = env["HAUS_LAB_ID"], message.id != expectedID || message.originID != expectedID { throw XMPPClientError.unexpectedProtocol }
@@ -273,6 +280,35 @@ import XMPPProtocol
         return await condition()
     }
 
+    /// XEP-0191 against the account's server: the domain advertises the feature, a block carrying a XEP-0377 report
+    /// (with a stanza-id copy) is accepted and pushed back to this session, the fetched list holds it, and an unblock
+    /// is pushed and empties it again. Leaves the list as it found it.
+    static func verifyBlocking(client: XMPPClient, address: String, domain: String, ownJID: String) async throws {
+        let features = try await client.discoveryFeatures(for: domain)
+        guard features.contains("urn:xmpp:blocking") else { throw XMPPClientError.unexpectedProtocol }
+        print("BLOCKING_ADVERTISED reporting=\(features.contains("urn:xmpp:reporting:1"))")
+        var events = client.events.makeAsyncIterator()
+        func next(_ wanted: XMPPBlocklistChange) async throws {
+            while let event = await events.next() {
+                if case .blocklist(let change) = event, change == wanted { return }
+                if case .state(.disconnected) = event { break }
+            }
+            throw XMPPClientError.connectionClosed
+        }
+        let before = try await client.fetchBlocklist()
+        guard !before.blocks(address) else { throw XMPPClientError.invalidConfiguration }
+        try await next(.replaceAll(before.addresses))
+        let report = XMPPBlockReport(reason: .spam, messages: [XMPPStanzaReference(id: UUID().uuidString, by: ownJID)])
+        try await client.block(address, report: report)
+        try await next(.blocked([address]))
+        guard try await client.fetchBlocklist().blocks(address) else { throw XMPPClientError.unexpectedProtocol }
+        print("BLOCK_WITH_REPORT_VERIFIED")
+        try await client.unblock([address])
+        try await next(.unblocked([address]))
+        guard try await client.fetchBlocklist() == before else { throw XMPPClientError.unexpectedProtocol }
+        print("UNBLOCK_VERIFIED")
+    }
+
     /// Verifies delivered fallback body, not incoming structured-reply reconciliation.
     static func verifyReply(client: XMPPClient, to: String, sourceID: String) async throws {
         let source = "Original 👩🏽‍💻 & <text>\nSecond line"
@@ -299,7 +335,7 @@ import XMPPProtocol
             case .state(.disconnected): throw XMPPClientError.connectionClosed
             case .avatarMetadata(let owner, let metadata): print("AVATAR \(owner) \(metadata?.id ?? "removed")")
             case .encryptedMessage, .omemoDevices, .encryptionFailure, .messageError, .streamAcknowledged: break
-            case .state, .encryptedGroupMessage, .groupPresence, .reaction, .retraction, .receipt, .chatState, .contactPresence, .subscription, .rosterItems, .displayedSync: break
+            case .state, .encryptedGroupMessage, .groupPresence, .reaction, .retraction, .receipt, .chatState, .contactPresence, .subscription, .rosterItems, .displayedSync, .blocklist: break
             }
         }
         throw XMPPClientError.connectionClosed
