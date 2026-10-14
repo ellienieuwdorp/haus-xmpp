@@ -572,10 +572,10 @@ struct ConversationComposer: View {
         return showsTray || !state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// What the link preview card follows: the draft, the setting (never in the sample conversations), and whether
-    /// this message may carry a preview at all (not with files, not an edit).
+    /// What the link preview card follows: the draft, the setting (never in the sample conversations), whether the
+    /// chat can carry a preview (modern OMEMO), and whether this message may carry one (not with files, not an edit).
     private var linkPreviewInput: ComposerLinkPreviewInput {
-        ComposerLinkPreviewInput(draft: state.draft, enabled: LinkSettings.shared.fetchPreviews && !model.isDemo,
+        ComposerLinkPreviewInput(draft: state.draft, enabled: LinkSettings.shared.fetchPreviews && !model.isDemo && model.linkPreviewsTravel(to: chatID),
                                  suppressed: showsTray || editing != nil)
     }
 

@@ -50,6 +50,13 @@ extension AppModel: ComposerLinkPreviewSource {
                                    roster: linkPreviewRosterEntry)
     }
 
+    /// Whether a message sent now to `chatID` can carry a link preview: only a modern OMEMO seal has somewhere private
+    /// for it (groups always seal modern; a direct chat once its version is known). Elsewhere the composer shows no
+    /// card, so it never suggests a preview that would not be sent, and fetches nothing.
+    func linkPreviewsTravel(to chatID: String) -> Bool {
+        isGroup(chatID) || encryptionOverview(for: chatID)?.profile == .modern
+    }
+
     func composerLinkPreview(for url: URL) async -> ComposerLinkPreview.Content? {
         guard !isDemo, LinkSettings.shared.fetchPreviews, let host = LinkDetection.displayHost(for: url) else { return nil }
         useLinkPreviewAccount()
