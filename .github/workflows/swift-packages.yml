@@ -1,0 +1,38 @@
+# Package tests on a GitHub-hosted macOS runner. UI and lab tests don't run here: they need a simulator, a live
+# test server or both.
+name: Swift packages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.package }}
+    # The project is developed with Xcode 27. `xcode-27` is GitHub's macOS 27 image with Xcode 27, a public preview
+    # as of 2026-10 (https://github.com/actions/runner-images). Move to the GA macOS image once it ships Xcode 27.
+    runs-on: xcode-27
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [XMPPProtocol, MessageStore, MessagingCore, OMEMOCrypto, OMEMO]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select Xcode
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_27.0.app
+          swift --version
+      - name: Verify vendored libomemo-c and protobuf-c
+        if: matrix.package == 'OMEMOCrypto'
+        run: python3 -I Packages/OMEMOCrypto/Scripts/verify_vendor.py
+      - name: Test
+        run: swift test --package-path "Packages/${{ matrix.package }}" --parallel

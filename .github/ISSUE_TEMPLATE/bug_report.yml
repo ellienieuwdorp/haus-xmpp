@@ -1,0 +1,51 @@
+name: Bug report
+description: Something doesn't work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems: use **Security > Report a vulnerability** instead.
+        Don't paste real conversations, passwords, push tokens or full JIDs of other people.
+  - type: input
+    id: version
+    attributes:
+      label: App version and build, or the commit you built
+      placeholder: 0.1.0 (1), or a commit hash
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [iPhone, iPad, Mac]
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS version
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: Server software and version, if known
+      placeholder: Prosody 13.0, ejabberd 25.x, a public server's name…
+  - type: input
+    id: peer
+    attributes:
+      label: Other client involved, if any
+      placeholder: Conversations 2.x, Dino 0.5, Gajim 2.x, Monal 6.x…
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected and what happened
+    validations:
+      required: true

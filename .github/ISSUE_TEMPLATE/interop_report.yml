@@ -1,0 +1,30 @@
+name: Interoperability report
+description: Haus XMPP and another client or server don't understand each other.
+labels: [interop]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Haus XMPP version and build, or the commit you built
+    validations:
+      required: true
+  - type: input
+    id: other
+    attributes:
+      label: Other client or server, with version
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [OMEMO encryption, Group chats, Reactions, Replies or edits, File sharing, Message history / sync, Push notifications, Sign-in / connection, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: XML stanzas help a lot. Remove or replace addresses, bodies and keys first.
+    validations:
+      required: true
