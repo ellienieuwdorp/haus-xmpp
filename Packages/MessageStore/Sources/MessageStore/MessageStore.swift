@@ -1322,6 +1322,13 @@ public actor MessageStore {
                                [.text(accountID), .text(messageID)])
     }
 
+    /// The lowercased hosts of every file URL the account has stored: its upload slots' GET URLs and the files it
+    /// received. Link previews never fetch from them.
+    public func attachmentHosts(accountID: String) throws -> Set<String> {
+        Set(try connection.query("SELECT DISTINCT url FROM attachments WHERE account_id=? AND url IS NOT NULL", [.text(accountID)])
+            .compactMap { URL(string: $0[0].string)?.host()?.lowercased() })
+    }
+
     public func encryptedOutgoing(accountID: String, messageID: String) throws -> Data? {
         try connection.query("SELECT wire FROM encrypted_outbox WHERE account_id=? AND message_id=?", [.text(accountID), .text(messageID)]).first?[0].data
     }

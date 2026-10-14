@@ -98,4 +98,33 @@ final class ComposerLinkPreviewTests: XCTestCase {
         XCTAssertNil(preview.frozen(for: "Read this instead", suppressed: false), "The link left the text")
         XCTAssertNil(preview.frozen(for: "https://example.net/b and https://example.org/a", suppressed: false), "No longer the first link")
     }
+
+    /// What `send` stores with the outgoing row, whatever the composer handed it: only our own preview, for the first
+    /// previewable link of the body (never one on a host serving our files), with an image within what we send and
+    /// typed as such.
+    func testSendStoresOnlyOurPreviewOfTheFirstLinkWithinTheSentBounds() {
+        let body = "Read https://example.org/a and https://example.net/b"
+        let jpeg = Data(repeating: 0xFF, count: MessageContent.LinkMetadata.maximumSentImageBytes)
+        func preview(_ url: String = "https://example.org/a", title: String? = "Title", image: Data? = Data([0xFF, 0xD8]),
+                     type: String? = "image/jpeg", source: StoredLinkPreview.Source = .own) -> StoredLinkPreview {
+            StoredLinkPreview(url: url, title: title, imageData: image, imageType: type, source: source)
+        }
+        let cases: [(preview: StoredLinkPreview, body: String, uploadHosts: Set<String>, accepted: Bool, line: UInt)] = [
+            (preview(), body, [], true, #line),
+            (preview(image: jpeg), body, [], true, #line),
+            (preview(image: nil, type: nil), body, [], true, #line),
+            (preview(source: .sender), body, [], false, #line),
+            (preview("https://example.net/b"), body, [], false, #line),
+            (preview(), "Read this instead", [], false, #line),
+            (preview("https://files.example.org/get/x.jpg"), "https://files.example.org/get/x.jpg", ["files.example.org"], false, #line),
+            (preview(image: jpeg + Data([0])), body, [], false, #line),
+            (preview(type: nil), body, [], false, #line),
+            (preview(image: nil, type: "image/jpeg"), body, [], false, #line),
+            (preview(title: nil, image: nil, type: nil), body, [], false, #line),
+        ]
+        for (preview, body, hosts, accepted, line) in cases {
+            let stored = AppModel.acceptedOwnLinkPreview(preview, body: body, uploadHosts: hosts)
+            XCTAssertEqual(stored, accepted ? preview : nil, line: line)
+        }
+    }
 }

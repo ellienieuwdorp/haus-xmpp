@@ -13,9 +13,25 @@ extension AppModel: ComposerLinkPreviewSource {
         linkPreviewCenter.account == accountID ? linkPreviewCenter.results : [:]
     }
 
-    /// GET hosts of our upload slots, as far as the open chat shows them: the hosts of the files we sent there.
-    var linkPreviewUploadHosts: Set<String> {
-        Set(messages.lazy.filter(\.isOutgoing).compactMap { $0.attachment?.url.flatMap(URL.init(string:))?.host()?.lowercased() })
+    /// Reads the hosts of the account's stored files (`linkPreviewUploadHosts`) once per account, before its timelines
+    /// are published; a failed read is tried again on the next load.
+    func loadLinkPreviewHosts(store: MessageStore, account: String) async {
+        guard !account.isEmpty, linkPreviewHostsAccount != account else { return }
+        linkPreviewHostsAccount = account
+        let stored = try? await store.attachmentHosts(accountID: account)
+        guard accountID == account else { return }
+        guard let stored else { linkPreviewHostsAccount = nil; return }
+        noteLinkPreviewHosts(stored)
+    }
+
+    /// Adds hosts that serve the account's files: a slot just taken, or files in a timeline being published.
+    func noteLinkPreviewHosts(_ hosts: Set<String>) {
+        guard !hosts.isSubset(of: linkPreviewUploadHosts) else { return }
+        linkPreviewUploadHosts.formUnion(hosts)
+    }
+
+    func noteLinkPreviewHosts(of messages: [ChatMessage]) {
+        noteLinkPreviewHosts(Set(messages.compactMap { $0.attachment?.url.flatMap { URL(string: $0) }?.host()?.lowercased() }))
     }
 
     /// A message with a link is on screen (iOS cell configure or prefetch, Mac row appear): fetch its preview if the
@@ -45,9 +61,9 @@ extension AppModel: ComposerLinkPreviewSource {
 
     /// The own preview `send` may store with `body`: ours, for the first previewable link of the body, within the
     /// bounds we send. Anything else is dropped rather than sent.
-    func acceptedOwnLinkPreview(_ preview: StoredLinkPreview?, body: String) -> StoredLinkPreview? {
+    static func acceptedOwnLinkPreview(_ preview: StoredLinkPreview?, body: String, uploadHosts: Set<String>) -> StoredLinkPreview? {
         guard let preview, preview.source == .own,
-              LinkDetection.previewableURLs(in: body, uploadHosts: linkPreviewUploadHosts).first?.absoluteString == preview.url,
+              LinkDetection.previewableURLs(in: body, uploadHosts: uploadHosts).first?.absoluteString == preview.url,
               preview.title != nil || preview.imageData != nil,
               (preview.imageData?.count ?? 0) <= MessageContent.LinkMetadata.maximumSentImageBytes,
               (preview.imageData == nil) == (preview.imageType == nil) else { return nil }

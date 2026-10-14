@@ -287,6 +287,11 @@ final class AppModel {
     private var files: AttachmentFiles? { storageDirectory.map { AttachmentFiles(directory: $0, account: accountID) } }
     /// Our own link preview fetches (AppModel+LinkPreviews.swift). Observed: a result fills in its card.
     let linkPreviewCenter = LinkPreviewCenter()
+    /// Hosts that serve the account's files, which never get a preview: our upload slots' GET hosts and the hosts of
+    /// files we received. Read from storage once per account, then extended as slots are taken and timelines load.
+    var linkPreviewUploadHosts: Set<String> = []
+    /// The account `linkPreviewUploadHosts` was read from storage for.
+    @ObservationIgnored var linkPreviewHostsAccount: String?
     /// The account's attachment folder; fetched preview images live in its `link-previews/`.
     var linkPreviewFolder: URL? { storageDirectory.map { AttachmentFiles.root(directory: $0, account: accountID) } }
     /// This connection's roster as the link preview contact rule reads it (`LinkPreviewPolicy`).
@@ -1481,6 +1486,7 @@ final class AppModel {
         uploadService = uploads.load(account: account)
         resetTyping()
         lastSeenTracker = LastSeenTracker()
+        linkPreviewUploadHosts = []; linkPreviewHostsAccount = nil
         preferences.set(account, forKey: "lastAccount")
     }
 
@@ -1563,6 +1569,7 @@ final class AppModel {
                     let slot = try await client.requestUploadSlot(service: service, filename: attachment.name, size: size, contentType: "application/octet-stream")
                     let taskID = uploader.start(file: staged, slot: slot, size: size, contentType: "application/octet-stream")
                     try await store.setAttachmentUploadTask(accountID: account, messageID: message.id, taskID: taskID, url: slot.get.absoluteString)
+                    if self?.accountID == account, let host = slot.get.host()?.lowercased() { self?.noteLinkPreviewHosts([host]) }
                 } catch {
                     // A dropped connection is not the server refusing; the reconnect starts uploads again.
                     let dropped = error is CancellationError || [XMPPClientError.notConnected, .connectionClosed].contains { $0 == error as? XMPPClientError }
@@ -2312,7 +2319,7 @@ final class AppModel {
         if let source, source.accountID != account || source.chatID != chatID { return false }
         let message = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chatID,
                                     senderID: account, body: body, isOutgoing: true, reply: source.map { replySnapshot(of: $0, in: chatID) }, encryptionProfile: sample ? nil : "pending",
-                                    linkPreview: acceptedOwnLinkPreview(linkPreview, body: body))
+                                    linkPreview: Self.acceptedOwnLinkPreview(linkPreview, body: body, uploadHosts: linkPreviewUploadHosts))
         if let problem = XMPPClient.messageProblem(to: chatID, body: body, id: message.id, reply: Self.wireReply(message.reply)) {
             self.error = Self.sendFailure(problem)
             return false
@@ -3304,6 +3311,7 @@ final class AppModel {
     }
 
     private func publishTimeline(_ page: TimelinePage, chat: String) {
+        noteLinkPreviewHosts(of: page.messages)
         messages = page.messages
         messagesLoadedFor = chat
         messageReactions = page.reactions
@@ -3348,6 +3356,7 @@ final class AppModel {
         // before the message shows); track stored message IDs if that is ever visible.
         defer { typingTracker.flushSettled(); publishTyping() }
         do {
+            await loadLinkPreviewHosts(store: store, account: account)
             if scope.contains(.chats) {
                 try await loadChats(store: store, account: account)
                 prefetchTimelinePages(store: store, account: account)
