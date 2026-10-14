@@ -1,15 +1,15 @@
 # UI tests
 
-`HausXMPPUITests` drives the app through XCUITest. Most suites launch it with `-demo` on sample data from an isolated store and need no network. Suites named `…LabUITests`, and the others that sign in, skip unless the lab environment (`HAUS_LAB_*`, the echo peer) is exported; see `infra/local/README.md`.
+`HausXMPPUITests` drives the app through XCUITest. Most suites launch it with `-demo` on sample data from an isolated store and need no network. The lab suites (listed under "Lab suites" below) sign in to a test XMPP server and skip unless its environment is exported.
 
 ## What runs when
 
 The scheme `HausXMPP` has two test plans in `TestPlans/`:
 
-- **`UISmoke`**: the panel swap, long-chat and reply-swipe keepers, about two minutes. These check the software keyboard and gesture arbitration, which break most easily.
+- **`UISmoke`**: the panel swap, long-chat and reply-swipe tests, about two minutes. These check the software keyboard and gesture arbitration, which break most easily.
 - **`UIFull`** (the scheme's default): every UI test. Each routine test launches the app once; the lab and device tests skip in a fraction of a second unless their environment is exported.
 
-Run `UISmoke`, plus `-only-testing` for the suites of the screens you touched. Run `UIFull` once per PR.
+Run `UISmoke`, plus `-only-testing` for the suites of the screens you touched. Run `UIFull` before opening a pull request that changes UI.
 
 | Suite | One launch covers |
 |---|---|
@@ -24,17 +24,18 @@ Each test runs in named steps (`XCTContext.runActivity`), and every class stops 
 
 ## Running
 
-`scripts/ui-tests.sh` runs a test plan or single classes and tests from an existing build. It takes one lock (`/usr/bin/lockf` on `ui-tests.lock` in the shared git directory) for every checkout, so a second run waits for the first instead of slowing both down. It prints who holds the slot while it waits.
+Use one simulator that nothing else is driving, and keep derived data and result bundles inside the checkout (`build/` is gitignored):
 
 ```bash
-export HAUS_UI_SIMULATOR=<udid>                         # a simulator no other session drives
-scripts/ui-tests.sh --build UISmoke                     # build-for-testing outside the lock, then the plan
-scripts/ui-tests.sh MessageActionsUITests ChatListSwipeUITests   # the suites for the screens you touched
-scripts/ui-tests.sh ReplyUITests/testReplySwipesKeepTheKeyboardAndLeaveBackToTheSystem
-scripts/ui-tests.sh --captures UIFull                   # with review screenshots
+xcodebuild test -project HausXMPP.xcodeproj -scheme HausXMPP -testPlan UISmoke \
+  -destination 'platform=iOS Simulator,id=<udid>' -derivedDataPath build/DerivedData \
+  -resultBundlePath build/TestResults/smoke.xcresult -collect-test-diagnostics never
+
+# the suites for the screens you touched
+xcodebuild test ... -only-testing:HausXMPPUITests/MessageActionsUITests -only-testing:HausXMPPUITests/ChatListSwipeUITests
 ```
 
-Derived data goes to `build/DerivedData` and result bundles to `build/TestResults`, both inside the checkout and ignored. Arguments after `--` go to `xcodebuild`, for example `-- -quiet`. The script passes `-collect-test-diagnostics never`: otherwise a failure runs `simctl diagnose` for up to 600 s while the slot is held. Delete result bundles once you have read them.
+`-collect-test-diagnostics never` stops a failure from running `simctl diagnose` for up to ten minutes. Delete result bundles once you have read them.
 
 Rebuild with the scheme you are about to test. If `HausXMPPLifecycle` shares a derived data folder with a later `HausXMPP` build, running it without rebuilding fails about a dozen unrelated tests that compare errors.
 
@@ -42,29 +43,29 @@ The attachment suites need an iOS 26.5 simulator with the stock photos.
 
 ### A keyboard that never shows
 
-A simulator that has seen a hardware keyboard minimises the software keyboard: it exists, but its frame sits below the screen, and the composer stays at rest. Every keyboard test then fails. `showKeyboard(tapping:)` (in `UITestSupport.swift`) fails at once in that case and says so; the script warns before the run. On 2026-10-08 a cloned simulator had `AutomaticMinimizationEnabled` on in `com.apple.keyboard.preferences`. Turning it off fixed the panel test, and turning it back on broke it again:
+A simulator that has seen a hardware keyboard minimises the software keyboard: it exists, but its frame sits below the screen, and the composer stays at rest. Every keyboard test then fails. `showKeyboard(tapping:)` (in `UITestSupport.swift`) fails at once in that case and says so. The cause seen so far is `AutomaticMinimizationEnabled` in `com.apple.keyboard.preferences`, which a cloned simulator can have on. Turn it off:
 
 ```bash
 xcrun simctl spawn <udid> defaults write com.apple.keyboard.preferences AutomaticMinimizationEnabled -bool NO
 ```
 
-This is a likely cause of the earlier "fails on a freshly cloned simulator" reports (`467.0 is not equal to 826.0`).
+A typical symptom is a height assertion such as `467.0 is not equal to 826.0`.
 
 ### Screenshots
 
-Review screenshots (`capture(_:_:)`, kept in the result bundle) are taken only when the runner has `HAUS_UI_CAPTURES=1`. Pass `--captures` to the script, or export `TEST_RUNNER_HAUS_UI_CAPTURES=1` for `xcodebuild`. Routine runs skip them and the settle waits that go with them.
+Review screenshots (`capture(_:_:)`, kept in the result bundle) are taken only when the runner has `HAUS_UI_CAPTURES=1`. Export `TEST_RUNNER_HAUS_UI_CAPTURES=1` before running `xcodebuild`. Routine runs skip them and the settle waits that go with them.
 
 ### Parallel clones
 
-`-parallel-testing-enabled YES -parallel-testing-worker-count 3` gives each worker a fresh clone of the simulator and splits the suite by class. Each clone boots every simulator daemon, so only use it while no other simulators are booted. On 2026-09-29, with four other simulators running, the load average passed 800 and two clones stalled. There is no measurement yet from an idle machine.
+`-parallel-testing-enabled YES -parallel-testing-worker-count 3` gives each worker a fresh clone of the simulator and splits the suite by class. Each clone boots every simulator daemon, so use it only while no other simulators are booted; with several others running, clones have stalled.
 
 ## What belongs where
 
-A UI test costs a launch (about 4 s) and one to four seconds per gesture. Write one only for what XCUITest alone can check: the software keyboard, gesture arbitration with the system back swipe, context menus, the out-of-process photo picker, permission prompts, rotation, and SwiftUI screens a hosted test cannot reach. Add new checks as named steps to the keeper that already opens that screen rather than as a new launch.
+A UI test costs a launch (about 4 s) and one to four seconds per gesture. Write one only for what XCUITest alone can check: the software keyboard, gesture arbitration with the system back swipe, context menus, the out-of-process photo picker, permission prompts, rotation, and SwiftUI screens a hosted test cannot reach. Add new checks as named steps to the test that already opens that screen rather than as a new launch.
 
 Everything else goes in `HausXMPPLifecycleTests` (`AppLifecycleTests/`) or a package:
 
-- Conversation decisions shared with the Mac timeline (`App/Conversation`): which actions a message offers (`MessageActionMenuTests`), how stored messages become rows (`ConversationPresenterTests`) and where the list scrolls (`TimelineScrollPolicyTests`). Test these types directly, without a window. The `HausXMPPMac` target compiles the folder for macOS, so a UIKit dependency creeping in breaks the Mac build (see docs/development/mac-target.md).
+- Conversation decisions shared with the Mac timeline (`App/Conversation`): which actions a message offers (`MessageActionMenuTests`), how stored messages become rows (`ConversationPresenterTests`) and where the list scrolls (`TimelineScrollPolicyTests`). Test these types directly, without a window. The `HausXMPPMac` target compiles the folder for macOS, so a UIKit dependency creeping in breaks the Mac build.
 - Timeline cells: labels, sides, widths, the typing item, placeholders, edited and unsent bubbles, and that the cell wires up the shared actions. Drive the real controller in a `UIWindow`, as `TimelinePositionTests` does.
 - Timeline positions: that the controller carries out the scroll policy: anchoring, loading earlier pages, following an own send (`TimelinePositionTests`).
 - Composer decisions such as which item carries a reply, attachment dispatch order, mute durations.
@@ -72,23 +73,35 @@ Everything else goes in `HausXMPPLifecycleTests` (`AppLifecycleTests/`) or a pac
 
 ## Lab suites
 
-The lab suites share `LabFixture` (skip unless exported, launch on an isolated store) and the steps in `LabUITestSupport.swift`: `connectToLab`, `startChat(with:)`, `selectModernOMEMO` and `acceptPendingDevices`. Give each suite a fresh fixture, because an account collects stale OMEMO devices across runs:
+`EncryptionUITests`, `OutboxUITests`, `ReceiptUITests`, `ReactionUITests`, `RevisionUITests`, `GroupUITests`, `AttachmentSendLabUITests`, `LastSeenLabUITests` and `NotificationActionLabUITests` sign in to a test server. They share `LabFixture` (skip unless exported, launch on an isolated store) and the steps in `LabUITestSupport.swift`: `connectToLab`, `startChat(with:)`, `selectModernOMEMO` and `acceptPendingDevices`.
 
-```bash
-work/push-gateway-venv/bin/python infra/local/create_group_fixture.py work/lab/<suite> --runner-environment work/lab/<suite>/runner.json
-```
+They need:
 
-Start the peer that suite needs from `Packages/OMEMO/Scripts/Interop` with `--credentials work/lab/<suite>/peer.json --state work/lab/<suite>/peer-state.json --ca work/lab/<suite>/ca.crt`, and wait for its ready line. Which peer:
+- An XMPP server reachable as `localhost` with direct TLS on port 5223, a certificate from a CA of your own, and two disposable accounts. Prosody with MAM, carbons, stream management, PEP, last activity, MUC on `rooms.localhost` and HTTP file upload covers every suite. Use a fresh pair of accounts per suite, because an account collects stale OMEMO devices across runs.
+- An OMEMO peer client signed in as the second account. It must accept the app's devices and, for most suites, echo each decrypted message back encrypted. **This peer is not included in the repository.** Encryption, Outbox, Receipt and Last Seen expect an echo; AttachmentSend expects no echo (an echoed photo pushes the caption off screen); Reaction and Revision expect the peer to use the modern (`urn:xmpp:omemo:2`) profile; the notification suite expects the peer to send typing notifications as well; Group expects a peer in a members-only, non-anonymous room.
 
-- `peer.py --echo` for Encryption, Outbox, Receipt and Last Seen.
-- `peer.py` without `--echo` for AttachmentSend: echoed photos push the caption off screen, where its state cannot be read.
-- `peer.py --echo --profile modern` for Reaction and the peer half of Revision.
-- `peer.py --echo --typing` for the notification lab, also exporting `TEST_RUNNER_XMPP_NOTIFICATION_ACTION_LAB=1`.
-- `group_peer.py --room <room>` for Group.
+Export the variables with a `TEST_RUNNER_` prefix so that Xcode passes them to the test runner. A variable set only as a prefix on the `xcodebuild` command line does not reach it.
 
-Then `export` every runner key with a `TEST_RUNNER_` prefix. Add `TEST_RUNNER_HAUS_LAB_CA_DER`, the base64 DER of `ca.crt`. Run the suite with `scripts/ui-tests.sh <Suite>`, which passes the exported variables on. A variable set only as a prefix on the `xcodebuild` command did not reach the runner.
+| Variable | Meaning |
+|---|---|
+| `HAUS_LAB_USERNAME`, `HAUS_LAB_PASSWORD` | The app's account (a bare username on `localhost`) |
+| `HAUS_LAB_CA_DER` | Base64 DER of the server's CA certificate. The app trusts it for this connection only |
+| `XMPP_OMEMO_PEER` | The peer's bare JID |
+| `XMPP_GROUP_ROOM` | `GroupUITests`: the room's bare JID |
+| `XMPP_PEER_EXITS_AFTER` | `LastSeenLabUITests`, optional: seconds after which the peer signs off |
+| `XMPP_NOTIFICATION_ACTION_LAB` | `NotificationActionLabUITests`: `1` |
+| `XMPP_ACTION_TARGET`, `XMPP_ACTION_EXPECT` | Its Mark as Read step: the text of two one-shot peer messages that you send from the host, the first while the app shows the chat list, the second after it went to the background |
+| `HAUS_LAB_PORT` | Optional: sign in through a local proxy on this port instead of 5223 |
+| `HAUS_LAB_HOST` | Optional: the server's private LAN address, for runs on a device |
 
-To run a lab suite over a slow link, start `infra/local/slow_link.py` in front of the lab (for example `--listen 15223 --target 5223 --delay 0.1` for a 200 ms round trip) and also export `TEST_RUNNER_HAUS_LAB_PORT=15223`. `connectToLab` then signs in through that port. `AttachmentSendLabUITests` needs it to fail on code that drops an upload request: on loopback the slot round trips are too short to show the bug. `AttachmentDispatchTests.testFilesQueuedDuringAPassGetTheNextPass` in the lifecycle suite catches that bug without the lab.
+`AttachmentSendLabUITests` only catches a dropped upload request over a slow link: on loopback the upload slot round trips are too short to show the bug. Put a proxy that adds about 100 ms each way in front of the server and set `HAUS_LAB_PORT`. `AttachmentDispatchTests.testFilesQueuedDuringAPassGetTheNextPass` in the lifecycle suite catches the same bug without a server.
+
+Two more suites need setups that are not described here and skip otherwise:
+
+- `PushOnboardingLabUITests` (`HAUS_PUSH_LAB=1`, `XMPP_PUSH_SERVICE`): a Prosody with `mod_cloud_notify` and a stand-in push gateway component.
+- `PushUITests` (`XMPP_PUSH_DEVICE_TEST=1`): a physical iPhone, real APNs and a staging server set through `HAUS_STAGING_DOMAIN` (see `Config/Local.xcconfig.example`).
+
+Run lab suites on a simulator you don't otherwise use. `NotificationActionLabUITests` and `PushOnboardingLabUITests` use the app's primary store on purpose.
 
 ## Where the time goes
 

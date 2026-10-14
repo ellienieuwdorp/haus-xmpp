@@ -1,59 +1,58 @@
-# Encryption lifecycle diagnostics
+# Lifecycle tests
 
-Run the **HausXMPPLifecycle** scheme. It hosts `HausXMPPLifecycleTests` inside the app, uses an isolated UI storage namespace, and creates only generated synthetic account/key fixtures under `Application Support/Messaging/LifecycleTests`. There are no network calls and no real-account reads. Ordinary fixtures and their dedicated Keychain items are deleted after each test. The separate-process seed persists until its matching verification run.
+Run the **HausXMPPLifecycle** scheme. It hosts `HausXMPPLifecycleTests` inside the app, uses an isolated UI storage namespace, and creates only generated synthetic account and key fixtures under `Application Support/Messaging/LifecycleTests`. There are no network calls and no reads of a real account. Ordinary fixtures and their dedicated Keychain items are deleted after each test. The separate-process seed persists until its matching verification run.
 
-The standard suite checks device-local Keychain accessibility metadata, stable key reload, encrypted OMEMO identity restoration, backup exclusion and fail-closed behavior after a wrapping key disappears. The physical-only metadata test checks the actual Data Protection class on the directory, SQLite database, WAL, SHM and transport lock file. Simulator runs explicitly skip that assertion because the simulator filesystem does not expose physical iOS Data Protection attributes.
+```bash
+xcodebuild test -project HausXMPP.xcodeproj -scheme HausXMPPLifecycle \
+  -destination 'platform=iOS Simulator,id=<udid>' -derivedDataPath build/DerivedData \
+  -parallel-testing-enabled NO
+```
 
-## Actual process relaunch
+Besides the app logic tests (conversation presentation, timeline, composer, notifications, migrations), the encryption suite checks device-local Keychain accessibility metadata, stable key reload, encrypted OMEMO identity restoration, backup exclusion and fail-closed behaviour after a wrapping key disappears. A device-only test checks the actual Data Protection class on the directory, the SQLite database, its WAL and SHM files and the transport lock file. Simulator runs skip that assertion because the simulator file system does not expose iOS Data Protection attributes.
 
-Run only `HausXMPPLifecycleTests/EncryptionLifecycleTests/testIdentityAcrossSeparateProcessLaunches` twice in separate test invocations. Supply the same fresh UUID as test-runner environment `XMPP_LIFECYCLE_RUN_ID`, with `XMPP_LIFECYCLE_PHASE=seed` first and `verify` second. The second invocation requires a different process ID and reads the existing encrypted snapshot with the existing Keychain key; it never reinitializes the identity. Verification removes the fixture. A reused seed ID with an existing manifest is rejected.
+Rebuild with this scheme before running it. A derived data folder last built by the `HausXMPP` scheme makes about a dozen unrelated tests that compare errors fail.
 
-Example using XcodeBuildMCP `test_sim` (or `test_device` when available): set `testRunnerEnv` to these values and use `extraArgs` containing `-parallel-testing-enabled`, `NO`, and `-only-testing:HausXMPPLifecycleTests/EncryptionLifecycleTests/testIdentityAcrossSeparateProcessLaunches`. Configure the HausXMPPLifecycle scheme and the desired simulator or physical destination first.
+## Process relaunch
 
-## Attended physical lock probe
+Run only `HausXMPPLifecycleTests/EncryptionLifecycleTests/testIdentityAcrossSeparateProcessLaunches`, twice, in separate test invocations. Give both the same fresh UUID as `XMPP_LIFECYCLE_RUN_ID`, with `XMPP_LIFECYCLE_PHASE=seed` the first time and `verify` the second. Xcode passes variables prefixed `TEST_RUNNER_` to the hosted test process, so from a shell:
 
-Run only `testLockedDeviceCanReadAfterFirstUnlockEncryptionState` on an unlocked, passcode-protected physical iPhone. The passcode/lock policy must make protected data unavailable promptly. Set test-runner environment `XMPP_LIFECYCLE_MANUAL_LOCK=1`.
+```bash
+export TEST_RUNNER_XMPP_LIFECYCLE_RUN_ID=$(uuidgen) TEST_RUNNER_XMPP_LIFECYCLE_PHASE=seed
+xcodebuild test ... -only-testing:HausXMPPLifecycleTests/EncryptionLifecycleTests/testIdentityAcrossSeparateProcessLaunches
+export TEST_RUNNER_XMPP_LIFECYCLE_PHASE=verify
+xcodebuild test-without-building ... -only-testing:HausXMPPLifecycleTests/EncryptionLifecycleTests/testIdentityAcrossSeparateProcessLaunches
+```
 
-The test emits and attaches **LOCK_PROBE_ARMED** after both peer profiles are initialized, fingerprints approved in the isolated fixture and both ciphertext packets prepared. All expensive setup occurs before arming. Lock the phone immediately, keep it locked, and allow up to 25 seconds. The test obtains a finite UIKit background task; it does not request indefinite execution. Success requires all of the following observed in the same run:
+The second invocation requires a different process ID and reads the existing encrypted snapshot with the existing Keychain key; it never initialises a new identity. Verification removes the fixture. A reused seed ID with an existing manifest is rejected.
+
+## Attended lock probe (device only)
+
+Run only `testLockedDeviceCanReadAfterFirstUnlockEncryptionState` on an unlocked, passcode-protected iPhone whose lock settings make protected data unavailable promptly. Set `XMPP_LIFECYCLE_MANUAL_LOCK=1`. Device runs need a development team (`DEVELOPMENT_TEAM` in `Config/Local.xcconfig`).
+
+The test emits and attaches **LOCK_PROBE_ARMED** after both OMEMO profiles are initialised, fingerprints approved in the isolated fixture and both ciphertext packets prepared. All expensive setup happens before that. Lock the phone immediately, keep it locked, and allow up to 25 seconds. The test uses a finite UIKit background task. It passes only if all of the following hold in the same run:
 
 1. `UIApplication.isProtectedDataAvailable` becomes false.
 2. A separately created `.complete` protection sentinel can no longer be read.
-3. The `.afterFirstUnlockThisDeviceOnly` Keychain item is retrieved successfully.
-4. A newly opened class-C SQLite connection and fresh OMEMO service restore the existing identity, decrypt one preprepared legacy packet and one modern packet from an approved generated peer, and atomically commit plaintext, ratchet changes and replay outcomes while the device remains locked. Every attempted network operation throws.
-5. Repeating those same packets leaves the snapshot unchanged, and the device ID/fingerprint is unchanged.
+3. The `.afterFirstUnlockThisDeviceOnly` Keychain item is still read successfully.
+4. A newly opened class C SQLite connection and a fresh OMEMO service restore the existing identity, decrypt one prepared legacy packet and one modern packet from an approved generated peer, and atomically commit plaintext, ratchet changes and replay outcomes while the device stays locked. Every attempted network operation throws.
+5. Repeating the same packets leaves the snapshot unchanged, and the device ID and fingerprint are unchanged.
 
-**LOCK_PROBE_VERIFIED** is emitted only after these checks. A timeout is a failure, not a claimed pass. Simulator runs always skip this probe. No private selector, undocumented HID command or fabricated lock state is used. Background task expiration or a debugger/device policy preventing a real lock can make the probe fail or terminate; rerun attended and preserve its result bundle.
+**LOCK_PROBE_VERIFIED** is emitted only after these checks. A timeout is a failure. Simulator runs always skip this probe. No private API or simulated lock state is used, so background task expiry or a debugger that keeps the device awake can make the probe fail; run it again attended.
 
-This covers relock **after first unlock**. It does not establish behavior before the first unlock following a reboot, device-to-device restoration, push/NSE execution, background scheduling reliability or APNs delivery. Those remain separate lifecycle/operational scenarios.
+The probe covers relocking after the first unlock. It does not cover behaviour before the first unlock after a reboot, restoring to another device, the notification service extension, background scheduling or APNs delivery.
 
-## Primary references
+`testPreparedIncomingPacketsCommitUsingOnlyPersistentIdentity` runs the same receive and commit helper unlocked, on the simulator too. A pass there is not a locked-device result. Rebuild the device test product after changing that helper and before running the probe.
+
+## Notification checks
+
+`NotificationAccessGateTests` uses disposable files to check that a signed-out account's notifications stay off across relaunches, that turning them on removes the marker, that an empty marker stays off and that unreadable state throws. `PushTokenCallbackTests` feeds synthetic APNs callback bytes to the test host to check that the latest token is buffered and stale tokens are rejected; it never requests a real token. `NotificationNavigationTests` covers a buffered cold-launch tap and ignored dismiss and malformed callbacks. Account and message authorisation for notifications is tested in MessagingCore.
+
+## References
 
 Accessed 2026-09-14:
 
-- [After-first-unlock, this-device-only Keychain accessibility](https://developer.apple.com/documentation/security/ksecattraccessibleafterfirstunlockthisdeviceonly): key remains accessible after the first unlock until restart and does not migrate to another device.
-- [Complete-until-first-user-authentication file protection](https://developer.apple.com/documentation/foundation/fileprotectiontype/completeuntilfirstuserauthentication): class-C files remain available after a subsequent lock.
-- [UIApplication protected-data availability](https://developer.apple.com/documentation/uikit/uiapplication/isprotecteddataavailable): relevant to complete/complete-unless-open protection, not a promise that class-C data becomes inaccessible.
+- [After-first-unlock, this-device-only Keychain accessibility](https://developer.apple.com/documentation/security/ksecattraccessibleafterfirstunlockthisdeviceonly): the key stays accessible after the first unlock until restart and does not migrate to another device.
+- [Complete-until-first-user-authentication file protection](https://developer.apple.com/documentation/foundation/fileprotectiontype/completeuntilfirstuserauthentication): class C files stay available after a later lock.
+- [UIApplication protected-data availability](https://developer.apple.com/documentation/uikit/uiapplication/isprotecteddataavailable): relevant to complete and complete-unless-open protection, not a promise that class C data becomes inaccessible.
 - [Finite background task API](https://developer.apple.com/documentation/uikit/uiapplication/beginbackgroundtask(withname:expirationhandler:)): requests bounded continuation of work.
-- [XCUIDevice public API](https://developer.apple.com/documentation/xcuiautomation/xcuidevice): documented hardware-button simulation includes home, volume, camera and action buttons; no public lock button is documented.
-
-## Verified locally
-
-2026-09-14 simulator baseline: three tests passed, zero failed; three opt-in/physical tests skipped. Separate seed and verify invocations each passed with zero skips, proving actual test-host process relaunch on simulator. A subsequent physical-iPhone run passed all four standard checks with zero failures (the attended lock and separate-process tests were intentionally skipped in the baseline). Separate physical seed and verify invocations then each passed without skips. Evidence is retained outside git under `work/omemo-device/lifecycle-standard.xcresult`, `lifecycle-relaunch-seed.xcresult` and `lifecycle-relaunch-verify.xcresult` with corresponding logs. The physical tests verified actual directory/SQLite-sidecar protection metadata and a separate-process Keychain-backed identity restore. The later attended physical run is recorded below.
-
-The physical invocations used `xcodebuild test` for the initial build and `test-without-building` for the two relaunch phases, scheme `HausXMPPLifecycle`, a dedicated `work/LifecycleDeviceDerivedData` directory and `-parallel-testing-enabled NO`. Xcode propagates variables prefixed `TEST_RUNNER_` to the hosted test process; set `TEST_RUNNER_XMPP_LIFECYCLE_RUN_ID` and `TEST_RUNNER_XMPP_LIFECYCLE_PHASE` for shell-driven seed/verify runs. Device destination and development team are local configuration and are deliberately not committed here.
-
-The strengthened dual-profile receive/commit path also has an ordinary unlocked regression, `testPreparedIncomingPacketsCommitUsingOnlyPersistentIdentity`, which passed on simulator. The attended probe calls the exact same helper after proving physical lock; an unlocked helper pass is not a locked-device result. Rebuild the device test product after changing this helper before running the attended probe.
-
-## Attended physical result — 2026-09-14
-
-The strengthened `testLockedDeviceCanReadAfterFirstUnlockEncryptionState` passed on the USB-connected iPhone with zero failures and zero skips (24.001 seconds). It emitted `LOCK_PROBE_VERIFIED` only after observing protected data unavailable and an unreadable class-A sentinel, then restoring the existing device-only Keychain key and SQLite identity, decrypting and atomically committing both legacy and modern OMEMO packets, and checking replay/identity stability while the device remained locked. No network was used by that fixture. Private evidence: `work/omemo-device/lifecycle-locked-current.xcresult` and its matching log.
-
-A separate real APNs test also persisted an incoming encrypted fixture exactly once with the containing app in diagnostic mode that prevents foreground XMPP connections. That proves notification-extension synchronization independently of this offline protection probe; see [production readiness](../docs/development/production-readiness.md). Neither result establishes before-first-unlock behavior following reboot or the full interruption/provider matrix.
-
-The final standard physical regression ran all 12 discovered tests with zero failures: 10 passed and the two explicitly opt-in tests (attended lock and separate-process phase) skipped as intended. The attended lock passed separately as above; the separate-process seed/verify evidence remains recorded in the earlier section. Result: `work/omemo-device/lifecycle-standard-current.xcresult`.
-
-## Notification authorization and routing follow-up
-
-`NotificationAccessGateTests` uses disposable files to verify that logout remains disabled across reopening, explicit enablement removes the marker, an empty marker stays disabled, and unreadable state throws. `PushTokenCallbackTests` injects synthetic APNs callback bytes into the isolated test host to verify latest-token buffering and stale-token rejection; it does not request a real provider token or mutate the primary account journal.
-
-These three new checks passed on the physical iPhone. The subsequent full lifecycle run discovered 15 tests: **13 passed, two opt-in tests skipped, zero failures** (`work/push-stage/notification-lifecycle-all.xcresult`). A later `NotificationNavigationTests` addition passed separately on the simulator, covering a buffered cold-launch tap and ignored dismiss/malformed callbacks. Account/message authorization is tested in MessagingCore. The new routing callback has not yet been verified by tapping a real APNs notification on hardware. See [notification evidence](../docs/development/notification-previews.md).
+- [XCUIDevice](https://developer.apple.com/documentation/xcuiautomation/xcuidevice): the documented hardware-button simulation has no lock button.
