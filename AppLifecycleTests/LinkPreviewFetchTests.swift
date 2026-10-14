@@ -50,7 +50,7 @@ final class LinkPreviewFetchTests: XCTestCase {
               in spring.">
             <meta property='og:image' content="/img/bridge.png"><meta property="og:image:alt" content="The bridge at dusk">
             <meta property="og:image" content="https://cdn.example/second.png">
-            """, after: 4 * 1024 * 1024)))
+            """, after: 4 * 1024 * 1024), pause: 5_000))
         PreviewStubServer.serve("https://news.example/img/bridge.png", .image(Self.png(width: 2_400, height: 1_260)))
 
         let result = await fetch("https://news.example/story")
