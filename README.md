@@ -1,6 +1,6 @@
 # Haus XMPP
 
-Haus XMPP is a native XMPP messenger for iPhone, with a Mac app in progress. It speaks standard XMPP, so it works with an account on any server and with people who use other XMPP clients. Messages are end-to-end encrypted with OMEMO.
+Haus XMPP is a native XMPP messenger for iPhone, with a Mac app in progress. It speaks standard XMPP, so it works with an account on any server and with people who use other XMPP clients. It encrypts messages end to end with OMEMO.
 
 **It is early software and not ready for personal conversations.** Most of what is listed below has been tested against a local Prosody test server, with disposable accounts and independent OMEMO implementations (python-omemo, QXmpp and libomemo.js) as the other side. Decrypted notification previews have been checked on a physical iPhone against a test server. Broad testing against other clients and servers, and a full release validation, have not been done yet. There are no public builds.
 
@@ -8,8 +8,9 @@ Haus XMPP is a native XMPP messenger for iPhone, with a Mac app in progress. It 
 
 - One-to-one chats, encrypted with OMEMO in both the original (`eu.siacs.conversations.axolotl`) and the current (`urn:xmpp:omemo:2`) profile.
 - Encrypted private group chats (XEP-0045 members-only, non-anonymous rooms, `urn:xmpp:omemo:2` only). This is a restricted first implementation; see [Packages/OMEMO/GROUPS.md](Packages/OMEMO/GROUPS.md).
-- Explicit device trust: a new or changed key is never trusted silently, and a message from an unverified device does not look verified. Encryption never falls back to plaintext.
+- Explicit device trust: a new or changed key is never trusted silently, and a message from an unverified device does not look verified. Message text in an encrypted chat is never sent unencrypted.
 - Reactions, replies, corrections, retractions, receipts, read markers and typing notifications.
+- With `urn:xmpp:omemo:2`, reactions are encrypted. With the original profile, reactions, receipts and retractions travel as plain XEP-0444, XEP-0184 and XEP-0424 stanzas, because that is what clients on that profile understand.
 - Message history from the server archive (XEP-0313), stream resumption (XEP-0198), carbons and synchronised read state (XEP-0490), so several devices stay in step.
 - Push notifications that the notification service extension decrypts on the device. The push gateway only sees a generic wake-up, never message content.
 - Encrypted file and photo sharing (XEP-0363 with XEP-0454).
