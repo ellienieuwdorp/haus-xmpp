@@ -66,6 +66,7 @@
 		32F7F88A717F84963107FCAF /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97458A0AF66A781FDEE95E70 /* SettingsView.swift */; };
 		346851E8F1AB356F12B683AF /* GroupJoinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64553F11D282035E206DBCE1 /* GroupJoinView.swift */; };
 		34AA5ED12B9611519291857D /* LastSeenTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EE701CB57B7105AB84D9504 /* LastSeenTrackerTests.swift */; };
+		354D11AC9DAF73E8B9268104 /* MacLinkPreviewCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6DB6AFCBA2A1A1FCF238CA3 /* MacLinkPreviewCard.swift */; };
 		35A93984520362F59B1D4F63 /* MacExtensionProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 377EE020496066307F80188A /* MacExtensionProbe.swift */; };
 		364D130D4D94312A5D5DADDE /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 535BE8A1F1E6F1BDCA72435B /* Theme.swift */; };
 		373F493D6B6C09282C8B286C /* ChatRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A4DB06AECC4926F0E8AB2ED /* ChatRow.swift */; };
@@ -492,6 +493,7 @@
 		D4E9D1EA17C8008D91B2D600 /* AttachmentDispatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentDispatchTests.swift; sourceTree = "<group>"; };
 		D5F90485C4526281BAF76DD6 /* CoalescedReloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoalescedReloadTests.swift; sourceTree = "<group>"; };
 		D6CA8152B21BE66BD1AEA1DD /* XMPPNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = XMPPNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		D6DB6AFCBA2A1A1FCF238CA3 /* MacLinkPreviewCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLinkPreviewCard.swift; sourceTree = "<group>"; };
 		D78ECA4DBDACE97E7A0AA2EE /* PreUpgradeHold.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreUpgradeHold.swift; sourceTree = "<group>"; };
 		D79B0F9D17AAB865512526A1 /* TimelinePositionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelinePositionTests.swift; sourceTree = "<group>"; };
 		D91703893D572016132C7E6D /* LinkOpening.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkOpening.swift; sourceTree = "<group>"; };
@@ -601,6 +603,7 @@
 				9E8B694210C22F9137AC0711 /* MacImageEncoding.swift */,
 				F7D7B0F60E83D75595B85518 /* MacLifecycle.swift */,
 				C330E74F87D4C44D0C45570E /* MacLifecycleDebug.swift */,
+				D6DB6AFCBA2A1A1FCF238CA3 /* MacLinkPreviewCard.swift */,
 				AC35ADFF191022AC7947AFE8 /* MacPushProbe.swift */,
 				3DC7D740F62B973A8BC6B7E0 /* MacRootView.swift */,
 				E370F3025375AED97F4C8529 /* MacSettingsView.swift */,
@@ -1362,6 +1365,7 @@
 				7EF13805E692A99C6CE1BF26 /* MacImageEncoding.swift in Sources */,
 				0D04946520F10F50787A02A8 /* MacLifecycle.swift in Sources */,
 				267CEC631E56DBC1EBE98E9B /* MacLifecycleDebug.swift in Sources */,
+				354D11AC9DAF73E8B9268104 /* MacLinkPreviewCard.swift in Sources */,
 				3EE536B829BCCB54A2F688D4 /* MacPushProbe.swift in Sources */,
 				9553722566FB8DACF9AC6DBD /* MacRootView.swift in Sources */,
 				658DBFA69EBDFC4C303E4C0E /* MacSettingsView.swift in Sources */,
