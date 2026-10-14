@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy policy · haus xmpp</title>
+<meta name="description" content="What Haus XMPP and its push service do with your data.">
+<link rel="icon" href="/images/favicon.png">
+<link rel="apple-touch-icon" href="/images/apple-touch-icon.png">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="page">
+<header><img src="/images/icon.png" alt=""><a href="/">haus xmpp</a></header>
+
+<h1>Privacy policy</h1>
+<p class="updated">Last updated 14 October 2026</p>
+
+<p>Haus XMPP is a messaging app for the XMPP network, for iPhone and Mac. This policy covers the app, the push service at <code>push.xmpp.haus</code> and this website. Haus XMPP is made by Ellie Nieuwdorp, who is responsible for this data. Contact: <a href="mailto:ellie@xmpp.haus">ellie@xmpp.haus</a>.</p>
+
+<h2>The short version</h2>
+<ul>
+  <li>There is no Haus XMPP account. You sign in with an account on an XMPP server you choose, and the app talks to that server directly.</li>
+  <li>We never receive your messages, contacts, encryption keys or password.</li>
+  <li>If you turn on notifications, our push service stores your XMPP address and an Apple device token so it can wake the app. Nothing else.</li>
+  <li>No ads, no tracking, no analytics, nothing sold.</li>
+</ul>
+
+<h2>Data on your device and your server</h2>
+<p>Your messages, contacts, attachments and encryption keys are stored on your device. Your password and keys are kept in the system keychain. Messages in encrypted chats are encrypted on your device with OMEMO before they leave it. Your XMPP server receives and stores what any XMPP server does: your contact list, your messages (encrypted ones it cannot read), and its own logs. That server is run by whoever you chose, under their own privacy policy. We have no access to it.</p>
+
+<h2>Push notifications</h2>
+<p>XMPP servers cannot notify an iPhone directly, so when notifications are on, the app registers with our push service at <code>push.xmpp.haus</code>. The service stores:</p>
+<ul>
+  <li>your XMPP address (for example <code>name@example.org</code>), so only your account can change or remove the registration;</li>
+  <li>the Apple Push Notification device token for this install, and whether it is a development or release build;</li>
+  <li>a random identifier and secret the app creates for the registration;</li>
+  <li>timestamps of the last registration change and of pending wake-ups.</li>
+</ul>
+<p>When a message arrives, your server sends the push service a wake-up that contains no message content, sender or other details. The push service asks Apple to deliver a generic notification, and the app then fetches and decrypts the message on your device.</p>
+<p>When you turn notifications off or sign out, the app tells the push service to delete the registration. Registrations that are revoked, whose token Apple reports as invalid, or that were never used are deleted 60 days after their last change. Pending wake-ups expire after one hour. The service's logs contain counters only, never addresses, tokens or messages. Nightly backups of the registration database are kept for seven days.</p>
+<p>The push service runs on a server rented from Hetzner Online GmbH in Helsinki, Finland. Notifications are delivered by Apple's Push Notification service, under <a href="https://www.apple.com/legal/privacy/">Apple's privacy policy</a>.</p>
+<p>We use this data only to deliver notifications you asked for. The legal basis is providing the service you requested (Article 6(1)(b) GDPR).</p>
+
+<h2>TestFlight and the App Store</h2>
+<p>If you install the app through TestFlight, Apple shares the feedback, screenshots and crash reports you choose to send with us, along with your device model and OS version, as described in Apple's TestFlight terms. App Store and TestFlight usage statistics reach us only if you allow sharing with app developers in your device settings. We use these only to fix problems.</p>
+
+<h2>This website</h2>
+<p>This site is static and hosted on Cloudflare Pages. It sets no cookies and runs no analytics. Cloudflare processes your IP address and request details to serve the pages and protect the site, under <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare's privacy policy</a>.</p>
+
+<h2>Email</h2>
+<p>If you email us, we keep your message and address to answer you. Email to <code>xmpp.haus</code> is handled by iCloud Mail.</p>
+
+<h2>Your rights</h2>
+<p>You can ask for a copy of the data the push service holds about your address, or for its deletion, by emailing <a href="mailto:ellie@xmpp.haus">ellie@xmpp.haus</a> from or about that account. Turning off notifications in the app deletes it too. You may also complain to your data protection authority; in the Netherlands that is the Autoriteit Persoonsgegevens.</p>
+
+<h2>Children</h2>
+<p>Haus XMPP is not aimed at children, and we do not knowingly collect data about them.</p>
+
+<h2>Changes</h2>
+<p>If this policy changes, the new version will be posted here with a new date. Significant changes will also be mentioned in the app's release notes.</p>
+
+<footer><a href="/">Home</a> · <a href="/support/">Support</a></footer>
+</main>
+</body>
+</html>
