@@ -43,7 +43,8 @@ extension AppModel {
     /// Stored device trust decides, whatever the socket is doing: a chat with usable trusted devices is encrypted
     /// while offline too, because queued messages are sealed for them. A failed refresh never changes it.
     func trustSummary(for chatID: String) -> ConversationTrust {
-        if isDemo { return ConversationTrust(level: .encrypted, subtitle: "Sample conversation") }
+        // The samples read as a verified chat would; the chat list says they are samples.
+        if isDemo { return ConversationTrust(level: .verified, subtitle: "Encrypted · Verified") }
         let group = isGroup(chatID)
         switch chatCapabilities(chatID).encryption {
         case .pending:

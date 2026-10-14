@@ -18,9 +18,9 @@ final class ReplyUITests: XCTestCase {
         XCTContext.runActivity(named: "A day header gives the swipe back") { _ in
             let first = app.textViews.containing(NSPredicate(format: "value BEGINSWITH %@", "Found a quiet spot")).firstMatch
             XCTAssertTrue(first.waitForExistence(timeout: 5))
-            // The day header sits just above the first bubble, in the same cell. The demo messages are all sent on one day.
-            let day = Date(timeIntervalSince1970: 1_789_380_000).formatted(date: .abbreviated, time: .omitted)
-            let dayHeader = app.staticTexts.matching(NSPredicate(format: "label == %@", day)).firstMatch
+            // The day header sits just above the first bubble, in the same cell. Alex's sample messages are all sent on one
+            // morning: today's, or yesterday's before 09:40.
+            let dayHeader = app.staticTexts.matching(NSPredicate(format: "label IN %@", ["Today", "Yesterday"])).firstMatch
             XCTAssertTrue(dayHeader.waitForExistence(timeout: 5))
             XCTAssertLessThanOrEqual(dayHeader.frame.maxY, first.frame.minY, "the day header is above the first bubble")
             // Past half the width, so the back swipe completes at XCTest's drag speed.

@@ -73,7 +73,7 @@ struct MacConversationView: View {
         .blockConfirmation(model: model, request: $blockRequest)
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(title)
-        .navigationSubtitle(model.isDemo ? "Sample conversation" : model.trustSummary(for: chatID).pill)
+        .navigationSubtitle(model.trustSummary(for: chatID).pill)
         .toolbar {
             // The contact's picture before the name, as the iPhone's header shows it; a click opens the details.
             ToolbarItem(placement: .navigation) {

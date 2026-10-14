@@ -11,13 +11,12 @@ enum DemoLinkSamples {
     static let chatID = "sam@preview.local"
     static let title = "Sam"
 
-    /// Older than the other sample chats, so it lists last and their order stays as the UI tests expect.
-    static func messages(account: String) -> [StoredMessage] {
-        let start = 1_789_370_000.0
+    /// From `start` a minute apart; the caller dates it before the other sample chats, so it lists last.
+    static func messages(account: String, start: Date) -> [StoredMessage] {
         func message(_ index: Int, outgoing: Bool, _ body: String, preview: StoredLinkPreview? = nil) -> StoredMessage {
             let id = "sample-links-\(index)"
             return StoredMessage(id: id, accountID: account, chatID: chatID, senderID: outgoing ? account : chatID, body: body,
-                                 sentAt: Date(timeIntervalSince1970: start + Double(index) * 60), isOutgoing: outgoing,
+                                 sentAt: start.addingTimeInterval(Double(index) * 60), isOutgoing: outgoing,
                                  wireID: outgoing ? id : nil, linkPreview: preview)
         }
         let library = "https://example.org/library/opening"

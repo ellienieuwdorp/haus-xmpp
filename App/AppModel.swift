@@ -494,46 +494,24 @@ final class AppModel {
     }
 
     /// Signs out (messages and keys stay) and shows sample conversations stored on this device; nothing is sent. The
-    /// `-demo-*` launch arguments (DEBUG only) add extras for tests and captures.
+    /// sample account starts afresh each time (`DemoSamples`). The `-demo-*` launch arguments (DEBUG only) add extras
+    /// for tests and captures.
     func loadDemo() async {
         await forgetAccount()
         let token = generation
-        let account = "preview.local"
+        let account = DemoSamples.account
         selectAccount(account)
         guard generation == token, let store else { return }
         do {
-            // Each chat's sent messages show one receipt state: read (Alex, whose last message is sent so the list shows it too), delivered (Maya), accepted (Notes).
-            let samples: [(String, String, [String], MessageEventKind?)] = [
-                ("alex@preview.local", "Alex", ["Found a quiet spot by the water. Coffee tomorrow?", "That sounds perfect. Around ten?", "Ten it is ☕️", "See you there!"], .displayed),
-                ("maya@preview.local", "Maya", ["A little reminder to take the scenic route.", "Always. See you this weekend!"], .delivered),
-                ("notes@preview.local", "Notes to self", ["A place for the things worth keeping. Try starring this message.", "Starred things stay at the top of the list."], nil)
-            ]
-            for (chatID, title, bodies, receipt) in samples {
-                try await store.upsertChat(accountID: account, chatID: chatID, title: title)
-                for (index, body) in bodies.enumerated() {
-                    let outgoing = !index.isMultiple(of: 2)
-                    // An own wire ID lets sample messages show receipts and be unsent or edited (projection only, nothing is sent).
-                    let id = "sample-\(chatID)-\(index)"
-                    try await store.insertMessage(StoredMessage(
-                        id: id, accountID: account, chatID: chatID,
-                        senderID: outgoing ? account : chatID, body: body,
-                        sentAt: Date(timeIntervalSince1970: 1_789_380_000 + Double(index)), isOutgoing: outgoing, wireID: outgoing ? id : nil
-                    ))
-                    if outgoing, let receipt {
-                        try await store.recordReceipt(accountID: account, event: MessageEvent(id: id + "-receipt", chatID: chatID, actorID: chatID, targetWireID: id,
-                                                                                            kind: receipt, payload: "{}", updatedAt: Date(timeIntervalSince1970: 1_789_380_010)))
-                    }
-                }
+            // Whatever an earlier visit left (a sent sample, an edit, an older build's samples) goes, with its files.
+            try await store.eraseLocalAccount(accountID: account)
+            if let storageRoot {
+                try? FileManager.default.removeItem(at: AttachmentFiles.root(directory: storageRoot, account: account))
+                try? FileManager.default.removeItem(at: AvatarStore.directory(root: storageRoot, account: account))
             }
-            // Links and previews that came with their messages, so the sample needs no fetch (DemoLinkSamples).
-            try await store.upsertChat(accountID: account, chatID: DemoLinkSamples.chatID, title: DemoLinkSamples.title)
-            for message in DemoLinkSamples.messages(account: account) {
-                try await store.insertMessage(message)
-                guard message.isOutgoing else { continue }
-                try await store.recordReceipt(accountID: account, event: MessageEvent(id: message.id + "-receipt", chatID: message.chatID, actorID: message.chatID,
-                                                                                    targetWireID: message.id, kind: .displayed, payload: "{}",
-                                                                                    updatedAt: message.sentAt.addingTimeInterval(10)))
-            }
+            let morning = DemoSamples.morning()
+            let ownAvatar = try await DemoSamples.write(to: store, files: files, avatarRoot: storageRoot, morning: morning)
+            preferences.set(ownAvatar, forKey: "avatar.\(account)")
             #if DEBUG
             // Long enough to cross several timeline pages; only tests and scroll checks ask for it.
             if ProcessInfo.processInfo.arguments.contains("-demo-long") {
@@ -551,44 +529,26 @@ final class AppModel {
             // not encrypt for this one, and an incoming message that could not be read. Recorded exactly as the
             // receive path records them, so they are never content, never reactable and never counted.
             if ProcessInfo.processInfo.arguments.contains("-demo-unreadable") {
-                try await store.recordUnreadableMessage(UnreadableMessage(accountID: account, chatID: "alex@preview.local", senderID: account, isOutgoing: true,
-                    sentAt: Date(timeIntervalSince1970: 1_789_380_004), reason: .notForThisDevice, key: .archive(archive: account, id: "sample-unreadable-1")))
-                try await store.recordUnreadableMessage(UnreadableMessage(accountID: account, chatID: "alex@preview.local", senderID: "alex@preview.local", isOutgoing: false,
-                    sentAt: Date(timeIntervalSince1970: 1_789_380_005), reason: .decryptFailed, key: .archive(archive: account, id: "sample-unreadable-2")))
+                try await store.recordUnreadableMessage(UnreadableMessage(accountID: account, chatID: DemoSamples.alex, senderID: account, isOutgoing: true,
+                    sentAt: morning.addingTimeInterval(4), reason: .notForThisDevice, key: .archive(archive: account, id: "sample-unreadable-1")))
+                try await store.recordUnreadableMessage(UnreadableMessage(accountID: account, chatID: DemoSamples.alex, senderID: DemoSamples.alex, isOutgoing: false,
+                    sentAt: morning.addingTimeInterval(5), reason: .decryptFailed, key: .archive(archive: account, id: "sample-unreadable-2")))
             }
             #endif
             // One muted chat, so the list's muted glyph shows in sample captures.
-            try await store.setChatNotificationSetting(accountID: account, chatID: "maya@preview.local", ChatNotificationSetting(mutedUntil: ChatNotificationSetting.always))
+            try await store.setChatNotificationSetting(accountID: account, chatID: DemoSamples.maya, ChatNotificationSetting(mutedUntil: ChatNotificationSetting.always))
             #if DEBUG
             // A peer who is typing, for tests and screenshots; nothing expires it.
-            if ProcessInfo.processInfo.arguments.contains("-demo-typing") { typing = ["alex@preview.local": ["alex@preview.local"]] }
+            if ProcessInfo.processInfo.arguments.contains("-demo-typing") { typing = [DemoSamples.alex: [DemoSamples.alex]] }
             #endif
-            // One sample photo, drawn here so no asset ships: exercises the bubble thumbnail and the viewer.
-            if let files {
-                let size = CGSize(width: 1200, height: 900)
-                #if os(iOS)
-                let photo = UIGraphicsImageRenderer(size: size).jpegData(withCompressionQuality: 0.8) { context in
-                    let colors = [UIColor.systemTeal.cgColor, UIColor.systemIndigo.cgColor] as CFArray
-                    guard let gradient = CGGradient(colorsSpace: nil, colors: colors, locations: nil) else { return }
-                    context.cgContext.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
-                }
-                #else
-                let photo = try MacImageEncoding.gradientJPEG(size: size, colors: [NSColor.systemTeal.cgColor, NSColor.systemIndigo.cgColor])
-                #endif
-                let attachment = StoredAttachment(name: "waterfront.jpg", mediaType: "image/jpeg", size: photo.count, width: 1200, height: 900,
-                                                  hash: Data.sha256(photo).hexString, secret: Data([0])) // never opened: the file is already cached
-                try files.write(photo, to: files.cacheURL(attachment, messageID: "sample-photo"))
-                try await store.insertMessage(StoredMessage(id: "sample-photo", accountID: account, chatID: "alex@preview.local", senderID: "alex@preview.local", body: "",
-                                                            sentAt: Date(timeIntervalSince1970: 1_789_380_000.5), isOutgoing: false, attachment: attachment))
-            }
             // Sample history is read history; only `-demo-unread` (DEBUG) leaves something new, for screenshots of the count pill.
             for chat in try await store.chats(accountID: account) { try await store.markChatRead(accountID: account, chatID: chat.id) }
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-demo-unread") {
-                let unread = [("maya@preview.local", "Also, bring the map 🗺️"), ("maya@preview.local", "The trail opens at nine."), ("alex@preview.local", "Bringing pastries 🥐")]
+                let unread = [(DemoSamples.maya, "Also, bring the map 🗺️"), (DemoSamples.maya, "The trail opens at nine."), (DemoSamples.alex, "Bringing pastries 🥐")]
                 for (index, (chatID, body)) in unread.enumerated() {
                     try await store.insertMessage(StoredMessage(id: "sample-unread-\(index)", accountID: account, chatID: chatID, senderID: chatID, body: body,
-                                                                sentAt: Date(timeIntervalSince1970: 1_789_380_100 + Double(index)), isOutgoing: false))
+                                                                sentAt: morning.addingTimeInterval(60 + Double(index)), isOutgoing: false))
                 }
             }
             #endif
@@ -3109,15 +3069,9 @@ final class AppModel {
         if open != openChatTyping { openChatTyping = open }
     }
 
-    /// The demo's fixed header samples; a real chat starts unknown until presence says otherwise.
-    private static let demoLastSeen: [String: LastSeen] = [
-        "alex@preview.local": .online,
-        "maya@preview.local": .lastSeen(Date(timeIntervalSince1970: 1_789_380_000)),
-    ]
-
     private func syncOpenChatLastSeen() {
         let open = openChatID.flatMap { chat in
-            isDemo ? AppModel.demoLastSeen[chat] : isDirectChat(chat) ? lastSeenTracker.lastSeen(for: chat) : nil
+            isDemo ? DemoSamples.lastSeen(chat) : isDirectChat(chat) ? lastSeenTracker.lastSeen(for: chat) : nil
         }
         if open != openChatLastSeen { openChatLastSeen = open }
     }
