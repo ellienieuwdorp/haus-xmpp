@@ -2415,7 +2415,7 @@ final class AppModel {
     }
 
     /// `linkPreview` is the composer's frozen own preview (`ComposerLinkPreview.frozen`), stored with the message so
-    /// every retry seals the same bytes. Only modern OMEMO carries it; a legacy seal clears it (link-previews.md, Wire).
+    /// every retry seals the same bytes. Only modern OMEMO carries it, inside the SCE content; a legacy seal clears it.
     func send(_ body: String, to chatID: String, replyingTo source: ChatMessage? = nil, linkPreview: StoredLinkPreview? = nil) async -> Bool {
         guard !isSending, let store, !accountID.isEmpty,
               !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,

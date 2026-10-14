@@ -54,8 +54,8 @@ private func found(_ text: String) -> [(DetectedLink.Kind, String, String)] {
     #expect(found("https://example.org/doc#section-2").map(\.0) == [.web])
 }
 
-/// link-previews.md, engineering default 9: one classifier for which links may carry a preview, used by the composer, the encoder and the
-/// receive validator alike.
+/// One classifier for which links may carry a preview, used by the composer, the encoder and the receive validator
+/// alike.
 @Test func previewableURLsApplyEveryExclusion() {
     let file = "https://upload.example.org/slot/photo.jpg"
     let aesgcmFile = "aesgcm://upload.example.org/slot/legacy.jpg#" + String(repeating: "0", count: 88)

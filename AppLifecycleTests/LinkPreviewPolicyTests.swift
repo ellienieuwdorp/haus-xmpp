@@ -3,8 +3,8 @@ import XCTest
 import XMPPProtocol
 @testable import HausXMPP
 
-/// Who our own fetch runs for (docs/development/link-previews.md, engineering default 3; owner decision 2026-10-07:
-/// never for non-contacts, no option).
+/// Who our own fetch runs for: contacts with a to, from or both subscription once the roster has loaded, never
+/// anyone else, and there is no option to fetch for non-contacts.
 final class LinkPreviewPolicyTests: XCTestCase {
     private static let account = "me@example.org"
 
@@ -20,7 +20,7 @@ final class LinkPreviewPolicyTests: XCTestCase {
         ]
         let loaded: (String) -> LinkPreviewPolicy.RosterEntry = { roster[$0] ?? .absent }
         let cases: [(message: StoredMessage, roster: (String) -> LinkPreviewPolicy.RosterEntry, expected: Bool, line: UInt)] = [
-            // Our own messages show only the preview they carried, which is what the peer got (engineering default 6).
+            // Our own messages show only the preview they carried, which is what the peer got.
             (message(from: Self.account, outgoing: true), { _ in .item(.both) }, false, #line),
             // Sent from another of our devices (a carbon or the archive).
             (message(from: Self.account), { _ in .item(.both) }, false, #line),

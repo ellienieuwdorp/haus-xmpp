@@ -10,7 +10,7 @@ import Observation
     static let openInSafariKey = "openLinksInSafari"
 
     /// Privacy > Link previews: our own fetching, for links we type and links contacts send. Previews that arrive with
-    /// a message show either way. On by default (owner decision, 2026-10-07).
+    /// a message show either way. On by default.
     var fetchPreviews: Bool { didSet { defaults.set(fetchPreviews, forKey: Self.fetchPreviewsKey) } }
     /// Open links in Safari: off opens web links in the in-app browser. iOS only; the Mac always uses the default browser.
     var openInSafari: Bool { didSet { defaults.set(openInSafari, forKey: Self.openInSafariKey) } }

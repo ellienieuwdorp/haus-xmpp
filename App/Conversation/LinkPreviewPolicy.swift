@@ -2,9 +2,11 @@ import Foundation
 import MessageStore
 import XMPPProtocol
 
-/// Whether our own fetch may run, and its cached result show, for a displayed message's link
-/// (docs/development/link-previews.md, engineering defaults 3, 4 and 6). A preview the sender attached shows whatever
-/// this says; this only decides what our own fetch adds to a bubble.
+/// Whether our own fetch may run, and its cached result show, for a displayed message's link. Fetches start when a
+/// message is displayed, never when it is inserted; they run only for contacts (a roster subscription of to, from or
+/// both), never before the roster has loaded, never with the setting off and never in the sample conversations. Our own
+/// messages show only the preview they carried, which is what the peer got. A preview the sender attached shows
+/// whatever this says; this only decides what our own fetch adds to a bubble.
 enum LinkPreviewPolicy {
     /// What this connection's roster says about a sender.
     enum RosterEntry: Equatable {

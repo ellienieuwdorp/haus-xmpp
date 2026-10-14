@@ -3,7 +3,8 @@ import Foundation
 extension MessageContent {
     /// XEP-0511 link metadata about one link in the body: an RDF `<Description rdf:about=…>` with OpenGraph children.
     /// It travels only inside an authenticated SCE `<content/>` (modern OMEMO, direct and group); legacy OMEMO and
-    /// plaintext carry none. See docs/development/link-previews.md for the wire form and the receive rules.
+    /// plaintext carry none. `rdf:about` is read by namespace, whatever prefix the sender bound, and the bounds below
+    /// apply on receive and on send.
     public struct LinkMetadata: Sendable, Equatable {
         public static let rdfNamespace = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
         public static let openGraphNamespace = "https://ogp.me/ns#"

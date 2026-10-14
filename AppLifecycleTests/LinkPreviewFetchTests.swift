@@ -6,7 +6,7 @@ import XMPPProtocol
 @testable import HausXMPP
 
 /// The bounded fetcher and the fetch center through the real URLSession, with web servers replaced by an in-process
-/// URLProtocol and DNS by a fixed table (docs/development/link-previews.md, Fetcher). Nothing leaves the process.
+/// URLProtocol and DNS by a fixed table. Nothing leaves the process.
 final class LinkPreviewFetchTests: XCTestCase {
     /// Public addresses (never contacted: the stub answers first).
     private static let publicV4: [UInt8] = [93, 184, 216, 34]

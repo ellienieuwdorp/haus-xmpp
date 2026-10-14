@@ -4,11 +4,11 @@ import MessageStore
 import OSLog
 import XMPPProtocol
 
-/// Our own link preview fetches for the signed-in account (docs/development/link-previews.md, Fetcher): one in
-/// flight per link (`LinkDetection.cacheKey`), at most `concurrentFetches` at once, only while the app is in front.
-/// Results go to the fetch cache (`LinkPreviewCaching`, 7 days on success and 1 on failure) with the downsampled
-/// image as a file under the account's attachment folder, `link-previews/`, and are published in `results`.
-/// The policy (setting, contact, demo) is the caller's; this only fetches what it is asked for.
+/// Our own link preview fetches for the signed-in account: one in flight per link (`LinkDetection.cacheKey`), at most
+/// `concurrentFetches` at once, only while the app is in front. Results go to the fetch cache (`LinkPreviewCaching`, 7
+/// days on success and 1 on failure) with the downsampled image as a file under the account's attachment folder,
+/// `link-previews/`, and are published in `results`. The policy (setting, contact, demo) is the caller's; this only
+/// fetches what it is asked for.
 @MainActor @Observable
 final class LinkPreviewCenter {
     /// Results for the account, by cache key. Links without a preview are not listed.

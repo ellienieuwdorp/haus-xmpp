@@ -1,8 +1,8 @@
 import Foundation
 import XMPPProtocol
 
-/// Where a link in a message goes when it is opened (CX-8, docs/development/link-previews.md "Link opening"). The
-/// decision is shared; the iPhone timeline and the Mac bubble each perform it.
+/// Where a link in a message goes when it is opened. The decision is shared; the iPhone timeline and the Mac bubble
+/// each perform it.
 enum LinkDestination: Equatable, Sendable {
     /// A web page, in the app's browser or the system's default one.
     case web(URL, inApp: Bool)

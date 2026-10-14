@@ -253,7 +253,7 @@ targets:
     sources:
       - AppLifecycleTests
       # The 045ca73 build's schema-21 store, the f563365 build's schema-23 store and main's schema-24 (4df394a) and
-      # schema-25 (8115529) stores, shared with the MessageStore package tests.
+      # schema-25 (7159f37) stores, shared with the MessageStore package tests.
       - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/schema-21.sql
         buildPhase: resources
       - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/schema-23.sql

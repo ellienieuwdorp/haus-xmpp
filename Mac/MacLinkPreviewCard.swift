@@ -3,10 +3,10 @@ import ImageIO
 import SwiftUI
 
 /// The link preview card above the text in a Mac bubble: the iPhone's `LinkPreviewCardView` in SwiftUI, drawn from the
-/// same `TimelineLinkPreview` (docs/development/link-previews.md, UI). Large image, small 56 pt thumbnail or text only,
-/// as the stored data decides; the large image's height follows from its stored aspect, so the card is laid out before
-/// the image decodes. A click opens the link through the environment's `openURL`, which the conversation routes.
-/// The row's accessibility label already speaks for it (`TimelineMessage.accessibilityDescription`).
+/// same `TimelineLinkPreview`. Large image, small 56 pt thumbnail or text only, as the stored data decides; the large
+/// image's height follows from its stored aspect, so the card is laid out before the image decodes. A click opens the
+/// link through the environment's `openURL`, which the conversation routes. The row's accessibility label already
+/// speaks for it (`TimelineMessage.accessibilityDescription`).
 struct MacLinkPreviewCard: View {
     let preview: TimelineLinkPreview
     /// The reply quote's fill on this bubble.

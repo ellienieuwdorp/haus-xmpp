@@ -36,7 +36,8 @@ private func description(about: String = xmlEscaped(link), _ children: String = 
     "<Description xmlns='\(rdf)' xmlns:rdf='\(rdf)' rdf:about='\(about)'>\(children)</Description>"
 }
 
-/// What we send is what a receiver reads back, inside the reply form, in the order the link-previews plan fixes.
+/// What we send is what a receiver reads back, inside the reply form, in a fixed order: body, reply and its fallback,
+/// at most one Description, origin ID.
 @Test func sentMetadataRoundTripsInsideContentAfterTheReply() throws {
     let sent = MessageContent(body: "Look \(link) now", reply: .init(id: "w1", to: "bob@example.org", quote: "> bob\n> https://quoted.example/x\n\n"),
                               originID: "o1", linkMetadata: [LinkMetadata(about: link, title: " Council\napproves ", description: "Spring.",
@@ -63,7 +64,7 @@ private func description(about: String = xmlEscaped(link), _ children: String = 
     }
 }
 
-/// Receive rules (link-previews.md): a broken Description drops every Description of the message, never the text.
+/// Receive rules: a broken Description drops every Description of the message, never the text.
 @Test func brokenMetadataDropsAllOfItAndKeepsTheMessage() throws {
     let good = description()
     let other = "https://other.example/a"

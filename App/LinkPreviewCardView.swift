@@ -2,10 +2,10 @@
 import ImageIO
 import UIKit
 
-/// The link preview card inside an iPhone bubble, above the text (docs/development/link-previews.md, UI). Styled like
-/// the reply-quote panel, drawn from stored data only: the variant and the large image's height follow from the
-/// stored pixel size, so the card's layout is settled before the image decodes and never changes on screen. Its bubble
-/// handles taps and long presses, and its text speaks for it, so nothing here is an accessibility element.
+/// The link preview card inside an iPhone bubble, above the text. Styled like the reply-quote panel, drawn from stored
+/// data only: the variant and the large image's height follow from the stored pixel size, so the card's layout is
+/// settled before the image decodes and never changes on screen. Its bubble handles taps and long presses, and its text
+/// speaks for it, so nothing here is an accessibility element.
 @MainActor
 final class LinkPreviewCardView: UIView {
     static let cornerRadius: CGFloat = 12

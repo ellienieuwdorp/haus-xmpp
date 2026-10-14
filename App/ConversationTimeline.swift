@@ -250,7 +250,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         present(viewer, animated: true)
     }
 
-    /// Opens a link from a bubble (CX-8): where it goes is `LinkOpening`'s decision, shared with the Mac; this performs
+    /// Opens a link from a bubble: where it goes is `LinkOpening`'s decision, shared with the Mac; this performs
     /// it. A tap on a phone number asks first, as Call, Send Message or Copy; the menu's Call calls directly.
     /// `source` and `rect` (in its coordinates) are what a share sheet or the phone number's choices point at.
     func handleLink(_ url: URL, _ command: LinkCommand, from source: UIView, at rect: CGRect) {

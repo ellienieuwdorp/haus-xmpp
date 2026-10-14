@@ -1,9 +1,9 @@
 import Foundation
 import XMPPProtocol
 
-// Our own bounded OpenGraph fetcher (docs/development/link-previews.md, Fetcher). App only: neither notification
-// extension compiles it, so a push never fetches. LinkPresentation is not used: measured, it reaches loopback and
-// private hosts, follows redirects without a hook, downloads whole direct files and ignores its own timeout.
+// Our own bounded OpenGraph fetcher. App only: neither notification extension compiles it, so a push never fetches.
+// LinkPresentation is not used: measured, it reaches loopback and private hosts, follows redirects without a hook,
+// downloads whole direct files and ignores its own timeout.
 
 /// What a fetch found: card text already cleaned and shortened to what we may send, and the page's image
 /// downsampled. Has a title or an image.

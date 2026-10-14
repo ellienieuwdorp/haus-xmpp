@@ -2,7 +2,7 @@ import MessageStore
 import XCTest
 @testable import HausXMPP
 
-/// The shared link preview values both bubbles and the composer read (docs/development/link-previews.md).
+/// The shared link preview values both bubbles and the composer read.
 @MainActor
 final class LinkPreviewModelTests: XCTestCase {
     /// Owner decisions 2026-10-07: our own fetching is on by default and links open in the in-app browser by default;
@@ -22,7 +22,7 @@ final class LinkPreviewModelTests: XCTestCase {
         XCTAssertTrue(relaunched.openInSafari)
     }
 
-    /// link-previews.md, UI: the card's layout follows from the image's pixel size alone, so it is known before first layout.
+    /// The card's layout follows from the image's pixel size alone, so it is known before first layout.
     func testCardVariantFollowsTheImageSize() {
         let cases: [(width: Int?, height: Int?, variant: TimelineLinkPreview.Variant, line: UInt)] = [
             (1200, 630, .large, #line),

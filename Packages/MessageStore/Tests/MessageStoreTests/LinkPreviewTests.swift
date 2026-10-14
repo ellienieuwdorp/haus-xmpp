@@ -36,8 +36,8 @@ private func previewed(_ id: String, body: String = "Read \(link)", _ preview: S
     }
 }
 
-/// link-previews.md: a correction carries the full new metadata and replaces the preview, one without removes it,
-/// and a retraction deletes the stored row.
+/// A correction carries the full new metadata and replaces the preview, one without removes it, and a retraction
+/// deletes the stored row.
 @Test func correctionsReplaceThePreviewAndRetractionsDeleteIt() async throws {
     try await withEncryptedStore(account: account, chats: [(peer, "Bob")]) { store, url in
         try await store.insertMessage(previewed("m", StoredLinkPreview(url: link, title: "Old", source: .sender)))

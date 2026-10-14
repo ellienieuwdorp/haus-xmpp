@@ -12,8 +12,8 @@ import XMPPProtocol
     func composerLinkPreview(for url: URL) async -> ComposerLinkPreview.Content?
 }
 
-/// The preview of the link being typed (docs/development/link-previews.md, Send). Shared by the iPhone composer
-/// and, from Mac Phase 2, the Mac's; no UIKit or AppKit here.
+/// The preview of the link being typed. Shared by the iPhone composer and, once the Mac has a composer, the Mac's; no
+/// UIKit or AppKit here.
 ///
 /// About 400 ms after the draft stops changing, the first previewable link is fetched when the setting allows; the
 /// card shows the host while it loads. Removing the card is remembered for that link until the draft is emptied.

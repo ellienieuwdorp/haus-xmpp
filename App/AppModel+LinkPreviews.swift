@@ -4,9 +4,8 @@ import XMPPProtocol
 
 // MARK: Link previews
 
-// What the conversation and the composer ask of the model for link previews (docs/development/link-previews.md):
-// fetches through `linkPreviewCenter` under `LinkPreviewPolicy`, and the composer's preview with the image reduced to
-// what we send.
+// What the conversation and the composer ask of the model for link previews: fetches through `linkPreviewCenter` under
+// `LinkPreviewPolicy`, and the composer's preview with the image reduced to what we send.
 extension AppModel: ComposerLinkPreviewSource {
     /// Our own fetch results for the signed-in account, keyed by `LinkDetection.cacheKey`.
     var linkPreviews: [String: FetchedLinkPreview] {

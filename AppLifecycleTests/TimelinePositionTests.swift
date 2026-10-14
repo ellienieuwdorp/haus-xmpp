@@ -104,8 +104,8 @@ final class TimelinePositionTests: XCTestCase {
         XCTAssertTrue(collectionView.indexPathsForVisibleItems.contains(sent), "sending returns to the newest message")
     }
 
-    /// Our own fetch lands after its bubble is on screen (link-previews.md, engineering default 4): the card grows that
-    /// bubble, but the message the reader is looking at stays put, and a chat resting on its newest message stays there.
+    /// Our own fetch starts when its bubble is displayed and lands after it is on screen: the card grows that bubble,
+    /// but the message the reader is looking at stays put, and a chat resting on its newest message stays there.
     func testALateLinkCardKeepsTheReaderWhereTheyWere() throws {
         var shown = messages(1...100)
         controller.update(messages: shown, onToggleStar: { _ in })

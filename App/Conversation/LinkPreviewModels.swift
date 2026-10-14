@@ -3,7 +3,7 @@ import MessageStore
 import XMPPProtocol
 
 // The link preview values the conversation shares between the iPhone bubble, the Mac bubble and the composer. Like
-// the rest of TimelineModels, nothing here may import UIKit or AppKit. See docs/development/link-previews.md.
+// the rest of TimelineModels, nothing here may import UIKit or AppKit.
 
 /// What a bubble's preview card draws. Built from stored data only, so its layout is known before the first layout
 /// and never changes while the bubble is on screen.

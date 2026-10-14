@@ -3,10 +3,10 @@ import Foundation
 import MessageStore
 import UniformTypeIdentifiers
 
-/// The sample chat with links (CX-8, CX-9) for the demo: a received preview with a large image, an own sent preview
-/// with a small thumbnail, a text-only preview, and a phone number, an email address and an `xmpp:` link. Every preview
-/// is carried with its message, as a sender's XEP-0511 metadata or our frozen own preview, and every image is drawn
-/// here, so the sample needs no network and no asset ships (the demo never fetches, `LinkPreviewPolicy`).
+/// The sample chat with links and link previews: a received preview with a large image, an own sent preview with a
+/// small thumbnail, a text-only preview, and a phone number, an email address and an `xmpp:` link. Every preview is
+/// carried with its message, as a sender's XEP-0511 metadata or our frozen own preview, and every image is drawn here,
+/// so the sample needs no network and no asset ships (the demo never fetches, `LinkPreviewPolicy`).
 enum DemoLinkSamples {
     static let chatID = "sam@preview.local"
     static let title = "Sam"

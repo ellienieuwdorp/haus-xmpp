@@ -3,8 +3,8 @@ import XCTest
 import XMPPProtocol
 @testable import HausXMPP
 
-/// The composer's link preview (docs/development/link-previews.md, Send): what it fetches while the user types, and
-/// what Send freezes into the message without waiting.
+/// The composer's link preview: what it fetches while the user types, and what Send freezes into the message without
+/// waiting.
 @MainActor
 final class ComposerLinkPreviewTests: XCTestCase {
     private final class Source: ComposerLinkPreviewSource {

@@ -28,7 +28,7 @@ public struct DetectedLink: Sendable, Equatable {
     }
 }
 
-/// Link detection and the preview exclusions, shared by the bubble (CX-8), the composer, the XEP-0511 encoder and the
+/// Link detection and the preview exclusions, shared by the bubble, the composer, the XEP-0511 encoder and the
 /// receive validator, so all of them agree on which characters are a link and which links may carry a preview.
 public enum LinkDetection {
     /// Every link in `text`, in order: web links, `xmpp:`, `mailto:` and bare email addresses, `tel:` and phone numbers,

@@ -16,11 +16,11 @@ import os
 /// `restore-journal.json` and `return-journal.json` while a restore or a return runs; `restored.json` while the
 /// previous version's data is in place; `saved-replies.json` for notification replies typed before the upgrade.
 /// Secrets stay in the Keychain as separate copy items, under a service named for the same generation. Builds up to
-/// f563365 have this code too, under the unnumbered names, main at 4df394a under generation 24 and main at 8115529
+/// f563365 have this code too, under the unnumbered names, main at 4df394a under generation 24 and main at 7159f37
 /// under generation 25: none sees a newer generation's backups, and this build takes theirs over when it opens
 /// (`adoptOlderGeneration`).
 struct PreUpgradeSnapshot: Sendable {
-    /// The newest schema the build this one replaces can open: main since 8115529 refuses anything above 25, main
+    /// The newest schema the build this one replaces can open: main since 7159f37 refuses anything above 25, main
     /// since 4df394a anything above 24, f563365 (the owner's build) anything above 23, and 045ca73 stops at 21. A store
     /// at or below it is copied before migrating, whichever of them left it; one above it (a migration that stopped
     /// part way) holds nothing a previous build could read back.

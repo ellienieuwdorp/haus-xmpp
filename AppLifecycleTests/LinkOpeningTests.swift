@@ -2,8 +2,8 @@ import XCTest
 import XMPPProtocol
 @testable import HausXMPP
 
-/// Where a link in a message goes when it is opened (CX-8, docs/development/link-previews.md "Link opening"). The
-/// iPhone and the Mac perform the same destinations; only the iPhone has an in-app browser.
+/// Where a link in a message goes when it is opened. The iPhone and the Mac perform the same destinations; only the
+/// iPhone has an in-app browser.
 final class LinkOpeningTests: XCTestCase {
     private func url(_ string: String) -> URL { URL(string: string)! }
 

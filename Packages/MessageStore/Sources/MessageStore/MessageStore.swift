@@ -411,9 +411,9 @@ public actor MessageStore {
                     PRIMARY KEY(account_id, profile, device_id)
                 )
                 """)
-            // v26: link previews (docs/development/link-previews.md). The preview a message carries, sent or received, goes
-            // and comes with its message; our own fetches are a per-account cache whose image files live under the
-            // account's attachment folder. The version check and IF NOT EXISTS keep it idempotent in any merge order.
+            // v26: link previews. The preview a message carries, sent or received, goes and comes with its message; our
+            // own fetches are a per-account cache whose image files live under the account's attachment folder. The
+            // version check and IF NOT EXISTS keep it idempotent in any merge order.
             if version < 26 {
                 try connection.execute("""
                     CREATE TABLE IF NOT EXISTS message_link_previews (
