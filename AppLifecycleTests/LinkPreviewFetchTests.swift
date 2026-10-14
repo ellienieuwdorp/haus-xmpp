@@ -278,6 +278,48 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertEqual(again?.title, "Back", "The interrupted fetch left nothing behind")
     }
 
+    /// Only a missing connection is asked again after a return to the foreground. A name that does not resolve while
+    /// the device has a network, or a certificate that is not trusted, stands as a failure and is not requested again.
+    @MainActor func testOnlyAMissingConnectionIsAskedAgain() async throws {
+        let center = LinkPreviewCenter(fetcher: fetcher(), cache: InMemoryLinkPreviewCache())
+        center.use(account: "me@example.org", folder: nil)
+        resolver.set("offline.example", Self.publicV4)
+        resolver.set("untrusted.example", Self.publicV4)
+        PreviewStubServer.serve("https://offline.example/", .fail(.notConnectedToInternet))
+        PreviewStubServer.serve("https://untrusted.example/", .fail(.serverCertificateUntrusted))
+        let links = ["offline", "untrusted", "dead"].map { URL(string: "https://\($0).example/")! }
+        for url in links {
+            let preview = await center.preview(for: url)
+            XCTAssertNil(preview, url.absoluteString)
+        }
+
+        for url in links {
+            resolver.set(url.host()!, Self.publicV4)
+            PreviewStubServer.serve(url.absoluteString, .page(page("<title>Up</title>")))
+        }
+        center.setForeground(false)
+        center.setForeground(true)
+        let titles = await [center.preview(for: links[0]), center.preview(for: links[1]), center.preview(for: links[2])].map { $0?.title }
+        XCTAssertEqual(titles, ["Up", nil, nil])
+        XCTAssertEqual(PreviewStubServer.requests(to: "untrusted.example"), 1)
+        XCTAssertEqual(PreviewStubServer.requests(to: "dead.example"), 0)
+
+        // Without a network, a name that does not resolve says nothing about the name.
+        let offline = LinkPreviewCenter(fetcher: fetcher(), cache: InMemoryLinkPreviewCache())
+        offline.use(account: "me@example.org", folder: nil)
+        offline.hasNetwork = false
+        let unknown = URL(string: "https://later.example/")!
+        let first = await offline.preview(for: unknown)
+        XCTAssertNil(first)
+        resolver.set("later.example", Self.publicV4)
+        PreviewStubServer.serve("https://later.example/", .page(page("<title>Later</title>")))
+        offline.hasNetwork = true
+        offline.setForeground(false)
+        offline.setForeground(true)
+        let again = await offline.preview(for: unknown)
+        XCTAssertEqual(again?.title, "Later")
+    }
+
     // MARK: Sent thumbnail
 
     /// What we send: a JPEG within 400 px and 24 KiB, without the source's metadata.
@@ -356,6 +398,8 @@ private final class PreviewStubServer: URLProtocol, @unchecked Sendable {
         case redirect(String)
         /// Answers nothing until cancelled.
         case stall
+        /// The transfer fails as URLSession reports it.
+        case fail(URLError.Code)
     }
 
     private static let lock = NSLock()
@@ -394,6 +438,8 @@ private final class PreviewStubServer: URLProtocol, @unchecked Sendable {
             client?.urlProtocolDidFinishLoading(self)
         case .stall:
             break
+        case .fail(let code):
+            client?.urlProtocol(self, didFailWithError: URLError(code))
         case .page(let body, let charset, let pause):
             send(body, headers: ["Content-Type": "text/html; charset=\(charset)", "Content-Length": String(body.count)], host: host, pause: pause)
         case .image(let body, let announces):

@@ -20,6 +20,9 @@ final class LinkPreviewCenter {
     @ObservationIgnored private let fetcher: LinkPreviewFetcher
     @ObservationIgnored private let concurrent: Int
     @ObservationIgnored private var isForeground = true
+    /// The device has a usable network path (the app model's path monitor). A name that does not resolve while it has
+    /// none is asked again later instead of standing as a failure for a day.
+    @ObservationIgnored var hasNetwork = true
     /// Links with no preview: a fresh failure in the cache, or one just recorded.
     @ObservationIgnored private var settled: Set<String> = []
     /// Links whose fetch found no network this time in front; asked again after the next return to the foreground.
@@ -111,7 +114,10 @@ final class LinkPreviewCenter {
         var entry = LinkPreviewCacheEntry(accountID: account, url: key, fetchedAt: .now, status: .failed)
         switch result {
         case .failure(.cancelled): return .interrupted
+        // No connection this time in front: asked again after the next return. A dead name, a refused connection
+        // or a bad certificate is an ordinary failure and stands for a day.
         case .failure(.network): return .unreachable
+        case .failure(.unresolved) where !hasNetwork: return .unreachable
         case .failure(let failure):
             Logger(subsystem: "haus.xmpp.ios", category: "link-previews").info("No preview: \(String(describing: failure), privacy: .public)")
         case .success(let page):

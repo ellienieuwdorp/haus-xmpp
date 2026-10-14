@@ -29,8 +29,12 @@ enum LinkPreviewFetchFailure: Error, Equatable {
     /// The page had no title and no usable image.
     case nothingToShow
     case cancelled
-    /// The transport failed (no network, TLS, DNS).
+    /// No connection: offline, the connection lost, cellular data not allowed. Worth asking again later.
     case network
+    /// The name did not resolve: a dead domain, or no network to ask (the caller knows which).
+    case unresolved
+    /// The server could not be reached or not trusted: a refused connection, a TLS or certificate failure.
+    case connectionFailed
 }
 
 /// Resolves a host name to the addresses a connection could use. The fetcher checks every one before it connects.
@@ -49,7 +53,7 @@ struct SystemHostResolver: HostResolving {
                 hints.ai_socktype = SOCK_STREAM
                 var list: UnsafeMutablePointer<addrinfo>?
                 guard getaddrinfo(host, "443", &hints, &list) == 0, let first = list else {
-                    continuation.resume(throwing: LinkPreviewFetchFailure.network)
+                    continuation.resume(throwing: LinkPreviewFetchFailure.unresolved)
                     return
                 }
                 defer { freeaddrinfo(first) }
@@ -73,6 +77,19 @@ struct SystemHostResolver: HostResolving {
                 }
                 continuation.resume(returning: found)
             }
+        }
+    }
+}
+
+extension LinkPreviewFetchFailure {
+    /// A transfer's error: only a missing connection is `network`; DNS and TLS failures are not.
+    init(transportError error: any Error) {
+        switch (error as? URLError)?.code {
+        case .timedOut?: self = .timedOut
+        case .cancelled?: self = .cancelled
+        case .notConnectedToInternet?, .networkConnectionLost?, .dataNotAllowed?, .internationalRoamingOff?, .callIsActive?: self = .network
+        case .cannotFindHost?, .dnsLookupFailed?: self = .unresolved
+        default: self = .connectionFailed
         }
     }
 }
@@ -244,7 +261,7 @@ final class LinkPreviewFetcher: Sendable {
         } catch let failure as LinkPreviewFetchFailure {
             throw failure
         } catch {
-            throw .network
+            throw .connectionFailed
         }
     }
 
@@ -271,7 +288,7 @@ final class LinkPreviewFetcher: Sendable {
         } catch let failure as LinkPreviewFetchFailure {
             throw failure
         } catch {
-            throw .network
+            throw .unresolved
         }
         guard !addresses.isEmpty, addresses.allSatisfy(LinkPreviewDestination.isAllowed) else { throw .refusedDestination }
     }
@@ -453,11 +470,7 @@ private final class BoundedLoad: NSObject, URLSessionDataDelegate, @unchecked Se
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
         if let error, !complete, failure == nil {
-            switch (error as? URLError)?.code {
-            case .timedOut?: failure = .timedOut
-            case .cancelled?: failure = .cancelled
-            default: failure = .network
-            }
+            failure = LinkPreviewFetchFailure(transportError: error)
         }
         taskEnded = true
         settleIfDone()

@@ -368,8 +368,11 @@ final class AppModel {
             }
         }
         pathMonitor.pathUpdateHandler = { [weak self] path in
-            guard path.status == .satisfied else { return }
-            Task { @MainActor in self?.networkBecameReachable() }
+            let usable = path.status == .satisfied
+            Task { @MainActor in
+                self?.linkPreviewCenter.hasNetwork = usable
+                if usable { self?.networkBecameReachable() }
+            }
         }
         pathMonitor.start(queue: .global(qos: .utility))
         await openStorage()
