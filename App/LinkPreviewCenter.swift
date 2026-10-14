@@ -16,7 +16,8 @@ final class LinkPreviewCenter {
     @ObservationIgnored private(set) var account = ""
     /// The account's attachment folder; the images live in its `link-previews/`.
     @ObservationIgnored private var folder: URL?
-    @ObservationIgnored private var cache: any LinkPreviewCaching
+    /// The store's fetch cache (`MessageStore`, schema 26); nothing is fetched without one.
+    @ObservationIgnored private var cache: (any LinkPreviewCaching)?
     @ObservationIgnored private let fetcher: LinkPreviewFetcher
     @ObservationIgnored private var isForeground = true
     /// The device has a usable network path (the app model's path monitor). A name that does not resolve while it has
@@ -37,16 +38,15 @@ final class LinkPreviewCenter {
     static let concurrentFetches = 2
     nonisolated static let folderName = "link-previews"
 
-    init(fetcher: LinkPreviewFetcher = LinkPreviewFetcher(), cache: any LinkPreviewCaching = InMemoryLinkPreviewCache()) {
+    init(fetcher: LinkPreviewFetcher = LinkPreviewFetcher()) {
         self.fetcher = fetcher
-        self.cache = cache
     }
 
-    /// The account fetches are for, its attachment folder and the cache that keeps its results; a change drops
-    /// what the previous account had published and stops its fetches.
-    func use(account: String, folder: URL?, cache: (any LinkPreviewCaching)? = nil) {
-        if let cache { self.cache = cache }
-        guard account != self.account || folder != self.folder else { return }
+    /// The account fetches are for, its attachment folder and the cache that keeps its results (nil while the store
+    /// is not open, which fetches nothing); a change of any of them drops what was published and stops the fetches.
+    func use(account: String, folder: URL?, cache: (any LinkPreviewCaching)?) {
+        guard account != self.account || folder != self.folder || !Self.same(cache, self.cache) else { return }
+        self.cache = cache
         interrupt()
         self.account = account
         self.folder = folder
@@ -75,7 +75,7 @@ final class LinkPreviewCenter {
 
     private func start(_ url: URL) -> Task<FetchedLinkPreview?, Never>? {
         let key = LinkDetection.cacheKey(for: url)
-        guard !account.isEmpty, results[key] == nil, !settled.contains(key), !unreachable.contains(key), LinkDetection.isFetchable(url) else { return nil }
+        guard !account.isEmpty, cache != nil, results[key] == nil, !settled.contains(key), !unreachable.contains(key), LinkDetection.isFetchable(url) else { return nil }
         if let task = inFlight[key] { return task }
         guard isForeground else { return nil }
         let epoch = epoch
@@ -99,7 +99,8 @@ final class LinkPreviewCenter {
     private enum Outcome { case preview(FetchedLinkPreview), nothing, unreachable, interrupted }
 
     private func resolve(_ url: URL, key: String, epoch: UUID) async -> Outcome {
-        let account = account, folder = folder, cache = cache
+        let account = account, folder = folder
+        guard let cache else { return .interrupted }
         if let entry = try? await cache.linkPreviewCacheEntry(accountID: account, url: key), entry.isFresh(at: .now) {
             return entry.status == .ok ? .preview(Self.fetched(entry, folder: folder)) : .nothing
         }
@@ -136,6 +137,14 @@ final class LinkPreviewCenter {
             Self.remove(pruned, folder: folder)
         }
         return entry.status == .ok ? .preview(Self.fetched(entry, folder: folder)) : .nothing
+    }
+
+    private static func same(_ a: (any LinkPreviewCaching)?, _ b: (any LinkPreviewCaching)?) -> Bool {
+        switch (a, b) {
+        case (nil, nil): true
+        case let (a?, b?): (a as AnyObject) === (b as AnyObject)
+        default: false
+        }
     }
 
     private func acquireSlot() async -> Bool {
@@ -187,41 +196,5 @@ final class LinkPreviewCenter {
         for path in paths where path.hasPrefix(folderName + "/") && !path.contains("..") {
             try? FileManager.default.removeItem(at: folder.appending(path: path))
         }
-    }
-}
-
-/// The fetch cache kept in memory, until the store keeps it (schema 26, `link_preview_cache`). Lost on relaunch;
-/// the image files it names stay on disk until replaced.
-actor InMemoryLinkPreviewCache: LinkPreviewCaching {
-    private var entries: [String: [String: LinkPreviewCacheEntry]] = [:]
-
-    func linkPreviewCacheEntry(accountID: String, url: String) -> LinkPreviewCacheEntry? { entries[accountID]?[url] }
-
-    @discardableResult func saveLinkPreviewCacheEntry(_ entry: LinkPreviewCacheEntry) -> String? {
-        let previous = entries[entry.accountID]?[entry.url]?.imagePath
-        entries[entry.accountID, default: [:]][entry.url] = entry
-        return previous == entry.imagePath ? nil : previous
-    }
-
-    func pruneLinkPreviewCache(accountID: String, fetchedBefore date: Date, keeping: Int) -> [String] {
-        guard var account = entries[accountID] else { return [] }
-        var removed: [String] = []
-        for (key, entry) in account where entry.fetchedAt < date {
-            account[key] = nil
-            if let path = entry.imagePath { removed.append(path) }
-        }
-        if account.count > keeping {
-            for entry in account.values.sorted(by: { $0.fetchedAt < $1.fetchedAt }).prefix(account.count - keeping) {
-                account[entry.url] = nil
-                if let path = entry.imagePath { removed.append(path) }
-            }
-        }
-        entries[accountID] = account
-        return removed
-    }
-
-    func deleteLinkPreviewCache(accountID: String) -> [String] {
-        defer { entries[accountID] = nil }
-        return entries[accountID]?.values.compactMap(\.imagePath) ?? []
     }
 }

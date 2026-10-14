@@ -70,9 +70,9 @@ extension AppModel: ComposerLinkPreviewSource {
         return preview
     }
 
-    /// Points the fetch center at the signed-in account (none in the sample conversations); a change stops the
-    /// previous account's fetches.
+    /// Points the fetch center at the signed-in account (none in the sample conversations) and the store's fetch
+    /// cache; a change stops the previous account's fetches.
     func useLinkPreviewAccount() {
-        linkPreviewCenter.use(account: isDemo ? "" : accountID, folder: linkPreviewFolder)
+        linkPreviewCenter.use(account: isDemo ? "" : accountID, folder: linkPreviewFolder, cache: linkPreviewCache)
     }
 }

@@ -21,7 +21,22 @@ final class LinkPreviewFetchTests: XCTestCase {
         configuration.protocolClasses = [PreviewStubServer.self]
     }
 
-    override func tearDown() { PreviewStubServer.reset() }
+    /// Folders of the stores `makeCache` opened, removed after each test.
+    private var storeFolders: [URL] = []
+
+    override func tearDown() {
+        PreviewStubServer.reset()
+        for folder in storeFolders { try? FileManager.default.removeItem(at: folder) }
+        storeFolders = []
+    }
+
+    /// The fetch cache the app uses: a message store of its own.
+    private func makeCache() throws -> MessageStore {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "LinkPreviewFetchTests-store-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        storeFolders.append(folder)
+        return try MessageStore(url: folder.appending(path: "messages.sqlite"))
+    }
 
     private func fetcher(total: Duration = .seconds(10)) -> LinkPreviewFetcher {
         var limits = LinkPreviewFetcher.Limits()
@@ -233,9 +248,9 @@ final class LinkPreviewFetchTests: XCTestCase {
     @MainActor func testTheCenterCoalescesLinksAndRunsTwoAtATime() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "LinkPreviewFetchTests-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
-        let cache = InMemoryLinkPreviewCache()
-        let center = LinkPreviewCenter(fetcher: fetcher(), cache: cache)
-        center.use(account: "me@example.org", folder: folder)
+        let cache = try makeCache()
+        let center = LinkPreviewCenter(fetcher: fetcher())
+        center.use(account: "me@example.org", folder: folder, cache: cache)
         for index in 0..<5 {
             resolver.set("site\(index).example", Self.publicV4)
             PreviewStubServer.serve("https://site\(index).example/", .page(page("<title>Site \(index)</title>"), pause: 50_000))
@@ -248,8 +263,8 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertEqual(center.results[LinkDetection.cacheKey(for: URL(string: "https://site0.example/")!)]?.title, "Site 0")
 
         // A relaunch (a new center over the same cache) reuses the fresh entry.
-        let relaunched = LinkPreviewCenter(fetcher: fetcher(), cache: cache)
-        relaunched.use(account: "me@example.org", folder: folder)
+        let relaunched = LinkPreviewCenter(fetcher: fetcher())
+        relaunched.use(account: "me@example.org", folder: folder, cache: cache)
         let reused = await relaunched.preview(for: URL(string: "https://site1.example/")!)
         XCTAssertEqual(reused?.title, "Site 1")
         XCTAssertEqual(PreviewStubServer.requests(to: "site1.example"), 1)
@@ -257,17 +272,17 @@ final class LinkPreviewFetchTests: XCTestCase {
 
     /// A failure stands for a day, a success for a week; an expired entry is fetched again.
     @MainActor func testCachedResultsExpire() async throws {
-        let cache = InMemoryLinkPreviewCache()
+        let cache = try makeCache()
         resolver.set("fresh.example", Self.publicV4)
         resolver.set("stale.example", Self.publicV4)
         PreviewStubServer.serve("https://fresh.example/", .page(page("<title>New</title>")))
         PreviewStubServer.serve("https://stale.example/", .page(page("<title>New</title>")))
-        await cache.saveLinkPreviewCacheEntry(LinkPreviewCacheEntry(accountID: "me@example.org", url: "https://fresh.example/",
+        try await cache.saveLinkPreviewCacheEntry(LinkPreviewCacheEntry(accountID: "me@example.org", url: "https://fresh.example/",
                                                                          fetchedAt: .now - 20 * 60 * 60, status: .failed))
-        await cache.saveLinkPreviewCacheEntry(LinkPreviewCacheEntry(accountID: "me@example.org", url: "https://stale.example/",
+        try await cache.saveLinkPreviewCacheEntry(LinkPreviewCacheEntry(accountID: "me@example.org", url: "https://stale.example/",
                                                                          fetchedAt: .now - 8 * 24 * 60 * 60, status: .ok, title: "Old"))
-        let center = LinkPreviewCenter(fetcher: fetcher(), cache: cache)
-        center.use(account: "me@example.org", folder: nil)
+        let center = LinkPreviewCenter(fetcher: fetcher())
+        center.use(account: "me@example.org", folder: nil, cache: cache)
         let fresh = await center.preview(for: URL(string: "https://fresh.example/")!)
         let stale = await center.preview(for: URL(string: "https://stale.example/")!)
         XCTAssertNil(fresh)
@@ -279,8 +294,8 @@ final class LinkPreviewFetchTests: XCTestCase {
     @MainActor func testTheCenterFetchesOnlyInFront() async throws {
         resolver.set("away.example", Self.publicV4)
         PreviewStubServer.serve("https://away.example/", .page(page("<title>Back</title>"), pause: 200_000))
-        let center = LinkPreviewCenter(fetcher: fetcher(), cache: InMemoryLinkPreviewCache())
-        center.use(account: "me@example.org", folder: nil)
+        let center = LinkPreviewCenter(fetcher: fetcher())
+        center.use(account: "me@example.org", folder: nil, cache: try makeCache())
         let url = URL(string: "https://away.example/")!
 
         center.setForeground(false)
@@ -300,8 +315,8 @@ final class LinkPreviewFetchTests: XCTestCase {
     /// Only a missing connection is asked again after a return to the foreground. A name that does not resolve while
     /// the device has a network, or a certificate that is not trusted, stands as a failure and is not requested again.
     @MainActor func testOnlyAMissingConnectionIsAskedAgain() async throws {
-        let center = LinkPreviewCenter(fetcher: fetcher(), cache: InMemoryLinkPreviewCache())
-        center.use(account: "me@example.org", folder: nil)
+        let center = LinkPreviewCenter(fetcher: fetcher())
+        center.use(account: "me@example.org", folder: nil, cache: try makeCache())
         resolver.set("offline.example", Self.publicV4)
         resolver.set("untrusted.example", Self.publicV4)
         PreviewStubServer.serve("https://offline.example/", .fail(.notConnectedToInternet))
@@ -324,8 +339,8 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertEqual(PreviewStubServer.requests(to: "dead.example"), 0)
 
         // Without a network, a name that does not resolve says nothing about the name.
-        let offline = LinkPreviewCenter(fetcher: fetcher(), cache: InMemoryLinkPreviewCache())
-        offline.use(account: "me@example.org", folder: nil)
+        let offline = LinkPreviewCenter(fetcher: fetcher())
+        offline.use(account: "me@example.org", folder: nil, cache: try makeCache())
         offline.hasNetwork = false
         let unknown = URL(string: "https://later.example/")!
         let first = await offline.preview(for: unknown)

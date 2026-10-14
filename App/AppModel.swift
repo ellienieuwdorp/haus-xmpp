@@ -294,6 +294,8 @@ final class AppModel {
     @ObservationIgnored var linkPreviewHostsAccount: String?
     /// The account's attachment folder; fetched preview images live in its `link-previews/`.
     var linkPreviewFolder: URL? { storageDirectory.map { AttachmentFiles.root(directory: $0, account: accountID) } }
+    /// The store's fetch cache for those previews; nil while storage is closed, which fetches nothing.
+    var linkPreviewCache: (any LinkPreviewCaching)? { store }
     /// This connection's roster as the link preview contact rule reads it (`LinkPreviewPolicy`).
     func linkPreviewRosterEntry(_ contact: String) -> LinkPreviewPolicy.RosterEntry {
         guard lastSeenTracker.rosterLoaded else { return .notLoaded }
@@ -1059,6 +1061,8 @@ final class AppModel {
         outboxSender = nil
         encryption = nil
         store = nil
+        // Fetches still writing to the closed store stop and record nothing.
+        useLinkPreviewAccount()
         chats = []
         messages = []
     }
