@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 import UserNotifications
 
@@ -37,5 +38,36 @@ struct MacNotificationPermissionRow: View {
         case .denied: "Off in \(ThisDevice.settingsApp)"
         default: "Not allowed yet"
         }
+    }
+}
+
+/// "Open at login": the app as its own login item (`SMAppService.mainApp`). Off until the user turns it on here;
+/// the app never registers itself.
+struct MacLoginItemSection: View {
+    @State private var status = SMAppService.mainApp.status
+    @State private var failed = false
+
+    var body: some View {
+        Section {
+            Toggle(isOn: Binding(get: { [.enabled, .requiresApproval].contains(status) }, set: change)) {
+                Label { Text("Open at login") } icon: { SettingsIconTile(systemName: "power", color: .gray) }
+            }
+            .accessibilityIdentifier("openAtLogin")
+            if status == .requiresApproval {
+                Button("Allow in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
+            }
+        } footer: {
+            if failed { Text("The login item could not be changed. Try again, or change it in Login Items.") }
+        }
+        // Login Items in System Settings can change it while the window is closed.
+        .onAppear { status = SMAppService.mainApp.status }
+    }
+
+    private func change(_ on: Bool) {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            failed = false
+        } catch { failed = true }
+        status = SMAppService.mainApp.status
     }
 }
