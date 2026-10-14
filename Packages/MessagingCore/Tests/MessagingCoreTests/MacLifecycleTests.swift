@@ -91,11 +91,10 @@ private struct MacHarness {
 }
 
 struct MacLifecycleDriverTests {
-    @Test func aLaunchWithNoWindowConnectsUnseenAndBindsInactive() {
+    /// What the stream then binds with is LifecycleTests' `aNewStreamBindsWithTheCurrentSignals`.
+    @Test func aLaunchWithNoWindowConnectsUnseen() {
         var harness = MacHarness()
-        let start = signals(window: false, reading: false)
-        #expect(harness.step(.launched(.none)) == [.start(start)])
-        #expect(start.streamBinding == StreamBinding(presence: .available, clientActive: false))
+        #expect(harness.step(.launched(.none)) == [.start(signals(window: false, reading: false))])
         // Nobody at the Mac (launched at login): the stream binds away as well.
         var unattended = MacHarness()
         #expect(unattended.step(.launched(.none), idle: 900) == [.start(signals(window: false, reading: false, present: false))])
@@ -190,7 +189,6 @@ struct MacLifecycleDriverTests {
         _ = harness.step(.willSleep)
         #expect(harness.step(.didWake, idle: 3_600) == [.change(signals(window: false, reading: false, present: false), activated: false)])
         #expect(harness.transitions == [LifecycleTransition(resumesTransport: true)])
-        #expect(harness.applied.streamBinding == StreamBinding(presence: .away, clientActive: false))
     }
 
     @Test func quittingQuiescesAndNothingAfterItTurnsTheTransportBackOn() {
