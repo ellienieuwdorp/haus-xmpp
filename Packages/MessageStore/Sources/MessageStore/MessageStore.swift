@@ -881,6 +881,23 @@ public actor MessageStore {
                                [hash.map(Value.text) ?? .null, .text(accountID), .text(chatID)])
     }
 
+    /// Removes every row of an account that only ever lived on this device (the sample conversations), so it can be
+    /// written afresh: chats, messages, events, previews, settings, all of it, in one transaction. Every table keyed by
+    /// `account_id` is covered, including ones added later. An account with encryption state is refused, so no
+    /// identity keys or sessions can be thrown away this way.
+    public func eraseLocalAccount(accountID: String) throws {
+        guard !accountID.isEmpty else { throw MessageStoreError.invalidValue }
+        try connection.transaction {
+            guard try encryptionStateRevision(accountID: accountID) == nil else { throw MessageStoreError.invalidTransition }
+            // Rows refer to each other (attachments to messages, messages to chats); checked once all are gone.
+            try connection.execute("PRAGMA defer_foreign_keys = ON")
+            let tables = try connection.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").map { $0[0].string }
+            for table in tables where !(try connection.query("SELECT 1 FROM pragma_table_info(?) WHERE name='account_id'", [.text(table)]).isEmpty) {
+                try connection.execute("DELETE FROM \"\(table)\" WHERE account_id=?", [.text(accountID)])
+            }
+        }
+    }
+
     /// Returns the latest page in chronological order. Cursor uses both timestamp and ID for ties.
     public func messages(accountID: String, chatID: String, limit: Int = 100,
                          before: StoredMessage? = nil) throws -> [StoredMessage] {
