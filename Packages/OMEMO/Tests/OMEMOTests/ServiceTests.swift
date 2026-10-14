@@ -192,9 +192,10 @@ final class ServiceFixture {
             for device in bOverview.devices where device.active { try await b.setTrust(account: bob, deviceID: device.id, trust: .accepted) }
         }
     }
-    func queue(_ body: String = "Hello encrypted world 👋", id: String = UUID().uuidString, reply: MessageReply? = nil) async throws -> StoredMessage {
+    func queue(_ body: String = "Hello encrypted world 👋", id: String = UUID().uuidString, reply: MessageReply? = nil,
+               linkPreview: StoredLinkPreview? = nil) async throws -> StoredMessage {
         try await aStore.upsertChat(accountID: alice, chatID: bob, title: "Bob")
-        let message = StoredMessage(id: id, accountID: alice, chatID: bob, senderID: alice, body: body, isOutgoing: true, reply: reply)
+        let message = StoredMessage(id: id, accountID: alice, chatID: bob, senderID: alice, body: body, isOutgoing: true, reply: reply, linkPreview: linkPreview)
         _ = try await aStore.enqueueOutgoing(message)
         return message
     }

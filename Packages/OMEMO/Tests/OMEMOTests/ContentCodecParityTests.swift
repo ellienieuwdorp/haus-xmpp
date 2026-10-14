@@ -50,4 +50,19 @@ final class ContentCodecParityTests: XCTestCase {
         XCTAssertNotNil(XMPPClient.decodeOutgoingReactionXML(stanza(reaction), from: account))
         XCTAssertNotNil(try EncryptedContent.decode(envelope(reaction), sender: peer, recipient: account, modern: true).reaction)
     }
+
+    /// Here the paths differ on purpose: XEP-0511 metadata is read only from authenticated SCE content. The same
+    /// Description in a plain stanza (or next to `<encrypted/>`, XEP-0420) is ignored, so nobody can attach a card to
+    /// a message they did not sign.
+    func testLinkMetadataIsReadOnlyFromAuthenticatedContent() throws {
+        let rdf = MessageContent.LinkMetadata.rdfNamespace
+        let content = "<body xmlns='jabber:client'>See https://a.example/</body><Description xmlns='\(rdf)' xmlns:rdf='\(rdf)' "
+            + "rdf:about='https://a.example/'><title xmlns='https://ogp.me/ns#'>A</title></Description>"
+        let encrypted = try EncryptedContent.decode(envelope(content), sender: peer, recipient: account, modern: true)
+        XCTAssertEqual(encrypted.linkMetadata?.title, "A")
+        let plain = try XMPPProtocol.XMLNode.parse(standalone: Data("<message xmlns='jabber:client' type='chat'>\(content)</message>".utf8))
+        let decoded = try MessageContent.decode(plain, strict: false)
+        XCTAssertEqual(decoded.body, "See https://a.example/")
+        XCTAssertEqual(decoded.linkMetadata, [])
+    }
 }

@@ -100,11 +100,16 @@ extension OMEMOService {
                 return
             }
             let plaintext = try EncryptedContent.encode(body: message.body, reply: message.reply, sender: account,
-                                                        recipient: room, modern: true, originID: message.id)
+                                                        recipient: room, modern: true, originID: message.id, linkMetadata: message.linkPreview?.metadata)
             var saved = try await self.sealForRecipients(plaintext, profile: .modern, accepted: recipients, state: &state)
             saved.groupMembers = overview.room.members
+            // Rooms are always modern; a preview that still cannot ride (invalid for the text) leaves the bubble too.
+            let droppedLinkPreview = message.linkPreview.map {
+                !EncryptedContent.linkMetadataRides($0.metadata, body: message.body, modern: true, fileSharing: message.attachment != nil)
+            } ?? false
             try await self.store.sealQueuedOutgoing(accountID: account, messageID: messageID, profile: "modern",
-                expectedRevision: revision, state: self.encode(state, account: account), wire: JSONEncoder().encode(saved), authenticateWireID: false)
+                expectedRevision: revision, state: self.encode(state, account: account), wire: JSONEncoder().encode(saved), authenticateWireID: false,
+                clearLinkPreview: droppedLinkPreview)
         }
     }
 
@@ -287,7 +292,8 @@ extension OMEMOService {
                     isCorrection = content.correction != nil
                     stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: message.room, senderID: message.sender,
                         body: content.body, sentAt: retained.sentAt, isOutgoing: message.sender == account, reply: content.reply,
-                        encryptionProfile: "modern", wireID: nil, wireIDAuthenticated: false)
+                        encryptionProfile: "modern", wireID: nil, wireIDAuthenticated: false,
+                        linkPreview: content.linkMetadata.map { StoredLinkPreview($0, source: .sender) })
                     reaction = nil
                 }
             } catch is SendingTimeOutsideWindow {

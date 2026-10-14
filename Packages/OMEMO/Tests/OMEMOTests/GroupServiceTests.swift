@@ -564,3 +564,29 @@ private struct GroupTransport: OMEMOGroupTransport {
         XCTAssertEqual(pending.count, 1)
     }
 }
+
+extension GroupServiceTests {
+    /// Rooms are modern only: the preview rides with the room message and is stored for its authenticated sender.
+    func testGroupMessageCarriesItsPreview() async throws {
+        let preview = StoredLinkPreview(url: "https://example.org/news", title: "Council approves", imageData: Data([0xFF, 0xD8]),
+                                        imageType: "image/jpeg", source: .own)
+        var received = preview; received.source = .sender
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let room = RoomFixture(), roomID = "private@conference.localhost"
+        let at = GroupTransport(base: f.aTransport, room: room), bt = GroupTransport(base: f.bTransport, room: room)
+        let outgoing = StoredMessage(id: "group-one", accountID: f.alice, chatID: roomID, senderID: f.alice, body: "Read https://example.org/news", isOutgoing: true,
+                                     linkPreview: preview)
+        try await f.aStore.upsertChat(accountID: f.alice, chatID: roomID, title: "Private group")
+        _ = try await f.aStore.enqueueOutgoing(outgoing)
+        try await f.a.prepareGroupMessage(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
+        let mine = try await f.aStore.message(accountID: f.alice, messageID: outgoing.id)
+        XCTAssertEqual(mine?.linkPreview, preview)
+        let prepared = try await f.a.outgoingGroupEnvelope(account: f.alice, messageID: outgoing.id, room: roomID, transport: at)
+        let incoming = try XMPPEncryptedGroupMessage(id: outgoing.id, room: roomID, occupant: roomID + "/alice", sender: f.alice, envelope: prepared.envelope)
+        let inserted = try await f.b.receiveGroup(account: f.bob, message: incoming, transport: bt)
+        XCTAssertTrue(inserted)
+        let stored = try await f.bStore.messages(accountID: f.bob, chatID: roomID).first
+        XCTAssertEqual(stored?.linkPreview, received)
+    }
+}

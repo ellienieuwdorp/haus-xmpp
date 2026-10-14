@@ -1,6 +1,7 @@
 import Foundation
 import MessageStore
 import XCTest
+import XMPPProtocol
 @testable import OMEMO
 
 final class EncryptedContentTests: XCTestCase {
@@ -153,4 +154,25 @@ final class EncryptedContentTests: XCTestCase {
         assertRejected(envelope(content, affixes: "<time stamp='2023-11-14T22:13:20Z'/><time stamp='2023-11-14T22:13:20Z'/>"))
     }
 
+    /// The card shows the first described link of the text; a file never carries metadata, and legacy OMEMO encrypts the
+    /// text alone, with nothing about the link anywhere.
+    func testLinkMetadataIsTheFirstDescribedLinkAndOnlyInModernTextMessages() throws {
+        let rdf = MessageContent.LinkMetadata.rdfNamespace, og = MessageContent.LinkMetadata.openGraphNamespace
+        func describe(_ url: String, _ title: String) -> String {
+            "<Description xmlns='\(rdf)' xmlns:rdf='\(rdf)' rdf:about='\(url)'><title xmlns='\(og)'>\(title)</title></Description>"
+        }
+        let decoded = try decode(envelope("<body xmlns='jabber:client'>https://a.example/ then https://b.example/</body>"
+                                          + describe("https://b.example/", "B") + describe("https://a.example/", "A")))
+        XCTAssertEqual(decoded.linkMetadata, MessageContent.LinkMetadata(about: "https://a.example/", title: "A"))
+
+        let metadata = MessageContent.LinkMetadata(about: "https://a.example/", title: "A")
+        let legacy = try EncryptedContent.encode(body: "See https://a.example/", reply: nil, sender: sender, recipient: recipient, modern: false,
+                                                 linkMetadata: metadata)
+        XCTAssertEqual(legacy, Data("See https://a.example/".utf8))
+        let file = MessageContent.FileSharing(name: "a.jpg", mediaType: "image/jpeg", size: 1, hash: Data(repeating: 1, count: 32),
+                                              url: "https://up.example/a.jpg", key: Data(repeating: 2, count: 32), iv: Data(repeating: 3, count: 12))
+        let sealedFile = try EncryptedContent.encode(body: "See https://a.example/", reply: nil, sender: sender, recipient: recipient, modern: true,
+                                                     fileSharing: file, linkMetadata: metadata)
+        XCTAssertNil(try EncryptedContent.decode(sealedFile, sender: sender, recipient: recipient, modern: true).linkMetadata)
+    }
 }
