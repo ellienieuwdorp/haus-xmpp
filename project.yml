@@ -112,6 +112,8 @@ targets:
           - NotificationHarness.swift
           - Info.plist
           - App.entitlements
+          # The Mac has its own (Mac/PrivacyInfo.xcprivacy): no keyboard APIs.
+          - PrivacyInfo.xcprivacy
       - Shared
       - Mac
       # Debug-only: the app arms and reads the extension's storage probe.
@@ -182,6 +184,7 @@ targets:
     deploymentTarget: '26.0'
     sources:
       - path: NotificationService
+        # Its PrivacyInfo.xcprivacy is shared with the iOS extension: the same code, the same APIs.
         excludes:
           - NotificationService.entitlements
           - Info.plist
