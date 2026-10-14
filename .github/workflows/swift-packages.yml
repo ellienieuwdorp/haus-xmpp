@@ -1,5 +1,8 @@
-# Package tests on a GitHub-hosted macOS runner. UI and lab tests don't run here: they need a simulator, a live
-# test server or both.
+# Package tests. UI and lab tests don't run here: they need a simulator, a live test server or both.
+#
+# The tests run on the maintainer's self-hosted Mac (label `haus-xmpp`). A self-hosted runner executes whatever the
+# workflow checks out, so it only takes pushes to this repository and pull requests from branches in it, never pull
+# requests from forks. Fork pull requests get the same tests on a GitHub-hosted runner instead.
 name: Swift packages
 
 on:
@@ -17,8 +20,29 @@ concurrency:
 jobs:
   test:
     name: ${{ matrix.package }}
-    # The project is developed with Xcode 27. `xcode-27` is GitHub's macOS 27 image with Xcode 27, a public preview
-    # as of 2026-10 (https://github.com/actions/runner-images). Move to the GA macOS image once it ships Xcode 27.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64, haus-xmpp]
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [XMPPProtocol, MessageStore, MessagingCore, OMEMOCrypto, OMEMO]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify vendored libomemo-c and protobuf-c
+        if: matrix.package == 'OMEMOCrypto'
+        run: python3 -I Packages/OMEMOCrypto/Scripts/verify_vendor.py
+      - name: Test
+        # Build products live outside the checkout, so the checkout's clean step keeps them between runs.
+        run: |
+          swift --version
+          swift test --package-path "Packages/${{ matrix.package }}" --parallel \
+            --scratch-path "$RUNNER_TOOL_CACHE/haus-xmpp/${{ matrix.package }}"
+
+  test-fork:
+    name: ${{ matrix.package }} (fork)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    # GitHub's macOS image with Xcode 27 (https://github.com/actions/runner-images).
     runs-on: xcode-27
     timeout-minutes: 30
     strategy:
