@@ -47,7 +47,8 @@ import XMPPProtocol
         }
         if env["HAUS_LAB_BLOCKING_SMOKE"] == "1" {
             guard let to = env["HAUS_LAB_TO"] else { throw XMPPClientError.invalidConfiguration }
-            try await verifyBlocking(client: client, address: to, domain: domain, ownJID: user + "@" + domain)
+            try await verifyBlocking(client: client, address: to, domain: domain, ownJID: user + "@" + domain,
+                                     keepsBlock: env["HAUS_LAB_BLOCKING_KEEP"] == "1")
             timeout.cancel()
             await client.disconnectAndWait()
             return
@@ -282,8 +283,9 @@ import XMPPProtocol
 
     /// XEP-0191 against the account's server: the domain advertises the feature, a block carrying a XEP-0377 report
     /// (with a stanza-id copy) is accepted and pushed back to this session, the fetched list holds it, and an unblock
-    /// is pushed and empties it again. Leaves the list as it found it.
-    static func verifyBlocking(client: XMPPClient, address: String, domain: String, ownJID: String) async throws {
+    /// is pushed and empties it again. Leaves the list as it found it, unless `keepsBlock` (HAUS_LAB_BLOCKING_KEEP=1)
+    /// stops after the block, so another session of the account can be watched following the push.
+    static func verifyBlocking(client: XMPPClient, address: String, domain: String, ownJID: String, keepsBlock: Bool) async throws {
         let features = try await client.discoveryFeatures(for: domain)
         guard features.contains("urn:xmpp:blocking") else { throw XMPPClientError.unexpectedProtocol }
         print("BLOCKING_ADVERTISED reporting=\(features.contains("urn:xmpp:reporting:1"))")
@@ -303,6 +305,7 @@ import XMPPProtocol
         try await next(.blocked([address]))
         guard try await client.fetchBlocklist().blocks(address) else { throw XMPPClientError.unexpectedProtocol }
         print("BLOCK_WITH_REPORT_VERIFIED")
+        if keepsBlock { return }
         try await client.unblock([address])
         try await next(.unblocked([address]))
         guard try await client.fetchBlocklist() == before else { throw XMPPClientError.unexpectedProtocol }
