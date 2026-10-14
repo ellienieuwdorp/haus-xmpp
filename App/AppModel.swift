@@ -1486,7 +1486,9 @@ final class AppModel {
         uploadService = uploads.load(account: account)
         resetTyping()
         lastSeenTracker = LastSeenTracker()
+        // The previous account's preview fetches stop now, not at the next display.
         linkPreviewUploadHosts = []; linkPreviewHostsAccount = nil
+        useLinkPreviewAccount()
         preferences.set(account, forKey: "lastAccount")
     }
 
