@@ -167,6 +167,13 @@ enum AccentTheme: String, CaseIterable, Identifiable {
         }
     }
     var swatch: Color { Color(platform: bubble) }
+    /// The reply-quote panel and the link preview card inside a bubble. On a sent bubble a tint of its text colour; on
+    /// the neutral received bubble a quiet shade in light mode and a quiet lift in dark mode, where a shade would
+    /// vanish into the dark bubble.
+    func panelFill(outgoing: Bool) -> PlatformColor {
+        outgoing ? bubbleText.withAlphaComponent(bubbleText == .white ? 0.18 : 0.08)
+            : .dynamic(light: PlatformColor.black.withAlphaComponent(0.06), dark: PlatformColor.white.withAlphaComponent(0.08))
+    }
 }
 
 /// The one avatar circle: a verified image when the contact has one, otherwise their initial in a

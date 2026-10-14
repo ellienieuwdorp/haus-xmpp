@@ -1681,7 +1681,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         let meta: UIColor = message.isOutgoing ? theme.bubbleText.withAlphaComponent(0.75) : .secondaryLabel
         bubble.backgroundColor = message.isOutgoing ? theme.bubble : Self.incomingBubble
         textView.textColor = text
-        quote.backgroundColor = message.isOutgoing ? theme.bubbleText.withAlphaComponent(theme.bubbleText == .white ? 0.18 : 0.08) : UIColor.black.withAlphaComponent(0.06)
+        quote.backgroundColor = theme.panelFill(outgoing: message.isOutgoing)
         quoteBar.backgroundColor = message.isOutgoing ? theme.bubbleText : theme.tint
         quoteAuthor.textColor = text
         quoteBody.textColor = text

@@ -239,10 +239,8 @@ private struct MacBubble: View {
 
     private var textColor: Color { message.isOutgoing ? Color(platform: accent.bubbleText) : .primary }
     private var metaColor: Color { message.isOutgoing ? Color(platform: accent.bubbleText.withAlphaComponent(0.75)) : .secondary }
-    /// The preview card's fill: the iPhone's reply-quote panel fill.
-    private var panelFill: Color {
-        message.isOutgoing ? Color(platform: accent.bubbleText.withAlphaComponent(accent.bubbleText == .white ? 0.18 : 0.08)) : .black.opacity(0.06)
-    }
+    /// The preview card's fill: the iPhone's reply-quote panel fill (`AccentTheme.panelFill`).
+    private var panelFill: Color { Color(platform: accent.panelFill(outgoing: message.isOutgoing)) }
     /// Links are underlined, in the accent on received bubbles and in the text colour on the accent-filled sent ones.
     private var linkColor: Color { message.isOutgoing ? textColor : Color(platform: accent.tint) }
 
