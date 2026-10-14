@@ -285,6 +285,15 @@ final class AppModel {
     @ObservationIgnored private var uploadReconciliation = UploadReconciliation()
     private var serverProfiles: ServerProfileMemory { ServerProfileMemory(defaults: preferences) }
     private var files: AttachmentFiles? { storageDirectory.map { AttachmentFiles(directory: $0, account: accountID) } }
+    /// Our own link preview fetches (AppModel+LinkPreviews.swift). Observed: a result fills in its card.
+    let linkPreviewCenter = LinkPreviewCenter()
+    /// The account's attachment folder; fetched preview images live in its `link-previews/`.
+    var linkPreviewFolder: URL? { storageDirectory.map { AttachmentFiles.root(directory: $0, account: accountID) } }
+    /// This connection's roster as the link preview contact rule reads it (`LinkPreviewPolicy`).
+    func linkPreviewRosterEntry(_ contact: String) -> LinkPreviewPolicy.RosterEntry {
+        guard lastSeenTracker.rosterLoaded else { return .notLoaded }
+        return lastSeenTracker.roster[contact].map { .item($0.subscription) } ?? .absent
+    }
     @ObservationIgnored private var uploader: AttachmentUploader?
     @ObservationIgnored private var storageDirectory: URL?
     @ObservationIgnored private lazy var uploadPasses = RerunningPass { [weak self] in self?.uploadPass() }
@@ -792,6 +801,7 @@ final class AppModel {
             case .change(let signals, let activated): changeLifecycle(to: signals, activated: activated)
             }
         }
+        linkPreviewCenter.setForeground(lifecycle.windowVisible)
     }
 
     /// Returns once every lifecycle transition queued so far, and any queued behind them meanwhile, has run: the Mac
