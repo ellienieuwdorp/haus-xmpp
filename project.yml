@@ -33,6 +33,8 @@ targets:
         CADisableMinimumFrameDurationOnPhone: true
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Export compliance: the app encrypts messages itself (OMEMO), beyond the encryption the OS provides.
+        ITSAppUsesNonExemptEncryption: true
         NSCameraUsageDescription: Take a photo or video to send.
         NSMicrophoneUsageDescription: Record sound with videos you take to send.
         NSPhotoLibraryUsageDescription: Pick recent photos and videos to send.
@@ -119,6 +121,8 @@ targets:
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # As on iOS: the app does its own message encryption (OMEMO).
+        ITSAppUsesNonExemptEncryption: true
         HausPushEnvironment: $(HAUS_PUSH_ENVIRONMENT)
         HausStagingDomain: $(HAUS_STAGING_DOMAIN)
         # Communication notifications, as on iOS: the app declares the intent its extension donates.

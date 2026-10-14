@@ -24,6 +24,8 @@
 	<string>$(HAUS_PUSH_ENVIRONMENT)</string>
 	<key>HausStagingDomain</key>
 	<string>$(HAUS_STAGING_DOMAIN)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Take a photo or video to send.</string>
 	<key>NSMicrophoneUsageDescription</key>
