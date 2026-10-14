@@ -47,7 +47,7 @@ private func pushNode(_ xml: String) throws -> XMPPProtocol.XMLNode {
     #expect(throws: XMPPNotificationError.self) { try PushNotifications.disableXML(serviceJID: "push.example.org", node: "") }
 }
 
-@Test func clientStateIndicationsAreNonStanzasAndRequireAConnection() async throws {
+@Test func clientStateIndicationsAreNonStanzas() async throws {
     for active in [false, true] {
         let node = try pushNode(PushNotifications.clientStateXML(active: active))
         #expect(node.namespace == "urn:xmpp:csi:0")
@@ -56,6 +56,5 @@ private func pushNode(_ xml: String) throws -> XMPPProtocol.XMLNode {
     }
     let client = XMPPClient()
     #expect(await !client.supportsClientStateIndication)
-    await #expect(throws: XMPPClientError.notConnected) { try await client.setClientActive(false) }
     await #expect(throws: XMPPClientError.notConnected) { try await client.enablePush(XMPPPushConfiguration(serviceJID: "push.example.org", node: "node")) }
 }

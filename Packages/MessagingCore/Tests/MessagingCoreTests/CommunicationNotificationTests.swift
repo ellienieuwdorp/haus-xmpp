@@ -27,10 +27,14 @@ private let me = NotificationCommunication.Person(handle: "me@example.org", disp
     let communication = NotificationCommunication(sender: .init(handle: "bob@x", displayName: "Bob", avatarHash: nil), conversationIdentifier: "thread-2",
                                                   account: me, groupName: "Book club", groupAvatarHash: "room",
                                                   otherRecipients: [.init(handle: "carol@x", displayName: "Carol", avatarHash: nil)], body: "Hi all")
-    let intent = CommunicationNotification.intent(communication) { _ in nil }
+    let intent = CommunicationNotification.intent(communication) { $0 == "room" ? Data([0x89, 0x50, 0x4E, 0x47]) : nil }
     #expect(intent.speakableGroupName?.spokenPhrase == "Book club")
     #expect(intent.recipients?.map { $0.personHandle?.value } == ["me@example.org", "carol@x"])
     #expect(intent.recipients?.first?.isMe == true && intent.sender?.displayName == "Bob")
+    // The room's avatar is the image of the group name parameter. These tests run on macOS, where only the
+    // string-named form of the accessor exists.
+    #expect(intent.__image(forParameterNamed: "speakableGroupName") != nil)
+    #expect(CommunicationNotification.intent(communication) { _ in nil }.__image(forParameterNamed: "speakableGroupName") == nil)
 }
 
 @Test func planContentKeepsEverythingTheRequestCarries() {

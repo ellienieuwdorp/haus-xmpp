@@ -24,11 +24,14 @@ public enum CommunicationNotification {
                                          speakableGroupName: communication.groupName.map { INSpeakableString(spokenPhrase: $0) },
                                          conversationIdentifier: communication.conversationIdentifier, serviceName: nil,
                                          sender: person(communication.sender), attachments: nil)
-        #if os(iOS)
         if communication.isGroup, let hash = communication.groupAvatarHash, let data = avatar(hash) {
+            #if os(iOS)
             intent.setImage(INImage(imageData: data), forParameterNamed: \.speakableGroupName)
+            #elseif os(macOS)
+            // The KeyPath form is unavailable on macOS; the string-named Objective-C method it refines is not.
+            intent.__setImage(INImage(imageData: data), forParameterNamed: "speakableGroupName")
+            #endif
         }
-        #endif
         return intent
     }
 

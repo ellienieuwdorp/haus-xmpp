@@ -54,9 +54,9 @@ struct EncryptionDetailsView: View {
         // Stored devices at once; the server is asked at most once per connection unless Refresh is tapped.
         .task { await model.loadEncryptionDetails(for: chatID) }
         .navigationTitle("Devices & Encryption")
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineNavigationTitle()
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .barTrailing) {
                 Button("Refresh devices", systemImage: "arrow.clockwise") {
                     Task { await model.loadEncryptionDetails(for: chatID, force: true) }
                 }.labelStyle(.iconOnly).disabled(!model.session.isReady)
@@ -152,7 +152,7 @@ struct DeviceRow: View {
             Image(systemName: "iphone")
                 .font(.system(size: 18)).foregroundStyle(.secondary)
                 .frame(width: 36, height: 36)
-                .background(Color(.tertiarySystemFill), in: Circle())
+                .background(Color.tertiaryFill, in: Circle())
             Text("Device \(String(device.deviceID))").foregroundStyle(.primary)
             Spacer(minLength: 8)
             // A plain HStack, not a Label: List pads a Label's icon column to body metrics and leaves a gap.
@@ -280,7 +280,7 @@ struct DeviceFingerprintSheet: View {
             .navigationTitle("Device \(String(device.deviceID))")
             // A device ID can publish in both versions, each with its own fingerprint encoding: name the one being compared.
             .navigationSubtitle("\(device.jid) · \(versions ?? device.profile.label)")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { dismiss() }.labelStyle(.iconOnly) } }
             .confirmationDialog("Repair this encryption session?", isPresented: $confirmingRepair, titleVisibility: .visible) {
                 Button("Repair session") {

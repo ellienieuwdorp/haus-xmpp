@@ -80,7 +80,8 @@ public struct BackgroundSynchronizer: Sendable {
             if let resource = account.resource { try await client.configureResource(resource) }
             let preferences = try await store.accountPreferences(accountID: account.accountID)
             try await client.setAvailability(BackgroundSession.availability(sharesLastSeen: preferences.lastSeen,
-                                                                            leftForeground: account.leftForeground))
+                                                                            leftForeground: account.leftForeground),
+                                             clientActive: false)
             try await store.recoverInterruptedSubmissions(accountID: account.accountID)
             // Taken before the timer starts, so it is never later than the real deadline.
             let deadline = ContinuousClock.now + timeBudget - waited

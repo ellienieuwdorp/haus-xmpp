@@ -1,9 +1,13 @@
+#if os(iOS)
 import UIKit
+#endif
 import UserNotifications
 import MessagingCore
 
+/// The notification center's delegate on both platforms, and on iOS the application delegate that receives APNs tokens.
+/// The Mac registers no token yet (push is gated off there until Phase 3; see mac-target.md).
 @MainActor
-final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+final class PushRegistration: NSObject, UNUserNotificationCenterDelegate {
     static let shared = PushRegistration()
     // One primary AppModel consumes this stream. A token received before subscription
     // remains buffered; newer unsolicited callbacks supersede older buffered values.
@@ -13,18 +17,22 @@ final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificatio
     private var waiters: [UUID: CheckedContinuation<Data, any Error>] = [:]
     enum Failure: Error { case unavailable, denied }
 
-    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+    /// Becomes the notification center's delegate. Called once at launch by the platform's application delegate.
+    func installNotificationDelegate() {
         UNUserNotificationCenter.current().delegate = self
         // `message` offers Reply and Mark as Read; `notice`, `reaction` and the extension's `fallback` have none
         // (plan D2, D3, D8, E).
         UNUserNotificationCenter.current().setNotificationCategories(NotificationCategories.all)
-        #if DEBUG
+        #if DEBUG && os(iOS)
         NotificationHarness.install()
         #endif
-        return true
     }
 
     static func request() async throws -> Data {
+        #if os(macOS)
+        // No APNs registration on the Mac in this phase.
+        throw Failure.unavailable
+        #else
         guard try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) else { throw Failure.denied }
         // Register on every launch/request: APNs tokens may change. Never infer a token size.
         let id = UUID()
@@ -42,6 +50,7 @@ final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificatio
             // since both hop to the main actor in order.
             Task { @MainActor in shared.waiters.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
         }
+        #endif
     }
 
     static func refreshIfAuthorized() async throws -> Data? {
@@ -53,14 +62,14 @@ final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificatio
     static func unsolicitedTokens() -> AsyncStream<Data> { shared.unsolicited.stream }
     static func isLatestToken(_ token: Data) -> Bool { shared.latestCallbackToken == token }
 
-    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    fileprivate func received(_ deviceToken: Data) {
         Self.shared.latestCallbackToken = deviceToken
         let pending = Self.shared.waiters
         Self.shared.waiters.removeAll()
         if pending.isEmpty { Self.shared.unsolicited.continuation.yield(deviceToken) }
         for waiter in pending.values { waiter.resume(returning: deviceToken) }
     }
-    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
+    fileprivate func registrationFailed() {
         let pending = Self.shared.waiters
         Self.shared.waiters.removeAll()
         for waiter in pending.values { waiter.resume(throwing: Failure.unavailable) }
@@ -112,6 +121,23 @@ final class PushRegistration: NSObject, UIApplicationDelegate, UNUserNotificatio
         }
     }
 }
+
+#if os(iOS)
+extension PushRegistration: UIApplicationDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        installNotificationDelegate()
+        return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        received(deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
+        registrationFailed()
+    }
+}
+#endif
 
 /// Carries a system completion handler to the main actor, where it is called exactly as UIKit requires.
 private struct MainThreadCompletion<Value>: @unchecked Sendable {

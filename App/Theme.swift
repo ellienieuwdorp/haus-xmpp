@@ -1,5 +1,9 @@
 import SwiftUI
+#if os(iOS)
 import UIKit
+#else
+import AppKit
+#endif
 
 /// The single source of the user's accent and light/dark choice. Every screen, sheet and hosted
 /// controller reads this one object, so a change made in Settings repaints the sheet that made it too.
@@ -12,9 +16,16 @@ import UIKit
     var accent: AccentTheme { didSet { defaults.set(accent.rawValue, forKey: AccentTheme.storageKey) } }
     /// One of `modes`; "automatic" follows the system.
     var mode: String { didSet { defaults.set(mode, forKey: AppearanceView.modeKey) } }
+    #if os(iOS)
     var interfaceStyle: UIUserInterfaceStyle {
         switch mode { case "light": .light; case "dark": .dark; default: .unspecified }
     }
+    #else
+    /// The app's appearance on the Mac; nil follows the system.
+    var interfaceStyle: NSAppearance? {
+        switch mode { case "light": NSAppearance(named: .aqua); case "dark": NSAppearance(named: .darkAqua); default: nil }
+    }
+    #endif
 
     @ObservationIgnored private let defaults: UserDefaults
 
@@ -45,11 +56,12 @@ private struct ThemedRoot: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .tint(Color(uiColor: appearance.accent.tint))
+            .tint(Color(platform: appearance.accent.tint))
             .background { WindowInterfaceStyle(style: appearance.interfaceStyle) }
     }
 }
 
+#if os(iOS)
 /// Light/dark is the window's trait override rather than `preferredColorScheme`: going from Dark back
 /// to Automatic through the SwiftUI preference leaves an open sheet dark until it is dismissed
 /// (iOS 26.5), while every presentation in the window follows the window's override. Set as the view
@@ -78,6 +90,33 @@ private struct WindowInterfaceStyle: UIViewRepresentable {
 
     func updateUIView(_ anchor: Anchor, context: Context) { anchor.style = style }
 }
+#else
+/// On the Mac the choice is the application's appearance, so every window (main, Settings, sheets) and the menus follow
+/// it together. Set as the view joins a window, so a stored Dark choice is in place before the first frame.
+private struct WindowInterfaceStyle: NSViewRepresentable {
+    let style: NSAppearance?
+
+    final class Anchor: NSView {
+        var style: NSAppearance? { didSet { apply() } }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+        }
+        private func apply() {
+            guard window != nil, NSApp.appearance?.name != style?.name else { return }
+            NSApp.appearance = style
+        }
+    }
+
+    func makeNSView(context: Context) -> Anchor {
+        let anchor = Anchor()
+        anchor.style = style
+        return anchor
+    }
+
+    func updateNSView(_ anchor: Anchor, context: Context) { anchor.style = style }
+}
+#endif
 
 extension View {
     func themedRoot() -> some View { modifier(ThemedRoot()) }
@@ -97,37 +136,37 @@ enum AccentTheme: String, CaseIterable, Identifiable {
     var title: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
 
     /// Glyphs, links, buttons: at least 4.5:1 on both system backgrounds in each appearance.
-    var tint: UIColor {
+    var tint: PlatformColor {
         switch self {
         case .indigo: return .systemIndigo
-        case .lime: return UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.65, green: 0.88, blue: 0.39, alpha: 1) : UIColor(red: 0.22, green: 0.47, blue: 0.05, alpha: 1) }
-        case .crab: return UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.96, green: 0.51, blue: 0.36, alpha: 1) : UIColor(red: 0.74, green: 0.26, blue: 0.11, alpha: 1) }
-        case .sky: return UIColor { $0.userInterfaceStyle == .dark ? .systemTeal : UIColor(red: 0, green: 0.42, blue: 0.52, alpha: 1) }
-        case .rose: return UIColor { $0.userInterfaceStyle == .dark ? .systemPink : UIColor(red: 0.78, green: 0.12, blue: 0.36, alpha: 1) }
-        case .graphite: return UIColor { $0.userInterfaceStyle == .dark ? .systemGray : UIColor(red: 0.36, green: 0.36, blue: 0.38, alpha: 1) }
+        case .lime: return .dynamic(light: PlatformColor(red: 0.22, green: 0.47, blue: 0.05, alpha: 1), dark: PlatformColor(red: 0.65, green: 0.88, blue: 0.39, alpha: 1))
+        case .crab: return .dynamic(light: PlatformColor(red: 0.74, green: 0.26, blue: 0.11, alpha: 1), dark: PlatformColor(red: 0.96, green: 0.51, blue: 0.36, alpha: 1))
+        case .sky: return .dynamic(light: PlatformColor(red: 0, green: 0.42, blue: 0.52, alpha: 1), dark: .systemTeal)
+        case .rose: return .dynamic(light: PlatformColor(red: 0.78, green: 0.12, blue: 0.36, alpha: 1), dark: .systemPink)
+        case .graphite: return .dynamic(light: PlatformColor(red: 0.36, green: 0.36, blue: 0.38, alpha: 1), dark: .systemGray)
         }
     }
     /// Sent-bubble fill: dark fills carry white text, light fills dark text, both at 4.5:1 in either appearance.
-    var bubble: UIColor {
+    var bubble: PlatformColor {
         switch self {
-        case .indigo: return UIColor(red: 0.345, green: 0.337, blue: 0.839, alpha: 1)
-        case .lime: return UIColor(red: 0.65, green: 0.88, blue: 0.39, alpha: 1)
-        case .crab: return UIColor(red: 0.96, green: 0.51, blue: 0.36, alpha: 1)
+        case .indigo: return PlatformColor(red: 0.345, green: 0.337, blue: 0.839, alpha: 1)
+        case .lime: return PlatformColor(red: 0.65, green: 0.88, blue: 0.39, alpha: 1)
+        case .crab: return PlatformColor(red: 0.96, green: 0.51, blue: 0.36, alpha: 1)
         case .sky: return .systemTeal
-        case .rose: return UIColor(red: 0.84, green: 0.15, blue: 0.40, alpha: 1)
-        case .graphite: return UIColor(red: 0.42, green: 0.42, blue: 0.44, alpha: 1)
+        case .rose: return PlatformColor(red: 0.84, green: 0.15, blue: 0.40, alpha: 1)
+        case .graphite: return PlatformColor(red: 0.42, green: 0.42, blue: 0.44, alpha: 1)
         }
     }
     /// Text on the sent bubble.
-    var bubbleText: UIColor {
+    var bubbleText: PlatformColor {
         switch self {
-        case .lime: return UIColor(red: 0.06, green: 0.13, blue: 0, alpha: 1)
-        case .crab: return UIColor(red: 0.16, green: 0.04, blue: 0, alpha: 1)
-        case .sky: return UIColor(red: 0, green: 0.10, blue: 0.16, alpha: 1)
+        case .lime: return PlatformColor(red: 0.06, green: 0.13, blue: 0, alpha: 1)
+        case .crab: return PlatformColor(red: 0.16, green: 0.04, blue: 0, alpha: 1)
+        case .sky: return PlatformColor(red: 0, green: 0.10, blue: 0.16, alpha: 1)
         default: return .white
         }
     }
-    var swatch: Color { Color(uiColor: bubble) }
+    var swatch: Color { Color(platform: bubble) }
 }
 
 /// The one avatar circle: a verified image when the contact has one, otherwise their initial in a
@@ -135,16 +174,16 @@ enum AccentTheme: String, CaseIterable, Identifiable {
 struct ChatAvatar: View {
     let key: String
     let name: String
-    var image: UIImage? = nil
+    var image: PlatformImage? = nil
     var isGroup = false
     let size: CGFloat
 
     var body: some View {
         ZStack {
             if let image {
-                Image(uiImage: image).resizable().scaledToFill()
+                Image(platformImage: image).resizable().scaledToFill()
             } else {
-                Circle().fill(key.isEmpty ? Color(.systemGray3) : Color(uiColor: AvatarPalette.color(for: key)))
+                Circle().fill(key.isEmpty ? Color.placeholderGray : Color(platform: AvatarPalette.color(for: key)))
                 if isGroup {
                     Image(systemName: "person.2.fill").font(.system(size: size * 0.42, weight: .medium))
                 } else if let initial = name.first {
@@ -163,13 +202,13 @@ struct ChatAvatar: View {
 
 /// Stable per-name avatar colour so a contact keeps its hue across launches.
 enum AvatarPalette {
-    static let colors: [UIColor] = [
-        UIColor(red: 0.36, green: 0.48, blue: 0.84, alpha: 1), UIColor(red: 0.79, green: 0.42, blue: 0.55, alpha: 1),
-        UIColor(red: 0.83, green: 0.54, blue: 0.29, alpha: 1), UIColor(red: 0.25, green: 0.64, blue: 0.54, alpha: 1),
-        UIColor(red: 0.29, green: 0.61, blue: 0.79, alpha: 1), UIColor(red: 0.60, green: 0.42, blue: 0.82, alpha: 1),
-        UIColor(red: 0.72, green: 0.53, blue: 0.23, alpha: 1), UIColor(red: 0.35, green: 0.63, blue: 0.35, alpha: 1),
+    static let colors: [PlatformColor] = [
+        PlatformColor(red: 0.36, green: 0.48, blue: 0.84, alpha: 1), PlatformColor(red: 0.79, green: 0.42, blue: 0.55, alpha: 1),
+        PlatformColor(red: 0.83, green: 0.54, blue: 0.29, alpha: 1), PlatformColor(red: 0.25, green: 0.64, blue: 0.54, alpha: 1),
+        PlatformColor(red: 0.29, green: 0.61, blue: 0.79, alpha: 1), PlatformColor(red: 0.60, green: 0.42, blue: 0.82, alpha: 1),
+        PlatformColor(red: 0.72, green: 0.53, blue: 0.23, alpha: 1), PlatformColor(red: 0.35, green: 0.63, blue: 0.35, alpha: 1),
     ]
-    static func color(for name: String) -> UIColor {
+    static func color(for name: String) -> PlatformColor {
         var hash: UInt32 = 2_166_136_261
         for scalar in name.lowercased().unicodeScalars { hash = (hash ^ scalar.value) &* 16_777_619 }
         return colors[Int(hash % UInt32(colors.count))]
@@ -197,33 +236,47 @@ enum MessageStatusArt {
         }
     }
 
-    static func image(_ glyph: MessageStatusGlyph, scale: CGFloat) -> UIImage {
+    static func image(_ glyph: MessageStatusGlyph, scale: CGFloat) -> PlatformImage {
         let size = CGSize(width: designWidth(glyph) * scale, height: designHeight * scale)
+        #if os(iOS)
         let image = UIGraphicsImageRenderer(size: size).image { context in
-            let cg = context.cgContext
-            cg.scaleBy(x: scale, y: scale)
-            cg.setLineCap(.round)
-            cg.setLineJoin(.round)
-            cg.setLineWidth(line)
-            UIColor.black.set()
-            switch glyph {
-            case .sending: dashedRing(cg)
-            case .sent: ring(cg, centreX: 6); check(cg, offsetX: 0)
-            case .delivered:
-                hidingRightDisc(cg) { ring(cg, centreX: 6) }
-                ring(cg, centreX: 12); check(cg, offsetX: 6)
-            case .read:
-                hidingRightDisc(cg) { disc(cg, centreX: 6) }
-                disc(cg, centreX: 12)
-                cg.setBlendMode(.clear)
-                check(cg, offsetX: 6)
-            case .failed:
-                disc(cg, centreX: 6)
-                cg.setBlendMode(.clear)
-                exclamation(cg)
-            }
+            draw(glyph, in: context.cgContext, scale: scale)
         }
         return image.withRenderingMode(.alwaysTemplate)
+        #else
+        // Flipped, so the y-down geometry below draws the same way up as in UIKit.
+        let image = NSImage(size: size, flipped: true) { _ in
+            guard let cg = NSGraphicsContext.current?.cgContext else { return false }
+            draw(glyph, in: cg, scale: scale)
+            return true
+        }
+        image.isTemplate = true
+        return image
+        #endif
+    }
+
+    private static func draw(_ glyph: MessageStatusGlyph, in cg: CGContext, scale: CGFloat) {
+        cg.scaleBy(x: scale, y: scale)
+        cg.setLineCap(.round)
+        cg.setLineJoin(.round)
+        cg.setLineWidth(line)
+        PlatformColor.black.set()
+        switch glyph {
+        case .sending: dashedRing(cg)
+        case .sent: ring(cg, centreX: 6); check(cg, offsetX: 0)
+        case .delivered:
+            hidingRightDisc(cg) { ring(cg, centreX: 6) }
+            ring(cg, centreX: 12); check(cg, offsetX: 6)
+        case .read:
+            hidingRightDisc(cg) { disc(cg, centreX: 6) }
+            disc(cg, centreX: 12)
+            cg.setBlendMode(.clear)
+            check(cg, offsetX: 6)
+        case .failed:
+            disc(cg, centreX: 6)
+            cg.setBlendMode(.clear)
+            exclamation(cg)
+        }
     }
 
     private static func circle(centreX: CGFloat, radius: CGFloat) -> CGRect {
@@ -276,6 +329,7 @@ enum MessageStatusArt {
     }
 }
 
+#if os(iOS)
 /// The bubble footer's status slot: a fixed 18 pt wide box (scaled with Dynamic Type like caption2)
 /// that right-aligns the mark, so the footer never reflows between states. Sending marks spin unless
 /// Reduce Motion is on or the send is only unconfirmed.
@@ -355,3 +409,4 @@ final class MessageStatusView: UIView {
         mark.layer.add(spin, forKey: Self.spinKey)
     }
 }
+#endif

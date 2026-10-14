@@ -31,15 +31,31 @@ public struct LifecycleSignals: Sendable, Equatable {
 
     /// Whether `chatID` is the chat the user is reading.
     public func reading(_ chatID: String, openChatID: String?) -> Bool { readingChat(openChatID: openChatID) == chatID }
+
+    /// What a new stream binds with: away presence when the user is not present, CSI `<inactive/>` when no window is
+    /// visible (a Mac launched at login with no window). A stream binding while the transport is going away is closed
+    /// by the quiesce, which announces away itself, so it binds with the defaults, as iOS always has.
+    public var streamBinding: StreamBinding {
+        guard transportWanted else { return StreamBinding(presence: .available, clientActive: true) }
+        return StreamBinding(presence: present ? .available : .away, clientActive: windowVisible)
+    }
+}
+
+/// The presence and XEP-0352 state a new stream announces when it binds (`LifecycleSignals.streamBinding`).
+public struct StreamBinding: Sendable, Equatable {
+    public var presence: LifecycleTransition.Presence
+    public var clientActive: Bool
+    public init(presence: LifecycleTransition.Presence, clientActive: Bool) { self.presence = presence; self.clientActive = clientActive }
 }
 
 /// One step a lifecycle driver asks the app to take, in order.
 public enum LifecycleUpdate: Sendable, Equatable {
     /// The signals the process starts with, before any transport work: set, and nothing runs.
     case start(LifecycleSignals)
-    /// The user stopped interacting (iOS: the scene left `.active`). That moment becomes the last-seen time, sent as
-    /// XEP-0319 idle by every away presence until the next one.
-    case interactionEnded
+    /// The user stopped interacting (iOS: the scene left `.active`, at nil, which means now; the Mac: the time of the
+    /// last input when the user went idle, locked the screen, switched user, or the Mac went to sleep or the app quit).
+    /// That moment becomes the last-seen time, sent as XEP-0319 idle by every away presence until the next one.
+    case interactionEnded(at: Date?)
     /// New signals. The app runs `LifecycleTransition.between(current, new, activated:)`, also when they equal the
     /// current ones. `activated`: the user brought the app forward (iOS: the scene reached `.active`), which repeats
     /// the return-to-front work; a focus or occlusion change alone does not.
@@ -56,9 +72,11 @@ public struct LifecycleTransition: Sendable, Equatable {
     /// Blocks new transport and crypto work at once, then (after `presence`) disconnects with a final `<a/>`, joins
     /// every reader, consumer, sender and UI crypto mutation, and only then releases the lease.
     public var quiescesTransport = false
-    /// XEP-0352 state for the live stream; nil sends none.
+    /// XEP-0352 state for the live stream; nil sends none. With a `presence` it is written together with it
+    /// (`<active/>` before, `<inactive/>` after); alone, it is written on its own.
     public var clientActive: Bool?
-    /// Presence for the live stream, sent before anything else in the transition; nil sends none.
+    /// Presence for the live stream, sent before anything else in the transition; nil sends none. Never without a
+    /// `clientActive`.
     public var presence: Presence?
 
     public init(resumesTransport: Bool = false, quiescesTransport: Bool = false, clientActive: Bool? = nil, presence: Presence? = nil) {
@@ -67,22 +85,20 @@ public struct LifecycleTransition: Sendable, Equatable {
     }
 
     public static func between(_ old: LifecycleSignals, _ new: LifecycleSignals, activated: Bool = false) -> LifecycleTransition {
-        // The session hibernates (up to days with push), so it must read as away before it goes, whatever `present`
-        // says. Away presence carries CSI <inactive/> and the disconnect follows, so no separate CSI.
-        guard new.transportWanted else { return LifecycleTransition(quiescesTransport: true, presence: .away) }
+        // The session hibernates (up to days with push), so it must read as away and inactive before it goes,
+        // whatever `present` and `windowVisible` say. The disconnect follows.
+        guard new.transportWanted else { return LifecycleTransition(quiescesTransport: true, clientActive: false, presence: .away) }
         var transition = LifecycleTransition()
         // The transport (re)starting, or the user bringing the app forward, which on iOS is every activation.
         transition.resumesTransport = !old.transportWanted || activated
-        // A stream that stays up announces the user coming and going. A new one announces itself when it binds.
-        if old.transportWanted, old.present != new.present { transition.presence = new.present ? .available : .away }
-        // XMPPClient writes CSI with every presence on a live stream: <active/> with available, <inactive/> with
-        // away. Restate the window's state when the presence just said the opposite.
-        let csiSentWithPresence = transition.presence.map { $0 == .available }
-        if new.windowVisible {
-            if activated || !old.transportWanted || !old.windowVisible || csiSentWithPresence == false {
-                transition.clientActive = true
-            }
-        } else if old.transportWanted, old.windowVisible || csiSentWithPresence == true {
+        if old.transportWanted, old.present != new.present {
+            // A stream that stays up announces the user coming and going, and restates the window's CSI state with
+            // it. A new stream announces both when it binds (`LifecycleSignals.streamBinding`).
+            transition.presence = new.present ? .available : .away
+            transition.clientActive = new.windowVisible
+        } else if new.windowVisible {
+            if activated || !old.transportWanted || !old.windowVisible { transition.clientActive = true }
+        } else if old.transportWanted, old.windowVisible {
             transition.clientActive = false
         }
         return transition
@@ -126,7 +142,7 @@ public struct SceneLifecycleDriver: LifecycleDriver {
             signals = .away
             updates.append(.start(.away))
         case .phaseChanged(let previous, let phase):
-            if previous == .active, phase != .active { updates.append(.interactionEnded) }
+            if previous == .active, phase != .active { updates.append(.interactionEnded(at: nil)) }
             if phase == .active { signals = .inFront; updates.append(.change(.inFront, activated: true)) }
             else if phase == .background { signals = .away; updates.append(.change(.away, activated: false)) }
         case .becameActive:
@@ -135,5 +151,54 @@ public struct SceneLifecycleDriver: LifecycleDriver {
             updates.append(.change(.inFront, activated: true))
         }
         return updates
+    }
+}
+
+/// Where each attention-dependent feature looks. On iOS every one keeps following the transport (the scene), as the
+/// single `foreground` flag did; a desktop app holds the transport with no window, so there each one follows the
+/// signal that matches it.
+public struct AttentionRules: Sendable, Equatable {
+    /// iOS: unchanged from before the signals were split.
+    public static let phone = AttentionRules(desktop: false)
+    /// The Mac.
+    public static let desktop = AttentionRules(desktop: true)
+
+    public let desktop: Bool
+
+    /// The chat whose banners `willPresent` hides. iOS asks only while the app is in front, so the open chat; on a
+    /// Mac the frontmost app is not necessarily read, so the chat being read.
+    public func bannerHiddenChat(_ signals: LifecycleSignals, openChatID: String?) -> String? {
+        desktop ? signals.readingChat(openChatID: openChatID) : openChatID
+    }
+
+    /// Whether `chatID`'s delivered notifications and waiting reaction alerts go now because it is on screen. iOS:
+    /// whenever it is the open chat (the transport, which these need, means the app is in front). Mac: only while it
+    /// is read.
+    public func clearsNotifications(of chatID: String, _ signals: LifecycleSignals, openChatID: String?) -> Bool {
+        desktop ? signals.reading(chatID, openChatID: openChatID) : openChatID == chatID
+    }
+
+    /// Whether the "message wasn't delivered" alert shows. iOS: while the transport is wanted (in front). Mac: while a
+    /// window is visible to show it in.
+    public func showsDeliveryAlert(_ signals: LifecycleSignals) -> Bool {
+        desktop ? signals.windowVisible : signals.transportWanted
+    }
+
+    /// Whether typing chat states may go to the open chat. iOS: while the transport is wanted. Mac: while the user is
+    /// reading it.
+    public func sendsChatStates(_ signals: LifecycleSignals) -> Bool {
+        desktop ? signals.transportWanted && signals.readsOpenChat : signals.transportWanted
+    }
+
+    /// Whether a typing state the peer saw ends now: on a Mac when the user stops reading, so a draft left
+    /// mid-sentence ends the chat state instead of going from composing to paused. iOS leaves it, as before.
+    public func endsChatState(from old: LifecycleSignals, to new: LifecycleSignals) -> Bool {
+        desktop && sendsChatStates(old) && !sendsChatStates(new)
+    }
+
+    /// Whether the user just started reading the open chat: on a Mac the newest visible message is then marked read
+    /// and the chat's notifications go (critique G3). On iOS cells mark messages as they appear and nothing else runs.
+    public func startsReading(from old: LifecycleSignals, to new: LifecycleSignals) -> Bool {
+        desktop && !old.readsOpenChat && new.readsOpenChat
     }
 }

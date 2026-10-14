@@ -12,7 +12,7 @@ struct KeyRecoveryView: View {
         if let plan = model.keyRecovery {
             content(plan)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(.systemGroupedBackground))
+                .background(Color.groupedBackground)
         }
     }
 
@@ -39,7 +39,7 @@ struct KeyRecoveryView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(20)
-                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .background(Color.secondaryGroupedBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 32)

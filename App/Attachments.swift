@@ -7,7 +7,9 @@ import OMEMO
 import Photos
 import PhotosUI
 import SwiftUI
+#if os(iOS)
 import UIKit
+#endif
 import UniformTypeIdentifiers
 import XMPPProtocol
 
@@ -102,10 +104,18 @@ enum AttachmentPreparer {
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                   kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
                   kCGImageSourceThumbnailMaxPixelSize: maximumPixels, kCGImageSourceShouldCacheImmediately: true] as CFDictionary),
-              let jpeg = UIImage(cgImage: image).jpegData(compressionQuality: 0.85) else { throw Failure.unreadable }
+              let jpeg = jpegData(image, quality: 0.85) else { throw Failure.unreadable }
         guard jpeg.count <= limit else { throw Failure.tooLarge(limit: limit) }
         let base = (name as NSString).deletingPathExtension
         return PreparedAttachment(data: jpeg, name: (base.isEmpty ? "photo" : base) + ".jpg", mediaType: "image/jpeg", width: image.width, height: image.height)
+    }
+
+    private static func jpegData(_ image: CGImage, quality: CGFloat) -> Data? {
+        #if os(iOS)
+        UIImage(cgImage: image).jpegData(compressionQuality: quality)
+        #else
+        try? MacImageEncoding.jpeg(image, quality: quality)
+        #endif
     }
 
     /// A recent-photos pick from the attachment panel. Originals kept only in iCloud download on demand.
@@ -134,6 +144,7 @@ enum AttachmentPreparer {
         return try prepareImage(data, name: "photo", limit: limit)
     }
 
+    #if os(iOS)
     /// A camera capture from the attachment panel.
     static func prepare(capture: CameraCapture, limit: Int) async throws -> PreparedAttachment {
         switch capture {
@@ -143,6 +154,7 @@ enum AttachmentPreparer {
             return try await prepareVideo(url, name: "video", limit: limit)
         }
     }
+    #endif
 
     static func prepareVideo(_ url: URL, name: String, limit: Int) async throws -> PreparedAttachment {
         try await prepareVideo(AVURLAsset(url: url), name: name, limit: limit)
@@ -271,28 +283,28 @@ final class AttachmentUploader: NSObject, URLSessionTaskDelegate, @unchecked Sen
 /// Bounded decoding for bubbles: the thumbnail pass never inflates the full image.
 enum AttachmentThumbnails {
     // NSCache is thread-safe; the annotation only tells the compiler so.
-    nonisolated(unsafe) private static let cache = NSCache<NSString, UIImage>()
+    nonisolated(unsafe) private static let cache = NSCache<NSString, PlatformImage>()
 
     /// Synchronous hit, so a reconfigured cell never blanks an image it already showed.
-    static func cached(for url: URL) -> UIImage? { cache.object(forKey: url.path as NSString) }
+    static func cached(for url: URL) -> PlatformImage? { cache.object(forKey: url.path as NSString) }
 
-    static func image(for url: URL, mediaType: String, maxPixels: Int = 1024) async -> UIImage? {
+    static func image(for url: URL, mediaType: String, maxPixels: Int = 1024) async -> PlatformImage? {
         let key = url.path as NSString
         if let hit = cache.object(forKey: key) { return hit }
-        let image: UIImage? = await Task.detached(priority: .userInitiated) {
+        let image: PlatformImage? = await Task.detached(priority: .userInitiated) {
             if mediaType.hasPrefix("image/") {
                 guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
                       let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                           kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
                           kCGImageSourceThumbnailMaxPixelSize: maxPixels] as CFDictionary) else { return nil }
-                return UIImage(cgImage: cg)
+                return PlatformImage(cgImage: cg)
             }
             if mediaType.hasPrefix("video/") {
                 let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
                 generator.appliesPreferredTrackTransform = true
                 generator.maximumSize = CGSize(width: maxPixels, height: maxPixels)
                 guard let cg = try? await generator.image(at: .zero).image else { return nil }
-                return UIImage(cgImage: cg)
+                return PlatformImage(cgImage: cg)
             }
             return nil
         }.value
@@ -301,7 +313,7 @@ enum AttachmentThumbnails {
     }
 
     /// A small still for the composer tray. The decoder reads files, so the bytes pass through a temporary one.
-    static func preview(of prepared: PreparedAttachment) async -> UIImage? {
+    static func preview(of prepared: PreparedAttachment) async -> PlatformImage? {
         guard prepared.mediaType.hasPrefix("image/") || prepared.mediaType.hasPrefix("video/") else { return nil }
         let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + "." + (prepared.name as NSString).pathExtension)
         guard (try? prepared.data.write(to: url, options: .completeFileProtection)) != nil else { return nil }
@@ -312,6 +324,7 @@ enum AttachmentThumbnails {
     }
 }
 
+#if os(iOS)
 /// A sent or received photo, full screen: pinch to zoom, drag down to dismiss, share, save.
 final class ImageViewer: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     private let url: URL
@@ -438,3 +451,4 @@ final class ImageViewer: UIViewController, UIScrollViewDelegate, UIGestureRecogn
         }
     }
 }
+#endif

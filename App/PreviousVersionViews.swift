@@ -25,7 +25,7 @@ struct UpgradeBlockingView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemGroupedBackground))
+        .background(Color.groupedBackground)
     }
 
     private func progress(_ text: String) -> some View {
@@ -71,7 +71,7 @@ struct UpgradeBlockingView: View {
         .sheet(isPresented: $choosing) {
             NavigationStack {
                 UpgradeChoiceView(model: model, state: state)
-                    .background(Color(.systemGroupedBackground))
+                    .background(Color.groupedBackground)
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { choosing = false } } }
             }
             .themedRoot()
@@ -271,7 +271,7 @@ struct PreviousVersionBackupView: View {
             }
             .task { rolledBack = await model.chatsWithEncryptedSendsSinceBackup() }
             .navigationTitle("Previous Version Backup")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineNavigationTitle()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         .confirmationDialog("Restore previous version’s data?", isPresented: $confirmingRestore, titleVisibility: .visible) {
