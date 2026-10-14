@@ -169,6 +169,9 @@ public struct EncryptionPreparation: Sendable {
     /// Files queued as a reply that were sealed without it, because their chat fell back to legacy OMEMO first.
     /// Their stored quote is gone too; the caller tells the user, whose composer no longer holds the reply.
     public var droppedReplies: Set<String> = []
+    /// Messages and corrections sealed without the link preview they were queued with (their chat fell back to legacy
+    /// OMEMO first). The stored preview is gone too, so the sender's bubble shows what the peer got.
+    public var droppedLinkPreviews: Set<String> = []
 }
 
 /// What the transport must write for one claimed update, re-validated against current trust.

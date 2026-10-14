@@ -1,16 +1,21 @@
 import Foundation
+import XMPPProtocol
 
 /// One thing a message can do, with what doing it means on this platform.
 struct MessageAction: Identifiable {
     enum Kind: String {
         case reply, copy, selectText, star, retry, edit, unsend, encryptionDetails, report
+        /// The pressed link's actions, above the message's own: open it (call, for a phone number), message the
+        /// number, copy it, share it.
+        case openLink, messageNumber, copyLink, shareLink
 
         /// Choosing it presents nothing and focuses nothing, so the composer may take back the focus it had before the
-        /// menu. Reply and edit focus the composer themselves; text selection and the unsend dialog must keep it away.
+        /// menu. Reply and edit focus the composer themselves; text selection and the unsend dialog must keep it away,
+        /// and so must anything that opens a link or a share sheet.
         var returnsFocusToComposer: Bool {
             switch self {
-            case .copy, .star, .retry: true
-            case .reply, .edit, .selectText, .unsend, .encryptionDetails, .report: false
+            case .copy, .star, .retry, .copyLink: true
+            case .reply, .edit, .selectText, .unsend, .encryptionDetails, .report, .openLink, .messageNumber, .shareLink: false
             }
         }
     }
@@ -42,7 +47,53 @@ enum MessageActionMenu {
         let symbol: String
     }
 
-    static func items(for message: TimelineMessage) -> [Item] {
+    /// `link` is the link a long press landed on (in the text or on the preview card); its actions come first.
+    static func items(for message: TimelineMessage, link: URL? = nil) -> [Item] {
+        let own = messageItems(for: message)
+        guard let link, !message.showsPlaceholder else { return own }
+        return linkItems(for: link) + own
+    }
+
+    /// What a long press on `url` adds at the top of the message menu.
+    static func linkItems(for url: URL) -> [Item] {
+        switch LinkOpening.destination(for: url, inAppBrowser: false) {
+        case .phone:
+            [Item(kind: .openLink, title: "Call", symbol: "phone"),
+             Item(kind: .messageNumber, title: "Send message", symbol: "message"),
+             Item(kind: .copyLink, title: "Copy number", symbol: "number")]
+        case .mail:
+            [Item(kind: .openLink, title: "New mail", symbol: "envelope"),
+             Item(kind: .copyLink, title: "Copy email address", symbol: "at"),
+             Item(kind: .shareLink, title: "Share link", symbol: "square.and.arrow.up")]
+        case .chat, .group:
+            [Item(kind: .openLink, title: "Open chat", symbol: "bubble.left.and.bubble.right"),
+             Item(kind: .copyLink, title: "Copy address", symbol: "at"),
+             Item(kind: .shareLink, title: "Share link", symbol: "square.and.arrow.up")]
+        case .map:
+            [Item(kind: .openLink, title: "Open in Maps", symbol: "map"),
+             Item(kind: .copyLink, title: "Copy link", symbol: "link"),
+             Item(kind: .shareLink, title: "Share link", symbol: "square.and.arrow.up")]
+        case .unsupported:
+            [Item(kind: .copyLink, title: "Copy link", symbol: "link")]
+        case .web:
+            [Item(kind: .openLink, title: "Open link", symbol: "safari"),
+             Item(kind: .copyLink, title: "Copy link", symbol: "link"),
+             Item(kind: .shareLink, title: "Share link", symbol: "square.and.arrow.up")]
+        }
+    }
+
+    /// The VoiceOver action that opens one link in the text, named after what it does and the link as written.
+    static func linkAccessibilityTitle(for link: DetectedLink) -> String {
+        switch link.kind {
+        case .web: "Open link \(link.text)"
+        case .phone: "Call \(link.text)"
+        case .mail: "Email \(link.text)"
+        case .xmpp: "Open chat \(link.text)"
+        case .geo: "Open \(link.text) in Maps"
+        }
+    }
+
+    private static func messageItems(for message: TimelineMessage) -> [Item] {
         // A placeholder is a notice, not content: nothing to quote, copy, star or select; only why it is unreadable.
         if message.unreadable != nil {
             return [Item(kind: .encryptionDetails, title: "Encryption details", symbol: "lock.shield")]

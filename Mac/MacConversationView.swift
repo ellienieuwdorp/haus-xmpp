@@ -1,9 +1,11 @@
+import AppKit
 import SwiftUI
 
 /// The open chat, read-only. A placeholder until the Mac has its own timeline and composer: it shows the rows the
 /// shared presenter builds, in a SwiftUI `LazyVStack` that opens at the newest message in its first frame (scrolling
 /// there after layout shows a visible jump) and follows the bottom while the reader is there. No paging, no prepend
-/// hold, no composer yet. A bubble's right-click menu has the shared menu's Copy and Report.
+/// hold, no composer yet. A bubble's right-click menu has the shared menu's Copy and Report. Links in bubbles open
+/// through `LinkOpening`, and preview cards show as on the iPhone.
 struct MacConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -16,6 +18,12 @@ struct MacConversationView: View {
     @State private var visibleRows = VisibleRows()
     /// A message's Report, waiting for its confirmation.
     @State private var blockRequest: BlockRequest?
+    /// A phone link was clicked: Call, Send Message or Copy.
+    @State private var phoneLink: PhoneLink?
+    /// A link could not be opened, so it was copied; the alert says why.
+    @State private var copiedReason: String?
+    /// An `xmpp:…?join` link to a group this account is not in: the join flow, with its address filled in.
+    @State private var joiningGroup: String?
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -65,6 +73,58 @@ struct MacConversationView: View {
         // Closed by the root when the selection moves on or the window closes: SwiftUI may build the detail column more
         // than once for one selection, and a late disappearance would close the chat the new view just opened.
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
+        .environment(\.openURL, OpenURLAction { url in open(url); return .handled })
+        .confirmationDialog(phoneLink?.number ?? "", isPresented: Binding(get: { phoneLink != nil }, set: { if !$0 { phoneLink = nil } }),
+                            titleVisibility: .visible, presenting: phoneLink) { link in
+            Button("Call") { NSWorkspace.shared.open(link.call) }
+            Button("Send message") { NSWorkspace.shared.open(link.message) }
+            Button("Copy") { copy(link.number) }
+        }
+        .alert("Copied", isPresented: Binding(get: { copiedReason != nil }, set: { if !$0 { copiedReason = nil } }), presenting: copiedReason) { _ in
+            Button("OK") {}
+        } message: { Text($0) }
+        .sheet(isPresented: Binding(get: { joiningGroup != nil }, set: { if !$0 { joiningGroup = nil } })) {
+            NavigationStack {
+                GroupJoinView(model: model, room: joiningGroup ?? "") { room in
+                    joiningGroup = nil
+                    model.requestRoute(.chat(room))
+                }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { joiningGroup = nil } } }
+            }
+            .frame(minWidth: 420, idealWidth: 460, minHeight: 360, idealHeight: 420)
+            .themedRoot()
+        }
+    }
+
+    /// Performs a link from a bubble or a card. Where it goes is `LinkOpening`'s decision, shared with the iPhone; web
+    /// pages always open in the default browser.
+    private func open(_ url: URL) {
+        switch LinkOpening.destination(for: url, inAppBrowser: false) {
+        case .web(let page, _), .map(let page):
+            NSWorkspace.shared.open(page)
+        case .phone(let number, let call, let message):
+            phoneLink = PhoneLink(number: number, call: call, message: message)
+        case .mail(let mail, let address):
+            if !NSWorkspace.shared.open(mail) { copied(address, because: "No mail app is set up on this Mac, so the address was copied.") }
+        case .chat(let address):
+            guard address != chatID else { return }
+            if model.isGroup(address) { model.requestRoute(.chat(address)); return }
+            Task { if let chat = await model.createChat(address) { model.requestRoute(.chat(chat)) } }
+        case .group(let room):
+            if !model.isGroup(room) { joiningGroup = room } else if room != chatID { model.requestRoute(.chat(room)) }
+        case .unsupported:
+            copied(LinkOpening.copyText(for: url), because: "This link can’t be opened here, so it was copied.")
+        }
+    }
+
+    private func copied(_ text: String, because reason: String) {
+        copy(text)
+        copiedReason = reason
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     private func timeline(_ presenter: ConversationPresenter) -> some View {
@@ -82,6 +142,8 @@ struct MacConversationView: View {
                             .onAppear {
                                 visibleRows.ids.insert(row.message.id)
                                 markIfReading(row.message.id, presenter: presenter)
+                                // Fetched on display, never at insert, under the model's policy (setting, contact, demo).
+                                if row.message.wantsLinkPreview { model.linkPreviewDisplayed(row.message.id) }
                             }
                             .onDisappear { visibleRows.ids.remove(row.message.id) }
                     }
@@ -128,6 +190,7 @@ private struct MacTimelineRow: View {
     let isGroup: Bool
     let report: (String) -> Void
     @Environment(\.appearance) private var appearance
+    @Environment(\.openURL) private var openURL
 
     private var message: TimelineMessage { row.message }
 
@@ -156,7 +219,13 @@ private struct MacTimelineRow: View {
         .padding(.top, row.startsRun && row.dateHeader == nil ? 8 : 2)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(message.accessibilityDescription)
-        .accessibilityActions { menu }
+        .accessibilityActions {
+            menu
+            // One action per link, as on the iPhone.
+            ForEach(Array(message.links.enumerated()), id: \.offset) { _, link in
+                Button(MessageActionMenu.linkAccessibilityTitle(for: link)) { openURL(link.url) }
+            }
+        }
     }
 
     /// The shared menu's items the Mac performs so far.
@@ -200,6 +269,22 @@ private struct MacBubble: View {
 
     private var textColor: Color { message.isOutgoing ? Color(platform: accent.bubbleText) : .primary }
     private var metaColor: Color { message.isOutgoing ? Color(platform: accent.bubbleText.withAlphaComponent(0.75)) : .secondary }
+    /// The preview card's fill: the iPhone's reply-quote panel fill (`AccentTheme.panelFill`).
+    private var panelFill: Color { Color(platform: accent.panelFill(outgoing: message.isOutgoing)) }
+    /// Links are underlined, in the accent on received bubbles and in the text colour on the accent-filled sent ones.
+    private var linkColor: Color { message.isOutgoing ? textColor : Color(platform: accent.tint) }
+
+    /// The text with its links (`TimelineMessage.links`) as link runs; a placeholder has none.
+    private var text: AttributedString {
+        let shown = message.displayedText
+        var text = AttributedString(shown)
+        for link in message.links {
+            guard let written = Range(link.range, in: shown), let range = Range(written, in: text) else { continue }
+            text[range].link = link.url
+            text[range].swiftUI.underlineStyle = .single
+        }
+        return text
+    }
 
     var body: some View {
         VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 0) {
@@ -219,11 +304,16 @@ private struct MacBubble: View {
                         .font(.callout)
                         .foregroundStyle(textColor)
                 }
+                if let preview = message.linkPreview, !message.showsPlaceholder {
+                    MacLinkPreviewCard(preview: preview, fill: panelFill, textColor: textColor, metaColor: metaColor)
+                        .padding(.horizontal, -4)
+                }
                 if !message.displayedText.isEmpty {
-                    Text(message.displayedText)
+                    Text(text)
                         .font(.body)
                         .italic(message.showsPlaceholder)
                         .foregroundStyle(message.showsPlaceholder ? metaColor : textColor)
+                        .tint(linkColor)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -296,6 +386,13 @@ private struct MacTypingRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(typing.accessibilityLabel)
     }
+}
+
+/// A clicked phone link's choices.
+private struct PhoneLink {
+    let number: String
+    let call: URL
+    let message: URL
 }
 
 /// A plain reference holder, so changing it never invalidates the view that owns it.

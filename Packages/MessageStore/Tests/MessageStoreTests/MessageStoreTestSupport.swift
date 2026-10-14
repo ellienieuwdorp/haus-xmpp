@@ -45,7 +45,8 @@ func sqliteExecute(url: URL, sql: String) -> Bool {
 
 /// Writes a store a previous build left, from its real dump: schema 21 is the 045ca73 build's (three synthetic messages
 /// of `Ellie@Example.org`, as typed, with `bob@example.org`), schema 23 the f563365 build's (the same three, already
-/// `ellie@example.org`, plus a group message), schema 24 that store as main at 4df394a migrates it. In
+/// `ellie@example.org`, plus a group message), schema 24 that store as main at 4df394a migrates it, schema 25 as main
+/// at 8115529 migrates that. In
 /// write-ahead-log mode, as every one of those builds keeps it.
 func writePreviousReleaseStore(at url: URL, schema: Int = 21) throws {
     let fixture = try #require(Bundle.module.url(forResource: "schema-\(schema)", withExtension: "sql", subdirectory: "Fixtures"))

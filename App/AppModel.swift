@@ -104,6 +104,8 @@ final class AppModel {
                 pushWanted = accountID.isEmpty || !preferences.bool(forKey: "pushOff." + accountID)
                 pushStatus = .off
                 loadBlocklist()
+                // At once, not at the next displayed link: the previous account's fetches stop and record nothing.
+                useLinkPreviewAccount()
             }
             ForegroundNotificationState.shared.accountID = isDemo ? "" : accountID
         }
@@ -295,6 +297,22 @@ final class AppModel {
     @ObservationIgnored private var uploadReconciliation = UploadReconciliation()
     private var serverProfiles: ServerProfileMemory { ServerProfileMemory(defaults: preferences) }
     private var files: AttachmentFiles? { storageDirectory.map { AttachmentFiles(directory: $0, account: accountID) } }
+    /// Our own link preview fetches (AppModel+LinkPreviews.swift). Observed: a result fills in its card.
+    let linkPreviewCenter = LinkPreviewCenter()
+    /// Hosts that serve the account's files, which never get a preview: our upload slots' GET hosts and the hosts of
+    /// files we received. Read from storage once per account, then extended as slots are taken and timelines load.
+    var linkPreviewUploadHosts: Set<String> = []
+    /// The account `linkPreviewUploadHosts` was read from storage for.
+    @ObservationIgnored var linkPreviewHostsAccount: String?
+    /// The account's attachment folder; fetched preview images live in its `link-previews/`.
+    var linkPreviewFolder: URL? { storageDirectory.map { AttachmentFiles.root(directory: $0, account: accountID) } }
+    /// The store's fetch cache for those previews; nil while storage is closed, which fetches nothing.
+    var linkPreviewCache: (any LinkPreviewCaching)? { store }
+    /// This connection's roster as the link preview contact rule reads it (`LinkPreviewPolicy`).
+    func linkPreviewRosterEntry(_ contact: String) -> LinkPreviewPolicy.RosterEntry {
+        guard lastSeenTracker.rosterLoaded else { return .notLoaded }
+        return lastSeenTracker.roster[contact].map { .item($0.subscription) } ?? .absent
+    }
     @ObservationIgnored private var uploader: AttachmentUploader?
     @ObservationIgnored private var storageDirectory: URL?
     @ObservationIgnored private lazy var uploadPasses = RerunningPass { [weak self] in self?.uploadPass() }
@@ -365,8 +383,11 @@ final class AppModel {
             }
         }
         pathMonitor.pathUpdateHandler = { [weak self] path in
-            guard path.status == .satisfied else { return }
-            Task { @MainActor in self?.networkBecameReachable() }
+            let usable = path.status == .satisfied
+            Task { @MainActor in
+                self?.linkPreviewCenter.hasNetwork = usable
+                if usable { self?.networkBecameReachable() }
+            }
         }
         pathMonitor.start(queue: .global(qos: .utility))
         await openStorage()
@@ -503,6 +524,15 @@ final class AppModel {
                                                                                             kind: receipt, payload: "{}", updatedAt: Date(timeIntervalSince1970: 1_789_380_010)))
                     }
                 }
+            }
+            // Links and previews that came with their messages, so the sample needs no fetch (DemoLinkSamples).
+            try await store.upsertChat(accountID: account, chatID: DemoLinkSamples.chatID, title: DemoLinkSamples.title)
+            for message in DemoLinkSamples.messages(account: account) {
+                try await store.insertMessage(message)
+                guard message.isOutgoing else { continue }
+                try await store.recordReceipt(accountID: account, event: MessageEvent(id: message.id + "-receipt", chatID: message.chatID, actorID: message.chatID,
+                                                                                    targetWireID: message.id, kind: .displayed, payload: "{}",
+                                                                                    updatedAt: message.sentAt.addingTimeInterval(10)))
             }
             #if DEBUG
             // Long enough to cross several timeline pages; only tests and scroll checks ask for it.
@@ -783,6 +813,8 @@ final class AppModel {
     /// Erase credentials and the push subscription for the current account.
     private func forgetAccount() async {
         quiescing = true
+        // No preview fetch of this account runs on, or lands in its cache, while its data is being removed.
+        linkPreviewCenter.use(account: "", folder: nil, cache: nil)
         generation = UUID() // Invalidate pending permission/registration before removing credentials.
         let token = generation
         let account = accountID
@@ -855,6 +887,7 @@ final class AppModel {
             case .change(let signals, let activated): changeLifecycle(to: signals, activated: activated)
             }
         }
+        linkPreviewCenter.setForeground(lifecycle.windowVisible)
     }
 
     /// Returns once every lifecycle transition queued so far, and any queued behind them meanwhile, has run: the Mac
@@ -1104,6 +1137,8 @@ final class AppModel {
         outboxSender = nil
         encryption = nil
         store = nil
+        // Fetches still writing to the closed store stop and record nothing.
+        useLinkPreviewAccount()
         chats = []
         messages = []
     }
@@ -1549,6 +1584,9 @@ final class AppModel {
         uploadService = uploads.load(account: account)
         resetTyping()
         lastSeenTracker = LastSeenTracker()
+        // The previous account's preview fetches stop now, not at the next display.
+        linkPreviewUploadHosts = []; linkPreviewHostsAccount = nil
+        useLinkPreviewAccount()
         preferences.set(account, forKey: "lastAccount")
     }
 
@@ -1631,6 +1669,7 @@ final class AppModel {
                     let slot = try await client.requestUploadSlot(service: service, filename: attachment.name, size: size, contentType: "application/octet-stream")
                     let taskID = uploader.start(file: staged, slot: slot, size: size, contentType: "application/octet-stream")
                     try await store.setAttachmentUploadTask(accountID: account, messageID: message.id, taskID: taskID, url: slot.get.absoluteString)
+                    if self?.accountID == account, let host = slot.get.host()?.lowercased() { self?.noteLinkPreviewHosts([host]) }
                 } catch {
                     // A dropped connection is not the server refusing; the reconnect starts uploads again.
                     let dropped = error is CancellationError || [XMPPClientError.notConnected, .connectionClosed].contains { $0 == error as? XMPPClientError }
@@ -2375,7 +2414,9 @@ final class AppModel {
         } catch { self.error = "Could not create conversation."; return nil }
     }
 
-    func send(_ body: String, to chatID: String, replyingTo source: ChatMessage? = nil) async -> Bool {
+    /// `linkPreview` is the composer's frozen own preview (`ComposerLinkPreview.frozen`), stored with the message so
+    /// every retry seals the same bytes. Only modern OMEMO carries it; a legacy seal clears it (link-previews.md, Wire).
+    func send(_ body: String, to chatID: String, replyingTo source: ChatMessage? = nil, linkPreview: StoredLinkPreview? = nil) async -> Bool {
         guard !isSending, let store, !accountID.isEmpty,
               !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               body.utf8.count <= 16_384 else { return false }
@@ -2387,7 +2428,8 @@ final class AppModel {
         if isGroup(chatID), !canSend(to: chatID) { error = "Wait until this account has joined the group before sending."; return false }
         if let source, source.accountID != account || source.chatID != chatID { return false }
         let message = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chatID,
-                                    senderID: account, body: body, isOutgoing: true, reply: source.map { replySnapshot(of: $0, in: chatID) }, encryptionProfile: sample ? nil : "pending")
+                                    senderID: account, body: body, isOutgoing: true, reply: source.map { replySnapshot(of: $0, in: chatID) }, encryptionProfile: sample ? nil : "pending",
+                                    linkPreview: Self.acceptedOwnLinkPreview(linkPreview, body: body, uploadHosts: linkPreviewUploadHosts))
         if let problem = XMPPClient.messageProblem(to: chatID, body: body, id: message.id, reply: Self.wireReply(message.reply)) {
             self.error = Self.sendFailure(problem)
             return false
@@ -3498,6 +3540,7 @@ final class AppModel {
     }
 
     private func publishTimeline(_ page: TimelinePage, chat: String) {
+        noteLinkPreviewHosts(of: page.messages)
         messages = page.messages
         messagesLoadedFor = chat
         messageReactions = page.reactions
@@ -3542,6 +3585,7 @@ final class AppModel {
         // before the message shows); track stored message IDs if that is ever visible.
         defer { typingTracker.flushSettled(); publishTyping() }
         do {
+            await loadLinkPreviewHosts(store: store, account: account)
             if scope.contains(.chats) {
                 try await loadChats(store: store, account: account)
                 prefetchTimelinePages(store: store, account: account)

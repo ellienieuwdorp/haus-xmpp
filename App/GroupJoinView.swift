@@ -7,6 +7,13 @@ struct GroupJoinView: View {
     @State private var nickname = ""
     @State private var joining = false
 
+    /// `room` prefills the address, as when an `xmpp:…?join` link in a message opens this.
+    init(model: AppModel, room: String = "", joined: @escaping (String) -> Void) {
+        self.model = model
+        self.joined = joined
+        _room = State(initialValue: room)
+    }
+
     var body: some View {
         Form {
             Section {

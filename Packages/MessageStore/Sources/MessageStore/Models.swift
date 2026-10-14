@@ -24,6 +24,8 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public var attachment: StoredAttachment?
     /// Set only on a placeholder row (`encryptionProfile == "unreadable"`, empty body): why this device cannot show it.
     public var unreadableReason: UnreadableReason?
+    /// The link preview the sender attached or we sent with it (`StoredLinkPreview`); nil for most messages.
+    public var linkPreview: StoredLinkPreview?
     /// Projection flags, set only by `applying(_:)`; never persisted.
     public var isRetracted = false
     public var isEdited = false
@@ -34,8 +36,12 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
         var result = self
         for event in events where event.actorID == senderID {
             switch event.kind {
-            case .retraction: result.isRetracted = true; result.isEdited = false; result.body = ""; result.attachment = nil
-            case .correction: if !result.isRetracted, let body = MessageEvent.correctionBody(event.payload) { result.body = body; result.isEdited = true }
+            case .retraction: result.isRetracted = true; result.isEdited = false; result.body = ""; result.attachment = nil; result.linkPreview = nil
+            case .correction:
+                // A correction carries the whole new message: its preview replaces the old one, and none removes it.
+                if !result.isRetracted, let body = MessageEvent.correctionBody(event.payload) {
+                    result.body = body; result.isEdited = true; result.linkPreview = MessageEvent.correctionLinkPreview(event.payload)
+                }
             default: break
             }
         }
@@ -45,8 +51,9 @@ public struct StoredMessage: Identifiable, Equatable, Sendable {
     public init(id: String, accountID: String, chatID: String, senderID: String, body: String,
                 sentAt: Date = Date(), isOutgoing: Bool = false, isStarred: Bool = false,
                 transportState: OutgoingTransportState? = nil, reply: MessageReply? = nil, encryptionProfile: String? = nil, wireID: String? = nil, wireIDAuthenticated: Bool = false,
-                attachment: StoredAttachment? = nil, unreadableReason: UnreadableReason? = nil) {
+                attachment: StoredAttachment? = nil, unreadableReason: UnreadableReason? = nil, linkPreview: StoredLinkPreview? = nil) {
         self.attachment = attachment
+        self.linkPreview = linkPreview
         self.unreadableReason = unreadableReason
         self.id = id
         self.accountID = accountID
@@ -502,15 +509,29 @@ public struct MessageEvent: Sendable, Equatable {
         self.updatedAt = Date(timeIntervalSince1970: (updatedAt.timeIntervalSince1970 * 1_000).rounded() / 1_000)
     }
 
-    /// A correction's payload is the replacement body as one JSON string; a retraction's is `{}`.
-    public static func correctionPayload(_ body: String) throws -> String {
+    /// A correction's payload is the replacement body as one JSON string, or, when the correction carries a link
+    /// preview, `{"body":…,"linkPreview":…}`; a retraction's is `{}`.
+    public static func correctionPayload(_ body: String) throws -> String { try correctionPayload(body, linkPreview: nil) }
+    public static func correctionPayload(_ body: String, linkPreview: StoredLinkPreview?) throws -> String {
         guard !body.isEmpty, body.utf8.count <= 65_536 else { throw MessageStoreError.invalidValue }
-        return String(decoding: try JSONEncoder().encode(body), as: UTF8.self)
+        guard let linkPreview else { return String(decoding: try JSONEncoder().encode(body), as: UTF8.self) }
+        try linkPreview.validate()
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        return String(decoding: try encoder.encode(Correction(body: body, linkPreview: linkPreview)), as: UTF8.self)
     }
     public static func correctionBody(_ payload: String) -> String? {
-        guard let body = try? JSONDecoder().decode(String.self, from: Data(payload.utf8)), !body.isEmpty, body.utf8.count <= 65_536 else { return nil }
+        let data = Data(payload.utf8)
+        guard let body = (try? JSONDecoder().decode(String.self, from: data)) ?? correction(data)?.body,
+              !body.isEmpty, body.utf8.count <= 65_536 else { return nil }
         return body
     }
+    /// The preview a correction payload carries; nil for the plain form and for a preview the store would refuse.
+    public static func correctionLinkPreview(_ payload: String) -> StoredLinkPreview? {
+        guard let preview = correction(Data(payload.utf8))?.linkPreview, (try? preview.validate()) != nil else { return nil }
+        return preview
+    }
+    private struct Correction: Codable { let body: String; let linkPreview: StoredLinkPreview? }
+    private static func correction(_ data: Data) -> Correction? { try? JSONDecoder().decode(Correction.self, from: data) }
 }
 
 /// One row of the durable update outbox: every outgoing stanza that is not a chat message.

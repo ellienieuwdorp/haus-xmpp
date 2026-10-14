@@ -28,6 +28,27 @@ final class MessageActionMenuTests: XCTestCase {
         }
     }
 
+    /// A long press on a link (or the card) puts that link's actions above the message's own, named for what the link
+    /// is; a press elsewhere on the bubble, or on a placeholder, leaves the message's menu as it was.
+    func testAPressedLinkPutsItsActionsAboveTheMessages() {
+        let message = TimelineMessage(id: "m", body: "Links", isOutgoing: false, isStarred: false, sentAt: sentAt)
+        let reading = ["Reply", "Copy", "Star message", "Select text"]
+        let cases: [(link: String, actions: [String], line: UInt)] = [
+            ("https://example.org/a", ["Open link", "Copy link", "Share link"], #line),
+            ("tel:+31612345678", ["Call", "Send message", "Copy number"], #line),
+            ("mailto:bob@example.org", ["New mail", "Copy email address", "Share link"], #line),
+            ("xmpp:romeo@montague.lit", ["Open chat", "Copy address", "Share link"], #line),
+            ("geo:37.78,-122.39", ["Open in Maps", "Copy link", "Share link"], #line),
+            ("xmpp:montague.lit", ["Copy link"], #line),
+        ]
+        for item in cases {
+            XCTAssertEqual(MessageActionMenu.items(for: message, link: URL(string: item.link)!).map(\.title), item.actions + reading, item.link, line: item.line)
+        }
+        XCTAssertEqual(MessageActionMenu.items(for: message).map(\.title), reading)
+        let unreadable = TimelineMessage(id: "u", body: "", isOutgoing: false, isStarred: false, unreadable: .decryptFailed)
+        XCTAssertEqual(MessageActionMenu.items(for: unreadable, link: URL(string: "https://example.org")!).map(\.title), ["Encryption details"])
+    }
+
     /// A file opens once on disk and can be fetched while it waits for a tap or failed; an unsent message's file cannot.
     func testAFileOffersOpenOrDownloadByWhereItStands() {
         func file(_ download: AttachmentDownloadState, on disk: URL? = nil, retracted: Bool = false) -> TimelineMessage {

@@ -9,7 +9,7 @@ public actor MessageStore {
     private let transportOwnership: TransportOwnership
 
     /// The schema this build writes.
-    public static let currentSchemaVersion = 25
+    public static let currentSchemaVersion = 26
 
     /// How opening treats a file written by an older build.
     public enum SchemaAccess: Sendable {
@@ -411,7 +411,29 @@ public actor MessageStore {
                     PRIMARY KEY(account_id, profile, device_id)
                 )
                 """)
-            try connection.execute("PRAGMA user_version = \(addressesMigrated ? 25 : 22)")
+            // v26: link previews (docs/development/link-previews.md). The preview a message carries, sent or received, goes
+            // and comes with its message; our own fetches are a per-account cache whose image files live under the
+            // account's attachment folder. The version check and IF NOT EXISTS keep it idempotent in any merge order.
+            if version < 26 {
+                try connection.execute("""
+                    CREATE TABLE IF NOT EXISTS message_link_previews (
+                        account_id TEXT NOT NULL, message_id TEXT NOT NULL, url TEXT NOT NULL, title TEXT, summary TEXT,
+                        image_data BLOB, image_type TEXT, image_alt TEXT, source TEXT NOT NULL CHECK(source IN ('sender','own')),
+                        PRIMARY KEY(account_id, message_id),
+                        FOREIGN KEY(account_id, message_id) REFERENCES messages(account_id, id) ON DELETE CASCADE
+                    )
+                    """)
+                try connection.execute("""
+                    CREATE TABLE IF NOT EXISTS link_preview_cache (
+                        account_id TEXT NOT NULL, url TEXT NOT NULL, fetched_at REAL NOT NULL,
+                        status TEXT NOT NULL CHECK(status IN ('ok','failed')), title TEXT, summary TEXT, image_alt TEXT,
+                        image_path TEXT, image_width INTEGER, image_height INTEGER,
+                        PRIMARY KEY(account_id, url)
+                    )
+                    """)
+                try connection.execute("CREATE INDEX IF NOT EXISTS link_preview_cache_age ON link_preview_cache(account_id,fetched_at)")
+            }
+            try connection.execute("PRAGMA user_version = \(addressesMigrated ? 26 : 22)")
         }
     }
 
@@ -450,12 +472,15 @@ public actor MessageStore {
             comparison.transportState = existing.transportState
             comparison.rejection = existing.rejection
             comparison.attachment = existing.attachment
+            // A seal for a legacy chat may have cleared our own preview since (`sealQueuedOutgoing`).
+            comparison.linkPreview = existing.linkPreview
             guard existing == comparison else { throw MessageStoreError.conflictingIdentity }
             return false
         }
         if let attachment = message.attachment {
             try Self.validateAttachment(attachment)
         }
+        try message.linkPreview?.validate()
         try connection.execute("""
             INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing,starred,reply_json,encryption_profile,wire_id,wire_id_authenticated)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
@@ -471,6 +496,14 @@ public actor MessageStore {
                       attachment.width.map(Value.integer) ?? .null, attachment.height.map(Value.integer) ?? .null, .text(attachment.hash),
                       attachment.cipherHash.map(Value.text) ?? .null, .blob(attachment.secret), attachment.url.map(Value.text) ?? .null,
                       attachment.uploadState.map { .text($0.rawValue) } ?? .null, attachment.uploadTaskID.map(Value.integer) ?? .null])
+        }
+        if let preview = message.linkPreview {
+            try connection.execute("""
+                INSERT INTO message_link_previews(account_id,message_id,url,title,summary,image_data,image_type,image_alt,source)
+                VALUES(?,?,?,?,?,?,?,?,?)
+                """, [.text(message.accountID), .text(message.id), .text(preview.url), preview.title.map(Value.text) ?? .null,
+                      preview.summary.map(Value.text) ?? .null, preview.imageData.map(Value.blob) ?? .null, preview.imageType.map(Value.text) ?? .null,
+                      preview.imageAlt.map(Value.text) ?? .null, .text(preview.source.rawValue)])
         }
         return true
     }
@@ -756,11 +789,12 @@ public actor MessageStore {
                         cipherHash: row[10].optionalString, secret: row[11].data ?? Data(), url: row[12].optionalString,
                         uploadState: row[13].optionalString.flatMap(StoredAttachment.UploadState.init(rawValue:)), uploadTaskID: Self.optionalInteger(row[14]))
                 }
+                decoded.linkPreview = Self.decodeLinkPreview(row[19..<26])
                 // Same precedence as `applying`: the sender's retraction wins over any correction.
                 if row[15].integer != 0 {
-                    decoded.isRetracted = true; decoded.isEdited = false; decoded.body = ""; decoded.attachment = nil
+                    decoded.isRetracted = true; decoded.isEdited = false; decoded.body = ""; decoded.attachment = nil; decoded.linkPreview = nil
                 } else if let payload = row[16].optionalString, let body = MessageEvent.correctionBody(payload) {
-                    decoded.body = body; decoded.isEdited = true
+                    decoded.body = body; decoded.isEdited = true; decoded.linkPreview = MessageEvent.correctionLinkPreview(payload)
                 }
                 last = decoded
             }
@@ -773,8 +807,8 @@ public actor MessageStore {
         }
     }
 
-    /// 4 chat + 11 attachment + 4 summary columns precede `l.*` (Self.columns order).
-    private static let chatListPrefix = 19
+    /// 4 chat + 11 attachment + 4 summary + 7 link preview columns precede `l.*` (Self.columns order).
+    private static let chatListPrefix = 26
     // `?1` is the account throughout. Every step is an index seek per chat: the newest message comes
     // from the `timeline` index and is joined by primary key, so the cost follows the number of chats,
     // not of messages. The store never runs ANALYZE; plans and measurements are in the package README.
@@ -828,10 +862,12 @@ public actor MessageStore {
         SELECT c.id,c.title,c.pinned,c.avatar_hash,
                a.name,a.media_type,a.size,a.width,a.height,a.hash,a.cipher_hash,a.secret,a.url,a.upload_state,a.task_id,
                s.retracted,s.correction,s.delivered,s.displayed,
+               p.url,p.title,p.summary,p.image_data,p.image_type,p.image_alt,p.source,
                l.*
         FROM chats c
         LEFT JOIN last l ON l.id=(SELECT m.id FROM messages m WHERE m.account_id=?1 AND m.chat_id=c.id ORDER BY m.sent_at DESC,m.id DESC LIMIT 1)
         LEFT JOIN attachments a ON a.account_id=?1 AND a.message_id=l.id
+        LEFT JOIN message_link_previews p ON p.account_id=?1 AND p.message_id=l.id
         LEFT JOIN summary s ON s.chat_id=c.id
         WHERE c.account_id=?1
         ORDER BY c.pinned DESC,l.sent_at DESC,c.id
@@ -1322,6 +1358,13 @@ public actor MessageStore {
                                [.text(accountID), .text(messageID)])
     }
 
+    /// The lowercased hosts of every file URL the account has stored: its upload slots' GET URLs and the files it
+    /// received. Link previews never fetch from them.
+    public func attachmentHosts(accountID: String) throws -> Set<String> {
+        Set(try connection.query("SELECT DISTINCT url FROM attachments WHERE account_id=? AND url IS NOT NULL", [.text(accountID)])
+            .compactMap { URL(string: $0[0].string)?.host()?.lowercased() })
+    }
+
     public func encryptedOutgoing(accountID: String, messageID: String) throws -> Data? {
         try connection.query("SELECT wire FROM encrypted_outbox WHERE account_id=? AND message_id=?", [.text(accountID), .text(messageID)]).first?[0].data
     }
@@ -1329,7 +1372,8 @@ public actor MessageStore {
     /// Converts an already durable queued intention into exact ciphertext and commits the ratchet
     /// advancement in the SAME transaction. Never overwrites an existing encrypted attempt.
     public func sealQueuedOutgoing(accountID: String, messageID: String, profile: String,
-                                   expectedRevision: Int, state: Data, wire: Data, authenticateWireID: Bool = true, clearReply: Bool = false) throws {
+                                   expectedRevision: Int, state: Data, wire: Data, authenticateWireID: Bool = true, clearReply: Bool = false,
+                                   clearLinkPreview: Bool = false) throws {
         guard !profile.isEmpty, !wire.isEmpty, wire.count <= 1_048_576 else { throw MessageStoreError.invalidValue }
         try connection.transaction {
             guard try encryptedOutgoing(accountID: accountID, messageID: messageID) == nil,
@@ -1339,6 +1383,8 @@ public actor MessageStore {
             try connection.execute("UPDATE messages SET encryption_profile=?,wire_id=?,wire_id_authenticated=? WHERE account_id=? AND id=?", [.text(profile), authenticateWireID ? .text(messageID) : .null, .integer(profile == "modern" && authenticateWireID ? 1 : 0), .text(accountID), .text(messageID)])
             // The sealed content left the reply out; the stored message must not claim one.
             if clearReply { try connection.execute("UPDATE messages SET reply_json=NULL WHERE account_id=? AND id=?", [.text(accountID), .text(messageID)]) }
+            // Nor a link preview: our bubble shows what the peer got.
+            if clearLinkPreview { try connection.execute("DELETE FROM message_link_previews WHERE account_id=? AND message_id=?", [.text(accountID), .text(messageID)]) }
         }
     }
 
@@ -2389,16 +2435,19 @@ public actor MessageStore {
     }
 
     /// Unsend or rewrite one of our own messages: the queued stanza and its optimistic projection,
-    /// in one transaction. The outbox seals the wire later; the event is what the timeline shows now.
+    /// in one transaction. The outbox seals the wire later; the event is what the timeline shows now. A correction's
+    /// `linkPreview` is the one it sends with the new body (nil sends none, which removes the old one for the peer too).
     @discardableResult public func enqueueMessageUpdate(accountID: String, id: String, kind: StoredUpdate.Kind, chatID: String,
-                                                       targetMessageID: String, body: String = "", createdAt: Date = Date()) throws -> Bool {
+                                                       targetMessageID: String, body: String = "", linkPreview: StoredLinkPreview? = nil,
+                                                       createdAt: Date = Date()) throws -> Bool {
         let eventKind: MessageEventKind
         switch kind { case .retraction: eventKind = .retraction; case .correction: eventKind = .correction; default: throw MessageStoreError.invalidValue }
         guard let target = try message(accountID: accountID, messageID: targetMessageID), target.chatID == chatID,
               target.isOutgoing, target.senderID == accountID,
               let wireID = try reactionReference(accountID: accountID, messageID: targetMessageID) ?? target.wireID,
               try reactionTarget(accountID: accountID, chatID: chatID, wireID: wireID)?.id == targetMessageID else { throw MessageStoreError.invalidValue }
-        let payload = eventKind == .correction ? try MessageEvent.correctionPayload(body) : "{}"
+        guard linkPreview == nil || eventKind == .correction else { throw MessageStoreError.invalidValue }
+        let payload = eventKind == .correction ? try MessageEvent.correctionPayload(body, linkPreview: linkPreview) : "{}"
         let event = MessageEvent(id: id, chatID: chatID, actorID: accountID, targetWireID: wireID, kind: eventKind, payload: payload, updatedAt: createdAt)
         try Self.validateEvent(accountID: accountID, event: event)
         return try connection.transaction {
@@ -2471,13 +2520,23 @@ public actor MessageStore {
     }
 
     /// Converts a durable queued intention into exact ciphertext and commits the ratchet advancement
-    /// in the SAME transaction. Never overwrites an existing sealed wire.
-    public func sealQueuedUpdate(accountID: String, updateID: String, expectedRevision: Int, state: Data, wire: Data) throws {
+    /// in the SAME transaction. Never overwrites an existing sealed wire. `clearLinkPreview`: a correction sealed
+    /// without the link preview it was queued with (the chat fell back to legacy OMEMO); its queued payload and its
+    /// event lose the preview too, so our edited bubble shows what the peer got.
+    public func sealQueuedUpdate(accountID: String, updateID: String, expectedRevision: Int, state: Data, wire: Data,
+                                 clearLinkPreview: Bool = false) throws {
         guard !wire.isEmpty, wire.count <= 1_048_576 else { throw MessageStoreError.invalidValue }
         try connection.transaction {
             guard try sealableUpdate(accountID: accountID, updateID: updateID), try updateWire(accountID: accountID, updateID: updateID) == nil else { throw MessageStoreError.invalidTransition }
             try writeEncryptionState(accountID: accountID, expectedRevision: expectedRevision, data: state)
             try connection.execute("UPDATE outgoing_updates SET wire=? WHERE account_id=? AND id=?", [.blob(wire), .text(accountID), .text(updateID)])
+            if clearLinkPreview, let queued = try update(accountID: accountID, updateID: updateID), queued.kind == .correction,
+               let payload = queued.payload, let body = MessageEvent.correctionBody(payload) {
+                let plain = try MessageEvent.correctionPayload(body)
+                try connection.execute("UPDATE outgoing_updates SET reactions_json=? WHERE account_id=? AND id=?", [.text(plain), .text(accountID), .text(updateID)])
+                try connection.execute("UPDATE message_events SET payload_json=? WHERE account_id=? AND actor_id=? AND id=? AND kind='correction'",
+                                       [.text(plain), .text(accountID), .text(accountID), .text(updateID)])
+            }
         }
     }
 
@@ -2570,6 +2629,8 @@ public actor MessageStore {
             try connection.execute("DELETE FROM notification_candidates WHERE account_id=? AND message_id=?", [.text(accountID), .text(target.id)])
             try connection.execute("DELETE FROM reaction_notification_candidates WHERE account_id=? AND target_message_id=?", [.text(accountID), .text(target.id)])
             try connection.execute("DELETE FROM reaction_notifications_posted WHERE account_id=? AND target_message_id=?", [.text(accountID), .text(target.id)])
+            // An unsent message keeps no preview: the sender took the link back.
+            try connection.execute("DELETE FROM message_link_previews WHERE account_id=? AND message_id=?", [.text(accountID), .text(target.id)])
         }
     }
 
@@ -2645,7 +2706,18 @@ public actor MessageStore {
                                                   uploadState: text(attachment[9]).flatMap(StoredAttachment.UploadState.init(rawValue:)), uploadTaskID: integer(attachment[10]))
             message.attachment?.sealedAccount = text(attachment[11])
         }
+        message.linkPreview = try connection.query("SELECT \(Self.linkPreviewColumns) FROM message_link_previews WHERE account_id=? AND message_id=?",
+                                                   [.text(message.accountID), .text(message.id)]).first.flatMap { Self.decodeLinkPreview($0[...]) }
         return message
+    }
+
+    private static let linkPreviewColumns = "url,title,summary,image_data,image_type,image_alt,source"
+    /// `linkPreviewColumns` in order; nil when the row has no preview (a NULL url from an outer join).
+    private static func decodeLinkPreview(_ row: ArraySlice<Value>) -> StoredLinkPreview? {
+        let values = Array(row)
+        guard values.count == 7, let url = values[0].optionalString, let source = values[6].optionalString.flatMap(StoredLinkPreview.Source.init) else { return nil }
+        return StoredLinkPreview(url: url, title: values[1].optionalString, summary: values[2].optionalString, imageData: values[3].data,
+                                 imageType: values[4].optionalString, imageAlt: values[5].optionalString, source: source)
     }
 
     private static func decode(_ row: [Value]) throws -> StoredMessage {
@@ -2813,5 +2885,60 @@ public struct StoreSnapshotSummary: Codable, Sendable, Equatable {
             counts[table] = try connection.query("SELECT count(*) FROM \"\(table.replacingOccurrences(of: "\"", with: "\"\""))\"").first?[0].integer ?? 0
         }
         rowCounts = counts
+    }
+}
+
+// MARK: Link preview cache
+
+extension MessageStore: LinkPreviewCaching {
+    private static let cacheColumns = "account_id,url,fetched_at,status,title,summary,image_alt,image_path,image_width,image_height"
+
+    private static func decodeCacheEntry(_ row: [Value]) -> LinkPreviewCacheEntry? {
+        guard let status = LinkPreviewCacheEntry.Status(rawValue: row[3].string) else { return nil }
+        return LinkPreviewCacheEntry(accountID: row[0].string, url: row[1].string, fetchedAt: Date(timeIntervalSince1970: row[2].double), status: status,
+                                     title: row[4].optionalString, summary: row[5].optionalString, imageAlt: row[6].optionalString,
+                                     imagePath: row[7].optionalString, imageWidth: optionalInteger(row[8]), imageHeight: optionalInteger(row[9]))
+    }
+
+    public func linkPreviewCacheEntry(accountID: String, url: String) throws -> LinkPreviewCacheEntry? {
+        try connection.query("SELECT \(Self.cacheColumns) FROM link_preview_cache WHERE account_id=? AND url=?", [.text(accountID), .text(url)])
+            .first.flatMap(Self.decodeCacheEntry)
+    }
+
+    @discardableResult public func saveLinkPreviewCacheEntry(_ entry: LinkPreviewCacheEntry) throws -> String? {
+        try entry.validate()
+        return try connection.transaction {
+            let previous = try linkPreviewCacheEntry(accountID: entry.accountID, url: entry.url)?.imagePath
+            try connection.execute("""
+                INSERT OR REPLACE INTO link_preview_cache(\(Self.cacheColumns)) VALUES(?,?,?,?,?,?,?,?,?,?)
+                """, [.text(entry.accountID), .text(entry.url), .real(entry.fetchedAt.timeIntervalSince1970), .text(entry.status.rawValue),
+                      entry.title.map(Value.text) ?? .null, entry.summary.map(Value.text) ?? .null, entry.imageAlt.map(Value.text) ?? .null,
+                      entry.imagePath.map(Value.text) ?? .null, entry.imageWidth.map(Value.integer) ?? .null, entry.imageHeight.map(Value.integer) ?? .null])
+            return previous == entry.imagePath ? nil : previous
+        }
+    }
+
+    public func pruneLinkPreviewCache(accountID: String, fetchedBefore date: Date, keeping: Int) throws -> [String] {
+        guard date.timeIntervalSince1970.isFinite, keeping >= 0 else { throw MessageStoreError.invalidValue }
+        let account = Value.text(accountID)
+        // Older than `date`, or beyond the newest `keeping`: one statement for each, so the paths match the rows gone.
+        let condition = """
+            account_id=?1 AND (fetched_at<?2 OR url IN (
+                SELECT url FROM link_preview_cache WHERE account_id=?1 ORDER BY fetched_at DESC,url DESC LIMIT -1 OFFSET ?3))
+            """
+        let values: [Value] = [account, .real(date.timeIntervalSince1970), .integer(keeping)]
+        return try connection.transaction {
+            let paths = try connection.query("SELECT image_path FROM link_preview_cache WHERE \(condition) AND image_path IS NOT NULL", values).map { $0[0].string }
+            try connection.execute("DELETE FROM link_preview_cache WHERE \(condition)", values)
+            return paths
+        }
+    }
+
+    public func deleteLinkPreviewCache(accountID: String) throws -> [String] {
+        try connection.transaction {
+            let paths = try connection.query("SELECT image_path FROM link_preview_cache WHERE account_id=? AND image_path IS NOT NULL", [.text(accountID)]).map { $0[0].string }
+            try connection.execute("DELETE FROM link_preview_cache WHERE account_id=?", [.text(accountID)])
+            return paths
+        }
     }
 }

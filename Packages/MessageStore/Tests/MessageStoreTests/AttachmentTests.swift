@@ -89,3 +89,24 @@ private func media(_ id: String, body: String = "", attachment: StoredAttachment
     let older = try JSONDecoder().decode(MessageReply.self, from: Data(#"{"messageID":"m","senderID":"a","body":"Ten it is","wireID":"m"}"#.utf8))
     #expect(older == MessageReply(messageID: "m", senderID: "a", body: "Ten it is", wireID: "m"))
 }
+
+/// Link previews never fetch from a host that serves the account's files: the GET host of a slot we took, and the
+/// host of a file we received. Another account's files do not count.
+@Test func attachmentHostsAreThoseOfTheAccountsSlotsAndReceivedFiles() async throws {
+    let url = try fixture()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    try await store.acquireTransportOwnership()
+    try await store.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
+    try await store.upsertChat(accountID: "b", chatID: "peer", title: "Peer")
+    #expect(try await store.enqueueOutgoing(media("sent")))
+    #expect(try await store.enqueueOutgoing(media("no-slot-yet")))
+    try await store.setAttachmentUploadTask(accountID: "a", messageID: "sent", taskID: 1, url: "https://Upload.Example.org:5281/get/x.jpg")
+    func received(_ account: String, _ url: String) -> StoredMessage {
+        StoredMessage(id: "in", accountID: account, chatID: "peer", senderID: "peer", body: "", sentAt: Date(timeIntervalSince1970: 5),
+                      attachment: StoredAttachment(name: "doc.pdf", mediaType: "application/pdf", size: 10, hash: "ff", secret: Data([9]), url: url))
+    }
+    #expect(try await store.insertMessage(received("a", "https://share.example.net/doc")))
+    #expect(try await store.insertMessage(received("b", "https://files.example.com/doc")))
+    #expect(try await store.attachmentHosts(accountID: "a") == ["upload.example.org", "share.example.net"])
+}

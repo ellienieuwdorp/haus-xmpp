@@ -8,12 +8,12 @@ import Testing
 struct SnapshotTests {
     private let previousVersion = 21
 
-    /// A previous build's store (a real schema-21, 23 or 24 file, `writePreviousReleaseStore`) with its three
+    /// A previous build's store (a real schema-21, 23, 24 or 25 file, `writePreviousReleaseStore`) with its three
     /// messages with Bob in the main file and `walMessages` more committed through a connection that stays open, so
     /// they exist only as WAL frames. Returns that connection; close it with `sqlite3_close`.
     private func previousBuildStore(at url: URL, schema: Int = 21, walMessages: Int) async throws -> OpaquePointer? {
         try writePreviousReleaseStore(at: url, schema: schema)
-        // As that build wrote the account: schema 21 kept the spelling as typed, 23 and 24 the normal form.
+        // As that build wrote the account: schema 21 kept the spelling as typed, 23 to 25 the normal form.
         let account = schema < 23 ? "Ellie@Example.org" : "ellie@example.org"
         var writer: OpaquePointer?
         #expect(sqlite3_open(url.path, &writer) == SQLITE_OK)
@@ -88,7 +88,7 @@ struct SnapshotTests {
 
     /// The notification extension's open: an older store (any previous build's) is refused before anything is
     /// written to it, and neither that open nor the snapshot path creates a store that is not there.
-    @Test(arguments: [21, 23, 24]) func currentOnlyRefusesAnOlderStoreWithoutWritingToIt(schema: Int) async throws {
+    @Test(arguments: [21, 23, 24, 25]) func currentOnlyRefusesAnOlderStoreWithoutWritingToIt(schema: Int) async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "messages.sqlite")
@@ -106,7 +106,7 @@ struct SnapshotTests {
     /// Every previous build's real store, frames still in its WAL included, migrates to the current schema under the
     /// lease, under the normal account spelling, with every message and the state that build kept. The only upgrades a
     /// real store can take start here: no store below schema 21 exists.
-    @Test(arguments: [21, 23, 24]) func upgradeAfterTheSnapshotNeedsTheLeaseAndReachesTheCurrentSchema(schema: Int) async throws {
+    @Test(arguments: [21, 23, 24, 25]) func upgradeAfterTheSnapshotNeedsTheLeaseAndReachesTheCurrentSchema(schema: Int) async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "messages.sqlite")

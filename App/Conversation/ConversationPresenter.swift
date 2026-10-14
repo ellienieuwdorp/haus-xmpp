@@ -1,6 +1,7 @@
 import Foundation
 import MessageStore
 import OMEMO
+import XMPPProtocol
 
 /// What a conversation reads from the app model. `AppModel` provides it; the presenter only reads, so a view built
 /// on it keeps observing exactly the model properties it touches.
@@ -16,6 +17,10 @@ protocol ConversationSource: AnyObject {
     var messageReceipts: [String: MessageEventKind] { get }
     var attachmentFiles: [String: URL] { get }
     var attachmentDownloads: [String: AttachmentDownloadState] { get }
+    /// Our own link preview fetches, keyed by `LinkDetection.cacheKey`.
+    var linkPreviews: [String: FetchedLinkPreview] { get }
+    /// GET hosts of our upload slots, which never get a preview (`StoredMessage.linkPreviewCandidate`).
+    var linkPreviewUploadHosts: Set<String> { get }
     var encryptionOverview: EncryptionOverview? { get }
     var openChatTyping: [String]? { get }
     func isGroup(_ chatID: String) -> Bool
@@ -24,6 +29,10 @@ protocol ConversationSource: AnyObject {
     func canRevise(_ message: StoredMessage) -> Bool
     func isBackfilling(chat: String) -> Bool
     func isBlocked(_ chatID: String) -> Bool
+    /// A message is on screen: fetch its link preview if policy allows. Never called at insert time.
+    func linkPreviewDisplayed(_ messageID: String)
+    /// Whether our own fetch may run for `message`, and so whether its cached result may show on it (`LinkPreviewPolicy`).
+    func mayFetchLinkPreview(for message: StoredMessage) -> Bool
 }
 
 /// Everything the open conversation shows that is derived from the model: which messages are listed under the current
@@ -133,7 +142,7 @@ struct ConversationPresenter {
                                    unreadable: unreadable)
         }
         let canRevise = source.canRevise(message)
-        return TimelineMessage(id: message.id, body: message.body, isOutgoing: message.isOutgoing, isStarred: message.isStarred,
+        var shown = TimelineMessage(id: message.id, body: message.body, isOutgoing: message.isOutgoing, isStarred: message.isStarred,
                                attachment: message.attachment.map { TimelineAttachment(name: $0.name, mediaType: $0.mediaType, size: $0.size, width: $0.width, height: $0.height,
                                                                                        localURL: source.attachmentFiles[message.id],
                                                                                        download: source.attachmentDownloads[message.id] ?? .loading) },
@@ -148,6 +157,37 @@ struct ConversationPresenter {
                                author: isGroup && !message.isOutgoing ? message.senderID : nil,
                                isRetracted: message.isRetracted, isEdited: message.isEdited, canEdit: canRevise && !message.body.isEmpty, canUnsend: canRevise,
                                canReport: !isGroup && !message.isOutgoing && !message.isRetracted && !source.isBlocked(chatID))
+        (shown.linkPreview, shown.wantsLinkPreview) = linkPreview(for: message)
+        return shown
+    }
+
+    /// The message's card: the preview it carries (the sender's, or ours frozen when it was sent) while that link is
+    /// still in the body, else our fetch for its first previewable link where we would fetch for this message. A
+    /// carried preview shows whatever the fetch setting says; it brings its own image or none. Our cache never shows on
+    /// our own messages (the peer got only what they carried), a non-contact's, or with the setting off, even when
+    /// another message fetched the link. `wanted` is true when the first previewable link may still get our card.
+    private func linkPreview(for message: ChatMessage) -> (preview: TimelineLinkPreview?, wanted: Bool) {
+        guard message.attachment == nil, !message.isRetracted, message.unreadableReason == nil else { return (nil, false) }
+        let links = LinkScan.previewableURLs(in: message.body, uploadHosts: source.linkPreviewUploadHosts)
+        guard let first = links.first else { return (nil, false) }
+        if let carried = message.linkPreview, let url = links.first(where: { $0.absoluteString == carried.url }),
+           let host = LinkDetection.displayHost(for: url) {
+            let size = carried.imageData.flatMap { LinkScan.pixelSize(of: $0) }
+            // Neither a title nor a readable image: nothing to draw, and nothing to fetch either, since it carried one.
+            guard carried.title != nil || size != nil else { return (nil, false) }
+            return (TimelineLinkPreview(url: url, host: host, title: carried.title, summary: carried.summary,
+                                        image: size == nil ? nil : carried.imageData.map(TimelineLinkPreview.Image.data), imageAlt: carried.imageAlt,
+                                        variant: TimelineLinkPreview.variant(imageWidth: size?.width, imageHeight: size?.height),
+                                        imageAspectRatio: size.map { Double($0.width) / Double($0.height) }), false)
+        }
+        guard source.mayFetchLinkPreview(for: message) else { return (nil, false) }
+        guard let fetched = source.linkPreviews[LinkDetection.cacheKey(for: first)], fetched.title != nil || fetched.imageFile != nil,
+              let host = LinkDetection.displayHost(for: first) else { return (nil, true) }
+        let size = fetched.imageFile == nil ? nil : fetched.imageWidth.flatMap { width in fetched.imageHeight.map { (width, $0) } }
+        let variant = TimelineLinkPreview.variant(imageWidth: size?.0, imageHeight: size?.1)
+        return (TimelineLinkPreview(url: first, host: host, title: fetched.title, summary: fetched.summary,
+                                    image: variant == .text ? nil : fetched.imageFile.map(TimelineLinkPreview.Image.file), imageAlt: fetched.imageAlt,
+                                    variant: variant, imageAspectRatio: variant == .text ? nil : size.map { Double($0.0) / Double($0.1) }), false)
     }
 
     /// Search and the starred filter show a slice of history, so nobody is shown typing at its end.

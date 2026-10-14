@@ -117,6 +117,11 @@ struct SettingsView: View {
                     }
                     .accessibilityIdentifier("blockedContacts")
                 }
+                // Per device (LinkSettings): what this app fetches, not something contacts see.
+                Toggle(isOn: Binding(get: { LinkSettings.shared.fetchPreviews }, set: { LinkSettings.shared.fetchPreviews = $0 })) {
+                    Label { Text("Link previews") } icon: { SettingsIconTile(systemName: "link", color: .teal) }
+                }
+                .accessibilityIdentifier("linkPreviews")
             } header: {
                 Text("Privacy")
             } footer: {
@@ -138,6 +143,11 @@ struct SettingsView: View {
                     }
                 }
                 .accessibilityIdentifier("appearanceRow")
+                // Off opens web links in the in-app browser; the Mac always uses the default browser.
+                Toggle(isOn: Binding(get: { LinkSettings.shared.openInSafari }, set: { LinkSettings.shared.openInSafari = $0 })) {
+                    Label { Text("Open links in Safari") } icon: { SettingsIconTile(systemName: "safari.fill", color: .blue) }
+                }
+                .accessibilityIdentifier("openLinksInSafari")
             }
             #endif
             Section {
