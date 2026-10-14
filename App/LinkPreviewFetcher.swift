@@ -103,6 +103,17 @@ enum LinkPreviewDestination {
         remoteAddresses.allSatisfy { address in address.map { literal($0).map(isAllowed) ?? false } ?? true }
     }
 
+    /// The host a connection to `url` goes to, as the resolver must see it: the host of the URL as it is sent
+    /// (`absoluteString`, where an international name is already in its IDNA ASCII form), lowercased. Nil for a host
+    /// with percent-escapes or one that is not ASCII: URLSession decodes escapes before it connects, so a checked
+    /// `10%2E0%2E0%2E1` or `in%73ide.example` would not be the name it reaches.
+    static func connectionHost(of url: URL) -> String? {
+        guard let sent = URL(string: url.absoluteString), let encoded = sent.host(percentEncoded: true),
+              let decoded = sent.host(percentEncoded: false), !encoded.isEmpty, !encoded.contains("%"), encoded == decoded,
+              decoded.unicodeScalars.allSatisfy(\.isASCII) else { return nil }
+        return decoded.lowercased()
+    }
+
     /// Names refused before resolving: `localhost`, `.localhost`, `.local`, `.home.arpa` and single-label names.
     /// `host` is without brackets and may end in a dot.
     static func isAllowedName(_ host: String) -> Bool {
@@ -272,9 +283,11 @@ final class LinkPreviewFetcher: Sendable {
         }
     }
 
-    /// The scheme, port and name rules, then every resolved address. Runs before the first request and every redirect.
+    /// The scheme, port and name rules, then every resolved address of the host the connection will use. Runs before
+    /// the first request, the page's image and every redirect.
     fileprivate func checkDestination(_ url: URL, deadline: ContinuousClock.Instant) async throws(LinkPreviewFetchFailure) {
-        guard LinkDetection.isFetchable(url), let host = url.host(percentEncoded: true) else { throw .notFetchable }
+        guard LinkDetection.isFetchable(url) else { throw .notFetchable }
+        guard let host = LinkPreviewDestination.connectionHost(of: url) else { throw .refusedDestination }
         if let literal = LinkPreviewDestination.literal(host) {
             guard LinkPreviewDestination.isAllowed(literal) else { throw .refusedDestination }
             return

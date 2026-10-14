@@ -161,6 +161,35 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertEqual(control.map(\.title), .success("Outside"))
     }
 
+    /// The name checked is the one the connection uses. URLSession decodes a percent-escaped host before it connects
+    /// (`in%73ide.example` reaches `inside.example`), so such a host is refused for the page, for its image and for a
+    /// redirect, even where the escaped spelling resolves to a public address. An international name is resolved in the
+    /// IDNA form the request is sent with.
+    func testTheCheckedHostIsTheOneTheConnectionReaches() async throws {
+        resolver.set("in%73ide.example", Self.publicV4)
+        resolver.set("inside.example", [[10, 1, 2, 3]])
+        resolver.set("news.example", Self.publicV4)
+        resolver.set("short.example", Self.publicV4)
+        resolver.set("xn--bcher-kva.example", Self.publicV4)
+        PreviewStubServer.serve("https://in%73ide.example/admin", .page(page("<title>Router admin</title>")))
+        PreviewStubServer.serve("https://in%73ide.example/pic.png", .image(Self.png(width: 400, height: 300)))
+        PreviewStubServer.serve("https://news.example/story", .page(page(#"<meta property="og:title" content="Story"><meta property="og:image" content="https://in%73ide.example/pic.png">"#)))
+        PreviewStubServer.serve("https://short.example/escaped", .redirect("https://in%73ide.example/admin"))
+        PreviewStubServer.serve("https://xn--bcher-kva.example/", .page(page("<title>Bücher</title>")))
+
+        let direct = await fetch("https://in%73ide.example/admin")
+        XCTAssertEqual(direct, .failure(.refusedDestination))
+        let story = try await fetch("https://news.example/story").get()
+        XCTAssertEqual(story.title, "Story")
+        XCTAssertNil(story.image, "The page's image is on the refused host")
+        let redirected = await fetch("https://short.example/escaped")
+        XCTAssertEqual(redirected, .failure(.refusedDestination))
+        XCTAssertEqual(PreviewStubServer.requests(to: "in%73ide.example"), 0, "No request left for the escaped host")
+
+        let international = await fetch("https://bücher.example/")
+        XCTAssertEqual(international.map(\.title), .success("Bücher"))
+    }
+
     /// After the transfer, the addresses the connections used are checked again (a DNS rebinding between our check
     /// and the connection): one private address discards the result. The stub server reports none, so the table runs
     /// on the check itself.
