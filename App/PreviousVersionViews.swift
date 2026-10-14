@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Replaces the app while the previous version's data is being backed up, could not be backed up, is being restored,
-/// has been restored, or while this version's kept data goes back. Nothing behind it connects or changes storage.
+/// has been restored, or while this version's kept data goes back, and when a newer version's data is on the device.
+/// Nothing behind it connects or changes storage.
 struct UpgradeBlockingView: View {
     @Bindable var model: AppModel
     @Environment(\.appearance) private var appearance
@@ -21,6 +22,7 @@ struct UpgradeBlockingView: View {
             case .restoring: progress("Restoring the previous version’s data…")
             case .returning: progress("Putting this version’s data back…")
             case .waitingForLease: progress("Waiting for a notification to finish…")
+            case .newerData: newerData
             default: progress("Backing up before updating…")
             }
         }
@@ -56,6 +58,16 @@ struct UpgradeBlockingView: View {
         } message: {
             Text("Your data will be upgraded for this version. Without a backup you cannot go back to the previous version on this \(ThisDevice.noun).")
         }
+    }
+
+    /// An older build installed over a newer one (TestFlight allows it): it cannot read the data, and offers nothing that
+    /// would change it.
+    private var newerData: some View {
+        blocking(symbol: "arrow.up.circle.fill", tint: Color(appearance.accent.tint), title: "Update Haus XMPP",
+                 body: "This version of Haus XMPP is older than your data. Install the latest version from TestFlight or the App Store.\n\nYour messages and keys are kept as they are.") {
+            EmptyView()
+        }
+        .accessibilityIdentifier("newerDataScreen")
     }
 
     /// The previous version has not opened the restored data yet.
