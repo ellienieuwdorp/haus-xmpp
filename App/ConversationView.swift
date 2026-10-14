@@ -2,6 +2,7 @@ import MessageStore
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
+import XMPPProtocol
 
 /// The draft lives outside `ConversationView`'s state so typing only invalidates the composer, never the timeline.
 @MainActor @Observable final class ComposerState {
@@ -17,6 +18,8 @@ import UniformTypeIdentifiers
     var tray: [PendingAttachment] = []
     /// True from Send until the last file and the caption are queued; the tray is frozen meanwhile.
     var dispatching = false
+    /// The card for the first link in the draft; Send freezes it into the message.
+    @ObservationIgnored let linkPreview = ComposerLinkPreview()
     /// Counts Sends, so a rail pick that was still preparing when Send took the tray stays out of the next message.
     @ObservationIgnored var sends = 0
     /// The draft when a finger last landed on Send. A tap outside the field makes UIKit accept a pending
@@ -158,6 +161,8 @@ struct ConversationView: View {
         let text = state.draftForSend()
         let account = model.accountID
         let reply = replyingTo
+        // What the card shows now goes with the text; a fetch still running is not waited for.
+        let linkPreview = editing == nil ? state.linkPreview.frozen(for: text, suppressed: !state.tray.isEmpty) : nil
         // Cleared on the tap, not once the send settles: anything typed meanwhile would otherwise leave the sent
         // text behind. A failure puts the text back if the field is still empty.
         state.draft = ""
@@ -185,7 +190,7 @@ struct ConversationView: View {
                 state.tray.removeAll { $0.id == item.id }
                 return true
             }, sendCaption: { text in
-                model.accountID == account ? await model.send(text, to: chatID, replyingTo: plan.caption) : false
+                model.accountID == account ? await model.send(text, to: chatID, replyingTo: plan.caption, linkPreview: linkPreview) : false
             })
             guard model.accountID == account else { return }
             if plan.clearsReply(after: sent) {
@@ -545,6 +550,13 @@ struct ConversationComposer: View {
         return showsTray || !state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// What the link preview card follows: the draft, the setting (never in the sample conversations), and whether
+    /// this message may carry a preview at all (not with files, not an edit).
+    private var linkPreviewInput: ComposerLinkPreviewInput {
+        ComposerLinkPreviewInput(draft: state.draft, enabled: LinkSettings.shared.fetchPreviews && !model.isDemo,
+                                 suppressed: showsTray || editing != nil)
+    }
+
     /// Rail picks in tray order: the order the panel numbers them in.
     private var selectedAssetIDs: [String] { state.tray.compactMap(\.assetIdentifier) }
 
@@ -614,6 +626,9 @@ struct ConversationComposer: View {
                 HStack(alignment: .bottom, spacing: 8) {
                     if showsAttach { attachButton }
                     VStack(alignment: .leading, spacing: 0) {
+                        if state.linkPreview.state != .none {
+                            ComposerLinkPreviewCard(state: state.linkPreview.state) { state.linkPreview.remove() }
+                        }
                         if showsTray { AttachmentTray(items: state.tray, frozen: state.dispatching) { id in state.tray.removeAll { $0.id == id } } }
                         HStack(alignment: .bottom, spacing: 4) {
                             TextField(placeholder, text: $state.draft, axis: .vertical)
@@ -654,7 +669,70 @@ struct ConversationComposer: View {
         }
         .onChange(of: showsAttach) { _, shown in if !shown { state.attachmentsOpen = false } }
         .onChange(of: state.draft) { _, draft in model.draftChanged(draft, in: chatID) }
+        .onChange(of: linkPreviewInput, initial: true) { _, input in
+            state.linkPreview.update(draft: input.draft, enabled: input.enabled, suppressed: input.suppressed, source: model)
+        }
         .onChange(of: focused) { _, isFocused in state.focused = isFocused }
+    }
+}
+
+private struct ComposerLinkPreviewInput: Equatable {
+    let draft: String
+    let enabled: Bool
+    let suppressed: Bool
+}
+
+/// The preview of the link being typed, above the field inside the composer's glass: the host with an activity
+/// indicator while it loads, then the small-thumbnail card. Its remove button keeps the reply strip's 44 pt target.
+struct ComposerLinkPreviewCard: View {
+    let state: ComposerLinkPreview.State
+    let onRemove: () -> Void
+    /// Decoded once per card image, not on every composer render; its slot is held from the start.
+    @State private var thumbnail: UIImage?
+
+    private var thumbnailData: Data? {
+        guard case .ready(let content) = state else { return nil }
+        return content.thumbnail
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            switch state {
+            case .loading(let url):
+                ProgressView().controlSize(.small).frame(width: TimelineReply.thumbnailSide, height: TimelineReply.thumbnailSide)
+                Text(LinkDetection.displayHost(for: url) ?? url.absoluteString)
+                    .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel("Loading link preview for \(LinkDetection.displayHost(for: url) ?? url.absoluteString)")
+            case .ready(let content):
+                if content.thumbnail != nil {
+                    Color.clear.frame(width: 44, height: 44)
+                        .overlay { if let thumbnail { Image(uiImage: thumbnail).resizable().scaledToFill() } }
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .accessibilityHidden(true)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    if let title = content.title { Text(title).font(.footnote.weight(.semibold)).lineLimit(2) }
+                    if let summary = content.summary { Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                    Text(content.host).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Link preview: " + [content.title, content.host].compactMap { $0 }.joined(separator: ", "))
+            case .none:
+                EmptyView()
+            }
+            Button(action: onRemove) {
+                Image(systemName: "xmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44).contentShape(Rectangle())
+            }
+            .accessibilityLabel("Remove link preview").accessibilityIdentifier("removeLinkPreview")
+        }
+        .padding(.leading, 8)
+        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 8).padding(.top, 8)
+        .accessibilityIdentifier("composerLinkPreview")
+        .onChange(of: thumbnailData, initial: true) { _, data in thumbnail = data.flatMap(UIImage.init(data:)) }
     }
 }
 
