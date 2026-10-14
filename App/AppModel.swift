@@ -103,6 +103,7 @@ final class AppModel {
                 timelinePages.removeAll()
                 pushWanted = accountID.isEmpty || !preferences.bool(forKey: "pushOff." + accountID)
                 pushStatus = .off
+                loadBlocklist()
             }
             ForegroundNotificationState.shared.accountID = isDemo ? "" : accountID
         }
@@ -325,6 +326,7 @@ final class AppModel {
         // and the Chats stack is not rebuilt (its identity is the account) once `prepare()` reads the same value.
         // Read in normal form but not rewritten: preferences change only after the pre-upgrade snapshot (`openStorage`).
         accountID = preferences.string(forKey: "lastAccount").map { JID.normalizedBare($0) ?? $0 } ?? ""
+        loadBlocklist()
         NotificationActionCenter.shared.handler = { [weak self] request, budget in
             await self?.performNotificationAction(request, budget: budget) ?? .rejected
         }
@@ -764,6 +766,7 @@ final class AppModel {
         if !account.isEmpty { try? snapshots?.removeSavedReplies(of: account) }
         uploads.forget(account: account)
         serverProfiles.forget(account: account)
+        BlockedAddresses.forget(accountID: account, defaults: sessionDefaults)
         // The next account starts without the backoff or the alert this one earned.
         reconnection = ReconnectPolicy()
         selectAccount("")
@@ -1925,6 +1928,9 @@ final class AppModel {
             if !accountPreferences.lastSeen { await revokePresenceSharing(items.filter { $0.subscription == .from || $0.subscription == .both }.map(\.jid), token: token) }
             guard generation == token, let openChatID, replacesAll || items.contains(where: { $0.jid == openChatID }) else { return }
             requestLastSeen(for: openChatID)
+        case .blocklist(let change):
+            guard !isDemo else { return }
+            applyBlocklist(change, account: account)
         case .streamAcknowledged:
             refreshSoon()
         case .message:
@@ -2137,6 +2143,9 @@ final class AppModel {
             await refresh()
             guard setupIsCurrent(token) else { return }
             startOutbox()
+            // After the outbox started, so a server slow to answer cannot hold back sending.
+            await refreshBlocklist(account: account, client: client)
+            guard setupIsCurrent(token) else { return }
             if uploadReconciliation.reconcilesAtReady(stored: uploadService) { await reconcileUploads() }
             if let openChatID { await loadEncryptionDetails(for: openChatID) }
             // Another client may have signed in while this one was away: the account-level review should not wait
@@ -3284,6 +3293,113 @@ final class AppModel {
         await setChatNotifications(chatID, ChatNotificationSetting(level: isGroup(chatID) ? level : .all))
     }
 
+    // MARK: Blocking (XEP-0191, XEP-0377)
+
+    /// The account's block list as its server last reported it, and kept for the extension (`BlockedAddresses`).
+    private(set) var blocklist = XMPPBlocklist()
+    /// What the server offers, from its last completed feature discovery.
+    private(set) var blockingSupport = BlockingSupport()
+
+    /// A direct chat whose address the account blocked. Rooms are not blocked through their address here.
+    func isBlocked(_ chatID: String) -> Bool { !isGroup(chatID) && blocklist.blocks(chatID) }
+
+    var blockingAvailability: BlockingAvailability {
+        .evaluate(signedIn: !accountID.isEmpty, isDemo: isDemo, ready: session.isReady, support: blockingSupport, domain: accountDomain)
+    }
+
+    private func loadBlocklist() {
+        blocklist = isDemo ? XMPPBlocklist() : BlockedAddresses.load(accountID: accountID, defaults: sessionDefaults)
+        blockingSupport = BlockingSupport(features: isDemo ? nil : serverProfiles.memory(account: accountID, stream: nil, uploadsFresh: false).features)
+    }
+
+    /// After every connection's discovery: a server with XEP-0191 sends its list (the `.blocklist` event applies it) and
+    /// pushes later changes to this session; one without it blocks nothing, so the kept copy is dropped.
+    private func refreshBlocklist(account: String, client: XMPPClient) async {
+        guard !isDemo else { return }
+        blockingSupport = BlockingSupport(features: serverProfiles.memory(account: account, stream: nil, uploadsFresh: false).features)
+        switch blockingSupport.blocking {
+        case true?:
+            do { try await client.fetchBlocklist() } catch {
+                Self.syncLog.notice("block list fetch failed: \(ConnectionSetup.detail(error), privacy: .public)")
+            }
+        case false?: applyBlocklist(.replaceAll([]), account: account)
+        case nil: break
+        }
+    }
+
+    private func applyBlocklist(_ change: XMPPBlocklistChange, account: String) {
+        guard account == accountID else { return }
+        let updated = blocklist.applying(change)
+        guard updated != blocklist else { return }
+        let newlyBlocked = chats.map(\.id).filter { !isGroup($0) && updated.blocks($0) && !blocklist.blocks($0) }
+        blocklist = updated
+        BlockedAddresses.save(updated, accountID: account, defaults: sessionDefaults)
+        updateAppBadge(chats)
+        // What a newly blocked chat already had on screen goes too.
+        for chatID in newlyBlocked {
+            Task { await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID) }
+        }
+    }
+
+    /// Blocks a direct chat's address, optionally reporting it (XEP-0377) with the reported message's archive ID. The
+    /// server confirms before the chat shows as blocked; its push to this and the account's other sessions follows.
+    @discardableResult
+    func block(_ chatID: String, report reason: XMPPReportReason? = nil, messageID: String? = nil) async -> Bool {
+        guard !isGroup(chatID), blockingAvailability.isAvailable else { return false }
+        let account = accountID
+        if isDemo {
+            blocklist.apply(.blocked([chatID]))
+            return true
+        }
+        guard let client else { return false }
+        var report: XMPPBlockReport?
+        if let reason {
+            var references: [XMPPStanzaReference] = []
+            // XEP-0377 §6: stanza IDs point into the server's archive. Only an incoming message of this very chat counts.
+            if blockingSupport.archive, let messageID, let store,
+               messages.contains(where: { $0.id == messageID && $0.chatID == chatID && !$0.isOutgoing }),
+               let stanzaID = try? await store.archiveStanzaID(accountID: account, messageID: messageID) {
+                references.append(XMPPStanzaReference(id: stanzaID, by: account))
+            }
+            report = XMPPBlockReport(reason: reason, messages: references)
+        }
+        do {
+            try await client.block(chatID, report: report)
+        } catch {
+            guard account == accountID else { return false }
+            self.error = "Couldn’t block \(AppModel.displayName(for: chatID, title: chats.first { $0.id == chatID }?.title)). Try again."
+            return false
+        }
+        applyBlocklist(.blocked([chatID]), account: account)
+        return true
+    }
+
+    /// Unblocks one entry of the list, as the server holds it (a chat's bare address, or a domain or full address set
+    /// elsewhere).
+    func unblock(_ address: String) async {
+        guard blockingAvailability.isAvailable else { return }
+        let account = accountID
+        if isDemo {
+            blocklist.apply(.unblocked([address]))
+            return
+        }
+        guard let client else { return }
+        do {
+            try await client.unblock([address])
+        } catch {
+            guard account == accountID else { return }
+            self.error = "Couldn’t unblock \(address). Try again."
+            return
+        }
+        applyBlocklist(.unblocked([address]), account: account)
+    }
+
+    /// The list entries a chat is blocked by: its own address, or its domain.
+    func blockEntries(for chatID: String) -> [String] {
+        guard let jid = JID(chatID) else { return [] }
+        return [jid.bare, jid.domainpart].filter { blocklist.addresses.contains($0) }
+    }
+
     @ObservationIgnored private lazy var reload = CoalescedReload { [weak self] scope in await self?.load(scope) }
 
     /// Returns after a load that started after this call; concurrent calls share one follow-up load.
@@ -3499,7 +3615,8 @@ final class AppModel {
     private func updateAppBadge(_ summaries: [ChatSummary]) {
         guard !accountID.isEmpty else { return }
         setAppBadge(NotificationBadge.count(unread: Dictionary(summaries.map { ($0.id, $0.unreadCount) }, uniquingKeysWith: max),
-                                            settings: Dictionary(summaries.map { ($0.id, $0.notification) }, uniquingKeysWith: { first, _ in first })))
+                                            settings: Dictionary(summaries.map { ($0.id, $0.notification) }, uniquingKeysWith: { first, _ in first }),
+                                            blocklist: blocklist))
     }
 
     private func setAppBadge(_ count: Int) {
@@ -3861,7 +3978,8 @@ extension AppModel: NotificationActionEnvironment {
         let account = session.account, progress = NotificationRunProgress()
         let timeout = session.budget.presentationTimeout(at: .now)
         guard timeout > .zero else { return }
-        let presentation = Task { try await presenter.present(store: store, accountID: account, progress: progress) }
+        let blocked = BlockedAddresses.load(accountID: account, defaults: sessionDefaults)
+        let presentation = Task { try await presenter.present(store: store, accountID: account, progress: progress, blocklist: blocked) }
         let watchdog = Task { try? await Task.sleep(for: timeout); presentation.cancel() }
         _ = await presentation.result
         watchdog.cancel()
@@ -3881,7 +3999,8 @@ extension AppModel: NotificationActionEnvironment {
         let presents = mayPostNotifications && postsNotificationsInThisSession && !isDemo && session.isReady && catchUp == nil
             && sessionAccount?.accountID == account
         let posted = try await NotificationPresenter(posting: notificationPoster(account: account))
-            .presentForeground(store: store, accountID: account, readingChatID: lifecycle.readingChat(openChatID: openChatID), presents: presents)
+            .presentForeground(store: store, accountID: account, readingChatID: lifecycle.readingChat(openChatID: openChatID), presents: presents,
+                               blocklist: blocklist)
         if posted > 0 { Self.syncLog.notice("foreground notifications posted=\(posted, privacy: .public)") }
     }
 

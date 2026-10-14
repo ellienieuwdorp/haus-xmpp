@@ -104,6 +104,8 @@ public enum XMPPEvent: Sendable, Equatable {
     case rosterItems([XMPPRosterItem], replacesAll: Bool)
     /// XEP-0490 items another device of this account published; the notification came from our own bare JID.
     case displayedSync([XMPPDisplayedItem])
+    /// A XEP-0191 block list fetch result (`.replaceAll`) or one server push, in stream order.
+    case blocklist(XMPPBlocklistChange)
     /// Consume previous events durably before acknowledging this token.
     case streamManagementBarrier(XMPPInboundToken)
     case streamAcknowledged
@@ -222,6 +224,10 @@ public actor XMPPClient {
     private var rosterFetchIDs: Set<String> = []
     /// RFC 6121 §2.1.6: pushes go only to resources that requested the roster in this session.
     private var rosterRequested = false
+    /// Pending XEP-0191 block list fetches, emitted in stream order like the roster's.
+    private var blocklistFetchIDs: Set<String> = []
+    /// XEP-0191 §3.3: the server pushes block list changes only to sessions that fetched the list.
+    private var blocklistRequested = false
     /// Whether an XEP-0012 query to our full JID is answered. Survives reconnects; the owner sets it.
     private var sharesLastActivity = false
     /// The current session continued an earlier one (XEP-0198 resume): no initial presence was sent, so the server
@@ -273,6 +279,7 @@ public actor XMPPClient {
         guard validRoute, !domain.isEmpty, !username.isEmpty, !password.isEmpty,
               !username.contains("\0"), !password.contains("\0"), !domain.contains(where: { $0.isWhitespace }) else { throw XMPPClientError.invalidConfiguration }
         groupRooms.removeAll(); rosterFetchIDs.removeAll(); rosterRequested = false
+        blocklistFetchIDs.removeAll(); blocklistRequested = false
         self.domain = domain; self.username = username; self.password = password; self.requireSCRAM = requireSCRAM
         authenticatedWithSCRAM = false
         phase = .features; generation = UUID()
@@ -704,11 +711,15 @@ public actor XMPPClient {
                 return
             }
             let rosterFetch = node.attributes["id"].map(rosterFetchIDs.contains) ?? false
+            let blocklistFetch = node.attributes["id"].map(blocklistFetchIDs.contains) ?? false
             if routeIQ(node) {
                 // Answered after anything our server held for us: the catch-up is over.
                 stampWindow = nil
                 if rosterFetch, node.attributes["type"] == "result", let items = try? PresenceWire.rosterResult(node) {
                     try emit(.rosterItems(items, replacesAll: true))
+                }
+                if blocklistFetch, node.attributes["type"] == "result", let addresses = try? BlockingWire.blocklistResult(node) {
+                    try emit(.blocklist(.replaceAll(addresses)))
                 }
                 if let inbound { try await streamManagement?.handled(inbound) }
                 return
@@ -744,6 +755,11 @@ public actor XMPPClient {
                     let to = node.attributes["from"].map { " to='\(xmlEscaped($0))'" } ?? ""
                     try await write("<iq type='result' id='\(xmlEscaped(id))'\(to)/>")
                     try emit(.rosterItems([item], replacesAll: false))
+                } else if blocklistRequested, let account = OMEMOWire.bareJID(boundJID),
+                          let change = BlockingWire.push(node, accountBareJID: account) {
+                    let to = node.attributes["from"].map { " to='\(xmlEscaped($0))'" } ?? ""
+                    try await write("<iq type='result' id='\(xmlEscaped(id))'\(to)/>")
+                    try emit(.blocklist(change))
                 } else if let response = PresenceWire.inlineResponse(node, accountFullJID: boundJID, sharesLastActivity: sharesLastActivity) {
                     // disco#info, XEP-0199 ping and XEP-0012; other requests are rejected explicitly.
                     try await write(response)
@@ -1088,6 +1104,32 @@ public actor XMPPClient {
         return try PresenceWire.rosterResult(response)
     }
 
+    /// XEP-0191 §3.2. The result is also emitted as `.blocklist(.replaceAll)` in stream order, ahead of any push that
+    /// follows it, and later pushes are answered and emitted until the session ends: the server pushes only to sessions
+    /// that asked for the list. Ask only when the server advertises `urn:xmpp:blocking`.
+    @discardableResult public func fetchBlocklist() async throws -> XMPPBlocklist {
+        guard phase == .online, OMEMOWire.bareJID(boundJID) != nil else { throw XMPPClientError.notConnected }
+        blocklistRequested = true
+        let id = UUID().uuidString
+        blocklistFetchIDs.insert(id)
+        defer { blocklistFetchIDs.remove(id) }
+        let response = try await requestIQ(type: "get", to: nil, payload: "<blocklist xmlns='\(BlockingWire.namespace)'/>", id: id)
+        return XMPPBlocklist(try BlockingWire.blocklistResult(response))
+    }
+
+    /// XEP-0191 §3.3, with an optional XEP-0377 report. Returns once the server accepted the block; its push to every
+    /// session that fetched the list follows.
+    public func block(_ address: String, report: XMPPBlockReport? = nil) async throws {
+        guard phase == .online else { throw XMPPClientError.notConnected }
+        _ = try await requestIQ(type: "set", to: nil, payload: BlockingWire.blockXML(address, report: report))
+    }
+
+    /// XEP-0191 §3.4.
+    public func unblock(_ addresses: [String]) async throws {
+        guard phase == .online else { throw XMPPClientError.notConnected }
+        _ = try await requestIQ(type: "set", to: nil, payload: BlockingWire.unblockXML(addresses))
+    }
+
     /// `<presence to='bare' type='…'/>`: ask for, grant, withdraw or refuse a presence subscription.
     public func sendSubscription(_ kind: XMPPSubscriptionRequest, to bare: String) async throws {
         guard phase == .online else { throw XMPPClientError.notConnected }
@@ -1351,7 +1393,7 @@ public actor XMPPClient {
 
     private func routeIQ(_ node: XMLNode) -> Bool {
         guard let id = node.attributes["id"], let request = iqRequests[id], request.scope.accepts(node) else { return false }
-        iqRequests.removeValue(forKey: id); rosterFetchIDs.remove(id)
+        iqRequests.removeValue(forKey: id); rosterFetchIDs.remove(id); blocklistFetchIDs.remove(id)
         request.timeout.cancel()
         do { request.continuation.resume(returning: try IQReplyScope.result(node)) }
         catch { request.continuation.resume(throwing: error) }
@@ -1359,7 +1401,7 @@ public actor XMPPClient {
     }
 
     private func failIQ(_ id: String, error: Error) {
-        rosterFetchIDs.remove(id)
+        rosterFetchIDs.remove(id); blocklistFetchIDs.remove(id)
         guard let request = iqRequests.removeValue(forKey: id) else { return }
         request.timeout.cancel()
         request.continuation.resume(throwing: error)
@@ -1382,6 +1424,7 @@ public actor XMPPClient {
     private func finish(_ reason: String?, error: Error = XMPPClientError.connectionClosed) {
         generation = UUID()
         groupRooms.removeAll(); rosterFetchIDs.removeAll(); rosterRequested = false
+        blocklistFetchIDs.removeAll(); blocklistRequested = false
         // Their reads are failed below; a stale refresh must never be joined by the next connection.
         for refresh in roomRefreshes.values { refresh.task.cancel() }
         roomRefreshes.removeAll()

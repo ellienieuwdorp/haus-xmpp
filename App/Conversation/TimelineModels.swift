@@ -103,6 +103,8 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     var isEdited = false
     var canEdit = false
     var canUnsend = false
+    /// A received message in a direct chat: its menu offers Report, which reports and blocks the sender.
+    var canReport = false
     /// This device could not show the message; `body` is empty and the bubble shows the reason as a quiet placeholder.
     var unreadable: UnreadableReason? = nil
 

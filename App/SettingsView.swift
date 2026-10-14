@@ -105,6 +105,18 @@ struct SettingsView: View {
                     Label { Text("Last seen") } icon: { SettingsIconTile(systemName: "clock.fill", color: .orange) }
                 }
                 .accessibilityIdentifier("lastSeen")
+                if !model.accountID.isEmpty {
+                    NavigationLink {
+                        BlockedContactsView(model: model)
+                    } label: {
+                        LabeledContent {
+                            Text(model.blocklist.isEmpty ? "None" : "\(model.blocklist.addresses.count)")
+                        } label: {
+                            Label { Text("Blocked") } icon: { SettingsIconTile(systemName: "hand.raised.fill", color: .red) }
+                        }
+                    }
+                    .accessibilityIdentifier("blockedContacts")
+                }
             } header: {
                 Text("Privacy")
             } footer: {

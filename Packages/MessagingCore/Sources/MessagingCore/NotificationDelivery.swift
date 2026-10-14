@@ -1,5 +1,6 @@
 import Foundation
 import MessageStore
+import XMPPProtocol
 
 /// Why a run could not settle. Every one of them shows the generic fallback (plan D2): unknown is never suppressed.
 public enum NotificationFallbackReason: String, Sendable, Equatable, Codable {
@@ -231,15 +232,16 @@ public struct NotificationPresenter: Sendable {
     }
 
     /// `authorize` rereads the protected account after the network work; it throws when the user signed out meanwhile.
+    /// Nothing from an address in `blocklist` is posted or counted in the badge; its candidates are claimed unshown.
     public func present(store: MessageStore, accountID: String, progress: NotificationRunProgress, stage: PresentationStage = .complete,
-                        authorize: @Sendable () throws -> Void = {}) async throws {
+                        blocklist: XMPPBlocklist = XMPPBlocklist(), authorize: @Sendable () throws -> Void = {}) async throws {
         // An early presentation leaves the phase alone: pushes keep joining the run while it walks rooms.
         if stage.isFinal { progress.enter(.presenting) }
         try Task.checkCancellation()
         try authorize()
-        let batch = try await store.pendingNotifications(accountID: accountID)
+        let batch = try await store.pendingNotifications(accountID: accountID).excludingBlocked(blocklist)
         // Best effort: an unknown badge leaves the icon as it is rather than failing the run.
-        let badge = try? await NotificationBadge.count(store: store, accountID: accountID)
+        let badge = try? await NotificationBadge.count(store: store, accountID: accountID, blocklist: blocklist)
         let plan = NotificationPlanner.plan(batch, accountID: accountID, badge: badge, playsSound: !progress.hasPlayedSound)
         if plan.requests.isEmpty {
             if progress.report.posted == 0, let unfinished = stage.unfinished { throw unfinished }

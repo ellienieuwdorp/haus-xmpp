@@ -94,7 +94,7 @@ public actor InboundProcessor {
             catch { await client.disconnect(); throw error }
             return .acknowledged
         case .state, .message, .chatState, .groupPresence, .omemoDevices, .avatarMetadata, .encryptionFailure, .streamAcknowledged,
-             .contactPresence, .subscription, .rosterItems:
+             .contactPresence, .subscription, .rosterItems, .blocklist:
             return .ignored
         }
     }

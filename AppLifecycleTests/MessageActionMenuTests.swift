@@ -10,6 +10,8 @@ final class MessageActionMenuTests: XCTestCase {
         let reading = ["Reply", "Copy", "Star message", "Select text"]
         let cases: [(message: TimelineMessage, actions: [String], line: UInt)] = [
             (TimelineMessage(id: "received", body: "Ten it is", isOutgoing: false, isStarred: false, sentAt: sentAt), reading, #line),
+            (TimelineMessage(id: "reportable", body: "Buy now", isOutgoing: false, isStarred: false, sentAt: sentAt, canReport: true),
+             reading + ["Report"], #line),
             (TimelineMessage(id: "starred", body: "Keep this", isOutgoing: false, isStarred: true, sentAt: sentAt),
              ["Reply", "Copy", "Unstar message", "Select text"], #line),
             (TimelineMessage(id: "own", body: "See you there", isOutgoing: true, isStarred: false, sentAt: sentAt, status: .serverAccepted,

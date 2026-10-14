@@ -23,6 +23,7 @@ protocol ConversationSource: AnyObject {
     func canReact(to message: StoredMessage) -> Bool
     func canRevise(_ message: StoredMessage) -> Bool
     func isBackfilling(chat: String) -> Bool
+    func isBlocked(_ chatID: String) -> Bool
 }
 
 /// Everything the open conversation shows that is derived from the model: which messages are listed under the current
@@ -145,7 +146,8 @@ struct ConversationPresenter {
                                canReact: !message.isRetracted && source.canReact(to: message),
                                reactionUnavailableReason: message.isRetracted ? nil : reactionUnavailableReason(message),
                                author: isGroup && !message.isOutgoing ? message.senderID : nil,
-                               isRetracted: message.isRetracted, isEdited: message.isEdited, canEdit: canRevise && !message.body.isEmpty, canUnsend: canRevise)
+                               isRetracted: message.isRetracted, isEdited: message.isEdited, canEdit: canRevise && !message.body.isEmpty, canUnsend: canRevise,
+                               canReport: !isGroup && !message.isOutgoing && !message.isRetracted && !source.isBlocked(chatID))
     }
 
     /// Search and the starred filter show a slice of history, so nobody is shown typing at its end.

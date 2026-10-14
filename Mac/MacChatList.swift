@@ -10,6 +10,8 @@ struct MacChatList: View {
     @FocusState private var searchFocused: Bool
     /// Own devices the card was put off for with Later; a device not in here brings the card back.
     @State private var ownDevicesLater: Set<String> = []
+    /// A Block or Report chosen from a chat's menu, waiting for its confirmation.
+    @State private var blockRequest: BlockRequest?
 
     private var searchTerm: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -56,7 +58,8 @@ struct MacChatList: View {
                     .padding(.vertical, 4)
             }
             ForEach(visibleChats) { chat in
-                ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatars[chat.id], typing: model.typing[chat.id], avatarSize: 40)
+                ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatars[chat.id], typing: model.typing[chat.id], avatarSize: 40,
+                        isBlocked: model.isBlocked(chat.id))
                     .padding(.vertical, 4)
                     .tag(chat.id)
                     .task(id: "\(chat.id)|\(model.session.isReady)") { await model.loadAvatar(for: chat.id) }
@@ -66,6 +69,7 @@ struct MacChatList: View {
             }
         }
         .listStyle(.sidebar)
+        .blockConfirmation(model: model, request: $blockRequest)
         .overlay {
             if model.chats.isEmpty {
                 // As on the iPhone: quiet until storage has been read, so a signed-in launch never flashes "no chats".
@@ -131,10 +135,30 @@ struct MacChatList: View {
                 }
             }
         }
+        if !model.isGroup(chat.id) {
+            Divider()
+            blockActions(for: chat)
+        }
         Divider()
         Button("Chat Details", systemImage: "info.circle") {
             window.selection = chat.id
             window.inspectorShown = true
+        }
+    }
+
+    /// The details' Block, Report and Unblock, as menu items; disabled without a server that blocks.
+    @ViewBuilder private func blockActions(for chat: ChatSummary) -> some View {
+        let available = model.blockingAvailability.isAvailable
+        if model.isBlocked(chat.id) {
+            Button("Unblock", systemImage: "hand.raised.slash") {
+                Task { for entry in model.blockEntries(for: chat.id) { await model.unblock(entry) } }
+            }
+            .disabled(!available)
+        } else {
+            Button("Block…", systemImage: "hand.raised") { blockRequest = BlockRequest(kind: .block, chatID: chat.id, name: chat.displayTitle) }
+                .disabled(!available)
+            Button("Report…", systemImage: "exclamationmark.bubble") { blockRequest = BlockRequest(kind: .report, chatID: chat.id, name: chat.displayTitle) }
+                .disabled(!available)
         }
     }
 }

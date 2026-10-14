@@ -104,6 +104,8 @@ struct ConversationView: View {
     @State private var starredOnly = false
     @State private var retryMessageID: String?
     @State private var unsendMessageID: String?
+    /// A message's Report, waiting for its confirmation.
+    @State private var blockRequest: BlockRequest?
     @State private var replyingTo: ChatMessage?
     /// The own message whose text is in the composer; sending queues a correction instead of a message.
     @State private var editing: ChatMessage?
@@ -119,7 +121,8 @@ struct ConversationView: View {
     @State private var lastSeenClock = Date.now
     /// The header subtitle; nil keeps the header to the name alone.
     private var lastSeenLabel: String? {
-        guard !isGroup, let state = model.openChatLastSeen else { return nil }
+        // A blocked contact's presence no longer reaches us; an old answer would go stale in the header.
+        guard !isGroup, !model.isBlocked(chatID), let state = model.openChatLastSeen else { return nil }
         return LastSeen.label(state, now: lastSeenClock, calendar: .autoupdatingCurrent)
     }
     private var encryptionRoute: ChatRoute { isGroup ? .groupDetails(chatID) : .encryption(chatID) }
@@ -271,7 +274,10 @@ struct ConversationView: View {
             }, onEdit: { id in
                 guard let message = model.messages.first(where: { $0.id == id }) else { return }
                 beginEditing(message)
-            }, onUnsend: { composerState.focused = false; unsendMessageID = $0 }, onOpenEncryption: { model.requestRoute(encryptionRoute) }, onDisplayed: { id in
+            }, onUnsend: { composerState.focused = false; unsendMessageID = $0 }, onReport: { id in
+                composerState.focused = false
+                blockRequest = BlockRequest(kind: .report, chatID: chatID, name: title, messageID: id)
+            }, onOpenEncryption: { model.requestRoute(encryptionRoute) }, onDisplayed: { id in
                 guard presenter.marksDisplayed(id) else { return }
                 Task { await model.markDisplayed(id) }
             }, onRestoreComposerFocus: { composerState.focused = true }, onReachTop: { Task { await model.loadOlderMessages() } },
@@ -381,6 +387,7 @@ struct ConversationView: View {
         } message: { _ in
             Text("It disappears here. \(title) may still see it if their app doesn't support unsending.")
         }
+        .blockConfirmation(model: model, request: $blockRequest)
         .onChange(of: model.conversationIntent) { _, intent in
             // Chat Details pops back and leaves what it wants opened here.
             switch intent {
@@ -589,8 +596,17 @@ struct ConversationComposer: View {
     }
 
     var body: some View {
+        if model.isBlocked(chatID) {
+            BlockedChatBar(model: model, chatID: chatID, name: AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title))
+                .padding(.horizontal, 16).padding(.vertical, 8)
+        } else {
+            composer
+        }
+    }
+
+    private var composer: some View {
         let showsAttach = !isGroup && model.canSendAttachments
-        GlassEffectContainer(spacing: 8) {
+        return GlassEffectContainer(spacing: 8) {
             VStack(spacing: 8) {
                 // The same strip carries a reply target or, in edit mode, the message being rewritten.
                 if let reply = replyingTo ?? editing {

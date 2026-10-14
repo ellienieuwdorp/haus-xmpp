@@ -128,6 +128,9 @@ struct ChatDetailsView: View {
                 .padding(.top, 35)
                 .padding(.bottom, 36)
             }
+            if !isGroup, chatID != model.accountID {
+                ChatBlockingSection(model: model, chatID: chatID, name: title)
+            }
         }
         .groupedListStyle()
         .toolbarTitleDisplayMode(.inline)

@@ -130,7 +130,9 @@ private enum ExtensionRun {
                 progress: progress, presentation: { store, stage in
                     // Keep the transport lease through presentation. Preferences cannot change under this lease;
                     // logout authorization is reread before each presentation (direct messages first, then the rest).
-                    try await presenter.present(store: store, accountID: accountID, progress: progress, stage: stage, authorize: {
+                    // The block list is the app's copy of what the server last reported; nothing from it alerts.
+                    try await presenter.present(store: store, accountID: accountID, progress: progress, stage: stage,
+                                                blocklist: BlockedAddresses.load(accountID: accountID), authorize: {
                         guard try NotificationAccount.load() == account else { throw CancellationError() }
                     })
                 })
