@@ -1,11 +1,13 @@
 import AppKit
+import QuickLook
 import SwiftUI
 
 /// The open chat, read-only. A placeholder until the Mac has its own timeline and composer: it shows the rows the
 /// shared presenter builds, in a SwiftUI `LazyVStack` that opens at the newest message in its first frame (scrolling
 /// there after layout shows a visible jump) and follows the bottom while the reader is there. No paging, no prepend
 /// hold, no composer yet. A bubble's right-click menu has the shared menu's Copy and Report. Links in bubbles open
-/// through `LinkOpening`, and preview cards show as on the iPhone.
+/// through `LinkOpening`, and preview cards show as on the iPhone. Photos and videos show as framed stills and files
+/// as a line; a click opens one in Quick Look, or asks for its download when it is not on this Mac yet.
 struct MacConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -24,6 +26,8 @@ struct MacConversationView: View {
     @State private var copiedReason: String?
     /// An `xmpp:…?join` link to a group this account is not in: the join flow, with its address filled in.
     @State private var joiningGroup: String?
+    /// The file shown in Quick Look.
+    @State private var quickLook: URL?
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -69,7 +73,21 @@ struct MacConversationView: View {
         .blockConfirmation(model: model, request: $blockRequest)
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(title)
-        .navigationSubtitle(model.isDemo ? "Sample conversation" : model.trustSummary(for: chatID).pill)
+        .navigationSubtitle(model.trustSummary(for: chatID).pill)
+        .toolbar {
+            // The contact's picture before the name, as the iPhone's header shows it; a click opens the details.
+            ToolbarItem(placement: .navigation) {
+                Button(action: showDetails) {
+                    ChatAvatar(key: chatID, name: title, image: model.avatars[chatID], isGroup: model.isGroup(chatID), size: 28)
+                }
+                .buttonStyle(.plain)
+                .help("Show the chat's details")
+                .accessibilityLabel("Chat Details")
+                .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
+            }
+            .sharedBackgroundVisibility(.hidden)
+        }
+        .quickLookPreview($quickLook)
         // Closed by the root when the selection moves on or the window closes: SwiftUI may build the detail column more
         // than once for one selection, and a late disappearance would close the chat the new view just opened.
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
@@ -117,6 +135,13 @@ struct MacConversationView: View {
         }
     }
 
+    /// A click on a photo, video or file: Quick Look once it is here, else its download (a file waiting for a click, or
+    /// a failed one).
+    private func openAttachment(of message: TimelineMessage) {
+        guard let attachment = message.attachment, !message.showsPlaceholder else { return }
+        if let url = attachment.localURL { quickLook = url } else if attachment.download.canRequest { model.downloadAttachment(message.id) }
+    }
+
     private func copied(_ text: String, because reason: String) {
         copy(text)
         copiedReason = reason
@@ -135,15 +160,19 @@ struct MacConversationView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(rows, id: \.message.id) { row in
-                        MacTimelineRow(row: row, isGroup: presenter.isGroup) { id in
+                        MacTimelineRow(row: row, isGroup: presenter.isGroup, report: { id in
                             blockRequest = BlockRequest(kind: .report, chatID: chatID, name: title, messageID: id)
-                        }
+                        }, openAttachment: { openAttachment(of: row.message) })
                             .id(row.message.id)
                             .onAppear {
                                 visibleRows.ids.insert(row.message.id)
                                 markIfReading(row.message.id, presenter: presenter)
                                 // Fetched on display, never at insert, under the model's policy (setting, contact, demo).
                                 if row.message.wantsLinkPreview { model.linkPreviewDisplayed(row.message.id) }
+                                // As on the iPhone: a file not on disk yet is fetched on sight when its chat allows it.
+                                if row.message.attachment?.localURL == nil, row.message.attachment != nil, !row.message.showsPlaceholder {
+                                    model.attachmentDisplayed(row.message.id)
+                                }
                             }
                             .onDisappear { visibleRows.ids.remove(row.message.id) }
                     }
@@ -189,6 +218,7 @@ private struct MacTimelineRow: View {
     let row: TimelineRow
     let isGroup: Bool
     let report: (String) -> Void
+    let openAttachment: () -> Void
     @Environment(\.appearance) private var appearance
     @Environment(\.openURL) private var openURL
 
@@ -211,7 +241,7 @@ private struct MacTimelineRow: View {
                     .padding(.leading, 12)
             }
             BubbleWidth {
-                MacBubble(message: message, accent: appearance.accent)
+                MacBubble(message: message, accent: appearance.accent, openAttachment: openAttachment)
                     .contextMenu { menu }
             }
             .frame(maxWidth: .infinity, alignment: message.isOutgoing ? .trailing : .leading)
@@ -221,6 +251,9 @@ private struct MacTimelineRow: View {
         .accessibilityLabel(message.accessibilityDescription)
         .accessibilityActions {
             menu
+            if let attachment = message.attachment, !message.showsPlaceholder, attachment.localURL != nil || attachment.download.canRequest {
+                Button(attachment.localURL == nil ? "Download" : "Open \(attachment.kindLabel)", action: openAttachment)
+            }
             // One action per link, as on the iPhone.
             ForEach(Array(message.links.enumerated()), id: \.offset) { _, link in
                 Button(MessageActionMenu.linkAccessibilityTitle(for: link)) { openURL(link.url) }
@@ -266,6 +299,7 @@ private struct BubbleWidth: Layout {
 private struct MacBubble: View {
     let message: TimelineMessage
     let accent: AccentTheme
+    let openAttachment: () -> Void
 
     private var textColor: Color { message.isOutgoing ? Color(platform: accent.bubbleText) : .primary }
     private var metaColor: Color { message.isOutgoing ? Color(platform: accent.bubbleText.withAlphaComponent(0.75)) : .secondary }
@@ -273,6 +307,8 @@ private struct MacBubble: View {
     private var panelFill: Color { Color(platform: accent.panelFill(outgoing: message.isOutgoing)) }
     /// Links are underlined, in the accent on received bubbles and in the text colour on the accent-filled sent ones.
     private var linkColor: Color { message.isOutgoing ? textColor : Color(platform: accent.tint) }
+
+    private var showsMedia: Bool { message.attachment?.showsPreview == true && !message.showsPlaceholder }
 
     /// The text with its links (`TimelineMessage.links`) as link runs; a placeholder has none.
     private var text: AttributedString {
@@ -290,19 +326,36 @@ private struct MacBubble: View {
         VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 if let reply = message.reply, !message.showsPlaceholder {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(reply.author).font(.caption.weight(.semibold))
-                        Text(reply.body).font(.caption).lineLimit(2)
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(reply.author).font(.caption.weight(.semibold))
+                            Text(reply.body).font(.caption).lineLimit(2)
+                        }
+                        .foregroundStyle(textColor.opacity(0.85))
+                        .padding(.leading, 8)
+                        .overlay(alignment: .leading) { Capsule().fill(textColor.opacity(0.5)).frame(width: 2) }
+                        // A quoted photo or video keeps its still at the trailing edge, as on the iPhone.
+                        if let still = reply.thumbnail {
+                            Spacer(minLength: 0)
+                            MacQuoteStill(attachment: still, tint: metaColor)
+                        }
                     }
-                    .foregroundStyle(textColor.opacity(0.85))
-                    .padding(.leading, 8)
-                    .overlay(alignment: .leading) { Capsule().fill(textColor.opacity(0.5)).frame(width: 2) }
                 }
                 if let attachment = message.attachment, !message.showsPlaceholder {
-                    Label(attachment.name.isEmpty ? attachment.kindLabel : attachment.name,
-                          systemImage: attachment.isImage ? "photo" : attachment.isVideo ? "video" : "doc")
-                        .font(.callout)
-                        .foregroundStyle(textColor)
+                    Button(action: openAttachment) {
+                        if attachment.showsPreview {
+                            MacMediaPreview(attachment: attachment, tint: metaColor)
+                                // Framed by the bubble colour, as on the iPhone: 3 pt to the bubble's edges.
+                                .padding(.horizontal, -MacMediaPreview.edge)
+                                .padding(.top, message.reply == nil ? -MacMediaPreview.top : 0)
+                        } else {
+                            Label(attachment.name.isEmpty ? attachment.kindLabel : attachment.name, systemImage: "doc")
+                                .font(.callout)
+                                .foregroundStyle(textColor)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help(attachment.localURL == nil ? attachment.downloadDetail : "Open in Quick Look")
                 }
                 if let preview = message.linkPreview, !message.showsPlaceholder {
                     MacLinkPreviewCard(preview: preview, fill: panelFill, textColor: textColor, metaColor: metaColor)
@@ -319,6 +372,8 @@ private struct MacBubble: View {
                 }
                 footer
             }
+            // A photo fixes the bubble's width, as on the iPhone: a caption wraps under it rather than widening it.
+            .frame(width: showsMedia ? MacMediaPreview.width - 2 * MacMediaPreview.edge : nil)
             .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6)
             .background(message.isOutgoing ? accent.swatch : Color.tertiaryFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             if !message.reactions.isEmpty {
@@ -360,6 +415,93 @@ private struct MacBubble: View {
                 .overlay { Capsule().strokeBorder(reaction.isSelected ? accent.swatch : Color.secondary.opacity(0.3), lineWidth: reaction.isSelected ? 1.5 : 0.5) }
                 .accessibilityLabel(reaction.accessibilityDescription)
             }
+        }
+    }
+}
+
+/// A photo's or video's still in the bubble, sized as the iPhone sizes it: 274 pt wide inside a 280 pt bubble (a 3 pt
+/// frame of bubble colour), its height following the picture between 114 and 334 pt, corners concentric with the
+/// bubble's. Until the file is here the frame keeps that size and says where the download stands.
+private struct MacMediaPreview: View {
+    let attachment: TimelineAttachment
+    let tint: Color
+    @State private var image: NSImage?
+
+    static let width: CGFloat = 274
+    /// From the bubble's content edge to its outer edge, less the 3 pt frame.
+    static let edge: CGFloat = 9
+    static let top: CGFloat = 5
+
+    init(attachment: TimelineAttachment, tint: Color) {
+        self.attachment = attachment
+        self.tint = tint
+        // A still decoded before shows in the first frame, so a row that comes back never blinks.
+        _image = State(initialValue: attachment.localURL.flatMap(AttachmentThumbnails.cached(for:)))
+    }
+
+    private var height: CGFloat { min(334, max(114, (Self.width / attachment.aspectRatio).rounded())) }
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(.quaternary)
+            if let image {
+                Image(nsImage: image).resizable().scaledToFill()
+                if attachment.isVideo {
+                    Image(systemName: "play.circle.fill").font(.system(size: 40)).foregroundStyle(.white).shadow(radius: 4)
+                }
+            } else if attachment.localURL == nil, attachment.download != .loading {
+                VStack(spacing: 6) {
+                    Image(systemName: attachment.download == .failed ? "arrow.clockwise.circle"
+                          : attachment.download == .mismatch || attachment.download == .tooLarge ? "exclamationmark.circle" : "arrow.down.circle")
+                        .font(.title)
+                    Text(attachment.downloadDetail).font(.caption).multilineTextAlignment(.center)
+                }
+                .foregroundStyle(tint)
+                .padding(8)
+            } else if attachment.localURL == nil {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: attachment.isVideo ? "video" : "photo").font(.title).foregroundStyle(tint)
+            }
+        }
+        .frame(width: Self.width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 16 - 3, style: .continuous))
+        .contentShape(Rectangle())
+        .task(id: attachment.localURL) {
+            guard image == nil, let url = attachment.localURL else { return }
+            image = await AttachmentThumbnails.image(for: url, mediaType: attachment.mediaType)
+        }
+    }
+}
+
+/// The small still of a quoted photo or video. Its slot is there from the first frame, so the quote never widens when
+/// the file arrives; until then it holds the kind's symbol on a quiet fill.
+private struct MacQuoteStill: View {
+    let attachment: TimelineAttachment
+    let tint: Color
+    @State private var image: NSImage?
+
+    init(attachment: TimelineAttachment, tint: Color) {
+        self.attachment = attachment
+        self.tint = tint
+        _image = State(initialValue: attachment.localURL.flatMap(AttachmentThumbnails.cached(for:)))
+    }
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(tint.opacity(0.2))
+            if let image {
+                Image(nsImage: image).resizable().scaledToFill()
+            } else {
+                Image(systemName: attachment.isVideo ? "video" : "photo").font(.caption).foregroundStyle(tint)
+            }
+        }
+        .frame(width: TimelineReply.thumbnailSide, height: TimelineReply.thumbnailSide)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .accessibilityHidden(true)
+        .task(id: attachment.localURL) {
+            guard image == nil, let url = attachment.localURL else { return }
+            image = await AttachmentThumbnails.image(for: url, mediaType: attachment.mediaType)
         }
     }
 }

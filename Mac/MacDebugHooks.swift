@@ -19,6 +19,7 @@ import SwiftUI
 ///   the steps while they run, for a recording: `wait <seconds>`, `select <chat>`, `deselect`, `inspector on|off`,
 ///   `settings general|appearance|about`, `close-settings`.
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
+/// - `-haus-window-size <width>x<height>`: the main window's content size in points, for captures at a set size.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-sheet account|new-chat|own-devices`,
 ///   `-haus-settings general|appearance|about`, `-haus-close-window <seconds>`: what the window shows.
 /// - `-haus-block <chat>`: blocks a sample conversation (sample data only), for captures of a blocked chat.
@@ -142,6 +143,10 @@ import SwiftUI
             }
             // Sample conversations block locally, so a capture can show a blocked chat without a server.
             if let chat = value(after: "-haus-block"), model.isDemo { await model.block(chat) }
+            if let size = value(after: "-haus-window-size")?.split(separator: "x").compactMap({ Double($0) }), size.count == 2, let main = mainWindow {
+                main.setContentSize(NSSize(width: size[0], height: size[1]))
+                log("window content size \(main.contentLayoutRect.size)")
+            }
             if let chat = value(after: "-haus-select") {
                 window.selection = chat
                 await waitUntil(seconds: 10) { model.messagesLoadedFor == chat }
@@ -317,6 +322,13 @@ import SwiftUI
                 shape.fill()
                 for holder in glass.subviews {
                     for content in holder.subviews where !content.isHidden && content.bounds.width > 0 {
+                        // Vibrant text and fields are blended by the window server too and cache in the wrong colours
+                        // (black labels in dark mode): the content draws in the plain appearance of the same mode.
+                        let vibrant = content.appearance
+                        content.appearance = NSAppearance(named: window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) ?? .aqua)
+                        content.layoutSubtreeIfNeeded()
+                        content.display()
+                        defer { content.appearance = vibrant }
                         draw(content, into: view)
                         // Table rows (the sidebar's chats) are left out of their table's cached image; each row
                         // renders on its own, clipped to what its scroll view shows.
@@ -326,7 +338,22 @@ import SwiftUI
                             guard !visible.isEmpty else { continue }
                             NSGraphicsContext.saveGraphicsState()
                             visible.clip()
-                            draw(row, into: view)
+                            if let selected = row as? NSTableRowView, selected.isSelected, let layer = row.layer {
+                                // The selection is a vibrant fill too and caches as black: a flat stand-in (the inactive
+                                // window's selection, as the window is never key here) under the row without it.
+                                NSColor.unemphasizedSelectedContentBackgroundColor.setFill()
+                                NSBezierPath(roundedRect: row.convert(row.bounds, to: view).insetBy(dx: 10, dy: 0), xRadius: 10, yRadius: 10).fill()
+                                let fills = descendants(of: layer).filter { $0.backgroundColor != nil && $0.compositingFilter.map { "\($0)".contains("vibrant") } == true }
+                                CATransaction.begin(); CATransaction.setDisableActions(true)
+                                fills.forEach { $0.isHidden = true }
+                                CATransaction.commit()
+                                draw(row, into: view)
+                                CATransaction.begin(); CATransaction.setDisableActions(true)
+                                fills.forEach { $0.isHidden = false }
+                                CATransaction.commit()
+                            } else {
+                                draw(row, into: view)
+                            }
                             NSGraphicsContext.restoreGraphicsState()
                         }
                     }
@@ -339,12 +366,93 @@ import SwiftUI
 
     private static func draw(_ part: NSView, into view: NSView) {
         guard let rep = part.bitmapImageRepForCachingDisplay(in: part.bounds) else { return }
+        // Vibrant text and fills (the sidebar's labels, the search field) are masks through which the window server
+        // tints what lies behind them with a colour matrix; `cacheDisplay` skips that filter, which left them black or
+        // white. Those layers are left out of the cache and drawn on their own: the stand-in behind each through the
+        // same matrix, in the layer's shape, fills under the cached image and text over it. Table rows are cached on
+        // their own (see `renderRep`), so a table's container leaves their layers alone.
+        let rows = Set(descendants(of: part).compactMap { $0 is NSTableRowView ? $0.layer.map(ObjectIdentifier.init) : nil })
+        let vibrant = part.layer.map { vibrantLayers(in: $0, skipping: rows) } ?? []
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        let hidden = vibrant.map(\.layer.isHidden)
+        vibrant.forEach { $0.layer.isHidden = true }
+        CATransaction.commit()
         part.cacheDisplay(in: part.bounds, to: rep)
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        for (item, wasHidden) in zip(vibrant, hidden) { item.layer.isHidden = wasHidden }
+        CATransaction.commit()
+        let fills = vibrant.filter { $0.layer.backgroundColor != nil }, marks = vibrant.filter { $0.layer.backgroundColor == nil }
+        tint(fills, of: part, into: view)
         rep.draw(in: part.convert(part.bounds, to: view), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: false, hints: nil)
+        tint(marks, of: part, into: view)
+    }
+
+    private static func tint(_ layers: [(layer: CALayer, matrix: [Float])], of part: NSView, into view: NSView) {
+        guard let root = part.layer, let context = NSGraphicsContext.current?.cgContext else { return }
+        let scale = part.window?.backingScaleFactor ?? 2
+        for item in layers where !item.layer.isHidden && item.layer.bounds.width > 0 && item.layer.bounds.height > 0 {
+            let layer = item.layer
+            let width = Int((layer.bounds.width * scale).rounded(.up)), height = Int((layer.bounds.height * scale).rounded(.up))
+            guard let shapeContext = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                               space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { continue }
+            shapeContext.scaleBy(x: scale, y: scale)
+            if !layer.isGeometryFlipped { shapeContext.translateBy(x: 0, y: layer.bounds.height); shapeContext.scaleBy(x: 1, y: -1) }
+            layer.render(in: shapeContext)
+            guard let shape = shapeContext.makeImage() else { continue }
+            // Where the layer sits in the part's view (a backing layer shares its view's coordinates), then in the
+            // captured view.
+            var frame = part.convert(root.convert(layer.bounds, from: layer), to: view)
+            if view.isFlipped { frame.origin.y = view.bounds.height - frame.maxY }
+            // The matrix tints what lies behind the layer, here the stand-in already drawn there, in the layer's shape.
+            let backdrop = pixel(of: context, at: CGPoint(x: frame.minX + 0.5, y: frame.minY + 0.5))
+            let matrix = item.matrix
+            func channel(_ row: Int) -> CGFloat {
+                let value = matrix[row * 5] * backdrop[0] + matrix[row * 5 + 1] * backdrop[1] + matrix[row * 5 + 2] * backdrop[2] + matrix[row * 5 + 3] + matrix[row * 5 + 4]
+                return CGFloat(min(1, max(0, value)))
+            }
+            context.saveGState()
+            context.clip(to: frame, mask: shape)
+            context.setFillColor(CGColor(srgbRed: channel(0), green: channel(1), blue: channel(2), alpha: channel(3)))
+            context.fill(frame)
+            context.restoreGState()
+        }
+    }
+
+    /// One pixel of a bitmap context (user space, y up), as sRGB components 0…1 without alpha.
+    private static func pixel(of context: CGContext, at point: CGPoint) -> [Float] {
+        let device = point.applying(context.userSpaceToDeviceSpaceTransform)
+        guard let data = context.data, context.bitsPerPixel == 32 else { return [0.5, 0.5, 0.5] }
+        let x = min(context.width - 1, max(0, Int(device.x))), y = min(context.height - 1, max(0, Int(device.y)))
+        // Device space is y up from the bottom row; the buffer starts at the top row.
+        let row = context.height - 1 - y
+        let bytes = data.advanced(by: row * context.bytesPerRow + x * 4).assumingMemoryBound(to: UInt8.self)
+        return [Float(bytes[0]) / 255, Float(bytes[1]) / 255, Float(bytes[2]) / 255]
+    }
+
+    /// Layers drawn through a vibrant colour matrix, with that matrix (4 × 5, row-major, bias last in each row).
+    private static func vibrantLayers(in root: CALayer, skipping skipped: Set<ObjectIdentifier>) -> [(layer: CALayer, matrix: [Float])] {
+        var found: [(CALayer, [Float])] = []
+        func walk(_ layer: CALayer) {
+            guard !skipped.contains(ObjectIdentifier(layer)) else { return }
+            if let filter = layer.filters?.first as? NSObject, "\(filter)".contains("vibrantColorMatrix") || (filter.value(forKey: "name") as? String) == "vibrantColorMatrix",
+               let value = filter.value(forKey: "inputColorMatrix") as? NSValue {
+                var matrix = [Float](repeating: 0, count: 20)
+                matrix.withUnsafeMutableBytes { value.getValue($0.baseAddress!, size: $0.count) }
+                found.append((layer, matrix))
+                return
+            }
+            layer.sublayers?.forEach(walk)
+        }
+        walk(root)
+        return found
     }
 
     private static func descendants(of view: NSView) -> [NSView] {
         view.subviews.flatMap { [$0] + descendants(of: $0) }
+    }
+
+    private static func descendants(of layer: CALayer) -> [CALayer] {
+        (layer.sublayers ?? []).flatMap { [$0] + descendants(of: $0) }
     }
 
     /// Set by the system for a sandboxed process, whose relative paths resolve inside its own container.
