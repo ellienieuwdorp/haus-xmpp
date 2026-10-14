@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import Security
+import SQLite3
 import SwiftUI
 
 /// Launch arguments for checking the Mac app without driving its UI: captures of its own windows, a timed quit, the
@@ -16,10 +17,10 @@ import SwiftUI
 ///   with any other open window (Settings) drawn over its centre.
 /// - `-haus-tour "<step>; …"`: with `-haus-capture-frames`, starts the frames as soon as the main window exists and plays
 ///   the steps while they run, for a recording: `wait <seconds>`, `select <chat>`, `deselect`, `inspector on|off`,
-///   `settings general|appearance`, `close-settings`.
+///   `settings general|appearance|about`, `close-settings`.
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-sheet account|new-chat|own-devices`,
-///   `-haus-settings general|appearance`, `-haus-close-window <seconds>`: what the window shows.
+///   `-haus-settings general|appearance|about`, `-haus-close-window <seconds>`: what the window shows.
 /// - `-haus-self-check`: the App Group container, the store in it, and a data-protection Keychain round trip.
 /// - `-haus-lab-sign-in`: signs in with `HAUS_LAB_USERNAME` and `HAUS_LAB_PASSWORD` (a lab account; pass
 ///   `-lab-ui-test` and `HAUS_LAB_CA_DER` for the lab's certificate authority, as the iPhone's lab tests do).
@@ -27,6 +28,8 @@ import SwiftUI
 /// - `-haus-dump-menus`: the main menu's items and shortcuts.
 /// - `-haus-fresh-store`: with `XMPP_UI_TEST_STORE` set, empties that session's store and preferences at launch, so a
 ///   run starts as a new install would. The shared App Group store is left alone.
+/// - `-haus-store-schema <n>`: with `XMPP_UI_TEST_STORE` set, stamps that session's existing store with schema `n`
+///   before it opens, as a newer build would have left it (for the screen an older build shows over newer data).
 /// - `-haus-unobtrusive`: see `MacUnobtrusive`.
 /// - `-haus-lifecycle-steps "<step>; …"`: a lifecycle scenario after the hooks above (`MacLifecycleDebug`).
 /// - `-haus-log-notifications`: logs the notifications the model would post instead of posting them.
@@ -53,16 +56,38 @@ import SwiftUI
     static func prepareLaunch() {
         MacUnobtrusive.install()
         if has("-haus-fresh-store") { emptyTestStore() }
+        if let schema = value(after: "-haus-store-schema").flatMap(Int32.init) { stampTestStore(schema: schema) }
+    }
+
+    /// The UI test session's own store, never the shared one.
+    private static func testStoreDirectory() -> URL? {
+        guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"], let id = UUID(uuidString: value)?.uuidString,
+              let support = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false) else {
+            return nil
+        }
+        return support.appending(path: "Messaging/UITests/" + id, directoryHint: .isDirectory)
+    }
+
+    private static func stampTestStore(schema: Int32) {
+        guard let database = testStoreDirectory()?.appending(path: "messages.sqlite"),
+              FileManager.default.fileExists(atPath: database.path) else {
+            log("store schema: no test session store to stamp")
+            return
+        }
+        var connection: OpaquePointer?
+        defer { sqlite3_close(connection) }
+        let result = sqlite3_open(database.path, &connection) == SQLITE_OK
+            ? sqlite3_exec(connection, "PRAGMA user_version=\(schema)", nil, nil, nil) : SQLITE_CANTOPEN
+        log("store schema: stamped \(schema), result \(result)")
     }
 
     /// The UI test session's own store (`SharedStorage.directory(testSessionID:)`) and preferences suite.
     private static func emptyTestStore() {
-        guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"], let id = UUID(uuidString: value)?.uuidString,
-              let support = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false) else {
+        guard let directory = testStoreDirectory() else {
             log("fresh store: XMPP_UI_TEST_STORE is not a session ID; nothing emptied")
             return
         }
-        let directory = support.appending(path: "Messaging/UITests/" + id, directoryHint: .isDirectory)
+        let id = directory.lastPathComponent
         if FileManager.default.fileExists(atPath: directory.path) {
             do { try FileManager.default.removeItem(at: directory) } catch { log("fresh store: could not empty the session's store: \(error)") }
         }

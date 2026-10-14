@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The Settings window (⌘,): the iPhone's settings screen as the General pane, and Appearance as a pane of its own.
+/// The Settings window (⌘,): the iPhone's settings screen as the General pane, and Appearance and About as panes of
+/// their own.
 struct MacSettingsView: View {
-    enum Pane: String { case general, appearance }
+    enum Pane: String { case general, appearance, about }
 
     @Bindable var model: AppModel
     @State private var pane = Pane.general
@@ -19,6 +20,12 @@ struct MacSettingsView: View {
             Tab("Appearance", systemImage: "paintpalette", value: .appearance) {
                 NavigationStack {
                     AppearanceView()
+                }
+                .labelStyle(.listRow)
+            }
+            Tab("About", systemImage: "info.circle", value: .about) {
+                NavigationStack {
+                    AboutView()
                 }
                 .labelStyle(.listRow)
             }

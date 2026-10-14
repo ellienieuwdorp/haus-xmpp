@@ -253,6 +253,29 @@ import XMPPProtocol
         try assertSpellings(installation, rewritten: false)
     }
 
+    /// An older build installed over a newer one (TestFlight lets testers do that) finds a store it cannot read. It
+    /// refuses it with `unsupportedSchema`, which the app shows as its own screen, and changes nothing on the way: no
+    /// snapshot, no migration, no rewritten spellings.
+    func testANewerBuildsStoreIsRefusedAndNothingIsChanged() async throws {
+        let installation = try makeInstallation()
+        try await previousBuildData(in: installation)
+        let locations = installation.locations
+        let newer = MessageStore.currentSchemaVersion + 1
+        XCTAssertEqual(sqlite3_exec(installation.walWriter, "PRAGMA user_version=\(newer)", nil, nil, nil), SQLITE_OK)
+        let rows = allRows(locations.database)
+        do {
+            _ = try await installation.snapshots.open(upgradeAllowed: true, now: now)
+            XCTFail("opened a newer build's store")
+        } catch {
+            XCTAssertEqual(error as? MessageStoreError, .unsupportedSchema(newer))
+        }
+        XCTAssertEqual(sqliteRows(locations.database, "PRAGMA user_version"), ["\(newer)"])
+        XCTAssertEqual(allRows(locations.database), rows)
+        XCTAssertNil(installation.snapshots.manifest)
+        XCTAssertEqual(try PreUpgradeSnapshot.keychainAccounts(service: locations.keychain.snapshotService), [])
+        try assertSpellings(installation, rewritten: false)
+    }
+
     /// A launch killed part way through the snapshot left its folder and a Keychain copy: both are discarded and the
     /// snapshot is taken again from the start before anything migrates.
     func testASnapshotInterruptedByACrashIsDiscardedAndRetaken() async throws {

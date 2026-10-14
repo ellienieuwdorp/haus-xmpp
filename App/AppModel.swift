@@ -440,6 +440,11 @@ final class AppModel {
                     await queueSavedReplies()
                 }
             }
+        } catch MessageStoreError.unsupportedSchema(let version) {
+            // A newer build wrote this store (TestFlight lets testers install an older build). Nothing was opened
+            // for writing; this build stays offline and leaves the data for the newer one.
+            Self.syncLog.error("store schema \(version, privacy: .public) is newer than this build's \(MessageStore.currentSchemaVersion, privacy: .public)")
+            upgradeState = .newerData
         } catch {
             if upgradeState != .none { upgradeState = .none }
             self.error = "Could not open local message storage."
@@ -3919,4 +3924,7 @@ enum UpgradeState: Equatable {
     case restored(PreUpgradeSnapshot.RestoredState)
     /// Putting this version's kept data back after a restore.
     case returning
+    /// The store was written by a newer build, which this one cannot read. Nothing opens it until a newer build is
+    /// installed; there is no way out from here that would change or delete it.
+    case newerData
 }

@@ -213,6 +213,16 @@ extension ToolbarItemPlacement {
         NSApplication.didBecomeActiveNotification
         #endif
     }
+
+    /// The app's icon, for the About screen. On the Mac it comes with its shape; on iOS it is the square artwork, which
+    /// the iPhone target bundles as a plain image (an app icon set cannot be loaded by name).
+    static var iconImage: PlatformImage? {
+        #if os(iOS)
+        Bundle.main.path(forResource: "AppIcon", ofType: "png").flatMap(UIImage.init(contentsOfFile:))
+        #else
+        NSApp.applicationIconImage
+        #endif
+    }
 }
 
 /// Keeps the process running through one bounded piece of work: a UIKit background task on iOS, and on the Mac a
