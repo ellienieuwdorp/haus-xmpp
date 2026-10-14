@@ -1,5 +1,6 @@
 import SafariServices
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 import XCTest
 @testable import HausXMPP
 
@@ -202,6 +203,74 @@ final class TimelineCellSemanticsTests: XCTestCase {
         browser.dismiss(animated: false)
     }
 
+    /// The bubble finds the link under a finger itself (its text view takes no touches): a tap on a drawn link or on
+    /// the card opens that link, a tap on plain text is left to the bubble, and a long press on a link still opens the
+    /// bubble's menu. The recognizers are the cell's own; only where the finger lands is chosen here.
+    func testATapOnADrawnLinkOrTheCardOpensItAndPlainTextIsLeftAlone() throws {
+        var chats: [String] = []
+        controller.onOpenChat = { chats.append($0) }
+        let card = TimelineLinkPreview(url: URL(string: "https://example.org/a")!, host: "example.org", title: "Council approves the bridge",
+                                       summary: nil, variant: .text)
+        show([TimelineMessage(id: "link", body: "xmpp:romeo@montague.lit\nsee you at ten", isOutgoing: false, isStarred: false, sentAt: sentAt),
+              TimelineMessage(id: "card", body: "See example.org/a", isOutgoing: false, isStarred: false, linkPreview: card, sentAt: sentAt)])
+
+        let textView = try XCTUnwrap(try speaker("link") as? UITextView)
+        let bubble = try XCTUnwrap(textView.superview)
+        let cell = try self.cell(at: XCTUnwrap(dataSource?.indexPath(for: "link")))
+        let tap = try recognizer(UITapGestureRecognizer.self, on: bubble, of: cell, pinnedAs: PinnedTap.self)
+        let press = try recognizer(UILongPressGestureRecognizer.self, on: bubble, of: cell, pinnedAs: PinnedPress.self)
+        // The first line is the link, the second plain text; points sit inside each line's text.
+        let lineHeight = try XCTUnwrap(textView.font).lineHeight
+        let onLink = CGPoint(x: textView.textContainerInset.left + 30, y: textView.textContainerInset.top + lineHeight / 2)
+        let onPlain = CGPoint(x: onLink.x, y: onLink.y + lineHeight)
+
+        PinnedTouch.at = (onPlain, textView)
+        XCTAssertFalse(cell.gestureRecognizerShouldBegin(tap), "plain text: the tap is not the link's")
+        PinnedTouch.at = (onLink, textView)
+        XCTAssertTrue(cell.gestureRecognizerShouldBegin(tap))
+        XCTAssertTrue(cell.gestureRecognizerShouldBegin(press), "a long press on a link still opens the menu")
+        tap.state = .ended
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertEqual(chats, ["romeo@montague.lit"])
+
+        let cardBubble = try XCTUnwrap(try speaker("card").superview)
+        let cardView = try XCTUnwrap(descendants(of: cardBubble).first { $0 is LinkPreviewCardView })
+        let cardCell = try self.cell(at: XCTUnwrap(dataSource?.indexPath(for: "card")))
+        let cardTap = try recognizer(UITapGestureRecognizer.self, on: cardBubble, of: cardCell, pinnedAs: PinnedTap.self)
+        PinnedTouch.at = (CGPoint(x: cardView.bounds.midX, y: cardView.bounds.midY), cardView)
+        XCTAssertTrue(cardCell.gestureRecognizerShouldBegin(cardTap))
+        cardTap.state = .ended
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        let browser = try XCTUnwrap(controller.presentedViewController as? SFSafariViewController, "the card opens its link")
+        browser.dismiss(animated: false)
+        PinnedTouch.at = nil
+    }
+
+    /// An image too small or too tall for the large layout gets a 56 pt thumbnail at the card's trailing edge, beside
+    /// the text, and the card is tall enough for it.
+    func testASmallImageCardKeepsItsThumbnailBesideTheText() throws {
+        let square = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 120)).pngData { $0.fill(CGRect(x: 0, y: 0, width: 120, height: 120)) }
+        let card = TimelineLinkPreview(url: URL(string: "https://example.org/a")!, host: "example.org", title: "Bridge", summary: nil,
+                                       image: .data(square), variant: .small, imageAspectRatio: 1)
+        show([TimelineMessage(id: "card", body: "See example.org/a", isOutgoing: true, isStarred: false, linkPreview: card, sentAt: sentAt,
+                              status: .serverAccepted)])
+        let cardView = try XCTUnwrap(descendants(of: try XCTUnwrap(try speaker("card").superview)).first { $0 is LinkPreviewCardView })
+        let thumbnail = try XCTUnwrap(descendants(of: cardView).first { $0 is UIImageView && !$0.isHidden })
+        let title = try XCTUnwrap(descendants(of: cardView).first { ($0 as? UILabel)?.text == "Bridge" })
+        XCTAssertGreaterThanOrEqual(cardView.bounds.height, 56 + 2 * 8 - 0.5)
+        XCTAssertEqual(thumbnail.frame.size, CGSize(width: 56, height: 56))
+        XCTAssertEqual(thumbnail.frame.maxX, cardView.bounds.width - 8, accuracy: 0.5, "the thumbnail sits at the trailing edge")
+        XCTAssertLessThanOrEqual(title.convert(title.bounds, to: cardView).maxX, thumbnail.frame.minX - 10 + 0.5, "the text stays beside it")
+    }
+
+    /// The cell's own recognizer of `type` on `view` (the one whose delegate is `cell`), made to report the touch at
+    /// `PinnedTouch.at` without changing anything else about it.
+    private func recognizer<R: UIGestureRecognizer>(_ kind: R.Type, on view: UIView, of cell: UIView, pinnedAs pinned: AnyClass) throws -> R {
+        let found = try XCTUnwrap(view.gestureRecognizers?.first { type(of: $0) == kind && $0.delegate === cell } as? R, "\(kind) on the bubble")
+        object_setClass(found, pinned)
+        return found
+    }
+
     func testTypingIsTheLastItemBelowTheNewestMessage() throws {
         let typing = TimelineTyping(author: nil, colorKey: "alex@preview.local", accessibilityLabel: TypingTracker.description(["Alex"]))
         var shown = [TimelineMessage(id: "mine", body: "See you at ten", isOutgoing: true, isStarred: false, sentAt: sentAt, status: .serverAccepted),
@@ -229,4 +298,19 @@ final class TimelineCellSemanticsTests: XCTestCase {
         XCTAssertEqual(after.height, first.height, accuracy: 0.5)
         XCTAssertGreaterThan(after.minY, try bubble("arrived").maxY)
     }
+}
+
+/// Where the pinned recognizers report their touch: a point in a view's coordinates.
+@MainActor private enum PinnedTouch {
+    static var at: (point: CGPoint, view: UIView)?
+    static func location(in view: UIView?) -> CGPoint { at.map { $0.view.convert($0.point, to: view) } ?? .zero }
+}
+
+// Subclasses without storage, so an existing recognizer can take one on with `object_setClass`.
+private final class PinnedTap: UITapGestureRecognizer {
+    override func location(in view: UIView?) -> CGPoint { PinnedTouch.location(in: view) }
+}
+
+private final class PinnedPress: UILongPressGestureRecognizer {
+    override func location(in view: UIView?) -> CGPoint { PinnedTouch.location(in: view) }
 }
