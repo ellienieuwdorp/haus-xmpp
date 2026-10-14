@@ -25,7 +25,25 @@ targets:
   HausXMPP:
     type: application
     platform: iOS
-    sources: [App, Shared]
+    sources:
+      - App
+      - Shared
+      # The icon artwork as a plain image too, for the About screen: iOS does not load an app icon set by name.
+      - path: App/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+        buildPhase: resources
+      # The licence and notice files, bundled as they are in the repository for Settings > About > Licences.
+      - path: LICENSE
+        buildPhase: resources
+      - path: LICENSE-ADDITIONAL-PERMISSION
+        buildPhase: resources
+      - path: THIRD_PARTY_LICENSES.md
+        buildPhase: resources
+      - path: Packages/OMEMOCrypto/NOTICE.libomemo-c
+        buildPhase: resources
+      - path: Packages/OMEMOCrypto/LICENSE.libomemo-c
+        buildPhase: resources
+      - path: Packages/OMEMOCrypto/LICENSE.protobuf-c
+        buildPhase: resources
     # Merged into the generated Info.plist. Without this key Core Animation caps iPhone animations at 60 Hz.
     info:
       path: App/Info.plist
@@ -33,6 +51,7 @@ targets:
         CADisableMinimumFrameDurationOnPhone: true
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSHumanReadableCopyright: Copyright © 2026 Ellie Nieuwdorp and the Haus XMPP contributors
         NSCameraUsageDescription: Take a photo or video to send.
         NSMicrophoneUsageDescription: Record sound with videos you take to send.
         NSPhotoLibraryUsageDescription: Pick recent photos and videos to send.
@@ -113,11 +132,25 @@ targets:
       - Mac
       # Debug-only: the app arms and reads the extension's storage probe.
       - NotificationServiceMac/MacExtensionProbe.swift
+      # The licence and notice files, bundled as they are in the repository for Settings > About > Licences.
+      - path: LICENSE
+        buildPhase: resources
+      - path: LICENSE-ADDITIONAL-PERMISSION
+        buildPhase: resources
+      - path: THIRD_PARTY_LICENSES.md
+        buildPhase: resources
+      - path: Packages/OMEMOCrypto/NOTICE.libomemo-c
+        buildPhase: resources
+      - path: Packages/OMEMOCrypto/LICENSE.libomemo-c
+        buildPhase: resources
+      - path: Packages/OMEMOCrypto/LICENSE.protobuf-c
+        buildPhase: resources
     info:
       path: Mac/Info.plist
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSHumanReadableCopyright: Copyright © 2026 Ellie Nieuwdorp and the Haus XMPP contributors
         HausPushEnvironment: $(HAUS_PUSH_ENVIRONMENT)
         HausStagingDomain: $(HAUS_STAGING_DOMAIN)
         # Communication notifications, as on iOS: the app declares the intent its extension donates.

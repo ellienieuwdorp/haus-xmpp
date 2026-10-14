@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var confirmingSignOut = false
     @State private var showingBackup = false
     @State private var confirmingDeleteUnreadable = false
+    @State private var noMailApp = false
 
     private var accent: AccentTheme { appearance.accent }
     private var localPart: String { model.accountID.split(separator: "@").first.map(String.init) ?? "" }
@@ -172,6 +173,35 @@ struct SettingsView: View {
                 } message: {
                     Text("You will no longer be able to go back to the previous version on this \(ThisDevice.noun).")
                 }
+            }
+            Section {
+                // The Mac's Settings window has About as a pane of its own.
+                #if os(iOS)
+                NavigationLink {
+                    AboutView()
+                } label: {
+                    LabeledContent {
+                        Text(AppInfo.version)
+                    } label: {
+                        Label { Text("About") } icon: { SettingsIconTile(systemName: "info", color: .gray) }
+                    }
+                }
+                .accessibilityIdentifier("aboutRow")
+                #endif
+                Button {
+                    openURL(AppInfo.supportMail) { opened in if !opened { noMailApp = true } }
+                } label: {
+                    Label { Text("Contact support") } icon: { SettingsIconTile(systemName: "envelope.fill", color: .blue) }
+                }
+                .foregroundStyle(.primary)
+                .accessibilityHint("Writes an email to \(AppInfo.supportAddress)")
+                .accessibilityIdentifier("contactSupport")
+                ExternalLinkRow(title: "Support website", url: AppInfo.support, systemName: "questionmark", color: .green)
+            }
+            .alert("No mail app", isPresented: $noMailApp) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Write to \(AppInfo.supportAddress) from any email app.")
             }
             Section {
                 Button("Sign Out", role: .destructive) { confirmingSignOut = true }

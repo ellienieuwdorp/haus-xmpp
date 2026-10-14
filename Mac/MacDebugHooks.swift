@@ -16,10 +16,10 @@ import SwiftUI
 ///   with any other open window (Settings) drawn over its centre.
 /// - `-haus-tour "<step>; …"`: with `-haus-capture-frames`, starts the frames as soon as the main window exists and plays
 ///   the steps while they run, for a recording: `wait <seconds>`, `select <chat>`, `deselect`, `inspector on|off`,
-///   `settings general|appearance`, `close-settings`.
+///   `settings general|appearance|about`, `close-settings`.
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-sheet account|new-chat|own-devices`,
-///   `-haus-settings general|appearance`, `-haus-close-window <seconds>`: what the window shows.
+///   `-haus-settings general|appearance|about`, `-haus-close-window <seconds>`: what the window shows.
 /// - `-haus-self-check`: the App Group container, the store in it, and a data-protection Keychain round trip.
 /// - `-haus-lab-sign-in`: signs in with `HAUS_LAB_USERNAME` and `HAUS_LAB_PASSWORD` (a lab account; pass
 ///   `-lab-ui-test` and `HAUS_LAB_CA_DER` for the lab's certificate authority, as the iPhone's lab tests do).

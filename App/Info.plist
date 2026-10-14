@@ -26,6 +26,8 @@
 	<string>$(HAUS_STAGING_DOMAIN)</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Take a photo or video to send.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Ellie Nieuwdorp and the Haus XMPP contributors</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Record sound with videos you take to send.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

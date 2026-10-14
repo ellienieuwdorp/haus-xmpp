@@ -24,6 +24,8 @@
 	<string>$(HAUS_STAGING_DOMAIN)</string>
 	<key>LSMultipleInstancesProhibited</key>
 	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Ellie Nieuwdorp and the Haus XMPP contributors</string>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>INSendMessageIntent</string>
