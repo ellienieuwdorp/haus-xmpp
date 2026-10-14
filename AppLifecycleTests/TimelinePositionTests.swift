@@ -104,6 +104,38 @@ final class TimelinePositionTests: XCTestCase {
         XCTAssertTrue(collectionView.indexPathsForVisibleItems.contains(sent), "sending returns to the newest message")
     }
 
+    /// Our own fetch lands after its bubble is on screen (link-previews.md, engineering default 4): the card grows that
+    /// bubble, but the message the reader is looking at stays put, and a chat resting on its newest message stays there.
+    func testALateLinkCardKeepsTheReaderWhereTheyWere() throws {
+        var shown = messages(1...100)
+        controller.update(messages: shown, onToggleStar: { _ in })
+        collectionView.contentOffset.y = 300
+        collectionView.layoutIfNeeded()
+        let before = try readerPosition()
+        let card = TimelineLinkPreview(url: URL(string: "https://example.org/a")!, host: "example.org", title: "A title", summary: nil,
+                                       image: nil, variant: .large, imageAspectRatio: 1.91)
+        // On the message the reader is on, and on one below it that is also on screen.
+        let anchor = try XCTUnwrap(shown.firstIndex { $0.id == before.id })
+        for index in [anchor, anchor + 2] { shown[index].linkPreview = card }
+        let grown = try XCTUnwrap(dataSource?.indexPath(for: shown[anchor + 2].id))
+        XCTAssertTrue(collectionView.indexPathsForVisibleItems.contains(grown))
+        let height = try XCTUnwrap(collectionView.layoutAttributesForItem(at: grown)).frame.height
+        controller.update(messages: shown, onToggleStar: { _ in })
+        collectionView.layoutIfNeeded()
+        XCTAssertGreaterThan(try XCTUnwrap(collectionView.layoutAttributesForItem(at: grown)).frame.height, height + 100, "the card is in the bubble")
+        XCTAssertEqual(try distance(of: before.id), before.distance, accuracy: 0.5)
+
+        // Resting on the newest message: a card for it keeps the list on it.
+        controller.update(messages: shown + [TimelineMessage(id: "sent", body: "example.org/a", isOutgoing: true, isStarred: false)], onToggleStar: { _ in })
+        collectionView.layoutIfNeeded()
+        var newest = TimelineMessage(id: "sent", body: "example.org/a", isOutgoing: true, isStarred: false)
+        newest.linkPreview = card
+        controller.update(messages: shown + [newest], onToggleStar: { _ in })
+        collectionView.layoutIfNeeded()
+        let bottom = collectionView.contentSize.height - collectionView.bounds.height + collectionView.adjustedContentInset.bottom
+        XCTAssertEqual(collectionView.contentOffset.y, bottom, accuracy: 0.5)
+    }
+
     func testHeaderComesAndGoesAboveTheOldestMessageWithoutMovingTheReader() throws {
         controller.update(messages: messages(1...100), onToggleStar: { _ in })
         // Near the top of the loaded window, where reaching the top starts a backfill.

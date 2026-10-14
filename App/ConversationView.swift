@@ -107,6 +107,8 @@ struct ConversationView: View {
     @State private var starredOnly = false
     @State private var retryMessageID: String?
     @State private var unsendMessageID: String?
+    /// The group an `xmpp:…?join` link asked to join, while its join sheet is up.
+    @State private var joiningGroup: String?
     @State private var replyingTo: ChatMessage?
     /// The own message whose text is in the composer; sending queues a correction instead of a message.
     @State private var editing: ChatMessage?
@@ -281,6 +283,17 @@ struct ConversationView: View {
                 Task { await model.markDisplayed(id) }
             }, onRestoreComposerFocus: { composerState.focused = true }, onReachTop: { Task { await model.loadOlderMessages() } },
             onAttachmentDisplayed: { model.attachmentDisplayed($0) }, onDownloadAttachment: { model.downloadAttachment($0) },
+            onLinkPreviewDisplayed: { model.linkPreviewDisplayed($0) },
+            onOpenChat: { address in
+                guard address != chatID else { return }
+                if model.isGroup(address) { model.requestRoute(.chat(address)); return }
+                Task { if let chat = await model.createChat(address) { model.requestRoute(.chat(chat)) } }
+            }, onOpenGroup: { room in
+                // A group this account has not joined opens the join flow with its address filled in.
+                guard model.isGroup(room) else { composerState.focused = false; joiningGroup = room; return true }
+                if room != chatID { model.requestRoute(.chat(room)) }
+                return true
+            },
             // Without "+" (a group, or a server with no upload service) there is no panel to warm up.
             attachmentKeyboard: isGroup || !model.canSendAttachments ? nil : composerState.attachmentKeyboard)
             // The controller pins the composer to the keyboard itself and insets the messages to match.
@@ -385,6 +398,15 @@ struct ConversationView: View {
             Button("Cancel", role: .cancel) { unsendMessageID = nil }
         } message: { _ in
             Text("It disappears here. \(title) may still see it if their app doesn't support unsending.")
+        }
+        .sheet(isPresented: Binding(get: { joiningGroup != nil }, set: { if !$0 { joiningGroup = nil } })) {
+            NavigationStack {
+                GroupJoinView(model: model, room: joiningGroup ?? "") { room in
+                    joiningGroup = nil
+                    model.requestRoute(.chat(room))
+                }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { joiningGroup = nil } } }
+            }
         }
         .onChange(of: model.conversationIntent) { _, intent in
             // Chat Details pops back and leaves what it wants opened here.

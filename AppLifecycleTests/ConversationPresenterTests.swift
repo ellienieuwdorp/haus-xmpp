@@ -1,5 +1,7 @@
+import ImageIO
 import MessageStore
 import OMEMO
+import UIKit
 import XCTest
 @testable import HausXMPP
 
@@ -115,6 +117,115 @@ final class ConversationPresenterTests: XCTestCase {
         XCTAssertEqual(photo.author, "you")
         XCTAssertEqual(photo.thumbnail?.mediaType, "image/jpeg")
         XCTAssertNil(photo.thumbnail?.localURL, "not loaded, so nothing to show in the slot yet")
+    }
+
+    /// One card per message: the preview it carries while that link is still in the body (whatever the fetch setting;
+    /// a corrected body that dropped the link drops it), else our fetch for its first previewable link, else none and
+    /// a request for one. Never on a file, an unsent or an unreadable message. The host is always the body link's.
+    func testACardShowsTheCarriedPreviewElseOurFetchForTheFirstLink() throws {
+        let wide = UIGraphicsImageRenderer(size: CGSize(width: 600, height: 300), format: { let format = UIGraphicsImageRendererFormat(); format.scale = 1; return format }())
+            .pngData { $0.fill(CGRect(x: 0, y: 0, width: 600, height: 300)) }
+        let fetchedImage = URL(fileURLWithPath: "/tmp/link-previews/news.jpg")
+        source.linkPreviews = ["https://news.example/b": FetchedLinkPreview(title: "Fetched", summary: "From the page", imageFile: fetchedImage,
+                                                                            imageWidth: 1200, imageHeight: 630)]
+        var carried = message("carried", body: "see example.org/a and https://news.example/b")
+        carried.linkPreview = StoredLinkPreview(url: "https://example.org/a", title: "Carried", summary: "From the sender", imageData: wide,
+                                                imageType: "image/png", imageAlt: "A bridge", source: .sender)
+        var corrected = message("corrected", body: "now https://News.example/b instead")
+        corrected.linkPreview = StoredLinkPreview(url: "https://gone.example/", title: "Gone", source: .sender)
+        var file = message("file", body: "https://news.example/b")
+        file.attachment = StoredAttachment(name: "photo.jpg", mediaType: "image/jpeg", size: 1, hash: "", secret: Data())
+        source.messages = [carried, corrected, message("waiting", body: "https://other.example/c"), message("plain", body: "No links here"), file,
+                           message("unsent", body: "https://news.example/b", retracted: true)]
+
+        let first = try XCTUnwrap(try shown("carried").linkPreview)
+        XCTAssertEqual(first, TimelineLinkPreview(url: URL(string: "https://example.org/a")!, host: "example.org", title: "Carried", summary: "From the sender",
+                                                  image: .data(wide), imageAlt: "A bridge", variant: .large, imageAspectRatio: 2))
+        XCTAssertFalse(try shown("carried").wantsLinkPreview)
+
+        // The cache is keyed by the normalised link; the card keeps the link as the body writes it.
+        let fetched = try XCTUnwrap(try shown("corrected").linkPreview)
+        XCTAssertEqual(fetched.url.absoluteString, "https://News.example/b")
+        XCTAssertEqual(fetched.host, "news.example")
+        XCTAssertEqual(fetched.title, "Fetched")
+        XCTAssertEqual(fetched.image, .file(fetchedImage))
+        XCTAssertEqual(fetched.variant, .large)
+        XCTAssertEqual(try XCTUnwrap(fetched.imageAspectRatio), 1200.0 / 630, accuracy: 0.001)
+
+        XCTAssertNil(try shown("waiting").linkPreview)
+        XCTAssertTrue(try shown("waiting").wantsLinkPreview, "no card yet: the bubble asks for one when shown")
+        for id in ["plain", "file", "unsent"] {
+            XCTAssertNil(try shown(id).linkPreview, id)
+            XCTAssertFalse(try shown(id).wantsLinkPreview, id)
+        }
+    }
+
+    /// A carried image is judged by its header before anything decodes it: a few kilobytes can declare a canvas that
+    /// takes hundreds of megabytes to inflate, so an image over the pixel budget is dropped and the card shows its text.
+    /// A correction keeps the message ID, so one that swaps the image for another of the same byte count is read afresh.
+    func testACarriedImageDeclaringAHugeCanvasLeavesATextCard() throws {
+        // Two valid blank 1-bit PNGs padded to the same length: 600 x 300 px, and 5,000 x 5,000 px (25 MP) in a few KB.
+        var honest = Self.blankPNG(width: 600, height: 300)
+        var huge = Self.blankPNG(width: 5_000, height: 5_000)
+        let length = max(honest.count, huge.count) + 64
+        honest = Self.padded(honest, to: length)
+        huge = Self.padded(huge, to: length)
+        XCTAssertEqual(honest.count, huge.count)
+        XCTAssertLessThan(huge.count, 64 * 1024, "within the wire's embedded image limit")
+        let claimed = try XCTUnwrap(CGImageSourceCreateWithData(huge as CFData, nil).flatMap { CGImageSourceCopyPropertiesAtIndex($0, 0, nil) } as? [CFString: Any])
+        XCTAssertEqual(claimed[kCGImagePropertyPixelWidth] as? Int, 5_000, "ImageIO reads the claimed canvas")
+
+        var sent = message("m", body: "see https://example.org/a")
+        sent.linkPreview = StoredLinkPreview(url: "https://example.org/a", title: "Bridge", imageData: honest, imageType: "image/png", source: .sender)
+        source.messages = [sent]
+        XCTAssertEqual(try shown("m").linkPreview?.variant, .large)
+        XCTAssertEqual(try shown("m").linkPreview?.imageAspectRatio, 2)
+
+        sent.linkPreview?.imageData = huge
+        source.messages = [sent]
+        let card = try XCTUnwrap(try shown("m").linkPreview)
+        XCTAssertNil(card.image)
+        XCTAssertEqual(card.variant, .text)
+        XCTAssertNil(card.imageAspectRatio)
+        XCTAssertEqual(card.title, "Bridge")
+    }
+
+    /// A blank grayscale 1-bit PNG, written by hand: drawing a canvas this size to encode it would take the memory the
+    /// test is about.
+    private static func blankPNG(width: UInt32, height: UInt32) -> Data {
+        let row = 1 + (Int(width) + 7) / 8
+        let raw = Data(count: row * Int(height))
+        // zlib around raw deflate: header, data, Adler-32 of the zero bytes (a stays 1, b counts them).
+        var zlib = Data([0x78, 0x9C])
+        zlib.append(try! (raw as NSData).compressed(using: .zlib) as Data)
+        zlib.append(contentsOf: bigEndian(UInt32(raw.count % 65_521) << 16 | 1))
+        var png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        png.append(chunk("IHDR", bigEndian(width) + bigEndian(height) + [1, 0, 0, 0, 0]))
+        png.append(chunk("IDAT", [UInt8](zlib)))
+        png.append(chunk("IEND", []))
+        return png
+    }
+
+    /// `png` with a text chunk after its header that brings it to `length` bytes.
+    private static func padded(_ png: Data, to length: Int) -> Data {
+        let filler = [UInt8]("Comment".utf8) + [0] + [UInt8](repeating: 0x20, count: length - png.count - 20)
+        return png.prefix(33) + chunk("tEXt", filler) + png.dropFirst(33)
+    }
+
+    private static func chunk(_ type: String, _ body: [UInt8]) -> Data {
+        let typed = [UInt8](type.utf8) + body
+        return Data(bigEndian(UInt32(body.count)) + typed + bigEndian(crc32(typed)))
+    }
+
+    private static func bigEndian(_ value: UInt32) -> [UInt8] { (0..<4).map { UInt8(truncatingIfNeeded: value >> (24 - 8 * $0)) } }
+
+    private static func crc32(_ bytes: [UInt8]) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in bytes {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 { crc = crc & 1 == 1 ? (crc >> 1) ^ 0xEDB8_8320 : crc >> 1 }
+        }
+        return ~crc
     }
 
     func testTypingShowsAtTheEndOfTheWholeChatOnly() {

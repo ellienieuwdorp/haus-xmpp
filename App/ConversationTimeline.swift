@@ -1,8 +1,10 @@
 import MessageStore
 import QuickLook
+import SafariServices
 import SwiftUI
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
+import XMPPProtocol
 
 /// Native baseline for the first transport milestone. Composer and message state belong to the parent.
 struct ConversationTimeline: UIViewControllerRepresentable {
@@ -32,6 +34,12 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     var onAttachmentDisplayed: (String) -> Void = { _ in }
     /// A tap on a file waiting for one, or on a failed one.
     var onDownloadAttachment: (String) -> Void = { _ in }
+    /// A bubble whose first previewable link has no card yet came on screen or is about to; never at insert time.
+    var onLinkPreviewDisplayed: (String) -> Void = { _ in }
+    /// An `xmpp:` link to a person was opened: open or start that chat.
+    var onOpenChat: (String) -> Void = { _ in }
+    /// An `xmpp:…?join` link was opened: open the group, or its join flow, and return true; false copies the address.
+    var onOpenGroup: (String) -> Bool = { _ in false }
     /// Its hidden responder is installed in the controller's view, so the attachment panel is the keyboard here.
     var attachmentKeyboard: AttachmentKeyboard? = nil
     // Observed so a stored accent change re-renders visible bubbles.
@@ -47,6 +55,9 @@ struct ConversationTimeline: UIViewControllerRepresentable {
         // Before the update: its snapshot displays cells, which report their files.
         controller.onAttachmentDisplayed = onAttachmentDisplayed
         controller.onDownloadAttachment = onDownloadAttachment
+        controller.onLinkPreviewDisplayed = onLinkPreviewDisplayed
+        controller.onOpenChat = onOpenChat
+        controller.onOpenGroup = onOpenGroup
         controller.update(messages: messages, typing: typing, loadingEarlier: loadingEarlier, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend,
                           onOpenEncryption: onOpenEncryption, onDisplayed: onDisplayed)
         controller.onRestoreComposerFocus = onRestoreComposerFocus
@@ -55,8 +66,11 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     }
 }
 
+/// What a bubble asks of a link: open it as a tap does, or one of the long-press menu's link actions.
+enum LinkCommand { case open, call, message, share }
+
 @MainActor
-final class ConversationTimelineController: UIViewController, UICollectionViewDelegate {
+final class ConversationTimelineController: UIViewController, UICollectionViewDelegate, UICollectionViewDataSourcePrefetching {
     private struct Anchor {
         let id: String
         let distanceFromTop: CGFloat
@@ -86,6 +100,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     var onReachTop: () -> Void = {}
     var onAttachmentDisplayed: (String) -> Void = { _ in }
     var onDownloadAttachment: (String) -> Void = { _ in }
+    var onLinkPreviewDisplayed: (String) -> Void = { _ in }
+    var onOpenChat: (String) -> Void = { _ in }
+    var onOpenGroup: (String) -> Bool = { _ in false }
     /// While the long-press menu is up the timeline holds still: its snapshot sits at the bubble's captured frame.
     private var actionsVisible = false
     private var heldUpdate: (() -> Void)?
@@ -131,6 +148,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .interactive
         collectionView.delegate = self
+        // Asks for link previews of the bubbles about to scroll in, so a card is usually there before its bubble is.
+        collectionView.prefetchDataSource = self
         collectionView.accessibilityIdentifier = "conversation.timeline"
         collectionView.register(MessageBubbleCell.self, forCellWithReuseIdentifier: "message")
         collectionView.register(TypingIndicatorCell.self, forCellWithReuseIdentifier: "typing")
@@ -206,7 +225,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                                putKeyboardAwayForActions()
                                return true
                            }, openAttachment: { [weak self] url in self?.preview(url, title: row.message.attachment?.name, isImage: row.message.attachment?.isImage == true) },
-                           download: { [weak self] in self?.onDownloadAttachment(id) })
+                           download: { [weak self] in self?.onDownloadAttachment(id) },
+                           handleLink: { [weak self] url, command, source, rect in self?.handleLink(url, command, from: source, at: rect) })
             return cell
         }
     }
@@ -224,6 +244,61 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         viewer.dataSource = previewSource
         viewer.delegate = previewSource
         present(viewer, animated: true)
+    }
+
+    /// Opens a link from a bubble (CX-8): where it goes is `LinkOpening`'s decision, shared with the Mac; this performs
+    /// it. A tap on a phone number asks first, as Call, Send Message or Copy; the menu's Call calls directly.
+    /// `source` and `rect` (in its coordinates) are what a share sheet or the phone number's choices point at.
+    func handleLink(_ url: URL, _ command: LinkCommand, from source: UIView, at rect: CGRect) {
+        guard presentedViewController == nil else { return }
+        let destination = LinkOpening.destination(for: url, inAppBrowser: !LinkSettings.shared.openInSafari)
+        switch (command, destination) {
+        case (.share, _):
+            let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+            sheet.popoverPresentationController?.sourceView = source
+            sheet.popoverPresentationController?.sourceRect = rect
+            present(sheet, animated: true)
+        case (.call, .phone(_, let call, _)):
+            UIApplication.shared.open(call)
+        case (.message, .phone(_, _, let message)):
+            UIApplication.shared.open(message)
+        case (.open, .phone(let number, let call, let message)):
+            let sheet = UIAlertController(title: number, message: nil, preferredStyle: .actionSheet)
+            sheet.addAction(UIAlertAction(title: "Call", style: .default) { _ in UIApplication.shared.open(call) })
+            sheet.addAction(UIAlertAction(title: "Send Message", style: .default) { _ in UIApplication.shared.open(message) })
+            sheet.addAction(UIAlertAction(title: "Copy", style: .default) { _ in UIPasteboard.general.string = number })
+            sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            sheet.popoverPresentationController?.sourceView = source
+            sheet.popoverPresentationController?.sourceRect = rect
+            present(sheet, animated: true)
+        case (.open, .web(let page, inApp: true)):
+            let browser = SFSafariViewController(url: page)
+            browser.dismissButtonStyle = .close
+            present(browser, animated: true)
+        case (.open, .web(let page, inApp: false)), (.open, .map(let page)):
+            UIApplication.shared.open(page)
+        case (.open, .mail(let mail, let address)):
+            UIApplication.shared.open(mail) { [weak self] opened in
+                if !opened { self?.copied(address, because: "No mail app is set up on this iPhone, so the address was copied.") }
+            }
+        case (.open, .chat(let address)):
+            onOpenChat(address)
+        case (.open, .group(let room)):
+            if !onOpenGroup(room) { copied(room, because: "This group can’t be joined here, so its address was copied.") }
+        case (.open, .unsupported):
+            copied(LinkOpening.copyText(for: url), because: "This link can’t be opened here, so it was copied.")
+        default:
+            break
+        }
+    }
+
+    /// A link that could not be opened was copied instead; the dialog says so and why.
+    private func copied(_ text: String, because reason: String) {
+        UIPasteboard.general.string = text
+        guard presentedViewController == nil else { return }
+        let alert = UIAlertController(title: "Copied", message: reason, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
     }
 
     func update(messages incoming: [TimelineMessage], typing: TimelineTyping? = nil, loadingEarlier: Bool = false, accent: String = "", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in },
@@ -484,9 +559,17 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             return
         }
         guard let id = dataSource.itemIdentifier(for: indexPath), let row = rowsByID[id] else { return }
+        if row.message.wantsLinkPreview { onLinkPreviewDisplayed(id) }
         if let attachment = row.message.attachment, attachment.localURL == nil, !row.message.showsPlaceholder { onAttachmentDisplayed(id) }
         guard !row.message.isOutgoing else { return }
         onDisplayed(id)
+    }
+
+    func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
+        for path in indexPaths {
+            guard let id = dataSource.itemIdentifier(for: path), rowsByID[id]?.message.wantsLinkPreview == true else { continue }
+            onLinkPreviewDisplayed(id)
+        }
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -720,6 +803,16 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private var message: TimelineMessage? { row?.message }
     private var openAttachment: (URL) -> Void = { _ in }
     private var download: () -> Void = {}
+    private var handleLink: (URL, LinkCommand, UIView, CGRect) -> Void = { _, _, _, _ in }
+    /// The card above the text, inside the attachment slot (no message has both in version 1).
+    private let linkCard = LinkPreviewCardView()
+    private var linkCardConstraints: [NSLayoutConstraint] = []
+    private var linkCardTop: NSLayoutConstraint!
+    /// The links drawn in the text, as configured.
+    private var links: [DetectedLink] = []
+    /// Opens the link under a tap, in the text or on the card; it never begins elsewhere, so it blocks nothing.
+    private let linkTap = UITapGestureRecognizer()
+    private var attachmentTap: UITapGestureRecognizer!
     private let attachmentArea = UIView()
     private let media = UIImageView()
     private let mediaSpinner = UIActivityIndicatorView(style: .medium)
@@ -915,8 +1008,22 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         attachmentArea.translatesAutoresizingMaskIntoConstraints = false
         attachmentArea.clipsToBounds = true
         attachmentArea.isAccessibilityElement = false
-        attachmentArea.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleAttachmentTap)))
+        attachmentTap = UITapGestureRecognizer(target: self, action: #selector(handleAttachmentTap))
+        attachmentTap.delegate = self
+        attachmentArea.addGestureRecognizer(attachmentTap)
         bubble.addSubview(attachmentArea)
+        linkCard.isHidden = true
+        attachmentArea.addSubview(linkCard)
+        linkCardTop = linkCard.topAnchor.constraint(equalTo: attachmentArea.topAnchor, constant: LinkPreviewCardView.bubbleInset)
+        linkCardConstraints = [
+            linkCardTop,
+            linkCard.leadingAnchor.constraint(equalTo: attachmentArea.leadingAnchor, constant: LinkPreviewCardView.bubbleInset),
+            linkCard.trailingAnchor.constraint(equalTo: attachmentArea.trailingAnchor, constant: -LinkPreviewCardView.bubbleInset),
+            linkCard.bottomAnchor.constraint(equalTo: attachmentArea.bottomAnchor),
+        ]
+        linkTap.addTarget(self, action: #selector(handleLinkTap))
+        linkTap.delegate = self
+        bubble.addGestureRecognizer(linkTap)
         media.translatesAutoresizingMaskIntoConstraints = false
         media.contentMode = .scaleAspectFill
         media.clipsToBounds = true
@@ -981,7 +1088,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         textView.adjustsFontForContentSizeCategory = true
         textView.textContainerInset = .init(top: 10, left: 12, bottom: 3, right: 12)
         textView.textContainer.lineFragmentPadding = 0
-        // Preview fetching is a separate, explicit feature, never a text rendering side effect.
+        // Links are found once by LinkDetection (shared with the Mac and the preview rules) and drawn as attributes; the
+        // view stays non-interactive and the bubble hit-tests them, so selection, the menu and the reply swipe keep working.
         textView.dataDetectorTypes = []
         bubble.addSubview(textView)
         footer.translatesAutoresizingMaskIntoConstraints = false
@@ -1101,8 +1209,43 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
                 attachmentHeight.constant = 62
             }
         } else { attachmentHeight.constant = 0 }
+        if !linkCard.isHidden {
+            // The media width rule: the card's layout never depends on its title's length.
+            width = min(maximumTextWidth + 24, 280)
+            linkCard.fit(width: width - 2 * LinkPreviewCardView.bubbleInset)
+        }
         bubbleWidth.constant = width
         return super.preferredLayoutAttributesFitting(layoutAttributes)
+    }
+
+    /// The link at `point` (bubble coordinates): the card's, or the one drawn under the point in the text.
+    private func link(at point: CGPoint) -> URL? { linkTarget(at: point)?.url }
+
+    /// The link at `point` and where it is drawn (bubble coordinates), for a sheet to point at. Hit-tested through
+    /// UITextInput, which works with either TextKit (never the layout manager, which would switch the view to
+    /// TextKit 1); a few points of slop around each line of a link make small links easy to hit.
+    private func linkTarget(at point: CGPoint) -> (url: URL, rect: CGRect)? {
+        guard message != nil else { return nil }
+        if !linkCard.isHidden, let url = linkCard.preview?.url {
+            let card = linkCard.convert(linkCard.bounds, to: bubble)
+            if card.contains(point) { return (url, card) }
+        }
+        let local = bubble.convert(point, to: textView)
+        guard !textView.isHidden, textView.bounds.contains(local) else { return nil }
+        for link in links {
+            guard let start = textView.position(from: textView.beginningOfDocument, offset: link.range.location),
+                  let end = textView.position(from: start, offset: link.range.length),
+                  let range = textView.textRange(from: start, to: end) else { continue }
+            let lines = textView.selectionRects(for: range).map(\.rect).filter { !$0.isEmpty }
+            guard let hit = lines.first(where: { $0.insetBy(dx: -4, dy: -4).contains(local) }) else { continue }
+            return (link.url, textView.convert(hit, to: bubble))
+        }
+        return nil
+    }
+
+    @objc private func handleLinkTap() {
+        guard let target = linkTarget(at: linkTap.location(in: bubble)) else { return }
+        handleLink(target.url, .open, bubble, target.rect)
     }
 
     @objc private func handleAttachmentTap() {
@@ -1189,11 +1332,67 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         }
     }
 
+    /// The card sits in the attachment slot, which then takes the card's height instead of a fixed one: 8 pt below the
+    /// bubble's top like the quote, or right in the slot's place 8 pt under a quote.
+    private func configureLinkCard(_ preview: TimelineLinkPreview?, belowQuote: Bool, fill: UIColor, textColor: UIColor, metaColor: UIColor) {
+        linkCard.isHidden = preview == nil
+        guard let preview else {
+            NSLayoutConstraint.deactivate(linkCardConstraints)
+            attachmentHeight.isActive = true
+            return
+        }
+        attachmentHeight.isActive = false
+        linkCardTop.constant = belowQuote ? 0 : LinkPreviewCardView.bubbleInset
+        NSLayoutConstraint.activate(linkCardConstraints)
+        attachmentArea.isHidden = false
+        linkCard.configure(preview, fill: fill, textColor: textColor, metaColor: metaColor)
+    }
+
+    /// Links are underlined, in the accent on received bubbles and in the text colour on the accent-filled sent ones.
+    /// Only colour and underline change: the font, and so the measured width, stays the body's.
+    private func drawLinks(base: UIColor, link color: UIColor) {
+        let storage = textView.textStorage
+        let whole = NSRange(location: 0, length: storage.length)
+        storage.beginEditing()
+        storage.removeAttribute(.underlineStyle, range: whole)
+        storage.addAttribute(.foregroundColor, value: base, range: whole)
+        for link in links where NSMaxRange(link.range) <= whole.length {
+            storage.addAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue, .foregroundColor: color], range: link.range)
+        }
+        storage.endEditing()
+    }
+
+    /// VoiceOver's Links rotor walks the links in the text; activating the text then opens the one it moved to.
+    private func linkRotor() -> UIAccessibilityCustomRotor {
+        UIAccessibilityCustomRotor(systemType: .link) { [weak self] predicate in
+            guard let self else { return nil }
+            let textView = self.textView
+            let forward = predicate.searchDirection == .next
+            let current = (predicate.currentItem.targetElement as AnyObject?) === textView
+                ? predicate.currentItem.targetRange.map { textView.offset(from: textView.beginningOfDocument, to: $0.start) } : nil
+            guard let link = (forward ? links : links.reversed()).first(where: { link in
+                      current.map { forward ? link.range.location > $0 : link.range.location < $0 } ?? true
+                  }),
+                  let start = textView.position(from: textView.beginningOfDocument, offset: link.range.location),
+                  let end = textView.position(from: start, offset: link.range.length),
+                  let range = textView.textRange(from: start, to: end) else { return nil }
+            textView.rotorLink = { [weak self] in
+                guard let self else { return }
+                handleLink(link.url, .open, bubble, bubble.bounds)
+            }
+            return UIAccessibilityCustomRotorItemResult(targetElement: textView, targetRange: range)
+        }
+    }
+
     /// The one action list (`MessageActionMenu`); the overlay menu and VoiceOver custom actions both read it.
-    private func actions() -> [MessageAction] {
+    private func actions(link: URL? = nil) -> [MessageAction] {
         guard let message else { return [] }
-        return MessageActionMenu.items(for: message).map { item in
+        return MessageActionMenu.items(for: message, link: link).map { item in
             let perform: () -> Void = switch item.kind {
+            case .openLink: { [weak self] in if let link { self?.openFromMenu(link) } }
+            case .messageNumber: { [weak self] in guard let self, let link else { return }; handleLink(link, .message, bubble, bubble.bounds) }
+            case .copyLink: { if let link { UIPasteboard.general.string = LinkOpening.copyText(for: link) } }
+            case .shareLink: { [weak self] in guard let self, let link else { return }; handleLink(link, .share, bubble, bubble.bounds) }
             case .encryptionDetails: openEncryptionAction
             case .star: toggleStar
             case .reply: replyAction
@@ -1207,6 +1406,12 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         }
     }
 
+    /// The menu's first item: Call for a phone number (a tap asks first), what a tap does otherwise.
+    private func openFromMenu(_ url: URL) {
+        let command: LinkCommand = if case .phone = LinkOpening.destination(for: url, inAppBrowser: false) { .call } else { .open }
+        handleLink(url, command, bubble, bubble.bounds)
+    }
+
     @objc private func handlePress(_ press: UILongPressGestureRecognizer) {
         switch press.state {
         case .began:
@@ -1217,10 +1422,12 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             if bubble.transform.tx != 0 { resetReplySwipe(animated: false) }
             pressGeneration += 1
             let generation = pressGeneration
-            if UIAccessibility.isReduceMotionEnabled { presentMenu(actionsContext()); return }
+            // Pressed on a link or the card: its actions go on top of the message's.
+            let link = link(at: press.location(in: bubble))
+            if UIAccessibility.isReduceMotionEnabled { presentMenu(actionsContext(link: link)); return }
             // The snapshot and frames are taken before the squeeze (a snapshot ignores the transform anyway); the
             // prepared overlay draws its source at the squeeze's end scale, which it will have when it is shown.
-            var context = actionsContext()
+            var context = actionsContext(link: link)
             context?.sourceScale = Self.squeezedScale
             UIView.animate(withDuration: Self.squeezeDuration, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction]) {
                 self.squeeze(Self.squeezedScale)
@@ -1277,14 +1484,14 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     }
 
     /// The snapshot and frames exactly as the screen shows them, and what the menu will offer. Frames ignore the squeeze.
-    private func actionsContext() -> MessageActionsContext? {
+    private func actionsContext(link: URL? = nil) -> MessageActionsContext? {
         guard let message, window != nil, let bubbleSnapshot = bubble.snapshotView(afterScreenUpdates: false) else { return nil }
         let reactions = message.reactions.isEmpty ? nil : reactionRow.snapshotView(afterScreenUpdates: false)
         let id = message.id
         return MessageActionsContext(message: message, bubble: bubbleSnapshot, bubbleFrame: unsqueezedFrame(bubble),
                                              bubbleShape: bubblePath(in: bubble.bounds).cgPath, sourceScale: bubble.transform.a,
                                              reactions: reactions, reactionsFrame: unsqueezedFrame(reactionRow),
-                                             actions: actions(), react: reactionAction,
+                                             actions: actions(link: link), react: reactionAction,
                                              setSourceHidden: { [weak self] hidden in
                                                  guard let self else { return }
                                                  // Hidden, it drops the squeeze so the menu closes onto its resting size.
@@ -1315,6 +1522,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
 
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         if gestureRecognizer === press { return !isSelectingText && bubbleContains(press.location(in: self)) }
+        if gestureRecognizer === linkTap { return !isSelectingText && link(at: linkTap.location(in: bubble)) != nil }
+        if gestureRecognizer === attachmentTap { return message?.attachment != nil }
         guard gestureRecognizer === replyPan else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
         guard !isSelectingText, let start = replyTouchStart, ownsReplySwipe(at: start) else { return false }
         let velocity = replyPan.velocity(in: contentView)
@@ -1408,7 +1617,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
 
     func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,
                    edit: @escaping () -> Void = {}, unsend: @escaping () -> Void = {}, openEncryption: @escaping () -> Void = {},
-                   presentActions: @escaping (MessageActionsContext) -> Bool, openAttachment: @escaping (URL) -> Void = { _ in }, download: @escaping () -> Void = {}) {
+                   presentActions: @escaping (MessageActionsContext) -> Bool, openAttachment: @escaping (URL) -> Void = { _ in }, download: @escaping () -> Void = {},
+                   handleLink: @escaping (URL, LinkCommand, UIView, CGRect) -> Void = { _, _, _, _ in }) {
         let message = row.message
         self.row = row
         self.toggleStar = toggleStar
@@ -1421,9 +1631,11 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         self.presentActions = presentActions
         self.openAttachment = openAttachment
         self.download = download
+        self.handleLink = handleLink
         bubble.cornerConfiguration = .corners(topLeftRadius: .fixed(20), topRightRadius: .fixed(20),
                                               bottomLeftRadius: .fixed(corners.bottomLeft), bottomRightRadius: .fixed(corners.bottomRight))
         if messageID != message.id {
+            textView.rotorLink = nil
             resetReplySwipe(animated: false)
             _ = textView.resignFirstResponder()
             textView.isSelectable = false
@@ -1451,7 +1663,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         NSLayoutConstraint.deactivate([plainTextTop, replyTextTop, plainAttachmentTop, replyAttachmentTop])
         (message.reply == nil ? plainAttachmentTop : replyAttachmentTop)?.isActive = true
         // Under a preview the caption keeps its own inset; under a quote alone the text tucks up as before.
-        (message.reply == nil || message.attachment != nil ? plainTextTop : replyTextTop)?.isActive = true
+        let card = message.showsPlaceholder || message.attachment != nil ? nil : message.linkPreview
+        (message.reply == nil || message.attachment != nil || card != nil ? plainTextTop : replyTextTop)?.isActive = true
         textHeight.isActive = message.body.isEmpty && message.attachment != nil
         textView.isHidden = textHeight.isActive
         // A caption keeps its usual 10pt inset from the photo itself, not from the frame below it.
@@ -1484,6 +1697,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         textView.font = message.showsPlaceholder ? UIFont(descriptor: bodyDescriptor.withSymbolicTraits(.traitItalic) ?? bodyDescriptor, size: 0) : .preferredFont(forTextStyle: .body)
         textView.textColor = message.showsPlaceholder ? meta : text
         configureAttachment(message.showsPlaceholder ? nil : message.attachment, isOutgoing: message.isOutgoing, textColor: text)
+        configureLinkCard(card, belowQuote: message.reply != nil, fill: quote.backgroundColor ?? .clear, textColor: text, metaColor: meta)
+        links = message.links
+        drawLinks(base: message.showsPlaceholder ? meta : text, link: message.isOutgoing ? text : theme.tint)
         for pill in reactionRow.arrangedSubviews { pill.removeFromSuperview() }
         for reaction in message.reactions {
             reactionRow.addArrangedSubview(ReactionPill(reaction, onTap: message.canReact ? { [weak self] in self?.reactionAction(reaction.emoji) } : nil))
@@ -1495,6 +1711,14 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
                 case .open(let url): self?.openAttachment(url)
                 case .download: self?.download()
                 }
+                return true
+            })
+        }
+        // One action per link, after the menu's and the file's, before the reactions.
+        for link in links {
+            customActions.append(UIAccessibilityCustomAction(name: MessageActionMenu.linkAccessibilityTitle(for: link)) { [weak self] _ in
+                guard let self else { return false }
+                handleLink(link.url, .open, bubble, bubble.bounds)
                 return true
             })
         }
@@ -1510,6 +1734,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             view.accessibilityLabel = view === speaksForMessage ? message.accessibilityDescription : nil
             view.accessibilityCustomActions = view === speaksForMessage ? customActions : nil
         }
+        textView.accessibilityCustomRotors = textView === speaksForMessage && !links.isEmpty ? [linkRotor()] : nil
         star.alpha = message.isStarred ? 1 : 0
         time.text = message.footerText
         time.isHidden = !message.showsFooterText
@@ -1746,6 +1971,20 @@ private final class ReactionPill: UIView {
 /// Returning to ordinary reading restores the bubble's single context-menu interaction.
 @MainActor
 private final class MessageTextView: UITextView {
+    /// Opens the link the Links rotor last moved to; activating the text runs it.
+    var rotorLink: (() -> Void)?
+
+    override func accessibilityActivate() -> Bool {
+        guard let rotorLink else { return super.accessibilityActivate() }
+        rotorLink()
+        return true
+    }
+
+    override func accessibilityElementDidLoseFocus() {
+        super.accessibilityElementDidLoseFocus()
+        rotorLink = nil
+    }
+
     private lazy var selectionMenu: UIEditMenuInteraction = {
         let interaction = UIEditMenuInteraction(delegate: nil)
         addInteraction(interaction)

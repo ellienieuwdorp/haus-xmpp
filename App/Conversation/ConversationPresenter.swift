@@ -1,6 +1,7 @@
 import Foundation
 import MessageStore
 import OMEMO
+import XMPPProtocol
 
 /// What a conversation reads from the app model. `AppModel` provides it; the presenter only reads, so a view built
 /// on it keeps observing exactly the model properties it touches.
@@ -138,7 +139,7 @@ struct ConversationPresenter {
                                    unreadable: unreadable)
         }
         let canRevise = source.canRevise(message)
-        return TimelineMessage(id: message.id, body: message.body, isOutgoing: message.isOutgoing, isStarred: message.isStarred,
+        var shown = TimelineMessage(id: message.id, body: message.body, isOutgoing: message.isOutgoing, isStarred: message.isStarred,
                                attachment: message.attachment.map { TimelineAttachment(name: $0.name, mediaType: $0.mediaType, size: $0.size, width: $0.width, height: $0.height,
                                                                                        localURL: source.attachmentFiles[message.id],
                                                                                        download: source.attachmentDownloads[message.id] ?? .loading) },
@@ -152,6 +153,34 @@ struct ConversationPresenter {
                                reactionUnavailableReason: message.isRetracted ? nil : reactionUnavailableReason(message),
                                author: isGroup && !message.isOutgoing ? message.senderID : nil,
                                isRetracted: message.isRetracted, isEdited: message.isEdited, canEdit: canRevise && !message.body.isEmpty, canUnsend: canRevise)
+        (shown.linkPreview, shown.wantsLinkPreview) = linkPreview(for: message)
+        return shown
+    }
+
+    /// The message's card: the preview it carries (the sender's, or ours frozen when it was sent) while that link is
+    /// still in the body, else our fetch for its first previewable link. A carried preview shows whatever the fetch
+    /// setting says; it brings its own image or none. `wanted` is true when the first previewable link has no card yet.
+    private func linkPreview(for message: ChatMessage) -> (preview: TimelineLinkPreview?, wanted: Bool) {
+        guard message.attachment == nil, !message.isRetracted, message.unreadableReason == nil else { return (nil, false) }
+        let links = LinkScan.previewableURLs(in: message.body, uploadHosts: source.linkPreviewUploadHosts)
+        guard let first = links.first else { return (nil, false) }
+        if let carried = message.linkPreview, let url = links.first(where: { $0.absoluteString == carried.url }),
+           let host = LinkDetection.displayHost(for: url) {
+            let size = carried.imageData.flatMap { LinkScan.pixelSize(of: $0) }
+            // Neither a title nor a readable image: nothing to draw, and nothing to fetch either, since it carried one.
+            guard carried.title != nil || size != nil else { return (nil, false) }
+            return (TimelineLinkPreview(url: url, host: host, title: carried.title, summary: carried.summary,
+                                        image: size == nil ? nil : carried.imageData.map(TimelineLinkPreview.Image.data), imageAlt: carried.imageAlt,
+                                        variant: TimelineLinkPreview.variant(imageWidth: size?.width, imageHeight: size?.height),
+                                        imageAspectRatio: size.map { Double($0.width) / Double($0.height) }), false)
+        }
+        guard let fetched = source.linkPreviews[LinkDetection.cacheKey(for: first)], fetched.title != nil || fetched.imageFile != nil,
+              let host = LinkDetection.displayHost(for: first) else { return (nil, true) }
+        let size = fetched.imageFile == nil ? nil : fetched.imageWidth.flatMap { width in fetched.imageHeight.map { (width, $0) } }
+        let variant = TimelineLinkPreview.variant(imageWidth: size?.0, imageHeight: size?.1)
+        return (TimelineLinkPreview(url: first, host: host, title: fetched.title, summary: fetched.summary,
+                                    image: variant == .text ? nil : fetched.imageFile.map(TimelineLinkPreview.Image.file), imageAlt: fetched.imageAlt,
+                                    variant: variant, imageAspectRatio: variant == .text ? nil : size.map { Double($0.0) / Double($0.1) }), false)
     }
 
     /// Search and the starred filter show a slice of history, so nobody is shown typing at its end.
