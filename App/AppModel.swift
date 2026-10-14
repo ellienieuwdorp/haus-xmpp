@@ -262,6 +262,10 @@ final class AppModel {
     @ObservationIgnored private var preparation: Task<Void, Never>?
     /// Notification permission as last read; foreground banners are posted only with it.
     @ObservationIgnored private var mayPostNotifications = false
+    #if os(macOS)
+    /// The Mac's notification permission as last read, for Settings. iOS shows push status instead.
+    private(set) var notificationAuthorization = UNAuthorizationStatus.notDetermined
+    #endif
     /// Per connection, where banners for what it catches up on stand (`AttentionRules.holdsCatchUpBanners`, the Mac).
     @ObservationIgnored private var catchUpBanners = CatchUpBanners.holding
     /// The transport a Reply or Mark as Read took; nil when no action runs.
@@ -628,6 +632,11 @@ final class AppModel {
             // `.online` was emitted before `connect` returned, so this runs alongside the setup task. Not awaited: the
             // sign-in sheet closes now, and the permission prompt, APNs and the gateway round trips follow on their own.
             startPushSetup(client: connection, session: connected, token: token, interactive: manual)
+            #if os(macOS)
+            // Push stays off on the Mac, but its own banners need permission: asked on a manual sign-in, as iOS asks
+            // in its push setup, and only if it was never asked.
+            if manual { Task { await requestNotificationPermission() } }
+            #endif
             return true
         } catch {
             guard generation == token else { await connection.disconnect(); return false }
@@ -1195,6 +1204,21 @@ final class AppModel {
         startPushSetup(client: client, session: session, token: token, interactive: true)
         await pushTask?.value
     }
+
+    #if os(macOS)
+    /// Asks for permission to show banners (alert, sound, badge), if it was never asked. Nothing registers for push.
+    /// After a manual sign-in, and from Settings.
+    func requestNotificationPermission() async {
+        guard testSessionID == nil, !isDemo, !accountID.isEmpty else { return }
+        #if DEBUG
+        // A scripted check never puts a system prompt on screen.
+        if MacUnobtrusive.isOn || MacDebugNotificationLog.poster != nil { return }
+        #endif
+        guard await Self.notificationAuthorization() == .notDetermined else { refreshNotificationPermission(); return }
+        _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+        refreshNotificationPermission()
+    }
+    #endif
 
     /// Settings: turn push off. Revokes the gateway registration and disables it at the account server; offline, or
     /// on a failure, both wait in the saved registration state for the next connection.
@@ -3862,6 +3886,7 @@ extension AppModel: NotificationActionEnvironment {
             #else
             // App Clips' ephemeral authorization does not exist on macOS.
             self.mayPostNotifications = [.authorized, .provisional].contains(status)
+            self.notificationAuthorization = status
             #if DEBUG
             if MacDebugNotificationLog.poster != nil { self.mayPostNotifications = true }
             #endif

@@ -76,10 +76,7 @@ struct SettingsView: View {
                         }
                     }
                     #else
-                    Button("Open \(ThisDevice.settingsApp)") {
-                        if let url = PlatformApplication.notificationSettingsURL { openURL(url) }
-                    }
-                    .accessibilityIdentifier("openNotificationSettings")
+                    MacNotificationPermissionRow(model: model)
                     #endif
                     Toggle("Message previews", isOn: Binding(get: { model.notificationPreviewsEnabled },
                         set: { enabled in Task { await model.setNotificationPreviews(enabled) } }))
