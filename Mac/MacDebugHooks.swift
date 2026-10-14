@@ -20,6 +20,7 @@ import SwiftUI
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-sheet account|new-chat|own-devices`,
 ///   `-haus-settings general|appearance`, `-haus-close-window <seconds>`: what the window shows.
+/// - `-haus-block <chat>`: blocks a sample conversation (sample data only), for captures of a blocked chat.
 /// - `-haus-self-check`: the App Group container, the store in it, and a data-protection Keychain round trip.
 /// - `-haus-lab-sign-in`: signs in with `HAUS_LAB_USERNAME` and `HAUS_LAB_PASSWORD` (a lab account; pass
 ///   `-lab-ui-test` and `HAUS_LAB_CA_DER` for the lab's certificate authority, as the iPhone's lab tests do).
@@ -114,6 +115,8 @@ import SwiftUI
                 await runTour(tour, window: window, model: model)
                 return
             }
+            // Sample conversations block locally, so a capture can show a blocked chat without a server.
+            if let chat = value(after: "-haus-block"), model.isDemo { await model.block(chat) }
             if let chat = value(after: "-haus-select") {
                 window.selection = chat
                 await waitUntil(seconds: 10) { model.messagesLoadedFor == chat }

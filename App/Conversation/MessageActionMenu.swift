@@ -3,14 +3,14 @@ import Foundation
 /// One thing a message can do, with what doing it means on this platform.
 struct MessageAction: Identifiable {
     enum Kind: String {
-        case reply, copy, selectText, star, retry, edit, unsend, encryptionDetails
+        case reply, copy, selectText, star, retry, edit, unsend, encryptionDetails, report
 
         /// Choosing it presents nothing and focuses nothing, so the composer may take back the focus it had before the
         /// menu. Reply and edit focus the composer themselves; text selection and the unsend dialog must keep it away.
         var returnsFocusToComposer: Bool {
             switch self {
             case .copy, .star, .retry: true
-            case .reply, .edit, .selectText, .unsend, .encryptionDetails: false
+            case .reply, .edit, .selectText, .unsend, .encryptionDetails, .report: false
             }
         }
     }
@@ -61,6 +61,8 @@ enum MessageActionMenu {
         }
         if message.canEdit { items.append(Item(kind: .edit, title: "Edit", symbol: "pencil")) }
         if message.canUnsend { items.append(Item(kind: .unsend, title: "Unsend", symbol: "trash")) }
+        // Last, after the everyday actions: it opens the report dialog, which also blocks the sender.
+        if message.canReport { items.append(Item(kind: .report, title: "Report", symbol: "exclamationmark.bubble")) }
         return items
     }
 

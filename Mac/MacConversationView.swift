@@ -3,7 +3,7 @@ import SwiftUI
 /// The open chat, read-only. A placeholder until the Mac has its own timeline and composer: it shows the rows the
 /// shared presenter builds, in a SwiftUI `LazyVStack` that opens at the newest message in its first frame (scrolling
 /// there after layout shows a visible jump) and follows the bottom while the reader is there. No paging, no prepend
-/// hold, no composer, no message menus yet.
+/// hold, no composer yet. A bubble's right-click menu has the shared menu's Copy and Report.
 struct MacConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -14,6 +14,8 @@ struct MacConversationView: View {
     /// reading marks the newest one the user can see. Not observed: rows scrolling in and out must not rebuild the
     /// whole timeline, and only the `readingStarts` change reads it.
     @State private var visibleRows = VisibleRows()
+    /// A message's Report, waiting for its confirmation.
+    @State private var blockRequest: BlockRequest?
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -49,6 +51,14 @@ struct MacConversationView: View {
                 .padding(.horizontal, 16).padding(.top, 8)
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            // Where the composer will be: a blocked chat says so and offers Unblock.
+            if model.isBlocked(chatID) {
+                BlockedChatBar(model: model, chatID: chatID, name: title)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+            }
+        }
+        .blockConfirmation(model: model, request: $blockRequest)
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(title)
         .navigationSubtitle(model.isDemo ? "Sample conversation" : model.trustSummary(for: chatID).pill)
@@ -65,7 +75,9 @@ struct MacConversationView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(rows, id: \.message.id) { row in
-                        MacTimelineRow(row: row, isGroup: presenter.isGroup)
+                        MacTimelineRow(row: row, isGroup: presenter.isGroup) { id in
+                            blockRequest = BlockRequest(kind: .report, chatID: chatID, name: title, messageID: id)
+                        }
                             .id(row.message.id)
                             .onAppear {
                                 visibleRows.ids.insert(row.message.id)
@@ -114,6 +126,7 @@ struct MacConversationView: View {
 private struct MacTimelineRow: View {
     let row: TimelineRow
     let isGroup: Bool
+    let report: (String) -> Void
     @Environment(\.appearance) private var appearance
 
     private var message: TimelineMessage { row.message }
@@ -136,12 +149,29 @@ private struct MacTimelineRow: View {
             }
             BubbleWidth {
                 MacBubble(message: message, accent: appearance.accent)
+                    .contextMenu { menu }
             }
             .frame(maxWidth: .infinity, alignment: message.isOutgoing ? .trailing : .leading)
         }
         .padding(.top, row.startsRun && row.dateHeader == nil ? 8 : 2)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(message.accessibilityDescription)
+        .accessibilityActions { menu }
+    }
+
+    /// The shared menu's items the Mac performs so far.
+    @ViewBuilder private var menu: some View {
+        ForEach(MessageActionMenu.items(for: message).filter { [.copy, .report].contains($0.kind) }, id: \.kind) { item in
+            Button(item.kind == .report ? item.title + "…" : item.title, systemImage: item.symbol) {
+                switch item.kind {
+                case .copy:
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(message.body, forType: .string)
+                case .report: report(message.id)
+                default: break
+                }
+            }
+        }
     }
 }
 

@@ -28,6 +28,8 @@ final class ConversationPresenterTests: XCTestCase {
         func canReact(to message: StoredMessage) -> Bool { reactable }
         func canRevise(_ message: StoredMessage) -> Bool { false }
         func isBackfilling(chat: String) -> Bool { false }
+        var blocked: Set<String> = []
+        func isBlocked(_ chatID: String) -> Bool { blocked.contains(chatID) }
     }
 
     private let source = Source()
@@ -112,6 +114,20 @@ final class ConversationPresenterTests: XCTestCase {
         XCTAssertEqual(photo.author, "you")
         XCTAssertEqual(photo.thumbnail?.mediaType, "image/jpeg")
         XCTAssertNil(photo.thumbnail?.localURL, "not loaded, so nothing to show in the slot yet")
+    }
+
+    /// Report reports and blocks the sender, so only a received message of a direct chat that is not blocked yet offers it.
+    func testOnlyAReceivedDirectMessageCanBeReported() throws {
+        let room = "team@rooms.example.org"
+        source.groups = [room]
+        source.messages = [message("in"), message("out", from: Self.account), message("unsent", retracted: true),
+                           message("member", from: "sam@example.org", chat: room)]
+        XCTAssertTrue(try shown("in").canReport)
+        XCTAssertFalse(try shown("out").canReport)
+        XCTAssertFalse(try shown("unsent").canReport)
+        XCTAssertFalse(try shown("member", in: presenter(chatID: room)).canReport)
+        source.blocked = [Self.peer]
+        XCTAssertFalse(try shown("in").canReport)
     }
 
     func testTypingShowsAtTheEndOfTheWholeChatOnly() {

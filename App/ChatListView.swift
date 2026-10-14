@@ -63,7 +63,7 @@ struct ChatListView: View {
             // same-section rule): List animates that as a fade in place, whereas a real move to the top
             // starts the row from below the last cell and slides it under its siblings (iOS 26.5 and 27).
             ForEach(visibleChats, id: \.listIdentity) { chat in
-                Button { path.append(.chat(chat.id)) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatars[chat.id], typing: model.typing[chat.id]) }
+                Button { path.append(.chat(chat.id)) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatars[chat.id], typing: model.typing[chat.id], isBlocked: model.isBlocked(chat.id)) }
                     .buttonStyle(.plain)
                     .task(id: "\(chat.id)|\(model.session.isReady)") { await model.loadAvatar(for: chat.id) }
                     .listRowInsets(EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16))

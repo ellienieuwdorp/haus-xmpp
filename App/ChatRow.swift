@@ -13,6 +13,8 @@ struct ChatRow: View {
     var typing: [String]? = nil
     /// The iPhone's 52 pt; the Mac sidebar's rows are smaller.
     var avatarSize: CGFloat = 52
+    /// The account blocked this chat's address: the preview says so and no unread count shows.
+    var isBlocked = false
 
     private static let dayMonth: DateFormatter = { let f = DateFormatter(); f.dateFormat = "dd/MM"; return f }()
 
@@ -56,6 +58,7 @@ struct ChatRow: View {
     }
 
     private var preview: Text {
+        if isBlocked { return Text("Blocked") }
         let body = Text(chat.preview.isEmpty ? "Start a conversation" : chat.preview)
         guard let stateGlyph else { return body }
         return stateGlyph + Text(" ") + body
@@ -68,7 +71,9 @@ struct ChatRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(chat.displayTitle).font(.headline).foregroundStyle(.primary).lineLimit(1)
                     // Follows the name rather than leading the time, whose width changes from row to row.
-                    if chat.notification.isMuted() {
+                    if isBlocked {
+                        Text(Image(systemName: "hand.raised.fill")).font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+                    } else if chat.notification.isMuted() {
                         Text(Image(systemName: "bell.slash.fill")).font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
                     }
                     Spacer(minLength: 8)
@@ -92,7 +97,7 @@ struct ChatRow: View {
                         .animation(.easeInOut(duration: 0.2), value: typing)
                     // One trailing slot under the time: the unread count, else the pin, so both stay right-aligned
                     // down the list. An unread pinned row still sits in the pinned group at the top.
-                    if chat.unreadCount > 0 {
+                    if chat.unreadCount > 0, !isBlocked {
                         UnreadPill(count: chat.unreadCount)
                     } else if chat.isPinned {
                         Text(Image(systemName: "pin.fill")).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)

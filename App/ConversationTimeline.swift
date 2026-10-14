@@ -20,6 +20,8 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     var onReaction: (String, String) -> Void = { _, _ in }
     var onEdit: (String) -> Void = { _ in }
     var onUnsend: (String) -> Void = { _ in }
+    /// A received message's Report; the parent confirms and blocks.
+    var onReport: (String) -> Void = { _ in }
     /// A placeholder's "Encryption details" action; the parent owns navigation.
     var onOpenEncryption: () -> Void = {}
     /// A received message's cell came on screen; the model decides whether that is a read marker.
@@ -47,7 +49,7 @@ struct ConversationTimeline: UIViewControllerRepresentable {
         // Before the update: its snapshot displays cells, which report their files.
         controller.onAttachmentDisplayed = onAttachmentDisplayed
         controller.onDownloadAttachment = onDownloadAttachment
-        controller.update(messages: messages, typing: typing, loadingEarlier: loadingEarlier, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend,
+        controller.update(messages: messages, typing: typing, loadingEarlier: loadingEarlier, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend, onReport: onReport,
                           onOpenEncryption: onOpenEncryption, onDisplayed: onDisplayed)
         controller.onRestoreComposerFocus = onRestoreComposerFocus
         controller.onReachTop = onReachTop
@@ -76,6 +78,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     private var onReaction: (String, String) -> Void = { _, _ in }
     private var onEdit: (String) -> Void = { _ in }
     private var onUnsend: (String) -> Void = { _ in }
+    private var onReport: (String) -> Void = { _ in }
     private var onOpenEncryption: () -> Void = {}
     private var onDisplayed: (String) -> Void = { _ in }
     private var previousSize: CGSize = .zero
@@ -194,7 +197,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
             guard let self, let row = rowsByID[id],
                   let cell = collection.dequeueReusableCell(withReuseIdentifier: "message", for: indexPath) as? MessageBubbleCell else { return nil }
             cell.configure(row: row, toggleStar: { [weak self] in self?.onToggleStar(id) }, retry: { [weak self] in self?.onRetryMessage(id) }, reply: { [weak self] in self?.onReply(id) }, reaction: { [weak self] emoji in self?.onReaction(id, emoji) },
-                           edit: { [weak self] in self?.onEdit(id) }, unsend: { [weak self] in self?.onUnsend(id) },
+                           edit: { [weak self] in self?.onEdit(id) }, unsend: { [weak self] in self?.onUnsend(id) }, report: { [weak self] in self?.onReport(id) },
                            openEncryption: { [weak self] in self?.onOpenEncryption() },
                            presentActions: { [weak self] context in
                                guard let self, presentedViewController == nil else { return false }
@@ -227,12 +230,13 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     }
 
     func update(messages incoming: [TimelineMessage], typing: TimelineTyping? = nil, loadingEarlier: Bool = false, accent: String = "", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in },
-                onEdit: @escaping (String) -> Void = { _ in }, onUnsend: @escaping (String) -> Void = { _ in }, onOpenEncryption: @escaping () -> Void = {},
+                onEdit: @escaping (String) -> Void = { _ in }, onUnsend: @escaping (String) -> Void = { _ in }, onReport: @escaping (String) -> Void = { _ in },
+                onOpenEncryption: @escaping () -> Void = {},
                 onDisplayed: @escaping (String) -> Void = { _ in }) {
         loadViewIfNeeded()
         if actionsVisible {
             heldUpdate = { [weak self] in self?.update(messages: incoming, typing: typing, loadingEarlier: loadingEarlier, accent: accent, onToggleStar: onToggleStar, onRetryMessage: onRetryMessage, onReply: onReply, onReaction: onReaction, onEdit: onEdit, onUnsend: onUnsend,
-                                                       onOpenEncryption: onOpenEncryption, onDisplayed: onDisplayed) }
+                                                       onReport: onReport, onOpenEncryption: onOpenEncryption, onDisplayed: onDisplayed) }
             return
         }
         self.onToggleStar = onToggleStar
@@ -241,6 +245,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         self.onReaction = onReaction
         self.onEdit = onEdit
         self.onUnsend = onUnsend
+        self.onReport = onReport
         self.onOpenEncryption = onOpenEncryption
         self.onDisplayed = onDisplayed
         let uniqueRows = TimelineItems.rows(for: incoming)
@@ -748,6 +753,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private var reactionAction: (String) -> Void = { _ in }
     private var editAction: () -> Void = {}
     private var unsendAction: () -> Void = {}
+    private var reportAction: () -> Void = {}
     private var openEncryptionAction: () -> Void = {}
     /// Returns whether the menu opened; when it did not, the cell puts its squeezed bubble back.
     private var presentActions: (MessageActionsContext) -> Bool = { _ in false }
@@ -1202,6 +1208,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             case .retry: retry
             case .edit: editAction
             case .unsend: unsendAction
+            case .report: reportAction
             }
             return MessageAction(item, perform: perform)
         }
@@ -1407,7 +1414,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     }
 
     func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,
-                   edit: @escaping () -> Void = {}, unsend: @escaping () -> Void = {}, openEncryption: @escaping () -> Void = {},
+                   edit: @escaping () -> Void = {}, unsend: @escaping () -> Void = {}, report: @escaping () -> Void = {}, openEncryption: @escaping () -> Void = {},
                    presentActions: @escaping (MessageActionsContext) -> Bool, openAttachment: @escaping (URL) -> Void = { _ in }, download: @escaping () -> Void = {}) {
         let message = row.message
         self.row = row
@@ -1417,6 +1424,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         self.reactionAction = reaction
         self.editAction = edit
         self.unsendAction = unsend
+        self.reportAction = report
         self.openEncryptionAction = openEncryption
         self.presentActions = presentActions
         self.openAttachment = openAttachment
