@@ -40,12 +40,29 @@ struct ChatListView: View {
         searchTerm.isEmpty && model.ownDeviceReview.contains { !ownDevicesLater.contains($0.id) }
     }
 
+    /// A quiet line above sample chats (and, in DEBUG, lab chats).
+    private var listCaption: String? {
+        if model.isDemo { return "Sample conversations · stored on this device" }
+        #if DEBUG
+        if model.isLabAccount { return "Local development lab" }
+        #endif
+        return nil
+    }
+
+    private var signedOutHint: String {
+        #if DEBUG
+        "Connect to the local lab in Settings, or explore sample conversations."
+        #else
+        "Sign in to your XMPP account in Settings, or explore sample conversations."
+        #endif
+    }
+
     var body: some View {
         // The list is always the content, with the empty states as overlays: swapping the content view would
         // crossfade the title bar and toolbar along with it whenever the first rows arrive.
         List {
-            if model.isDemo || model.isLabAccount, !model.chats.isEmpty {
-                Text(model.isDemo ? "Sample conversations · stored on this device" : "Local development lab")
+            if let listCaption, !model.chats.isEmpty {
+                Text(listCaption)
                     .font(.footnote).foregroundStyle(.secondary)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 4, trailing: 16))
@@ -108,9 +125,7 @@ struct ChatListView: View {
                     ContentUnavailableView {
                         Label("No conversations yet", systemImage: "bubble.left.and.bubble.right")
                     } description: {
-                        Text(model.accountID.isEmpty
-                             ? "Connect to the local lab in Settings, or explore sample conversations."
-                             : "Tap the compose button to start a conversation.")
+                        Text(model.accountID.isEmpty ? signedOutHint : "Tap the compose button to start a conversation.")
                     } actions: {
                         if model.accountID.isEmpty {
                             Button("Explore sample conversations") { Task { await model.loadDemo() } }

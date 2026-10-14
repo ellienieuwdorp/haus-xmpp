@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var confirmingSignOut = false
     @State private var showingBackup = false
     @State private var confirmingDeleteUnreadable = false
+    @State private var confirmingSamples = false
 
     private var accent: AccentTheme { appearance.accent }
     private var localPart: String { model.accountID.split(separator: "@").first.map(String.init) ?? "" }
@@ -38,7 +39,7 @@ struct SettingsView: View {
                     .buttonStyle(.plain)
                     .accessibilityHint("Opens sign in")
                 Button(model.accountID.isEmpty ? "Sign in" : "Switch account") { showingConnection = true }
-                    .accessibilityIdentifier("Connect to local lab")
+                    .accessibilityIdentifier("accountSignIn")
                 if model.session.isConnected {
                     Button("Disconnect") { Task { await model.disconnect() } }
                 }
@@ -126,16 +127,29 @@ struct SettingsView: View {
                 .accessibilityIdentifier("appearanceRow")
             }
             #endif
+            Section {
+                // Showing the samples signs the account out, so a signed-in account confirms first.
+                Button {
+                    if model.accountID.isEmpty || model.isDemo { Task { await model.loadDemo() } } else { confirmingSamples = true }
+                } label: {
+                    Label { Text("Explore sample conversations") } icon: { SettingsIconTile(systemName: "sparkles", color: .blue) }
+                }
+                .accessibilityIdentifier("exploreSamples")
+                .confirmationDialog("Explore sample conversations?", isPresented: $confirmingSamples, titleVisibility: .visible) {
+                    Button("Sign Out and Explore") { Task { await model.loadDemo() } }
+                } message: {
+                    Text("This signs you out of \(model.accountID). You’ll need your password to sign in again. Messages and keys stay on this \(ThisDevice.noun).")
+                }
+            }
+            #if DEBUG
             Section("Development") {
                 HStack(spacing: 12) {
                     SettingsIconTile(systemName: "tray.and.arrow.down.fill", color: .gray)
                     Text("Received lab messages: \(model.receivedCount)")
                         .accessibilityIdentifier("labReceivedCount")
                 }
-                Button { Task { await model.loadDemo() } } label: {
-                    Label { Text("Explore sample conversations") } icon: { SettingsIconTile(systemName: "sparkles", color: .blue) }
-                }
             }
+            #endif
             if let backup = model.previousVersionBackup {
                 let old = Date() >= backup.suggestDeletionAfter
                 Section {
