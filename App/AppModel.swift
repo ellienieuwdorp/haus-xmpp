@@ -130,6 +130,9 @@ final class AppModel {
     /// previous, so two never generate or register at once; resetSession cancels it and forgetAccount joins it.
     @ObservationIgnored private var pushTask: Task<Void, Never>?
     private(set) var notificationRoute: NotificationChatRoute?
+    /// Called once a notification click has chosen its chat, before any view shows it: the Mac opens its main window
+    /// for it (the window may be closed while the app keeps running).
+    @ObservationIgnored var onNotificationRoute: (@MainActor () -> Void)?
     /// A push onto the Chats stack asked for by a view that owns no navigation path (a bubble's
     /// "Encryption details" action). RootView appends it and clears it.
     var requestedRoute: ChatRoute?
@@ -2562,6 +2565,7 @@ final class AppModel {
               let message = try? await destination.resolve(accountID: account, store: store),
               authorizedNotificationAccount() == account else { return }
         notificationRoute = NotificationChatRoute(accountID: account, chatID: message.chatID)
+        onNotificationRoute?()
     }
 
     /// The synchronous half of opening, run before the pushed screen's first frame: resets the open chat's projection

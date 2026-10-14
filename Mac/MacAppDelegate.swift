@@ -40,6 +40,7 @@ import SwiftUI
         MacLifecycleDebug.attach(to: lifecycle)
         #endif
         lifecycle.install()
+        model.onNotificationRoute = { [weak self] in self?.showMainWindow() }
         Task { await model.prepare() }
         #if DEBUG
         MacDebugHooks.start(model: model, window: window, lifecycle: lifecycle)
@@ -51,6 +52,17 @@ import SwiftUI
 
     /// Quit, log out and shut down: the transport quiesces first (a final `<a/>`), bounded, then the app goes.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { lifecycle.shouldTerminate() }
+
+    /// A notification click brings the main window back (the root view then selects the chat): opened again if it
+    /// was closed or a background launch never showed it, out of the Dock if it was minimised. The system activates
+    /// the app for the click itself.
+    private func showMainWindow() {
+        if let main = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix(Self.mainWindowID) == true }), main.isMiniaturized {
+            main.deminiaturize(nil)
+        } else {
+            window.openWindow?(id: Self.mainWindowID)
+        }
+    }
 
     /// The Dock icon (or opening the app again) with no window on screen brings the main window back.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
