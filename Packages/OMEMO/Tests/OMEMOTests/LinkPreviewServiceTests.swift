@@ -65,4 +65,33 @@ final class LinkPreviewServiceTests: XCTestCase {
             XCTAssertEqual(theirs.linkPreview, expected.map(asSender), body)
         }
     }
+
+    /// An edit queued with the preview while the chat was modern, sealed after it fell back to legacy, goes without
+    /// it; the same seal takes the preview out of the stored edit, so our bubble shows what the peer got.
+    func testAnEditSealedForLegacyLosesItsQueuedPreview() async throws {
+        let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
+        try await f.initialize(.modern)
+        let outgoing = try await f.queue("Read \(link)", linkPreview: ownPreview())
+        try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport)
+        let edited = "Really, read \(link)"
+        let id = try await f.a.queueCorrection(account: f.alice, chatID: f.bob, messageID: outgoing.id, body: edited)
+        func mine() async throws -> StoredMessage? {
+            try await f.aStore.message(accountID: f.alice, messageID: outgoing.id)?
+                .applying(try await f.aStore.events(accountID: f.alice, chatID: f.bob, messageID: outgoing.id))
+        }
+        let queued = try await mine()
+        XCTAssertEqual(queued?.linkPreview, ownPreview(), "Queued on modern, the edit keeps the preview")
+
+        // The chat falls back to legacy before the edit is sealed.
+        let legacy = try await f.a.refreshDevices(account: f.alice, peer: f.bob, profile: .legacy, transport: f.aTransport)
+        for device in legacy.devices where device.active { try await f.a.setTrust(account: f.alice, deviceID: device.id, trust: .accepted) }
+        let prepared = try await f.a.prepareAvailableUpdates(account: f.alice, transport: f.aTransport)
+        XCTAssertTrue(prepared.messageIDs.contains(id))
+        XCTAssertEqual(prepared.droppedLinkPreviews, [id])
+        let sealed = try await mine()
+        XCTAssertEqual(sealed?.body, edited)
+        XCTAssertNil(sealed?.linkPreview)
+        let update = try await f.aStore.update(accountID: f.alice, updateID: id)
+        XCTAssertNil(update?.payload.flatMap(MessageEvent.correctionLinkPreview), "The queued edit no longer claims it either")
+    }
 }

@@ -685,7 +685,11 @@ public actor OMEMOService {
     private func prepareUpdatesLocked(account: String, transport: any OMEMOTransport) async throws -> EncryptionPreparation {
         // One sealing rule for every kind: the plain stanza is the wire for a legacy peer, an SCE payload for a modern one.
         // A correction has a body, so it is encrypted for legacy peers too (`plain` is nil) and its reference rides outside.
-        struct Pending { let id: String; let chatID: String; let kind: StoredUpdate.Kind; let plain: (() throws -> String)?; let plaintext: (_ modern: Bool) throws -> Data }
+        struct Pending {
+            let id: String; let chatID: String; let kind: StoredUpdate.Kind; let plain: (() throws -> String)?; let plaintext: (_ modern: Bool) throws -> Data
+            /// A correction whose queued link preview the seal leaves out (legacy has nowhere private to carry it).
+            var dropsLinkPreview: (_ modern: Bool) -> Bool = { _ in false }
+        }
         var queued = try await store.queuedReactions(accountID: account).map { update in
             Pending(id: update.id, chatID: update.chatID, kind: .reaction,
                     plain: { try XMPPClient.reactionXML(to: update.chatID, targetID: update.targetWireID, reactions: update.reactions, id: update.id) },
@@ -715,9 +719,13 @@ public actor OMEMOService {
             queued.append(Pending(id: update.id, chatID: update.chatID, kind: .correction, plain: nil,
                                   plaintext: { modern in try EncryptedContent.encode(body: body, reply: nil, sender: account, recipient: update.chatID,
                                                                                      modern: modern, originID: update.id, fileSharing: file, correction: target,
-                                                                                     linkMetadata: linkMetadata) }))
+                                                                                     linkMetadata: linkMetadata) },
+                                  dropsLinkPreview: { modern in
+                                      linkMetadata.map { !EncryptedContent.linkMetadataRides($0, body: body, modern: modern, fileSharing: file != nil) } ?? false
+                                  }))
         }
         var ready = Set(try await store.queuedUpdates(accountID: account, kind: .keyTransport).map(\.id)), blocked: [String: String] = [:]
+        var droppedLinkPreviews = Set<String>()
         var failure: OMEMOError?
         for update in queued {
             do {
@@ -743,8 +751,12 @@ public actor OMEMOService {
                     let (revision, old) = try await load(account)
                     var state = old
                     let saved = try sealContent(try update.plaintext(!legacy), account: account, peer: update.chatID, profile: profile, state: &state)
+                    // As for a message: a correction queued with a preview while the chat was modern, sealed for legacy,
+                    // loses the stored preview in the same transaction.
+                    let dropped = update.dropsLinkPreview(!legacy)
                     try await store.sealQueuedUpdate(accountID: account, updateID: update.id, expectedRevision: revision,
-                                                     state: encode(state, account: account), wire: JSONEncoder().encode(saved))
+                                                     state: encode(state, account: account), wire: JSONEncoder().encode(saved), clearLinkPreview: dropped)
+                    if dropped { droppedLinkPreviews.insert(update.id) }
                 }
                 ready.insert(update.id)
             } catch {
@@ -753,7 +765,7 @@ public actor OMEMOService {
                 blocked[update.chatID] = (error as? OMEMOError)?.errorDescription ?? "The private update remains queued."
             }
         }
-        return EncryptionPreparation(messageIDs: ready, blockedChats: blocked, failure: failure)
+        return EncryptionPreparation(messageIDs: ready, blockedChats: blocked, failure: failure, droppedLinkPreviews: droppedLinkPreviews)
     }
 
     /// SM may retransmit a journaled stanza only when it is exactly one durable outgoing row of ours:

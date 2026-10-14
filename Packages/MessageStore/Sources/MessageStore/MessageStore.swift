@@ -2520,13 +2520,23 @@ public actor MessageStore {
     }
 
     /// Converts a durable queued intention into exact ciphertext and commits the ratchet advancement
-    /// in the SAME transaction. Never overwrites an existing sealed wire.
-    public func sealQueuedUpdate(accountID: String, updateID: String, expectedRevision: Int, state: Data, wire: Data) throws {
+    /// in the SAME transaction. Never overwrites an existing sealed wire. `clearLinkPreview`: a correction sealed
+    /// without the link preview it was queued with (the chat fell back to legacy OMEMO); its queued payload and its
+    /// event lose the preview too, so our edited bubble shows what the peer got.
+    public func sealQueuedUpdate(accountID: String, updateID: String, expectedRevision: Int, state: Data, wire: Data,
+                                 clearLinkPreview: Bool = false) throws {
         guard !wire.isEmpty, wire.count <= 1_048_576 else { throw MessageStoreError.invalidValue }
         try connection.transaction {
             guard try sealableUpdate(accountID: accountID, updateID: updateID), try updateWire(accountID: accountID, updateID: updateID) == nil else { throw MessageStoreError.invalidTransition }
             try writeEncryptionState(accountID: accountID, expectedRevision: expectedRevision, data: state)
             try connection.execute("UPDATE outgoing_updates SET wire=? WHERE account_id=? AND id=?", [.blob(wire), .text(accountID), .text(updateID)])
+            if clearLinkPreview, let queued = try update(accountID: accountID, updateID: updateID), queued.kind == .correction,
+               let payload = queued.payload, let body = MessageEvent.correctionBody(payload) {
+                let plain = try MessageEvent.correctionPayload(body)
+                try connection.execute("UPDATE outgoing_updates SET reactions_json=? WHERE account_id=? AND id=?", [.text(plain), .text(accountID), .text(updateID)])
+                try connection.execute("UPDATE message_events SET payload_json=? WHERE account_id=? AND actor_id=? AND id=? AND kind='correction'",
+                                       [.text(plain), .text(accountID), .text(accountID), .text(updateID)])
+            }
         }
     }
 
