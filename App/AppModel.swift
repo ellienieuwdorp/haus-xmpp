@@ -262,6 +262,8 @@ final class AppModel {
     @ObservationIgnored private var preparation: Task<Void, Never>?
     /// Notification permission as last read; foreground banners are posted only with it.
     @ObservationIgnored private var mayPostNotifications = false
+    /// Per connection, where banners for what it catches up on stand (`AttentionRules.holdsCatchUpBanners`, the Mac).
+    @ObservationIgnored private var catchUpBanners = CatchUpBanners.holding
     /// The transport a Reply or Mark as Read took; nil when no action runs.
     @ObservationIgnored private var actionSession: NotificationActionSession?
     /// Finished outbox passes, so an action can tell that a pass ran after its reply was queued.
@@ -1654,6 +1656,7 @@ final class AppModel {
         backfillingArchive = nil
         opportunisticBackfillDone = false
         archiveWalkFinished = false
+        catchUpBanners = .holding
         backfillSettled = []
         backfillResumesAt = nil
         eventTask?.cancel()
@@ -1727,6 +1730,7 @@ final class AppModel {
                 catchUp = nil
                 backfillTask?.cancel()
                 archiveWalkFinished = false
+                catchUpBanners = .holding
                 for room in groupChats.keys { groupChats[room]?.joined = false }
                 // Chat states and presence belong to the stream that carried them.
                 resetTyping()
@@ -2088,6 +2092,8 @@ final class AppModel {
             Self.syncLog.notice("setup went on without \(step, privacy: .public): \(detail, privacy: .public)")
         case .settled:
             Self.syncLog.notice("settled +\(self.syncElapsed(), privacy: .public) ms")
+            // A server without an archive: nothing more to catch up on. After a walk the read-state sync releases them.
+            if !archiveWalkFinished { releaseCatchUpBanners() }
         case .failed(let step, let detail):
             catchUp = nil
             if step == ConnectionSetup.archiveStep { Self.syncLog.notice("catch-up failed +\(self.syncElapsed(), privacy: .public) ms") }
@@ -3135,7 +3141,17 @@ final class AppModel {
             guard generation == token else { return }
             publishReadState()
             await DeliveredNotificationCleaner.removeCatchUpPlaceholders(accountID: account)
+            guard generation == token else { return }
+            releaseCatchUpBanners()
         }
+    }
+
+    /// The Mac: this connection's catch-up and the other devices' read state are in, so the banners held meanwhile
+    /// can go, one per chat, with the next chat-list load.
+    private func releaseCatchUpBanners() {
+        guard Self.attention.holdsCatchUpBanners, catchUpBanners == .holding else { return }
+        catchUpBanners = .due
+        refreshSoon(.chats)
     }
 
     /// Notification Center keeps only unread messages: requests for messages now at or below their chat's pointer go.
@@ -3785,11 +3801,27 @@ extension AppModel: NotificationActionEnvironment {
     fileprivate func presentForegroundNotifications(store: MessageStore, account: String) async throws {
         let started = ContinuousClock.now
         defer { syncTimings.add(.notify, since: started) }
+        if Self.attention.holdsCatchUpBanners, catchUpBanners != .live {
+            try await presentCaughtUpNotifications(store: store, account: account)
+            return
+        }
         let presents = mayPostNotifications && postsNotificationsInThisSession && !isDemo && session.isReady && catchUp == nil
             && sessionAccount?.accountID == account
         let posted = try await NotificationPresenter(posting: notificationPoster(account: account))
             .presentForeground(store: store, accountID: account, readingChatID: lifecycle.readingChat(openChatID: openChatID), presents: presents)
         if posted > 0 { Self.syncLog.notice("foreground notifications posted=\(posted, privacy: .public)") }
+    }
+
+    /// The Mac: until this connection has caught up, candidates wait (neither posted nor dismissed); then everything
+    /// held is posted once, one banner per chat, and later candidates follow the foreground rule.
+    private func presentCaughtUpNotifications(store: MessageStore, account: String) async throws {
+        guard catchUpBanners == .due else { return }
+        let token = generation
+        let presents = mayPostNotifications && postsNotificationsInThisSession && !isDemo && session.isReady && sessionAccount?.accountID == account
+        let posted = try await NotificationPresenter(posting: notificationPoster(account: account))
+            .presentCaughtUp(store: store, accountID: account, readingChatID: lifecycle.readingChat(openChatID: openChatID), presents: presents)
+        if generation == token, catchUpBanners == .due { catchUpBanners = .live }
+        Self.syncLog.notice("caught-up notifications posted=\(posted, privacy: .public)")
     }
 
     /// The extension's poster, with the app's pre-scaled notification avatars, so banners match the extension's requests.
@@ -3863,6 +3895,10 @@ extension AppModel: NotificationActionEnvironment {
     }
     #endif
 }
+
+/// Per connection, on the Mac: banners for what the connection catches up on wait (`holding`) until the walk and the
+/// read-state sync are in, then go once, one per chat (`due`); after that each candidate banners as it arrives (`live`).
+private enum CatchUpBanners { case holding, due, live }
 
 /// Where a launch stands with the previous version's data. Every state but `none` shows a blocking screen.
 enum UpgradeState: Equatable {
