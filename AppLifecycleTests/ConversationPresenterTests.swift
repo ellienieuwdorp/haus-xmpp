@@ -11,6 +11,7 @@ import XCTest
 final class ConversationPresenterTests: XCTestCase {
     private static let account = "me@example.org"
     private static let peer = "alex@example.org"
+    private static let room = "room@groups.example.org"
 
     private final class Source: ConversationSource {
         var accountID = ConversationPresenterTests.account
@@ -33,6 +34,9 @@ final class ConversationPresenterTests: XCTestCase {
         func canRevise(_ message: StoredMessage) -> Bool { false }
         func isBackfilling(chat: String) -> Bool { false }
         func linkPreviewDisplayed(_ messageID: String) {}
+        /// Senders our fetch may run for; the rule itself is `LinkPreviewPolicyTests`'.
+        var fetchedFor: Set<String> = [ConversationPresenterTests.peer]
+        func mayFetchLinkPreview(for message: StoredMessage) -> Bool { fetchedFor.contains(message.senderID) }
     }
 
     private let source = Source()
@@ -160,6 +164,22 @@ final class ConversationPresenterTests: XCTestCase {
         }
     }
 
+    /// Our cache only shows where we would fetch: a link another message fetched stays bare on our own message (the
+    /// peer got nothing with it, as when a legacy chat dropped our preview) and on a sender we never fetch for.
+    func testOurFetchShowsOnlyWhereWeWouldFetch() throws {
+        source.linkPreviews = ["https://news.example/b": FetchedLinkPreview(title: "Fetched", summary: nil)]
+        source.groups = [Self.room]
+        source.messages = [message("contact", body: "https://news.example/b"),
+                           message("own", from: Self.account, body: "https://news.example/b", transport: .serverAccepted),
+                           message("stranger", from: "\(Self.room)/sam", chat: Self.room, body: "https://news.example/b")]
+
+        XCTAssertEqual(try shown("contact").linkPreview?.title, "Fetched")
+        for shown in [try shown("own"), try shown("stranger", in: presenter(chatID: Self.room))] {
+            XCTAssertNil(shown.linkPreview, shown.id)
+            XCTAssertFalse(shown.wantsLinkPreview, shown.id)
+        }
+    }
+
     /// A carried image is judged by its header before anything decodes it: a few kilobytes can declare a canvas that
     /// takes hundreds of megabytes to inflate, so an image over the pixel budget is dropped and the card shows its text.
     /// A correction keeps the message ID, so one that swaps the image for another of the same byte count is read afresh.
@@ -236,7 +256,7 @@ final class ConversationPresenterTests: XCTestCase {
         source.openChatTyping = nil
         XCTAssertNil(presenter().typing)
 
-        let room = "room@groups.example.org"
+        let room = Self.room
         source.groups = [room]
         source.openChatTyping = ["maya@example.org", "sam@example.org"]
         XCTAssertEqual(presenter(chatID: room).typing,

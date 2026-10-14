@@ -40,11 +40,14 @@ extension AppModel: ComposerLinkPreviewSource {
         guard let message = messages.first(where: { $0.id == messageID }),
               let url = message.linkPreviewCandidate(uploadHosts: linkPreviewUploadHosts), LinkDetection.isFetchable(url),
               // A preview that came with the message (the sender's, or the one we sent) shows instead.
-              message.linkPreview?.url != url.absoluteString,
-              LinkPreviewPolicy.mayFetch(for: message, account: accountID, fetchesPreviews: LinkSettings.shared.fetchPreviews, isDemo: isDemo,
-                                         roster: linkPreviewRosterEntry) else { return }
+              message.linkPreview?.url != url.absoluteString, mayFetchLinkPreview(for: message) else { return }
         useLinkPreviewAccount()
         linkPreviewCenter.request(url)
+    }
+
+    func mayFetchLinkPreview(for message: StoredMessage) -> Bool {
+        LinkPreviewPolicy.mayFetch(for: message, account: accountID, fetchesPreviews: LinkSettings.shared.fetchPreviews, isDemo: isDemo,
+                                   roster: linkPreviewRosterEntry)
     }
 
     func composerLinkPreview(for url: URL) async -> ComposerLinkPreview.Content? {

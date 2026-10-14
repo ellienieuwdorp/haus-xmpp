@@ -13,16 +13,17 @@ final class LinkPreviewPolicyTests: XCTestCase {
                       isOutgoing: outgoing, encryptionProfile: "modern")
     }
 
-    func testOnlyOwnMessagesAndContactsWithASubscriptionAreFetchedFor() {
+    func testOnlyContactsWithASubscriptionAreFetchedFor() {
         let roster: [String: LinkPreviewPolicy.RosterEntry] = [
             "to@example.org": .item(.to), "from@example.org": .item(.from), "both@example.org": .item(.both),
             "pending@example.org": .item(.none),
         ]
         let loaded: (String) -> LinkPreviewPolicy.RosterEntry = { roster[$0] ?? .absent }
         let cases: [(message: StoredMessage, roster: (String) -> LinkPreviewPolicy.RosterEntry, expected: Bool, line: UInt)] = [
-            (message(from: Self.account, outgoing: true), { _ in .notLoaded }, true, #line),
+            // Our own messages show only the preview they carried, which is what the peer got (engineering default 6).
+            (message(from: Self.account, outgoing: true), { _ in .item(.both) }, false, #line),
             // Sent from another of our devices (a carbon or the archive).
-            (message(from: Self.account), loaded, true, #line),
+            (message(from: Self.account), { _ in .item(.both) }, false, #line),
             (message(from: "to@example.org"), loaded, true, #line),
             (message(from: "from@example.org"), loaded, true, #line),
             (message(from: "Both@Example.org"), loaded, true, #line),
@@ -41,10 +42,11 @@ final class LinkPreviewPolicyTests: XCTestCase {
         }
     }
 
-    /// The setting off, or the sample conversations: never, not even for our own messages.
+    /// The setting off, or the sample conversations: never, not even for a contact.
     func testTheSettingAndDemoModeStopEveryFetch() {
-        let own = message(from: Self.account, outgoing: true)
-        XCTAssertFalse(LinkPreviewPolicy.mayFetch(for: own, account: Self.account, fetchesPreviews: false, isDemo: false) { _ in .item(.both) })
-        XCTAssertFalse(LinkPreviewPolicy.mayFetch(for: own, account: Self.account, fetchesPreviews: true, isDemo: true) { _ in .item(.both) })
+        let contact = message(from: "both@example.org")
+        XCTAssertTrue(LinkPreviewPolicy.mayFetch(for: contact, account: Self.account, fetchesPreviews: true, isDemo: false) { _ in .item(.both) })
+        XCTAssertFalse(LinkPreviewPolicy.mayFetch(for: contact, account: Self.account, fetchesPreviews: false, isDemo: false) { _ in .item(.both) })
+        XCTAssertFalse(LinkPreviewPolicy.mayFetch(for: contact, account: Self.account, fetchesPreviews: true, isDemo: true) { _ in .item(.both) })
     }
 }

@@ -30,6 +30,8 @@ protocol ConversationSource: AnyObject {
     func isBackfilling(chat: String) -> Bool
     /// A message is on screen: fetch its link preview if policy allows. Never called at insert time.
     func linkPreviewDisplayed(_ messageID: String)
+    /// Whether our own fetch may run for `message`, and so whether its cached result may show on it (`LinkPreviewPolicy`).
+    func mayFetchLinkPreview(for message: StoredMessage) -> Bool
 }
 
 /// Everything the open conversation shows that is derived from the model: which messages are listed under the current
@@ -158,8 +160,10 @@ struct ConversationPresenter {
     }
 
     /// The message's card: the preview it carries (the sender's, or ours frozen when it was sent) while that link is
-    /// still in the body, else our fetch for its first previewable link. A carried preview shows whatever the fetch
-    /// setting says; it brings its own image or none. `wanted` is true when the first previewable link has no card yet.
+    /// still in the body, else our fetch for its first previewable link where we would fetch for this message. A
+    /// carried preview shows whatever the fetch setting says; it brings its own image or none. Our cache never shows on
+    /// our own messages (the peer got only what they carried), a non-contact's, or with the setting off, even when
+    /// another message fetched the link. `wanted` is true when the first previewable link may still get our card.
     private func linkPreview(for message: ChatMessage) -> (preview: TimelineLinkPreview?, wanted: Bool) {
         guard message.attachment == nil, !message.isRetracted, message.unreadableReason == nil else { return (nil, false) }
         let links = LinkScan.previewableURLs(in: message.body, uploadHosts: source.linkPreviewUploadHosts)
@@ -174,6 +178,7 @@ struct ConversationPresenter {
                                         variant: TimelineLinkPreview.variant(imageWidth: size?.width, imageHeight: size?.height),
                                         imageAspectRatio: size.map { Double($0.width) / Double($0.height) }), false)
         }
+        guard source.mayFetchLinkPreview(for: message) else { return (nil, false) }
         guard let fetched = source.linkPreviews[LinkDetection.cacheKey(for: first)], fetched.title != nil || fetched.imageFile != nil,
               let host = LinkDetection.displayHost(for: first) else { return (nil, true) }
         let size = fetched.imageFile == nil ? nil : fetched.imageWidth.flatMap { width in fetched.imageHeight.map { (width, $0) } }
