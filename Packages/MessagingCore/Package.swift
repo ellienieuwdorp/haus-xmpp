@@ -8,6 +8,6 @@ let package = Package(
     dependencies: [.package(path: "../MessageStore"), .package(path: "../XMPPProtocol"), .package(path: "../OMEMO")],
     targets: [
         .target(name: "MessagingCore", dependencies: ["MessageStore", "XMPPProtocol", "OMEMO"]),
-        .testTarget(name: "MessagingCoreTests", dependencies: ["MessagingCore", "MessageStore"])
+        .testTarget(name: "MessagingCoreTests", dependencies: ["MessagingCore", "MessageStore", "XMPPProtocol"])
     ]
 )

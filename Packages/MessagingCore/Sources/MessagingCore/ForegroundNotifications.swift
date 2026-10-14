@@ -1,5 +1,6 @@
 import Foundation
 import MessageStore
+import XMPPProtocol
 
 /// Foreground banners. While the app is in front and holds the transport lease it claims every
 /// candidate its own connection committed, exactly as it always dismissed them, but first posts the extension's own
@@ -28,15 +29,15 @@ extension NotificationPresenter {
     /// The app's foreground claim, under its transport lease. With `presents` false (catching up, no notification
     /// permission) every candidate is dismissed without a banner. Otherwise the foreground plan is posted, best effort,
     /// and then exactly the claimed rows are deleted; a burst beyond the per-run cap dismisses the rest. Returns how
-    /// many requests were posted.
+    /// many requests were posted. Nothing from an address in `blocklist` gets a banner.
     @discardableResult
     public func presentForeground(store: MessageStore, accountID: String, readingChatID: String?, presents: Bool,
-                                  now: Date = Date()) async throws -> Int {
+                                  blocklist: XMPPBlocklist = XMPPBlocklist(), now: Date = Date()) async throws -> Int {
         guard presents else {
             try await store.dismissPendingMessageNotifications(accountID: accountID)
             return 0
         }
-        let batch = try await store.pendingNotifications(accountID: accountID)
+        let batch = try await store.pendingNotifications(accountID: accountID).excludingBlocked(blocklist)
         guard !batch.claimed.isEmpty || batch.deferredCount > 0 else { return 0 }
         let plan = NotificationPlanner.foreground(batch, accountID: accountID, readingChatID: readingChatID, now: now)
         var posted = 0
