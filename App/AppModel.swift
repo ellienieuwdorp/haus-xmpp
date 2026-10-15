@@ -4341,7 +4341,6 @@ extension AppModel: NotificationActionEnvironment {
 /// read-state sync are in, then go once, one per chat (`due`); after that each candidate banners as it arrives (`live`).
 private enum CatchUpBanners { case holding, due, live }
 
-/// Where a launch stands with the previous version's data. Every state but `none` shows a blocking screen.
 /// Where this install stands with a transfer of its data to another install.
 enum TransferState: Equatable {
     case none
@@ -4353,6 +4352,7 @@ enum TransferState: Equatable {
     case settling
 }
 
+/// Where a launch stands with the previous version's data. Every state but `none` shows a blocking screen.
 enum UpgradeState: Equatable {
     case none
     /// Taking the snapshot and migrating (shown only if it takes a moment).
