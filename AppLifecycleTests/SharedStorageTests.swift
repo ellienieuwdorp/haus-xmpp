@@ -6,6 +6,15 @@ import XMPPProtocol
 @testable import HausXMPP
 
 @MainActor final class SharedStorageTests: XCTestCase {
+    /// The App Group follows the build's identity, and the entitlement grants the same group the Info.plist names: the
+    /// Debug test host is the development app, whose data stays apart from the released app's.
+    func testTheAppGroupFollowsTheBundleIdentity() throws {
+        let bundle = try XCTUnwrap(Bundle.main.bundleIdentifier)
+        XCTAssertEqual(SharedStorage.group, "group." + bundle)
+        XCTAssertNotEqual(SharedStorage.group, "group.haus.xmpp.ios")
+        XCTAssertNoThrow(try SharedStorage.groupContainer())
+    }
+
     /// One resource per installation and account, shared by the app, its actions and the extension, so a fresh bind
     /// replaces the previous session instead of adding one.
     func testTheSessionResourceIsCreatedOncePerAccountAndKept() throws {

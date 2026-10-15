@@ -67,6 +67,8 @@ targets:
         HausPushEnvironment: $(HAUS_PUSH_ENVIRONMENT)
         # Optional test server for `-staging` (Config/Base.xcconfig). Empty in a plain checkout and in Release.
         HausStagingDomain: $(HAUS_STAGING_DOMAIN)
+        # The App Group this build's data lives in (Config/Base.xcconfig): the development app has its own.
+        HausAppGroup: $(HAUS_APP_GROUP)
         # One window until AppModel can serve several; a second iPad window would share the one AppModel, open chat and
         # scenePhase handler. This is the whole manifest: the generated one (turned off below) says true and wins over a
         # partial manifest here.
@@ -82,11 +84,12 @@ targets:
       - target: XMPPNotificationService
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: haus.xmpp.ios
+        # Identifiers, name and icon come from Config/Base.xcconfig: Debug builds are the separate development app.
+        PRODUCT_BUNDLE_IDENTIFIER: $(HAUS_BUNDLE_ID_BASE)
         CODE_SIGN_ENTITLEMENTS: App/App.entitlements
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Haus XMPP
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_CFBundleDisplayName: $(HAUS_DISPLAY_NAME)
+        ASSETCATALOG_COMPILER_APPICON_NAME: $(HAUS_APP_ICON)
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: NO
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Connect to an XMPP server on your local network.
@@ -166,6 +169,7 @@ targets:
         NSHumanReadableCopyright: Copyright © 2026 Ellie Nieuwdorp and the Haus XMPP contributors
         HausPushEnvironment: $(HAUS_PUSH_ENVIRONMENT)
         HausStagingDomain: $(HAUS_STAGING_DOMAIN)
+        HausAppGroup: $(HAUS_APP_GROUP)
         # Communication notifications, as on iOS: the app declares the intent its extension donates.
         NSUserActivityTypes: [INSendMessageIntent]
         # One process per user: a second copy would contend for the store's transport lease.
@@ -178,15 +182,16 @@ targets:
       - target: XMPPNotificationServiceMac
     settings:
       base:
-        PRODUCT_NAME: Haus XMPP
+        # The menu bar, Dock and Finder name: "Haus Dev.app" for the development app, so both can sit in Applications.
+        PRODUCT_NAME: $(HAUS_DISPLAY_NAME)
         PRODUCT_MODULE_NAME: HausXMPP
-        PRODUCT_BUNDLE_IDENTIFIER: haus.xmpp.ios
+        PRODUCT_BUNDLE_IDENTIFIER: $(HAUS_BUNDLE_ID_BASE)
         CODE_SIGN_ENTITLEMENTS: Mac/Mac.entitlements
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Haus XMPP
+        INFOPLIST_KEY_CFBundleDisplayName: $(HAUS_DISPLAY_NAME)
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.social-networking
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Connect to an XMPP server on your local network.
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_APPICON_NAME: $(HAUS_APP_ICON)
         ARCHS: arm64
         ENABLE_HARDENED_RUNTIME: YES
       configs:
@@ -208,8 +213,9 @@ targets:
       - sdk: Intents.framework
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: haus.xmpp.ios.notifications
-        CODE_SIGN_ENTITLEMENTS: NotificationService/NotificationService.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: $(HAUS_BUNDLE_ID_BASE).notifications
+        # With or without the notification filtering entitlement (HAUS_NOTIFICATION_FILTERING in Config/Base.xcconfig).
+        CODE_SIGN_ENTITLEMENTS: NotificationService/NotificationService$(HAUS_EXTENSION_ENTITLEMENTS_SUFFIX).entitlements
         INFOPLIST_FILE: NotificationService/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -229,6 +235,7 @@ targets:
         # Its PrivacyInfo.xcprivacy is shared with the iOS extension: the same code, the same APIs.
         excludes:
           - NotificationService.entitlements
+          - NotificationService-Unfiltered.entitlements
           - Info.plist
       - Shared
       - NotificationServiceMac
@@ -242,8 +249,8 @@ targets:
       base:
         PRODUCT_NAME: XMPPNotificationService
         PRODUCT_MODULE_NAME: XMPPNotificationService
-        PRODUCT_BUNDLE_IDENTIFIER: haus.xmpp.ios.notifications
-        CODE_SIGN_ENTITLEMENTS: NotificationServiceMac/NotificationServiceMac.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: $(HAUS_BUNDLE_ID_BASE).notifications
+        CODE_SIGN_ENTITLEMENTS: NotificationServiceMac/NotificationServiceMac$(HAUS_EXTENSION_ENTITLEMENTS_SUFFIX).entitlements
         INFOPLIST_FILE: NotificationServiceMac/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         APPLICATION_EXTENSION_API_ONLY: YES

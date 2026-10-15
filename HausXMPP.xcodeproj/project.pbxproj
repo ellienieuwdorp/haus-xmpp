@@ -382,6 +382,7 @@
 /* Begin PBXFileReference section */
 		00A9EC5780FEE600199477E2 /* DemoSamples.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoSamples.swift; sourceTree = "<group>"; };
 		01CD07EFDE545F6F94C06B4D /* GroupDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupDetailsView.swift; sourceTree = "<group>"; };
+		027F8163CD0996CD1FAA9802 /* NotificationServiceMac-Unfiltered.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "NotificationServiceMac-Unfiltered.entitlements"; sourceTree = "<group>"; };
 		03474B6E9D0B48EE5C4FC942 /* TimelineScrollPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineScrollPolicy.swift; sourceTree = "<group>"; };
 		0554E0B736A32101FBE1D193 /* NotificationNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNavigationTests.swift; sourceTree = "<group>"; };
 		05E2E3244C71D59528D07679 /* ChatListSwipeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListSwipeUITests.swift; sourceTree = "<group>"; };
@@ -510,6 +511,7 @@
 		A4D58701C743B4C1C79D20B9 /* AppModel+ConversationSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel+ConversationSource.swift"; sourceTree = "<group>"; };
 		A6BF0339B117304DCA097DFF /* AppearanceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceStoreTests.swift; sourceTree = "<group>"; };
 		A7BD0CDB24630A5C7CD70BF3 /* BlockedAddresses.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockedAddresses.swift; sourceTree = "<group>"; };
+		A86E29FBC0D52EDFCAC0C6C7 /* NotificationService-Unfiltered.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "NotificationService-Unfiltered.entitlements"; sourceTree = "<group>"; };
 		AAD47A5646692079DA699298 /* Attachments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Attachments.swift; sourceTree = "<group>"; };
 		AC355ED50ED01A97A49C9030 /* Intents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Intents.framework; path = System/Library/Frameworks/Intents.framework; sourceTree = SDKROOT; };
 		AC35ADFF191022AC7947AFE8 /* MacPushProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPushProbe.swift; sourceTree = "<group>"; };
@@ -716,6 +718,7 @@
 			isa = PBXGroup;
 			children = (
 				194C8380CB6CD51A204A4B3C /* Info.plist */,
+				A86E29FBC0D52EDFCAC0C6C7 /* NotificationService-Unfiltered.entitlements */,
 				BCBE2EE10C63807F3591D2F1 /* NotificationService.entitlements */,
 				E70D8DDFCEAC226CF360BB9B /* NotificationService.swift */,
 				2A5C546425283FA7DF4F92F8 /* PrivacyInfo.xcprivacy */,
@@ -820,6 +823,7 @@
 			children = (
 				3C69CFBE40FB7BEEC71B5F79 /* Info.plist */,
 				377EE020496066307F80188A /* MacExtensionProbe.swift */,
+				027F8163CD0996CD1FAA9802 /* NotificationServiceMac-Unfiltered.entitlements */,
 				10716E4570CF3CAC0AAA0C6D /* NotificationServiceMac.entitlements */,
 			);
 			path = NotificationServiceMac;
@@ -1607,7 +1611,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				ARCHS = arm64;
-				CODE_SIGN_ENTITLEMENTS = NotificationServiceMac/NotificationServiceMac.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "NotificationServiceMac/NotificationServiceMac$(HAUS_EXTENSION_ENTITLEMENTS_SUFFIX).entitlements";
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -1618,7 +1622,7 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = haus.xmpp.ios.notifications;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(HAUS_BUNDLE_ID_BASE).notifications";
 				PRODUCT_MODULE_NAME = XMPPNotificationService;
 				PRODUCT_NAME = XMPPNotificationService;
 				SDKROOT = macosx;
@@ -1629,14 +1633,14 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(HAUS_APP_ICON)";
 				CODE_SIGN_ENTITLEMENTS = Mac/Mac.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				HAUS_PUSH_ENVIRONMENT = sandbox;
 				INFOPLIST_FILE = Mac/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Haus XMPP";
+				INFOPLIST_KEY_CFBundleDisplayName = "$(HAUS_DISPLAY_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to an XMPP server on your local network.";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1644,9 +1648,9 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = haus.xmpp.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(HAUS_BUNDLE_ID_BASE)";
 				PRODUCT_MODULE_NAME = HausXMPP;
-				PRODUCT_NAME = "Haus XMPP";
+				PRODUCT_NAME = "$(HAUS_DISPLAY_NAME)";
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -1654,13 +1658,13 @@
 		81625679EA293F21C8746691 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(HAUS_APP_ICON)";
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				GENERATE_INFOPLIST_FILE = YES;
 				HAUS_PUSH_ENVIRONMENT = sandbox;
 				INFOPLIST_FILE = App/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Haus XMPP";
+				INFOPLIST_KEY_CFBundleDisplayName = "$(HAUS_DISPLAY_NAME)";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to an XMPP server on your local network.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save photos you receive to your library.";
@@ -1672,7 +1676,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = haus.xmpp.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(HAUS_BUNDLE_ID_BASE)";
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
@@ -1701,7 +1705,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = NotificationService/NotificationService.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "NotificationService/NotificationService$(HAUS_EXTENSION_ENTITLEMENTS_SUFFIX).entitlements";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = NotificationService/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1709,7 +1713,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = haus.xmpp.ios.notifications;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(HAUS_BUNDLE_ID_BASE).notifications";
 				SDKROOT = iphoneos;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -1754,7 +1758,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = NotificationService/NotificationService.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "NotificationService/NotificationService$(HAUS_EXTENSION_ENTITLEMENTS_SUFFIX).entitlements";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = NotificationService/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1762,7 +1766,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = haus.xmpp.ios.notifications;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(HAUS_BUNDLE_ID_BASE).notifications";
 				SDKROOT = iphoneos;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -1838,7 +1842,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(HAUS_APP_ICON)";
 				CODE_SIGN_ENTITLEMENTS = Mac/Mac.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1846,7 +1850,7 @@
 				HAUS_PUSH_ENVIRONMENT = production;
 				HAUS_STAGING_DOMAIN = "";
 				INFOPLIST_FILE = Mac/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Haus XMPP";
+				INFOPLIST_KEY_CFBundleDisplayName = "$(HAUS_DISPLAY_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to an XMPP server on your local network.";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1854,9 +1858,9 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = haus.xmpp.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(HAUS_BUNDLE_ID_BASE)";
 				PRODUCT_MODULE_NAME = HausXMPP;
-				PRODUCT_NAME = "Haus XMPP";
+				PRODUCT_NAME = "$(HAUS_DISPLAY_NAME)";
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -1924,7 +1928,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				ARCHS = arm64;
-				CODE_SIGN_ENTITLEMENTS = NotificationServiceMac/NotificationServiceMac.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "NotificationServiceMac/NotificationServiceMac$(HAUS_EXTENSION_ENTITLEMENTS_SUFFIX).entitlements";
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -1935,7 +1939,7 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = haus.xmpp.ios.notifications;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(HAUS_BUNDLE_ID_BASE).notifications";
 				PRODUCT_MODULE_NAME = XMPPNotificationService;
 				PRODUCT_NAME = XMPPNotificationService;
 				SDKROOT = macosx;
@@ -1945,14 +1949,14 @@
 		F8116728F48AB3F2DD746EC1 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(HAUS_APP_ICON)";
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				GENERATE_INFOPLIST_FILE = YES;
 				HAUS_PUSH_ENVIRONMENT = production;
 				HAUS_STAGING_DOMAIN = "";
 				INFOPLIST_FILE = App/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Haus XMPP";
+				INFOPLIST_KEY_CFBundleDisplayName = "$(HAUS_DISPLAY_NAME)";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connect to an XMPP server on your local network.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save photos you receive to your library.";
@@ -1964,7 +1968,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = haus.xmpp.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(HAUS_BUNDLE_ID_BASE)";
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;

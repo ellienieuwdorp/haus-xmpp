@@ -2,7 +2,15 @@ import Foundation
 import MessageStore
 
 enum SharedStorage {
-    static let group = "group.haus.xmpp.ios"
+    /// This build's App Group, from the `HausAppGroup` Info.plist key (`HAUS_APP_GROUP` in Config/Base.xcconfig). The
+    /// development app and the released app each have their own, so neither can reach the other's data. A bundle
+    /// without the key is a broken build and stops here: any default could be another app's data.
+    static let group: String = {
+        guard let group = Bundle.main.object(forInfoDictionaryKey: "HausAppGroup") as? String, !group.isEmpty else {
+            preconditionFailure("HausAppGroup is missing from the Info.plist")
+        }
+        return group
+    }()
     enum Failure: Error, Equatable { case unavailable, conflictingStores }
 
     /// Only the containing app migrates its original store. Move the whole directory while

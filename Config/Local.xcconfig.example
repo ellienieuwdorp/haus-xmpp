@@ -6,3 +6,12 @@ DEVELOPMENT_TEAM = ABCDE12345
 // Optional: the domain of your own test XMPP server. Debug builds launched with `-staging` sign in there
 // on port 5223 (direct TLS), and accounts on it get the same disposable-account safeguards as localhost.
 // HAUS_STAGING_DOMAIN = xmpp.example.org
+
+// Your own app identity, needed on a device unless you are on the official team. Debug builds add ".dev" to the
+// identifier and use HAUS_DEV_APP_NAME. See Config/Base.xcconfig for everything derived from them.
+// HAUS_APP_ID = com.example.chat
+// HAUS_APP_NAME = Example Chat
+// HAUS_DEV_APP_NAME = Example Dev
+
+// Unless Apple granted your notification extension com.apple.developer.usernotifications.filtering:
+// HAUS_NOTIFICATION_FILTERING = NO
