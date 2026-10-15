@@ -28,8 +28,10 @@ import Testing
         }
         let kept = rows("me@example.org")
         #expect(rows(sample).values.contains { $0 != "0" }, "the fixture wrote rows for the sample account")
+        #expect(try await store.storedAccountIDs() == [sample, "me@example.org"])
 
         try await store.eraseLocalAccount(accountID: sample)
+        #expect(try await store.storedAccountIDs() == ["me@example.org"])
         #expect(rows(sample).values.allSatisfy { $0 == "0" }, "\(rows(sample))")
         #expect(rows("me@example.org") == kept)
         #expect(try await store.chats(accountID: sample).isEmpty)

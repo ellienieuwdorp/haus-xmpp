@@ -898,6 +898,17 @@ public actor MessageStore {
         }
     }
 
+    /// Every account with at least one row in any table keyed by `account_id`, including tables added later: what a
+    /// restore from another install would replace.
+    public func storedAccountIDs() throws -> Set<String> {
+        let tables = try connection.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").map { $0[0].string }
+        var accounts = Set<String>()
+        for table in tables where !(try connection.query("SELECT 1 FROM pragma_table_info(?) WHERE name='account_id'", [.text(table)]).isEmpty) {
+            accounts.formUnion(try connection.query("SELECT DISTINCT account_id FROM \"\(table)\"").map { $0[0].string })
+        }
+        return accounts
+    }
+
     /// Returns the latest page in chronological order. Cursor uses both timestamp and ID for ties.
     public func messages(accountID: String, chatID: String, limit: Int = 100,
                          before: StoredMessage? = nil) throws -> [StoredMessage] {
