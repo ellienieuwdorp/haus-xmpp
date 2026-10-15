@@ -486,10 +486,18 @@ final class AppModel {
                 await refresh()
                 if let openChatID { await loadEncryptionDetails(for: openChatID, refreshFromServer: false) }
                 if testSessionID == nil, let saved = try NotificationAccount.load() {
-                    sessionAccount = saved
-                    if saved.push != nil { pushStatus = .on }
-                    reconcile()
-                    await queueSavedReplies()
+                    if try await Self.ownsSavedAccount(saved, lastAccount: savedAccount, store: opened) {
+                        sessionAccount = saved
+                        if saved.push != nil { pushStatus = .on }
+                        reconcile()
+                        await queueSavedReplies()
+                    } else {
+                        // Left in the Keychain by an install of this app that was deleted (the Keychain outlives it):
+                        // this install never signed in with it. Signing in silently would give the account a new
+                        // device, and would rule out restoring a transfer here. The extension stays off it too.
+                        Self.syncLog.notice("ignoring an account record this install did not save")
+                        try? NotificationAccessGate.disable(at: NotificationAccessGate.location())
+                    }
                 }
             }
         } catch MessageStoreError.unsupportedSchema(let version) {
@@ -502,6 +510,13 @@ final class AppModel {
             self.error = "Could not open local message storage."
             hasLoadedChats = true // nothing more will arrive; show the empty state behind the alert rather than a blank screen
         }
+    }
+
+    /// The account record in the Keychain is this install's: it is the account this install last selected, or the
+    /// store holds that account's encryption state (a build from before the selection was remembered).
+    private static func ownsSavedAccount(_ saved: NotificationAccount, lastAccount: String, store: MessageStore) async throws -> Bool {
+        if JID.normalizedBare(lastAccount) == saved.accountID { return true }
+        return try await store.encryptionStateRevision(accountID: saved.accountID) != nil
     }
 
     /// `-demo` (DEBUG only, for tests and captures) opens the sample conversations at launch.
