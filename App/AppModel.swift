@@ -409,17 +409,19 @@ final class AppModel {
         openingStorage = true
         defer { openingStorage = false }
         do {
-            if testSessionID == nil {
-                // Before anything opens or creates a store: data moved to another install stays out of reach, and a
-                // transfer a crash interrupted is undone first.
-                let transfers = AccountTransfer.Locations.production(messaging: try SharedStorage.groupContainer().appending(path: "Messaging", directoryHint: .isDirectory))
-                    .map { AccountTransfer(locations: $0) }
-                self.transfers = transfers
-                if let moved = try transfers?.recover() {
-                    transferState = .moved(moved)
-                    hasLoadedChats = true
-                    return
-                }
+            // Before anything opens or creates a store: data moved to another install stays out of reach, and a
+            // transfer a crash interrupted is undone first.
+            let transferLocations = if let testSessionID {
+                AccountTransfer.Locations.testSession(testSessionID, preferences: preferences)
+            } else {
+                AccountTransfer.Locations.production(messaging: try SharedStorage.groupContainer().appending(path: "Messaging", directoryHint: .isDirectory))
+            }
+            let transfers = transferLocations.map { AccountTransfer(locations: $0) }
+            self.transfers = transfers
+            if let moved = try transfers?.recover() {
+                transferState = .moved(moved)
+                hasLoadedChats = true
+                return
             }
             let directory = try await SharedStorage.directory(testSessionID: testSessionID, migrate: true)
             storageRoot = directory
@@ -1202,14 +1204,14 @@ final class AppModel {
 
     /// Settings offers a transfer for a signed-in account whose storage is open.
     var canTransfer: Bool {
-        testSessionID == nil && transfers != nil && store != nil && transferState == .none && upgradeState == .none && keyRecovery == nil
+        transfers != nil && store != nil && transferState == .none && upgradeState == .none && keyRecovery == nil
             && !accountID.isEmpty && !isDemo
     }
 
     /// The signed-out screens offer a restore while nobody is signed in here (the sample conversations are fine: a
     /// restore replaces them). Whether the store holds an identity is checked when it runs, and refused with a reason.
     var canRestoreTransfer: Bool {
-        testSessionID == nil && transfers != nil && store != nil && transferState == .none && upgradeState == .none && keyRecovery == nil
+        transfers != nil && store != nil && transferState == .none && upgradeState == .none && keyRecovery == nil
             && (accountID.isEmpty || isDemo)
     }
 

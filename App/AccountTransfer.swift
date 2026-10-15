@@ -45,6 +45,24 @@ struct AccountTransfer: Sendable {
             PreUpgradeSnapshot.Locations.production(messaging: messaging)
                 .map { Locations(install: $0, encryptionService: EncryptionKeychain.service, storageID: "primary") }
         }
+
+        /// A UI test session's own store, preferences and Keychain items (DEBUG builds only set one), beside the
+        /// session's store folder: a transfer there never reaches the app's real data.
+        static func testSession(_ id: String, preferences: UserDefaults) -> Locations? {
+            guard let support = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true),
+                  let group = UserDefaults(suiteName: "haus.xmpp.uitest.\(id).group") else { return nil }
+            let sessions = support.appending(path: "Messaging/UITests", directoryHint: .isDirectory)
+            let root = sessions.appending(path: id + "-group", directoryHint: .isDirectory)
+            try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let install = PreUpgradeSnapshot.Locations(
+                groupRoot: root, messaging: sessions.appending(path: id, directoryHint: .isDirectory),
+                appDefaults: .init(defaults: preferences, name: "haus.xmpp.uitest." + id),
+                groupDefaults: .init(defaults: group, name: "haus.xmpp.uitest.\(id).group"),
+                keychain: .init(accountService: "haus.xmpp.uitest.\(id).account", accountKey: NotificationAccount.key,
+                                pushService: "haus.xmpp.uitest.\(id).push", snapshotService: "haus.xmpp.uitest.\(id).snapshot"),
+                accessGate: root.appending(path: "notification-access-disabled"), installation: "uitest")
+            return Locations(install: install, encryptionService: EncryptionKeychain.service, storageID: id)
+        }
     }
 
     /// The Keychain as this type uses it: raw bytes, never decoded on the way through.
