@@ -1506,7 +1506,8 @@ final class AppModel {
             guard generation == token, accountID == account else { throw CancellationError() }
             guard let state = try PushRegistrationState.load(accountID: account), let operation = state.journal.pending else { return }
             do {
-                let result = try await client.updatePushRegistration(operation, configuration: state.configuration, environment: environment)
+                let result = try await client.updatePushRegistration(operation, configuration: state.configuration, environment: environment,
+                                                                     topic: PushService.topic)
                 guard generation == token, accountID == account else { throw CancellationError() }
                 guard var latest = try PushRegistrationState.load(accountID: account), latest.configuration == state.configuration else { throw CancellationError() }
                 guard latest.journal.acknowledge(result, for: operation) else { throw CancellationError() }

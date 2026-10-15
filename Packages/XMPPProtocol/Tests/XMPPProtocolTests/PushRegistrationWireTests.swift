@@ -55,3 +55,24 @@ private func registrationNode(_ xml: String) throws -> XMPPProtocol.XMLNode {
     let revokeXML = try registrationNode(PushRegistrationWire.operationXML(revoke, configuration: config, environment: .production))
     #expect(revokeXML.attributes["environment"] == nil)
 }
+
+@Test func registerNamesItsAPNsTopicOnlyWhenGiven() throws {
+    let config = try XMPPPushConfiguration(serviceJID: "push.xmpp.haus", node: String(repeating: "n", count: 43),
+                                           publishOptions: ["secret": String(repeating: "s", count: 43)])
+    let register = try XMPPPushRegistrationOperation(action: .register, revision: 3, deviceToken: "aabb")
+    let named = try registrationNode(PushRegistrationWire.operationXML(register, configuration: config, environment: .sandbox,
+                                                                       topic: "haus.xmpp.ios.dev"))
+    #expect(named.attributes["topic"] == "haus.xmpp.ios.dev" && named.attributes["environment"] == "sandbox")
+    // Without a topic the stanza is exactly what gateways without topics accept.
+    let plain = try registrationNode(PushRegistrationWire.operationXML(register, configuration: config, environment: .sandbox))
+    #expect(plain.attributes["topic"] == nil && Set(plain.attributes.keys) == ["node", "secret", "revision", "token", "environment"])
+    let revoke = try XMPPPushRegistrationOperation(action: .revoke, revision: 4)
+    let revokeXML = try registrationNode(PushRegistrationWire.operationXML(revoke, configuration: config, environment: .sandbox,
+                                                                           topic: "haus.xmpp.ios.dev"))
+    #expect(revokeXML.attributes["topic"] == nil)
+    for topic in ["", "haus xmpp", "haus'xmpp", String(repeating: "a", count: 256)] {
+        #expect(throws: XMPPNotificationError.self) {
+            try PushRegistrationWire.operationXML(register, configuration: config, environment: .sandbox, topic: topic)
+        }
+    }
+}

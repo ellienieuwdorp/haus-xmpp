@@ -24,6 +24,19 @@ enum PushService {
     static var environment: XMPPPushEnvironment? {
         (Bundle.main.object(forInfoDictionaryKey: "HausPushEnvironment") as? String).flatMap(XMPPPushEnvironment.init(rawValue:))
     }
+
+    /// The topic the gateway assumes when a registration names none: the released app's, which registered before
+    /// topics existed.
+    static let gatewayDefaultTopic = "haus.xmpp.ios"
+
+    /// The APNs topic this build's tokens belong to, which is its bundle identifier: the development app's differs from
+    /// the released app's. Named in a registration only when it is not the gateway's default, so the released app's
+    /// registrations stay exactly as gateways without topics expect them.
+    static var topic: String? { topic(bundleIdentifier: Bundle.main.bundleIdentifier) }
+
+    static func topic(bundleIdentifier: String?) -> String? {
+        bundleIdentifier == gatewayDefaultTopic ? nil : bundleIdentifier
+    }
 }
 
 /// What Settings says about push for the signed-in account.
