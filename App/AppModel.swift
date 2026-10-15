@@ -516,7 +516,7 @@ final class AppModel {
 
     /// The account record in the Keychain is this install's: it is the account this install last selected, or the
     /// store holds that account's encryption state (a build from before the selection was remembered).
-    private static func ownsSavedAccount(_ saved: NotificationAccount, lastAccount: String, store: MessageStore) async throws -> Bool {
+    static func ownsSavedAccount(_ saved: NotificationAccount, lastAccount: String, store: MessageStore) async throws -> Bool {
         if JID.normalizedBare(lastAccount) == saved.accountID { return true }
         return try await store.encryptionStateRevision(accountID: saved.accountID) != nil
     }

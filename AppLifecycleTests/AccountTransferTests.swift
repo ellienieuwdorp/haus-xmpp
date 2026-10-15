@@ -311,4 +311,44 @@ import XMPPProtocol
         let resumedDevice = try await source.encryption(resumed).overview(account: account, peer: peer).localDeviceID
         XCTAssertEqual(resumedDevice, signed.overview.localDeviceID)
     }
+
+    /// The owner's update in place, from a build that predates transfers: `Messaging/`, the Keychain records and the
+    /// preferences are there, but no `Transfer/` folder and no transfer Keychain item. The launch's transfer step
+    /// changes and creates nothing, and the saved account counts as this install's, whether that build remembered the
+    /// selected account or not.
+    func testAnUpdateFromABuildBeforeTransfersKeepsItsDataAndAccount() async throws {
+        let install = try makeInstall()
+        let signed = try await signedIn(install)
+        try await signed.store.close()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: install.locations.directory.path))
+
+        XCTAssertNil(try install.transfer.recover())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: install.locations.directory.path), "nothing created for transfers")
+        XCTAssertFalse(TransferHold.isMoved(groupRoot: install.root))
+
+        let store = try install.openStore()
+        let bodies = try await store.messages(accountID: account, chatID: peer).map(\.body)
+        XCTAssertEqual(bodies, signed.messages.map(\.body))
+        let device = try await install.encryption(store).overview(account: account, peer: peer).localDeviceID
+        XCTAssertEqual(device, signed.overview.localDeviceID)
+        let record = try AccountTransfer.decodeAccount(XCTUnwrap(try PreUpgradeSnapshot.keychainData(service: install.keychain.accountService, account: "primary")))
+        let last = try XCTUnwrap(install.appDefaults.string(forKey: "lastAccount"))
+        var owned = try await AppModel.ownsSavedAccount(record, lastAccount: last, store: store)
+        XCTAssertTrue(owned, "the selected account")
+        owned = try await AppModel.ownsSavedAccount(record, lastAccount: "", store: store)
+        XCTAssertTrue(owned, "no selection remembered: the store holds the account's identity")
+    }
+
+    /// A reinstall: the Keychain kept the deleted install's account record, but this install never selected it and
+    /// its store holds no identity for it, so the app starts signed out.
+    func testARecordADeletedInstallLeftBehindIsNotThisInstalls() async throws {
+        let install = try makeInstall()
+        let store = try install.openStore()
+        let record = NotificationAccount(accountID: account, host: "localhost", port: 5223, domain: "localhost", username: "ellie",
+                                         password: "synthetic-password", push: nil)
+        var owned = try await AppModel.ownsSavedAccount(record, lastAccount: "", store: store)
+        XCTAssertFalse(owned)
+        owned = try await AppModel.ownsSavedAccount(record, lastAccount: "other@localhost", store: store)
+        XCTAssertFalse(owned)
+    }
 }
