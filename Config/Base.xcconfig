@@ -8,7 +8,7 @@ DEVELOPMENT_TEAM =
 // Raise CURRENT_PROJECT_VERSION for each App Store Connect upload (a version can't reuse a build number), or
 // pass it on the command line: xcodebuild archive ... CURRENT_PROJECT_VERSION=42
 MARKETING_VERSION = 0.1.0
-CURRENT_PROJECT_VERSION = 2
+CURRENT_PROJECT_VERSION = 3
 
 // Domain of an optional hosted test server (Debug builds: the `-staging` launch argument). Empty turns the
 // staging mode off.
