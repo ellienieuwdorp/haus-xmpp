@@ -20,6 +20,8 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>HausAppGroup</key>
+	<string>$(HAUS_APP_GROUP)</string>
 	<key>HausPushEnvironment</key>
 	<string>$(HAUS_PUSH_ENVIRONMENT)</string>
 	<key>HausStagingDomain</key>

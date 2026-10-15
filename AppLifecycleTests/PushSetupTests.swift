@@ -12,6 +12,15 @@ import XMPPProtocol
         XCTAssertEqual(PushService.serviceJID, "push.xmpp.haus")
     }
 
+    /// The development app's tokens belong to its own APNs topic, so its registrations name it; the released app's
+    /// registrations name none and keep the gateway's default.
+    func testRegistrationsNameTheAPNsTopicUnlessItIsTheGatewayDefault() {
+        XCTAssertEqual(PushService.topic, Bundle.main.bundleIdentifier)
+        XCTAssertNotEqual(PushService.topic, PushService.gatewayDefaultTopic)
+        XCTAssertNil(PushService.topic(bundleIdentifier: "haus.xmpp.ios"))
+        XCTAssertEqual(PushService.topic(bundleIdentifier: "haus.xmpp.ios.dev"), "haus.xmpp.ios.dev")
+    }
+
     func testPermissionGateAsksOnlyWhenInteractive() {
         XCTAssertNil(PushStatus.gate(for: .authorized, interactive: false))
         XCTAssertNil(PushStatus.gate(for: .provisional, interactive: false))

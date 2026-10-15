@@ -40,9 +40,17 @@ Machine-specific build settings go in `Config/Local.xcconfig`, which is gitignor
 - `DEVELOPMENT_TEAM`: your team ID, to run on a device.
 - `HAUS_STAGING_DOMAIN`: optional, the domain of your own test server. Debug builds launched with `-staging` sign in there over direct TLS on port 5223. Empty turns this off.
 
-The bundle identifiers (`haus.xmpp.ios`) and the app group (`group.haus.xmpp.ios`) belong to the official app. To run on a device with your own team, change them in `project.yml`, the four `.entitlements` files and `Shared/SharedStorage.swift`. [TRADEMARKS.md](TRADEMARKS.md) lists what a published fork must change.
+Debug builds are a separate development app: "Haus Dev", with its own icon, bundle identifier (`haus.xmpp.ios.dev`), App Group, Keychain items and data. It installs next to the TestFlight or App Store app and never sees its chats or keys. Release builds are "Haus XMPP" (`haus.xmpp.ios`). Every identifier derives from `HAUS_APP_ID` in `Config/Base.xcconfig`: the extensions add `.notifications`, the App Group is `group.` plus the bundle identifier, and Debug adds `.dev`.
 
-Push notifications go through the project's push gateway, `push.xmpp.haus`, which can only notify the official app. A build with other identifiers connects and syncs normally but gets no push notifications.
+The `haus.xmpp.ios` identifiers belong to the official app. To run on a device with your own team, set your own in `Config/Local.xcconfig`:
+
+- `HAUS_APP_ID`: your bundle identifier, for example `com.example.chat`. Register it, `HAUS_APP_ID.dev` and their `.notifications` extensions, and the App Groups `group.HAUS_APP_ID` and `group.HAUS_APP_ID.dev`, or let Xcode's automatic signing do it.
+- `HAUS_APP_NAME` and `HAUS_DEV_APP_NAME`: the names on the home screen, for Release and Debug.
+- `HAUS_NOTIFICATION_FILTERING = NO`, unless Apple granted your extension's App ID the notification filtering entitlement (`com.apple.developer.usernotifications.filtering`). Apple grants it per App ID on request. Without it the notification extension cannot hide the push it was woken by, so after posting the new messages it replaces that push with a quiet "You may have new messages" entry that the next sync removes. Debug builds never have the entitlement, since the development App ID is a separate one.
+
+[TRADEMARKS.md](TRADEMARKS.md) lists what a published fork must change.
+
+Push notifications go through the project's push gateway, `push.xmpp.haus`, which can only notify the official app and its development build. A build with other identifiers connects and syncs normally but gets no push notifications.
 
 ### Signing in
 

@@ -14,4 +14,42 @@ CURRENT_PROJECT_VERSION = 2
 // staging mode off.
 HAUS_STAGING_DOMAIN =
 
+// The app's identity. A fork sets its own HAUS_APP_ID, HAUS_APP_NAME and HAUS_DEV_APP_NAME in Config/Local.xcconfig;
+// everything else follows from them:
+//
+//   iPhone and Mac app        HAUS_BUNDLE_ID_BASE
+//   notification extensions  HAUS_BUNDLE_ID_BASE.notifications
+//   App Group                 group.HAUS_BUNDLE_ID_BASE
+//   Keychain access group     <team prefix>.HAUS_BUNDLE_ID_BASE
+//   APNs topic                HAUS_BUNDLE_ID_BASE
+//
+// Release builds (TestFlight, App Store) use HAUS_APP_ID itself. Debug builds are a separate development app,
+// HAUS_APP_ID.dev, with its own name, icon, data and Keychain items, so it installs next to the released app without
+// ever reading or changing its chats or encryption keys.
+HAUS_APP_ID = haus.xmpp.ios
+HAUS_APP_NAME = Haus XMPP
+HAUS_DEV_APP_NAME = Haus Dev
+HAUS_DEV_SUFFIX =
+HAUS_DEV_SUFFIX[config=Debug] = .dev
+HAUS_BUNDLE_ID_BASE = $(HAUS_APP_ID)$(HAUS_DEV_SUFFIX)
+HAUS_APP_GROUP = group.$(HAUS_BUNDLE_ID_BASE)
+HAUS_KEYCHAIN_GROUP = $(AppIdentifierPrefix)$(HAUS_BUNDLE_ID_BASE)
+HAUS_DISPLAY_NAME = $(HAUS_APP_NAME)
+HAUS_DISPLAY_NAME[config=Debug] = $(HAUS_DEV_APP_NAME)
+HAUS_APP_ICON = AppIcon
+HAUS_APP_ICON[config=Debug] = AppIcon-Dev
+
+// Whether Apple granted the notification extension's App ID the managed entitlement
+// com.apple.developer.usernotifications.filtering, which lets the extension hide a push once it has posted the
+// messages itself. Granted to the official release extension only: a fork without it sets NO here (in
+// Config/Local.xcconfig), and Debug builds never have it, since the development App ID is a different one. Without it
+// the extension shows a quiet stand-in for the push instead of hiding it.
+HAUS_NOTIFICATION_FILTERING = YES
+HAUS_EXTENSION_FILTERING = $(HAUS_NOTIFICATION_FILTERING)
+HAUS_EXTENSION_FILTERING[config=Debug] = NO
+// Picks the extensions' entitlements file: Name.entitlements with the filtering entitlement, Name-Unfiltered without.
+HAUS_EXTENSION_ENTITLEMENTS_SUFFIX_YES =
+HAUS_EXTENSION_ENTITLEMENTS_SUFFIX_NO = -Unfiltered
+HAUS_EXTENSION_ENTITLEMENTS_SUFFIX = $(HAUS_EXTENSION_ENTITLEMENTS_SUFFIX_$(HAUS_EXTENSION_FILTERING))
+
 #include? "Local.xcconfig"

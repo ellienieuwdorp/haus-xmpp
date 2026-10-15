@@ -7,6 +7,6 @@ The name and icon tell people that a build comes from this project. Please keep 
 - **Allowed without asking**: building and running the app for yourself; saying your project is "based on Haus XMPP" or "compatible with Haus XMPP"; using the name in articles, reviews and talks.
 - **Not allowed without written permission**: publishing a modified or rebuilt app under the name "Haus XMPP" or a confusingly similar name, or with the Haus XMPP icon, in any app store or download site.
 
-If you publish a fork, choose a new name, replace `App/Assets.xcassets/AppIcon.appiconset/AppIcon.png`, and change the identifiers: the bundle identifiers in `project.yml`, the app group in the four `.entitlements` files and in `Shared/SharedStorage.swift`, and the push service in `App/PushService.swift`.
+If you publish a fork, choose a new name, replace the icons (`AppIcon` and `AppIcon-Dev` in `App/Assets.xcassets` and `Mac/Assets.xcassets`), and change the identifiers: `HAUS_APP_ID`, `HAUS_APP_NAME` and `HAUS_DEV_APP_NAME` in `Config/Local.xcconfig` (bundle identifiers, App Groups and Keychain groups follow from them), and the push service in `App/PushService.swift`.
 
 Questions about the name or icon: open an issue.

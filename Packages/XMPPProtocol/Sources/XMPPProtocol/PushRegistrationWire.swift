@@ -65,10 +65,18 @@ enum PushRegistrationWire {
         return "node='\(xmlEscaped(configuration.node))' secret='\(xmlEscaped(secret))'"
     }
 
-    /// Only a registration names its environment: it travels with the token it describes.
+    /// Only a registration names its environment and APNs topic: they travel with the token they describe. Without a
+    /// topic the gateway uses its default one.
     static func operationXML(_ operation: XMPPPushRegistrationOperation, configuration: XMPPPushConfiguration,
-                             environment: XMPPPushEnvironment) throws -> String {
-        let token = operation.deviceToken.map { " token='\($0)' environment='\(environment.rawValue)'" } ?? ""
+                             environment: XMPPPushEnvironment, topic: String? = nil) throws -> String {
+        if let topic {
+            guard (1...255).contains(topic.utf8.count), topic.utf8.allSatisfy({
+                (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 46
+            }) else { throw XMPPNotificationError.invalidConfiguration }
+        }
+        let token = operation.deviceToken.map {
+            " token='\($0)' environment='\(environment.rawValue)'" + (topic.map { " topic='\($0)'" } ?? "")
+        } ?? ""
         return "<\(operation.action.rawValue) xmlns='\(namespace)' \(try credentials(configuration)) revision='\(operation.revision)'\(token)/>"
     }
 
@@ -93,10 +101,11 @@ enum PushRegistrationWire {
 }
 
 extension XMPPClient {
-    /// A register for a node the gateway does not know creates it, owned by this account's bare JID.
+    /// A register for a node the gateway does not know creates it, owned by this account's bare JID. `topic` is the
+    /// app's APNs topic (its bundle identifier); nil leaves it to the gateway's default.
     public func updatePushRegistration(_ operation: XMPPPushRegistrationOperation, configuration: XMPPPushConfiguration,
-                                       environment: XMPPPushEnvironment) async throws -> XMPPPushRegistrationResult {
-        let payload = try PushRegistrationWire.operationXML(operation, configuration: configuration, environment: environment)
+                                       environment: XMPPPushEnvironment, topic: String? = nil) async throws -> XMPPPushRegistrationResult {
+        let payload = try PushRegistrationWire.operationXML(operation, configuration: configuration, environment: environment, topic: topic)
         let response = try await requestIQ(type: "set", to: configuration.serviceJID, payload: payload)
         let result = try PushRegistrationWire.result(response)
         guard result.revision == operation.revision, result.action == operation.action else { throw XMPPIQError.malformedResponse }
