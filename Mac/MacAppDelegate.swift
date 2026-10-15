@@ -10,6 +10,8 @@ import SwiftUI
     var showingAccount = false
     var inspectorShown = false
     var reviewingOwnDevices = false
+    /// Restore from a transfer, from the signed-out sidebar.
+    var showingRestore = false
     /// Bumped by Find (⌘F); the sidebar focuses its search field when it changes.
     var searchRequests = 0
     /// Captured from the main window's content, so the Dock icon can bring the window back after it was closed.

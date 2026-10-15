@@ -10,6 +10,8 @@ struct SettingsView: View {
     @State private var confirmingDeleteUnreadable = false
     @State private var confirmingSamples = false
     @State private var noMailApp = false
+    @State private var showingTransfer = false
+    @State private var showingRestore = false
 
     private var accent: AccentTheme { appearance.accent }
     private var localPart: String { model.accountID.split(separator: "@").first.map(String.init) ?? "" }
@@ -34,6 +36,16 @@ struct SettingsView: View {
     }
 
     var body: some View {
+        if model.transferState != .none {
+            // The Mac's Settings window, while the main window shows the transfer.
+            ContentUnavailableView("Moving to another install", systemImage: "shippingbox",
+                                   description: Text("Finish the transfer in the main window."))
+        } else {
+            settings
+        }
+    }
+
+    private var settings: some View {
         List {
             Section {
                 Button { showingConnection = true } label: { profileCard }
@@ -163,6 +175,25 @@ struct SettingsView: View {
                 } message: {
                     Text("This signs you out of \(model.accountID). You’ll need your password to sign in again. Messages and keys stay on this \(ThisDevice.noun).")
                 }
+            }
+            if model.canTransfer {
+                Section {
+                    Button { showingTransfer = true } label: {
+                        Label { Text("Transfer to another app or device…") } icon: { SettingsIconTile(systemName: "shippingbox.and.arrow.backward.fill", color: .indigo) }
+                    }
+                    .foregroundStyle(.primary)
+                    .accessibilityIdentifier("transferAccount")
+                }
+                .sheet(isPresented: $showingTransfer) { TransferIntroView(model: model).macSheetSize(width: 460, height: 480).themedRoot() }
+            } else if model.canRestoreTransfer {
+                Section {
+                    Button { showingRestore = true } label: {
+                        Label { Text("Restore from a transfer…") } icon: { SettingsIconTile(systemName: "arrow.down.app.fill", color: .indigo) }
+                    }
+                    .foregroundStyle(.primary)
+                    .accessibilityIdentifier("restoreTransferRow")
+                }
+                .sheet(isPresented: $showingRestore) { RestoreTransferView(model: model).themedRoot() }
             }
             #if DEBUG
             Section("Development") {

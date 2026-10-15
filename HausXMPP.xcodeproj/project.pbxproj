@@ -143,6 +143,7 @@
 		6C5D42DC91587FB6C0195508 /* SharedSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECE35FFDB91D6C5604DB273F /* SharedSession.swift */; };
 		6CA2FA182DA14FAD3D3A6D4F /* AccountIdentityMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36AF6AA9413439022B1456D1 /* AccountIdentityMigration.swift */; };
 		6CD66E39F6B66B34D6923F66 /* PushRegistrationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A804ED5CE56EF792DB11C29 /* PushRegistrationState.swift */; };
+		6D22FA4BC378EA8577C71022 /* TransferViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F8D56C369489184BC8068FD /* TransferViews.swift */; };
 		6D99BAA5013AC5727BE47234 /* OutboxDrain.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E9F16915706C304AAE9D42 /* OutboxDrain.swift */; };
 		6DFB3DE95157FD59ADAD9FD9 /* DemoLinkSamples.swift in Sources */ = {isa = PBXBuildFile; fileRef = C85EFD7378FD25470AA035C3 /* DemoLinkSamples.swift */; };
 		6F8ACDDC2ADCE728DBD5F753 /* MessagingCore in Frameworks */ = {isa = PBXBuildFile; productRef = 4442EABDE44ABC0720396D42 /* MessagingCore */; };
@@ -242,6 +243,7 @@
 		BAD829949F27036DE79F2BF4 /* ConnectionSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 219AF3065A8866C0E26F5FFF /* ConnectionSetup.swift */; };
 		BB4D31211D0CAB5F23F04AA0 /* AppearanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 926773F781198BFF2F0E2AEC /* AppearanceView.swift */; };
 		BB7365337C8590259082A382 /* ComposerSendTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D3E9557976E9312C2E16874 /* ComposerSendTextTests.swift */; };
+		BC281F2C9AE02BA530B63867 /* TransferViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F8D56C369489184BC8068FD /* TransferViews.swift */; };
 		BC89379CDC4038D5BB61AF03 /* LICENSE.protobuf-c in Resources */ = {isa = PBXBuildFile; fileRef = F35C17BF0F9B0B9403E9870E /* LICENSE.protobuf-c */; };
 		BE5CD477F4422A23467F8EF0 /* ConversationPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54188CA656DDDED16D876198 /* ConversationPresenter.swift */; };
 		BE7EE3B8CB94E27CE1018CED /* ChatCapabilitiesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69109BFFF3B0297A85EED828 /* ChatCapabilitiesTests.swift */; };
@@ -438,6 +440,7 @@
 		3C69CFBE40FB7BEEC71B5F79 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		3D3AE7709F7666CC6099FAFE /* MacCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCommands.swift; sourceTree = "<group>"; };
 		3DC7D740F62B973A8BC6B7E0 /* MacRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRootView.swift; sourceTree = "<group>"; };
+		3F8D56C369489184BC8068FD /* TransferViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferViews.swift; sourceTree = "<group>"; };
 		3FEA9AED98D6D9D58F880157 /* UITestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestSupport.swift; sourceTree = "<group>"; };
 		4053E5EBC94DF0A0EB297556 /* ChatRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatRoute.swift; sourceTree = "<group>"; };
 		4166F1DF0B9E50FC5796856C /* TimelineModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineModels.swift; sourceTree = "<group>"; };
@@ -925,6 +928,7 @@
 				65AE7349FD1FCD92862145CE /* SignInView.swift */,
 				7A6DCB9F398CA0479AED16B7 /* SyncPhaseTimings.swift */,
 				535BE8A1F1E6F1BDCA72435B /* Theme.swift */,
+				3F8D56C369489184BC8068FD /* TransferViews.swift */,
 				8EA646B2D3BEC5BEF134632A /* Typing.swift */,
 				9CA0B98782AD4B252D2E4CCF /* Conversation */,
 			);
@@ -1356,6 +1360,7 @@
 				0557E401D86C1C093F445B63 /* TimelineModels.swift in Sources */,
 				2306BADF98012E71E113755E /* TimelineScrollPolicy.swift in Sources */,
 				9B805378DD0B035471E257E0 /* TransferHold.swift in Sources */,
+				6D22FA4BC378EA8577C71022 /* TransferViews.swift in Sources */,
 				7CD1E97E364C0BA4BFA357C1 /* Typing.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1575,6 +1580,7 @@
 				B1F6107BE08A79AC8F821610 /* TimelineModels.swift in Sources */,
 				03E7F044B5A0AF0044A8467B /* TimelineScrollPolicy.swift in Sources */,
 				C28BB21C73C2A8B7751FD9F8 /* TransferHold.swift in Sources */,
+				BC281F2C9AE02BA530B63867 /* TransferViews.swift in Sources */,
 				4AFD18FF078C33AD827D4A9A /* Typing.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

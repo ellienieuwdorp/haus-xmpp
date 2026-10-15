@@ -7,12 +7,16 @@ struct RootView: View {
     @State private var showingSettings = false
 
     var body: some View {
-        if model.upgradeState == .none, model.keyRecovery == nil {
+        if model.transferState == .none, model.upgradeState == .none, model.keyRecovery == nil {
             chats
         } else {
             Group {
-                if model.upgradeState != .none { UpgradeBlockingView(model: model) } else { KeyRecoveryView(model: model) }
+                if model.transferState != .none { TransferBlockingView(model: model) }
+                else if model.upgradeState != .none { UpgradeBlockingView(model: model) } else { KeyRecoveryView(model: model) }
             }
+            // The transfer started from Settings: when the chats come back (a fresh install after Delete Data, or the
+            // data taken back), they come back without that sheet.
+            .onAppear { showingSettings = false; showingConnection = false }
             .alert("Something needs attention", isPresented: Binding(
                 get: { model.error != nil }, set: { if !$0 { model.error = nil } }
             )) {
@@ -46,6 +50,11 @@ struct RootView: View {
             showingConnection = true
         }
         .sheet(isPresented: $showingConnection) { SignInView(model: model).themedRoot() }
+        .alert("Transfer restored", isPresented: $model.transferRestored) {
+            Button("OK") {}
+        } message: {
+            Text("Your chats are here. To finish the move, open Haus XMPP on the other device and choose Delete Data.")
+        }
         .sheet(isPresented: $showingSettings) {
             NavigationStack {
                 SettingsView(model: model, showingConnection: $showingConnection)
