@@ -51,9 +51,10 @@ targets:
         CADisableMinimumFrameDurationOnPhone: true
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        # ITSAppUsesNonExemptEncryption is left out until App Store Connect has the app's encryption declaration: set to
-        # true without the matching ITSEncryptionExportComplianceCode, uploads are rejected. Each build's export
-        # compliance is answered in App Store Connect until then.
+        # Export compliance as answered in App Store Connect: standard encryption algorithms (OMEMO through libomemo-c),
+        # not distributed in France. App Store Connect classes that as not needing documentation and records it as
+        # "no non-exempt encryption", so each upload states the same.
+        ITSAppUsesNonExemptEncryption: false
         NSHumanReadableCopyright: Copyright © 2026 Ellie Nieuwdorp and the Haus XMPP contributors
         NSCameraUsageDescription: Take a photo or video to send.
         NSMicrophoneUsageDescription: Record sound with videos you take to send.
@@ -160,7 +161,8 @@ targets:
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        # As on iOS, ITSAppUsesNonExemptEncryption waits for the encryption declaration's compliance code.
+        # As on iOS: standard encryption, not in France, recorded as no non-exempt encryption.
+        ITSAppUsesNonExemptEncryption: false
         NSHumanReadableCopyright: Copyright © 2026 Ellie Nieuwdorp and the Haus XMPP contributors
         HausPushEnvironment: $(HAUS_PUSH_ENVIRONMENT)
         HausStagingDomain: $(HAUS_STAGING_DOMAIN)
