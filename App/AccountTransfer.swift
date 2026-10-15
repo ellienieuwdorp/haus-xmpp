@@ -120,6 +120,9 @@ struct AccountTransfer: Sendable {
         case unrecognised(String)
         /// The moved data is not where the marker says, or a store appeared where it would go back.
         case heldDataMissing
+        /// The marker is there but cannot be read (before the first unlock, or damaged): the data may be moved, so
+        /// nothing may open or create a store until it can be.
+        case markerUnreadable
         case keychain
     }
 
@@ -166,7 +169,7 @@ struct AccountTransfer: Sendable {
             try PreUpgradeSnapshot.removeIfPresent(locations.importPrevious)
         }
         try PreUpgradeSnapshot.removeIfPresent(locations.incoming)
-        guard let moved = marker() else {
+        guard let moved = try readMarker() else {
             // An export that failed before its marker leaves only its staging copy.
             try PreUpgradeSnapshot.removeIfPresent(locations.exportStaging)
             return nil
@@ -179,7 +182,17 @@ struct AccountTransfer: Sendable {
         return moved
     }
 
-    func marker() -> Moved? { try? JSONDecoder().decode(Moved.self, from: Data(contentsOf: locations.marker)) }
+    func marker() -> Moved? { try? readMarker() }
+
+    /// Nil only when there is no marker; one that is there but does not read throws instead of counting as absent.
+    private func readMarker() throws -> Moved? {
+        guard FileManager.default.fileExists(atPath: locations.marker.path) else { return nil }
+        do { return try JSONDecoder().decode(Moved.self, from: Data(contentsOf: locations.marker)) }
+        catch {
+            Self.log.error("the transfer marker is there but cannot be read; storage stays closed")
+            throw Failure.markerUnreadable
+        }
+    }
 
     /// The archive, while moved.
     func archive(of moved: Moved) -> URL { locations.outgoing.appending(path: moved.fileName) }

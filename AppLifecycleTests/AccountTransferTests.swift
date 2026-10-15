@@ -312,6 +312,18 @@ import XMPPProtocol
         XCTAssertEqual(resumedDevice, signed.overview.localDeviceID)
     }
 
+    /// A marker that is there but does not read (before the first unlock, or damaged) keeps storage closed: counting
+    /// it as absent would let a launch create a new store, and a new identity, while the real one is held.
+    func testAnUnreadableMarkerKeepsStorageClosed() async throws {
+        let source = try makeInstall()
+        let signed = try await signedIn(source)
+        _ = try await export(source, store: signed.store, code: .generate())
+        try Data("{".utf8).write(to: source.locations.marker)
+        XCTAssertThrowsError(try source.transfer.recover()) { XCTAssertEqual($0 as? AccountTransfer.Failure, .markerUnreadable) }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.locations.held.path), "the held data stays where it is")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.locations.install.database.path))
+    }
+
     /// The owner's update in place, from a build that predates transfers: `Messaging/`, the Keychain records and the
     /// preferences are there, but no `Transfer/` folder and no transfer Keychain item. The launch's transfer step
     /// changes and creates nothing, and the saved account counts as this install's, whether that build remembered the
