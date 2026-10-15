@@ -2,6 +2,7 @@
 import AppKit
 import Security
 import SQLite3
+import MessagingCore
 import SwiftUI
 
 /// Launch arguments for checking the Mac app without driving its UI: captures of its own windows, a timed quit, the
@@ -27,6 +28,9 @@ import SwiftUI
 /// - `-haus-lab-sign-in`: signs in with `HAUS_LAB_USERNAME` and `HAUS_LAB_PASSWORD` (a lab account; pass
 ///   `-lab-ui-test` and `HAUS_LAB_CA_DER` for the lab's certificate authority, as the iPhone's lab tests do).
 /// - `-haus-sign-out`: signs the saved account out after launch, to leave a lab run's Mac clean.
+/// - `-haus-restore-transfer <code>`: restores the transfer file the app reads from standard input (the sandbox opens
+///   no other file the user did not pick). `-haus-transfer start|delete|resume`: prepares a transfer of the
+///   signed-in account, or settles a moved install (deletes its data, or takes it back).
 /// - `-haus-dump-menus`: the main menu's items and shortcuts.
 /// - `-haus-fresh-store`: with `XMPP_UI_TEST_STORE` set, empties that session's store and preferences at launch, so a
 ///   run starts as a new install would. The shared App Group store is left alone.
@@ -94,6 +98,9 @@ import SwiftUI
             do { try FileManager.default.removeItem(at: directory) } catch { log("fresh store: could not empty the session's store: \(error)") }
         }
         UserDefaults.standard.removePersistentDomain(forName: "haus.xmpp.uitest." + id)
+        // A transfer's folder and its preferences beside the session (`AccountTransfer.Locations.testSession`).
+        try? FileManager.default.removeItem(at: directory.deletingLastPathComponent().appending(path: id + "-group"))
+        UserDefaults.standard.removePersistentDomain(forName: "haus.xmpp.uitest.\(id).group")
         log("fresh store: session \(id)")
     }
 
@@ -123,6 +130,28 @@ import SwiftUI
             await model.prepare()
             if has("-haus-lab-sign-in") { await labSignIn(model) }
             if has("-haus-self-check") { await selfCheck(model) }
+            if let text = value(after: "-haus-restore-transfer") {
+                let file = FileManager.default.temporaryDirectory.appending(path: "restore.\(TransferArchive.fileExtension)")
+                try? FileHandle.standardInput.readToEnd()?.write(to: file)
+                defer { try? FileManager.default.removeItem(at: file) }
+                if let code = TransferCode(text) {
+                    let problem = await model.restoreTransfer(from: file, code: code)
+                    log("restore transfer: \(problem ?? "restored"); account \(model.accountID)")
+                } else { log("restore transfer: not a code") }
+            }
+            switch value(after: "-haus-transfer") {
+            case "start":
+                await model.startTransfer()
+                if case let .moved(moved) = model.transferState { log("transfer: moved, \(moved.fileName), \(moved.fileSize) bytes") }
+                else { log("transfer: not moved (\(model.error ?? "no error"))") }
+            case "delete":
+                await model.deleteMovedData()
+                log("transfer: data deleted; account \(model.accountID.isEmpty ? "none" : model.accountID)")
+            case "resume":
+                await model.useDataHereAgain()
+                log("transfer: using the data here again; account \(model.accountID)")
+            default: break
+            }
             if has("-haus-sign-out") {
                 await model.signOut()
                 log("signed out")
@@ -157,6 +186,7 @@ import SwiftUI
             case "account": window.showingAccount = true
             case "new-chat": window.showingNewChat = true
             case "own-devices": window.reviewingOwnDevices = true
+            case "restore": window.showingRestore = true
             default: break
             }
             if let seconds = value(after: "-haus-close-window").flatMap(Double.init) {

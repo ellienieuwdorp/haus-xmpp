@@ -138,6 +138,8 @@ private enum ExtensionRun {
             directory = root
             // A restore of the previous version's data is under way or done: that data is the app's alone.
             guard !PreUpgradeHold.isHeld(groupRoot: root.deletingLastPathComponent()) else { throw NotificationRunError.upgradePending }
+            // Moved to another install: the identity is that copy's now. (The app also moves the store out of reach.)
+            guard !TransferHold.isMoved(groupRoot: root.deletingLastPathComponent()) else { throw NotificationRunError.noAccount }
             guard let account = try NotificationAccount.load(), account.push != nil else { throw NotificationRunError.noAccount }
             let key: Data
             do { key = try EncryptionKeychain.load(storageID: "primary", allowCreation: false) }

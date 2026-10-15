@@ -135,6 +135,15 @@ extension View {
         #endif
     }
 
+    /// `textInputAutocapitalization(.characters)`, for codes.
+    func capitalizedCharacters() -> some View {
+        #if os(iOS)
+        textInputAutocapitalization(.characters)
+        #else
+        self
+        #endif
+    }
+
     /// `keyboardType(_:)`.
     func keyboard(_ type: PlatformKeyboard) -> some View {
         #if os(iOS)
@@ -224,6 +233,35 @@ extension ToolbarItemPlacement {
         #endif
     }
 }
+
+/// The general pasteboard.
+@MainActor enum PlatformPasteboard {
+    /// `UIPasteboard.general.string = text`.
+    static func copy(_ text: String) {
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #else
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #endif
+    }
+}
+
+#if os(macOS)
+/// The Mac's Save panel for a file the app made, which it then copies there. iOS saves through the share sheet.
+@MainActor enum PlatformFileSave {
+    /// False when the user cancelled; throws when the copy failed.
+    static func save(_ file: URL) throws -> Bool {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = file.lastPathComponent
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return false }
+        if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
+        try FileManager.default.copyItem(at: file, to: destination)
+        return true
+    }
+}
+#endif
 
 /// Keeps the process running through one bounded piece of work: a UIKit background task on iOS, and on the Mac a
 /// `ProcessInfo` activity that keeps App Nap away until the work ends or `macLimit` passes, whichever is first.

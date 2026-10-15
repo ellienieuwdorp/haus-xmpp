@@ -9,10 +9,13 @@ enum EncryptionKeychain {
         case missing
     }
 
+    /// The Keychain service the wrapping keys live under, one item per storage ID.
+    static let service = "haus.xmpp.encryption-state"
+
     /// Only absence permits creation, and only while the database has no encrypted identity or after the user chose to
     /// set up encryption again (`KeyRecovery.startOver`). Locked/inaccessible/deleted keys never cause identity regeneration.
     static func load(storageID: String, allowCreation: Bool) throws -> Data {
-        let query = KeychainQuery.genericPassword(service: "haus.xmpp.encryption-state", account: storageID)
+        let query = KeychainQuery.genericPassword(service: service, account: storageID)
         var lookup = query
         lookup[kSecReturnData as String] = true
         lookup[kSecMatchLimit as String] = kSecMatchLimitOne

@@ -8,8 +8,10 @@ struct MacRootView: View {
 
     var body: some View {
         Group {
-            if model.upgradeState == .none, model.keyRecovery == nil {
+            if model.transferState == .none, model.upgradeState == .none, model.keyRecovery == nil {
                 split
+            } else if model.transferState != .none {
+                TransferBlockingView(model: model)
             } else if model.upgradeState != .none {
                 UpgradeBlockingView(model: model)
             } else {
@@ -63,11 +65,17 @@ struct MacRootView: View {
             model.signInRequested = false
             window.showingAccount = true
         }
+        .alert("Transfer restored", isPresented: $model.transferRestored) {
+            Button("OK") {}
+        } message: {
+            Text("Your chats are here. To finish the move, open Haus XMPP on the other device and choose Delete Data.")
+        }
         .sheet(isPresented: $window.showingAccount) {
             SignInView(model: model)
                 .frame(minWidth: 460, idealWidth: 480, minHeight: 560, idealHeight: 620)
                 .themedRoot()
         }
+        .sheet(isPresented: $window.showingRestore) { RestoreTransferView(model: model).themedRoot() }
         .sheet(isPresented: $window.showingNewChat) {
             MacNewChatSheet(model: model) { chatID in
                 window.showingNewChat = false
@@ -112,6 +120,7 @@ struct MacRootView: View {
                     Button("Sign In…") { window.showingAccount = true }
                         .buttonStyle(.borderedProminent)
                     Button("Explore Sample Conversations") { Task { await model.loadDemo() } }
+                    if model.canRestoreTransfer { Button("Restore from a Transfer…") { window.showingRestore = true } }
                 }
             }
         }

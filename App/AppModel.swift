@@ -90,6 +90,14 @@ final class AppModel {
     @ObservationIgnored private var restoringData = false
     @ObservationIgnored private var snapshots: PreUpgradeSnapshot?
     @ObservationIgnored private var openingStorage = false
+    /// Where this install stands with a transfer to another install (see `AccountTransfer`). Anything but `.none`
+    /// replaces the app with the transfer screen and keeps storage closed.
+    private(set) var transferState: TransferState = .none
+    @ObservationIgnored private var transfers: AccountTransfer?
+    /// A restore from a transfer is being read or put in place.
+    private(set) var restoreProgress: AccountTransfer.Progress?
+    /// Set once a restore finished; the chat list says what is left to do on the other install.
+    var transferRestored = false
     /// Set while the database holds encryption state the Keychain wrapping key cannot open (the key is gone, or is
     /// another one): RootView shows the recovery screen, and storage stays closed for everything else until the user
     /// sets encryption up again (see `KeyRecoveryPlan`).
@@ -401,6 +409,20 @@ final class AppModel {
         openingStorage = true
         defer { openingStorage = false }
         do {
+            // Before anything opens or creates a store: data moved to another install stays out of reach, and a
+            // transfer a crash interrupted is undone first.
+            let transferLocations = if let testSessionID {
+                AccountTransfer.Locations.testSession(testSessionID, preferences: preferences)
+            } else {
+                AccountTransfer.Locations.production(messaging: try SharedStorage.groupContainer().appending(path: "Messaging", directoryHint: .isDirectory))
+            }
+            let transfers = transferLocations.map { AccountTransfer(locations: $0) }
+            self.transfers = transfers
+            if let moved = try transfers?.recover() {
+                transferState = .moved(moved)
+                hasLoadedChats = true
+                return
+            }
             let directory = try await SharedStorage.directory(testSessionID: testSessionID, migrate: true)
             storageRoot = directory
             let opened: MessageStore
@@ -466,10 +488,18 @@ final class AppModel {
                 await refresh()
                 if let openChatID { await loadEncryptionDetails(for: openChatID, refreshFromServer: false) }
                 if testSessionID == nil, let saved = try NotificationAccount.load() {
-                    sessionAccount = saved
-                    if saved.push != nil { pushStatus = .on }
-                    reconcile()
-                    await queueSavedReplies()
+                    if try await Self.ownsSavedAccount(saved, lastAccount: savedAccount, store: opened) {
+                        sessionAccount = saved
+                        if saved.push != nil { pushStatus = .on }
+                        reconcile()
+                        await queueSavedReplies()
+                    } else {
+                        // Left in the Keychain by an install of this app that was deleted (the Keychain outlives it):
+                        // this install never signed in with it. Signing in silently would give the account a new
+                        // device, and would rule out restoring a transfer here. The extension stays off it too.
+                        Self.syncLog.notice("ignoring an account record this install did not save")
+                        try? NotificationAccessGate.disable(at: NotificationAccessGate.location())
+                    }
                 }
             }
         } catch MessageStoreError.unsupportedSchema(let version) {
@@ -482,6 +512,13 @@ final class AppModel {
             self.error = "Could not open local message storage."
             hasLoadedChats = true // nothing more will arrive; show the empty state behind the alert rather than a blank screen
         }
+    }
+
+    /// The account record in the Keychain is this install's: it is the account this install last selected, or the
+    /// store holds that account's encryption state (a build from before the selection was remembered).
+    private static func ownsSavedAccount(_ saved: NotificationAccount, lastAccount: String, store: MessageStore) async throws -> Bool {
+        if JID.normalizedBare(lastAccount) == saved.accountID { return true }
+        return try await store.encryptionStateRevision(accountID: saved.accountID) != nil
     }
 
     /// `-demo` (DEBUG only, for tests and captures) opens the sample conversations at launch.
@@ -722,6 +759,7 @@ final class AppModel {
     /// password still works.
     private var wantsConnection: Bool {
         transportWanted && !quiescing && !userWantsOffline && !authenticationRejected && sessionAccount != nil && !isDemo && upgradeState == .none
+            && transferState == .none
     }
 
     /// The single place that turns "should be connected" into a `connect()` call. Every input
@@ -1157,6 +1195,214 @@ final class AppModel {
         keyRecovery = nil
         hasLoadedChats = false
         await openStorage()
+    }
+
+    // MARK: Transfer to another install
+
+    /// Where the moved state's archive is.
+    func transferArchiveURL(_ moved: AccountTransfer.Moved) -> URL? { transfers?.archive(of: moved) }
+
+    /// Settings offers a transfer for a signed-in account whose storage is open.
+    var canTransfer: Bool {
+        transfers != nil && store != nil && transferState == .none && upgradeState == .none && keyRecovery == nil
+            && !accountID.isEmpty && !isDemo
+    }
+
+    /// The signed-out screens offer a restore while nobody is signed in here (the sample conversations are fine: a
+    /// restore replaces them). Whether the store holds an identity is checked when it runs, and refused with a reason.
+    var canRestoreTransfer: Bool {
+        transfers != nil && store != nil && transferState == .none && upgradeState == .none && keyRecovery == nil
+            && (accountID.isEmpty || isDemo)
+    }
+
+    /// Settings, after the transfer screen's explanation: stops everything as the background transition does, keeps
+    /// (or takes, never by force) the lease, and packs this install's data into an archive under a new code. On
+    /// success the install is moved: storage stays closed and nothing connects until the user settles it. On failure
+    /// everything is put back and storage opens again.
+    func startTransfer() async {
+        guard canTransfer, let transfers, let store else { return }
+        let account = accountID, code = TransferCode.generate()
+        transferState = .exporting(nil)
+        restoringData = true
+        defer { restoringData = false }
+        // Packing a large account takes a while; leaving the app meanwhile must not suspend it half way.
+        let background = BackgroundActivity("Prepare transfer")
+        defer { background.end() }
+        reconnectTask?.cancel(); reconnectTask = nil
+        downloads.reset()
+        // No preview fetch writes into the folders while they are packed.
+        linkPreviewCenter.use(account: "", folder: nil, cache: nil)
+        await stopTransportWork()
+        quiescing = true
+        guard await takeLease(store) else {
+            hasTransportOwnership = false
+            quiescing = false
+            transferState = .none
+            useLinkPreviewAccount()
+            self.error = "A notification is being processed. Try the transfer again in a moment."
+            reconcile()
+            return
+        }
+        do {
+            let moved = try await transfers.export(store: store, accountID: account, code: code, now: Date()) { progress in
+                Task { @MainActor [weak self] in self?.showTransferProgress(progress) }
+            }
+            Self.syncLog.notice("transfer packed; this install is moved")
+            try? await store.close()
+            closeStorageAfterRestore()
+            quiescing = false
+            transferState = .moved(moved)
+        } catch {
+            Self.syncLog.error("transfer failed: \(String(describing: error), privacy: .public)")
+            // Before the store moved it is still open under the lease; after, it was closed and put back.
+            try? await store.close()
+            closeStorageAfterRestore()
+            quiescing = false
+            transferState = .none
+            hasLoadedChats = false
+            self.error = "The transfer file could not be made, and nothing was changed. " + AccountTransfer.describe(error)
+            await openStorage()
+        }
+    }
+
+    private func showTransferProgress(_ progress: AccountTransfer.Progress) {
+        if case let .exporting(current) = transferState {
+            // Reports hop here one by one and may arrive out of order; a bar never goes back.
+            if let current, (current.step.rawValue, current.fraction) > (progress.step.rawValue, progress.fraction) { return }
+            transferState = .exporting(progress)
+        } else if let current = restoreProgress, progress.fraction >= current.fraction {
+            restoreProgress = progress
+        }
+    }
+
+    /// The moved screen's "Use Here Again", after its typed confirmation: the store goes back where it was, the
+    /// archive is deleted, and storage opens as usual.
+    func useDataHereAgain() async {
+        guard case let .moved(moved) = transferState, let transfers else { return }
+        transferState = .settling
+        do { try transfers.rollBackExport() }
+        catch {
+            Self.syncLog.error("could not take the moved data back: \(String(describing: error), privacy: .public)")
+            transferState = .moved(moved)
+            self.error = "The data could not be put back on this \(ThisDevice.noun)."
+            return
+        }
+        Self.syncLog.notice("transfer cancelled; using the data here again")
+        transferState = .none
+        hasLoadedChats = false
+        await openStorage()
+    }
+
+    /// The moved screen's "Delete Data", after its confirmation: this install's copy goes, and the app starts as a
+    /// fresh install.
+    func deleteMovedData() async {
+        guard case let .moved(moved) = transferState, let transfers else { return }
+        transferState = .settling
+        do { try transfers.deleteMovedData() }
+        catch {
+            Self.syncLog.error("could not delete the moved data: \(String(describing: error), privacy: .public)")
+            transferState = .moved(moved)
+            self.error = "The data could not be deleted from this \(ThisDevice.noun). Try again."
+            return
+        }
+        // As at sign-out: delivered notifications and donated interactions name the account's contacts.
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+        appBadge = nil
+        setAppBadge(0)
+        await CommunicationHistory.deleteAll()
+        selectAccount("")
+        preferences.removeObject(forKey: "lastAccount")
+        transferState = .none
+        hasLoadedChats = false
+        await openStorage()
+    }
+
+    /// The restore sheet: reads and checks `file` with `code` (nothing changes meanwhile), then, under the lease,
+    /// puts it in place of this install's empty data and opens it. Returns why it did not, or nil once restored.
+    func restoreTransfer(from file: URL, code: TransferCode) async -> String? {
+        guard canRestoreTransfer, let transfers, let store, restoreProgress == nil else { return "A restore can’t start right now." }
+        restoreProgress = AccountTransfer.Progress(step: .restoring, fraction: 0)
+        defer { restoreProgress = nil }
+        let background = BackgroundActivity("Restore transfer")
+        defer { background.end() }
+        do { if let blocker = try await transfers.importBlocker(store: store) { return AccountTransfer.describe(blocker) } }
+        catch { return AccountTransfer.describe(error) }
+        let staged: AccountTransfer.Staged
+        do {
+            staged = try await Task.detached {
+                try Self.readPicked(file) { url in
+                    try transfers.stage(archive: url, code: code) { progress in
+                        Task { @MainActor [weak self] in self?.showTransferProgress(progress) }
+                    }
+                }
+            }.value
+        } catch {
+            Self.syncLog.error("restore refused: \(String(describing: error), privacy: .public)")
+            return AccountTransfer.describe(error)
+        }
+        guard canRestoreTransfer, self.store === store else { return "A restore can’t start right now." }
+        restoringData = true
+        defer { restoringData = false }
+        reconnectTask?.cancel(); reconnectTask = nil
+        downloads.reset()
+        await stopTransportWork()
+        quiescing = true
+        guard await takeLease(store) else {
+            hasTransportOwnership = false
+            quiescing = false
+            return "A notification is being processed. Try again in a moment."
+        }
+        do {
+            try await transfers.commit(staged, store: store, now: Date())
+        } catch {
+            Self.syncLog.error("restore failed: \(String(describing: error), privacy: .public)")
+            if await store.holdsTransportOwnership {
+                // Refused before the store closed: it is as it was.
+                try? await store.releaseTransportOwnership()
+                hasTransportOwnership = false
+                quiescing = false
+                reconcile()
+            } else {
+                closeStorageAfterRestore()
+                quiescing = false
+                hasLoadedChats = false
+                await openStorage()
+            }
+            return AccountTransfer.describe(error)
+        }
+        Self.syncLog.notice("restored a transfer for \(staged.manifest.accountID.isEmpty ? "no account" : "an account", privacy: .public)")
+        closeStorageAfterRestore()
+        quiescing = false
+        hasLoadedChats = false
+        transferRestored = true
+        await openStorage()
+        return nil
+    }
+
+    /// A file the user picked: inside its security scope and a coordinated read, so one in iCloud Drive is downloaded
+    /// first.
+    nonisolated private static func readPicked<T>(_ url: URL, _ read: (URL) throws -> T) throws -> T {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        var coordination: NSError?, result: Result<T, any Error>?
+        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordination) { readable in
+            result = Result { try read(readable) }
+        }
+        if let coordination { throw coordination }
+        guard let result else { throw CocoaError(.fileReadUnknown) }
+        return try result.get()
+    }
+
+    /// The store's lease, kept or taken (never by force): false when another process holds it for ten seconds.
+    private func takeLease(_ store: MessageStore) async -> Bool {
+        var leased = await store.holdsTransportOwnership
+        for _ in 0..<40 where !leased {
+            do { try await store.acquireTransportOwnership(); leased = true }
+            catch MessageStoreError.transportOwnedElsewhere { try? await Task.sleep(for: .milliseconds(250)) }
+            catch { break }
+        }
+        return leased
     }
 
     /// The user stopped interacting (iOS: the scene left `.active`, now; the Mac: the last input before going idle,
@@ -4093,6 +4339,17 @@ extension AppModel: NotificationActionEnvironment {
 private enum CatchUpBanners { case holding, due, live }
 
 /// Where a launch stands with the previous version's data. Every state but `none` shows a blocking screen.
+/// Where this install stands with a transfer of its data to another install.
+enum TransferState: Equatable {
+    case none
+    /// Packing the archive (nil until the first progress report).
+    case exporting(AccountTransfer.Progress?)
+    /// The archive is ready and this install's data is out of reach until the user deletes it or takes it back.
+    case moved(AccountTransfer.Moved)
+    /// Deleting the data or putting it back.
+    case settling
+}
+
 enum UpgradeState: Equatable {
     case none
     /// Taking the snapshot and migrating (shown only if it takes a moment).

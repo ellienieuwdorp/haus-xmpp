@@ -11,6 +11,7 @@ struct SignInView: View {
     @State private var security = XMPPTransportSecurity.startTLS
     @State private var consent = false
     @State private var showingAdvanced = false
+    @State private var showingRestore = false
 
     init(model: AppModel) {
         self.model = model
@@ -144,6 +145,10 @@ struct SignInView: View {
                         .buttonBorderShape(.capsule)
                         .disabled(!canConnect)
                         Text(model.session.label).font(.subheadline).foregroundStyle(.secondary)
+                        if model.canRestoreTransfer {
+                            Button("Restore from a transfer…") { showingRestore = true }
+                                .accessibilityIdentifier("signInRestoreTransfer")
+                        }
                     }
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
@@ -151,6 +156,9 @@ struct SignInView: View {
             }
             .toolbarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .sheet(isPresented: $showingRestore) { RestoreTransferView(model: model).themedRoot() }
+            // A restore signs this install in as the transferred account: nothing is left to sign in to here.
+            .onChange(of: model.transferRestored) { _, restored in if restored { dismiss() } }
         }
     }
 

@@ -8,6 +8,7 @@ struct ChatListView: View {
     @State private var search = ""
     @State private var recipient = ""
     @State private var showingNewChat = false
+    @State private var showingRestore = false
     @State private var newChatDetent: PresentationDetent = .medium
     /// The chat whose Mute swipe action asked for a duration.
     @State private var muting: String?
@@ -130,6 +131,10 @@ struct ChatListView: View {
                         if model.accountID.isEmpty {
                             Button("Explore sample conversations") { Task { await model.loadDemo() } }
                                 .buttonStyle(.borderedProminent)
+                            if model.canRestoreTransfer {
+                                Button("Restore from a transfer…") { showingRestore = true }
+                                    .accessibilityIdentifier("emptyRestoreTransfer")
+                            }
                         }
                     }
                 }
@@ -188,6 +193,7 @@ struct ChatListView: View {
             }
         }
         .sheet(isPresented: $showingNewChat) { newChatSheet }
+        .sheet(isPresented: $showingRestore) { RestoreTransferView(model: model).themedRoot() }
         .sheet(isPresented: $reviewingOwnDevices) { OwnDeviceReviewSheet(model: model) }
     }
 

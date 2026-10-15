@@ -68,7 +68,7 @@ struct PreUpgradeSnapshot: Sendable {
         /// This build's.
         var snapshotService: String { snapshotService(generation: PreUpgradeHold.generation) }
 
-        static let production = KeychainNames(accountService: "haus.xmpp.notification-account", accountKey: "primary",
+        static let production = KeychainNames(accountService: NotificationAccount.service, accountKey: NotificationAccount.key,
                                               pushService: PushRegistrationState.service, snapshotService: "haus.xmpp.pre-upgrade-snapshot")
     }
 
@@ -799,16 +799,16 @@ struct PreUpgradeSnapshot: Sendable {
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func decode<T: Decodable>(_ type: T.Type, at url: URL) throws -> T {
+    static func decode<T: Decodable>(_ type: T.Type, at url: URL) throws -> T {
         try JSONDecoder().decode(type, from: Data(contentsOf: url))
     }
 
-    private static func removeIfPresent(_ url: URL) throws {
+    static func removeIfPresent(_ url: URL) throws {
         do { try FileManager.default.removeItem(at: url) } catch CocoaError.fileNoSuchFile {}
     }
 
     /// The same class and backup exclusion as `Messaging/`.
-    private static func createProtectedDirectory(_ url: URL) throws {
+    static func createProtectedDirectory(_ url: URL) throws {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true,
                                                 attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
         var location = url
@@ -817,11 +817,11 @@ struct PreUpgradeSnapshot: Sendable {
         try location.setResourceValues(values)
     }
 
-    private static func protect(_ url: URL) throws {
+    static func protect(_ url: URL) throws {
         try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: url.path)
     }
 
-    private static func protectTree(_ url: URL) throws {
+    static func protectTree(_ url: URL) throws {
         try protect(url)
         guard let items = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil) else { return }
         for case let item as URL in items { try protect(item) }
@@ -855,7 +855,7 @@ struct PreUpgradeSnapshot: Sendable {
         return items.compactMap { $0[kSecAttrAccount as String] as? String }
     }
 
-    private static func keychainAdd(service: String, account: String, data: Data) throws {
+    static func keychainAdd(service: String, account: String, data: Data) throws {
         var item = query(service: service, account: account)
         item[kSecValueData as String] = data
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
@@ -863,7 +863,7 @@ struct PreUpgradeSnapshot: Sendable {
         guard status == errSecSuccess else { throw Failure.keychain(status) }
     }
 
-    private static func keychainSet(service: String, account: String, data: Data) throws {
+    static func keychainSet(service: String, account: String, data: Data) throws {
         let attributes: [String: Any] = [kSecValueData as String: data,
                                          kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
         let status = SecItemUpdate(query(service: service, account: account) as CFDictionary, attributes as CFDictionary)
@@ -871,7 +871,7 @@ struct PreUpgradeSnapshot: Sendable {
         guard status == errSecSuccess else { throw Failure.keychain(status) }
     }
 
-    private static func keychainDelete(service: String, account: String) throws {
+    static func keychainDelete(service: String, account: String) throws {
         let status = SecItemDelete(query(service: service, account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.keychain(status) }
     }
