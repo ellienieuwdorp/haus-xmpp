@@ -309,7 +309,7 @@ private func keyQuery(_ id: String) -> [String: Any] {
 }
 private func deleteKey(_ id: String) { _ = SecItemDelete(keyQuery(id) as CFDictionary) }
 
-private actor LifecyclePublicationServer {
+actor LifecyclePublicationServer {
     private var lists: [String: [UInt32]] = [:]
     private var bundles: [String: XMPPOMEMOBundle] = [:]
     func devices(_ account: String, _ profile: XMPPOMEMOProfile) -> [UInt32] { lists[account + profile.rawValue] ?? [] }
@@ -321,7 +321,7 @@ private actor LifecyclePublicationServer {
     func publish(_ account: String, _ bundle: XMPPOMEMOBundle) { bundles[account + bundle.profile.rawValue + String(bundle.deviceID)] = bundle }
 }
 
-private struct LocalPublicationFixture: OMEMOTransport {
+struct LocalPublicationFixture: OMEMOTransport {
     let account: String
     var server = LifecyclePublicationServer()
     func fetchOMEMODevices(for jid: String, profile: XMPPOMEMOProfile) async -> [UInt32] { await server.devices(jid, profile) }

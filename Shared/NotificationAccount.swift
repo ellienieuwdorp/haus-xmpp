@@ -113,8 +113,12 @@ struct NotificationAccount: Codable, Sendable, Equatable {
         return try JSONSerialization.data(withJSONObject: object)
     }
 
+    /// The Keychain item the record lives in.
+    static let service = "haus.xmpp.notification-account"
+    static let key = "primary"
+
     private static var keychainQuery: [String: Any] {
-        KeychainQuery.genericPassword(service: "haus.xmpp.notification-account", account: "primary")
+        KeychainQuery.genericPassword(service: service, account: key)
     }
     enum Failure: Error { case unavailable, credentialsRemain(backgroundDisabled: Bool) }
 }
