@@ -1202,6 +1202,9 @@ final class AppModel {
     /// Where the moved state's archive is.
     func transferArchiveURL(_ moved: AccountTransfer.Moved) -> URL? { transfers?.archive(of: moved) }
 
+    /// The moved state's code, from the Keychain.
+    func transferCode(_ moved: AccountTransfer.Moved) -> TransferCode? { transfers?.code(of: moved) }
+
     /// Settings offers a transfer for a signed-in account whose storage is open.
     var canTransfer: Bool {
         transfers != nil && store != nil && transferState == .none && upgradeState == .none && keyRecovery == nil

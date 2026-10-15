@@ -34,7 +34,8 @@ import XMPPProtocol
                 keychain: .init(accountService: "haus.xmpp.transfer-test.\(id).account", accountKey: "primary",
                                 pushService: "haus.xmpp.transfer-test.\(id).push", snapshotService: "haus.xmpp.transfer-test.\(id).snapshot"),
                 accessGate: root.appending(path: "notification-access-disabled"), installation: "/install/\(id)")
-            locations = AccountTransfer.Locations(install: install, encryptionService: "haus.xmpp.transfer-test.\(id).encryption", storageID: "primary")
+            locations = AccountTransfer.Locations(install: install, encryptionService: "haus.xmpp.transfer-test.\(id).encryption", storageID: "primary",
+                                                  codeService: "haus.xmpp.transfer-test.\(id).code")
         }
 
         var transfer: AccountTransfer { AccountTransfer(locations: locations) }
@@ -62,7 +63,8 @@ import XMPPProtocol
             }
             try? FileManager.default.removeItem(at: root)
             let names = locations.install.keychain
-            for service in [names.accountService, names.pushService, names.snapshotService(generation: PreUpgradeHold.generation), locations.encryptionService] {
+            for service in [names.accountService, names.pushService, names.snapshotService(generation: PreUpgradeHold.generation), locations.encryptionService,
+                            locations.codeService] {
                 SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service] as CFDictionary)
             }
         }
@@ -152,6 +154,10 @@ import XMPPProtocol
         XCTAssertTrue(TransferHold.isMoved(groupRoot: source.root))
         XCTAssertFalse(FileManager.default.fileExists(atPath: source.locations.install.database.path), "the store is out of reach of every process")
         XCTAssertEqual(try source.transfer.recover(), moved, "a relaunch finds the install still moved")
+        // The code is shown again after a relaunch from the Keychain; no file beside the archive spells it out.
+        XCTAssertEqual(source.transfer.code(of: moved), code)
+        let marker = try String(contentsOf: source.locations.marker, encoding: .utf8)
+        XCTAssertFalse(marker.contains(code.grouped), "the marker holds no code")
         let archive = source.transfer.archive(of: moved)
         XCTAssertGreaterThan(moved.fileSize, 0)
 
@@ -196,6 +202,7 @@ import XMPPProtocol
         }
 
         try source.transfer.deleteMovedData()
+        XCTAssertNil(source.transfer.code(of: moved))
         XCTAssertNil(try source.transfer.recover())
         XCTAssertFalse(FileManager.default.fileExists(atPath: source.locations.held.path))
         XCTAssertNil(try PreUpgradeSnapshot.keychainData(service: source.keychain.accountService, account: "primary"))
@@ -303,6 +310,7 @@ import XMPPProtocol
 
         let again = try await export(source, store: back, code: .generate())
         try source.transfer.rollBackExport()
+        XCTAssertEqual(try PreUpgradeSnapshot.keychainAccounts(service: source.locations.codeService), [], "no code outlives the move")
         XCTAssertNil(try source.transfer.recover())
         XCTAssertFalse(FileManager.default.fileExists(atPath: source.transfer.archive(of: again).path))
         let resumed = try source.openStore()

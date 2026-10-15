@@ -105,7 +105,7 @@ struct TransferBlockingView: View {
                 Text("Ready to move").font(.title2.weight(.bold)).multilineTextAlignment(.center).accessibilityAddTraits(.isHeader)
                 Text("Save the file or send it with AirDrop. Then, in Haus XMPP where you want your chats, choose **Restore from a transfer** and enter this code.")
                     .foregroundStyle(.secondary).multilineTextAlignment(.center)
-                if let code = TransferCode(moved.code) { TransferCodeCard(code: code) }
+                if let code = model.transferCode(moved) { TransferCodeCard(code: code) }
                 VStack(spacing: 12) {
                     if let file {
                         ShareLink(item: file) {

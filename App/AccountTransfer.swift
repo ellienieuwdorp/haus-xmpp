@@ -30,6 +30,8 @@ struct AccountTransfer: Sendable {
         /// The wrapping key's Keychain item (`EncryptionKeychain`).
         let encryptionService: String
         let storageID: String
+        /// The Keychain service that keeps a moved install's code, one item per transfer ID.
+        let codeService: String
 
         var directory: URL { TransferHold.directory(groupRoot: install.groupRoot) }
         var marker: URL { directory.appending(path: TransferHold.markerName) }
@@ -43,7 +45,7 @@ struct AccountTransfer: Sendable {
 
         static func production(messaging: URL) -> Locations? {
             PreUpgradeSnapshot.Locations.production(messaging: messaging)
-                .map { Locations(install: $0, encryptionService: EncryptionKeychain.service, storageID: "primary") }
+                .map { Locations(install: $0, encryptionService: EncryptionKeychain.service, storageID: "primary", codeService: "haus.xmpp.transfer-code") }
         }
 
         /// A UI test session's own store, preferences and Keychain items (DEBUG builds only set one), beside the
@@ -61,7 +63,8 @@ struct AccountTransfer: Sendable {
                 keychain: .init(accountService: "haus.xmpp.uitest.\(id).account", accountKey: NotificationAccount.key,
                                 pushService: "haus.xmpp.uitest.\(id).push", snapshotService: "haus.xmpp.uitest.\(id).snapshot"),
                 accessGate: root.appending(path: "notification-access-disabled"), installation: "uitest")
-            return Locations(install: install, encryptionService: EncryptionKeychain.service, storageID: id)
+            return Locations(install: install, encryptionService: EncryptionKeychain.service, storageID: id,
+                             codeService: "haus.xmpp.uitest.\(id).transfer-code")
         }
     }
 
@@ -90,9 +93,6 @@ struct AccountTransfer: Sendable {
         let transferID: String
         let createdAt: Date
         let accountID: String
-        /// The code, as shown. Kept here, in the same protected container as the data it opens, until the move is
-        /// settled, so it can be shown again after a relaunch.
-        let code: String
         let fileName: String
         var fileSize: Int64 = 0
     }
@@ -194,6 +194,19 @@ struct AccountTransfer: Sendable {
         }
     }
 
+    /// The code that opens the archive, while moved, so the moved screen can show it again after a relaunch. It lives
+    /// in the Keychain, never beside the archive: the archive carries the Keychain's own secrets (the account's
+    /// password, the encryption state's wrapping key), so a code kept in a file would let anyone who can read this
+    /// install's files read those too.
+    func code(of moved: Moved) -> TransferCode? {
+        (try? secrets.read(locations.codeService, moved.transferID)).flatMap { $0 }.flatMap { String(data: $0, encoding: .utf8) }.flatMap(TransferCode.init)
+    }
+
+    /// Every stored code goes: only the transfer in progress or moved ever has one.
+    private func deleteCodes() throws {
+        for transfer in try secrets.accounts(locations.codeService) { try secrets.delete(locations.codeService, transfer) }
+    }
+
     /// The archive, while moved.
     func archive(of moved: Moved) -> URL { locations.outgoing.appending(path: moved.fileName) }
 
@@ -230,10 +243,21 @@ struct AccountTransfer: Sendable {
         } catch { try? PreUpgradeSnapshot.removeIfPresent(locations.exportStaging); throw error }
 
         let id = UUID().uuidString
-        var moved = Moved(stage: .exporting, transferID: id, createdAt: now, accountID: accountID, code: code.grouped,
+        var moved = Moved(stage: .exporting, transferID: id, createdAt: now, accountID: accountID,
                           fileName: "Haus XMPP Transfer \(now.formatted(.iso8601.year().month().day())).\(TransferArchive.fileExtension)")
+        do {
+            try deleteCodes()
+            try secrets.set(locations.codeService, id, Data(code.grouped.utf8))
+        } catch {
+            try? PreUpgradeSnapshot.removeIfPresent(locations.exportStaging)
+            throw Failure.keychain
+        }
         // Written before the store moves: from here on the extension stays off, and a crash undoes the export.
-        try write(moved)
+        do { try write(moved) } catch {
+            try? secrets.delete(locations.codeService, id)
+            try? PreUpgradeSnapshot.removeIfPresent(locations.exportStaging)
+            throw error
+        }
         let messaging = locations.install.messaging, held = locations.held
         do {
             try await store.closeForMigration { try FileManager.default.moveItem(at: messaging, to: held) }
@@ -333,6 +357,7 @@ struct AccountTransfer: Sendable {
         }
         try PreUpgradeSnapshot.removeIfPresent(locations.outgoing)
         try PreUpgradeSnapshot.removeIfPresent(locations.exportStaging)
+        do { try deleteCodes() } catch { throw Failure.keychain }
         try PreUpgradeSnapshot.removeIfPresent(locations.marker)
     }
 
@@ -349,6 +374,7 @@ struct AccountTransfer: Sendable {
             try secrets.delete(keychain.accountService, keychain.accountKey)
             try secrets.delete(locations.encryptionService, locations.storageID)
             for owner in try secrets.accounts(keychain.pushService) { try secrets.delete(keychain.pushService, owner) }
+            try deleteCodes()
         } catch { throw Failure.keychain }
         for domain in [locations.install.appDefaults, locations.install.groupDefaults] {
             domain.replace(with: domain.contents.filter { !Self.isTransferable(preference: $0.key) })
