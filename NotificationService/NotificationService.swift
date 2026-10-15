@@ -4,7 +4,8 @@ import MessagingCore
 
 /// Thin shell: every remote request joins the process's run (`NotificationRunCoordinator`) and finishes with its outcome.
 /// A settled run posted one local request per new message, so the remote alert is suppressed with empty content
-/// (the filtering entitlement). Anything else shows the generic fallback; unknown is never suppressed.
+/// (the filtering entitlement), or replaced by a quiet stand-in where the extension lacks that entitlement. Anything
+/// else shows the generic fallback; unknown is never suppressed.
 final class NotificationService: UNNotificationServiceExtension, @unchecked Sendable {
     /// One per process: `didReceive` may arrive concurrently for coalesced pushes, on this or another instance.
     private static let coordinator = NotificationRunCoordinator { progress in await ExtensionRun.run(progress) }
@@ -59,15 +60,25 @@ private final class RemoteDelivery: @unchecked Sendable {
             return handler
         }) else { return }
         if case let .settled(report) = outcome {
+            // The badge is the one field a settled delivery may carry: unread outside muted chats, when the run knew it.
+            let badge = report.badge.map { NSNumber(value: $0) }
+            guard NotificationFiltering.isAvailable else {
+                callback(Self.standIn(for: request, badge: badge))
+                return
+            }
             // Every local add already completed: empty content suppresses the remote alert (no title, body or sound).
-            // The badge is the one field it may carry: unread outside muted chats, when the run knew it.
             let content = UNMutableNotificationContent()
-            content.badge = report.badge.map { NSNumber(value: $0) }
+            content.badge = badge
             callback(content)
             return
         }
-        // Plan D2: generic, no message content, the fallback category, and the identifier the system gave this request
-        // (the gateway's per-registration collapse ID), so repeated fallbacks replace each other.
+        // Unknown: leave the icon badge as it is.
+        callback(Self.fallback(for: request, badge: nil))
+    }
+
+    /// Plan D2: generic, no message content, the fallback category, and the identifier the system gave this request
+    /// (the gateway's per-registration collapse ID), so repeated fallbacks replace each other.
+    static func fallback(for request: UNNotificationRequest, badge: NSNumber?) -> UNNotificationContent {
         let content = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
         content.title = ""
         content.subtitle = ""
@@ -76,10 +87,26 @@ private final class RemoteDelivery: @unchecked Sendable {
         content.threadIdentifier = ""
         content.userInfo = [:]
         content.attachments = []
-        // Unknown: leave the icon badge as it is.
-        content.badge = nil
-        callback(content)
+        content.badge = badge
+        return content
     }
+
+    /// Without the filtering entitlement, empty content does not hide the push: the system shows it as it arrived. So
+    /// a settled run hands back the fallback instead, made quiet: passive and without a sound, as the messages the run
+    /// posted already alerted. Its fallback category lets the next run, or the app's catch-up, remove it.
+    static func standIn(for request: UNNotificationRequest, badge: NSNumber?) -> UNNotificationContent {
+        let content = (fallback(for: request, badge: badge).mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
+        content.sound = nil
+        content.interruptionLevel = .passive
+        return content
+    }
+}
+
+/// Whether this extension has the managed entitlement `com.apple.developer.usernotifications.filtering`, which makes
+/// empty content hide a push. Its build says so in the `HausNotificationFiltering` Info.plist key, set from the same
+/// build setting that picks the entitlements file (`HAUS_EXTENSION_FILTERING`); a missing key counts as no.
+enum NotificationFiltering {
+    static let isAvailable = Bundle.main.object(forInfoDictionaryKey: "HausNotificationFiltering") as? String == "YES"
 }
 
 #if DEBUG && os(macOS)
@@ -88,13 +115,13 @@ extension RemoteDelivery {
     var probedRequest: UNNotificationRequest { request }
     var isFinished: Bool { lock.withLock { handler == nil } }
 
-    /// Empty content, so the filtering entitlement hides the remote alert.
+    /// Empty content, so the filtering entitlement hides the remote alert; the quiet stand-in where it is missing.
     func suppress() {
         guard let callback = lock.withLock({ () -> ((UNNotificationContent) -> Void)? in
             defer { handler = nil }
             return handler
         }) else { return }
-        callback(UNMutableNotificationContent())
+        callback(NotificationFiltering.isAvailable ? UNMutableNotificationContent() : Self.standIn(for: request, badge: nil))
     }
 }
 #endif
