@@ -435,7 +435,7 @@ import SwiftUI
         let menu = MacMessageMenu(message: message)
         let reactions = menu.showsReactions ? menu.reactions.map { $0.emoji + ($0.isSelected ? "*" : "") }.joined() + "+" : "none"
         log("menu \(id): reactions \(reactions) (\(message.canReact ? "enabled" : message.reactionUnavailableReason ?? "disabled")); items "
-            + menu.items.map(MacMessageMenu.title(for:)).joined(separator: " | "))
+            + (menu.items.map(MacMessageMenu.title(for:)) + (menu.attachment?.items.map(\.title) ?? [])).joined(separator: " | "))
         for link in message.links {
             log("menu \(id) on \(link.url.absoluteString): " + MacMessageMenu(message: message, link: link.url).items.map(MacMessageMenu.title(for:)).joined(separator: " | "))
         }

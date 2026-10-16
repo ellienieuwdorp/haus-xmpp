@@ -90,13 +90,20 @@ struct MacTimelineRow: View {
         }
     }
 
-    /// The menu's actions, then the file's, one per link and one per quick reaction, as on the iPhone.
+    /// The menu's actions, then the file's (open it, then the Mac's copy, save and share), one per link and one per quick
+    /// reaction, as on the iPhone.
     @ViewBuilder private var accessibilityActions: some View {
-        ForEach(MessageActionMenu.items(for: message), id: \.kind) { item in
+        let menu = MacMessageMenu(message: message)
+        ForEach(menu.items, id: \.kind) { item in
             Button(MacMessageMenu.title(for: item)) { perform(item.kind, link: nil) }
         }
         if let attachment = MessageActionMenu.attachmentAction(for: message) {
             Button(attachment.title, action: openAttachment)
+        }
+        if let attachment = menu.attachment {
+            ForEach(attachment.items, id: \.kind) { item in
+                Button(item.title) { attachment.perform(item.kind) }
+            }
         }
         ForEach(Array(message.links.enumerated()), id: \.offset) { _, link in
             Button(MessageActionMenu.linkAccessibilityTitle(for: link)) { openURL(link.url) }
@@ -104,7 +111,6 @@ struct MacTimelineRow: View {
         ForEach(MessageActionMenu.reactionToggles(for: message), id: \.emoji) { toggle in
             Button(toggle.title) { react(toggle.emoji) }
         }
-        MacAttachmentMenuItems(message: message)
     }
 
     private func textMenu(_ link: URL?) -> NSMenu {

@@ -2,22 +2,41 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The bubble's items for a photo, video or file that is on this Mac: Copy Image (photos), Save As… and Share…. Used in
-/// the bubble's right-click menu and its accessibility actions. Show in Finder is left out: the file lives in the app's
-/// container under a name derived from its hash, which says nothing to the user; Save As… puts a copy where they want it.
-struct MacAttachmentMenuItems: View {
-    let message: TimelineMessage
+/// The bubble's items for a photo, video or file that is on this Mac: Copy Image (photos), Save As… and Share…. They
+/// follow the message's own items in `MacMessageMenu`, so the right-click menus, the hover toolbar's More menu and the
+/// row's VoiceOver actions all list them. Show in Finder is left out: the file lives in the app's container under a name
+/// derived from its hash, which says nothing to the user; Save As… puts a copy where they want it.
+struct MacAttachmentMenu {
+    enum Kind { case copyImage, saveAs, share }
 
-    var body: some View {
-        if let attachment = message.attachment, !message.showsPlaceholder, let url = attachment.localURL {
-            let name = MacAttachmentActions.fileName(for: attachment, at: url)
-            Section {
-                if attachment.isImage {
-                    Button("Copy Image", systemImage: "doc.on.doc") { MacAttachmentActions.copyImage(at: url, to: .general) }
-                }
-                Button("Save As…", systemImage: "square.and.arrow.down") { MacAttachmentActions.saveAs(url, name: name) }
-                Button("Share…", systemImage: "square.and.arrow.up") { MacAttachmentActions.share(url, name: name) }
-            }
+    struct Item {
+        let kind: Kind
+        let title: String
+        /// An SF Symbol name.
+        let symbol: String
+    }
+
+    let attachment: TimelineAttachment
+    let url: URL
+
+    init?(message: TimelineMessage) {
+        guard let attachment = message.attachment, !message.showsPlaceholder, let url = attachment.localURL else { return nil }
+        self.attachment = attachment
+        self.url = url
+    }
+
+    var items: [Item] {
+        (attachment.isImage ? [Item(kind: .copyImage, title: "Copy Image", symbol: "doc.on.doc")] : [])
+            + [Item(kind: .saveAs, title: "Save As…", symbol: "square.and.arrow.down"),
+               Item(kind: .share, title: "Share…", symbol: "square.and.arrow.up")]
+    }
+
+    @MainActor func perform(_ kind: Kind) {
+        let name = MacAttachmentActions.fileName(for: attachment, at: url)
+        switch kind {
+        case .copyImage: MacAttachmentActions.copyImage(at: url, to: .general)
+        case .saveAs: MacAttachmentActions.saveAs(url, name: name)
+        case .share: MacAttachmentActions.share(url, name: name)
         }
     }
 }

@@ -10,14 +10,17 @@ struct MacMessageHandlers {
     let react: (String, TimelineMessage) -> Void
 }
 
-/// One bubble's menu: the quick reactions over the shared menu's items, the pressed link's first. The right-click
-/// menu (SwiftUI over the bubble, AppKit over its text), the hover toolbar's More menu and the row's VoiceOver actions
-/// all read it, so they list the same things in the same order.
+/// One bubble's menu: the quick reactions over the shared menu's items, the pressed link's first, then the file's own
+/// (`MacAttachmentMenu`) when it is on this Mac. The right-click menu (SwiftUI over the bubble, AppKit over its text),
+/// the hover toolbar's More menu and the row's VoiceOver actions all read it, so they list the same things in the same
+/// order.
 struct MacMessageMenu {
     let message: TimelineMessage
     var link: URL? = nil
 
     var items: [MessageActionMenu.Item] { MessageActionMenu.items(for: message, link: link) }
+
+    var attachment: MacAttachmentMenu? { MacAttachmentMenu(message: message) }
 
     /// A placeholder is a notice, with nothing to react to.
     var showsReactions: Bool { !message.showsPlaceholder }
@@ -78,6 +81,12 @@ struct MacMessageMenuContent: View {
             }
             if MacMessageMenu.separatesLink(at: index, in: items) { Divider() }
         }
+        if let attachment = menu.attachment {
+            Divider()
+            ForEach(attachment.items, id: \.kind) { item in
+                Button(item.title, systemImage: item.symbol) { attachment.perform(item.kind) }
+            }
+        }
     }
 }
 
@@ -121,6 +130,14 @@ struct MacMessageMenuContent: View {
                 })
             }
             if MacMessageMenu.separatesLink(at: index, in: items) { result.addItem(.separator()) }
+        }
+        if let attachment = menu.attachment {
+            result.addItem(.separator())
+            for item in attachment.items {
+                result.addItem(ActionItem(item.title, image: NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil)) {
+                    attachment.perform(item.kind)
+                })
+            }
         }
         return result
     }
