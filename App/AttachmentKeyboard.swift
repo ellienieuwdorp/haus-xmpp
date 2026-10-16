@@ -416,7 +416,7 @@ final class AttachmentKeyboardView: UIInputView {
     }
 }
 
-/// "You've given access to a selection of photos" plus a Select More Photos button.
+/// "You've given access to a selection of photos" plus a Select More button.
 private final class LimitedAccessRow: UIView {
     var onSelectMore: () -> Void = {}
     var onSettings: () -> Void = {}
@@ -445,9 +445,12 @@ private final class LimitedAccessRow: UIView {
         label.font = .preferredFont(forTextStyle: .footnote)
         label.adjustsFontForContentSizeCategory = true
         label.textColor = .secondaryLabel
-        label.numberOfLines = 2
+        // Always one line: the text shrinks to fit instead of wrapping.
+        label.numberOfLines = 1
+        label.adjustsFontSizeToFitWidth = true
+        label.minimumScaleFactor = 0.5
         var configuration = UIButton.Configuration.glass()
-        configuration.title = "Select More Photos"
+        configuration.title = "Select More"
         configuration.buttonSize = .small
         configuration.cornerStyle = .capsule
         let selectMore = UIButton(configuration: configuration)
