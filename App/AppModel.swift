@@ -1605,7 +1605,7 @@ final class AppModel {
         guard testSessionID == nil, !isDemo, !accountID.isEmpty else { return }
         #if DEBUG
         // A scripted check never puts a system prompt on screen.
-        if MacUnobtrusive.isOn || MacDebugNotificationLog.poster != nil { return }
+        if MacUnobtrusive.isOn || MacDebugNotificationLog.mode != nil { return }
         #endif
         guard await Self.notificationAuthorization() == .notDetermined else { refreshNotificationPermission(); return }
         _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
