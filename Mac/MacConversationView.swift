@@ -14,7 +14,7 @@ import SwiftUI
 struct MacConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
-    /// Opens the chat's details, where its devices are reviewed.
+    /// Opens the chat's details.
     var showDetails: () -> Void = {}
     /// The timeline's rows and scroll position; made when the view first appears.
     @State private var timeline: MacTimelineController?
@@ -100,19 +100,9 @@ struct MacConversationView: View {
             }
         }
         .safeAreaInset(edge: .top) {
-            // Messages from a device nobody decided on wait, encrypted, until the user reviews it (the iPhone shows a
-            // card in the chat); the review itself is on the details' Devices & Encryption page.
-            if !model.isDemo, model.trustSummary(for: chatID).needsReview {
-                HStack(spacing: 10) {
-                    Image(systemName: "exclamationmark.shield").foregroundStyle(.orange)
-                    Text("New messages wait until you review this chat's devices.").font(.callout)
-                    Spacer(minLength: 8)
-                    Button("Review Devices…", action: showDetails)
-                }
-                .padding(.horizontal, 14).padding(.vertical, 8)
-                .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .padding(.horizontal, 16).padding(.top, 8)
-            }
+            // Sending, or reading, waits on a device nobody decided on (the iPhone shows a card in the chat); the
+            // banner's review sheet decides each waiting device by its fingerprint.
+            MacDeviceReviewBanner(model: model, chatID: chatID, title: title)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // A blocked chat says so and offers Unblock in place of the composer. The timeline's frame ends above it,

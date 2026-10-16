@@ -475,17 +475,13 @@ struct ConversationView: View {
                     .font(.system(size: 18, weight: .semibold)).foregroundStyle(.orange)
                     .frame(width: 36, height: 36).background(.orange.opacity(0.15), in: Circle())
                 VStack(alignment: .leading, spacing: 1) {
-                    if model.encryptionNeedsReview {
-                        Text(isGroup ? "Devices need review" : model.encryptionReviewIsOwnDevice ? "New device on your account" : "\(title) added a new device")
-                            .font(.subheadline.weight(.semibold))
-                        Text("Check its fingerprint before sending. Until then, nothing you write here leaves this \(ThisDevice.noun).")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    } else {
-                        // Only reading waits: the messages came from a device in the version this chat does not send with.
-                        Text("Messages waiting for review").font(.subheadline.weight(.semibold))
-                        Text("They come from a device you haven’t reviewed yet. Check its fingerprint to read them.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
+                    // Without a send waiting, only reading waits: the messages came from a device in the version this
+                    // chat does not send with.
+                    Text(ChatDeviceReview.headline(sendingWaits: model.encryptionNeedsReview, isGroup: isGroup,
+                                                   ownDevicesOnly: model.encryptionReviewIsOwnDevice, title: title))
+                        .font(.subheadline.weight(.semibold))
+                    Text(ChatDeviceReview.explanation(sendingWaits: model.encryptionNeedsReview))
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
             }
             HStack(spacing: 8) {
