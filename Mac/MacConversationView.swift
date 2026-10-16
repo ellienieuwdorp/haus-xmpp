@@ -78,10 +78,17 @@ struct MacConversationView: View {
         .onAppear {
             guard timeline == nil else { return }
             let model = model, chatID = chatID
-            timeline = MacTimelineController(model: model, chatID: chatID) {
+            let timeline = MacTimelineController(model: model, chatID: chatID) {
                 ConversationPresenter(source: model, chatID: chatID,
                                       title: AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title))
             }
+            // Esc in the timeline, or in a bubble's text: closes the find bar, as Esc in its field does, or else the
+            // starred filter; with neither open, keyboard focus goes to the composer.
+            timeline.onEscape = { [weak timeline, composerIntent] in
+                guard let timeline else { return }
+                if timeline.isFiltered { timeline.closeFilter() } else { composerIntent.focusComposer() }
+            }
+            self.timeline = timeline
         }
         .onDisappear { MacComposer.endEditing(composerIntent, account: model.accountID, chatID: chatID) }
         // Its own view, so only it reads the messages: this view's body never reruns for a new message.
@@ -114,7 +121,7 @@ struct MacConversationView: View {
                 BlockedChatBar(model: model, chatID: chatID, name: title)
                     .padding(.horizontal, 16).padding(.vertical, 10)
             } else if timeline?.searching != true {
-                MacComposer(model: model, chatID: chatID, intent: composerIntent)
+                MacComposer(model: model, chatID: chatID, intent: composerIntent, focusTimeline: timeline.map { timeline in { timeline.requestKeyboardFocus() } })
             }
         }
         // Files dropped anywhere in the chat but on the find bars join the composer's tray; a drop during search closes
@@ -318,8 +325,9 @@ struct MacConversationView: View {
     }
 
     private func timeline(_ timeline: MacTimelineController, presenter: ConversationPresenter) -> some View {
-        MacTimeline(controller: timeline) { row in
-            MacTimelineRow(row: row, isGroup: timeline.isGroup, handlers: messageHandlers, openAttachment: { openAttachment(of: row.message) })
+        let contactName = isGroup ? nil : title
+        return MacTimeline(controller: timeline, contactName: contactName) { row in
+            MacTimelineRow(row: row, isGroup: timeline.isGroup, contactName: contactName, handlers: messageHandlers, openAttachment: { openAttachment(of: row.message) })
                 .modifier(MacFindResult(timeline: timeline, id: row.message.id))
                 .onAppear {
                     visibleRows.ids.insert(row.message.id)
@@ -333,8 +341,6 @@ struct MacConversationView: View {
                 }
                 .onDisappear { visibleRows.ids.remove(row.message.id) }
         }
-        // Esc in the timeline closes the find bar, as Esc in its field does, or else the starred filter.
-        .onExitCommand(perform: timeline.isFiltered ? { timeline.closeFilter() } : nil)
         // The user started reading this chat (the app active, its window key and visible, the screen unlocked, the user
         // not idle): what was already on screen counts as seen now (critique G3).
         .onChange(of: model.readingStarts) { _, _ in
@@ -400,8 +406,9 @@ private struct MacConversationSubtitle: View {
     }
 }
 
-/// Publishes the Message menu's commands for the open chat, from the rows the timeline already built. Under search or
-/// the starred filter those rows are a slice, so the targets come from the whole chat: "last message" stays the chat's.
+/// Publishes the Message menu's commands for the open chat, from the rows the timeline already built: the message with
+/// the timeline's keyboard focus, else the last messages. Under search or the starred filter those rows are a slice,
+/// so the last messages come from the whole chat: "last message" stays the chat's.
 private struct MacMessageCommandsSource: View {
     let model: AppModel
     let chatID: String
@@ -415,8 +422,21 @@ private struct MacMessageCommandsSource: View {
     private var commands: MacMessageCommands {
         // `items` is the observed list the rows go into, so a change of rows reruns whatever reads this.
         _ = timeline.items
+        // The message with the timeline's keyboard focus, while the timeline has it. The reader may have scrolled it
+        // away since, so a command brings it back into view, ringed, before acting on it.
+        if timeline.hasKeyboardFocus, let id = timeline.focusedID, let focused = timeline.rows.first(where: { $0.message.id == id })?.message {
+            let handlers = handlers, timeline = timeline
+            let revealing = MacMessageHandlers(perform: { kind, message, link in
+                timeline.reveal(message.id)
+                handlers.perform(kind, message, link)
+            }, react: { emoji, message in
+                timeline.reveal(message.id)
+                handlers.react(emoji, message)
+            })
+            return MacMessageCommands(targets: LastMessageTargets(focused: focused), isFocused: true, isBlocked: model.isBlocked(chatID), handlers: revealing)
+        }
         let messages = timeline.isFiltered ? presenter.timelineMessages : timeline.rows.map(\.message)
-        return MacMessageCommands(targets: LastMessageTargets(messages: messages), isBlocked: model.isBlocked(chatID), handlers: handlers)
+        return MacMessageCommands(targets: LastMessageTargets(messages: messages), isFocused: false, isBlocked: model.isBlocked(chatID), handlers: handlers)
     }
 
     var body: some View {

@@ -15,6 +15,8 @@ import UniformTypeIdentifiers
     var attach: (MacComposerAttachments) -> Bool
     /// Whether `attach` would take files now; Continuity Camera offers its items only then.
     var canAttach: () -> Bool
+    /// Shift-Tab: where keyboard focus goes back to, when the composer knows; the window's key view loop otherwise.
+    var focusPrevious: (() -> Void)? = nil
 }
 
 /// Files or an image handed to the composer by a paste, a drop or Continuity Camera.
@@ -181,7 +183,7 @@ final class MacComposerTextView: NSTextView {
         isContinuousSpellCheckingEnabled = true
         writingToolsBehavior = .complete
         setAccessibilityLabel("Message")
-        setAccessibilityHelp("Return sends. Shift-Return starts a new line.")
+        setAccessibilityHelp("Return sends. Shift-Return starts a new line. Tab moves on.")
         setAccessibilityIdentifier("messageComposer")
     }
 
@@ -240,6 +242,13 @@ final class MacComposerTextView: NSTextView {
             return true
         case #selector(moveUp(_:)):
             return string.isEmpty && !hasMarkedText() && actions?.editLast() == true
+        // Tab and Shift-Tab move keyboard focus on, as in a text field; Option-Tab still types a tab.
+        case #selector(insertTab(_:)):
+            window?.selectNextKeyView(self)
+            return true
+        case #selector(insertBacktab(_:)):
+            if let focusPrevious = actions?.focusPrevious { focusPrevious() } else { window?.selectPreviousKeyView(self) }
+            return true
         case #selector(cancelOperation(_:)):
             return !hasMarkedText() && actions?.cancel() == true
         default:

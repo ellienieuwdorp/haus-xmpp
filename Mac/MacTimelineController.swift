@@ -46,6 +46,18 @@ import SwiftUI
     private(set) var starredOnly = false
     /// A filter opened and the store is asked for the whole history it may list.
     private(set) var loadingAll = false
+    /// The message the arrow keys moved to (`MacTimelineKeyboard`), ringed while the timeline has keyboard focus. Kept
+    /// when focus moves elsewhere, so coming back finds it.
+    private(set) var focusedID: String?
+    /// The timeline itself has keyboard focus, as SwiftUI reports it.
+    private(set) var hasKeyboardFocus = false
+    /// Bumped to give the timeline keyboard focus (`requestKeyboardFocus`).
+    private(set) var focusRequests = 0
+    /// A message whose menu should open below its bubble; the row opens it (`claimMenu`).
+    private(set) var pendingMenu: MenuRequest?
+    @ObservationIgnored private var menuRequests = 0
+    /// Esc in the timeline or in a bubble's text: the conversation moves keyboard focus to the composer.
+    @ObservationIgnored var onEscape: () -> Void = {}
 
     /// Where the scroll view laid things out. Not observed: it changes on every scrolled frame.
     @ObservationIgnored let layout = MacTimelineLayout()
@@ -449,12 +461,14 @@ import SwiftUI
         }
     }
 
-    /// A key or a jump moved the timeline: it counts as the reader's scroll for paging and shows the day chip.
-    private func readerMoved() {
+    /// A key or a jump moved the timeline: it counts as the reader's scroll for paging and shows the day chip, unless
+    /// it only brought a focused message into view, which the chip would cover.
+    private func readerMoved(showingDayChip: Bool = true) {
         readerMovedAt = .now
         noteReader()
         settlingAtOpen = false
         refiltered = nil
+        guard showingDayChip else { return }
         dayChipIdle?.cancel()
         updateDayChip(force: true)
         scheduleDayChipIdle()
@@ -718,9 +732,112 @@ import SwiftUI
         }
     }
 
+    // MARK: Keyboard focus
+
+    /// How far a focused message keeps from the frame's edges when a key brings it into view.
+    static let focusMargin: CGFloat = 12
+
+    /// The timeline gained or lost keyboard focus. Tabbing in focuses the newest message in view, so Return acts at once
+    /// and the ring shows where the keys start; a click leaves the ring off until an arrow key.
+    func keyboardFocusChanged(_ focused: Bool, byKey: Bool) {
+        if hasKeyboardFocus != focused { hasKeyboardFocus = focused }
+        guard focused, byKey, !focusedIsOnScreen else { return }
+        focusedID = TimelineMessageFocus.step(from: nil, forward: false, ids: rows.map(\.message.id), placed: placedRows(), frameHeight: layout.height)
+    }
+
+    private var focusedIsOnScreen: Bool {
+        guard let focusedID, let frame = layout.frame(of: focusedID) else { return false }
+        return frame.maxY > 0 && frame.minY < layout.height
+    }
+
+    /// Up or Down: focuses the message before or after the focused one (or `id`, a bubble whose text had the keys) and
+    /// scrolls it into view. Up at the oldest loaded message asks for older history, as a scroll there does.
+    func moveFocus(forward: Bool, from id: String? = nil) {
+        let ids = rows.map(\.message.id)
+        guard let next = TimelineMessageFocus.step(from: id ?? focusedID, forward: forward, ids: ids, placed: placedRows(), frameHeight: layout.height) else { return }
+        focusedID = next
+        // A menu asked for and not opened yet belongs to the message the keys just left.
+        pendingMenu = nil
+        reveal(next)
+        readerMoved(showingDayChip: false)
+        if !forward { requestOlderIfNeeded() }
+    }
+
+    /// Scrolls just far enough to show the whole row, or its start when it is taller than the frame.
+    func reveal(_ id: String) {
+        // A row that is not laid out is brought in first, so it can be measured.
+        if layout.frame(of: id) == nil { place(id, top: Self.focusMargin) }
+        guard let frame = layout.frame(of: id),
+              let top = TimelineMessageFocus.revealTop(top: frame.minY, bottom: frame.maxY, frameHeight: layout.height, margin: Self.focusMargin) else { return }
+        place(id, top: TimelineScrollPolicy.reachableTop(top, rowHeight: frame.height, frameHeight: layout.height))
+    }
+
+    /// Return or Space: the focused message's menu, opened by its row. False with no focused message listed.
+    func openFocusedMenu() -> Bool {
+        guard let focusedID, indexByID[focusedID] != nil else { return false }
+        openMenu(for: focusedID)
+        return true
+    }
+
+    /// Focuses the message and opens its menu below its bubble: Return or Space, or VoiceOver's Show Menu on the row.
+    func openMenu(for id: String) {
+        focusedID = id
+        reveal(id)
+        menuRequests += 1
+        pendingMenu = MenuRequest(id: id, number: menuRequests)
+    }
+
+    /// One press of Return or Space, or one Show Menu: each opens one menu.
+    struct MenuRequest: Equatable {
+        let id: String
+        let number: Int
+    }
+
+    /// True once for each request, while it is pending and its message still has focus: the lazy stack can build a row
+    /// twice, and each copy's bubble sees the same request.
+    func claimMenu(_ request: MenuRequest) -> Bool {
+        guard pendingMenu == request, focusedID == request.id else { return false }
+        pendingMenu = nil
+        return true
+    }
+
+    /// Gives the timeline keyboard focus: Shift-Tab from the composer and Tab from the find field come here, as the
+    /// window's key view loop does not know the scroll view SwiftUI makes focusable.
+    func requestKeyboardFocus() { focusRequests += 1 }
+
+    /// A bubble's text took keyboard focus (a click, Select Text): the keys go on from that message.
+    func bubbleTextFocused(_ id: String) {
+        guard focusedID != id else { return }
+        focusedID = id
+        pendingMenu = nil
+    }
+
+    /// A key that a bubble's text passed on: Up and Down give the timeline keyboard focus and move on from that bubble,
+    /// the scrolling keys scroll the timeline, and Esc goes to the composer.
+    func bubbleTextKey(_ key: MacTimelineKey, in id: String) {
+        switch key {
+        case .scroll(let move):
+            scroll(move)
+        case .focus(let forward):
+            moveFocus(forward: forward, from: id)
+            requestKeyboardFocus()
+        case .escape:
+            onEscape()
+        case .refocus:
+            requestKeyboardFocus()
+        }
+    }
+
     #if DEBUG
     /// The open chat's timeline, for the tour's scroll steps.
     static weak var current: MacTimelineController?
+
+    /// The window of an unobtrusive run is never key, and SwiftUI does not reliably report the timeline focused there:
+    /// this gives it focus and makes the report Tab into it would make.
+    func debugFocusByKey() {
+        requestKeyboardFocus()
+        keyboardFocusChanged(true, byKey: true)
+    }
 
     /// Moves the content by `delta` points as a reader's scroll would (positive towards older messages), for the tour.
     func debugScroll(by delta: CGFloat) {

@@ -36,6 +36,9 @@ struct MacBubbleText: NSViewRepresentable {
     func updateNSView(_ view: BubbleTextView, context: Context) {
         context.coordinator.openLink = openLink
         view.messageMenu = menu
+        let row = context.environment.timelineRow
+        view.timelineKey = row.timeline.map { timeline in { [weak timeline, id = row.id] key in timeline?.bubbleTextKey(key, in: id) } }
+        view.tookFocus = row.timeline.map { timeline in { [weak timeline, id = row.id] in timeline?.bubbleTextFocused(id) } }
         let resultClick = context.environment.findResultClick
         view.plainClick = resultClick.isActive ? { resultClick() } : nil
         if view.textStorage?.isEqual(to: text) != true { view.textStorage?.setAttributedString(text) }
@@ -94,6 +97,10 @@ struct MacBubbleText: NSViewRepresentable {
 
 final class BubbleTextView: NSTextView {
     var messageMenu: ((URL?) -> NSMenu)?
+    /// Takes the keys that belong to the timeline once this text has keyboard focus (`timelineKeys`).
+    var timelineKey: ((MacTimelineKey) -> Void)?
+    /// The text took keyboard focus: its message becomes the timeline's focused one.
+    var tookFocus: (() -> Void)?
     /// What a single click that lands on no link and leaves nothing selected does besides placing the caret: a search
     /// result's jump.
     var plainClick: (() -> Void)?
@@ -134,6 +141,55 @@ final class BubbleTextView: NSTextView {
         super.mouseDown(with: event)
         if selectedRange().length == 0 { plainClick() }
     }
+
+    /// A click or Select Text gives the text keyboard focus; Tab never stops here, the timeline around it is the stop.
+    override var canBecomeKeyView: Bool { false }
+
+    /// Scrolled out of the lazy stack with keyboard focus (which hides the view, or takes it out of the window): the
+    /// focus stays with the timeline around the text, which SwiftUI hosts, rather than going wherever AppKit and
+    /// SwiftUI would put it next (the sidebar).
+    override func viewDidHide() {
+        keepFocusInTimeline()
+        super.viewDidHide()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { keepFocusInTimeline() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    private func keepFocusInTimeline() {
+        guard let window, window.firstResponder === self else { return }
+        var host = superview
+        while let view = host, !NSStringFromClass(type(of: view)).contains("NSHostingView") { host = view.superview }
+        window.makeFirstResponder(host)
+        // SwiftUI's focus goes to the timeline too, after this change: without it SwiftUI moves to its first stop.
+        if let timelineKey { DispatchQueue.main.async { timelineKey(.refocus) } }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        guard super.becomeFirstResponder() else { return false }
+        tookFocus?()
+        return true
+    }
+
+    /// A click into the text gives it keyboard focus, for selecting with the keys; the timeline's keys still work here:
+    /// the scrolling keys scroll it, Up and Down (without Shift, which extends the selection) move on to the message
+    /// before or after this one, and Esc goes to the composer. SwiftUI usually takes them first, as the timeline around
+    /// the text has focus too; these are for when it does not.
+    override func doCommand(by selector: Selector) {
+        guard let timelineKey, let key = Self.timelineKeys[selector] else { return super.doCommand(by: selector) }
+        timelineKey(key)
+    }
+
+    private static let timelineKeys: [Selector: MacTimelineKey] = [
+        #selector(scrollPageUp(_:)): .scroll(.pageUp), #selector(pageUp(_:)): .scroll(.pageUp),
+        #selector(scrollPageDown(_:)): .scroll(.pageDown), #selector(pageDown(_:)): .scroll(.pageDown),
+        #selector(scrollToBeginningOfDocument(_:)): .scroll(.top), #selector(moveToBeginningOfDocument(_:)): .scroll(.top),
+        #selector(scrollToEndOfDocument(_:)): .scroll(.bottom), #selector(moveToEndOfDocument(_:)): .scroll(.bottom),
+        #selector(moveUp(_:)): .focus(forward: false), #selector(moveDown(_:)): .focus(forward: true),
+        #selector(cancelOperation(_:)): .escape,
+    ]
 
     /// The message's menu without first selecting the word under the pointer, as a text view would.
     override func rightMouseDown(with event: NSEvent) {

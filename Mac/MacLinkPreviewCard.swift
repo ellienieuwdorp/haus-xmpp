@@ -30,6 +30,8 @@ struct MacLinkPreviewCard: View {
                 .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
+        // Not a stop of its own in the window's keyboard focus: the keyboard opens the link from the message's menu.
+        .focusable(false)
         .help(preview.url.absoluteString)
         .task(id: preview.image) { image = await Self.decode(preview.image) }
     }

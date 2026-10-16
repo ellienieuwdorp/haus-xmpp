@@ -138,9 +138,13 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     var statusGlyph: MessageStatusGlyph? { isOutgoing ? status.map(MessageStatusGlyph.glyph(for:)) : nil }
 
     /// What VoiceOver reads for the bubble: who, what, then everything the bubble shows around the text.
-    var accessibilityDescription: String {
+    var accessibilityDescription: String { accessibilityDescription(sender: nil) }
+
+    /// As `accessibilityDescription`, with `sender` naming who sent a received message, where the caller knows a name
+    /// for them; without it, the author or "Contact".
+    func accessibilityDescription(sender: String?) -> String {
         let shown = displayedText
-        let speaker = isOutgoing ? "You" : (author ?? "Contact")
+        let speaker = isOutgoing ? "You" : (sender ?? author ?? "Contact")
         var descriptions = [shown.isEmpty ? speaker : "\(speaker): \(shown)"]
         if unreadable != nil { descriptions.append("not readable on this device") }
         if isEdited { descriptions.append("edited") }

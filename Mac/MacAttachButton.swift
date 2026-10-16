@@ -6,6 +6,7 @@ import SwiftUI
 /// Scan Documents, Add Sketch). An AppKit menu, because only one can carry the system's import-from-device item.
 struct MacAttachButton: View {
     let enabled: Bool
+    var focus: FocusState<MacComposerControl?>.Binding
     let photos: () -> Void
     let files: () -> Void
     /// Makes the composer's text view first responder: Continuity Camera offers its items to, and later hands what it
@@ -20,6 +21,7 @@ struct MacAttachButton: View {
             Image(systemName: "plus").font(.system(size: 18, weight: .semibold)).opacity(enabled ? 1 : 0.35)
         }
         .buttonStyle(CircularGlassButtonStyle(diameter: 44, tinted: false))
+        .focused(focus, equals: .attach)
         .background(MacMenuAnchor(box: anchor))
         .disabled(!enabled)
         .help("Attach")
