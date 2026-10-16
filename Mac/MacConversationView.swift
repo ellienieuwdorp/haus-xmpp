@@ -8,7 +8,7 @@ import SwiftUI
 /// in bubbles open through `LinkOpening`, and preview cards show as on the iPhone. Photos and videos show as framed
 /// stills and files as a line; a click opens one in Quick Look, or asks for its download when it is not on this Mac yet.
 /// Search and the starred filter list a slice of the chat under bars at the top (`MacConversationFindBars`); search
-/// hides the composer, as on the iPhone.
+/// hides the composer, as on the iPhone, and a reply or an edit in it waits there until search closes.
 struct MacConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -57,6 +57,7 @@ struct MacConversationView: View {
                                       title: AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title))
             }
         }
+        .onDisappear { MacComposer.endEditing(composerIntent, account: model.accountID, chatID: chatID) }
         // Its own view, so only it reads the messages: this view's body never reruns for a new message.
         .overlay { if let timeline { MacEmptyNotice(timeline: timeline, presenter: presenter) } }
         .safeAreaInset(edge: .top) {

@@ -14,6 +14,8 @@ import XMPPProtocol
     @ObservationIgnored let linkPreview = ComposerLinkPreview()
     /// The edit a successful Send just finished: its draft was already cleared, and anything typed since stays.
     @ObservationIgnored var finishedEdit: String?
+    /// The edit whose text the draft holds, so the composer coming back after search hid it keeps what was typed since.
+    @ObservationIgnored var loadedEdit: String?
 }
 
 /// Each chat's composer state while the app runs, so switching chats and coming back finds the draft where it was.
@@ -33,6 +35,18 @@ import XMPPProtocol
         let state = MacComposerState()
         states[chat] = state
         return state
+    }
+}
+
+extension MacComposer {
+    /// An edit ends with its chat: its text is the message's, not a draft to come back to. Called as the conversation
+    /// closes, not as the composer goes: search hides the composer and keeps the edit, as on the iPhone.
+    static func endEditing(_ intent: MacComposerIntent, account: String, chatID: String) {
+        guard intent.editing != nil else { return }
+        intent.cancelEditing()
+        let state = MacComposerDrafts.state(account: account, chat: chatID)
+        state.draft = ""
+        state.loadedEdit = nil
     }
 }
 
@@ -110,24 +124,20 @@ struct MacComposer: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .onChange(of: state.draft) { _, draft in model.draftChanged(draft, in: chatID) }
-        // Also on appearing: an edit started while the composer was away (a blocked chat) brings its text along.
+        // Also on appearing: an edit started while the composer was away (search, a blocked chat) brings its text
+        // along, one still open keeps what was typed, and one that ended meanwhile leaves the field as it would have.
         .onChange(of: intent.editing?.id, initial: true) { previous, _ in
             if let message = intent.editing {
-                state.draft = message.body
-            } else if previous != nil, state.finishedEdit != previous {
+                if state.loadedEdit != message.id { state.draft = message.body }
+            } else if let ended = previous ?? state.loadedEdit, state.finishedEdit != ended {
                 // A cancelled edit leaves an empty field, as on the iPhone.
                 state.draft = ""
             }
+            state.loadedEdit = intent.editing?.id
             state.finishedEdit = nil
         }
         .onChange(of: linkPreviewInput, initial: true) { _, input in
             state.linkPreview.update(draft: input.draft, enabled: input.enabled, suppressed: input.suppressed, source: linkPreviewSource)
-        }
-        // An edit ends with its chat: its text is the message's, not a draft to come back to.
-        .onDisappear {
-            guard intent.editing != nil else { return }
-            intent.cancelEditing()
-            state.draft = ""
         }
         #if DEBUG
         .onAppear { MacComposerTour.intent = intent }
