@@ -58,7 +58,7 @@ import SwiftUI
             if window.alphaValue > 0 || !window.ignoresMouseEvents {
                 hide(window)
                 if window.sheetParent == nil { window.orderBack(nil) }
-                MacDebugHooks.log("unobtrusive: hid \(window.identifier?.rawValue ?? window.title) at \(window.frame.origin)")
+                MacDebugHooks.log("unobtrusive: hid \(window.identifier?.rawValue ?? window.title) (\(type(of: window)), \(window.frame.size)) at \(window.frame.origin)")
             } else if isTopLevel(window), window.frame.origin != parking {
                 window.setFrameOrigin(parking)
             }

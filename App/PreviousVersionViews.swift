@@ -239,7 +239,7 @@ struct PreviousVersionBackupView: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            GroupedList {
                 Section {
                     LabeledContent("Taken", value: taken)
                 } footer: {
@@ -276,8 +276,12 @@ struct PreviousVersionBackupView: View {
                 }
                 Section {
                     Button("Restore previous version’s data") { confirmingRestore = true }
+                        .listRowButton()
                         .accessibilityIdentifier("restorePreviousVersion")
                     Button("Delete backup", role: .destructive) { confirmingDelete = true }
+                        // The role's red, which a Mac row's button style does not apply by itself.
+                        .foregroundStyle(.red)
+                        .listRowButton()
                         .accessibilityIdentifier("deletePreviousVersionBackup")
                 }
             }
@@ -286,6 +290,7 @@ struct PreviousVersionBackupView: View {
             .inlineNavigationTitle()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
+        .macSheetSize(width: 520, height: 640)
         .confirmationDialog("Restore previous version’s data?", isPresented: $confirmingRestore, titleVisibility: .visible) {
             Button("Restore previous version’s data", role: .destructive) {
                 dismiss()

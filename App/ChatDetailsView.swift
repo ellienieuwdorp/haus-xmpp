@@ -65,6 +65,17 @@ enum ConversationIntent: Equatable {
     case search(chatID: String), starred(chatID: String)
 }
 
+/// A details page's hero: the iPhone's full-width screen, and on the Mac an inspector column a third of that width.
+enum DetailsHeroMetrics {
+    #if os(iOS)
+    static let avatar: CGFloat = 96, top: CGFloat = 35, bottom: CGFloat = 36
+    static let title = Font.title.weight(.bold)
+    #else
+    static let avatar: CGFloat = 64, top: CGFloat = 8, bottom: CGFloat = 12
+    static let title = Font.title2.weight(.bold)
+    #endif
+}
+
 /// The trust capsule under a details hero; the small symbol keeps it a balanced pill.
 struct TrustPill: View {
     let text: String
@@ -94,7 +105,7 @@ struct ChatDetailsView: View {
     private var isGroup: Bool { model.isGroup(chatID) }
 
     var body: some View {
-        List {
+        GroupedList {
             // Hero and tiles are the section's header, outside its rounded background: as the last row they
             // lost their outer bottom corners to the section's larger corner mask.
             Section {
@@ -123,8 +134,8 @@ struct ChatDetailsView: View {
                 .foregroundStyle(.primary)
                 .textCase(nil)
                 .listRowInsets(EdgeInsets())
-                .padding(.top, 35)
-                .padding(.bottom, 36)
+                .padding(.top, DetailsHeroMetrics.top)
+                .padding(.bottom, DetailsHeroMetrics.bottom)
             }
             if !isGroup, chatID != model.accountID {
                 ChatBlockingSection(model: model, chatID: chatID, name: title)
@@ -136,9 +147,9 @@ struct ChatDetailsView: View {
 
     private var hero: some View {
         VStack(spacing: 6) {
-            ChatAvatar(key: chatID, name: title, image: model.avatars[chatID], isGroup: isGroup, size: 96)
+            ChatAvatar(key: chatID, name: title, image: model.avatars[chatID], isGroup: isGroup, size: DetailsHeroMetrics.avatar)
                 .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
-            Text(title).font(.title.weight(.bold)).padding(.top, 6)
+            Text(title).font(DetailsHeroMetrics.title).padding(.top, 6)
             Text(chatID).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
             if !model.isDemo {
                 let trust = model.trustSummary(for: chatID)
@@ -151,6 +162,10 @@ struct ChatDetailsView: View {
             }
         }
         .frame(maxWidth: .infinity)
+        #if os(macOS)
+        // A long name or address wraps in the narrow inspector; its lines stay centred under the avatar.
+        .multilineTextAlignment(.center)
+        #endif
         .padding(.vertical, 10)
     }
 

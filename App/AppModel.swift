@@ -634,6 +634,20 @@ final class AppModel {
             #if DEBUG
             // Two own devices waiting for review, so the account-level prompt can be seen without a second client.
             if ProcessInfo.processInfo.arguments.contains("-demo-own-device") { ownDevices = OwnDeviceReview.sampleDevices(account: account) }
+            // A joined group whose members' devices are in each review state, for captures of the group's details.
+            if ProcessInfo.processInfo.arguments.contains("-demo-group") {
+                let room = OwnDeviceReview.sampleRoom
+                try await store.upsertChat(accountID: account, chatID: room, title: "Trail crew")
+                try await store.insertMessage(StoredMessage(id: "sample-group-1", accountID: account, chatID: room, senderID: room + "/Alex",
+                                                            body: "Who’s bringing the map?", sentAt: morning.addingTimeInterval(-600), isOutgoing: false))
+                try await store.markChatRead(accountID: account, chatID: room)
+                guard generation == token else { return }
+                var group = GroupChatState(members: [account, DemoSamples.alex, DemoSamples.maya], devices: OwnDeviceReview.sampleGroupDevices(account: account))
+                group.joined = true
+                group.localDeviceID = 31337
+                group.localFingerprint = OwnDeviceReview.sampleIdentities[0].modern.map { String(format: "%02x", $0) }.joined()
+                groupChats[room] = group
+            }
             #endif
             await refresh()
         } catch { if generation == token { self.error = "Could not load sample conversations." } }
@@ -2634,7 +2648,8 @@ final class AppModel {
     /// false, so pop-back reuses this connection's refresh and a reconnect fetches once more. A failed refresh
     /// writes the diagnostics footer only.
     func loadGroupDetails(room: String, refreshFromServer: Bool = true, force: Bool = true) async {
-        guard transportWanted, !quiescing, let encryption, isGroup(room) else { return }
+        // Sample data has no stored devices to read; a sample group keeps the ones it was made with.
+        guard transportWanted, !quiescing, let encryption, isGroup(room), !isDemo else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         let account = accountID, token = generation
