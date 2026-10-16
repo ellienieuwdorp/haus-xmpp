@@ -192,7 +192,12 @@ final class MacComposerTextView: NSTextView {
         super.viewDidMoveToWindow()
         guard window != nil, wantsFocus else { return }
         // After SwiftUI has put the rest of the window's views in place, so nothing it adds later takes focus back.
-        DispatchQueue.main.async { [weak self] in self?.focus() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window else { return }
+            // A chat opened by arrowing through the chat list leaves the keys with the list.
+            if window.firstResponder is NSTableView, NSApp.currentEvent?.type == .keyDown { wantsFocus = false; return }
+            focus()
+        }
     }
 
     // MARK: Keys

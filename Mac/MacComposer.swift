@@ -18,17 +18,26 @@ import XMPPProtocol
 }
 
 /// Unsent drafts per chat while the app runs, so switching chats and coming back finds the text where it was. Kept in
-/// memory only: a draft never reaches the disk.
+/// memory only, so a draft never reaches the disk, and for one account: another account's chats start empty.
 @MainActor enum MacComposerDrafts {
+    private static var account = ""
     private static var drafts: [String: String] = [:]
 
-    static func draft(account: String, chat: String) -> String { drafts[key(account, chat)] ?? "" }
-
-    static func save(_ draft: String, account: String, chat: String) {
-        drafts[key(account, chat)] = draft.isEmpty ? nil : draft
+    static func draft(account: String, chat: String) -> String {
+        use(account)
+        return drafts[chat] ?? ""
     }
 
-    private static func key(_ account: String, _ chat: String) -> String { account + "\n" + chat }
+    static func save(_ draft: String, account: String, chat: String) {
+        use(account)
+        drafts[chat] = draft.isEmpty ? nil : draft
+    }
+
+    private static func use(_ account: String) {
+        guard account != self.account else { return }
+        self.account = account
+        drafts = [:]
+    }
 }
 
 /// The composer under the Mac conversation: the reply or edit bar, the link preview card, the text field and Send.
@@ -46,8 +55,9 @@ struct MacComposer: View {
         self.model = model
         self.chatID = chatID
         self.intent = intent
-        // Restored without announcing it: the peer hears typing only once the user changes the draft.
-        _state = State(initialValue: MacComposerState(draft: MacComposerDrafts.draft(account: model.accountID, chat: chatID)))
+        // Restored without announcing it: the peer hears typing only once the user changes the draft. An edit started
+        // while the composer was away (a blocked chat) brings its text along.
+        _state = State(initialValue: MacComposerState(draft: intent.editing?.body ?? MacComposerDrafts.draft(account: model.accountID, chat: chatID)))
     }
 
     /// Built bare, so the bars read only what an author line needs.
