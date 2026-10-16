@@ -28,6 +28,7 @@ import SwiftUI
         guard isOn else { return }
         NSApp.setActivationPolicy(.accessory)
         allowWindowsOffScreen()
+        refuseKeyWindows()
         let center = NotificationCenter.default
         // Nothing here asks to be activated, but SwiftUI's window opening can activate the app: hand the focus back
         // at once.
@@ -84,6 +85,20 @@ import SwiftUI
         guard let method = class_getInstanceMethod(NSWindow.self, selector) else { return }
         let unconstrained: @convention(block) (NSWindow, NSRect, NSScreen?) -> NSRect = { _, frame, _ in frame }
         method_setImplementation(method, imp_implementationWithBlock(unconstrained))
+    }
+
+    /// AppKit makes a sheet's parent the key window again when the sheet ends, and making a window key activates its
+    /// app, which this mode never wants: a window here is shown without becoming key, and a request to make one key
+    /// is dropped. The observer above still hands back any activation that comes another way.
+    private static func refuseKeyWindows() {
+        let makeKey: @convention(block) (NSWindow) -> Void = { _ in }
+        let makeKeyAndOrderFront: @convention(block) (NSWindow, Any?) -> Void = { window, sender in window.orderFront(sender) }
+        if let method = class_getInstanceMethod(NSWindow.self, #selector(NSWindow.makeKey)) {
+            method_setImplementation(method, imp_implementationWithBlock(makeKey))
+        }
+        if let method = class_getInstanceMethod(NSWindow.self, #selector(NSWindow.makeKeyAndOrderFront(_:))) {
+            method_setImplementation(method, imp_implementationWithBlock(makeKeyAndOrderFront))
+        }
     }
 
     /// Hides its window the moment the content joins it, before the window is first ordered on screen.
