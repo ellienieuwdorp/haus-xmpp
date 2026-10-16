@@ -4669,6 +4669,13 @@ extension AppModel: NotificationActionEnvironment {
         await client?.silenceTransport() ?? false
     }
 
+    /// Leaves the server's acknowledgement requests unanswered for `duration` on a live stream
+    /// (`XMPPClient.holdAcknowledgements(for:)`), for the Mac's check of a push to a healthy app. False when no stream
+    /// is online.
+    func debugHoldAcknowledgements(for duration: Duration) async -> Bool {
+        await client?.holdAcknowledgements(for: duration) ?? false
+    }
+
     /// Holds one UI crypto operation open for `duration`, so a quiesce that starts meanwhile cannot finish before it:
     /// the Mac's simulated missed sleep deadline.
     func debugHoldEncryptionOperation(for duration: Duration) {

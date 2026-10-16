@@ -19,7 +19,9 @@ import SwiftUI
 /// page would), `draft <text>` (the open chat's composer changed), `report` (lease and session), `notify <step>`
 /// (notification actions and settings, `MacNotificationDebug`), `drop-socket` (the live stream stops reading and writing
 /// without an error, as on a dead network path: the app notices only through its liveness probes, so a push the server
-/// then sends reaches the extension, whose liveness ring makes the app probe and reconnect), `quit`.
+/// then sends reaches the extension, whose liveness ring makes the app probe and reconnect), `hold-acks <seconds>`
+/// (the live stream leaves the server's acknowledgement requests unanswered that long, default 35, then answers once
+/// and goes on: the server pushes for a healthy session, and the app's probe is answered without a reconnect), `quit`.
 @MainActor enum MacLifecycleDebug {
     /// The scene phase each window's content last reported, by window.
     static var scenePhases: [String: ScenePhase] = [:]
@@ -112,6 +114,10 @@ import SwiftUI
             case "report": MacDebugHooks.log("report: \(await model.debugLeaseReport()), scenePhase \(phases)")
             case "notify": await MacNotificationDebug.run(argument, model: model, window: window)
             case "drop-socket": MacDebugHooks.log("step drop-socket: \(await model.debugSilenceTransport() ? "stream silenced" : "no stream online")")
+            case "hold-acks":
+                let seconds = Double(argument) ?? 35
+                let held = await model.debugHoldAcknowledgements(for: .seconds(seconds))
+                MacDebugHooks.log("step hold-acks: \(held ? "acknowledgements held \(Int(seconds)) s" : "no stream online")")
             case "quit": MacDebugHooks.quit()
             default: MacDebugHooks.log("step \(step): unknown")
             }
