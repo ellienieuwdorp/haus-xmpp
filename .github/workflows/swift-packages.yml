@@ -1,113 +1,83 @@
-# Package tests. UI and lab tests don't run here: they need a simulator, a live test server or both.
+# Package tests on GitHub-hosted runners. Lab tests (suites named `…LabTests`) skip themselves here: they need a live
+# test server. UI tests don't run in CI.
 #
-# The tests run on the maintainer's self-hosted Mac (label `haus-xmpp`). A self-hosted runner executes whatever the
-# workflow checks out, so it only takes pushes to this repository and pull requests from branches in it, never pull
-# requests from forks. Fork pull requests get the same tests on a GitHub-hosted runner instead.
+# Security properties, for anyone changing this file:
+# - Every job runs on a GitHub-hosted runner, a fresh VM per job; no job may target a self-hosted runner.
+# - Pull requests, from forks too, get exactly the same jobs as pushes. They run with a read-only token and no secrets.
+#   There is no `pull_request_target` or `workflow_run` trigger, and the workflow uses no secrets at all.
+# - The token can only read the repository (`contents: read`), and checkout doesn't keep it in .git/config.
+# - Actions are pinned to full commit SHAs.
+# - Event values reach shell scripts through environment variables, never by expanding `${{ }}` inside `run:`.
 name: Swift packages
 
-#
-# A run starts only when a package or this workflow changed, and tests only the changed packages and the packages that
-# depend on them, so commits to the app, the site or the README leave the runner alone. Run it by hand to test all.
+# A run starts only when a package or this CI changed, and tests only the changed packages and the packages that depend
+# on them. Run it by hand to test every package.
 on:
   push:
     branches: [main]
-    paths: ['Packages/**', '.github/workflows/swift-packages.yml']
+    paths: ['Packages/**', '.github/workflows/swift-packages.yml', '.github/scripts/changed-packages.sh']
   pull_request:
-    paths: ['Packages/**', '.github/workflows/swift-packages.yml']
+    paths: ['Packages/**', '.github/workflows/swift-packages.yml', '.github/scripts/changed-packages.sh']
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
+# A newer push to a pull request cancels its older run: the pull request's diff against its base covers both. Pushes
+# to main never cancel each other, since each one tests only the packages its own commits changed.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
   changes:
     name: Changed packages
-    # Fork pull requests never reach the self-hosted Mac, not even for this.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "macOS", "ARM64", "haus-xmpp"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       packages: ${{ steps.pick.outputs.packages }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Pick packages
         id: pick
         env:
           EVENT: ${{ github.event_name }}
-          BEFORE: ${{ github.event.before }}
-          BASE: ${{ github.event.pull_request.base.sha }}
+          SINCE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: |
-          all="XMPPProtocol MessageStore MessagingCore OMEMOCrypto OMEMO"
-          if [ "$EVENT" = pull_request ]; then
-            changed=$(git diff --name-only "$BASE"...HEAD)
-          elif [ "$EVENT" = push ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            changed=$(git diff --name-only "$BEFORE" HEAD)
-          else
-            changed=.github/workflows/swift-packages.yml # run by hand, a new branch or a rewritten history: test all
-          fi
-          want=" "
-          add() { for p in "$@"; do case "$want" in *" $p "*) ;; *) want="$want$p ";; esac; done; }
-          # A package's dependents are tested with it.
-          while IFS= read -r f; do
-            case "$f" in
-              .github/workflows/swift-packages.yml) add $all ;;
-              Packages/XMPPProtocol/*) add XMPPProtocol MessageStore OMEMO MessagingCore ;;
-              Packages/MessageStore/*) add MessageStore OMEMO MessagingCore ;;
-              Packages/OMEMOCrypto/*) add OMEMOCrypto OMEMO MessagingCore ;;
-              Packages/OMEMO/*) add OMEMO MessagingCore ;;
-              Packages/MessagingCore/*) add MessagingCore ;;
-            esac
-          done <<< "$changed"
-          json=""
-          for p in $all; do case "$want" in *" $p "*) json="$json${json:+,}\"$p\"";; esac; done
-          echo "packages=[$json]" | tee -a "$GITHUB_OUTPUT"
+          packages=$(.github/scripts/changed-packages.sh "$EVENT" "$SINCE")
+          echo "packages=$packages" | tee -a "$GITHUB_OUTPUT"
 
   test:
     name: ${{ matrix.package }}
     needs: changes
-    if: needs.changes.outputs.packages != '[]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, macOS, ARM64, haus-xmpp]
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        package: ${{ fromJSON(needs.changes.outputs.packages) }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Verify vendored libomemo-c and protobuf-c
-        if: matrix.package == 'OMEMOCrypto'
-        run: python3 -I Packages/OMEMOCrypto/Scripts/verify_vendor.py
-      - name: Test
-        # Build products live outside the checkout, so the checkout's clean step keeps them between runs.
-        run: |
-          swift --version
-          swift test --package-path "Packages/${{ matrix.package }}" --parallel \
-            --scratch-path "$RUNNER_TOOL_CACHE/haus-xmpp/${{ matrix.package }}"
-
-  test-fork:
-    name: ${{ matrix.package }} (fork)
-    needs: changes
-    if: needs.changes.outputs.packages != '[]' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-    # GitHub's macOS image with Xcode 27 (https://github.com/actions/runner-images).
+    if: needs.changes.outputs.packages != '[]'
+    # GitHub's macOS arm64 image with Xcode 27 (https://github.com/actions/runner-images). It also carries newer betas
+    # and release candidates; DEVELOPER_DIR pins the image's default, released Xcode 27.
     runs-on: xcode-27
-    timeout-minutes: 30
+    timeout-minutes: 45
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         package: ${{ fromJSON(needs.changes.outputs.packages) }}
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+      PACKAGE: ${{ matrix.package }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Select Xcode
+        with:
+          persist-credentials: false
+      - name: Show the toolchain
         run: |
-          sudo xcode-select --switch /Applications/Xcode_27.0.app
+          xcodebuild -version
           swift --version
       - name: Verify vendored libomemo-c and protobuf-c
         if: matrix.package == 'OMEMOCrypto'
         run: python3 -I Packages/OMEMOCrypto/Scripts/verify_vendor.py
       - name: Test
-        run: swift test --package-path "Packages/${{ matrix.package }}" --parallel
+        run: swift test --package-path "Packages/$PACKAGE" --parallel
