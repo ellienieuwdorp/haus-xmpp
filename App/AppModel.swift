@@ -285,8 +285,10 @@ final class AppModel {
     /// Notification permission as last read; foreground banners are posted only with it.
     @ObservationIgnored private var mayPostNotifications = false
     #if os(macOS)
-    /// The Mac's notification permission as last read, for Settings. iOS shows push status instead.
+    /// The Mac's notification permission as last read, for Settings, which shows it with the push status.
     private(set) var notificationAuthorization = UNAuthorizationStatus.notDetermined
+    /// The permission prompt on screen, which every caller that comes meanwhile waits for (`requestNotificationPermission`).
+    @ObservationIgnored private var permissionRequest: Task<Void, Never>?
     #endif
     /// Per connection, where banners for what it catches up on stand (`AttentionRules.holdsCatchUpBanners`, the Mac).
     @ObservationIgnored private var catchUpBanners = CatchUpBanners.holding
@@ -768,8 +770,9 @@ final class AppModel {
             // sign-in sheet closes now, and the permission prompt, APNs and the gateway round trips follow on their own.
             startPushSetup(client: connection, session: connected, token: token, interactive: manual)
             #if os(macOS)
-            // Push stays off on the Mac, but its own banners need permission: asked on a manual sign-in, as iOS asks
-            // in its push setup, and only if it was never asked.
+            // The Mac's own banners need permission whether or not it registers for push (`PushService.isOffered`), or
+            // the server supports it: asked on a manual sign-in, as iOS asks in its push setup, and only if it was
+            // never asked. A push setup that asks too waits for this prompt.
             if manual { Task { await requestNotificationPermission() } }
             #endif
             return true
@@ -1590,10 +1593,14 @@ final class AppModel {
         let token = generation
         guard let client, let session = sessionAccount, isConnected else {
             // The next connection finishes the setup; asked now, permission needs no prompt then.
+            #if os(macOS)
+            await requestNotificationPermission()
+            #else
             if await Self.notificationAuthorization() == .notDetermined {
                 _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
                 refreshNotificationPermission()
             }
+            #endif
             if generation == token, pushWanted { pushStatus = .settingUp }
             return
         }
@@ -1602,16 +1609,23 @@ final class AppModel {
     }
 
     #if os(macOS)
-    /// Asks for permission to show banners (alert, sound, badge), if it was never asked. Nothing registers for push.
-    /// After a manual sign-in, and from Settings.
+    /// Asks for permission to show banners (alert, sound, badge), if it was never asked. After a manual sign-in, from
+    /// Settings, and from a push setup that may ask; callers that come while the prompt is up wait for its answer, so
+    /// one sign-in shows one prompt.
     func requestNotificationPermission() async {
         guard testSessionID == nil, !isDemo, !accountID.isEmpty else { return }
         #if DEBUG
         // A scripted check never puts a system prompt on screen.
         if MacUnobtrusive.isOn || MacDebugNotificationLog.poster != nil { return }
         #endif
-        guard await Self.notificationAuthorization() == .notDetermined else { refreshNotificationPermission(); return }
-        _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+        if let permissionRequest { await permissionRequest.value; return }
+        let request = Task { @MainActor in
+            guard await Self.notificationAuthorization() == .notDetermined else { return }
+            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+        }
+        permissionRequest = request
+        await request.value
+        if permissionRequest == request { permissionRequest = nil }
         refreshNotificationPermission()
     }
     #endif
@@ -1626,16 +1640,7 @@ final class AppModel {
         pushStatus = .off
         let token = generation
         do {
-            let enabled = sessionAccount?.accountID == account ? sessionAccount?.push : nil
-            guard let state = try PushRegistrationState.turningOff(accountID: account, saved: try PushRegistrationState.load(accountID: account),
-                                                                   enabled: enabled) else { return }
-            try state.save()
-            if let session = sessionAccount, session.accountID == account, session.push != nil {
-                // The extension's guard declines from now on.
-                let saved = session.replacingPush(nil)
-                try saved.save()
-                sessionAccount = saved
-            }
+            guard try stagePushTurnOff(account: account) else { return }
             guard let client, isConnected, hasTransportOwnership, transportWanted, !quiescing, generation == token else { return }
             activeEncryptionOperations += 1
             defer { activeEncryptionOperations -= 1 }
@@ -1643,6 +1648,21 @@ final class AppModel {
         } catch {
             if generation == token, accountID == account { Self.syncLog.error("push revocation will retry on reconnect") }
         }
+    }
+
+    /// Stages the revocation and the disable of the account's subscription for `settlePushCleanup`, and takes the
+    /// subscription out of the saved account, so the extension's guard declines from now on. False when there is none.
+    @discardableResult private func stagePushTurnOff(account: String) throws -> Bool {
+        let enabled = sessionAccount?.accountID == account ? sessionAccount?.push : nil
+        guard let state = try PushRegistrationState.turningOff(accountID: account, saved: try PushRegistrationState.load(accountID: account),
+                                                               enabled: enabled) else { return false }
+        try state.save()
+        if let session = sessionAccount, session.accountID == account, session.push != nil {
+            let saved = session.replacingPush(nil)
+            try saved.save()
+            sessionAccount = saved
+        }
+        return true
     }
 
     /// Queues `reconcilePush` behind any setup still running (a reconnect during the permission prompt waits for the
@@ -1669,17 +1689,15 @@ final class AppModel {
             do {
                 activeEncryptionOperations += 1
                 defer { activeEncryptionOperations -= 1 }
+                // A build that offers no push (`PushService.isOffered`, the Mac for now) keeps no subscription: one a
+                // run that offered it left behind is turned off, whatever the switch said.
+                if !PushService.isOffered, sessionAccount?.accountID == account, sessionAccount?.push != nil {
+                    try stagePushTurnOff(account: account)
+                }
                 try await settlePushCleanup(client: client, account: account, token: token)
                 guard generation == token, pushIntent == intent else { return }
-                guard pushWanted else { pushStatus = .off; return }
-                #if os(macOS)
-                // Push is gated off on the Mac until its extension and token registration exist. Stored
-                // cleanup above still runs; nothing registers.
-                pushStatus = .off
-                return
-                #else
+                guard pushWanted, PushService.isOffered else { pushStatus = .off; return }
                 supported = try await client.supportsPushNotifications()
-                #endif
             }
             guard generation == token, pushIntent == intent else { return }
             guard supported else { pushStatus = .unsupported; return }
@@ -1687,8 +1705,12 @@ final class AppModel {
             if authorization == .notDetermined, interactive {
                 // Asks on the first sign-in only (a reconnect at launch never prompts).
                 if pushStatus != .on { pushStatus = .settingUp }
+                #if os(macOS)
+                await requestNotificationPermission()
+                #else
                 _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
                 refreshNotificationPermission()
+                #endif
                 authorization = await Self.notificationAuthorization()
             }
             guard generation == token, pushIntent == intent else { return }

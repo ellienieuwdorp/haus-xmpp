@@ -4,8 +4,8 @@ import UIKit
 import UserNotifications
 import MessagingCore
 
-/// The notification center's delegate on both platforms, and on iOS the application delegate that receives APNs tokens.
-/// The Mac registers no token yet: push stays gated off there until the extension-to-app liveness check exists.
+/// The notification center's delegate on both platforms, and the APNs token's destination: on iOS it is the application
+/// delegate that receives tokens, on the Mac `MacAppDelegate` forwards them.
 @MainActor
 final class PushRegistration: NSObject, UNUserNotificationCenterDelegate {
     static let shared = PushRegistration()
@@ -29,16 +29,18 @@ final class PushRegistration: NSObject, UNUserNotificationCenterDelegate {
 
     static func request() async throws -> Data {
         #if os(macOS)
-        // No APNs registration on the Mac in this phase.
-        throw Failure.unavailable
+        // The caller has read the authorization, and asked for it where it may (`AppModel.reconcilePush`). Asking
+        // here would put the prompt for banners on screen over the quiet delivery macOS grants without one.
+        guard PushService.isOffered else { throw Failure.unavailable }
         #else
         guard try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) else { throw Failure.denied }
+        #endif
         // Register on every launch/request: APNs tokens may change. Never infer a token size.
         let id = UUID()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 shared.waiters[id] = continuation
-                UIApplication.shared.registerForRemoteNotifications()
+                PlatformApplication.registerForRemoteNotifications()
                 Task { @MainActor in
                     try? await Task.sleep(for: .seconds(15))
                     shared.waiters.removeValue(forKey: id)?.resume(throwing: Failure.unavailable)
@@ -49,7 +51,6 @@ final class PushRegistration: NSObject, UNUserNotificationCenterDelegate {
             // since both hop to the main actor in order.
             Task { @MainActor in shared.waiters.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
         }
-        #endif
     }
 
     static func refreshIfAuthorized() async throws -> Data? {
@@ -61,14 +62,15 @@ final class PushRegistration: NSObject, UNUserNotificationCenterDelegate {
     static func unsolicitedTokens() -> AsyncStream<Data> { shared.unsolicited.stream }
     static func isLatestToken(_ token: Data) -> Bool { shared.latestCallbackToken == token }
 
-    fileprivate func received(_ deviceToken: Data) {
+    /// The platform's token callback.
+    func received(_ deviceToken: Data) {
         Self.shared.latestCallbackToken = deviceToken
         let pending = Self.shared.waiters
         Self.shared.waiters.removeAll()
         if pending.isEmpty { Self.shared.unsolicited.continuation.yield(deviceToken) }
         for waiter in pending.values { waiter.resume(returning: deviceToken) }
     }
-    fileprivate func registrationFailed() {
+    func registrationFailed() {
         let pending = Self.shared.waiters
         Self.shared.waiters.removeAll()
         for waiter in pending.values { waiter.resume(throwing: Failure.unavailable) }

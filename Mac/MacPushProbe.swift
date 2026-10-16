@@ -1,21 +1,28 @@
 #if DEBUG
 import AppKit
 import CoreGraphics
+import CryptoKit
 import ImageIO
 import Intents
 import MessagingCore
 import UniformTypeIdentifiers
 import UserNotifications
 
-/// Debug-only launch arguments for checking the Mac notification extension with real remote notifications. Push stays
-/// gated off in the app itself (`PushRegistration.request()` throws on the Mac); these hooks register for a token only
-/// when asked, and nothing here ships.
+/// Debug-only launch arguments for checking Mac push and the notification extension with real remote notifications.
+/// Nothing here ships.
 ///
+/// - `-haus-mac-push`: this run registers for push as the iPhone does (`PushService.isOffered`), and Settings shows the
+///   push switch. Without it a Debug run is the Release Mac app: no push, and a subscription left by an earlier run is
+///   turned off on the next connection.
+/// - `-haus-push-switch on|off`: once the app is prepared (and after `-haus-lab-sign-in`), turns push on or off as the
+///   Settings switch does, and logs the status it ends at.
+/// - `-haus-push-status <seconds>`: logs the push status and the notification authorization each time either changes,
+///   for that long.
+/// - APNs token callbacks are logged with the token's length and the first 8 hex digits of its SHA-256, never the token,
+///   so a stale token shows up against another tool's hash of what it registered.
 /// - `-haus-notification-settings`: the app's notification authorization and alert settings.
 /// - `-haus-request-provisional`: asks for provisional authorization, which the system grants without a prompt and which
 ///   delivers quietly to Notification Center.
-/// - `-haus-register-push`: registers for remote notifications. The token goes to standard output as the file
-///   `push-token.hex` (`HAUS-FILE`, see `MacDebugHooks`); it is never logged.
 /// - `-haus-arm-extension-probe suppress|pass|liveness`: arms `MacExtensionProbe` for the next remote request.
 /// - `-haus-liveness-answer`: answers every fresh liveness ring for as long as the run lasts, as a live app that can keep
 ///   the promise would, whatever this run's session; with an armed `liveness` probe it shows the ring and the answer
@@ -29,7 +36,7 @@ import UserNotifications
 /// - `-haus-group-avatar-probe`: posts a synthetic group communication notification with a room avatar and reports
 ///   whether the intent, the updated content and the delivered notification carry an image.
 @MainActor enum MacPushProbe {
-    private static let flags = ["-haus-notification-settings", "-haus-request-provisional", "-haus-register-push", "-haus-arm-extension-probe",
+    private static let flags = ["-haus-notification-settings", "-haus-request-provisional", "-haus-arm-extension-probe",
                                 "-haus-extension-probe-results", "-haus-extension-probe-clear", "-haus-delivered-notifications",
                                 "-haus-clear-delivered", "-haus-group-avatar-probe", "-haus-liveness-answer", "-haus-liveness-self-test"]
     private static var livenessResponder: AppLiveness.Responder?
@@ -65,10 +72,6 @@ import UserNotifications
                     livenessResponder = responder
                     if MacDebugHooks.has("-haus-liveness-self-test") { await livenessSelfTest() }
                 } catch { log("liveness answering: FAILED \(error)") }
-            }
-            if MacDebugHooks.has("-haus-register-push") {
-                log("registering for remote notifications")
-                NSApp.registerForRemoteNotifications()
             }
             if MacDebugHooks.has("-haus-extension-probe-results") {
                 do {
@@ -112,14 +115,41 @@ import UserNotifications
     }
 
     static func received(token: Data) {
-        log("push token received, \(token.count) bytes (written to push-token.hex, not logged)")
-        let hex = token.map { String(format: "%02x", $0) }.joined()
-        FileHandle.standardOutput.write(Data("HAUS-FILE push-token.hex \(Data(hex.utf8).base64EncodedString())\n".utf8))
+        log("push token received, \(token.count) bytes, sha256 \(SHA256.hash(data: token).prefix(4).map { String(format: "%02x", $0) }.joined())")
     }
 
     static func failed(_ error: any Error) {
         let error = error as NSError
         log("push registration FAILED \(error.domain) \(error.code) \(error.localizedDescription)")
+    }
+
+    // MARK: Push switch
+
+    /// `-haus-push-switch` and `-haus-push-status`, once the model is prepared and any lab sign-in has connected.
+    static func afterSignIn(_ model: AppModel) async {
+        if let seconds = MacDebugHooks.value(after: "-haus-push-status").flatMap(Double.init) {
+            Task { await logPushStatus(model, for: .seconds(seconds)) }
+        }
+        switch MacDebugHooks.value(after: "-haus-push-switch") {
+        case "on":
+            await model.enableNotifications()
+            log("push switch on: \(model.pushStatus.text)")
+        case "off":
+            await model.disableNotifications()
+            log("push switch off: \(model.pushStatus.text)")
+        case let other?: log("push switch: unknown value \(other)")
+        case nil: break
+        }
+    }
+
+    private static func logPushStatus(_ model: AppModel, for duration: Duration) async {
+        let clock = ContinuousClock(), end = clock.now + duration
+        var last = ""
+        while clock.now < end {
+            let line = "push status \(model.pushStatus.text), wanted \(model.pushWanted), authorization \(name(model.notificationAuthorization))"
+            if line != last { log(line); last = line }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
     }
 
     // MARK: Group avatar
@@ -272,15 +302,5 @@ import UserNotifications
     }
 
     private static func log(_ text: String) { MacDebugHooks.log(text) }
-}
-
-extension MacAppDelegate {
-    func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        MacPushProbe.received(token: deviceToken)
-    }
-
-    func application(_ application: NSApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
-        MacPushProbe.failed(error)
-    }
 }
 #endif

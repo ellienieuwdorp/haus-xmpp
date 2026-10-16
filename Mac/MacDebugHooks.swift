@@ -189,6 +189,7 @@ import SwiftUI
         Task {
             await model.prepare()
             if has("-haus-lab-sign-in") { await labSignIn(model) }
+            await MacPushProbe.afterSignIn(model)
             if has("-haus-self-check") { await selfCheck(model) }
             if let text = value(after: "-haus-restore-transfer") {
                 let file = FileManager.default.temporaryDirectory.appending(path: "restore.\(TransferArchive.fileExtension)")

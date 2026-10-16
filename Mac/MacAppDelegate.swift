@@ -54,6 +54,21 @@ import SwiftUI
         #endif
     }
 
+    /// APNs tokens, asked for by `PushRegistration.request`.
+    func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        PushRegistration.shared.received(deviceToken)
+        #if DEBUG
+        MacPushProbe.received(token: deviceToken)
+        #endif
+    }
+
+    func application(_ application: NSApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
+        PushRegistration.shared.registrationFailed()
+        #if DEBUG
+        MacPushProbe.failed(error)
+        #endif
+    }
+
     /// The app stays running, and connected, with no window open.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 

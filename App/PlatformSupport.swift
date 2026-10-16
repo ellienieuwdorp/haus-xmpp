@@ -283,6 +283,15 @@ extension ToolbarItemPlacement {
         #endif
     }
 
+    /// Asks APNs for this app's device token; the application delegate receives it (`PushRegistration.received`).
+    static func registerForRemoteNotifications() {
+        #if os(iOS)
+        UIApplication.shared.registerForRemoteNotifications()
+        #else
+        NSApp.registerForRemoteNotifications()
+        #endif
+    }
+
     /// The system's notification settings for this app: the app's page in iOS Settings, or System Settings >
     /// Notifications on the Mac.
     static var notificationSettingsURL: URL? {
