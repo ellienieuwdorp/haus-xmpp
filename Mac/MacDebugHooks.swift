@@ -104,9 +104,11 @@ import SwiftUI
 /// - `-haus-store-schema <n>`: with `XMPP_UI_TEST_STORE` set, stamps that session's existing store with schema `n`
 ///   before it opens, as a newer build would have left it (for the screen an older build shows over newer data).
 /// - `-haus-unobtrusive`: see `MacUnobtrusive`.
-/// - `-haus-lifecycle-steps "<step>; …"`: a lifecycle scenario after the hooks above (`MacLifecycleDebug`).
+/// - `-haus-lifecycle-steps "<step>; …"`: a lifecycle scenario after the hooks above, or after the tour
+///   (`MacLifecycleDebug`).
 /// - `-haus-log-notifications`: logs the notifications the model would post instead of posting them;
-///   `-haus-post-notifications` logs and posts them. Both also in a test session (`MacDebugNotificationLog`).
+///   `-haus-post-notifications` logs and posts them. Both also in a test session (`MacDebugNotificationLog`), which
+///   without either posts nothing and says so at launch.
 /// - Push and notification extension checks: see `MacPushProbe`.
 @MainActor enum MacDebugHooks {
     private static let arguments = ProcessInfo.processInfo.arguments
@@ -130,6 +132,9 @@ import SwiftUI
     static func prepareLaunch() {
         MacUnobtrusive.install()
         if has("-haus-fresh-store") { emptyTestStore() }
+        if MacDebugNotificationLog.silencesTestSession {
+            log("notifications: off in this test session; -haus-log-notifications logs them")
+        }
         if let schema = value(after: "-haus-store-schema").flatMap(Int32.init) { stampTestStore(schema: schema) }
     }
 
@@ -242,6 +247,9 @@ import SwiftUI
             }
             if let tour = value(after: "-haus-tour") {
                 await runTour(tour, window: window, model: model)
+                if let steps = value(after: "-haus-lifecycle-steps") {
+                    await MacLifecycleDebug.run(steps, lifecycle: lifecycle, model: model, window: window)
+                }
                 return
             }
             // Sample conversations block locally, so a capture can show a blocked chat without a server.
