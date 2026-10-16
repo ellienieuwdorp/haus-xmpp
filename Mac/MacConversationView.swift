@@ -212,8 +212,8 @@ struct MacConversationView: View {
                 }
                 .onDisappear { visibleRows.ids.remove(row.message.id) }
         }
-        // Esc in the timeline closes search and the starred filter.
-        .onExitCommand(perform: timeline.isFiltered ? { timeline.clearFilter() } : nil)
+        // Esc in the timeline closes the find bar, as Esc in its field does, or else the starred filter.
+        .onExitCommand(perform: timeline.isFiltered ? { timeline.closeFilter() } : nil)
         // The user started reading this chat (the app active, its window key and visible, the screen unlocked, the user
         // not idle): what was already on screen counts as seen now (critique G3).
         .onChange(of: model.readingStarts) { _, _ in

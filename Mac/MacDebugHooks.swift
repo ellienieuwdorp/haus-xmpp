@@ -27,8 +27,8 @@ import SwiftUI
 ///   positive towards older messages), `scroll-to <message id>` (a stored message by its ID), `quote <reference>` (as a
 ///   click on a quote naming that message does), `resize <width>x<height>` and `timeline` (logs the reader's row and
 ///   distances). Frames may be `0` seconds for a tour that only captures by name. Search steps
-///   (`MacConversationFindTour`): `find <text>` (opens search with that text), `find-close`, `starred on|off` and
-///   `show-result <message id>` (as a click on that result).
+///   (`MacConversationFindTour`): `find <text>` (opens search with that text), `find-close`, `find-esc` (as Esc in the
+///   timeline), `starred on|off` and `show-result <message id>` (as a click on that result).
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
 ///   also in the sample conversations, where previews are otherwise off. `-haus-untinted-send`: the composer's Send in
 ///   the clear variant of its glass style, as an enabled accent-tinted circle leaves the conversation out of a capture.
@@ -257,7 +257,7 @@ import SwiftUI
                 if otherWindows.isEmpty { openSettings?() }
             case "close-settings": otherWindows.forEach { $0.close() }
             case "type", "key", "reply", "edit": composerStep(words[0], argument, model: model)
-            case "find", "find-close", "starred", "show-result": MacConversationFindTour.step(words[0], argument)
+            case "find", "find-close", "find-esc", "starred", "show-result": MacConversationFindTour.step(words[0], argument)
             case "snap":
                 guard let directory = value(after: "-haus-capture"), let window = mainWindow, let png = render(window) else { log("tour snap: needs -haus-capture <dir>"); break }
                 emit(png, directory: directory, file: slug(argument) + ".png")

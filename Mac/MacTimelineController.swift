@@ -523,6 +523,12 @@ import SwiftUI
         refilter(wasFiltered: wasFiltered)
     }
 
+    /// Esc: closes search, as its Done does, or with search closed the starred filter, as its Show All does. Closing
+    /// search keeps the starred filter on, as on the iPhone.
+    func closeFilter() {
+        if searching { setSearching(false) } else { setStarredOnly(false) }
+    }
+
     /// Closes search and the starred filter together.
     func clearFilter() {
         guard isFiltered else { return }

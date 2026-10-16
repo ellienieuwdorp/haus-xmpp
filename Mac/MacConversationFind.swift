@@ -177,7 +177,8 @@ extension FocusedValues {
 
 #if DEBUG
 /// The tour's search steps (`MacDebugHooks`): `find <text>` opens search with that text, `find-close` closes it,
-/// `starred on|off` sets the starred filter, and `show-result <message id>` does what a click on that result does.
+/// `find-esc` does what Esc in the timeline does, `starred on|off` sets the starred filter, and
+/// `show-result <message id>` does what a click on that result does.
 @MainActor enum MacConversationFindTour {
     static func step(_ name: String, _ argument: String) {
         guard let timeline = MacTimelineController.current else { return MacDebugHooks.log("tour \(name): no open timeline") }
@@ -186,6 +187,7 @@ extension FocusedValues {
             timeline.setSearching(true)
             timeline.setQuery(argument)
         case "find-close": timeline.setSearching(false)
+        case "find-esc": timeline.closeFilter()
         case "starred": timeline.setStarredOnly(argument != "off")
         case "show-result": timeline.scrollTo(messageID: argument)
         default: break
