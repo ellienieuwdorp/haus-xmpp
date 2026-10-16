@@ -178,6 +178,8 @@ final class AppModel {
     @ObservationIgnored private var activeEncryptionOperations = 0
     @ObservationIgnored private var acquiringOwnership = false
     @ObservationIgnored private var hasTransportOwnership = false
+    /// Answers the notification extension's liveness handshake (`startLivenessResponder`).
+    @ObservationIgnored private var livenessResponder: AppLiveness.Responder?
     /// Background time begun when a release from the background left the kernel lock held (`releaseLeaseInBackground`):
     /// the app is not suspended holding it. The next release that frees the lock ends it.
     @ObservationIgnored private var unreleasedLease: BackgroundActivity?
@@ -395,6 +397,7 @@ final class AppModel {
                     await self?.receivePushToken(token)
                 }
             }
+            startLivenessResponder()
         }
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let usable = path.status == .satisfied
@@ -4382,6 +4385,52 @@ extension AppModel: NotificationActionEnvironment {
         _ = await presentation.result
         watchdog.cancel()
         if progress.report.posted > 0 { Self.syncLog.notice("notification action presented=\(progress.report.posted, privacy: .public)") }
+    }
+
+    // MARK: Liveness handshake
+
+    /// Answers a notification extension that found the lease busy (`LivenessHandshake`), so a push for this live session
+    /// is presented once, by the app, instead of next to the extension's fallback. Only on the Mac (`AppLiveness.isOffered`)
+    /// and only for the real store: a UI test session's store is not the one the extension opens.
+    private func startLivenessResponder() {
+        guard AppLiveness.isOffered, livenessResponder == nil, let container = try? SharedStorage.groupContainer() else { return }
+        let responder = AppLiveness.Responder(files: AppLiveness.Files(groupRoot: container),
+                                              conditions: { [weak self] in self?.livenessConditions ?? Self.silent },
+                                              answered: { [weak self] in self?.keepLivenessPromise() })
+        if responder.start() { livenessResponder = responder }
+        else { Self.syncLog.error("liveness responder could not observe its ring") }
+    }
+
+    private static let silent = LivenessConditions(wantsConnection: false, quiescing: true, ownsLease: false, servesExtensionAccount: false,
+                                                   presentsCatchUp: false)
+
+    /// The answer promises that this process keeps the lease and presents: never while a sleep or sign-out quiesces,
+    /// only for the account the extension serves, and only where what a later catch-up brings still gets its banner.
+    private var livenessConditions: LivenessConditions {
+        LivenessConditions(wantsConnection: wantsConnection && testSessionID == nil, quiescing: quiescing,
+                           ownsLease: hasTransportOwnership,
+                           servesExtensionAccount: sessionAccount.map { saved in
+                               (try? NotificationAccount.load())?.accountID == saved.accountID
+                           } ?? false,
+                           presentsCatchUp: Self.attention.holdsCatchUpBanners)
+    }
+
+    /// After an answer the push is this process's to present. The server pushed because an acknowledgement from this
+    /// session was overdue, so the socket may be dead without an error: probe it now (a dead stream ends, and the
+    /// reconciler resumes it, which replays what the server queued), or connect at once when no stream is up. What
+    /// arrives is presented by the usual foreground claim, or held and posted once the connection has caught up; a
+    /// sleep or quit before it arrives leaves it to the next connection's catch-up, which posts it the same way.
+    private func keepLivenessPromise() {
+        Self.syncLog.notice("liveness answered, connected=\(self.isConnected, privacy: .public)")
+        guard isConnected, let client else {
+            networkBecameReachable()
+            return
+        }
+        Task { [weak self] in
+            let alive = await client.probeLiveness(within: .seconds(5))
+            Self.syncLog.notice("liveness probe answered=\(alive, privacy: .public)")
+            if !alive { self?.networkBecameReachable() }
+        }
     }
 
     // MARK: Foreground banners

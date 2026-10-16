@@ -976,6 +976,45 @@ public actor XMPPClient {
         }
     }
 
+    /// Asks the server for proof of life now rather than after `silenceInterval` of silence, for a caller with reason
+    /// to doubt the socket (the server pushed for this session, which it does when an acknowledgement is overdue). Any
+    /// inbound bytes within `limit` count as the answer, as in the liveness loop, and without one the stream ends the
+    /// same way, so the owner reconnects. True when the stream answered.
+    public func probeLiveness(within limit: Duration) async -> Bool {
+        guard phase == .online else { return false }
+        let token = generation, seen = inboundActivity, deadline = ContinuousClock.now + limit
+        // Started before the write: a send stuck on a dead socket, or queued behind one, holds the probe no longer than
+        // `limit`. Ending the stream cancels the socket, which completes the stuck send.
+        let watchdog = Task { [weak self] in
+            guard (try? await Task.sleep(until: deadline, clock: .continuous)) != nil else { return }
+            await self?.endUnansweredProbe(token, seen: seen)
+        }
+        defer { watchdog.cancel() }
+        do {
+            if smOffered, streamManagement != nil { try await write("<r xmlns='urn:xmpp:sm:3'/>") }
+            else { Task { [weak self] in _ = try? await self?.requestIQ(type: "get", to: nil, payload: "<ping xmlns='urn:xmpp:ping'/>") } }
+        } catch {
+            // A send that failed on this stream will not carry an answer either; a cancelled caller ends nothing.
+            if !Task.isCancelled { endUnansweredProbe(token, seen: seen) }
+            return false
+        }
+        while generation == token, phase == .online {
+            if inboundActivity != seen { return true }
+            guard ContinuousClock.now < deadline else {
+                endUnansweredProbe(token, seen: seen)
+                return false
+            }
+            guard (try? await Task.sleep(for: .milliseconds(50))) != nil else { return false }
+        }
+        return false
+    }
+
+    /// Ends the stream `token` unless bytes arrived since `seen`.
+    private func endUnansweredProbe(_ token: UUID, seen: UInt64) {
+        guard generation == token, phase == .online, inboundActivity == seen else { return }
+        finish("Connection lost", error: XMPPClientError.timedOut)
+    }
+
     func groupAccount() throws -> String {
         guard phase == .online, let account = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
         return account
