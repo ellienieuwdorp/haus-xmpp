@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import CSQLite
 @testable import MessageStore
 
 private func fixture() throws -> URL {
@@ -83,4 +84,36 @@ private func outgoing(_ id: String, account: String = "a", time: Double = 100, b
     }
     await #expect(throws: CancellationError.self) { try await task.value }
     #expect(try await store.claimNextOutgoing(accountID: "a")?.message.id == "1")
+}
+
+/// A process suspended holding the transport lock is killed, so a release whose bookkeeping fails must still free it.
+@Test func failedReleaseStillFreesTheTransportLockForTheNextOwner() async throws {
+    let url = try fixture()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let owner = try MessageStore(url: url)
+    let contender = try MessageStore(url: url)
+    try await owner.acquireTransportOwnership()
+    try await owner.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
+    try await owner.enqueueOutgoing(outgoing("1"))
+    _ = try #require(await owner.claimNextOutgoing(accountID: "a"))
+    // Another connection keeps the database busy past the busy timeout, so marking the submission cannot commit.
+    var other: OpaquePointer?
+    try #require(sqlite3_open(url.path, &other) == SQLITE_OK)
+    defer { sqlite3_close(other) }
+    try #require(sqlite3_exec(other, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK)
+    do {
+        try await owner.releaseTransportOwnership()
+        Issue.record("release committed while another connection held the write lock")
+    } catch MessageStoreError.database(let code, _) {
+        #expect(code == SQLITE_BUSY)
+    }
+    #expect(await !owner.holdsTransportOwnership)
+    try await contender.acquireTransportOwnership()
+    try #require(sqlite3_exec(other, "ROLLBACK", nil, nil, nil) == SQLITE_OK)
+    // Left as it was for the next owner, which marks it uncertain before sending anything.
+    #expect(try await contender.messages(accountID: "a", chatID: "peer").first?.transportState == .submitting)
+    try await contender.recoverInterruptedSubmissions(accountID: "a")
+    #expect(try await owner.messages(accountID: "a", chatID: "peer").first?.transportState == .unconfirmed)
+    try await contender.close()
+    try await owner.close()
 }
