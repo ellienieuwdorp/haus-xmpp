@@ -898,6 +898,10 @@ final class AppModel {
             setAppBadge(0)
             // Donated communication interactions name this account's contacts, rooms and avatars: they go with it.
             await CommunicationHistory.deleteAll()
+        } else if badgeUsesDockTile {
+            // A test session's count lives only on the Mac's Dock tile, and goes with the session.
+            appBadge = nil
+            setAppBadge(0)
         }
         sessionAccount = nil
         pushStatus = .off
