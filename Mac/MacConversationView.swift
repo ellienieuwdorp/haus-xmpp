@@ -1,12 +1,14 @@
 import AppKit
+import MessageStore
 import QuickLook
 import SwiftUI
 
 /// The open chat. The timeline (`MacTimeline`) opens at the newest message in its first frame, follows the bottom while
 /// the reader is there, keeps the reader's row through older pages and resizes, and pages in older history near the top;
-/// the composer (`MacComposer`) sits below it. A bubble's right-click menu has the shared menu's Copy and Report. Links
-/// in bubbles open through `LinkOpening`, and preview cards show as on the iPhone. Photos and videos show as framed
-/// stills and files as a line; a click opens one in Quick Look, or asks for its download when it is not on this Mac yet.
+/// the composer (`MacComposer`) sits below it. A bubble's right-click menu, its hover toolbar and its VoiceOver actions
+/// perform the shared menu's actions (`MacMessageHandlers`), with the iPhone's retry and unsend dialogs. Links in
+/// bubbles open through `LinkOpening`, and preview cards show as on the iPhone. Photos and videos show as framed stills
+/// and files as a line; a click opens one in Quick Look, or asks for its download when it is not on this Mac yet.
 struct MacConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -20,6 +22,8 @@ struct MacConversationView: View {
     @State private var visibleRows = VisibleRows()
     /// A message's Report, waiting for its confirmation.
     @State private var blockRequest: BlockRequest?
+    @State private var retryMessageID: String?
+    @State private var unsendMessageID: String?
     /// A phone link was clicked: Call, Send Message or Copy.
     @State private var phoneLink: PhoneLink?
     /// A link could not be opened, so it was copied; the alert says why.
@@ -33,6 +37,15 @@ struct MacConversationView: View {
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
+    private var isGroup: Bool { model.isGroup(chatID) }
+    /// Where Encryption details goes: the inspector's page for this chat's devices, or a group's details.
+    private var encryptionRoute: ChatRoute { isGroup ? .groupDetails(chatID) : .encryption(chatID) }
+
+    /// The failed message the retry dialog is for was a file failed when encryption was set up again: its key is gone,
+    /// so the store refuses a retry and the dialog only explains.
+    private var retryIsImpossible: Bool {
+        retryMessageID.flatMap { id in model.messages.first { $0.id == id }?.rejection } == MessageStore.encryptionResetRejection
+    }
 
     var body: some View {
         let presenter = presenter
@@ -81,6 +94,39 @@ struct MacConversationView: View {
             }
         }
         .blockConfirmation(model: model, request: $blockRequest)
+        .confirmationDialog(retryIsImpossible ? "This file can’t be sent" : "Send this message again?", isPresented: Binding(
+            get: { retryMessageID != nil }, set: { if !$0 { retryMessageID = nil } }
+        ), titleVisibility: .visible, presenting: retryMessageID) { id in
+            if retryIsImpossible {
+                Button("OK", role: .cancel) { retryMessageID = nil }
+            } else {
+                Button("Send again") {
+                    Task { await model.retryMessage(id) }
+                    retryMessageID = nil
+                }
+                Button("Cancel", role: .cancel) { retryMessageID = nil }
+            }
+        } message: { id in
+            if retryIsImpossible {
+                Text(RejectionCopy.reason(MessageStore.encryptionResetRejection, isGroup: isGroup))
+            } else if let rejection = model.messages.first(where: { $0.id == id })?.rejection {
+                Text("It wasn't delivered. \(RejectionCopy.reason(rejection, isGroup: isGroup)) Sending again only helps once that has changed.")
+            } else {
+                Text("The recipient may already have it. Sending again could create a duplicate.")
+            }
+        }
+        .confirmationDialog("Unsend this message?", isPresented: Binding(
+            get: { unsendMessageID != nil }, set: { if !$0 { unsendMessageID = nil } }
+        ), titleVisibility: .visible, presenting: unsendMessageID) { id in
+            Button("Unsend", role: .destructive) {
+                Task { await model.unsend(messageID: id) }
+                if composerIntent.editing?.id == id { composerIntent.cancelEditing() }
+                unsendMessageID = nil
+            }
+            Button("Cancel", role: .cancel) { unsendMessageID = nil }
+        } message: { _ in
+            Text("It disappears here. \(title) may still see it if their app doesn't support unsending.")
+        }
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(title)
         .navigationSubtitle(model.trustSummary(for: chatID).pill)
@@ -98,6 +144,18 @@ struct MacConversationView: View {
             .sharedBackgroundVisibility(.hidden)
         }
         .quickLookPreview($quickLook)
+        #if DEBUG
+        // A tour step performing a message action as its menu item would (`MacDebugHooks`).
+        .onChange(of: MacDebugHooks.tour.messageRequest) { _, request in
+            guard let request, let message = presenter.timelineMessages.first(where: { $0.id == request.messageID }) else { return }
+            // No Copy: a run must leave the Mac's pasteboard alone.
+            let kinds: [String: MessageAction.Kind] = ["reply": .reply, "edit": .edit, "star": .star, "retry": .retry, "unsend": .unsend,
+                                                       "encryption": .encryptionDetails, "report": .report]
+            if request.verb == "react" { messageHandlers.react(request.argument, message) }
+            if let kind = kinds[request.verb] { perform(kind, on: message, link: nil) }
+            MacDebugHooks.log("composer intent: replying to \(composerIntent.replyingTo?.id ?? "none"), editing \(composerIntent.editing?.id ?? "none")")
+        }
+        #endif
         // Closed by the root when the selection moves on or the window closes: SwiftUI may build the detail column more
         // than once for one selection, and a late disappearance would close the chat the new view just opened.
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
@@ -145,6 +203,39 @@ struct MacConversationView: View {
         }
     }
 
+    /// What a bubble's menu, toolbar and VoiceOver actions do here; the iPhone's `ConversationView` does the same.
+    private var messageHandlers: MacMessageHandlers {
+        MacMessageHandlers(perform: { kind, message, link in perform(kind, on: message, link: link) },
+                           react: { emoji, message in Task { await model.toggleReaction(emoji, messageID: message.id) } })
+    }
+
+    private func perform(_ kind: MessageAction.Kind, on message: TimelineMessage, link: URL?) {
+        switch kind {
+        case .reply:
+            guard let stored = model.messages.first(where: { $0.id == message.id }) else { return }
+            composerIntent.reply(to: stored)
+        case .edit:
+            guard let stored = model.messages.first(where: { $0.id == message.id }) else { return }
+            composerIntent.edit(stored)
+        case .copy: copy(message.body)
+        case .star: Task { await model.toggleStar(message.id) }
+        case .retry: retryMessageID = message.id
+        case .unsend: unsendMessageID = message.id
+        case .encryptionDetails: model.requestRoute(encryptionRoute)
+        case .report: blockRequest = BlockRequest(kind: .report, chatID: chatID, name: title, messageID: message.id)
+        // The menu's first link item: Call for a phone number, what a click does otherwise.
+        case .openLink:
+            guard let link else { return }
+            if case .phone(_, let call, _) = LinkOpening.destination(for: link, inAppBrowser: false) { NSWorkspace.shared.open(call) } else { open(link) }
+        case .messageNumber:
+            guard let link, case .phone(_, _, let message) = LinkOpening.destination(for: link, inAppBrowser: false) else { return }
+            NSWorkspace.shared.open(message)
+        case .copyLink: if let link { copy(LinkOpening.copyText(for: link)) }
+        // The row selects its own text; the menus share a link through the system's share menu.
+        case .selectText, .shareLink: break
+        }
+    }
+
     /// A click on a photo, video or file: Quick Look once it is here, else its download (a file waiting for a click, or
     /// a failed one).
     private func openAttachment(of message: TimelineMessage) {
@@ -164,9 +255,7 @@ struct MacConversationView: View {
 
     private func timeline(_ timeline: MacTimelineController, presenter: ConversationPresenter) -> some View {
         MacTimeline(controller: timeline) { row in
-            MacTimelineRow(row: row, isGroup: timeline.isGroup, report: { id in
-                blockRequest = BlockRequest(kind: .report, chatID: chatID, name: title, messageID: id)
-            }, openAttachment: { openAttachment(of: row.message) })
+            MacTimelineRow(row: row, isGroup: timeline.isGroup, handlers: messageHandlers, openAttachment: { openAttachment(of: row.message) })
                 .onAppear {
                     visibleRows.ids.insert(row.message.id)
                     markIfReading(row.message.id, presenter: presenter)

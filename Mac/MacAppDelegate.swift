@@ -9,6 +9,8 @@ import SwiftUI
     var showingNewChat = false
     var showingAccount = false
     var inspectorShown = false
+    /// The pages pushed in the inspector over the chat's details (devices and encryption, group details).
+    var inspectorPath: [ChatRoute] = []
     var reviewingOwnDevices = false
     /// Restore from a transfer, from the signed-out sidebar.
     var showingRestore = false

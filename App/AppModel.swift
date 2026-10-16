@@ -607,6 +607,29 @@ final class AppModel {
                 }
             }
             #endif
+            #if DEBUG
+            // Two of Alex's sends that failed, for the retry dialog's captures: a message the server returned, and a file
+            // failed when encryption was set up again, which can never be retried. Failing them takes the store's lease
+            // as the foreground does; nothing is sent, since the outbox never runs for the samples.
+            if ProcessInfo.processInfo.arguments.contains("-demo-failed") {
+                do {
+                    try await acquireForegroundOwnership(store, token: token)
+                    let file = StoredAttachment(name: "boathouse-plan.pdf", mediaType: "application/pdf", size: 48_213, hash: String(repeating: "0", count: 64),
+                                                secret: Data([0]), url: "https://example.org/upload/boathouse-plan.pdf", uploadState: .uploaded)
+                    let failed = [(StoredMessage(id: "sample-failed-0", accountID: account, chatID: DemoSamples.alex, senderID: account, body: "Did the photo come through?",
+                                                 sentAt: morning.addingTimeInterval(10), isOutgoing: true, wireID: "sample-failed-0"), "service-unavailable"),
+                                  (StoredMessage(id: "sample-failed-1", accountID: account, chatID: DemoSamples.alex, senderID: account, body: "",
+                                                 sentAt: morning.addingTimeInterval(11), isOutgoing: true, wireID: "sample-failed-1", attachment: file),
+                                   MessageStore.encryptionResetRejection)]
+                    for (message, rejection) in failed {
+                        try await store.enqueueOutgoing(message)
+                        guard let submission = try await store.claimNextOutgoing(accountID: account, messageIDs: [message.id]) else { continue }
+                        try await store.finishOutgoingSubmission(submission)
+                        try await store.rejectOutgoing(accountID: account, chatID: message.chatID, wireID: message.id, rejection: rejection)
+                    }
+                } catch { Self.syncLog.error("demo failed sends not added: \(String(describing: error), privacy: .public)") }
+            }
+            #endif
             guard generation == token else { return }
             #if DEBUG
             // Two own devices waiting for review, so the account-level prompt can be seen without a second client.
@@ -2776,6 +2799,11 @@ final class AppModel {
     }
 
     func canReact(to message: StoredMessage) -> Bool {
+        #if DEBUG
+        if isDemo, Self.demoReactions {
+            return message.accountID == accountID && message.chatID == openChatID && message.wireID != nil && message.unreadableReason == nil
+        }
+        #endif
         guard message.accountID == accountID, message.chatID == openChatID,
               message.encryptionProfile == "modern" || message.encryptionProfile == "legacy" else { return false }
         if isGroup(message.chatID) { return message.encryptionProfile == "modern" && canSend(to: message.chatID) && reactableGroupMessages.contains(message.id) }
@@ -2784,7 +2812,25 @@ final class AppModel {
         return encryptionOverview?.profile == .legacy && message.wireID != nil
     }
 
+    #if DEBUG
+    /// `-demo-reactions`: sample messages take reactions, recorded on this device as a peer's would be and never sent,
+    /// for captures of the pills after reacting.
+    private static let demoReactions = ProcessInfo.processInfo.arguments.contains("-demo-reactions")
+    #endif
+
     func toggleReaction(_ emoji: String, messageID: String) async {
+        #if DEBUG
+        if isDemo, Self.demoReactions {
+            guard let store, let message = messages.first(where: { $0.id == messageID }), canReact(to: message), let wireID = message.wireID else { return }
+            let account = accountID
+            let mine = messageReactions[messageID]?.first(where: { $0.actorID == account })?.reactions ?? []
+            try? await store.recordReaction(accountID: account, reaction: AuthenticatedReaction(id: UUID().uuidString, chatID: message.chatID, actorID: account,
+                                                                                                targetWireID: wireID, reactions: mine.contains(emoji) ? [] : [emoji],
+                                                                                                updatedAt: Date()))
+            await refresh(.openChat)
+            return
+        }
+        #endif
         guard hasTransportOwnership, transportWanted, !quiescing else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
