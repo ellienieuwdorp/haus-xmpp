@@ -8,8 +8,8 @@ import SwiftUI
 /// - `chat <address>`: opens a chat with that address (a lab contact), creating it as New Chat would.
 /// - `join <room>`: joins that group (a lab room the account is a member of) and opens it.
 /// - `devices`: logs the open chat's devices with their trust, and what the review banner and the account review see.
-/// - `messages [<count>]`: logs the open chat's newest messages (default 4): direction, encryption, state and text.
-///   For lab runs with synthetic messages only.
+/// - `messages [<count>]`: logs the open chat's newest messages (default 4): direction, encryption, state, and the text
+///   of a lab account's (synthetic) messages.
 /// - The rest press a button as VoiceOver would (`MacKeyboardDebug.pressElement`), so they run the button's own action:
 ///   `device <id>` a device row in the inspector, `review` the banner's Review…,
 ///   `trust|verify|dont-trust|compare|remove <id>` that device's button in the newest open sheet (the review sheet, the
@@ -19,17 +19,19 @@ import SwiftUI
 ///   the accessibility tree of a window that was never on screen, so the button cannot be pressed).
 @MainActor enum MacDeviceReviewTour {
     static func step(_ name: String, _ argument: String, model: AppModel, window: MacWindowState, mainWindow: NSWindow?) async {
-        let buttons: [String: [String]] = [
-            "device": ["encryptionDevice.", "waitingDevice.", "groupDevice."],
-            "trust": ["deviceFingerprint.accept.", "deviceReview.trust.", "ownDevice.trust."],
-            "verify": ["deviceFingerprint.verify."],
-            "dont-trust": ["deviceFingerprint.block.", "deviceReview.reject.", "ownDevice.reject."],
-            "compare": ["deviceReview.compare.", "ownDevice.compare."],
-            "remove": ["deviceFingerprint.remove.", "ownDevice.remove."],
+        // Identifiers of a device's buttons (the device ID follows), and the fingerprint sheet's titles: that sheet is
+        // for one device, and the iPhone's lab tests find its buttons by title.
+        let buttons: [String: (identifiers: [String], titles: [String])] = [
+            "device": (["encryptionDevice.", "waitingDevice.", "groupDevice."], []),
+            "trust": (["deviceReview.trust.", "ownDevice.trust."], ["Accept without verifying"]),
+            "verify": ([], ["Fingerprints match"]),
+            "dont-trust": (["deviceReview.reject.", "ownDevice.reject."], ["Block this device"]),
+            "compare": (["deviceReview.compare.", "ownDevice.compare."], []),
+            "remove": (["ownDevice.remove."], ["Remove old device"]),
         ]
-        if let prefixes = buttons[name] {
+        if let button = buttons[name] {
             guard let mainWindow else { return MacDebugHooks.log("tour \(name): no main window") }
-            await MacKeyboardDebug.pressElement(matching: prefixes.map { $0 + argument }, in: mainWindow)
+            await MacKeyboardDebug.pressElement(matching: button.identifiers.map { $0 + argument } + button.titles, in: mainWindow)
             return
         }
         switch name {
@@ -53,8 +55,10 @@ import SwiftUI
             logDevices(model: model, window: window)
         case "messages":
             for message in model.messages.suffix(Int(argument) ?? 4) {
+                // Text only from a lab account's synthetic messages.
+                let text = model.isLabAccount ? "'\(message.body.prefix(80))'" : "\(message.body.count) characters"
                 MacDebugHooks.log("message \(message.id): \(message.isOutgoing ? "out" : "in"), \(message.encryptionProfile ?? "plain"), "
-                    + "\(message.transportState.map { "\($0)" } ?? "-"), '\(message.body.prefix(80))'")
+                    + "\(message.transportState.map { "\($0)" } ?? "-"), \(text)")
             }
         default: break
         }
