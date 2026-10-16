@@ -21,7 +21,9 @@ import SwiftUI
 /// without an error, as on a dead network path: the app notices only through its liveness probes, so a push the server
 /// then sends reaches the extension, whose liveness ring makes the app probe and reconnect), `hold-acks <seconds>`
 /// (the live stream leaves the server's acknowledgement requests unanswered that long, default 35, then answers once
-/// and goes on: the server pushes for a healthy session, and the app's probe is answered without a reconnect), `quit`.
+/// and goes on: the server pushes for a healthy session, and the app's probe is answered without a reconnect),
+/// `sign-out` (as Settings' Sign Out, which turns push off at the gateway and the server, so a staging run ends clean),
+/// `quit`.
 @MainActor enum MacLifecycleDebug {
     /// The scene phase each window's content last reported, by window.
     static var scenePhases: [String: ScenePhase] = [:]
@@ -118,6 +120,9 @@ import SwiftUI
                 let seconds = Double(argument) ?? 35
                 let held = await model.debugHoldAcknowledgements(for: .seconds(seconds))
                 MacDebugHooks.log("step hold-acks: \(held ? "acknowledgements held \(Int(seconds)) s" : "no stream online")")
+            case "sign-out":
+                await model.signOut()
+                MacDebugHooks.log("step sign-out: \(model.accountID.isEmpty ? "signed out" : "still signed in")")
             case "quit": MacDebugHooks.quit()
             default: MacDebugHooks.log("step \(step): unknown")
             }
