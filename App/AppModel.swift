@@ -4073,7 +4073,19 @@ final class AppModel {
     private func setAppBadge(_ count: Int) {
         guard appBadge != count else { return }
         appBadge = count
-        Task { await PlatformApplication.setBadgeCount(count) }
+        let dockTileOnly = badgeUsesDockTile
+        Task { await PlatformApplication.setBadgeCount(count, dockTileOnly: dockTileOnly) }
+    }
+
+    /// The Mac labels its Dock tile until notifications are asked, and in a test session, whose counts must not reach
+    /// the app's real badge; otherwise the badge is the notification centre's, which the extension sets too
+    /// (`PlatformApplication.setBadgeCount`).
+    private var badgeUsesDockTile: Bool {
+        #if os(macOS)
+        testSessionID != nil || notificationAuthorization == .notDetermined
+        #else
+        false
+        #endif
     }
 }
 
@@ -4560,8 +4572,14 @@ extension AppModel: NotificationActionEnvironment {
             guard let self else { return }
             // App Clips' ephemeral authorization does not exist on macOS.
             self.mayPostNotifications = [.authorized, .provisional].contains(status)
+            let asked = self.notificationAuthorization != .notDetermined
             self.notificationAuthorization = status
             self.notificationAlertStyle = alertStyle
+            // Once asked, the badge moves from the Dock tile to the notification centre.
+            if asked != (status != .notDetermined), let badge = self.appBadge {
+                self.appBadge = nil
+                self.setAppBadge(badge)
+            }
             #if DEBUG
             if MacDebugNotificationLog.mode == .log { self.mayPostNotifications = true }
             #endif
@@ -4609,6 +4627,11 @@ extension AppModel: NotificationActionEnvironment {
                 + (message.unreadableReason.map { " unreadable \($0)" } ?? "")
         }
         return "pointer \(pointer.map { "\($0.messageID.prefix(8)) at \($0.sentAt.timeIntervalSince1970)" } ?? "none"); \(rows.joined(separator: " | "))"
+    }
+
+    /// For the Mac's badge checks: the count last set and where it went.
+    var debugBadgeReport: String {
+        "icon badge \(appBadge.map(String.init) ?? "unset") through \(badgeUsesDockTile ? "the Dock tile" : "the notification centre")"
     }
 
     /// Cuts the live stream off without telling anyone (`XMPPClient.silenceTransport()`), for the Mac's check of the
