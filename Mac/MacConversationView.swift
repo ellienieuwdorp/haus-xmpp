@@ -98,9 +98,6 @@ struct MacConversationView: View {
                 .padding(.horizontal, 16).padding(.top, 8)
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if let timeline { MacConversationFindBars(timeline: timeline, focusRequests: findRequests) }
-        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // A blocked chat says so and offers Unblock in place of the composer. The timeline's frame ends above it,
             // so the timeline follows the composer's height as it does the window's (`MacTimelineController.resized`).
@@ -110,6 +107,13 @@ struct MacConversationView: View {
             } else if timeline?.searching != true {
                 MacComposer(model: model, chatID: chatID, intent: composerIntent)
             }
+        }
+        // Files dropped anywhere in the chat but on the find bars join the composer's tray; a drop during search closes
+        // it, as a reply does.
+        .onDrop(of: MacAttachmentDrop.types, delegate: MacAttachmentDrop(model: model, chatID: chatID, intent: composerIntent, targeted: $dropTargeted))
+        .overlay { if dropTargeted || debugDropHighlight { MacAttachmentDropHighlight() } }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let timeline { MacConversationFindBars(timeline: timeline, focusRequests: findRequests) }
         }
         .focusedSceneValue(\.conversationFind, timeline.map { timeline in
             MacConversationFindCommands(find: find, starredOnly: timeline.starredOnly, setStarredOnly: { timeline.setStarredOnly($0) })
@@ -163,8 +167,6 @@ struct MacConversationView: View {
         } message: { _ in
             Text("It disappears here. \(title) may still see it if their app doesn't support unsending.")
         }
-        .onDrop(of: MacAttachmentDrop.types, delegate: MacAttachmentDrop(model: model, chatID: chatID, intent: composerIntent, targeted: $dropTargeted))
-        .overlay { if dropTargeted || debugDropHighlight { MacAttachmentDropHighlight() } }
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(title)
         .navigationSubtitle(model.trustSummary(for: chatID).pill)
