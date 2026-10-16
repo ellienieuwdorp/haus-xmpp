@@ -40,9 +40,8 @@ enum SharedStorage {
         try usableContainer(FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group))
     }
 
-    /// The container must be a directory that exists or can be created, and that this process may write to. On iOS
-    /// that is checked with permissions rather than a probe write, so nothing is written and the answer does not
-    /// depend on file protection before first unlock. On macOS a probe file is written and removed (`permitsWriting`).
+    /// The container must be a directory that exists or can be created, and on macOS one this process may write to
+    /// (`permitsWriting`).
     static func usableContainer(_ url: URL?) throws -> URL {
         guard let url else { throw Failure.unavailable }
         let manager = FileManager.default
@@ -67,7 +66,10 @@ enum SharedStorage {
         try? FileManager.default.removeItem(at: probe)
         return true
         #else
-        FileManager.default.isWritableFile(atPath: url.path)
+        // On iOS a URL at all means the process has the App Group, and access(2) is no test: on an iPhone it reports the
+        // container read-only although the app writes inside it (measured 2026-10-16 on iOS 27 with a TestFlight build;
+        // the simulator says writable). A probe write could fail before first unlock and would write for nothing.
+        true
         #endif
     }
 
