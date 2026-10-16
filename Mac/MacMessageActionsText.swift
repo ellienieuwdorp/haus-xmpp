@@ -36,6 +36,8 @@ struct MacBubbleText: NSViewRepresentable {
     func updateNSView(_ view: BubbleTextView, context: Context) {
         context.coordinator.openLink = openLink
         view.messageMenu = menu
+        let resultClick = context.environment.findResultClick
+        view.plainClick = resultClick.isActive ? { resultClick() } : nil
         if view.textStorage?.isEqual(to: text) != true { view.textStorage?.setAttributedString(text) }
         view.linkTextAttributes = [.foregroundColor: linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue, .cursor: NSCursor.pointingHand]
         if context.coordinator.selectAllRequests != selectAllRequests {
@@ -92,6 +94,9 @@ struct MacBubbleText: NSViewRepresentable {
 
 final class BubbleTextView: NSTextView {
     var messageMenu: ((URL?) -> NSMenu)?
+    /// What a single click that lands on no link and leaves nothing selected does besides placing the caret: a search
+    /// result's jump.
+    var plainClick: (() -> Void)?
 
     static func make() -> BubbleTextView {
         let stack = MacBubbleText.TextStack()
@@ -117,6 +122,17 @@ final class BubbleTextView: NSTextView {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         clickIsInSelection(event) ? super.menu(for: event) : messageMenu?(link(at: event))
+    }
+
+    /// The text view tracks the click until the button comes up, selecting as the pointer drags; only a click that
+    /// selected nothing counts as a plain click. One inside a selection stays the selection's.
+    override func mouseDown(with event: NSEvent) {
+        guard let plainClick, event.clickCount == 1, link(at: event) == nil, !clickIsInSelection(event) else {
+            super.mouseDown(with: event)
+            return
+        }
+        super.mouseDown(with: event)
+        if selectedRange().length == 0 { plainClick() }
     }
 
     /// The message's menu without first selecting the word under the pointer, as a text view would.
