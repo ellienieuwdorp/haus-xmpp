@@ -244,9 +244,10 @@ struct MacBubble<CardMenu: View>: View {
     private var footer: some View {
         HStack(spacing: 4) {
             Spacer(minLength: 0)
-            if message.isStarred {
-                Image(systemName: "star.fill").font(.caption2).accessibilityHidden(true)
-            }
+            // Laid out on every message and shown only when starred, as on the iPhone, so starring never widens the bubble.
+            Image(systemName: "star.fill").font(.caption2)
+                .opacity(message.isStarred ? 1 : 0)
+                .accessibilityHidden(true)
             if message.showsFooterText {
                 Text(message.footerText).font(.caption2)
             }
