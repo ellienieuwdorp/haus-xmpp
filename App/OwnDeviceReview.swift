@@ -93,6 +93,23 @@ extension OwnDeviceReview {
             EncryptionDevice(jid: account, profile: .modern, deviceID: 1907, identityKey: changed.modern, trust: .undecided, active: true, identityChanged: true)
         ]
     }
+
+    #if DEBUG
+    /// `-demo-group`: the sample group's address.
+    static let sampleRoom = "trail@rooms.preview.local"
+
+    /// `-demo-group`: the sample group's devices, one in each state a member's device can be in, and another device of
+    /// the account.
+    static func sampleGroupDevices(account: String) -> [EncryptionDevice] {
+        let first = sampleIdentities[0], second = sampleIdentities[1]
+        return [
+            EncryptionDevice(jid: account, profile: .modern, deviceID: 48213, identityKey: second.modern, trust: .accepted, active: true, identityChanged: false),
+            EncryptionDevice(jid: DemoSamples.alex, profile: .modern, deviceID: 5120, identityKey: first.modern, trust: .verified, active: true, identityChanged: false),
+            EncryptionDevice(jid: DemoSamples.alex, profile: .modern, deviceID: 977, identityKey: second.modern, trust: .accepted, active: false, identityChanged: false),
+            EncryptionDevice(jid: DemoSamples.maya, profile: .modern, deviceID: 20417, identityKey: first.modern, trust: .undecided, active: true, identityChanged: true)
+        ]
+    }
+    #endif
 }
 
 /// The chat list's account-level prompt, shaped like a chat's trust review card.
