@@ -5,10 +5,16 @@
 # requests from forks. Fork pull requests get the same tests on a GitHub-hosted runner instead.
 name: Swift packages
 
+#
+# A run starts only when a package or this workflow changed, and tests only the changed packages and the packages that
+# depend on them, so commits to the app, the site or the README leave the runner alone. Run it by hand to test all.
 on:
   push:
     branches: [main]
+    paths: ['Packages/**', '.github/workflows/swift-packages.yml']
   pull_request:
+    paths: ['Packages/**', '.github/workflows/swift-packages.yml']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,15 +24,59 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Changed packages
+    # Fork pull requests never reach the self-hosted Mac, not even for this.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "macOS", "ARM64", "haus-xmpp"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    outputs:
+      packages: ${{ steps.pick.outputs.packages }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Pick packages
+        id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          all="XMPPProtocol MessageStore MessagingCore OMEMOCrypto OMEMO"
+          if [ "$EVENT" = pull_request ]; then
+            changed=$(git diff --name-only "$BASE"...HEAD)
+          elif [ "$EVENT" = push ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            changed=$(git diff --name-only "$BEFORE" HEAD)
+          else
+            changed=.github/workflows/swift-packages.yml # run by hand, a new branch or a rewritten history: test all
+          fi
+          want=" "
+          add() { for p in "$@"; do case "$want" in *" $p "*) ;; *) want="$want$p ";; esac; done; }
+          # A package's dependents are tested with it.
+          while IFS= read -r f; do
+            case "$f" in
+              .github/workflows/swift-packages.yml) add $all ;;
+              Packages/XMPPProtocol/*) add XMPPProtocol MessageStore OMEMO MessagingCore ;;
+              Packages/MessageStore/*) add MessageStore OMEMO MessagingCore ;;
+              Packages/OMEMOCrypto/*) add OMEMOCrypto OMEMO MessagingCore ;;
+              Packages/OMEMO/*) add OMEMO MessagingCore ;;
+              Packages/MessagingCore/*) add MessagingCore ;;
+            esac
+          done <<< "$changed"
+          json=""
+          for p in $all; do case "$want" in *" $p "*) json="$json${json:+,}\"$p\"";; esac; done
+          echo "packages=[$json]" | tee -a "$GITHUB_OUTPUT"
+
   test:
     name: ${{ matrix.package }}
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: changes
+    if: needs.changes.outputs.packages != '[]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, macOS, ARM64, haus-xmpp]
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        package: [XMPPProtocol, MessageStore, MessagingCore, OMEMOCrypto, OMEMO]
+        package: ${{ fromJSON(needs.changes.outputs.packages) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify vendored libomemo-c and protobuf-c
@@ -41,14 +91,15 @@ jobs:
 
   test-fork:
     name: ${{ matrix.package }} (fork)
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    needs: changes
+    if: needs.changes.outputs.packages != '[]' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
     # GitHub's macOS image with Xcode 27 (https://github.com/actions/runner-images).
     runs-on: xcode-27
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        package: [XMPPProtocol, MessageStore, MessagingCore, OMEMOCrypto, OMEMO]
+        package: ${{ fromJSON(needs.changes.outputs.packages) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Select Xcode
