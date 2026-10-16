@@ -32,9 +32,10 @@ import SwiftUI
 ///   frames), `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as the reader's scroll,
 ///   positive towards older messages), `scroll-to <message id>` (a stored message by its ID), `quote <reference>` (as a
 ///   click on a quote naming that message does), `resize <width>x<height>` and `timeline` (logs the reader's row and
-///   distances). `scroll <seconds>` sweeps the open chat's timeline from the newest loaded message to the oldest and
-///   back, moving its clip view on a 120 Hz timer, and logs how late the main thread ran the ticks and the app's memory
-///   footprint (`ScrollProbe`); give `-haus-capture-frames` a short time so its renders are done before the sweep.
+///   distances). `scroll <seconds> [paging]` sweeps the open chat's timeline from the newest loaded message to the
+///   oldest and back, moving its clip view on a 120 Hz timer, and logs how late the main thread ran the ticks and the
+///   app's memory footprint (`ScrollProbe`); with `paging` the sweep counts as the reader's gesture, so older pages
+///   come in near the top. Give `-haus-capture-frames` a short time so its renders are done before the sweep.
 ///   Frames may be `0` seconds for a tour that only captures by name.
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
 ///   also in the sample conversations, where previews are otherwise off. `-haus-untinted-send`: the composer's Send in
@@ -295,8 +296,9 @@ import SwiftUI
             case "capture":
                 guard let directory = value(after: "-haus-capture-frames"), let main = mainWindow, let png = renderWithOverlays(main) else { log("tour capture: needs -haus-capture-frames <dir> <seconds>"); break }
                 emit(png, directory: directory, file: slug(argument) + ".png")
-            case "scroll" where Double(argument) != nil:
-                if let window = mainWindow { await ScrollProbe.sweep(in: window, seconds: Double(argument) ?? 10) }
+            case "scroll" where Double(argument.split(separator: " ").first ?? "") != nil:
+                let parts = argument.split(separator: " ")
+                if let window = mainWindow { await ScrollProbe.sweep(in: window, seconds: Double(parts[0]) ?? 10, paging: parts.dropFirst().first == "paging") }
             case "scroll", "scroll-to", "quote", "resize", "timeline": await MacTimelineDebug.step(words[0], argument, window: mainWindow)
             default: log("tour \(step): unknown")
             }
@@ -353,7 +355,7 @@ import SwiftUI
         }
 
         /// The timeline is the scroll view with the tallest document: the chat list holds a few rows.
-        static func sweep(in window: NSWindow, seconds: Double) async {
+        static func sweep(in window: NSWindow, seconds: Double, paging: Bool) async {
             func scrollViews(in view: NSView) -> [NSScrollView] { ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrollViews(in:)) }
             guard let root = window.contentView,
                   let scrollView = scrollViews(in: root).max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }) else {
@@ -363,10 +365,13 @@ import SwiftUI
             let probe = ScrollProbe(scrollView: scrollView, seconds: seconds)
             let before = footprint()
             log(String(format: "scroll: start, document %.0f pt, footprint %.1f MB", scrollView.documentView?.frame.height ?? 0, megabytes(before)))
+            // With `paging`, as a gesture would, so the timeline pages in older history when the sweep nears the top.
+            if paging { MacTimelineController.current?.phaseChanged(.interacting) }
             await withCheckedContinuation { continuation in
                 probe.finished = continuation
                 probe.start()
             }
+            if paging { MacTimelineController.current?.phaseChanged(.idle) }
             let after = footprint()
             let sorted = probe.intervals.sorted()
             let p95 = sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))]
