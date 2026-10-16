@@ -141,8 +141,12 @@ final class AttachmentKeyboardResponder: UIView {
         controller.view.addSubview(responder)
     }
 
+    /// Also drops the composer's actions, which hold the composer that owns this keyboard. `close()` keeps them for
+    /// the picker chips, which call them after closing the panel. A camera still up keeps its own route to the
+    /// composer (see `presentCamera`).
     func uninstall() {
         close()
+        actions = nil
         responder.removeFromSuperview()
         host = nil
     }
@@ -241,14 +245,17 @@ final class AttachmentKeyboardResponder: UIView {
         }
     }
 
+    /// The camera holds the composer's capture action itself, not the panel's actions: the chat can stop offering
+    /// uploads while the camera is up, which uninstalls the panel, and the photo must still land. It lets go of the
+    /// action when the camera closes, so the composer is not kept alive past the capture.
     private func presentCamera() {
-        guard let host, host.presentedViewController == nil, UIImagePickerController.isSourceTypeAvailable(.camera) else { return }
+        guard let host, let actions, host.presentedViewController == nil, UIImagePickerController.isSourceTypeAvailable(.camera) else { return }
         let picker = UIImagePickerController()
         picker.sourceType = .camera
         picker.mediaTypes = [UTType.image.identifier, UTType.movie.identifier]
         picker.videoQuality = .typeHigh
         picker.delegate = camera
-        camera.onCapture = { [weak self] capture in self?.actions?.capture(capture) }
+        camera.onCapture = actions.capture
         host.present(picker, animated: true)
     }
 
@@ -274,9 +281,13 @@ final class AttachmentKeyboardResponder: UIView {
 }
 
 private final class CameraDelegate: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
-    var onCapture: (CameraCapture) -> Void = { _ in }
+    /// Set for one presentation and cleared when it ends.
+    var onCapture: ((CameraCapture) -> Void)?
 
     func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+        defer { picker.dismiss(animated: true) }
+        guard let onCapture else { return }
+        self.onCapture = nil
         if let url = info[.mediaURL] as? URL {
             // The picker deletes its file once it closes; keep a copy for the export.
             let copy = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + "." + (url.pathExtension.isEmpty ? "mov" : url.pathExtension))
@@ -284,17 +295,18 @@ private final class CameraDelegate: NSObject, UIImagePickerControllerDelegate, U
         } else if let image = info[.originalImage] as? UIImage, let data = image.jpegData(compressionQuality: 0.9) {
             onCapture(.image(data))
         }
-        picker.dismiss(animated: true)
     }
 
-    func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { picker.dismiss(animated: true) }
+    func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+        onCapture = nil
+        picker.dismiss(animated: true)
+    }
 }
 
 // MARK: - Panel
 
 /// Replaces the software keyboard: an optional limited-access row, the recent photos rail and the format chips.
 final class AttachmentKeyboardView: UIInputView {
-    private unowned let keyboard: AttachmentKeyboard
     private let limitedRow = LimitedAccessRow()
     private let rail: RecentPhotosRail
     private let chips: FormatChipRow
@@ -308,7 +320,6 @@ final class AttachmentKeyboardView: UIInputView {
     private var compact = false
 
     init(keyboard: AttachmentKeyboard) {
-        self.keyboard = keyboard
         rail = RecentPhotosRail(keyboard: keyboard)
         chips = FormatChipRow(keyboard: keyboard)
         super.init(frame: CGRect(x: 0, y: 0, width: 390, height: 335), inputViewStyle: .keyboard)
@@ -316,8 +327,8 @@ final class AttachmentKeyboardView: UIInputView {
         // iOS 26 draws the keyboard backdrop behind an input view; the panel adds nothing of its own.
         backgroundColor = .clear
         accessibilityIdentifier = "attachmentPanel"
-        limitedRow.onSelectMore = { [unowned keyboard] in keyboard.presentLimitedPicker() }
-        limitedRow.onSettings = { [unowned keyboard] in keyboard.openSettings() }
+        limitedRow.onSelectMore = { [weak keyboard] in keyboard?.presentLimitedPicker() }
+        limitedRow.onSettings = { [weak keyboard] in keyboard?.openSettings() }
         rail.onAccessChanged = { [weak self] limited in self?.showLimitedRow(limited) }
         for part in [limitedRow, rail, chips] as [UIView] {
             part.translatesAutoresizingMaskIntoConstraints = false
@@ -626,7 +637,9 @@ private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, 
 /// Up to 96 of the newest photos and videos, square tiles in one sideways row. Tapping adds to the tray in tap
 /// order; tapping a selected tile takes it back out.
 private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UICollectionViewDelegate {
-    private unowned let keyboard: AttachmentKeyboard
+    /// Weak, like every reference back from the panel: UIKit keeps the last panel it showed after the chat that
+    /// owned the keyboard has gone, and a chip's action runs a turn after its tap.
+    private weak var keyboard: AttachmentKeyboard?
     private let layout = UICollectionViewFlowLayout()
     private let collection: UICollectionView
     private let library = RecentPhotosLibrary.shared
@@ -752,7 +765,7 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
 
     private func refreshVisibleCells() {
         for case let cell as RecentPhotoCell in collection.visibleCells {
-            guard let path = collection.indexPath(for: cell), let asset = assets?.object(at: path.item) else { continue }
+            guard let path = collection.indexPath(for: cell), let asset = asset(at: path.item) else { continue }
             configureState(cell, asset: asset, index: path.item)
         }
     }
@@ -760,7 +773,7 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
     private func showAccessPrompt() {
         let denied = PHPhotoLibrary.authorizationStatus(for: .readWrite) != .notDetermined
         collection.backgroundView = message("Allow photo access to pick from your recent photos.", button: denied ? "Open Settings" : "Allow Access") { [weak self] in
-            if denied { self?.keyboard.openSettings() } else {
+            if denied { self?.keyboard?.openSettings() } else {
                 PHPhotoLibrary.requestAuthorization(for: .readWrite) { _ in Task { @MainActor [weak self] in self?.reload() } }
             }
         }
@@ -799,13 +812,20 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         return container
     }
 
+    /// `object(at:)` raises for an index past the end. Until the next layout pass after a reload, the visible cells
+    /// keep their old index paths, which a smaller read no longer has.
+    private func asset(at item: Int) -> PHAsset? {
+        guard let assets, item < assets.count else { return nil }
+        return assets.object(at: item)
+    }
+
     // MARK: Data source
 
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int { assets?.count ?? 0 }
 
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "photo", for: indexPath) as! RecentPhotoCell
-        guard let asset = assets?.object(at: indexPath.item) else { return cell }
+        guard let asset = asset(at: indexPath.item) else { return cell }
         cell.show(asset: asset, manager: library.imageManager, side: itemSide, scale: traitCollection.displayScale)
         configureState(cell, asset: asset, index: indexPath.item)
         return cell
@@ -820,7 +840,7 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: false)
-        guard let asset = assets?.object(at: indexPath.item) else { return }
+        guard let keyboard, let asset = asset(at: indexPath.item) else { return }
         let id = asset.localIdentifier
         if selection.contains(id) { keyboard.deselect(id); return }
         guard !loading.contains(id) else { return }
@@ -923,18 +943,22 @@ private final class RecentPhotoCell: UICollectionViewCell {
         options.isNetworkAccessAllowed = true
         let id = asset.localIdentifier
         let target = CGSize(width: max(side, 1) * scale, height: max(side, 1) * scale)
-        request = manager.requestImage(for: asset, targetSize: target, contentMode: .aspectFill, options: options) { [weak self] image, _ in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self, self.assetID == id else { return }
-                    self.imageView.image = image
-                }
+        // Sendable, so the handler is not main-actor code. Written here it otherwise would be, and Swift checks that
+        // on entry, which would trap if PhotoKit answered on a queue of its own. PhotoKit documents the main thread
+        // only as the typical case, so this is defensive. An answer on the main thread, such as the quick first one,
+        // is shown at once.
+        request = manager.requestImage(for: asset, targetSize: target, contentMode: .aspectFill, options: options) { @Sendable [weak self] image, _ in
+            let apply = { @MainActor in
+                guard let self, self.assetID == id else { return }
+                self.imageView.image = image
             }
+            if Thread.isMainThread { MainActor.assumeIsolated(apply) } else { DispatchQueue.main.async(execute: apply) }
         }
         let isVideo = asset.mediaType == .video
         durationLabel.isHidden = !isVideo
         scrim.isHidden = !isVideo
-        let seconds = Int(asset.duration.rounded())
+        // Int(_:) traps on a NaN or infinite value, and PhotoKit does not promise a finite duration.
+        let seconds = asset.duration.isFinite ? Int(min(max(asset.duration, 0), 359_999).rounded()) : 0
         let duration = seconds >= 3600 ? String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
             : String(format: "%d:%02d", seconds / 60, seconds % 60)
         durationLabel.text = isVideo ? duration : nil
@@ -971,10 +995,10 @@ private final class FormatChipRow: UIView {
         var chips: [(title: String, symbol: String, identifier: String, action: () -> Void)] = []
         // The simulator and some iPads have no camera; the chip is left out rather than shown dead.
         if UIImagePickerController.isSourceTypeAvailable(.camera) {
-            chips.append(("Camera", "camera.fill", "attachCamera", { [unowned keyboard] in keyboard.takePhoto() }))
+            chips.append(("Camera", "camera.fill", "attachCamera", { [weak keyboard] in keyboard?.takePhoto() }))
         }
-        chips.append(("Photos", "photo.on.rectangle.angled", "attachPhotos", { [unowned keyboard] in keyboard.pickPhotos() }))
-        chips.append(("File", "doc", "attachFiles", { [unowned keyboard] in keyboard.pickFiles() }))
+        chips.append(("Photos", "photo.on.rectangle.angled", "attachPhotos", { [weak keyboard] in keyboard?.pickPhotos() }))
+        chips.append(("File", "doc", "attachFiles", { [weak keyboard] in keyboard?.pickFiles() }))
         stack.axis = .horizontal
         stack.spacing = 12
         stack.alignment = .top
