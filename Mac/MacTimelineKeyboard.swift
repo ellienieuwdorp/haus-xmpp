@@ -138,15 +138,21 @@ struct MacTimelineRotors: ViewModifier {
     let namespace: Namespace.ID
 
     func body(content: Content) -> some View {
-        content
+        // Read from the observed `items`, so a new, edited or starred message or a page of history updates the rotors.
+        let messages = controller.items.compactMap { item -> TimelineMessage? in
+            guard case .message(let row) = item else { return nil }
+            return row.message
+        }
+        let links = Self.links(in: messages)
+        return content
             .accessibilityRotor("Messages") {
-                ForEach(controller.rows.map(\.message)) { message in entry(Self.label(for: message, contactName: contactName), message) }
+                ForEach(messages) { message in entry(Self.label(for: message, contactName: contactName), message) }
             }
             .accessibilityRotor(.links) {
                 ForEach(links) { link in entry(link.title, link.message) }
             }
             .accessibilityRotor("Starred Messages") {
-                ForEach(controller.rows.map(\.message).filter(\.isStarred)) { message in entry(Self.label(for: message, contactName: contactName), message) }
+                ForEach(messages.filter(\.isStarred)) { message in entry(Self.label(for: message, contactName: contactName), message) }
             }
     }
 
@@ -156,9 +162,9 @@ struct MacTimelineRotors: ViewModifier {
         let message: TimelineMessage
     }
 
-    /// Every link in the listed messages, oldest first, titled as the row's actions title them.
-    private var links: [Link] {
-        controller.rows.flatMap { row in row.message.links.map { (MessageActionMenu.linkAccessibilityTitle(for: $0), row.message) } }
+    /// Every link in the messages, oldest first, titled as the row's actions title them.
+    private static func links(in messages: [TimelineMessage]) -> [Link] {
+        messages.flatMap { message in message.links.map { (MessageActionMenu.linkAccessibilityTitle(for: $0), message) } }
             .enumerated().map { Link(id: $0.offset, title: $0.element.0, message: $0.element.1) }
     }
 
