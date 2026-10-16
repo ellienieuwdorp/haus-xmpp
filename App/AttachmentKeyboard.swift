@@ -934,8 +934,9 @@ private final class RecentPhotoCell: UICollectionViewCell {
         let id = asset.localIdentifier
         let target = CGSize(width: max(side, 1) * scale, height: max(side, 1) * scale)
         // Sendable, so the handler is not main-actor code. Written here it otherwise would be, and Swift checks that
-        // on entry, which traps when PhotoKit answers on a queue of its own (an iCloud original downloaded for the
-        // tile). An answer on the main thread, such as the quick first one, is shown at once.
+        // on entry, which would trap if PhotoKit answered on a queue of its own. PhotoKit documents the main thread
+        // only as the typical case, so this is defensive. An answer on the main thread, such as the quick first one,
+        // is shown at once.
         request = manager.requestImage(for: asset, targetSize: target, contentMode: .aspectFill, options: options) { @Sendable [weak self] image, _ in
             let apply = { @MainActor in
                 guard let self, self.assetID == id else { return }
