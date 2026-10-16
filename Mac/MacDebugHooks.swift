@@ -21,7 +21,8 @@ import SwiftUI
 ///   `inspector on|off`, `settings general|appearance|about`, `close-settings`, and for the open chat's composer:
 ///   `type <text>` (inserted at the caret as typing would), `key return|shift-return|option-return|command-return|escape|up`,
 ///   `reply <message id>|newest` (the newest received message), `edit <message id>|newest` (what Up-arrow would edit),
-///   `attach photo|file|scan|<path in the container>` (handed to the composer as a drop would), `paste photo|file|scan|<text>`
+///   `attach photo|file|scan|<path in the container>` (handed to the composer as a drop would),
+///   `drop photo|slow-photo|file|scan` (item providers dropped on the chat), `paste photo|file|scan|<text>`
 ///   and `import photo|scan` (Continuity Camera's handover), both from a private pasteboard, `remove-attachment <index>`,
 ///   `copy-image <message id>|newest` (to a private pasteboard, logging its types) (`MacAttachmentTour`),
 ///   and `snap <name>`, which captures the main window as `<name>.png` into `-haus-capture`'s directory.
@@ -249,7 +250,7 @@ import SwiftUI
                 if otherWindows.isEmpty { openSettings?() }
             case "close-settings": otherWindows.forEach { $0.close() }
             case "type", "key", "reply", "edit": composerStep(words[0], argument, model: model)
-            case "attach", "paste", "import", "remove-attachment", "copy-image": MacAttachmentTour.step(words[0], argument, model: model)
+            case "attach", "drop", "paste", "import", "remove-attachment", "copy-image": MacAttachmentTour.step(words[0], argument, model: model)
             case "snap":
                 guard let directory = value(after: "-haus-capture"), let window = mainWindow, let png = render(window) else { log("tour snap: needs -haus-capture <dir>"); break }
                 emit(png, directory: directory, file: slug(argument) + ".png")

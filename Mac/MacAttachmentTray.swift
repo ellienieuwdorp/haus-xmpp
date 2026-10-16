@@ -80,22 +80,26 @@ struct MacTrayItem: Identifiable {
         }
     }
 
-    /// What a drop onto the conversation carries: file URLs, else images or PDFs with no file behind them (a photo
-    /// dragged from a web page or from Photos).
-    static func read(_ providers: [NSItemProvider]) async -> [MacComposerAttachments] {
-        var found: [MacComposerAttachments] = []
-        for provider in providers {
+    /// A drop onto the conversation, one job per dragged item: a file, else an image or PDF with no file behind it (a
+    /// photo dragged from a web page or from Photos). Each holds its place in the tray as soon as it is dropped, so Send
+    /// waits for it, and its bytes are read only in its turn, so a large drop beyond the tray's room is never loaded.
+    static func jobs(for providers: [NSItemProvider], limit: Int) -> [Job] {
+        providers.compactMap { provider in
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                if let url = await fileURL(from: provider) { found.append(.files([url])) }
-                continue
+                return Job(label: provider.suggestedName ?? "File") {
+                    guard let url = await fileURL(from: provider) else { throw AttachmentPreparer.Failure.unreadable }
+                    return try await AttachmentPreparer.prepare(fileURL: url, name: url.lastPathComponent, type: UTType(filenameExtension: url.pathExtension), limit: limit)
+                }
             }
-            for type in [UTType.image, .pdf] where provider.hasItemConformingToTypeIdentifier(type.identifier) {
-                guard let data = await data(from: provider, type: type) else { break }
-                found.append(type == .pdf ? .pdf(data) : .image(data, type))
-                break
+            guard let type = [UTType.image, .pdf].first(where: { provider.hasItemConformingToTypeIdentifier($0.identifier) }) else { return nil }
+            let name = provider.suggestedName ?? (type == .pdf ? "Document" : "photo")
+            return Job(label: provider.suggestedName ?? (type == .pdf ? "Document" : "Photo")) {
+                let copy = try await fileCopy(from: provider, type: type)
+                defer { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
+                let named = (name as NSString).pathExtension.isEmpty && type == .pdf ? name + ".pdf" : name
+                return try await AttachmentPreparer.prepare(fileURL: copy, name: named, type: type, limit: limit)
             }
         }
-        return found
     }
 
     private static func fileURL(from provider: NSItemProvider) async -> URL? {
@@ -104,9 +108,22 @@ struct MacTrayItem: Identifiable {
         }
     }
 
-    private static func data(from provider: NSItemProvider, type: UTType) async -> Data? {
-        await withCheckedContinuation { continuation in
-            _ = provider.loadDataRepresentation(for: type) { data, _ in continuation.resume(returning: data) }
+    /// The item as a file of our own: the provider's file is gone once its handler returns. A file rather than data,
+    /// so the provider never has to hold the whole item in memory to hand it over.
+    private static func fileCopy(from provider: NSItemProvider, type: UTType) async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            _ = provider.loadFileRepresentation(for: type) { url, _, error in
+                guard let url else { return continuation.resume(throwing: error ?? AttachmentPreparer.Failure.unreadable) }
+                do {
+                    let folder = FileManager.default.temporaryDirectory.appending(path: "Drops/\(UUID().uuidString)", directoryHint: .isDirectory)
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    let copy = folder.appending(path: url.lastPathComponent)
+                    try FileManager.default.copyItem(at: url, to: copy)
+                    continuation.resume(returning: copy)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
         }
     }
 }
@@ -132,15 +149,9 @@ struct MacAttachmentDrop: DropDelegate {
     func performDrop(info: DropInfo) -> Bool {
         targeted = false
         guard validateDrop(info: info) else { return false }
-        let providers = info.itemProviders(for: Self.types)
-        let model = model, chatID = chatID, account = model.accountID
-        Task {
-            let found = await MacAttachmentIntake.read(providers)
-            guard model.accountID == account else { return }
-            let state = MacComposerDrafts.state(account: account, chat: chatID)
-            let limit = model.attachmentLimit
-            MacAttachmentIntake.add(found.flatMap { MacAttachmentIntake.jobs(for: $0, limit: limit) }, to: state, model: model)
-        }
+        let state = MacComposerDrafts.state(account: model.accountID, chat: chatID)
+        let jobs = MacAttachmentIntake.jobs(for: info.itemProviders(for: Self.types), limit: model.attachmentLimit)
+        MacAttachmentIntake.add(jobs, to: state, model: model)
         intent.focusComposer()
         return true
     }
@@ -254,9 +265,10 @@ struct MacAttachmentDropHighlight: View {
 
 #if DEBUG
 /// `-haus-tour`'s attachment steps (`MacDebugHooks`), through the composer's own paths: `attach` hands files to its
-/// seam as a drop would, `paste` and `import` go through the text view's pasteboard reading (from a private pasteboard,
-/// never the user's), `remove-attachment` uses the tray's remove, and `copy-image` copies a bubble's photo to a private
-/// pasteboard and logs what landed there.
+/// seam as a drop on the field would, `drop` hands item providers to the tray as a drop on the chat would, `paste` and
+/// `import` go through the text view's pasteboard reading (from a private pasteboard, never the user's),
+/// `remove-attachment` uses the tray's remove, and `copy-image` copies a bubble's photo to a private pasteboard and logs
+/// what landed there.
 @MainActor enum MacAttachmentTour {
     private static let pasteboard = NSPasteboard(name: NSPasteboard.Name("haus.tour.attachments"))
 
@@ -289,6 +301,25 @@ struct MacAttachmentDropHighlight: View {
                 guard requestor != nil else { return }
             }
             MacDebugHooks.log("tour \(step) \(argument): read \(textView.readSelection(from: pasteboard)), draft \(textView.string.count) characters")
+        case "drop":
+            // `photo`, `slow-photo` (whose source takes two seconds to hand it over), `file` or `scan`, as item providers
+            // dropped on the chat.
+            let provider: NSItemProvider? = switch argument {
+            case "photo", "slow-photo": DemoArt.lakePhotoJPEG().map { data in
+                let provider = NSItemProvider()
+                let delay: TimeInterval = argument == "slow-photo" ? 2 : 0
+                provider.registerDataRepresentation(for: .jpeg) { load in
+                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) { load(data, nil) }
+                    return nil
+                }
+                return provider
+            }
+            case "file": sampleFile().map { NSItemProvider(object: $0 as NSURL) }
+            case "scan": samplePDF().map { NSItemProvider(item: $0 as NSData, typeIdentifier: UTType.pdf.identifier) }
+            default: nil
+            }
+            guard let provider else { MacDebugHooks.log("tour drop \(argument): no sample"); return }
+            MacAttachmentIntake.add(MacAttachmentIntake.jobs(for: [provider], limit: model.attachmentLimit), to: state, model: model)
         case "remove-attachment":
             if let index = Int(argument), state.tray.indices.contains(index) { state.tray.remove(at: index) }
         case "copy-image":
