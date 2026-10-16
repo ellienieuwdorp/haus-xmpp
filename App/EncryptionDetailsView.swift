@@ -230,7 +230,7 @@ struct DeviceFingerprintSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            GroupedList {
                 Section {
                     VStack(spacing: 6) {
                         Image(systemName: device.badge.symbol)
@@ -273,6 +273,7 @@ struct DeviceFingerprintSheet: View {
                 if allowsMaintenance && device.active && device.trust.permitsEncryption {
                     Section {
                         Button("Repair encryption session", systemImage: "arrow.trianglehead.2.clockwise.rotate.90") { confirmingRepair = true }
+                            .listRowButton()
                             .disabled(!model.session.isReady)
                     } footer: { Text("Use this if messages from this device cannot be opened.") }
                 }
@@ -280,6 +281,7 @@ struct DeviceFingerprintSheet: View {
                     Button(role: .destructive) { if rejectionMessage == nil { review(.rejected) } else { confirmingRejection = true } } label: {
                         Label("Block this device", systemImage: "hand.raised").foregroundStyle(.red)
                     }
+                    .listRowButton()
                     .disabled(!device.active)
                     // Anchored to its button, so the dialog's popover points at what it confirms.
                     .confirmationDialog("Don’t trust device \(String(device.deviceID))?", isPresented: $confirmingRejection, titleVisibility: .visible) {
@@ -289,6 +291,7 @@ struct DeviceFingerprintSheet: View {
                         Button(role: .destructive) { confirmingRetirement = true } label: {
                             Label("Remove old device", systemImage: EncryptionDevice.removedSymbol).foregroundStyle(.red)
                         }
+                        .listRowButton()
                         .disabled(!model.session.isReady)
                     }
                 } footer: {
@@ -317,5 +320,6 @@ struct DeviceFingerprintSheet: View {
                 }
             } message: { Text("It will be removed from your account’s advertised encryption devices. Previous messages cannot be recalled.") }
         }
+        .macSheetSize(width: 460, height: 620)
     }
 }
