@@ -416,15 +416,15 @@ final class AttachmentKeyboardView: UIInputView {
     }
 }
 
-/// "You've given access to a selection of photos" plus a Manage menu.
+/// "You've given access to a selection of photos" plus a Select More Photos button.
 private final class LimitedAccessRow: UIView {
     var onSelectMore: () -> Void = {}
     var onSettings: () -> Void = {}
     private var collapse: NSLayoutConstraint!
-    private weak var manage: UIButton?
+    private weak var selectMore: UIButton?
     var collapsed = false { didSet { collapse.isActive = collapsed } }
 
-    /// Manage stays a small capsule beside one line of footnote text, but takes touches 44pt tall: the row, and
+    /// The button stays a small capsule beside one line of footnote text, but takes touches 44pt tall: the row, and
     /// the button through it, answer 8pt above and below their drawn bounds (the rail starts 16pt below).
     private static let reach: CGFloat = 8
 
@@ -434,7 +434,7 @@ private final class LimitedAccessRow: UIView {
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard !isHidden, self.point(inside: point, with: event) else { return nil }
-        if let manage, manage.convert(manage.bounds, to: self).insetBy(dx: 0, dy: -Self.reach).contains(point) { return manage }
+        if let selectMore, selectMore.convert(selectMore.bounds, to: self).insetBy(dx: 0, dy: -Self.reach).contains(point) { return selectMore }
         return super.hitTest(point, with: event)
     }
 
@@ -447,21 +447,24 @@ private final class LimitedAccessRow: UIView {
         label.textColor = .secondaryLabel
         label.numberOfLines = 2
         var configuration = UIButton.Configuration.glass()
-        configuration.title = "Manage"
+        configuration.title = "Select More Photos"
         configuration.buttonSize = .small
         configuration.cornerStyle = .capsule
-        let manage = UIButton(configuration: configuration)
-        self.manage = manage
-        manage.tintColor = .label
-        manage.showsMenuAsPrimaryAction = true
-        manage.accessibilityIdentifier = "managePhotoAccess"
-        manage.menu = UIMenu(children: [
-            UIAction(title: "Select More Photos…", image: UIImage(systemName: "photo.badge.plus")) { [weak self] _ in self?.onSelectMore() },
+        let selectMore = UIButton(configuration: configuration)
+        self.selectMore = selectMore
+        selectMore.tintColor = .label
+        selectMore.accessibilityIdentifier = "selectMorePhotos"
+        selectMore.addAction(UIAction { [weak self] _ in self?.onSelectMore() }, for: .primaryActionTriggered)
+        // A tap adds photos straight away; the settings route stays one long press (or VoiceOver action) away.
+        selectMore.menu = UIMenu(children: [
             UIAction(title: "Change Settings", image: UIImage(systemName: "gear")) { [weak self] _ in self?.onSettings() },
         ])
-        manage.setContentHuggingPriority(.required, for: .horizontal)
-        manage.setContentCompressionResistancePriority(.required, for: .horizontal)
-        let row = UIStackView(arrangedSubviews: [label, manage])
+        selectMore.accessibilityCustomActions = [
+            UIAccessibilityCustomAction(name: "Change Settings") { [weak self] _ in self?.onSettings(); return true },
+        ]
+        selectMore.setContentHuggingPriority(.required, for: .horizontal)
+        selectMore.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let row = UIStackView(arrangedSubviews: [label, selectMore])
         row.spacing = 12
         row.alignment = .center
         row.translatesAutoresizingMaskIntoConstraints = false
