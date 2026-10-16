@@ -240,9 +240,21 @@ private struct MacTimelineRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 12)
             }
-            BubbleWidth {
-                MacBubble(message: message, accent: appearance.accent, openAttachment: openAttachment)
-                    .contextMenu { menu }
+            // The pills are the bubble's sibling, not part of it, so they never widen it: the bubble's width comes from
+            // what it holds alone.
+            VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 0) {
+                BubbleWidth {
+                    MacBubble(message: message, accent: appearance.accent, openAttachment: openAttachment)
+                        .contextMenu { menu }
+                }
+                if !message.reactions.isEmpty {
+                    // Into the bubble's 6 pt bottom padding only, clear of the footer, with 2 pt kept below so the pills
+                    // stay clear of the next message, as on the iPhone.
+                    MacReactionRow(reactions: message.reactions)
+                        .padding(.horizontal, 10)
+                        .padding(.top, -3)
+                        .padding(.bottom, 2)
+                }
             }
             .frame(maxWidth: .infinity, alignment: message.isOutgoing ? .trailing : .leading)
         }
@@ -294,8 +306,8 @@ private struct BubbleWidth: Layout {
     }
 }
 
-/// Text, quote, attachment line and the quiet footer (edited, security notice, time, status mark) inside the bubble;
-/// reaction pills hang off its outer bottom corner and reserve their own space below it.
+/// Text, quote, attachment line and the quiet footer (edited, security notice, time, status mark) inside the bubble.
+/// Reaction pills are `MacReactionRow`, hung off its outer bottom corner by the row.
 private struct MacBubble: View {
     let message: TimelineMessage
     let accent: AccentTheme
@@ -323,65 +335,58 @@ private struct MacBubble: View {
     }
 
     var body: some View {
-        VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                if let reply = message.reply, !message.showsPlaceholder {
-                    HStack(spacing: 8) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(reply.author).font(.caption.weight(.semibold))
-                            Text(reply.body).font(.caption).lineLimit(2)
-                        }
-                        .foregroundStyle(textColor.opacity(0.85))
-                        .padding(.leading, 8)
-                        .overlay(alignment: .leading) { Capsule().fill(textColor.opacity(0.5)).frame(width: 2) }
-                        // A quoted photo or video keeps its still at the trailing edge, as on the iPhone.
-                        if let still = reply.thumbnail {
-                            Spacer(minLength: 0)
-                            MacQuoteStill(attachment: still, tint: metaColor)
-                        }
+        VStack(alignment: .leading, spacing: 4) {
+            if let reply = message.reply, !message.showsPlaceholder {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(reply.author).font(.caption.weight(.semibold))
+                        Text(reply.body).font(.caption).lineLimit(2)
+                    }
+                    .foregroundStyle(textColor.opacity(0.85))
+                    .padding(.leading, 8)
+                    .overlay(alignment: .leading) { Capsule().fill(textColor.opacity(0.5)).frame(width: 2) }
+                    // A quoted photo or video keeps its still at the trailing edge, as on the iPhone.
+                    if let still = reply.thumbnail {
+                        Spacer(minLength: 0)
+                        MacQuoteStill(attachment: still, tint: metaColor)
                     }
                 }
-                if let attachment = message.attachment, !message.showsPlaceholder {
-                    Button(action: openAttachment) {
-                        if attachment.showsPreview {
-                            MacMediaPreview(attachment: attachment, tint: metaColor)
-                                // Framed by the bubble colour, as on the iPhone: 3 pt to the bubble's edges.
-                                .padding(.horizontal, -MacMediaPreview.edge)
-                                .padding(.top, message.reply == nil ? -MacMediaPreview.top : 0)
-                        } else {
-                            Label(attachment.name.isEmpty ? attachment.kindLabel : attachment.name, systemImage: "doc")
-                                .font(.callout)
-                                .foregroundStyle(textColor)
-                        }
+            }
+            if let attachment = message.attachment, !message.showsPlaceholder {
+                Button(action: openAttachment) {
+                    if attachment.showsPreview {
+                        MacMediaPreview(attachment: attachment, tint: metaColor)
+                            // Framed by the bubble colour, as on the iPhone: 3 pt to the bubble's edges.
+                            .padding(.horizontal, -MacMediaPreview.edge)
+                            .padding(.top, message.reply == nil ? -MacMediaPreview.top : 0)
+                    } else {
+                        Label(attachment.name.isEmpty ? attachment.kindLabel : attachment.name, systemImage: "doc")
+                            .font(.callout)
+                            .foregroundStyle(textColor)
                     }
-                    .buttonStyle(.plain)
-                    .help(attachment.localURL == nil ? attachment.downloadDetail : "Open in Quick Look")
                 }
-                if let preview = message.linkPreview, !message.showsPlaceholder {
-                    MacLinkPreviewCard(preview: preview, fill: panelFill, textColor: textColor, metaColor: metaColor)
-                        .padding(.horizontal, -4)
-                }
-                if !message.displayedText.isEmpty {
-                    Text(text)
-                        .font(.body)
-                        .italic(message.showsPlaceholder)
-                        .foregroundStyle(message.showsPlaceholder ? metaColor : textColor)
-                        .tint(linkColor)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                footer
+                .buttonStyle(.plain)
+                .help(attachment.localURL == nil ? attachment.downloadDetail : "Open in Quick Look")
             }
-            // A photo fixes the bubble's width, as on the iPhone: a caption wraps under it rather than widening it.
-            .frame(width: showsMedia ? MacMediaPreview.width - 2 * MacMediaPreview.edge : nil)
-            .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6)
-            .background(message.isOutgoing ? accent.swatch : Color.tertiaryFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            if !message.reactions.isEmpty {
-                reactions
-                    .padding(.top, -6)
-                    .padding(message.isOutgoing ? .trailing : .leading, 10)
+            if let preview = message.linkPreview, !message.showsPlaceholder {
+                MacLinkPreviewCard(preview: preview, fill: panelFill, textColor: textColor, metaColor: metaColor)
+                    .padding(.horizontal, -4)
             }
+            if !message.displayedText.isEmpty {
+                Text(text)
+                    .font(.body)
+                    .italic(message.showsPlaceholder)
+                    .foregroundStyle(message.showsPlaceholder ? metaColor : textColor)
+                    .tint(linkColor)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            footer
         }
+        // A photo fixes the bubble's width, as on the iPhone: a caption wraps under it rather than widening it.
+        .frame(width: showsMedia ? MacMediaPreview.width - 2 * MacMediaPreview.edge : nil)
+        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6)
+        .background(message.isOutgoing ? accent.swatch : Color.tertiaryFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var footer: some View {
@@ -401,21 +406,38 @@ private struct MacBubble: View {
         }
         .foregroundStyle(metaColor)
     }
+}
 
-    private var reactions: some View {
-        HStack(spacing: 4) {
-            ForEach(message.reactions, id: \.emoji) { reaction in
-                HStack(spacing: 2) {
-                    Text(reaction.emoji)
-                    if reaction.count > 1 { Text("\(reaction.count)").font(.caption2.weight(.semibold)).foregroundStyle(.secondary) }
+/// One line of reaction pills, as wide as they need. When they do not all fit the width offered, the last ones fold
+/// into a single "+N" pill, as on the iPhone; the row's VoiceOver label still reads them all.
+private struct MacReactionRow: View {
+    let reactions: [TimelineReaction]
+
+    var body: some View {
+        // The longest row that fits: every pill, then one fewer plus "+N", and so on.
+        ViewThatFits(in: .horizontal) {
+            ForEach((1...reactions.count).reversed(), id: \.self) { shown in
+                HStack(spacing: 4) {
+                    ForEach(reactions.prefix(shown), id: \.emoji) { reaction in
+                        pill(reaction.emoji, count: reaction.count > 1 ? "\(reaction.count)" : nil)
+                            .accessibilityLabel(reaction.accessibilityDescription)
+                    }
+                    if shown < reactions.count { pill(nil, count: "+\(reactions.count - shown)") }
                 }
-                .font(.caption)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(.background, in: Capsule())
-                .overlay { Capsule().strokeBorder(reaction.isSelected ? accent.swatch : Color.secondary.opacity(0.3), lineWidth: reaction.isSelected ? 1.5 : 0.5) }
-                .accessibilityLabel(reaction.accessibilityDescription)
             }
         }
+    }
+
+    /// The user's own reaction looks like anyone else's; its label says "including you".
+    private func pill(_ emoji: String?, count: String?) -> some View {
+        HStack(spacing: 2) {
+            if let emoji { Text(emoji) }
+            if let count { Text(count).font(.caption2.weight(.semibold)).foregroundStyle(.secondary) }
+        }
+        .font(.caption)
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(.background, in: Capsule())
+        .overlay { Capsule().strokeBorder(Color.secondary.opacity(0.3), lineWidth: 0.5) }
     }
 }
 

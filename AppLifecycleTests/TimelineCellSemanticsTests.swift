@@ -136,6 +136,35 @@ final class TimelineCellSemanticsTests: XCTestCase {
         }
     }
 
+    /// A short message with more distinct reactions than the screen is wide (a peer may send twelve): the pills stay
+    /// between the margins, the ones that do not fit fold into one "+N" pill that accounts for every reaction, and the
+    /// bubble keeps the width it has without reactions.
+    func testManyReactionsStayOnScreenAndNeverWidenTheBubble() throws {
+        let emoji = ["❤️", "👍", "😂", "😮", "😢", "🙏", "🎉", "🔥", "👀", "💯", "✨", "🤔"]
+        let reactions = emoji.enumerated().map { TimelineReaction(emoji: $1, count: $0 < 3 ? 12 : 1, isSelected: false) }
+        for isOutgoing in [true, false] {
+            let message = { (reactions: [TimelineReaction]) in
+                TimelineMessage(id: "m", body: "OK", isOutgoing: isOutgoing, isStarred: false, sentAt: self.sentAt,
+                                status: isOutgoing ? .serverAccepted : nil, reactions: reactions)
+            }
+            show([message([])])
+            let bare = try bubble("m")
+            show([message(reactions)])
+            XCTAssertEqual(try bubble("m").width, bare.width, isOutgoing ? "own" : "received")
+            let content = try cell(at: IndexPath(item: 0, section: 0)).contentView
+            func shown(_ view: UIView) -> Bool { view === content || (!view.isHidden && view.superview.map(shown) == true) }
+            let labels = descendants(of: content).compactMap { $0 as? UILabel }.filter { shown($0) && $0.text != nil }
+            let pills = labels.filter { emoji.contains($0.text!) }
+            let overflow = try XCTUnwrap(labels.first { $0.text!.hasPrefix("+") }, "an overflow pill")
+            XCTAssertEqual(pills.count + (Int(overflow.text!.dropFirst()) ?? 0), emoji.count)
+            for label in pills + [overflow] {
+                let frame = label.convert(label.bounds, to: collectionView)
+                XCTAssertGreaterThanOrEqual(frame.minX, 16, "\(label.text!) \(isOutgoing ? "own" : "received")")
+                XCTAssertLessThanOrEqual(frame.maxX, collectionView.bounds.width - 16, "\(label.text!) \(isOutgoing ? "own" : "received")")
+            }
+        }
+    }
+
     /// A photo sent without a caption hides its text view, so the photo itself speaks for the message, quote included.
     func testACaptionlessPhotoSpeaksForItselfAndItsQuote() throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).jpg")

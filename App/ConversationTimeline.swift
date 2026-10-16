@@ -804,7 +804,12 @@ private final class PreviewSource: NSObject, QLPreviewControllerDataSource, @pre
 
 @MainActor
 private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizerDelegate {
-    private static let pillHang: CGFloat = 12
+    /// The time, star and status row sits this far above the bubble's bottom edge, whatever the bubble holds.
+    private static let footerInset: CGFloat = 8
+    static let pillHeight: CGFloat = 24
+    /// How far a reaction pill reaches up into the bubble: into the footer's bottom padding only, leaving 4pt
+    /// between the pill and the time and status row, so it never covers them at any text size.
+    private static let pillHang: CGFloat = 4
     private var row: TimelineRow?
     private var message: TimelineMessage? { row?.message }
     private var openAttachment: (URL) -> Void = { _ in }
@@ -1151,9 +1156,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             textView.trailingAnchor.constraint(equalTo: bubble.trailingAnchor),
             footer.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -12),
             footer.leadingAnchor.constraint(greaterThanOrEqualTo: bubble.leadingAnchor, constant: 12),
-            footer.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -8),
+            footer.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -Self.footerInset),
             reactionRow.topAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -Self.pillHang),
-            reactionRow.heightAnchor.constraint(equalToConstant: 24)
+            reactionRow.heightAnchor.constraint(equalToConstant: Self.pillHeight)
         ])
     }
 
@@ -1222,7 +1227,30 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             linkCard.fit(width: width - 2 * LinkPreviewCardView.bubbleInset)
         }
         bubbleWidth.constant = width
+        fitReactions(cellWidth: layoutAttributes.size.width)
         return super.preferredLayoutAttributesFitting(layoutAttributes)
+    }
+
+    /// The pills run from 8pt inside the bubble's outer edge towards the far margin, never past it. When they do not
+    /// all fit, the last ones fold into a single "+N" pill, so the row stays one line and every pill on it can be reached.
+    private func fitReactions(cellWidth: CGFloat) {
+        for case let pill as ReactionPill in reactionRow.arrangedSubviews {
+            if pill.isOverflow { pill.removeFromSuperview() } else { pill.isHidden = false }
+        }
+        let pills = reactionRow.arrangedSubviews
+        let available = cellWidth - 2 * 16 - 8
+        func width(_ view: UIView) -> CGFloat { view.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize).width }
+        let widths = pills.map(width)
+        func rowWidth(_ count: Int) -> CGFloat { widths.prefix(count).reduce(0, +) + CGFloat(max(0, count - 1)) * reactionRow.spacing }
+        guard rowWidth(pills.count) > available else { return }
+        var shown = pills.count - 1
+        var overflow = ReactionPill(overflow: pills.count - shown)
+        while shown > 1, rowWidth(shown) + reactionRow.spacing + width(overflow) > available {
+            shown -= 1
+            overflow = ReactionPill(overflow: pills.count - shown)
+        }
+        for pill in pills.dropFirst(shown) { pill.isHidden = true }
+        reactionRow.addArrangedSubview(overflow)
     }
 
     /// The link at `point` (bubble coordinates): the card's, or the one drawn under the point in the text.
@@ -1673,7 +1701,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         authorHeight.isActive = !showsAuthor
         author.textColor = message.author.map(AvatarPalette.color(for:)) ?? theme.tint
         bubbleTop.constant = showsAuthor ? 3 : 0
-        bubbleBottom.constant = message.reactions.isEmpty ? 0 : -(Self.pillHang + 2)
+        // The cell reserves the part of the pill below the bubble, plus 2pt, so it never meets the next message.
+        bubbleBottom.constant = message.reactions.isEmpty ? 0 : -(Self.pillHeight - Self.pillHang + 2)
         quote.isHidden = message.reply == nil
         quoteAuthor.text = message.reply?.author
         quoteBody.text = message.reply?.body
@@ -1926,50 +1955,55 @@ private final class TypingIndicatorCell: UICollectionViewCell {
     }
 }
 
-/// One reaction chip: emoji plus count, ringed in the accent when the user is among the reactors.
+/// One reaction chip: emoji plus count. The user's own reaction looks like anyone else's; the message's VoiceOver
+/// label says "including you", and the long-press reaction row marks it. An overflow chip says how many more emoji
+/// the row has no room for; the message's VoiceOver label still reads them all.
 @MainActor
 private final class ReactionPill: UIView {
-    private let ring = UIView()
     private let onTap: (() -> Void)?
+    let isOverflow: Bool
 
-    init(_ reaction: TimelineReaction, onTap: (() -> Void)?) {
+    convenience init(_ reaction: TimelineReaction, onTap: (() -> Void)?) {
+        self.init(emoji: reaction.emoji, count: reaction.count > 1 ? "\(reaction.count)" : nil, onTap: onTap)
+    }
+
+    convenience init(overflow hidden: Int) {
+        self.init(emoji: nil, count: "+\(hidden)", onTap: nil)
+    }
+
+    private init(emoji text: String?, count number: String?, onTap: (() -> Void)?) {
         self.onTap = onTap
+        isOverflow = text == nil
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         isAccessibilityElement = false
         if onTap != nil { addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped))) }
-        backgroundColor = .systemBackground
-        layer.cornerRadius = 12
+        // White in light mode; in dark mode a raised grey, so the pill still reads where it hangs over the black canvas.
+        // The border is the canvas colour, cutting the pill out of the bubble it overlaps.
+        backgroundColor = .tertiarySystemBackground
+        layer.cornerRadius = MessageBubbleCell.pillHeight / 2
         layer.borderWidth = 1.5
         layer.shadowOpacity = 0.14
         layer.shadowRadius = 1.5
         layer.shadowOffset = CGSize(width: 0, height: 1)
         let emoji = UILabel()
         emoji.font = .systemFont(ofSize: 14)
-        emoji.text = reaction.emoji
+        emoji.text = text
+        emoji.isHidden = text == nil
         let count = UILabel()
         count.font = .systemFont(ofSize: 12, weight: .semibold)
         count.textColor = .label
-        count.text = "\(reaction.count)"
-        count.isHidden = reaction.count <= 1
+        count.text = number
+        count.isHidden = number == nil
         let stack = UIStackView(arrangedSubviews: [emoji, count])
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.spacing = 3
         stack.alignment = .center
         addSubview(stack)
-        ring.translatesAutoresizingMaskIntoConstraints = false
-        ring.layer.cornerRadius = 10.5
-        ring.layer.borderWidth = 1.5
-        ring.isHidden = !reaction.isSelected
-        addSubview(ring)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
-            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            ring.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 1.5),
-            ring.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -1.5),
-            ring.topAnchor.constraint(equalTo: topAnchor, constant: 1.5),
-            ring.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -1.5)
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
         applyColors()
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (pill: ReactionPill, _: UITraitCollection) in pill.applyColors() }
@@ -1982,7 +2016,6 @@ private final class ReactionPill: UIView {
     private func applyColors() {
         layer.borderColor = UIColor.systemBackground.cgColor
         layer.shadowColor = UIColor.black.cgColor
-        ring.layer.borderColor = AccentTheme.current.tint.resolvedColor(with: traitCollection).cgColor
     }
 }
 
