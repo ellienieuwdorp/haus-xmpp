@@ -72,7 +72,7 @@ struct MacRootView: View {
         }
         .sheet(isPresented: $window.showingAccount) {
             SignInView(model: model)
-                .frame(minWidth: 460, idealWidth: 480, minHeight: 560, idealHeight: 620)
+                .frame(minWidth: 440, idealWidth: 460, minHeight: 460, idealHeight: 520)
                 .themedRoot()
         }
         .sheet(isPresented: $window.showingRestore) { RestoreTransferView(model: model).themedRoot() }
