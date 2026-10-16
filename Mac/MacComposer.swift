@@ -66,9 +66,10 @@ struct MacComposer: View {
     let model: AppModel
     let chatID: String
     @Bindable var intent: MacComposerIntent
-    /// Shift-Tab from the field: keyboard focus goes back to the timeline above.
+    /// Shift-Tab from the field, past the composer's own controls: keyboard focus goes back to the timeline above.
     let focusTimeline: (() -> Void)?
     @State private var state: MacComposerState
+    @FocusState private var control: MacComposerControl?
     @State private var choosingPhotos = false
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var choosingFiles = false
@@ -98,6 +99,7 @@ struct MacComposer: View {
 
     /// Where the iPhone shows its attach button: a direct chat on a server that takes uploads (any sample chat).
     private var showsAttach: Bool { !model.isGroup(chatID) && model.canSendAttachments }
+    private var attachEnabled: Bool { intent.editing == nil && !state.sending && !model.isSending }
     /// Paste and drop add files whenever the button shows, except while an edit rewrites text.
     private var canAttach: Bool { showsAttach && intent.editing == nil }
     /// The tray is set aside while an edit rewrites text.
@@ -137,16 +139,16 @@ struct MacComposer: View {
                 }
                 HStack(alignment: .bottom, spacing: 8) {
                     if showsAttach {
-                        MacAttachButton(enabled: intent.editing == nil && !state.sending && !model.isSending,
+                        MacAttachButton(enabled: attachEnabled, focus: $control,
                                         photos: { choosingPhotos = true }, files: { choosingFiles = true },
                                         prepareImport: { state.textView?.focus() })
                     }
                     VStack(alignment: .leading, spacing: 0) {
                         if state.linkPreview.state != .none {
-                            MacComposerLinkPreviewCard(state: state.linkPreview.state) { state.linkPreview.remove() }
+                            MacComposerLinkPreviewCard(state: state.linkPreview.state, focus: $control) { state.linkPreview.remove() }
                         }
                         if showsTray {
-                            MacAttachmentTray(items: state.tray, frozen: state.sending) { id in state.tray.removeAll { $0.id == id } }
+                            MacAttachmentTray(items: state.tray, frozen: state.sending, focus: $control) { id in state.tray.removeAll { $0.id == id } }
                         }
                         HStack(alignment: .bottom, spacing: 4) {
                             field
@@ -243,6 +245,7 @@ struct MacComposer: View {
                     .frame(width: 28, height: 28).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .focused($control, equals: .cancelBar)
             .help(isEdit ? "Cancel Edit (Esc)" : "Cancel Reply (Esc)")
             .accessibilityLabel(isEdit ? "Cancel edit" : "Cancel reply")
             .accessibilityIdentifier(isEdit ? "cancelEdit" : "cancelReply")
@@ -261,7 +264,24 @@ struct MacComposer: View {
     }
 
     private var keyActions: MacComposerKeyActions {
-        MacComposerKeyActions(send: send, editLast: editLast, cancel: cancelCurrent, attach: attach, canAttach: { canAttach }, focusPrevious: focusTimeline)
+        MacComposerKeyActions(send: send, editLast: editLast, cancel: cancelCurrent, attach: attach, canAttach: { canAttach },
+                              focusPrevious: focusTimeline.map { focusTimeline in { focusBeforeField(else: focusTimeline) } })
+    }
+
+    /// Shift-Tab from the field: with Full Keyboard Access, the control just before it, as the key view loop would
+    /// reach it (from there SwiftUI moves focus on itself); else, or with none, the timeline.
+    private func focusBeforeField(else focusTimeline: () -> Void) {
+        if NSApp.isFullKeyboardAccessEnabled, let previous = controlBeforeField { control = previous } else { focusTimeline() }
+    }
+
+    /// The composer's controls in reverse reading order: the tray's last remove button, the link preview's, Attach,
+    /// then the reply or edit bar's cancel button.
+    private var controlBeforeField: MacComposerControl? {
+        if showsTray, !state.sending, let last = state.tray.last { return .removeAttachment(last.id) }
+        if state.linkPreview.state != .none { return .removeLinkPreview }
+        if showsAttach, attachEnabled { return .attach }
+        if (intent.editing ?? intent.replyingTo) != nil { return .cancelBar }
+        return nil
     }
 
     private func cancel(isEdit: Bool) {
@@ -339,6 +359,14 @@ struct MacComposer: View {
     }
 }
 
+/// A control of the composer's that keyboard focus can be moved to: Shift-Tab from the field reaches the one before it.
+enum MacComposerControl: Hashable {
+    case cancelBar
+    case attach
+    case removeLinkPreview
+    case removeAttachment(UUID)
+}
+
 private struct LinkPreviewInput: Equatable {
     let draft: String
     let enabled: Bool
@@ -349,6 +377,7 @@ private struct LinkPreviewInput: Equatable {
 /// an activity indicator while it loads, then the small-thumbnail card, with a button that removes it.
 struct MacComposerLinkPreviewCard: View {
     let state: ComposerLinkPreview.State
+    var focus: FocusState<MacComposerControl?>.Binding
     let onRemove: () -> Void
     /// Decoded once per card image, not on every composer render; its slot is held from the start.
     @State private var thumbnail: CGImage?
@@ -391,6 +420,7 @@ struct MacComposerLinkPreviewCard: View {
                     .frame(width: 28, height: 28).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .focused(focus, equals: .removeLinkPreview)
             .help("Remove Link Preview")
             .accessibilityLabel("Remove link preview")
             .accessibilityIdentifier("removeLinkPreview")

@@ -164,6 +164,7 @@ struct MacAttachmentTray: View {
     let items: [MacTrayItem]
     /// While Send works through the tray, removing an item could no longer stop it going out.
     let frozen: Bool
+    var focus: FocusState<MacComposerControl?>.Binding
     let onRemove: (UUID) -> Void
 
     var body: some View {
@@ -223,6 +224,7 @@ struct MacAttachmentTray: View {
             }
             .buttonStyle(.plain)
             .disabled(frozen)
+            .focused(focus, equals: .removeAttachment(item.id))
             .help("Remove")
             .accessibilityLabel("Remove \(label)")
             .accessibilityIdentifier("removeAttachment")
