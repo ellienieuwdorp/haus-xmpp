@@ -2,9 +2,9 @@ import ServiceManagement
 import SwiftUI
 import UserNotifications
 
-/// The Mac's notification permission, which iOS folds into its push switch (the Mac registers no push yet): what
-/// macOS allows now, a button to ask while it was never asked, and System Settings for everything else, including
-/// turning quiet delivery into banners.
+/// The Mac's notification permission, in a build that registers no push (`PushService.isOffered`): what macOS allows
+/// now, a button to ask while it was never asked, and System Settings for everything else, including turning quiet
+/// delivery into banners.
 struct MacNotificationPermissionRow: View {
     @Bindable var model: AppModel
     @Environment(\.openURL) private var openURL
@@ -37,6 +37,62 @@ struct MacNotificationPermissionRow: View {
         case .provisional: "Delivered quietly, without banners"
         case .denied: "Off in \(ThisDevice.settingsApp)"
         default: "Not allowed yet"
+        }
+    }
+}
+
+/// The iPhone's push switch and its statuses, with the permission row folded in. On the Mac the permission matters
+/// apart from push: the banners the app posts itself while it runs need it too, so it is shown and asked for whatever
+/// the switch says. Quiet delivery, which macOS grants without asking, shows no banners, so the row says so and points
+/// to System Settings.
+struct MacPushNotificationRows: View {
+    @Bindable var model: AppModel
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        // On while push is on or being set up; a status that reads "Off" shows it off, as on the iPhone.
+        Toggle(isOn: Binding(get: { model.pushWanted && ![.off, .notAllowed].contains(model.pushStatus) },
+            set: { on in Task { if on { await model.enableNotifications() } else { await model.disableNotifications() } } })) {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Push notifications")
+                    Text(model.pushStatus.text).font(.footnote).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("pushStatus")
+                    if let permission {
+                        Text(permission).font(.footnote).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("notificationPermission")
+                    }
+                }
+            } icon: { SettingsIconTile(systemName: "bell.fill", color: .red) }
+        }
+        .accessibilityIdentifier("pushNotifications")
+        if model.pushWanted, [.unreachable, .unsupported].contains(model.pushStatus) {
+            Button("Try Again") { Task { await model.enableNotifications() } }
+                .disabled(!model.session.isReady)
+                .accessibilityIdentifier("retryPushNotifications")
+        }
+        switch model.notificationAuthorization {
+        case .notDetermined:
+            Button("Allow Notifications…") { Task { await model.requestNotificationPermission() } }
+                .accessibilityIdentifier("allowNotifications")
+        case .provisional, .denied:
+            Button("Open \(ThisDevice.settingsApp)") {
+                if let url = PlatformApplication.notificationSettingsURL { openURL(url) }
+            }
+            .accessibilityIdentifier("openNotificationSettings")
+        default:
+            EmptyView()
+        }
+    }
+
+    /// What the permission adds to the push status; nothing once banners are allowed, or where the status already
+    /// names it.
+    private var permission: String? {
+        switch model.notificationAuthorization {
+        case .provisional: "Delivered quietly, without banners"
+        case .denied: model.pushStatus == .notAllowed ? nil : "Not allowed in \(ThisDevice.settingsApp)"
+        case .notDetermined: "Not allowed yet"
+        default: nil
         }
     }
 }

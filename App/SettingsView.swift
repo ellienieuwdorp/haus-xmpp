@@ -76,8 +76,6 @@ struct SettingsView: View {
             #endif
             if showsNotificationSettings {
                 Section {
-                    // The Mac registers no push yet, so it shows only the preferences that also apply to
-                    // the notifications it posts itself.
                     #if os(iOS)
                     // On while push is on or being set up; a status that reads "Off" shows it off.
                     Toggle(isOn: Binding(get: { model.pushWanted && ![.off, .notAllowed].contains(model.pushStatus) },
@@ -107,7 +105,9 @@ struct SettingsView: View {
                         }
                     }
                     #else
-                    MacNotificationPermissionRow(model: model)
+                    // A Mac build without push (`PushService.isOffered`) shows only the permission, which its own
+                    // banners need.
+                    if PushService.isOffered { MacPushNotificationRows(model: model) } else { MacNotificationPermissionRow(model: model) }
                     #endif
                     Toggle("Message previews", isOn: Binding(get: { model.notificationPreviewsEnabled },
                         set: { enabled in Task { await model.setNotificationPreviews(enabled) } }))
