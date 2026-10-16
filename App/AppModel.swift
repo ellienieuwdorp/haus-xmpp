@@ -904,6 +904,10 @@ final class AppModel {
             setAppBadge(0)
             // Donated communication interactions name this account's contacts, rooms and avatars: they go with it.
             await CommunicationHistory.deleteAll()
+        } else if badgeUsesDockTile {
+            // A test session's count lives only on the Mac's Dock tile, and goes with the session.
+            appBadge = nil
+            setAppBadge(0)
         }
         sessionAccount = nil
         pushStatus = .off
@@ -1737,7 +1741,23 @@ final class AppModel {
                 authorization = await Self.notificationAuthorization()
             }
             guard generation == token, pushIntent == intent else { return }
+            #if os(macOS)
+            let (_, alertStyle) = await Self.notificationPermission()
+            guard generation == token, pushIntent == intent else { return }
+            if let stop = PushStatus.gate(for: authorization, alertStyle: alertStyle, interactive: false) {
+                if sessionAccount?.accountID == account, sessionAccount?.push != nil {
+                    activeEncryptionOperations += 1
+                    defer { activeEncryptionOperations -= 1 }
+                    try stagePushTurnOff(account: account)
+                    try await settlePushCleanup(client: client, account: account, token: token)
+                    guard generation == token, pushIntent == intent else { return }
+                }
+                pushStatus = stop
+                return
+            }
+            #else
             if let stop = PushStatus.gate(for: authorization, interactive: false) { pushStatus = stop; return }
+            #endif
             if pushStatus != .on { pushStatus = .settingUp }
             let deviceToken = try await PushRegistration.request()
             refreshNotificationPermission()
@@ -4122,7 +4142,19 @@ final class AppModel {
     private func setAppBadge(_ count: Int) {
         guard appBadge != count else { return }
         appBadge = count
-        Task { await PlatformApplication.setBadgeCount(count) }
+        let dockTileOnly = badgeUsesDockTile
+        Task { await PlatformApplication.setBadgeCount(count, dockTileOnly: dockTileOnly) }
+    }
+
+    /// The Mac labels its Dock tile until notifications are asked, and in a test session, whose counts must not reach
+    /// the app's real badge; otherwise the badge is the notification centre's, which the extension sets too
+    /// (`PlatformApplication.setBadgeCount`).
+    private var badgeUsesDockTile: Bool {
+        #if os(macOS)
+        testSessionID != nil || notificationAuthorization == .notDetermined
+        #else
+        false
+        #endif
     }
 }
 
@@ -4609,8 +4641,23 @@ extension AppModel: NotificationActionEnvironment {
             guard let self else { return }
             // App Clips' ephemeral authorization does not exist on macOS.
             self.mayPostNotifications = [.authorized, .provisional].contains(status)
+            let asked = self.notificationAuthorization != .notDetermined
+            let changed = (self.notificationAuthorization, self.notificationAlertStyle) != (status, alertStyle)
             self.notificationAuthorization = status
             self.notificationAlertStyle = alertStyle
+            // Once asked, the badge moves from the Dock tile to the notification centre.
+            if asked != (status != .notDetermined), let badge = self.appBadge {
+                self.appBadge = nil
+                self.setAppBadge(badge)
+            }
+            // Banners allowed or taken away in System Settings while connected: push follows now rather than on the
+            // next connection (`PushStatus.gate(for:alertStyle:interactive:)`).
+            let alertsAllowed = PushStatus.gate(for: status, alertStyle: alertStyle, interactive: false) == nil
+            if changed, status != .notDetermined, self.pushWanted, PushService.isOffered,
+               alertsAllowed ? self.pushStatus == .notAllowed : [.on, .settingUp].contains(self.pushStatus),
+               let client = self.client, let session = self.sessionAccount, self.isConnected {
+                self.startPushSetup(client: client, session: session, token: self.generation, interactive: false)
+            }
             #if DEBUG
             if MacDebugNotificationLog.mode == .log { self.mayPostNotifications = true }
             #endif
@@ -4671,6 +4718,24 @@ extension AppModel: NotificationActionEnvironment {
             "\($0.jid) \($0.deviceID) \($0.trust)\($0.active ? "" : " inactive")"
         }
         return "retained [\(pending.joined(separator: ", "))], room devices [\(devices.joined(separator: ", "))]"
+    }
+
+    /// For the Mac's badge checks: the count last set and where it went.
+    var debugBadgeReport: String {
+        "icon badge \(appBadge.map(String.init) ?? "unset") through \(badgeUsesDockTile ? "the Dock tile" : "the notification centre")"
+    }
+
+    /// Cuts the live stream off without telling anyone (`XMPPClient.silenceTransport()`), for the Mac's check of the
+    /// liveness handshake's probe and reconnect. False when no stream is online.
+    func debugSilenceTransport() async -> Bool {
+        await client?.silenceTransport() ?? false
+    }
+
+    /// Leaves the server's acknowledgement requests unanswered for `duration` on a live stream
+    /// (`XMPPClient.holdAcknowledgements(for:)`), for the Mac's check of a push to a healthy app. False when no stream
+    /// is online.
+    func debugHoldAcknowledgements(for duration: Duration) async -> Bool {
+        await client?.holdAcknowledgements(for: duration) ?? false
     }
 
     /// Holds one UI crypto operation open for `duration`, so a quiesce that starts meanwhile cannot finish before it:

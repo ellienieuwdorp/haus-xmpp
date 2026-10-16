@@ -63,9 +63,9 @@ import SwiftUI
 ///   that result). Menu bar steps: `menus` (logs what the Message menu's commands target, then the File, Edit, View,
 ///   Chat, Message and Window menus: each item, its shortcut and whether it is enabled), `command <menu>/<item>[/<item>]`
 ///   (performs that menu item as a click would, after the menu's validation; a disabled or missing item is logged
-///   instead), `header` (logs the window's title and subtitle), `badge` (logs the Dock tile's badge), `block <chat>` and
-///   `unblock <chat>` (sample conversations only, as `-haus-block`) and `close-window` (closes the main window, as its
-///   close button does). Device trust steps (`MacDeviceReviewTour`): `chat <address>`, `join <room>`, `devices`, `messages [<count>]`,
+///   instead), `header` (logs the window's title and subtitle), `badge` (logs the Dock tile's label and where the model
+///   last sent the icon badge), `block <chat>` and `unblock <chat>` (sample conversations only, as `-haus-block`) and
+///   `close-window` (closes the main window, as its close button does). Device trust steps (`MacDeviceReviewTour`): `chat <address>`, `join <room>`, `devices`, `messages [<count>]`,
 ///   `device <id>` (a device row of the inspector's devices or group page, which opens its fingerprint sheet), `review`
 ///   (the conversation banner's Review…), `own-review` (the account's review, as the sidebar card's Review opens it), `trust|verify|dont-trust|compare|remove
 ///   <id>` (that device's button in the open review or fingerprint sheet), `confirm <button>` (a confirmation's button)
@@ -380,7 +380,7 @@ import SwiftUI
             case "menus": logMenuBar()
             case "command": performMenuItem(argument)
             case "header": log("header: \(mainWindow.map { "'\($0.title)' / '\($0.subtitle)'" } ?? "no main window")")
-            case "badge": log("Dock badge \(NSApp.dockTile.badgeLabel ?? "none")")
+            case "badge": log("Dock badge \(NSApp.dockTile.badgeLabel ?? "none"), \(model.debugBadgeReport)")
             case "block" where model.isDemo: await model.block(argument)
             case "unblock" where model.isDemo: for entry in model.blockEntries(for: argument) { await model.unblock(entry) }
             case "close-window": mainWindow?.performClose(nil)

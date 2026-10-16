@@ -104,8 +104,8 @@ enum MacDebugNotificationLog {
 ///   `NotificationActionCenter` as the notification centre's delegate hands over a clicked one, and its outcome. With
 ///   `-haus-log-notifications` the newest logged request; otherwise the newest delivered one in Notification Center.
 /// - `notify delivered`: what Notification Center holds for the app (see `MacPushProbe`).
-/// - `notify state`: each chat's unread count and notification setting, the selected chat and the Dock badge, and
-///   whether this test session posts nothing (no `-haus-log-notifications`).
+/// - `notify state`: each chat's unread count and notification setting, the selected chat, the Dock tile's label and
+///   where the icon badge went, and whether this test session posts nothing (no `-haus-log-notifications`).
 /// - `notify messages <chat>`: the chat's read pointer and stored messages (ID prefix, direction and transport state,
 ///   time, body length, why unreadable), never their text.
 /// - `notify previews on|off`, `notify reactions on|off`: the Settings switches.
@@ -123,7 +123,7 @@ enum MacDebugNotificationLog {
         case "state":
             let chats = model.chats.map { "\($0.id) unread \($0.unreadCount)\($0.notification == ChatNotificationSetting() ? "" : " (\($0.notification))")" }
             log("notify state: \(chats.isEmpty ? "no chats" : chats.joined(separator: ", ")); selected \(window.selection ?? "none"), "
-                + "Dock badge \(NSApp.dockTile.badgeLabel ?? "none")"
+                + "Dock badge \(NSApp.dockTile.badgeLabel ?? "none"), \(model.debugBadgeReport)"
                 + (MacDebugNotificationLog.silencesTestSession ? "; notifications off in this test session" : ""))
         case "previews":
             await model.setNotificationPreviews(rest == "on")
