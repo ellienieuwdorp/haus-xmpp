@@ -339,6 +339,9 @@ private struct MacMessageCommandsSource: View {
     let chatID: String
     let timeline: MacTimelineController
     let handlers: MacMessageHandlers
+    #if DEBUG
+    @State private var debugToken = UUID()
+    #endif
 
     private var commands: MacMessageCommands {
         // `items` is the observed list the rows go into, so a change of rows reruns whatever reads this.
@@ -350,6 +353,11 @@ private struct MacMessageCommandsSource: View {
         Color.clear
             .accessibilityHidden(true)
             .focusedSceneValue(\.macMessageCommands, commands)
+            #if DEBUG
+            .onAppear { if MacUnobtrusive.isOn { let source = self; MacDebugHooks.tour.messageCommands.append((debugToken, { source.commands })) } }
+            // SwiftUI may build this view twice and take the copies down in any order; the newest one left counts.
+            .onDisappear { MacDebugHooks.tour.messageCommands.removeAll { $0.token == debugToken } }
+            #endif
     }
 }
 

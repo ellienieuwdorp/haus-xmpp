@@ -102,6 +102,9 @@ struct MacChatMenu: View {
     let focused: MacChatCommands?
 
     private var commands: MacChatCommands? {
+        #if DEBUG
+        if focused == nil, let unfocused = MacDebugHooks.tour.chatCommands { return unfocused() }
+        #endif
         return focused
     }
 
@@ -136,6 +139,9 @@ struct MacMessageMenuCommands: View {
     let focused: MacMessageCommands?
 
     private var commands: MacMessageCommands? {
+        #if DEBUG
+        if focused == nil, let unfocused = MacDebugHooks.tour.messageCommands.last { return unfocused.make() }
+        #endif
         return focused
     }
 
