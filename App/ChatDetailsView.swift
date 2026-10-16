@@ -114,13 +114,10 @@ struct ChatDetailsView: View {
             } header: {
                 VStack(spacing: 0) {
                     hero
-                    // The Mac's read-only conversation has no search or starred view to open yet.
-                    #if os(iOS)
                     HStack(spacing: 8) {
                         tile("Search", systemImage: "magnifyingglass") { leave(with: .search(chatID: chatID)) }
                         tile("Starred", systemImage: "star") { leave(with: .starred(chatID: chatID)) }
                     }
-                    #endif
                 }
                 // Undo the header's secondary caption styling, and keep the old sections' spacing.
                 .foregroundStyle(.primary)

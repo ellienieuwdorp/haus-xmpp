@@ -5,6 +5,8 @@ import SwiftUI
 struct MacCommands: Commands {
     let window: MacWindowState
     @Environment(\.openWindow) private var openWindow
+    /// The open chat's search and starred filter; nil while no chat is shown.
+    @FocusedValue(\.conversationFind) private var conversation
 
     var body: some Commands {
         // Kept for the Dock icon, which reopens the main window after it was closed (or never shown: a launch in the
@@ -20,13 +22,21 @@ struct MacCommands: Commands {
             }
             .keyboardShortcut("n")
         }
-        // Find searches the chat list for now; the full Mac conversation view will take ⌘F inside a chat.
+        // As in Mail: ⌘F searches what is open, ⌥⌘F the list beside it.
         CommandGroup(after: .textEditing) {
+            Button("Find in Conversation…") { conversation?.find() }
+                .keyboardShortcut("f")
+                .disabled(conversation == nil)
             Button("Find Chat…") {
                 showMainWindow()
                 window.searchRequests += 1
             }
-            .keyboardShortcut("f")
+            .keyboardShortcut("f", modifiers: [.command, .option])
+        }
+        CommandGroup(after: .sidebar) {
+            Toggle("Starred Messages", isOn: Binding(get: { conversation?.starredOnly ?? false },
+                                                     set: { conversation?.setStarredOnly($0) }))
+                .disabled(conversation == nil)
         }
         // The app has no help book; Help offers the support site and mail instead of "Help isn't available".
         CommandGroup(replacing: .help) {

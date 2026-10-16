@@ -201,6 +201,7 @@
 		9A4CA15E5D87E4F87ED8EB7A /* CoalescedReload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24971C9AFE6065119E87D945 /* CoalescedReload.swift */; };
 		9B805378DD0B035471E257E0 /* TransferHold.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6BAD5A2CC5BD36024E8579C /* TransferHold.swift */; };
 		9BD57F2EE4D968146B6B7797 /* LinkSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A6DDDC91AA22E187B34D17E /* LinkSettings.swift */; };
+		9D8DEC3262E478CDDFBD0B97 /* MacConversationFind.swift in Sources */ = {isa = PBXBuildFile; fileRef = B06DE019BE7587FFAB79B0B4 /* MacConversationFind.swift */; };
 		9ED56F755B682E67E5E1AC20 /* SharedSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECE35FFDB91D6C5604DB273F /* SharedSession.swift */; };
 		9EE6076ADE31F6322AC800C1 /* PushUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AC8B2A7BBFCEA0E69E72232 /* PushUITests.swift */; };
 		9FC332FF4AF38C8957D680FB /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 0C4661ACD1CB92BD1D68625E /* XMPPProtocol */; };
@@ -544,6 +545,7 @@
 		AC35ADFF191022AC7947AFE8 /* MacPushProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPushProbe.swift; sourceTree = "<group>"; };
 		ACBF37A7C95EEC298914703E /* LinkPreviewFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewFetcher.swift; sourceTree = "<group>"; };
 		ADA54DF38083C5DFB6D0F5C1 /* RevisionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RevisionUITests.swift; sourceTree = "<group>"; };
+		B06DE019BE7587FFAB79B0B4 /* MacConversationFind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacConversationFind.swift; sourceTree = "<group>"; };
 		B324F31F293C431B0B91594D /* PlatformSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformSupport.swift; sourceTree = "<group>"; };
 		B4689E0E3D14BB55262444FA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B73817A40C13029F33A2A1FF /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
@@ -689,6 +691,7 @@
 				5A0FAA76D7E3EC286E943F18 /* MacComposer.swift */,
 				86880CD8A2ACF57696491A6C /* MacComposerIntent.swift */,
 				7C56818FC0894E0A0E77766E /* MacComposerTextView.swift */,
+				B06DE019BE7587FFAB79B0B4 /* MacConversationFind.swift */,
 				CD9735757EA84131345E175B /* MacConversationView.swift */,
 				E5E34D508A44BE27F0D182FD /* MacDebugHooks.swift */,
 				9E8B694210C22F9137AC0711 /* MacImageEncoding.swift */,
@@ -1574,6 +1577,7 @@
 				BD1A21E3F6D6E99563CC14D1 /* MacComposer.swift in Sources */,
 				E5C62A063F26801D89ECB6E1 /* MacComposerIntent.swift in Sources */,
 				BF8B68B5F5D7539186A51F93 /* MacComposerTextView.swift in Sources */,
+				9D8DEC3262E478CDDFBD0B97 /* MacConversationFind.swift in Sources */,
 				62B5ACD2D3F79879ED0BBD03 /* MacConversationView.swift in Sources */,
 				0039E3C2A70F59E9C7A04141 /* MacDebugHooks.swift in Sources */,
 				3A7A62B7523F6748224D8BF5 /* MacExtensionProbe.swift in Sources */,
