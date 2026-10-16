@@ -763,13 +763,25 @@ import SwiftUI
         if !forward { requestOlderIfNeeded() }
     }
 
-    /// Scrolls just far enough to show the whole row, or its start when it is taller than the frame.
+    /// Scrolls just far enough to show the whole row, or its start when it is taller than the frame. Where that leaves
+    /// the reader is their place from then on, so a resize right after keeps it rather than the row they had scrolled to.
     func reveal(_ id: String) {
+        var moved = false
         // A row that is not laid out is brought in first, so it can be measured.
-        if layout.frame(of: id) == nil { place(id, top: Self.focusMargin) }
-        guard let frame = layout.frame(of: id),
-              let top = TimelineMessageFocus.revealTop(top: frame.minY, bottom: frame.maxY, frameHeight: layout.height, margin: Self.focusMargin) else { return }
-        place(id, top: TimelineScrollPolicy.reachableTop(top, rowHeight: frame.height, frameHeight: layout.height))
+        if layout.frame(of: id) == nil { moved = true; place(id, top: Self.focusMargin) }
+        guard let frame = layout.frame(of: id) else {
+            // Still not laid out, as while a resize animates: the row is the place, and the correction that follows the
+            // resize, or one queued now, brings it in.
+            followsEnd = false
+            restingPlace = (id: id, top: Self.focusMargin, height: 0)
+            keepPlace()
+            return
+        }
+        if let top = TimelineMessageFocus.revealTop(top: frame.minY, bottom: frame.maxY, frameHeight: layout.height, margin: Self.focusMargin) {
+            moved = true
+            place(id, top: TimelineScrollPolicy.reachableTop(top, rowHeight: frame.height, frameHeight: layout.height))
+        }
+        if moved { noteReader() }
     }
 
     /// Return or Space: the focused message's menu, opened by its row. False with no focused message listed.
