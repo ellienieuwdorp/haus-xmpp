@@ -129,7 +129,7 @@ struct MacConversationView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(title)
-        .navigationSubtitle(model.trustSummary(for: chatID).pill)
+        .background { MacConversationSubtitle(model: model, chatID: chatID) }
         .toolbar {
             // The contact's picture before the name, as the iPhone's header shows it; a click opens the details.
             ToolbarItem(placement: .navigation) {
@@ -293,6 +293,37 @@ private struct MacEmptyNotice: View {
         if let notice = presenter.emptyNotice {
             ContentUnavailableView(notice.title, systemImage: notice.systemImage)
         }
+    }
+}
+
+/// The header's line under the chat's name, by the iPhone's rules: who is typing, else the contact's last seen
+/// (`LastSeen.headerLabel`: a 1:1 chat with known activity, never a blocked one), else nothing. The trust state stays
+/// in the details and the review banner, as on the iPhone, so the line never flickers between the two. Its own view:
+/// typing and presence change often and must not rerun the conversation's body.
+private struct MacConversationSubtitle: View {
+    let model: AppModel
+    let chatID: String
+    /// Ticks while a relative "Last seen" shows, so "just now" and "today" roll over on their own.
+    @State private var clock = Date.now
+
+    private var subtitle: String {
+        let isGroup = model.isGroup(chatID), isBlocked = model.isBlocked(chatID)
+        if !isBlocked, let typing = model.typing[chatID], !typing.isEmpty { return TypingTracker.description(typing, isGroup: isGroup) }
+        return LastSeen.headerLabel(model.openChatLastSeen, isGroup: isGroup, isBlocked: isBlocked, now: clock, calendar: .autoupdatingCurrent) ?? ""
+    }
+
+    var body: some View {
+        Color.clear
+            .accessibilityHidden(true)
+            .navigationSubtitle(subtitle)
+            .task(id: model.openChatLastSeen) {
+                clock = .now
+                guard case .lastSeen = model.openChatLastSeen else { return }
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(30))
+                    clock = .now
+                }
+            }
     }
 }
 
