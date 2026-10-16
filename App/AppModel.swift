@@ -4123,7 +4123,7 @@ extension AppModel: NotificationActionEnvironment {
     }
 
     func authorizedNotificationAccount() -> String? {
-        guard testSessionID == nil, !isDemo, !accountID.isEmpty, sessionAccount?.accountID == accountID,
+        guard postsNotificationsInThisSession, !isDemo, !accountID.isEmpty, sessionAccount?.accountID == accountID,
               !ProcessInfo.processInfo.arguments.contains("--inspect-notification"),
               let saved = try? NotificationAccount.load(), saved.accountID == accountID else { return nil }
         return accountID
@@ -4416,22 +4416,24 @@ extension AppModel: NotificationActionEnvironment {
 
     /// The extension's poster, with the app's pre-scaled notification avatars, so banners match the extension's requests.
     private func notificationPoster(account: String) -> any NotificationPosting {
-        #if DEBUG && os(macOS)
-        // `-haus-log-notifications`: a lab run logs what would be posted, without asking for permission.
-        if let poster = MacDebugNotificationLog.poster { return poster }
-        #endif
         let root = storageRoot
-        return UserNotificationPoster(avatarData: { hash in
+        let poster = UserNotificationPoster(avatarData: { hash in
             guard let root else { return nil }
             return AvatarStore.notificationImageData(root: root, account: account, hash: hash)
         })
+        #if DEBUG && os(macOS)
+        // `-haus-log-notifications` / `-haus-post-notifications`: a lab run logs what it posts (or would post).
+        if let logged = MacDebugNotificationLog.poster(posting: poster) { return logged }
+        #endif
+        return poster
     }
 
-    /// A test session posts nothing, except a DEBUG Mac run that only logs its notifications (`-haus-log-notifications`):
-    /// banner checks can then use a private test store and leave the shared App Group store alone.
+    /// A test session posts nothing, and its account's notifications take no actions, except in a DEBUG Mac run that
+    /// logs its notifications (`MacDebugNotificationLog`): banner checks can then use a private test store and leave
+    /// the shared App Group store alone.
     private var postsNotificationsInThisSession: Bool {
         #if DEBUG && os(macOS)
-        if MacDebugNotificationLog.poster != nil { return true }
+        if MacDebugNotificationLog.mode != nil { return true }
         #endif
         return testSessionID == nil
     }
@@ -4454,7 +4456,7 @@ extension AppModel: NotificationActionEnvironment {
             self.mayPostNotifications = [.authorized, .provisional].contains(status)
             self.notificationAuthorization = status
             #if DEBUG
-            if MacDebugNotificationLog.poster != nil { self.mayPostNotifications = true }
+            if MacDebugNotificationLog.mode == .log { self.mayPostNotifications = true }
             #endif
             #endif
             // Turned off in iOS Settings while away; turning it back on is picked up by the next connection.
