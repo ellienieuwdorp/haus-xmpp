@@ -59,8 +59,7 @@ import SwiftUI
 ///   Messages read the main window's targets directly there (`Tour.chatCommands`, `Tour.messageCommands`,
 ///   `Tour.conversationFind`) instead of as focused scene values.
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
-///   also in the sample conversations, where previews are otherwise off. `-haus-untinted-send`: the composer's Send in
-///   the clear variant of its glass style, as an enabled accent-tinted circle leaves the conversation out of a capture.
+///   also in the sample conversations, where previews are otherwise off.
 /// - `-haus-timeline-trace`: logs each timeline update that held the reader's row, with how far the update moved it and
 ///   its drift over the next 30 refreshes, and each scroll the controller placed.
 /// - `-haus-timeline-unbound`: leaves the timeline's position unbound, so SwiftUI keeps the absolute offset through a
@@ -627,7 +626,7 @@ import SwiftUI
         // A popover's frame is glass and renders blank; its content alone renders, on a flat fill drawn below.
         let attached = (window.childWindows ?? []).filter { $0.isVisible && !$0.isSheet && !isRemote($0) }.compactMap { child -> (NSWindow, NSBitmapImageRep)? in
             guard let view = child.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
-            view.cacheDisplay(in: view.bounds, to: rep)
+            cacheDisplay(view, to: rep)
             return (child, rep)
         }
         guard !overlays.isEmpty || !attached.isEmpty else { return main.representation(using: .png, properties: [:]) }
@@ -687,7 +686,7 @@ import SwiftUI
         guard let base = view.bitmapImageRepForCachingDisplay(in: view.bounds),
               let output = view.bitmapImageRepForCachingDisplay(in: view.bounds),
               let context = NSGraphicsContext(bitmapImageRep: output) else { return nil }
-        view.cacheDisplay(in: view.bounds, to: base)
+        cacheDisplay(view, to: base)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
         window.effectiveAppearance.performAsCurrentDrawingAppearance {
@@ -745,6 +744,26 @@ import SwiftUI
         return output
     }
 
+    /// `cacheDisplay` renders the layers in this process (`CALayer.render(in:)`), not as the window server does, and
+    /// draws no Liquid Glass. A SwiftUI glass shape that is tinted and fully opaque (the composer's Send once there is
+    /// something to send) also masks its tint with a layer composited `destIn`, and while that layer is in the tree the
+    /// in-process render leaves out the entire hosting view around it: a capture showed the conversation and the
+    /// composer blank from the first typed character until the send, though their views and layers were all in place,
+    /// visible and opaque, and nothing was thrown. The disabled Send (0.35 opacity) and the untinted style render. The
+    /// masks are hidden while caching; the glass they belong to is blank in a capture either way.
+    private static func cacheDisplay(_ view: NSView, to rep: NSBitmapImageRep) {
+        let masks = view.layer.map(descendants(of:))?.filter { layer in
+            !layer.isHidden && NSStringFromClass(type(of: layer)).hasSuffix("SDFLayer") && layer.compositingFilter.map { "\($0)" } == "destIn"
+        } ?? []
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        masks.forEach { $0.isHidden = true }
+        CATransaction.commit()
+        view.cacheDisplay(in: view.bounds, to: rep)
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        masks.forEach { $0.isHidden = false }
+        CATransaction.commit()
+    }
+
     private static func draw(_ part: NSView, into view: NSView) {
         guard let rep = part.bitmapImageRepForCachingDisplay(in: part.bounds) else { return }
         // Vibrant text and fills (the sidebar's labels, the search field) are masks through which the window server
@@ -758,7 +777,7 @@ import SwiftUI
         let hidden = vibrant.map(\.layer.isHidden)
         vibrant.forEach { $0.layer.isHidden = true }
         CATransaction.commit()
-        part.cacheDisplay(in: part.bounds, to: rep)
+        cacheDisplay(part, to: rep)
         CATransaction.begin(); CATransaction.setDisableActions(true)
         for (item, wasHidden) in zip(vibrant, hidden) { item.layer.isHidden = wasHidden }
         CATransaction.commit()

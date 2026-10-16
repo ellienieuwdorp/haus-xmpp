@@ -205,19 +205,12 @@ struct MacComposer: View {
             .padding(.leading, 16)
     }
 
-    private var sendTinted: Bool {
-        #if DEBUG
-        if MacComposerTour.untintedSend { return false }
-        #endif
-        return true
-    }
-
     /// The fixed 30 pt circle at the field's trailing edge; its glyph turns into a checkmark for an edit.
     private var sendButton: some View {
         Button(action: send) {
             Image(systemName: intent.editing == nil ? "arrow.up" : "checkmark").font(.system(size: 14, weight: .bold))
         }
-        .buttonStyle(CircularGlassButtonStyle(diameter: 30, tinted: sendTinted))
+        .buttonStyle(CircularGlassButtonStyle(diameter: 30))
         .disabled(!canSend)
         .help(intent.editing == nil ? "Send" : "Save Edit")
         .accessibilityLabel(intent.editing == nil ? "Send" : "Save Edit")
@@ -410,9 +403,6 @@ struct MacComposerLinkPreviewCard: View {
     /// `-haus-sample-link-preview`: the composer shows a canned card for any link, also in the sample conversations,
     /// without fetching anything.
     static let samplePreview = MacDebugHooks.has("-haus-sample-link-preview")
-    /// `-haus-untinted-send`: Send in the clear variant of its style. The window cache leaves glass out anyway, and an
-    /// enabled accent-tinted circle leaves the conversation's whole hosting view out of a capture.
-    static let untintedSend = MacDebugHooks.has("-haus-untinted-send")
 
     final class SamplePreviewSource: ComposerLinkPreviewSource {
         static let shared = SamplePreviewSource()
