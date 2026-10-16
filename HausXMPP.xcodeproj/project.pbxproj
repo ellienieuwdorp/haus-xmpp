@@ -58,6 +58,7 @@
 		240E887F4B1845D864D7E75E /* AppModel+LinkPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A1BC7BC0C97AA3012CE6BC9 /* AppModel+LinkPreviews.swift */; };
 		25322A9E1808973855DE6B10 /* KeyRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429A77E75FD76C077B26B4D8 /* KeyRecoveryView.swift */; };
 		25BEA4A182C4766D0EF19E7A /* LinkPreviewCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52CBA699A4FB8EB8F46F6675 /* LinkPreviewCenter.swift */; };
+		266DD3BF0E770B1AF799415B /* ChatListOrderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FB06E272254B30049EBB048 /* ChatListOrderTests.swift */; };
 		266F17B43A7421C54AAA3CFC /* CoalescedReloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5F90485C4526281BAF76DD6 /* CoalescedReloadTests.swift */; };
 		267CEC631E56DBC1EBE98E9B /* MacLifecycleDebug.swift in Sources */ = {isa = PBXBuildFile; fileRef = C330E74F87D4C44D0C45570E /* MacLifecycleDebug.swift */; };
 		2851A08BBCAE4361516AB371 /* PushService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 676414A9C32CD62D47B379B7 /* PushService.swift */; };
@@ -137,6 +138,7 @@
 		62B5ACD2D3F79879ED0BBD03 /* MacConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD9735757EA84131345E175B /* MacConversationView.swift */; };
 		62F59DD0EC0B0BC58ADCBDD1 /* LinkPreviewModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B9874217D52661F7EE6E746 /* LinkPreviewModels.swift */; };
 		635371EDB084E437A9E61D68 /* PreUpgradeHold.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78ECA4DBDACE97E7A0AA2EE /* PreUpgradeHold.swift */; };
+		64514BA93D136848F3BE0B90 /* ChatListOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F58D19ADB9B16E477A41843 /* ChatListOrder.swift */; };
 		651E706AB36D19A556A20EC2 /* NotificationNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 879BC5B4DD701F8AEF61EC4F /* NotificationNavigation.swift */; };
 		658DBFA69EBDFC4C303E4C0E /* MacSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E370F3025375AED97F4C8529 /* MacSettingsView.swift */; };
 		65E05ACD7F3C3A37B23D0921 /* PushSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2232019E106C6E1BF8B39092 /* PushSetupTests.swift */; };
@@ -177,6 +179,7 @@
 		869CA74D260CAE034C9A8E88 /* Blocking.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52494E5FB5E0C728DAC3BAB6 /* Blocking.swift */; };
 		877BBE6E720200760BFC2B8B /* ChatMuteSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBBB905D505AB060F64A8D32 /* ChatMuteSummaryTests.swift */; };
 		878917C8F08EF2043BCABC4D /* LastSeenTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F2C755607B4E88953748B70 /* LastSeenTests.swift */; };
+		87B1BAFEEB64B9C199387EC6 /* ChatListOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F58D19ADB9B16E477A41843 /* ChatListOrder.swift */; };
 		87B8137714BBCDB1B4D64C54 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1FBDA1E5ABBDCC8D2F31245 /* AboutView.swift */; };
 		88A63F1DD7FF3DEA14252B7E /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70D8DDFCEAC226CF360BB9B /* NotificationService.swift */; };
 		88A937AEFB9A9E660400EB7E /* EncryptionKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68FF6093D4D7789019FDED79 /* EncryptionKeychain.swift */; };
@@ -508,6 +511,7 @@
 		6CA069AD085EB46EE92CD8B0 /* AppIcon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = AppIcon.png; sourceTree = "<group>"; };
 		6D54E8053F6733211E434A65 /* Mac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Mac.entitlements; sourceTree = "<group>"; };
 		6DA9426455CEFD6FB3A366F0 /* MessageStore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MessageStore; path = Packages/MessageStore; sourceTree = SOURCE_ROOT; };
+		6F58D19ADB9B16E477A41843 /* ChatListOrder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListOrder.swift; sourceTree = "<group>"; };
 		718556D6FAE3A23B682B97B6 /* LastSeenLabUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LastSeenLabUITests.swift; sourceTree = "<group>"; };
 		721516AB2DE102AB78AB3630 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		72CEDFA5595A4C5D13AC3286 /* ChatListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListView.swift; sourceTree = "<group>"; };
@@ -523,6 +527,7 @@
 		7C56818FC0894E0A0E77766E /* MacComposerTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacComposerTextView.swift; sourceTree = "<group>"; };
 		7EE5082F6FC8DC6C22351DAF /* ChatNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatNotifications.swift; sourceTree = "<group>"; };
 		7EFCD06FF2B22E21D6446586 /* MessageActionMenuTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageActionMenuTests.swift; sourceTree = "<group>"; };
+		7FB06E272254B30049EBB048 /* ChatListOrderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListOrderTests.swift; sourceTree = "<group>"; };
 		82A37AE4DB1C65BDCB4BD991 /* OMEMO */ = {isa = PBXFileReference; lastKnownFileType = folder; name = OMEMO; path = Packages/OMEMO; sourceTree = SOURCE_ROOT; };
 		843FF17A13C02A39A0E7F1F1 /* NotificationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationActions.swift; sourceTree = "<group>"; };
 		86880CD8A2ACF57696491A6C /* MacComposerIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacComposerIntent.swift; sourceTree = "<group>"; };
@@ -800,6 +805,7 @@
 				FD6825CFD10709370F6BDF5F /* AvatarNotificationImageTests.swift */,
 				9349A585AC7A9915D3300410 /* BlockingAvailabilityTests.swift */,
 				69109BFFF3B0297A85EED828 /* ChatCapabilitiesTests.swift */,
+				7FB06E272254B30049EBB048 /* ChatListOrderTests.swift */,
 				DBBB905D505AB060F64A8D32 /* ChatMuteSummaryTests.swift */,
 				D5F90485C4526281BAF76DD6 /* CoalescedReloadTests.swift */,
 				984E1C7FB2F6BCDCF3F9DBF7 /* ComposerLinkPreviewTests.swift */,
@@ -928,6 +934,7 @@
 				132E8AF2B3DAEEFB92B03C03 /* BlockingViews.swift */,
 				175366071B61DD1E158B1B82 /* ChatCapabilities.swift */,
 				4749F05E18328FC50A0611E5 /* ChatDetailsView.swift */,
+				6F58D19ADB9B16E477A41843 /* ChatListOrder.swift */,
 				72CEDFA5595A4C5D13AC3286 /* ChatListView.swift */,
 				7EE5082F6FC8DC6C22351DAF /* ChatNotifications.swift */,
 				4053E5EBC94DF0A0EB297556 /* ChatRoute.swift */,
@@ -1338,6 +1345,7 @@
 				B63F029BBF3865575DB6339E /* BlockingViews.swift in Sources */,
 				A51A8DBD3054B191CB4671D8 /* ChatCapabilities.swift in Sources */,
 				916F0C5F79286B7F598B2F69 /* ChatDetailsView.swift in Sources */,
+				64514BA93D136848F3BE0B90 /* ChatListOrder.swift in Sources */,
 				028100ACCB75CDF7DD034832 /* ChatListView.swift in Sources */,
 				77CD710091E8A7B5DA9CC11D /* ChatNotifications.swift in Sources */,
 				972BA0FB0311856F62AB20E0 /* ChatRoute.swift in Sources */,
@@ -1497,6 +1505,7 @@
 				F521E4B769AFAB80401B9E66 /* AvatarNotificationImageTests.swift in Sources */,
 				41926927A121678B2EDB61DF /* BlockingAvailabilityTests.swift in Sources */,
 				BE7EE3B8CB94E27CE1018CED /* ChatCapabilitiesTests.swift in Sources */,
+				266DD3BF0E770B1AF799415B /* ChatListOrderTests.swift in Sources */,
 				877BBE6E720200760BFC2B8B /* ChatMuteSummaryTests.swift in Sources */,
 				266F17B43A7421C54AAA3CFC /* CoalescedReloadTests.swift in Sources */,
 				7C604D61E692191480FEDB54 /* ComposerLinkPreviewTests.swift in Sources */,
@@ -1554,6 +1563,7 @@
 				0884A61AD9ABCD8CA670771D /* BlockingViews.swift in Sources */,
 				E64B7AFAA4464D1CB9B41D11 /* ChatCapabilities.swift in Sources */,
 				5FD69FBA803AE2C9C278541B /* ChatDetailsView.swift in Sources */,
+				87B1BAFEEB64B9C199387EC6 /* ChatListOrder.swift in Sources */,
 				2F2A5773EBBC35BDDD6DA674 /* ChatNotifications.swift in Sources */,
 				2B10F6DBD7A3501384360B82 /* ChatRoute.swift in Sources */,
 				56DB8D72360DA4A4A57FE677 /* ChatRow.swift in Sources */,

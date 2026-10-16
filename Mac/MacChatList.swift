@@ -15,14 +15,8 @@ struct MacChatList: View {
 
     private var searchTerm: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    /// Pinned first, then newest activity; ties keep the store's order. The iPhone list's order.
-    private var sortedChats: [ChatSummary] {
-        model.chats.enumerated().sorted { a, b in
-            if a.element.isPinned != b.element.isPinned { return a.element.isPinned }
-            let da = a.element.lastMessageAt ?? .distantPast, db = b.element.lastMessageAt ?? .distantPast
-            return da != db ? da > db : a.offset < b.offset
-        }.map(\.element)
-    }
+    /// The iPhone list's order.
+    private var sortedChats: [ChatSummary] { ChatListOrder.sorted(model.chats) }
 
     private var visibleChats: [ChatSummary] {
         guard !searchTerm.isEmpty else { return sortedChats }

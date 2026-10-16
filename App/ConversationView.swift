@@ -88,9 +88,7 @@ struct ConversationView: View {
     @State private var lastSeenClock = Date.now
     /// The header subtitle; nil keeps the header to the name alone.
     private var lastSeenLabel: String? {
-        // A blocked contact's presence no longer reaches us; an old answer would go stale in the header.
-        guard !isGroup, !model.isBlocked(chatID), let state = model.openChatLastSeen else { return nil }
-        return LastSeen.label(state, now: lastSeenClock, calendar: .autoupdatingCurrent)
+        LastSeen.headerLabel(model.openChatLastSeen, isGroup: isGroup, isBlocked: model.isBlocked(chatID), now: lastSeenClock, calendar: .autoupdatingCurrent)
     }
     private var encryptionRoute: ChatRoute { isGroup ? .groupDetails(chatID) : .encryption(chatID) }
 
