@@ -341,22 +341,39 @@ import SwiftUI
         settleAtOpen(geometry)
     }
 
-    /// Keeps `followsEnd`, and the reader where they were through a resize. Read from the scroll geometry, which is one
-    /// consistent snapshot; the rows' reported frames can lag it by a pass while a resize lays them out. Only the offset
-    /// moving is a scroll, the reader's or this controller's, and says whether the reader is at the end now, except in
-    /// the second after a resize without a gesture or a key: the bound position then puts its top row back, and content
-    /// that shrank past the offset (a new width collapses the stack's estimated heights) pulls it to the end. Anything
-    /// else (rows rewrapped and measured at a new width, a taller composer) moves the end under the reader, and one who
-    /// followed it still does.
+    /// Keeps `followsEnd` and `restingPlace`, and the reader where they were through a resize. Read from the scroll
+    /// geometry, which is one consistent snapshot; the rows' reported frames can lag it by a pass while a resize lays
+    /// them out. The reader's scroll, and otherwise only the offset moving (a scroll of this controller's, or input that
+    /// reports no phase), says whether the reader is at the end now; anything else (rows measured as they come into
+    /// view, rewrapped at a new width, a taller composer) moves the end under the reader, and one who followed it still
+    /// does. Outside a resize the reader's place is wherever they are now. In the second after one only the offset
+    /// moving with the reader's input counts: the bound position then puts its top row back, and content that shrank
+    /// past the offset (a new width collapses the stack's estimated heights) pulls it to the end. A correction queued
+    /// for a resize reads the place when it runs, so it never undoes a scroll that came after it.
     private func followEnd(from previous: ScrollGeometry?, to geometry: ScrollGeometry) {
         let distance = MacTimelineLayout.distanceFromBottom(geometry)
         let scrolledOnly = previous.map { $0.contentSize == geometry.contentSize && $0.containerSize == geometry.containerSize
             && $0.contentInsets == geometry.contentInsets && $0.contentOffset != geometry.contentOffset } ?? false
-        let resizing = resizedAt.map { ContinuousClock.now - $0 < .seconds(1) } == true
-        if readerIsScrolling || scrolledOnly && !resizing {
+        // The frame's new size can reach this before `resized`.
+        let resizing = previous.map { $0.containerSize != geometry.containerSize } == true
+            || resizedAt.map { ContinuousClock.now - $0 < .seconds(1) } == true
+        let byReader = resizing ? scrolledOnly && (readerIsScrolling || Self.scrollInput) : readerIsScrolling || scrolledOnly
+        if byReader {
             followsEnd = distance < TimelineScrollPolicy.nearBottomDistance
         } else if !applying, isLoaded, resizing || followsEnd && distance > 0.5 {
             keepPlace()
+        }
+        if !applying, byReader || !resizing { notePlace() }
+    }
+
+    /// The event being handled moves a scroll view: a scroll wheel, which may report no phase (a mouse's notched wheel),
+    /// or a click or drag on a scroller.
+    private static var scrollInput: Bool {
+        guard let event = NSApp.currentEvent, ProcessInfo.processInfo.systemUptime - event.timestamp < 0.1 else { return false }
+        switch event.type {
+        case .scrollWheel: return true
+        case .leftMouseDown, .leftMouseDragged: return event.window?.contentView?.hitTest(event.locationInWindow) is NSScroller
+        default: return false
         }
     }
 
@@ -366,7 +383,7 @@ import SwiftUI
         notePlace()
     }
 
-    /// Where the reader's last scroll came to rest, unless at the end: their top row and its distance from the top edge.
+    /// Where the reader's latest scroll has put them, unless at the end: their top row and its distance from the top edge.
     private func notePlace() {
         restingPlace = followsEnd ? nil : readerRow().map { (id: $0.id, top: $0.top, height: $0.bottom - $0.top) }
     }
