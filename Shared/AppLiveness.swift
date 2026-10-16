@@ -9,8 +9,7 @@ import MessagingCore
 /// extensions can write, and the answer echoes the request's random nonce.
 ///
 /// Everything is scoped by this build's App Group: the development and the released app each have their own container,
-/// and the ring's name starts with the group, so neither ever rings or answers the other (inside the Mac sandbox a
-/// Darwin name must start with an App Group the process belongs to).
+/// and the ring's name starts with the group, so neither ever rings or answers the other.
 enum AppLiveness {
     static var ringName: String { SharedStorage.group + ".liveness.request" }
 
@@ -20,7 +19,6 @@ enum AppLiveness {
         /// Larger than this is not ours to parse.
         static let maximumBytes = 4 * 1024
 
-        init(directory: URL) { self.directory = directory }
         /// `Liveness/` in the App Group container `groupRoot`.
         init(groupRoot: URL) { directory = groupRoot.appending(path: "Liveness", directoryHint: .isDirectory) }
 
@@ -83,12 +81,6 @@ enum AppLiveness {
             }
             guard status == NOTIFY_STATUS_OK else { token = NOTIFY_TOKEN_INVALID; return false }
             return true
-        }
-
-        func stop() {
-            guard token != NOTIFY_TOKEN_INVALID else { return }
-            notify_cancel(token)
-            token = NOTIFY_TOKEN_INVALID
         }
 
         /// One ring: the answer written, or nil when the app stays silent.
