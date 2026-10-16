@@ -25,7 +25,6 @@ import XMPPProtocol
     /// The draft when a finger last landed on Send. A tap outside the field makes UIKit accept a pending
     /// autocorrection, and it does so after touch-down but before the button's action runs.
     @ObservationIgnored var draftAtSendTouch: (text: String, at: Date)?
-    static let trayLimit = 10
 
     /// What Send sends: the draft as typed, when all the tap changed was the word being typed. A suggestion the
     /// user never picked stays out of the message.
@@ -42,43 +41,6 @@ import XMPPProtocol
         let word = typed.dropFirst(shared)
         guard !word.isEmpty, !word.contains(where: \.isWhitespace) else { return nil }
         return typed
-    }
-
-    /// Each file as its own message with no body, then the caption last: Conversations shows a file only when the
-    /// body is exactly its link. Stops at the first refusal and reports how many files went and whether the caption did.
-    static func dispatch<File>(_ files: [File], caption: String, sendFile: @MainActor (File) async -> Bool,
-                               sendCaption: @MainActor (String) async -> Bool) async -> (files: Int, caption: Bool) {
-        for (index, file) in files.enumerated() {
-            guard await sendFile(file) else { return (index, false) }
-        }
-        guard !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return (files.count, false) }
-        return (files.count, await sendCaption(caption))
-    }
-
-    /// Which part of a send carries the composer's reply. A quote on a file would put fallback text before its link,
-    /// so a reply rides on the caption. With no caption, the first file carries the bare reply reference where the
-    /// chat allows one (`filesAloneCanReply`); elsewhere the files go and the reply stays in the composer for a caption.
-    struct ReplyPlan {
-        /// What the first file replies to; later files never carry a reply.
-        let firstFile: ChatMessage?
-        /// What the caption replies to; nil when there is no caption to send.
-        let caption: ChatMessage?
-
-        init(caption text: String, reply: ChatMessage?, filesAloneCanReply: (ChatMessage) -> Bool) {
-            let captionless = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            firstFile = captionless ? reply.flatMap { filesAloneCanReply($0) ? $0 : nil } : nil
-            caption = captionless ? nil : reply
-        }
-
-        /// Whether the reply is done once `dispatch` reports what went: its caption, or a file that carried it.
-        func clearsReply(after sent: (files: Int, caption: Bool)) -> Bool { sent.caption || (firstFile != nil && sent.files > 0) }
-    }
-
-    /// The field's prompt while files wait in the tray: files alone go without a reply they cannot carry, so it says
-    /// before Send that the reply needs a caption.
-    static func trayPlaceholder(reply: ChatMessage?, filesAloneCanReply: (ChatMessage) -> Bool) -> String {
-        guard let reply, ReplyPlan(caption: "", reply: reply, filesAloneCanReply: filesAloneCanReply).firstFile == nil else { return "Add a caption…" }
-        return "Add a caption to reply…"
     }
 }
 
@@ -186,10 +148,10 @@ struct ConversationView: View {
         state.attachmentsOpen = false
         state.sends += 1
         state.dispatching = true
-        let plan = ComposerState.ReplyPlan(caption: text, reply: reply) { model.canReplyWithFilesAlone(to: $0, in: chatID) }
+        let plan = ComposerPlan.ReplyPlan(caption: text, reply: reply) { model.canReplyWithFilesAlone(to: $0, in: chatID) }
         Task {
             defer { state.dispatching = false }
-            let sent = await ComposerState.dispatch(files, caption: text, sendFile: { item in
+            let sent = await ComposerPlan.dispatch(files, caption: text, sendFile: { item in
                 guard model.accountID == account,
                       await model.sendAttachment(item.prepared, to: chatID, replyingTo: item.id == files.first?.id ? plan.firstFile : nil) else { return false }
                 state.tray.removeAll { $0.id == item.id }
@@ -211,8 +173,8 @@ struct ConversationView: View {
     private func addToTray(_ jobs: [() async throws -> PreparedAttachment]) {
         guard !jobs.isEmpty, !attaching else { return }
         let state = composerState
-        let room = ComposerState.trayLimit - state.tray.count
-        if jobs.count > room { model.error = "You can attach up to \(ComposerState.trayLimit) files at a time." }
+        let room = ComposerPlan.trayLimit - state.tray.count
+        if jobs.count > room { model.error = "You can attach up to \(ComposerPlan.trayLimit) files at a time." }
         attaching = true
         Task {
             defer { attaching = false }
@@ -237,8 +199,8 @@ struct ConversationView: View {
             await previous?.value
             // Send took the tray while this pick waited; it must not land in the next message unasked.
             guard state.sends == sends else { return }
-            guard state.tray.count < ComposerState.trayLimit else {
-                model.error = "You can attach up to \(ComposerState.trayLimit) files at a time."
+            guard state.tray.count < ComposerPlan.trayLimit else {
+                model.error = "You can attach up to \(ComposerPlan.trayLimit) files at a time."
                 return
             }
             do {
@@ -428,7 +390,7 @@ struct ConversationView: View {
         .onChange(of: model.encryptionNeedsReview) { reviewDismissed = false }
         .onChange(of: model.encryptionIncomingReview) { reviewDismissed = false }
         .onChange(of: model.encryptionStatus) { reviewDismissed = false }
-        .photosPicker(isPresented: $showingPhotoPicker, selection: $photoItems, maxSelectionCount: max(1, ComposerState.trayLimit - composerState.tray.count),
+        .photosPicker(isPresented: $showingPhotoPicker, selection: $photoItems, maxSelectionCount: max(1, ComposerPlan.trayLimit - composerState.tray.count),
                       selectionBehavior: .ordered, matching: .any(of: [.images, .videos]))
         .fileImporter(isPresented: $importingFile, allowedContentTypes: [.item], allowsMultipleSelection: true) { attach(files: $0) }
         .onChange(of: photoItems) { _, items in
@@ -570,13 +532,12 @@ struct ConversationComposer: View {
     private var placeholder: String {
         if !model.isDemo, model.encryptionNeedsReview { return "Sending paused until you review" }
         guard showsTray else { return "Message" }
-        return ComposerState.trayPlaceholder(reply: replyingTo) { model.canReplyWithFilesAlone(to: $0, in: chatID) }
+        return ComposerPlan.trayPlaceholder(reply: replyingTo) { model.canReplyWithFilesAlone(to: $0, in: chatID) }
     }
 
     private var canSend: Bool {
         guard !model.isSending, !state.dispatching, model.canSend(to: chatID) else { return false }
-        if let editing { return !state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && state.draft != editing.body }
-        return showsTray || !state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return ComposerPlan.hasContent(draft: state.draft, editing: editing, hasFiles: showsTray)
     }
 
     /// What the link preview card follows: the draft, the setting (never in the sample conversations), whether the

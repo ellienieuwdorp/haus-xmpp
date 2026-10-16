@@ -2,12 +2,12 @@ import AppKit
 import QuickLook
 import SwiftUI
 
-/// The open chat, read-only. A placeholder until the Mac has its own timeline and composer: it shows the rows the
-/// shared presenter builds, in a SwiftUI `LazyVStack` that opens at the newest message in its first frame (scrolling
-/// there after layout shows a visible jump) and follows the bottom while the reader is there. No paging, no prepend
-/// hold, no composer yet. A bubble's right-click menu has the shared menu's Copy and Report. Links in bubbles open
-/// through `LinkOpening`, and preview cards show as on the iPhone. Photos and videos show as framed stills and files
-/// as a line; a click opens one in Quick Look, or asks for its download when it is not on this Mac yet.
+/// The open chat: the rows the shared presenter builds, in a SwiftUI `LazyVStack` that opens at the newest message in
+/// its first frame (scrolling there after layout shows a visible jump) and follows the bottom while the reader is
+/// there, above the composer (`MacComposer`). No paging and no prepend hold yet. A bubble's right-click menu has the
+/// shared menu's Copy and Report. Links in bubbles open through `LinkOpening`, and preview cards show as on the
+/// iPhone. Photos and videos show as framed stills and files as a line; a click opens one in Quick Look, or asks for
+/// its download when it is not on this Mac yet.
 struct MacConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -30,6 +30,11 @@ struct MacConversationView: View {
     @State private var quickLook: URL?
     /// The composer's reply or edit, set by message actions.
     @State private var composerIntent = MacComposerIntent()
+    /// The bottom inset the composer takes; it changes when the field grows or shrinks by a line, never per keystroke.
+    @State private var composerHeight: CGFloat = 0
+    /// How far the timeline's end lies below the last line visible above the composer. Not observed, like
+    /// `visibleRows`: only the composer's resize reads it.
+    @State private var bottomGap = BottomGap()
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -65,12 +70,17 @@ struct MacConversationView: View {
                 .padding(.horizontal, 16).padding(.top, 8)
             }
         }
-        .safeAreaInset(edge: .bottom) {
-            // Where the composer will be: a blocked chat says so and offers Unblock.
-            if model.isBlocked(chatID) {
-                BlockedChatBar(model: model, chatID: chatID, name: title)
-                    .padding(.horizontal, 16).padding(.vertical, 10)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            // A blocked chat says so and offers Unblock in place of the composer.
+            Group {
+                if model.isBlocked(chatID) {
+                    BlockedChatBar(model: model, chatID: chatID, name: title)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                } else {
+                    MacComposer(model: model, chatID: chatID, intent: composerIntent)
+                }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
         }
         .blockConfirmation(model: model, request: $blockRequest)
         .background(Color(nsColor: .textBackgroundColor))
@@ -197,6 +207,16 @@ struct MacConversationView: View {
                 let target = typing == nil ? tail : TimelineItems.typingID
                 if let target { proxy.scrollTo(target, anchor: .bottom) }
             }
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentSize.height - geometry.contentOffset.y - geometry.contentInsets.top - geometry.containerSize.height
+            } action: { _, gap in bottomGap.value = gap }
+            // The field grew or shrank: a reader who was at the bottom keeps the newest message in view above it, and
+            // anyone reading further up stays where they are. The viewport has already changed with the field by the
+            // time this runs, so the gap before it is the gap now less the field's change.
+            .onChange(of: composerHeight) { previous, height in
+                guard let tail, bottomGap.value - (height - previous) < TimelineScrollPolicy.nearBottomDistance else { return }
+                proxy.scrollTo(typing == nil ? tail : TimelineItems.typingID, anchor: .bottom)
+            }
             // The user started reading this chat (the app active, its window key and visible, the screen unlocked,
             // the user not idle): what was already on screen counts as seen now (critique G3).
             .onChange(of: model.readingStarts) { _, _ in
@@ -225,4 +245,8 @@ private struct PhoneLink {
 /// A plain reference holder, so changing it never invalidates the view that owns it.
 @MainActor private final class VisibleRows {
     var ids: Set<String> = []
+}
+
+@MainActor private final class BottomGap {
+    var value: CGFloat = 0
 }
