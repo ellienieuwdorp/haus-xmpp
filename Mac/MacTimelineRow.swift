@@ -1,14 +1,20 @@
 import AppKit
 import SwiftUI
 
-/// One message: the day header above it when the day changes, the sender's name in a group, and the bubble.
+/// One message: the day header above it when the day changes, the sender's name in a group, and the bubble. The
+/// bubble carries the message's menu (`MacMessageMenu`), on a right-click and from the hover toolbar beside it.
 struct MacTimelineRow: View {
     let row: TimelineRow
     let isGroup: Bool
-    let report: (String) -> Void
+    let handlers: MacMessageHandlers
     let openAttachment: () -> Void
     @Environment(\.appearance) private var appearance
     @Environment(\.openURL) private var openURL
+    @State private var hovering = false
+    @State private var choosingEmoji = false
+    @State private var selectAllRequests = 0
+    /// Whether the gutter on the bubble's outer side holds the hover toolbar; in a narrow window it sits on the bubble.
+    @State private var toolbarFitsBeside = true
 
     private var message: TimelineMessage { row.message }
 
@@ -31,14 +37,11 @@ struct MacTimelineRow: View {
             // The pills are the bubble's sibling, not part of it, so they never widen it: the bubble's width comes from
             // what it holds alone.
             VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 0) {
-                BubbleWidth {
-                    MacBubble(message: message, accent: appearance.accent, openAttachment: openAttachment)
-                        .contextMenu { menu }
-                }
+                bubble
                 if !message.reactions.isEmpty {
                     // Into the bubble's 6 pt bottom padding only, clear of the footer, with 2 pt kept below so the pills
                     // stay clear of the next message, as on the iPhone.
-                    MacReactionRow(reactions: message.reactions)
+                    MacReactionRow(reactions: message.reactions, react: message.canReact ? { react($0) } : nil)
                         .padding(.horizontal, 10)
                         .padding(.top, -3)
                         .padding(.bottom, 2)
@@ -47,34 +50,108 @@ struct MacTimelineRow: View {
             .frame(maxWidth: .infinity, alignment: message.isOutgoing ? .trailing : .leading)
         }
         .padding(.top, row.startsRun && row.dateHeader == nil ? 8 : 2)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(message.accessibilityDescription)
-        .accessibilityActions {
-            menu
-            if let attachment = message.attachment, !message.showsPlaceholder, attachment.localURL != nil || attachment.download.canRequest {
-                Button(attachment.localURL == nil ? "Download" : "Open \(attachment.kindLabel)", action: openAttachment)
+        .accessibilityActions { accessibilityActions }
+        #if DEBUG
+        .onChange(of: MacDebugHooks.tour.messageRequest) { _, request in
+            guard let request, request.messageID == message.id else { return }
+            switch request.verb {
+            case "select-text": perform(.selectText, link: nil)
+            case "pick-emoji": choosingEmoji = true
+            default: break
             }
-            // One action per link, as on the iPhone.
-            ForEach(Array(message.links.enumerated()), id: \.offset) { _, link in
-                Button(MessageActionMenu.linkAccessibilityTitle(for: link)) { openURL(link.url) }
-            }
+        }
+        #endif
+    }
+
+    private var bubble: some View {
+        BubbleWidth {
+            MacBubble(message: message, accent: appearance.accent, openAttachment: openAttachment, selectAllRequests: selectAllRequests,
+                      textMenu: textMenu, cardMenu: { menu(link: $0) })
+                .contextMenu { menu(link: nil) }
+                .popover(isPresented: $choosingEmoji, arrowEdge: .top) {
+                    MacEmojiPicker(message: message) { emoji in
+                        choosingEmoji = false
+                        react(emoji)
+                    }
+                }
+        }
+        .onGeometryChange(for: Bool.self) { proxy in
+            // The room between the bubble's outer edge and the scroll view's, in the bubble's own coordinates.
+            guard let visible = proxy.bounds(of: .scrollView) else { return true }
+            let room = message.isOutgoing ? -visible.minX : visible.maxX - proxy.size.width
+            return room >= MacMessageToolbarSize.maximumWidth + 6 + 4
+        } action: { toolbarFitsBeside = $0 }
+        .overlay(alignment: toolbarFitsBeside ? (message.isOutgoing ? .leading : .trailing) : (message.isOutgoing ? .topLeading : .topTrailing)) {
+            toolbar
         }
     }
 
-    /// The shared menu's items the Mac performs so far.
-    @ViewBuilder private var menu: some View {
-        ForEach(MessageActionMenu.items(for: message).filter { [.copy, .report].contains($0.kind) }, id: \.kind) { item in
-            Button(item.kind == .report ? item.title + "…" : item.title, systemImage: item.symbol) {
-                switch item.kind {
-                case .copy:
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(message.body, forType: .string)
-                case .report: report(message.id)
-                default: break
-                }
+    /// The menu's actions, then the file's (open it, then the Mac's copy, save and share), one per link and one per quick
+    /// reaction, as on the iPhone.
+    @ViewBuilder private var accessibilityActions: some View {
+        let menu = MacMessageMenu(message: message)
+        ForEach(menu.items, id: \.kind) { item in
+            Button(MacMessageMenu.title(for: item)) { perform(item.kind, link: nil) }
+        }
+        if let attachment = MessageActionMenu.attachmentAction(for: message) {
+            Button(attachment.title, action: openAttachment)
+        }
+        if let attachment = menu.attachment {
+            ForEach(attachment.items, id: \.kind) { item in
+                Button(item.title) { attachment.perform(item.kind) }
             }
         }
+        ForEach(Array(message.links.enumerated()), id: \.offset) { _, link in
+            Button(MessageActionMenu.linkAccessibilityTitle(for: link)) { openURL(link.url) }
+        }
+        ForEach(MessageActionMenu.reactionToggles(for: message), id: \.emoji) { toggle in
+            Button(toggle.title) { react(toggle.emoji) }
+        }
     }
+
+    private func textMenu(_ link: URL?) -> NSMenu {
+        MacMessageNSMenu.make(MacMessageMenu(message: message, link: link), perform: perform, react: react, moreReactions: { choosingEmoji = true })
+    }
+
+    /// Beside the bubble in the gutter, on its outer side, centred on it; where the gutter is too narrow, over the
+    /// bubble's top outer corner instead, so it never runs past the window's edge. Always laid out and only faded in,
+    /// so a menu opened from it stays attached when the pointer moves into the menu and off the row.
+    private var toolbar: some View {
+        let replies = MessageActionMenu.items(for: message).contains { $0.kind == .reply }
+        #if DEBUG
+        let forced = MacDebugHooks.tour.hoveredMessage == message.id
+        #else
+        let forced = false
+        #endif
+        let shown = hovering || choosingEmoji || forced
+        return MacMessageToolbar(message: message, react: { choosingEmoji = true },
+                                 reply: replies ? { perform(.reply, link: nil) } : nil) { menu(link: nil) }
+            .fixedSize()
+            // Beside: 6 pt outside the bubble's leading edge (sent) or trailing edge (received). On the corner: 6 pt in
+            // from that edge, centred on the bubble's top edge. Each guide from the size alone, as the second would
+            // otherwise read the first.
+            .alignmentGuide(.leading) { [beside = toolbarFitsBeside] in beside ? $0.width + 6 : -6 }
+            .alignmentGuide(.trailing) { [beside = toolbarFitsBeside] in beside ? -6 : $0.width + 6 }
+            .alignmentGuide(.top) { $0.height / 2 }
+            .opacity(shown ? 1 : 0)
+            .allowsHitTesting(shown)
+            .animation(.easeOut(duration: 0.12), value: shown)
+    }
+
+    private func menu(link: URL?) -> some View {
+        MacMessageMenuContent(menu: MacMessageMenu(message: message, link: link), perform: perform, react: react, moreReactions: { choosingEmoji = true })
+    }
+
+    /// Select Text stays in the row, where the text view is; everything else goes to the conversation.
+    private func perform(_ kind: MessageAction.Kind, link: URL?) {
+        if kind == .selectText { selectAllRequests += 1 } else { handlers.perform(kind, message, link) }
+    }
+
+    private func react(_ emoji: String) { handlers.react(emoji, message) }
 }
 
 /// Caps the bubble at `min(560, 0.84 × width, width − 32)`, letting shorter bubbles hug
@@ -96,29 +173,39 @@ struct BubbleWidth: Layout {
 
 /// Text, quote, attachment line and the quiet footer (edited, security notice, time, status mark) inside the bubble.
 /// Reaction pills are `MacReactionRow`, hung off its outer bottom corner by the row.
-struct MacBubble: View {
+struct MacBubble<CardMenu: View>: View {
     let message: TimelineMessage
     let accent: AccentTheme
     let openAttachment: () -> Void
     @Environment(\.openQuotedMessage) private var openQuotedMessage
+    /// Bumped by Select Text.
+    let selectAllRequests: Int
+    /// The message's menu for a right-click on the text, with the link's items when it lands on one.
+    let textMenu: (URL?) -> NSMenu
+    /// The message's menu for a right-click on the preview card, which is a link too.
+    @ViewBuilder let cardMenu: (URL) -> CardMenu
+    @Environment(\.openURL) private var openURL
 
     private var textColor: Color { message.isOutgoing ? Color(platform: accent.bubbleText) : .primary }
     private var metaColor: Color { message.isOutgoing ? Color(platform: accent.bubbleText.withAlphaComponent(0.75)) : .secondary }
     /// The preview card's fill: the iPhone's reply-quote panel fill (`AccentTheme.panelFill`).
     private var panelFill: Color { Color(platform: accent.panelFill(outgoing: message.isOutgoing)) }
-    /// Links are underlined, in the accent on received bubbles and in the text colour on the accent-filled sent ones.
-    private var linkColor: Color { message.isOutgoing ? textColor : Color(platform: accent.tint) }
 
     private var showsMedia: Bool { message.attachment?.showsPreview == true && !message.showsPlaceholder }
 
-    /// The text with its links (`TimelineMessage.links`) as link runs; a placeholder has none.
-    private var text: AttributedString {
-        let shown = message.displayedText
-        var text = AttributedString(shown)
-        for link in message.links {
-            guard let written = Range(link.range, in: shown), let range = Range(written, in: text) else { continue }
-            text[range].link = link.url
-            text[range].swiftUI.underlineStyle = .single
+    /// The text with its links (`TimelineMessage.links`) as link runs; a placeholder has none and is a quiet italic.
+    private var text: NSAttributedString {
+        let body = NSFont.preferredFont(forTextStyle: .body)
+        let font = message.showsPlaceholder ? NSFont(descriptor: body.fontDescriptor.withSymbolicTraits(.italic), size: 0) ?? body : body
+        let color: NSColor = switch (message.isOutgoing, message.showsPlaceholder) {
+        case (true, false): accent.bubbleText
+        case (true, true): accent.bubbleText.withAlphaComponent(0.75)
+        case (false, false): .labelColor
+        case (false, true): .secondaryLabelColor
+        }
+        let text = NSMutableAttributedString(string: message.displayedText, attributes: [.font: font, .foregroundColor: color])
+        for link in message.links where NSMaxRange(link.range) <= text.length {
+            text.addAttribute(.link, value: link.url, range: link.range)
         }
         return text
     }
@@ -155,26 +242,33 @@ struct MacBubble: View {
                             .padding(.horizontal, -MacMediaPreview.edge)
                             .padding(.top, message.reply == nil ? -MacMediaPreview.top : 0)
                     } else {
-                        Label(attachment.name.isEmpty ? attachment.kindLabel : attachment.name, systemImage: "doc")
-                            .font(.callout)
-                            .foregroundStyle(textColor)
+                        // The name, then the size once it is here or where its download stands, as on the iPhone.
+                        Label {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(attachment.name.isEmpty ? attachment.kindLabel : attachment.name).foregroundStyle(textColor)
+                                Text(attachment.localURL == nil ? attachment.downloadDetail
+                                     : attachment.size > 0 ? ByteCountFormatter.string(fromByteCount: Int64(attachment.size), countStyle: .file) : attachment.mediaType)
+                                    .font(.caption).foregroundStyle(metaColor)
+                            }
+                        } icon: {
+                            Image(systemName: "doc").foregroundStyle(textColor)
+                        }
+                        .font(.callout)
                     }
                 }
                 .buttonStyle(.plain)
+                .modifier(MacAttachmentDragSource(attachment: attachment))
                 .help(attachment.localURL == nil ? attachment.downloadDetail : "Open in Quick Look")
             }
             if let preview = message.linkPreview, !message.showsPlaceholder {
                 MacLinkPreviewCard(preview: preview, fill: panelFill, textColor: textColor, metaColor: metaColor)
+                    .contextMenu { cardMenu(preview.url) }
                     .padding(.horizontal, -4)
             }
             if !message.displayedText.isEmpty {
-                Text(text)
-                    .font(.body)
-                    .italic(message.showsPlaceholder)
-                    .foregroundStyle(message.showsPlaceholder ? metaColor : textColor)
-                    .tint(linkColor)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                // Links are underlined, in the accent on received bubbles and in the text colour on the accent-filled sent ones.
+                MacBubbleText(text: text, linkColor: message.isOutgoing ? accent.bubbleText : accent.tint, selectAllRequests: selectAllRequests,
+                              menu: textMenu, openLink: { openURL($0) })
             }
             footer
         }
@@ -187,9 +281,10 @@ struct MacBubble: View {
     private var footer: some View {
         HStack(spacing: 4) {
             Spacer(minLength: 0)
-            if message.isStarred {
-                Image(systemName: "star.fill").font(.caption2).accessibilityHidden(true)
-            }
+            // Laid out on every message and shown only when starred, as on the iPhone, so starring never widens the bubble.
+            Image(systemName: "star.fill").font(.caption2)
+                .opacity(message.isStarred ? 1 : 0)
+                .accessibilityHidden(true)
             if message.showsFooterText {
                 Text(message.footerText).font(.caption2)
             }
@@ -204,9 +299,12 @@ struct MacBubble: View {
 }
 
 /// One line of reaction pills, as wide as they need. When they do not all fit the width offered, the last ones fold
-/// into a single "+N" pill, as on the iPhone; the row's VoiceOver label still reads them all.
+/// into a single "+N" pill, as on the iPhone; the row's VoiceOver label still reads them all. Where the user can react,
+/// a click on a pill adds that emoji as theirs, or takes theirs back.
 struct MacReactionRow: View {
     let reactions: [TimelineReaction]
+    /// Nil where the message takes no reactions: the pills only show.
+    var react: ((String) -> Void)? = nil
 
     var body: some View {
         // The longest row that fits: every pill, then one fewer plus "+N", and so on.
@@ -214,8 +312,15 @@ struct MacReactionRow: View {
             ForEach((1...reactions.count).reversed(), id: \.self) { shown in
                 HStack(spacing: 4) {
                     ForEach(reactions.prefix(shown), id: \.emoji) { reaction in
-                        pill(reaction.emoji, count: reaction.count > 1 ? "\(reaction.count)" : nil)
-                            .accessibilityLabel(reaction.accessibilityDescription)
+                        if let react {
+                            Button { react(reaction.emoji) } label: { pill(reaction.emoji, count: reaction.count > 1 ? "\(reaction.count)" : nil) }
+                                .buttonStyle(.plain)
+                                .help(MessageActionMenu.reactionTitle(reaction.emoji, selected: reaction.isSelected))
+                                .accessibilityLabel(reaction.accessibilityDescription)
+                        } else {
+                            pill(reaction.emoji, count: reaction.count > 1 ? "\(reaction.count)" : nil)
+                                .accessibilityLabel(reaction.accessibilityDescription)
+                        }
                     }
                     if shown < reactions.count { pill(nil, count: "+\(reactions.count - shown)") }
                 }
@@ -233,6 +338,7 @@ struct MacReactionRow: View {
         .padding(.horizontal, 6).padding(.vertical, 2)
         .background(.background, in: Capsule())
         .overlay { Capsule().strokeBorder(Color.secondary.opacity(0.3), lineWidth: 0.5) }
+        .contentShape(Capsule())
     }
 }
 

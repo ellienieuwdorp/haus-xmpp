@@ -28,6 +28,8 @@ struct MacCommands: Commands {
             }
             .keyboardShortcut("f")
         }
+        // File > Import from iPhone or iPad: Continuity Camera into the open chat's composer, as the attach menu offers.
+        ImportFromDevicesCommands()
         // The app has no help book; Help offers the support site and mail instead of "Help isn't available".
         CommandGroup(replacing: .help) {
             Button("Haus XMPP Support") { NSWorkspace.shared.open(AppInfo.support) }

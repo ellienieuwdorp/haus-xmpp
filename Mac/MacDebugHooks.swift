@@ -15,19 +15,34 @@ import SwiftUI
 /// - `-haus-capture <dir>`: once the chats (and a selected chat's messages) are loaded and laid out, every visible
 ///   window as `<n>-<name>.png`, rendered from its own views (`cacheDisplay`), at the screen's scale.
 /// - `-haus-capture-frames <dir> <seconds>`: the main window at about 10 frames a second, `frame-0001.png` onwards,
-///   with any other open window (Settings) drawn over its centre.
+///   with any other open window (Settings) drawn over its centre and its popovers where they hang; a sheet's words are
+///   logged instead.
 /// - `-haus-tour "<step>; …"`: plays the steps once the main window exists; with `-haus-capture-frames`, the frames start
 ///   then and run while the steps play, for a recording. Steps: `wait <seconds>`, `select <chat>`, `deselect`,
 ///   `inspector on|off`, `inspector-page details|encryption`, `settings general|appearance|about`, `close-settings`,
-///   and for the open chat's composer:
-///   `type <text>` (inserted at the caret as typing would), `key return|shift-return|option-return|command-return|escape|up`,
-///   `reply <message id>|newest` (the newest received message), `edit <message id>|newest` (what Up-arrow would edit),
-///   and `snap <name>`, which captures the main window as `<name>.png` into `-haus-capture`'s directory. Timeline steps
-///   (`MacTimelineDebug`): `capture <name>` (the main window and any other open window as `<name>.png` beside the
-///   frames), `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as the reader's scroll,
-///   positive towards older messages), `scroll-to <message id>` (a stored message by its ID), `quote <reference>` (as a
-///   click on a quote naming that message does), `resize <width>x<height>` and `timeline` (logs the reader's row and
-///   distances). Frames may be `0` seconds for a tour that only captures by name.
+///   `size <width>x<height>` (as `-haus-window-size`, which applies only after a tour), and for the open chat's composer: `type <text>` (inserted at
+///   the caret as typing would), `key return|shift-return|option-return|command-return|escape|up`, `reply newest` (the
+///   newest received message), `edit newest` (what Up-arrow would edit), `attach photo|file|scan|<path in the
+///   container>` (handed to the composer as a drop would), `drop photo|slow-photo|file|scan` (item providers dropped on
+///   the chat), `paste photo|file|scan|<text>` and `import photo|scan` (Continuity Camera's handover), both from a
+///   private pasteboard, `remove-attachment <index>`, `copy-image <message id>|newest` (to a private pasteboard, logging
+///   its types), `save-over` (Save As… over an existing file in the app's temporary directory, logging whether it
+///   survives a failed copy) (`MacAttachmentTour`), `drop-highlight on|off` (the chat's highlight for files dragged
+///   over it), and `snap <name>`, which captures the main window as `<name>.png` into `-haus-capture`'s directory.
+///   Message actions by message ID in the open chat, as the bubble's menu performs them:
+///   `reply|edit|star|retry|unsend|encryption|report|select-text <id>`, `react <id> <emoji>`, `pick-emoji <id>` (the
+///   emoji picker's popover), `hover <id>|off` (shows that bubble's hover toolbar until `hover off`), and `menu <id>`
+///   (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's), and `focus` (logs which view
+///   has the keyboard: the composer, a bubble's text or another). Timeline steps (`MacTimelineDebug`): `capture <name>`
+///   (the main window and any other open window as `<name>.png` beside the frames),
+///   `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as the reader's scroll, positive
+///   towards older messages), `scroll-to <message id>` (a stored message by its ID), `quote <reference>` (as a click on
+///   a quote naming that message does), `resize <width>x<height>` and `timeline` (logs the reader's row and distances).
+///   `scroll <seconds> [paging]` sweeps the open chat's timeline from the newest loaded message to the oldest and back, moving
+///   its clip view on a 120 Hz timer, and logs how late the main thread ran the ticks and the app's memory footprint
+///   (`ScrollProbe`); with `paging` the sweep counts as the reader's gesture, so older pages come in near the top. Give
+///   `-haus-capture-frames` a short time so its renders are done before the sweep. Frames may be `0` seconds for a tour
+///   that only captures by name.
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
 ///   also in the sample conversations, where previews are otherwise off. `-haus-untinted-send`: the composer's Send in
 ///   the clear variant of its glass style, as an enabled accent-tinted circle leaves the conversation out of a capture.
@@ -202,7 +217,7 @@ import SwiftUI
                 log("selected \(chat): \(model.messagesLoadedFor == chat ? "\(model.messages.count) messages" : "not loaded")")
             }
             if has("-haus-inspector") { window.inspectorShown = true }
-            if let page = value(after: "-haus-inspector-page") { tour.inspectorPage = page }
+            if let page = value(after: "-haus-inspector-page") { showInspectorPage(page, window: window, model: model) }
             switch value(after: "-haus-sheet") {
             case "account": window.showingAccount = true
             case "new-chat": window.showingNewChat = true
@@ -234,18 +249,32 @@ import SwiftUI
     /// Opens the Settings window; captured from the main window's content by `MacDebugPresentation`.
     static var openSettings: OpenSettingsAction?
 
-    /// The Settings pane and inspector page a tour asks for; `MacSettingsView` and `MacChatInspector` follow them.
+    /// The Settings pane a tour asks for; `MacSettingsView` follows it.
     @Observable @MainActor final class Tour {
         var settingsPane: MacSettingsView.Pane?
-        var inspectorPage: String?
+        /// A message action for the open conversation, or for one row, to perform; `serial` makes a repeat a change.
+        var messageRequest: MessageRequest?
+        /// The message whose hover toolbar shows as though the pointer were over it.
+        var hoveredMessage: String?
+        /// The chat shows its drop highlight as though files were dragged over it.
+        var dropHighlight = false
     }
 
-    /// The inspector's navigation path for `-haus-inspector-page` and the tour's `inspector-page`.
-    static func inspectorPath(_ page: String, chatID: String, isGroup: Bool) -> [ChatRoute] {
-        page == "encryption" ? [isGroup ? .groupDetails(chatID) : .encryption(chatID)] : []
+    struct MessageRequest: Equatable {
+        let verb: String
+        let messageID: String
+        let argument: String
+        let serial: Int
     }
 
     static let tour = Tour()
+
+    /// The open chat's details (`details`) or its devices and encryption page (`encryption`, group details for a group),
+    /// on the inspector's own path, as a route from a message's menu would open them.
+    private static func showInspectorPage(_ page: String, window: MacWindowState, model: AppModel) {
+        guard let chatID = window.selection else { return }
+        window.inspectorPath = page == "encryption" ? [model.isGroup(chatID) ? .groupDetails(chatID) : .encryption(chatID)] : []
+    }
 
     /// `-haus-tour`: frames from the moment the main window exists, while the steps change what it shows.
     private static func runTour(_ script: String, window: MacWindowState, model: AppModel) async {
@@ -262,18 +291,37 @@ import SwiftUI
             case "select": window.selection = argument
             case "deselect": window.selection = nil
             case "inspector": window.inspectorShown = argument != "off"
-            case "inspector-page": tour.inspectorPage = argument
+            case "inspector-page": showInspectorPage(argument, window: window, model: model)
             case "settings":
                 tour.settingsPane = MacSettingsView.Pane(rawValue: argument) ?? .general
                 if otherWindows.isEmpty { openSettings?() }
             case "close-settings": otherWindows.forEach { $0.close() }
-            case "type", "key", "reply", "edit": composerStep(words[0], argument, model: model)
+            case "type", "key": composerStep(words[0], argument, model: model)
+            case "reply" where argument == "newest", "edit" where argument == "newest": composerStep(words[0], argument, model: model)
+            case "reply", "edit", "star", "retry", "unsend", "encryption", "report", "select-text", "react", "pick-emoji":
+                let parts = argument.split(separator: " ", maxSplits: 1).map(String.init)
+                tour.messageRequest = MessageRequest(verb: words[0], messageID: parts.first ?? "", argument: parts.count > 1 ? parts[1] : "",
+                                                     serial: (tour.messageRequest?.serial ?? 0) + 1)
+            case "hover": tour.hoveredMessage = argument == "off" ? nil : argument
+            case "size":
+                let size = argument.split(separator: "x").compactMap { Double($0) }
+                if size.count == 2 { mainWindow?.setContentSize(NSSize(width: size[0], height: size[1])) }
+            case "menu": logMenu(for: argument, model: model, window: window)
+            case "focus":
+                let responder = mainWindow?.firstResponder
+                let name = responder === MacComposerTour.textView ? "composer" : responder is BubbleTextView ? "bubble text" : responder.map { String(describing: type(of: $0)) } ?? "none"
+                log("focus: \(name)")
+            case "attach", "drop", "paste", "import", "remove-attachment", "copy-image", "save-over": MacAttachmentTour.step(words[0], argument, model: model)
+            case "drop-highlight": tour.dropHighlight = argument != "off"
             case "snap":
                 guard let directory = value(after: "-haus-capture"), let window = mainWindow, let png = render(window) else { log("tour snap: needs -haus-capture <dir>"); break }
                 emit(png, directory: directory, file: slug(argument) + ".png")
             case "capture":
                 guard let directory = value(after: "-haus-capture-frames"), let main = mainWindow, let png = renderWithOverlays(main) else { log("tour capture: needs -haus-capture-frames <dir> <seconds>"); break }
                 emit(png, directory: directory, file: slug(argument) + ".png")
+            case "scroll" where Double(argument.split(separator: " ").first ?? "") != nil:
+                let parts = argument.split(separator: " ")
+                if let window = mainWindow { await ScrollProbe.sweep(in: window, seconds: Double(parts[0]) ?? 10, paging: parts.dropFirst().first == "paging") }
             case "scroll", "scroll-to", "quote", "resize", "timeline": await MacTimelineDebug.step(words[0], argument, window: mainWindow)
             default: log("tour \(step): unknown")
             }
@@ -300,17 +348,118 @@ import SwiftUI
             } else if let (selector, modifiers) = keys[argument] {
                 if !textView.handleCommand(selector, modifiers: modifiers) { textView.doCommand(by: selector) }
             } else { log("tour key \(argument): unknown") }
+        // `reply newest` and `edit newest`; by message ID they go through the bubble's menu.
         case "reply":
-            let message = argument == "newest" ? model.messages.last { !$0.isOutgoing && $0.unreadableReason == nil } : model.messages.first { $0.id == argument }
-            if let message { intent.reply(to: message) } else { log("tour reply \(argument): no such message") }
+            if let message = model.messages.last(where: { !$0.isOutgoing && $0.unreadableReason == nil }) { intent.reply(to: message) } else { log("tour reply newest: no received message") }
         case "edit":
-            let message = argument == "newest"
-                ? ConversationPresenter(source: model, chatID: model.messagesLoadedFor ?? "", title: "").newestEditable
-                : model.messages.first { $0.id == argument }
-            if let message { intent.edit(message) } else { log("tour edit \(argument): no such message") }
+            let presenter = ConversationPresenter(source: model, chatID: model.messagesLoadedFor ?? "", title: "")
+            if let message = presenter.newestEditable { intent.edit(message) } else { log("tour edit newest: nothing to edit") }
         default: break
         }
         log("composer \(step) \(argument): draft \(textView.string.count) characters, replying \(intent.replyingTo?.id ?? "-"), editing \(intent.editing?.id ?? "-")")
+    }
+
+    /// A scripted scroll through the open timeline, timed on the main thread. The window is off-screen, so no display
+    /// link runs: the ticks of a 120 Hz timer stand in for refreshes, and a tick that comes late means the main thread
+    /// was busy (laying out and building the rows that scrolled in). Render-server work is not in it.
+    @MainActor final class ScrollProbe: NSObject {
+        private let scrollView: NSScrollView
+        private let seconds: Double
+        private var started: CFTimeInterval = 0
+        private var last: CFTimeInterval = 0
+        private var intervals: [Double] = []
+        private var peak: UInt64 = 0
+        private var timer: Timer?
+        private var finished: CheckedContinuation<Void, Never>?
+
+        private init(scrollView: NSScrollView, seconds: Double) {
+            self.scrollView = scrollView
+            self.seconds = seconds
+        }
+
+        /// The timeline is the scroll view with the tallest document: the chat list holds a few rows.
+        static func sweep(in window: NSWindow, seconds: Double, paging: Bool) async {
+            func scrollViews(in view: NSView) -> [NSScrollView] { ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrollViews(in:)) }
+            guard let root = window.contentView,
+                  let scrollView = scrollViews(in: root).max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }) else {
+                log("scroll: no scroll view")
+                return
+            }
+            let probe = ScrollProbe(scrollView: scrollView, seconds: seconds)
+            let before = footprint()
+            log(String(format: "scroll: start, document %.0f pt, footprint %.1f MB", scrollView.documentView?.frame.height ?? 0, megabytes(before)))
+            // With `paging`, as a gesture would, so the timeline pages in older history when the sweep nears the top.
+            if paging { MacTimelineController.current?.phaseChanged(.interacting) }
+            await withCheckedContinuation { continuation in
+                probe.finished = continuation
+                probe.start()
+            }
+            if paging { MacTimelineController.current?.phaseChanged(.idle) }
+            let after = footprint()
+            let sorted = probe.intervals.sorted()
+            let p95 = sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))]
+            log(String(format: "scroll: %d ticks, %d over 16.7 ms, %d over 33 ms, p95 %.1f ms, worst %.1f ms; document %.0f pt; footprint %.1f MB after, peak %.1f MB",
+                       sorted.count, sorted.filter { $0 > 1 / 60.0 }.count, sorted.filter { $0 > 1 / 30.0 }.count, p95 * 1_000, (sorted.last ?? 0) * 1_000,
+                       scrollView.documentView?.frame.height ?? 0, megabytes(after), megabytes(max(probe.peak, after))))
+        }
+
+        private func start() {
+            started = CACurrentMediaTime()
+            last = started
+            let timer = Timer(timeInterval: 1 / 120.0, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.tick() } }
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+        }
+
+        /// Up from the bottom for the first half, back down for the second.
+        private func tick() {
+            let now = CACurrentMediaTime()
+            intervals.append(now - last)
+            last = now
+            if intervals.count.isMultiple(of: 60) { peak = max(peak, ScrollProbe.footprint()) }
+            let progress = min(1, (now - started) / seconds)
+            let clip = scrollView.contentView
+            let range = max(0, (scrollView.documentView?.frame.height ?? 0) - clip.bounds.height)
+            let fromTop = range * abs(1 - 2 * progress)
+            let flipped = scrollView.documentView?.isFlipped ?? true
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: flipped ? fromTop : range - fromTop))
+            scrollView.reflectScrolledClipView(clip)
+            guard progress >= 1 else { return }
+            timer?.invalidate()
+            finished?.resume()
+            finished = nil
+        }
+
+        private static func megabytes(_ bytes: UInt64) -> Double { Double(bytes) / 1_048_576 }
+
+        /// The memory the system charges the app for, as Activity Monitor's Memory column shows it.
+        private static func footprint() -> UInt64 {
+            var info = task_vm_info_data_t()
+            var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+            let result = withUnsafeMutablePointer(to: &info) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+            }
+            return result == KERN_SUCCESS ? info.phys_footprint : 0
+        }
+    }
+
+    /// The bubble's menu for one message of the open chat, as `MacMessageMenu` lists it, and its VoiceOver actions.
+    private static func logMenu(for id: String, model: AppModel, window: MacWindowState) {
+        let messages = window.selection.map { ConversationPresenter(source: model, chatID: $0, title: $0).timelineMessages } ?? []
+        guard let message = messages.first(where: { $0.id == id }) else {
+            log("menu \(id): not in the open chat, which has " + messages.map(\.id).joined(separator: ", "))
+            return
+        }
+        let menu = MacMessageMenu(message: message)
+        let reactions = menu.showsReactions ? menu.reactions.map { $0.emoji + ($0.isSelected ? "*" : "") }.joined() + "+" : "none"
+        log("menu \(id): reactions \(reactions) (\(message.canReact ? "enabled" : message.reactionUnavailableReason ?? "disabled")); items "
+            + (menu.items.map(MacMessageMenu.title(for:)) + (menu.attachment?.items.map(\.title) ?? [])).joined(separator: " | "))
+        for link in message.links {
+            log("menu \(id) on \(link.url.absoluteString): " + MacMessageMenu(message: message, link: link.url).items.map(MacMessageMenu.title(for:)).joined(separator: " | "))
+        }
+        if let preview = message.linkPreview {
+            log("menu \(id) on its card: " + MacMessageMenu(message: message, link: preview.url).items.map(MacMessageMenu.title(for:)).joined(separator: " | "))
+        }
     }
 
     private static var mainWindow: NSWindow? {
@@ -320,9 +469,15 @@ import SwiftUI
     /// Visible windows other than the main window and its sheets: the Settings window.
     private static var otherWindows: [NSWindow] {
         NSApp.windows.filter { window in
-            window.isVisible && !window.isSheet && !(window is NSPanel) && window.contentView != nil
+            window.isVisible && !window.isSheet && !(window is NSPanel) && window.contentView != nil && !isRemote(window)
                 && window.identifier?.rawValue.hasPrefix(MacAppDelegate.mainWindowID) != true
         }
+    }
+
+    /// A window the system draws from another process, such as the text input indicator beside a focused text view:
+    /// it renders blank here and is left out of captures.
+    private static func isRemote(_ window: NSWindow) -> Bool {
+        window.contentView?.subviews.contains { String(describing: type(of: $0)) == "NSRemoteView" } == true
     }
 
     private static func captureWindows(to directory: String) {
@@ -342,6 +497,7 @@ import SwiftUI
         var frame = 0
         while clock.now < end {
             let started = clock.now
+            if let window = mainWindow { logSheets(of: window) }
             if let window = mainWindow, let png = renderWithOverlays(window) {
                 frame += 1
                 emit(png, directory: directory, file: String(format: "frame-%04d.png", frame))
@@ -349,6 +505,20 @@ import SwiftUI
             try? await Task.sleep(until: started + .milliseconds(100), clock: clock)
         }
         log("captured \(frame) frame(s)")
+    }
+
+    private static var loggedSheets: Set<ObjectIdentifier> = []
+
+    /// Each sheet's text and buttons, once, as frames show it blank.
+    private static func logSheets(of window: NSWindow) {
+        func texts(in view: NSView) -> [String] {
+            let own: [String] = if let field = view as? NSTextField, !field.stringValue.isEmpty { [field.stringValue] }
+                else if let button = view as? NSButton, !button.title.isEmpty { ["[\(button.title)]"] } else { [] }
+            return own + view.subviews.flatMap(texts(in:))
+        }
+        for sheet in window.sheets where sheet.isVisible && loggedSheets.insert(ObjectIdentifier(sheet)).inserted {
+            log("sheet: " + (sheet.contentView.map(texts(in:)) ?? []).joined(separator: " | "))
+        }
     }
 
     /// The window's frame view, so the title bar and toolbar are in the picture with the content. Liquid Glass is
@@ -360,11 +530,19 @@ import SwiftUI
     }
 
     /// The main window with any other open window (Settings) drawn over its centre with a shadow, roughly where it
-    /// would sit in front of the main window. Both are rendered from their own views.
+    /// would sit in front of the main window, and its popovers (the emoji picker) where they are attached. All are
+    /// rendered from their own views. A sheet (a dialog) draws its content outside the views and would show blank, so
+    /// its words are logged instead (`logSheets`).
     private static func renderWithOverlays(_ window: NSWindow) -> Data? {
         guard let main = renderRep(window) else { return nil }
         let overlays = otherWindows.compactMap { renderRep($0) }
-        guard !overlays.isEmpty else { return main.representation(using: .png, properties: [:]) }
+        // A popover's frame is glass and renders blank; its content alone renders, on a flat fill drawn below.
+        let attached = (window.childWindows ?? []).filter { $0.isVisible && !$0.isSheet && !isRemote($0) }.compactMap { child -> (NSWindow, NSBitmapImageRep)? in
+            guard let view = child.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            return (child, rep)
+        }
+        guard !overlays.isEmpty || !attached.isEmpty else { return main.representation(using: .png, properties: [:]) }
         guard let output = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: main.pixelsWide, pixelsHigh: main.pixelsHigh,
                                             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                                             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
@@ -389,6 +567,26 @@ import SwiftUI
             NSGraphicsContext.saveGraphicsState()
             NSBezierPath(roundedRect: frame, xRadius: 24, yRadius: 24).addClip()
             overlay.draw(in: frame)
+            NSGraphicsContext.restoreGraphicsState()
+        }
+        let scale = CGFloat(main.pixelsWide) / max(1, window.frame.width)
+        for (child, rep) in attached {
+            // The system keeps a popover on a screen, which the off-screen window is not on: its height above the
+            // window's bottom is right, its horizontal place is not, so it is kept inside the picture.
+            let x = min(max(0, (child.frame.minX - window.frame.minX) * scale), canvas.width - CGFloat(rep.pixelsWide))
+            let frame = NSRect(x: x, y: (child.frame.minY - window.frame.minY) * scale, width: CGFloat(rep.pixelsWide), height: CGFloat(rep.pixelsHigh))
+            NSGraphicsContext.saveGraphicsState()
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor.black.withAlphaComponent(0.3)
+            shadow.shadowBlurRadius = 24
+            shadow.shadowOffset = NSSize(width: 0, height: -6)
+            shadow.set()
+            NSColor.windowBackgroundColor.setFill()
+            NSBezierPath(roundedRect: frame, xRadius: 20, yRadius: 20).fill()
+            NSGraphicsContext.restoreGraphicsState()
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(roundedRect: frame, xRadius: 20, yRadius: 20).addClip()
+            rep.draw(in: frame)
             NSGraphicsContext.restoreGraphicsState()
         }
         NSGraphicsContext.restoreGraphicsState()

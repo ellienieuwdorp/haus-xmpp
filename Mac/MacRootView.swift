@@ -43,14 +43,18 @@ struct MacRootView: View {
         .inspector(isPresented: Binding(get: { window.inspectorShown && window.selection != nil }, set: { window.inspectorShown = $0 })) {
             Group {
                 if let chatID = window.selection {
-                    MacChatInspector(model: model, chatID: chatID).id(chatID)
+                    MacChatInspector(model: model, chatID: chatID, path: $window.inspectorPath).id(chatID)
                 }
             }
             .inspectorColumnWidth(min: 280, ideal: 320, max: 420)
         }
         .id(model.accountID)
         .onChange(of: model.accountID) { _, _ in window.selection = nil; window.inspectorShown = false }
-        .onChange(of: window.selection) { previous, _ in if let previous { model.closeChat(previous) } }
+        .onChange(of: window.selection) { previous, selection in
+            if let previous { model.closeChat(previous) }
+            // Pages of the chat just left; a route that also chose the new chat has already pushed its own.
+            window.inspectorPath.removeAll { !Self.route($0, isFor: selection) }
+        }
         // The window closed (the app keeps running): nothing is on screen to read.
         .onDisappear { if let chatID = window.selection { model.closeChat(chatID) } }
         .onChange(of: model.notificationRoute, initial: true) { _, route in
@@ -68,6 +72,7 @@ struct MacRootView: View {
             case .details(let chatID), .encryption(let chatID), .groupDetails(let chatID):
                 window.selection = chatID
                 window.inspectorShown = true
+                window.inspectorPath = route == .details(chatID) ? [] : [route]
             }
         }
         .onChange(of: model.signInRequested) { _, requested in
@@ -97,6 +102,12 @@ struct MacRootView: View {
             OwnDeviceReviewSheet(model: model)
                 .frame(minWidth: 480, idealWidth: 520, minHeight: 520, idealHeight: 640)
                 .themedRoot()
+        }
+    }
+
+    private static func route(_ route: ChatRoute, isFor chatID: String?) -> Bool {
+        switch route {
+        case .chat(let id), .details(let id), .encryption(let id), .groupDetails(let id): id == chatID
         }
     }
 
@@ -137,7 +148,7 @@ struct MacRootView: View {
 struct MacChatInspector: View {
     @Bindable var model: AppModel
     let chatID: String
-    @State private var path: [ChatRoute] = []
+    @Binding var path: [ChatRoute]
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -152,12 +163,6 @@ struct MacChatInspector: View {
                 }
         }
         .labelStyle(.listRow)
-        #if DEBUG
-        .onChange(of: MacDebugHooks.tour.inspectorPage, initial: true) { _, page in
-            guard let page else { return }
-            path = MacDebugHooks.inspectorPath(page, chatID: chatID, isGroup: model.isGroup(chatID))
-        }
-        #endif
     }
 }
 
