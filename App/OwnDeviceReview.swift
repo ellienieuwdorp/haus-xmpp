@@ -173,7 +173,7 @@ struct OwnDeviceReviewSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            GroupedList {
                 Section {
                     VStack(spacing: 6) {
                         Image(systemName: "person.badge.shield.checkmark")
