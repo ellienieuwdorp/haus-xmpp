@@ -178,6 +178,9 @@ final class AppModel {
     @ObservationIgnored private var activeEncryptionOperations = 0
     @ObservationIgnored private var acquiringOwnership = false
     @ObservationIgnored private var hasTransportOwnership = false
+    /// Background time begun when a release from the background left the kernel lock held (`releaseLeaseInBackground`):
+    /// the app is not suspended holding it. The next release that frees the lock ends it.
+    @ObservationIgnored private var unreleasedLease: BackgroundActivity?
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
     @ObservationIgnored private var reconnection = ReconnectPolicy()
     @ObservationIgnored private var userWantsOffline = false
@@ -1131,10 +1134,7 @@ final class AppModel {
             // Whatever the lease is now, not what it was: a background transition during the restore left it alone,
             // and the restore gives it up here if the app is no longer in front.
             hasTransportOwnership = await store.holdsTransportOwnership
-            if hasTransportOwnership, !transportWanted {
-                hasTransportOwnership = false
-                try? await store.releaseTransportOwnership()
-            }
+            if hasTransportOwnership, !transportWanted { await releaseLeaseInBackground(store) }
             quiescing = false
             upgradeState = .none
             self.error = "The backup could not be restored: " + PreUpgradeSnapshot.describe(error)
@@ -1451,15 +1451,34 @@ final class AppModel {
         guard !restoringData else { return }
         hasTransportOwnership = false
         guard let store else { return }
-        do {
-            try await store.releaseTransportOwnership()
-            Self.lifecycleLog.notice("lease released")
-        } catch MessageStoreError.transportOwnershipRequired {
-        } catch {
-            // The lock is free unless the unlock itself failed; sends the release could not mark stay for the next owner.
-            let held = await store.holdsTransportOwnership
-            Self.lifecycleLog.error("lease release failed, lock \(held ? "still held" : "free", privacy: .public): \(String(reflecting: error), privacy: .public)")
+        await releaseLeaseInBackground(store)
+    }
+
+    /// Gives up the lease where the app may be suspended next (a quiesce, a background notification action). The store
+    /// frees the kernel lock even when marking interrupted sends fails, so only a failed unlock keeps it; that is tried
+    /// again. If the lock still holds, the model keeps the ownership the store has, and background time is asked for
+    /// that only a later release ends: when it runs out with the lock held, iOS ends the process (`BackgroundActivity`).
+    private func releaseLeaseInBackground(_ store: MessageStore) async {
+        hasTransportOwnership = false
+        for attempt in 1...3 {
+            do {
+                try await store.releaseTransportOwnership()
+                Self.lifecycleLog.notice("lease released")
+            } catch MessageStoreError.transportOwnershipRequired {
+            } catch {
+                // Sends the release could not mark stay as they are; every owner recovers them after acquiring.
+                Self.lifecycleLog.error("lease release failed, attempt \(attempt, privacy: .public): \(String(reflecting: error), privacy: .public)")
+            }
+            guard await store.holdsTransportOwnership else {
+                unreleasedLease?.end()
+                unreleasedLease = nil
+                return
+            }
+            if attempt < 3 { try? await Task.sleep(for: .milliseconds(100)) }
         }
+        Self.lifecycleLog.fault("lease still held: the transport lock did not unlock")
+        hasTransportOwnership = true
+        if unreleasedLease == nil { unreleasedLease = BackgroundActivity("Hold the unreleased lease") }
     }
 
     /// Everything the background transition stops, without giving up the lease: blocks new transport, crypto and
@@ -4246,7 +4265,7 @@ extension AppModel: NotificationActionEnvironment {
         // meanwhile keeps it.
         if session.holdsLease, !hasTransportOwnership, let store {
             if session.client != nil { await presentActionArrivals(store: store, session: session) }
-            try? await store.releaseTransportOwnership()
+            await releaseLeaseInBackground(store)
         }
         session.holdsLease = false
         actionSession = nil
