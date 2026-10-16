@@ -48,6 +48,8 @@ import SwiftUI
             MacDebugHooks.log("timeline resize to \(argument): reader \(reader?.id ?? "none") drift \(format(after.map { $0.minY - (reader?.top ?? 0) }))")
         case "timeline":
             report(timeline, "state")
+        case "drag":
+            drag(argument, timeline: timeline, window: window)
         default: break
         }
     }
@@ -82,6 +84,58 @@ import SwiftUI
             return String(format: "median %.1f ms, worst %.1f ms, total %.0f ms", sorted[sorted.count / 2] * 1_000, (sorted.last ?? 0) * 1_000, sorted.reduce(0, +) * 1_000)
         }
         MacDebugHooks.log("timeline resize-sweep \(argument): \(steps + 1) steps; resize and layout \(summary(synchronous)); step with the next frame \(summary(whole)); setContentSize \(summary(phases[0])), layout \(summary(phases[1])), display \(summary(phases[2]))")
+    }
+
+    /// `drag <points> <seconds> [phaseless]`: moves the timeline's clip view by `points` (positive towards older messages)
+    /// over `seconds` on a 120 Hz timer, as the reader's scroll: a gesture's phases around it, or none with `phaseless`,
+    /// as a wheel or the scroller may report. It runs while the next steps play, so a resize can land mid-scroll, and
+    /// logs the reader's row when it starts and when it ends.
+    private static func drag(_ argument: String, timeline: MacTimelineController, window: NSWindow?) {
+        let parts = argument.split(separator: " ")
+        func scrollViews(in view: NSView) -> [NSScrollView] { ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrollViews(in:)) }
+        guard parts.count >= 2, let points = Double(parts[0]), let seconds = Double(parts[1]), seconds > 0, let root = window?.contentView,
+              let scrollView = scrollViews(in: root).max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }) else {
+            return MacDebugHooks.log("tour drag \(argument): needs <points> <seconds> [phaseless] and an open timeline")
+        }
+        Drag(scrollView: scrollView, timeline: timeline, points: points, seconds: seconds, phases: parts.dropFirst(2).first != "phaseless",
+             label: String(argument)).start()
+    }
+
+    @MainActor private final class Drag {
+        let scrollView: NSScrollView, timeline: MacTimelineController, points: Double, seconds: Double, phases: Bool, label: String
+        private var started: CFTimeInterval = 0
+        private var moved: CGFloat = 0
+        private var timer: Timer?
+
+        init(scrollView: NSScrollView, timeline: MacTimelineController, points: Double, seconds: Double, phases: Bool, label: String) {
+            (self.scrollView, self.timeline, self.points, self.seconds, self.phases, self.label) = (scrollView, timeline, points, seconds, phases, label)
+        }
+
+        /// Keeps itself alive through its timer until the drag ends.
+        func start() {
+            report(timeline, "drag \(label) start")
+            if phases { timeline.phaseChanged(.interacting) }
+            started = CACurrentMediaTime()
+            let timer = Timer(timeInterval: 1 / 120.0, repeats: true) { _ in MainActor.assumeIsolated { self.tick() } }
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+        }
+
+        private func tick() {
+            let progress = min(1, (CACurrentMediaTime() - started) / seconds)
+            let step = CGFloat(points * progress) - moved
+            moved += step
+            let clip = scrollView.contentView
+            let range = max(0, (scrollView.documentView?.frame.height ?? 0) - clip.bounds.height)
+            let flipped = scrollView.documentView?.isFlipped ?? true
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: min(range, max(0, clip.bounds.minY + (flipped ? -step : step)))))
+            scrollView.reflectScrolledClipView(clip)
+            guard progress >= 1 else { return }
+            timer?.invalidate()
+            timer = nil
+            if phases { timeline.phaseChanged(.idle) }
+            report(timeline, "drag \(label) end")
+        }
     }
 
     private static func report(_ timeline: MacTimelineController, _ what: String) {

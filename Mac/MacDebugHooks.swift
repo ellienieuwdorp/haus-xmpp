@@ -42,7 +42,8 @@ import SwiftUI
 ///   a quote naming that message does), `resize <width>x<height>`, `timeline` (logs the reader's row and distances),
 ///   `resize-sweep <width>x<height> <width>x<height> <steps>` (a live resize from one size to the other, timing each
 ///   step; also with no chat open) and `stalls [label]` (main-thread stalls over 50 ms since the last `stalls` step; the
-///   first starts the probe).
+///   first starts the probe), `drag <points> <seconds> [phaseless]` (the reader's scroll by that many points, with a
+///   gesture's phases or none, running while the next steps play).
 ///   `scroll <seconds> [paging]` sweeps the open chat's timeline from the newest loaded message to the oldest and back, moving
 ///   its clip view on a 120 Hz timer, and logs how late the main thread ran the ticks and the app's memory footprint
 ///   (`ScrollProbe`); with `paging` the sweep counts as the reader's gesture, so older pages come in near the top. Give
@@ -346,7 +347,7 @@ import SwiftUI
             case "scroll" where Double(argument.split(separator: " ").first ?? "") != nil:
                 let parts = argument.split(separator: " ")
                 if let window = mainWindow { await ScrollProbe.sweep(in: window, seconds: Double(parts[0]) ?? 10, paging: parts.dropFirst().first == "paging") }
-            case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline": await MacTimelineDebug.step(words[0], argument, window: mainWindow)
+            case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline", "drag": await MacTimelineDebug.step(words[0], argument, window: mainWindow)
             case "menus": logMenuBar()
             case "command": performMenuItem(argument)
             case "header": log("header: \(mainWindow.map { "'\($0.title)' / '\($0.subtitle)'" } ?? "no main window")")
