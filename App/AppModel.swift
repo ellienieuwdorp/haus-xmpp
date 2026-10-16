@@ -3718,6 +3718,7 @@ final class AppModel {
         let account = accountID
         if isDemo {
             blocklist.apply(.blocked([chatID]))
+            updateAppBadge(chats)
             return true
         }
         guard let client else { return false }
@@ -3750,6 +3751,7 @@ final class AppModel {
         let account = accountID
         if isDemo {
             blocklist.apply(.unblocked([address]))
+            updateAppBadge(chats)
             return
         }
         guard let client else { return }
