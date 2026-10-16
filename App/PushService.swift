@@ -37,6 +37,21 @@ enum PushService {
     static func topic(bundleIdentifier: String?) -> String? {
         bundleIdentifier == gatewayDefaultTopic ? nil : bundleIdentifier
     }
+
+    /// Whether this build registers for push. The iPhone always does. On the Mac a push is only safe once the
+    /// notification extension has been seen decrypting under the transport lease there, and a live app has been seen
+    /// keeping its alert to itself through the liveness handshake; until those runs pass, only a Debug run started
+    /// with `-haus-mac-push` registers, and a Release build never does. Where it is false, Settings shows no push
+    /// switch and a subscription left by such a run is turned off on the next connection.
+    static var isOffered: Bool {
+        #if os(iOS)
+        true
+        #elseif DEBUG
+        ProcessInfo.processInfo.arguments.contains("-haus-mac-push")
+        #else
+        false
+        #endif
+    }
 }
 
 /// What Settings says about push for the signed-in account.
@@ -45,7 +60,7 @@ enum PushStatus: Equatable {
     case off
     case settingUp
     case on
-    /// Notifications are not allowed for the app in iOS Settings.
+    /// Notifications are not allowed for the app in the system's settings.
     case notAllowed
     /// The account's server does not advertise urn:xmpp:push:0.
     case unsupported
@@ -78,6 +93,14 @@ enum PushStatus: Equatable {
         case .notDetermined: interactive ? nil : .off
         @unknown default: .notAllowed
         }
+    }
+
+    /// Whether a push setup starts again once the permission prompt was answered outside one (the Mac's Allow
+    /// Notifications button in Settings). A reconnect that found the prompt unanswered stopped at Off with push still
+    /// wanted; once there is an answer the setup goes on, and stops at Not Allowed itself if the answer was no. Push
+    /// turned off in Settings stays off, and a build that offers no push never starts one.
+    static func resumesSetup(after authorization: UNAuthorizationStatus, status: PushStatus, wanted: Bool, offered: Bool) -> Bool {
+        offered && wanted && status == .off && authorization != .notDetermined
     }
 
     /// What Settings shows after a push setup or cleanup failed. Turned off, it stays "Off": a stored revocation or
