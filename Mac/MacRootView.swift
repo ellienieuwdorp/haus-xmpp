@@ -49,7 +49,7 @@ struct MacRootView: View {
             Button("OK") { model.error = nil }
         } message: { Text(model.error ?? "") }
         #if DEBUG
-        .modifier(MacDebugPresentation(window: window))
+        .modifier(MacDebugPresentation(model: model, window: window))
         .modifier(MacScenePhaseLog(window: "main"))
         .background(MacUnobtrusive.Anchor())
         #endif

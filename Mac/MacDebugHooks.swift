@@ -3,6 +3,7 @@ import AppKit
 import Security
 import SQLite3
 import MessagingCore
+import OMEMO
 import SwiftUI
 
 /// Launch arguments for checking the Mac app without driving its UI: captures of its own windows, a timed quit, the
@@ -54,7 +55,8 @@ import SwiftUI
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-window-size <width>x<height>`: the main window's content size in points, for captures at a set size.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-inspector-page details|encryption`,
-///   `-haus-sheet account|new-chat|own-devices`, `-haus-settings general|appearance|about`, `-haus-close-window <seconds>`:
+///   `-haus-sheet account|new-chat|own-devices|fingerprint|backup`, `-haus-settings general|appearance|about`,
+///   `-haus-close-window <seconds>`:
 ///   what the window shows. The inspector's `encryption` page is Devices & Encryption for a chat, Group details for a
 ///   group.
 /// - `-haus-block <chat>`: blocks a sample conversation (sample data only), for captures of a blocked chat.
@@ -898,16 +900,43 @@ import SwiftUI
 /// Opens the Settings window when `-haus-settings` asks for it; Settings is opened through the environment, so this
 /// sits on the main window's content.
 struct MacDebugPresentation: ViewModifier {
+    let model: AppModel
     let window: MacWindowState
     @Environment(\.openSettings) private var openSettings
+    /// `-haus-sheet fingerprint`: a sample device's fingerprint comparison, as a device row opens it.
+    @State private var fingerprint: EncryptionDevice?
+    /// `-haus-sheet backup`: a sample previous version's backup, as Settings opens it when there is one.
+    @State private var backup: PreUpgradeSnapshot.Manifest?
 
     func body(content: Content) -> some View {
         content.task {
             MacDebugHooks.openSettings = openSettings
+            switch MacDebugHooks.value(after: "-haus-sheet") {
+            case "fingerprint": fingerprint = OwnDeviceReview.sampleDevices(account: model.accountID).last
+            case "backup": backup = Self.sampleBackup
+            default: break
+            }
             guard MacDebugHooks.has("-haus-settings") else { return }
             try? await Task.sleep(for: .milliseconds(300))
             openSettings()
         }
+        .sheet(item: $fingerprint) { device in
+            DeviceFingerprintSheet(model: model, chatID: DemoSamples.alex, device: device, name: "Alex", allowsMaintenance: true) { _ in fingerprint = nil }
+                .themedRoot()
+        }
+        .sheet(isPresented: Binding(get: { backup != nil }, set: { if !$0 { backup = nil } })) {
+            if let backup { PreviousVersionBackupView(model: model, backup: backup).themedRoot() }
+        }
+    }
+
+    /// Taken a day ago, so the footer reads as for a fresh backup.
+    private static var sampleBackup: PreUpgradeSnapshot.Manifest? {
+        let json = """
+        {"id": "sample", "takenAt": \(Date().addingTimeInterval(-86_400).timeIntervalSinceReferenceDate),
+         "database": {"schemaVersion": 1, "rowCounts": {}}, "installation": "sample", "folders": [],
+         "notificationsDisabled": false, "accountRecord": false, "pushRegistrations": []}
+        """
+        return try? JSONDecoder().decode(PreUpgradeSnapshot.Manifest.self, from: Data(json.utf8))
     }
 }
 #endif
