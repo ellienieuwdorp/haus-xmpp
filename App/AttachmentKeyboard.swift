@@ -141,8 +141,9 @@ final class AttachmentKeyboardResponder: UIView {
         controller.view.addSubview(responder)
     }
 
-    /// Also drops the composer's actions, which hold the composer that owns this keyboard. `close()` keeps them:
-    /// a photo taken with the Camera chip comes back through them after the panel has closed.
+    /// Also drops the composer's actions, which hold the composer that owns this keyboard. `close()` keeps them for
+    /// the picker chips, which call them after closing the panel. A camera still up keeps its own route to the
+    /// composer (see `presentCamera`).
     func uninstall() {
         close()
         actions = nil
@@ -244,14 +245,17 @@ final class AttachmentKeyboardResponder: UIView {
         }
     }
 
+    /// The camera holds the composer's capture action itself, not the panel's actions: the chat can stop offering
+    /// uploads while the camera is up, which uninstalls the panel, and the photo must still land. It lets go of the
+    /// action when the camera closes, so the composer is not kept alive past the capture.
     private func presentCamera() {
-        guard let host, host.presentedViewController == nil, UIImagePickerController.isSourceTypeAvailable(.camera) else { return }
+        guard let host, let actions, host.presentedViewController == nil, UIImagePickerController.isSourceTypeAvailable(.camera) else { return }
         let picker = UIImagePickerController()
         picker.sourceType = .camera
         picker.mediaTypes = [UTType.image.identifier, UTType.movie.identifier]
         picker.videoQuality = .typeHigh
         picker.delegate = camera
-        camera.onCapture = { [weak self] capture in self?.actions?.capture(capture) }
+        camera.onCapture = actions.capture
         host.present(picker, animated: true)
     }
 
@@ -277,9 +281,13 @@ final class AttachmentKeyboardResponder: UIView {
 }
 
 private final class CameraDelegate: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
-    var onCapture: (CameraCapture) -> Void = { _ in }
+    /// Set for one presentation and cleared when it ends.
+    var onCapture: ((CameraCapture) -> Void)?
 
     func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+        defer { picker.dismiss(animated: true) }
+        guard let onCapture else { return }
+        self.onCapture = nil
         if let url = info[.mediaURL] as? URL {
             // The picker deletes its file once it closes; keep a copy for the export.
             let copy = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + "." + (url.pathExtension.isEmpty ? "mov" : url.pathExtension))
@@ -287,10 +295,12 @@ private final class CameraDelegate: NSObject, UIImagePickerControllerDelegate, U
         } else if let image = info[.originalImage] as? UIImage, let data = image.jpegData(compressionQuality: 0.9) {
             onCapture(.image(data))
         }
-        picker.dismiss(animated: true)
     }
 
-    func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { picker.dismiss(animated: true) }
+    func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+        onCapture = nil
+        picker.dismiss(animated: true)
+    }
 }
 
 // MARK: - Panel
