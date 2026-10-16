@@ -40,6 +40,9 @@ struct MacConversationView: View {
     @State private var dropTargeted = false
     /// Bumped by Find; the find bar's field takes focus on each change.
     @State private var findRequests = 0
+    #if DEBUG
+    @State private var debugToken = UUID()
+    #endif
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -121,9 +124,11 @@ struct MacConversationView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             if let timeline { MacConversationFindBars(timeline: timeline, focusRequests: findRequests) }
         }
-        .focusedSceneValue(\.conversationFind, timeline.map { timeline in
-            MacConversationFindCommands(find: find, starredOnly: timeline.starredOnly, setStarredOnly: { timeline.setStarredOnly($0) })
-        })
+        .focusedSceneValue(\.conversationFind, findCommands)
+        #if DEBUG
+        .onAppear { if MacUnobtrusive.isOn { let view = self; MacDebugHooks.tour.conversationFind.append((debugToken, { view.findCommands })) } }
+        .onDisappear { MacDebugHooks.tour.conversationFind.removeAll { $0.token == debugToken } }
+        #endif
         .onChange(of: model.conversationIntent, initial: true) { _, intent in
             // The details' Search and Starred tiles leave what they want opened here, as on the iPhone. Applied in a turn
             // of its own: the timeline scrolls as the filter changes, which it may not do inside a view update.
@@ -287,6 +292,13 @@ struct MacConversationView: View {
     private func openAttachment(of message: TimelineMessage) {
         guard let attachment = message.attachment, !message.showsPlaceholder else { return }
         if let url = attachment.localURL { quickLook = url } else if attachment.download.canRequest { model.downloadAttachment(message.id) }
+    }
+
+    /// What Find in Conversation and View > Starred Messages act on.
+    private var findCommands: MacConversationFindCommands? {
+        timeline.map { timeline in
+            MacConversationFindCommands(find: find, starredOnly: timeline.starredOnly, setStarredOnly: { timeline.setStarredOnly($0) })
+        }
     }
 
     /// Opens search, or moves keyboard focus back into its field when it is open.

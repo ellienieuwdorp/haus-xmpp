@@ -50,8 +50,9 @@ import SwiftUI
 ///   instead), `header` (logs the window's title and subtitle), `badge` (logs the Dock tile's badge), `block <chat>` and
 ///   `unblock <chat>` (sample conversations only, as `-haus-block`) and `close-window` (closes the main window, as its
 ///   close button does).
-///   The window of an unobtrusive run is never key, so the Chat and Message menus read the main window's targets
-///   directly there (`Tour.chatCommands`, `Tour.messageCommands`) instead of as focused scene values.
+///   The window of an unobtrusive run is never key, so the Chat and Message menus, Find in Conversation and Starred
+///   Messages read the main window's targets directly there (`Tour.chatCommands`, `Tour.messageCommands`,
+///   `Tour.conversationFind`) instead of as focused scene values.
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
 ///   also in the sample conversations, where previews are otherwise off. `-haus-untinted-send`: the composer's Send in
 ///   the clear variant of its glass style, as an enabled accent-tinted circle leaves the conversation out of a capture.
@@ -267,6 +268,8 @@ import SwiftUI
         /// key, so no focused scene value reaches the menus (`MacCommands`).
         var chatCommands: (() -> MacChatCommands?)?
         var messageCommands: [(token: UUID, make: () -> MacMessageCommands)] = []
+        /// The open chat's Find in Conversation and Starred Messages, likewise.
+        var conversationFind: [(token: UUID, make: () -> MacConversationFindCommands?)] = []
     }
 
     struct MessageRequest: Equatable {

@@ -8,11 +8,19 @@ struct MacCommands: Commands {
     let window: MacWindowState
     @Environment(\.openWindow) private var openWindow
     /// The open chat's search and starred filter; nil while no chat is shown.
-    @FocusedValue(\.conversationFind) private var conversation
+    @FocusedValue(\.conversationFind) private var focusedConversation
     @FocusedValue(\.macChatCommands) private var chatCommands
     @FocusedValue(\.macMessageCommands) private var messageCommands
 
+    private var conversation: MacConversationFindCommands? {
+        #if DEBUG
+        if focusedConversation == nil, let unfocused = MacDebugHooks.tour.conversationFind.last { return unfocused.make() }
+        #endif
+        return focusedConversation
+    }
+
     var body: some Commands {
+        let conversation = conversation
         // Kept for the Dock icon, which reopens the main window after it was closed (or never shown: a launch in the
         // background opens no window). Commands are built at launch, before any window exists.
         let _ = { if window.openWindow == nil { window.openWindow = openWindow } }()
