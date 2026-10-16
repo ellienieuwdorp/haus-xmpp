@@ -1,5 +1,6 @@
 import AppKit
 import ImageIO
+import PhotosUI
 import SwiftUI
 import XMPPProtocol
 
@@ -8,8 +9,14 @@ import XMPPProtocol
 /// user moved to another chat puts its text back where they will find it.
 @MainActor @Observable final class MacComposerState {
     var draft = ""
-    /// True from Send until the text is queued.
+    /// True from Send until the files and the text are queued; the tray is frozen meanwhile.
     var sending = false
+    /// Files waiting for Send, in the order they were picked, pasted or dropped (`MacAttachmentIntake`).
+    var tray: [MacTrayItem] = []
+    /// The tray's files being prepared, one after another so they land in order.
+    @ObservationIgnored var preparation: Task<Void, Never>?
+    /// The text view showing this draft, which the attach menu makes first responder for Continuity Camera.
+    @ObservationIgnored weak var textView: MacComposerTextView?
     /// The card for the first link in the draft; Send freezes it into the message.
     @ObservationIgnored let linkPreview = ComposerLinkPreview()
     /// The edit a successful Send just finished: its draft was already cleared, and anything typed since stays.
@@ -29,22 +36,26 @@ import XMPPProtocol
         }
         if let state = states[chat] { return state }
         // Chats left empty, with nothing on its way, have nothing to come back to.
-        states = states.filter { !$0.value.draft.isEmpty || $0.value.sending }
+        states = states.filter { !$0.value.draft.isEmpty || !$0.value.tray.isEmpty || $0.value.sending }
         let state = MacComposerState()
         states[chat] = state
         return state
     }
 }
 
-/// The composer under the Mac conversation: the reply or edit bar, the link preview card, the text field and Send.
-/// Return sends, Shift-Return and Option-Return start a new line, Esc cancels a reply or an edit, and Up-arrow in an
-/// empty field edits the newest message that offers Edit. Sends as the iPhone composer does: the same gating, the same
-/// reply, preview and edit handling, and typing notifications from the draft (`AppModel.draftChanged`).
+/// The composer under the Mac conversation: the reply or edit bar, the attach button, the tray of files, the link
+/// preview card, the text field and Send. Return sends, Shift-Return and Option-Return start a new line, Esc cancels a
+/// reply or an edit, and Up-arrow in an empty field edits the newest message that offers Edit. Sends as the iPhone
+/// composer does: the same gating, the same files-then-caption plan (`ComposerPlan`), the same reply, preview and edit
+/// handling, and typing notifications from the draft (`AppModel.draftChanged`).
 struct MacComposer: View {
     let model: AppModel
     let chatID: String
     @Bindable var intent: MacComposerIntent
     @State private var state: MacComposerState
+    @State private var choosingPhotos = false
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var choosingFiles = false
     @Environment(\.appearance) private var appearance
 
     init(model: AppModel, chatID: String, intent: MacComposerIntent) {
@@ -63,22 +74,35 @@ struct MacComposer: View {
     private var tint: Color { Color(platform: appearance.accent.tint) }
 
     private var placeholder: String {
-        !model.isDemo && model.encryptionNeedsReview ? "Sending paused until you review" : "Message"
+        if !model.isDemo, model.encryptionNeedsReview { return "Sending paused until you review" }
+        guard showsTray else { return "Message" }
+        return ComposerPlan.trayPlaceholder(reply: intent.replyingTo) { model.canReplyWithFilesAlone(to: $0, in: chatID) }
     }
+
+    /// Where the iPhone shows its attach button: a direct chat on a server that takes uploads (any sample chat).
+    private var showsAttach: Bool { !model.isGroup(chatID) && model.canSendAttachments }
+    /// Paste and drop add files whenever the button shows, except while an edit rewrites text.
+    private var canAttach: Bool { showsAttach && intent.editing == nil }
+    /// The tray is set aside while an edit rewrites text.
+    private var showsTray: Bool { intent.editing == nil && !state.tray.isEmpty }
+    private var preparing: Bool { state.tray.contains { $0.prepared == nil } }
 
     private var canSend: Bool {
         guard !model.isSending, !state.sending, model.canSend(to: chatID) else { return false }
-        return ComposerPlan.hasContent(draft: state.draft, editing: intent.editing, hasFiles: false)
+        // Send waits for every file in the tray, so none is left behind for a message of its own.
+        if showsTray, preparing { return false }
+        return ComposerPlan.hasContent(draft: state.draft, editing: intent.editing, hasFiles: showsTray)
     }
 
     /// What the link preview card follows, as on the iPhone: the draft, the setting (never in the sample
-    /// conversations), whether the chat can carry a preview (modern OMEMO), and whether this message may (not an edit).
+    /// conversations), whether the chat can carry a preview (modern OMEMO), and whether this message may carry one (not
+    /// with files, not an edit).
     private var linkPreviewInput: LinkPreviewInput {
         #if DEBUG
-        if MacComposerTour.samplePreview { return LinkPreviewInput(draft: state.draft, enabled: true, suppressed: intent.editing != nil) }
+        if MacComposerTour.samplePreview { return LinkPreviewInput(draft: state.draft, enabled: true, suppressed: showsTray || intent.editing != nil) }
         #endif
         return LinkPreviewInput(draft: state.draft, enabled: LinkSettings.shared.fetchPreviews && !model.isDemo && model.linkPreviewsTravel(to: chatID),
-                                suppressed: intent.editing != nil)
+                                suppressed: showsTray || intent.editing != nil)
     }
 
     private var linkPreviewSource: any ComposerLinkPreviewSource {
@@ -94,22 +118,43 @@ struct MacComposer: View {
                 if let message = intent.editing ?? intent.replyingTo {
                     contextBar(message, isEdit: intent.editing != nil)
                 }
-                VStack(alignment: .leading, spacing: 0) {
-                    if state.linkPreview.state != .none {
-                        MacComposerLinkPreviewCard(state: state.linkPreview.state) { state.linkPreview.remove() }
+                HStack(alignment: .bottom, spacing: 8) {
+                    if showsAttach {
+                        MacAttachButton(enabled: intent.editing == nil && !state.sending && !model.isSending,
+                                        photos: { choosingPhotos = true }, files: { choosingFiles = true },
+                                        prepareImport: { state.textView?.focus() })
                     }
-                    HStack(alignment: .bottom, spacing: 4) {
-                        field
-                        sendButton
+                    VStack(alignment: .leading, spacing: 0) {
+                        if state.linkPreview.state != .none {
+                            MacComposerLinkPreviewCard(state: state.linkPreview.state) { state.linkPreview.remove() }
+                        }
+                        if showsTray {
+                            MacAttachmentTray(items: state.tray, frozen: state.sending) { id in state.tray.removeAll { $0.id == id } }
+                        }
+                        HStack(alignment: .bottom, spacing: 4) {
+                            field
+                            sendButton
+                        }
+                        .frame(minHeight: 44)
                     }
-                    .frame(minHeight: 44)
+                    // A capsule at one line; the same radius keeps eight lines, the tray and the card readable.
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 }
-                // A capsule at one line; the same radius keeps eight lines and the card readable.
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .onChange(of: state.draft) { _, draft in model.draftChanged(draft, in: chatID) }
+        .photosPicker(isPresented: $choosingPhotos, selection: $photoItems, maxSelectionCount: max(1, ComposerPlan.trayLimit - state.tray.count),
+                      selectionBehavior: .ordered, matching: .any(of: [.images, .videos]))
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            photoItems = []
+            MacAttachmentIntake.add(MacAttachmentIntake.jobs(forPhotos: items, limit: model.attachmentLimit), to: state, model: model)
+        }
+        .fileImporter(isPresented: $choosingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            MacAttachmentIntake.add(MacAttachmentIntake.jobs(for: .files(urls), limit: model.attachmentLimit), to: state, model: model)
+        }
         // Also on appearing: an edit started while the composer was away (a blocked chat) brings its text along.
         .onChange(of: intent.editing?.id, initial: true) { previous, _ in
             if let message = intent.editing {
@@ -203,7 +248,7 @@ struct MacComposer: View {
     }
 
     private var keyActions: MacComposerKeyActions {
-        MacComposerKeyActions(send: send, editLast: editLast, cancel: cancelCurrent, attach: attach)
+        MacComposerKeyActions(send: send, editLast: editLast, cancel: cancelCurrent, attach: attach, canAttach: { canAttach })
     }
 
     private func cancel(isEdit: Bool) {
@@ -223,9 +268,13 @@ struct MacComposer: View {
         return true
     }
 
-    /// Files and images pasted or dropped into the field arrive here, to become attachments of the next send. Until the
-    /// Mac can attach files, nothing takes them, and the text view pastes or drops them as text would.
-    private func attach(_ attachments: MacComposerAttachments) -> Bool { false }
+    /// Files and images pasted, dropped or imported from an iPhone into the field arrive here and join the tray. Where
+    /// the chat cannot take files, the text view pastes or drops them as text would.
+    private func attach(_ attachments: MacComposerAttachments) -> Bool {
+        guard canAttach else { return false }
+        MacAttachmentIntake.add(MacAttachmentIntake.jobs(for: attachments, limit: model.attachmentLimit), to: state, model: model)
+        return true
+    }
 
     private func send() {
         guard canSend else { return }
@@ -253,13 +302,22 @@ struct MacComposer: View {
         }
         let reply = intent.replyingTo
         // What the card shows now goes with the text; a fetch still running is not waited for.
-        let linkPreview = state.linkPreview.frozen(for: text, suppressed: false)
+        let linkPreview = state.linkPreview.frozen(for: text, suppressed: showsTray)
+        let files = state.tray.compactMap { item in item.prepared.map { (id: item.id, prepared: $0) } }
+        let plan = ComposerPlan.ReplyPlan(caption: text, reply: reply) { model.canReplyWithFilesAlone(to: $0, in: chatID) }
         state.sending = true
         Task {
             defer { state.sending = false }
-            let sent = await model.send(text, to: chatID, replyingTo: reply, linkPreview: linkPreview)
+            let sent = await ComposerPlan.dispatch(files, caption: text, sendFile: { file in
+                guard model.accountID == account,
+                      await model.sendAttachment(file.prepared, to: chatID, replyingTo: file.id == files.first?.id ? plan.firstFile : nil) else { return false }
+                state.tray.removeAll { $0.id == file.id }
+                return true
+            }, sendCaption: { text in
+                model.accountID == account ? await model.send(text, to: chatID, replyingTo: plan.caption, linkPreview: linkPreview) : false
+            })
             guard model.accountID == account else { return }
-            if sent {
+            if plan.clearsReply(after: sent) {
                 if intent.replyingTo?.id == reply?.id { intent.cancelReply() }
             } else if state.draft.isEmpty {
                 state.draft = text

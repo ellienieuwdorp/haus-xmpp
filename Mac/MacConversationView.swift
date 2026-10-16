@@ -34,6 +34,8 @@ struct MacConversationView: View {
     @State private var quickLook: URL?
     /// The composer's reply or edit, set by message actions.
     @State private var composerIntent = MacComposerIntent()
+    /// Files are being dragged over the chat and it would take them.
+    @State private var dropTargeted = false
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -127,6 +129,8 @@ struct MacConversationView: View {
         } message: { _ in
             Text("It disappears here. \(title) may still see it if their app doesn't support unsending.")
         }
+        .onDrop(of: MacAttachmentDrop.types, delegate: MacAttachmentDrop(model: model, chatID: chatID, intent: composerIntent, targeted: $dropTargeted))
+        .overlay { if dropTargeted { MacAttachmentDropHighlight() } }
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(title)
         .navigationSubtitle(model.trustSummary(for: chatID).pill)

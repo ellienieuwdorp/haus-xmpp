@@ -40,6 +40,7 @@ import SwiftUI
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         PushRegistration.shared.installNotificationDelegate()
+        MacAttachmentActions.removeExports()
         #if DEBUG
         MacLifecycleDebug.attach(to: lifecycle)
         #endif

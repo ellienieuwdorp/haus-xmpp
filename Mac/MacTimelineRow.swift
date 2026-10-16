@@ -104,6 +104,7 @@ struct MacTimelineRow: View {
         ForEach(MessageActionMenu.reactionToggles(for: message), id: \.emoji) { toggle in
             Button(toggle.title) { react(toggle.emoji) }
         }
+        MacAttachmentMenuItems(message: message)
     }
 
     private func textMenu(_ link: URL?) -> NSMenu {
@@ -235,12 +236,22 @@ struct MacBubble<CardMenu: View>: View {
                             .padding(.horizontal, -MacMediaPreview.edge)
                             .padding(.top, message.reply == nil ? -MacMediaPreview.top : 0)
                     } else {
-                        Label(attachment.name.isEmpty ? attachment.kindLabel : attachment.name, systemImage: "doc")
-                            .font(.callout)
-                            .foregroundStyle(textColor)
+                        // The name, then the size once it is here or where its download stands, as on the iPhone.
+                        Label {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(attachment.name.isEmpty ? attachment.kindLabel : attachment.name).foregroundStyle(textColor)
+                                Text(attachment.localURL == nil ? attachment.downloadDetail
+                                     : attachment.size > 0 ? ByteCountFormatter.string(fromByteCount: Int64(attachment.size), countStyle: .file) : attachment.mediaType)
+                                    .font(.caption).foregroundStyle(metaColor)
+                            }
+                        } icon: {
+                            Image(systemName: "doc").foregroundStyle(textColor)
+                        }
+                        .font(.callout)
                     }
                 }
                 .buttonStyle(.plain)
+                .modifier(MacAttachmentDragSource(attachment: attachment))
                 .help(attachment.localURL == nil ? attachment.downloadDetail : "Open in Quick Look")
             }
             if let preview = message.linkPreview, !message.showsPlaceholder {

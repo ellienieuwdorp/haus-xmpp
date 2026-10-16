@@ -22,11 +22,15 @@ import SwiftUI
 ///   `inspector on|off`, `settings general|appearance|about`, `close-settings`, `size <width>x<height>` (as
 ///   `-haus-window-size`, which applies only after a tour), and for the open chat's composer: `type <text>` (inserted at
 ///   the caret as typing would), `key return|shift-return|option-return|command-return|escape|up`, `reply newest` (the
-///   newest received message), `edit newest` (what Up-arrow would edit), and `snap <name>`, which captures the main
-///   window as `<name>.png` into `-haus-capture`'s directory. Message actions by message ID in the open chat, as the
-///   bubble's menu performs them: `reply|edit|star|retry|unsend|encryption|report|select-text <id>`,
-///   `react <id> <emoji>`, `pick-emoji <id>` (the emoji picker's popover), `hover <id>|off` (shows that bubble's hover
-///   toolbar until `hover off`), and `menu <id>` (logs the bubble's menu, as no event can open it; an unknown ID lists
+///   newest received message), `edit newest` (what Up-arrow would edit), `attach photo|file|scan|<path in the
+///   container>` (handed to the composer as a drop would), `drop photo|slow-photo|file|scan` (item providers dropped on
+///   the chat), `paste photo|file|scan|<text>` and `import photo|scan` (Continuity Camera's handover), both from a
+///   private pasteboard, `remove-attachment <index>`, `copy-image <message id>|newest` (to a private pasteboard, logging
+///   its types), `save-over` (Save As… over an existing file in the app's temporary directory, logging whether it
+///   survives a failed copy) (`MacAttachmentTour`), and `snap <name>`, which captures the main window as `<name>.png`
+///   into `-haus-capture`'s directory. Message actions by message ID in the open chat, as the bubble's menu performs
+///   them: `reply|edit|star|retry|unsend|encryption|report|select-text <id>`, `react <id> <emoji>`, `pick-emoji <id>`
+///   (the emoji picker's popover), `hover <id>|off` (shows that bubble's hover toolbar until `hover off`), and `menu <id>` (logs the bubble's menu, as no event can open it; an unknown ID lists
 ///   the chat's), and `focus` (logs which view has the keyboard: the composer, a bubble's text or another). Timeline
 ///   steps (`MacTimelineDebug`): `capture <name>` (the main window and any other open window as `<name>.png` beside the
 ///   frames), `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as the reader's scroll,
@@ -290,6 +294,7 @@ import SwiftUI
                 let responder = mainWindow?.firstResponder
                 let name = responder === MacComposerTour.textView ? "composer" : responder is BubbleTextView ? "bubble text" : responder.map { String(describing: type(of: $0)) } ?? "none"
                 log("focus: \(name)")
+            case "attach", "drop", "paste", "import", "remove-attachment", "copy-image", "save-over": MacAttachmentTour.step(words[0], argument, model: model)
             case "snap":
                 guard let directory = value(after: "-haus-capture"), let window = mainWindow, let png = render(window) else { log("tour snap: needs -haus-capture <dir>"); break }
                 emit(png, directory: directory, file: slug(argument) + ".png")
