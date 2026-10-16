@@ -178,6 +178,8 @@ final class AppModel {
     @ObservationIgnored private var activeEncryptionOperations = 0
     @ObservationIgnored private var acquiringOwnership = false
     @ObservationIgnored private var hasTransportOwnership = false
+    /// Answers the notification extension's liveness handshake (`startLivenessResponder`).
+    @ObservationIgnored private var livenessResponder: AppLiveness.Responder?
     /// Background time begun when a release from the background left the kernel lock held (`releaseLeaseInBackground`):
     /// the app is not suspended holding it. The next release that frees the lock ends it.
     @ObservationIgnored private var unreleasedLease: BackgroundActivity?
@@ -395,6 +397,7 @@ final class AppModel {
                     await self?.receivePushToken(token)
                 }
             }
+            startLivenessResponder()
         }
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let usable = path.status == .satisfied
@@ -4382,6 +4385,50 @@ extension AppModel: NotificationActionEnvironment {
         _ = await presentation.result
         watchdog.cancel()
         if progress.report.posted > 0 { Self.syncLog.notice("notification action presented=\(progress.report.posted, privacy: .public)") }
+    }
+
+    // MARK: Liveness handshake
+
+    /// Answers a notification extension that found the lease busy (`LivenessHandshake`), so a push for this live session
+    /// is presented once, by the app, instead of next to the extension's fallback. Only for the real store: a UI test
+    /// session's store is not the one the extension opens.
+    private func startLivenessResponder() {
+        guard livenessResponder == nil, let container = try? SharedStorage.groupContainer() else { return }
+        let responder = AppLiveness.Responder(files: AppLiveness.Files(groupRoot: container),
+                                              conditions: { [weak self] in self?.livenessConditions ?? Self.silent },
+                                              answered: { [weak self] in self?.keepLivenessPromise() })
+        if responder.start() { livenessResponder = responder }
+        else { Self.syncLog.error("liveness responder could not observe its ring") }
+    }
+
+    private static let silent = LivenessConditions(wantsConnection: false, quiescing: true, ownsLease: false, servesExtensionAccount: false)
+
+    /// The answer promises that this process keeps the lease and presents: never while a background transition, sleep or
+    /// sign-out quiesces (on the iPhone the transport is wanted only in front), and only for the account the extension
+    /// serves.
+    private var livenessConditions: LivenessConditions {
+        LivenessConditions(wantsConnection: wantsConnection && testSessionID == nil, quiescing: quiescing,
+                           ownsLease: hasTransportOwnership,
+                           servesExtensionAccount: sessionAccount.map { saved in
+                               (try? NotificationAccount.load())?.accountID == saved.accountID
+                           } ?? false)
+    }
+
+    /// After an answer the push is this process's to present. The server pushed because an acknowledgement from this
+    /// session was overdue, so the socket may be dead without an error: probe it now (a dead stream ends, and the
+    /// reconciler resumes it, which replays what the server queued), or connect at once when no stream is up. What
+    /// arrives is presented by the usual foreground or catch-up claim.
+    private func keepLivenessPromise() {
+        Self.syncLog.notice("liveness answered, connected=\(self.isConnected, privacy: .public)")
+        guard isConnected, let client else {
+            networkBecameReachable()
+            return
+        }
+        Task { [weak self] in
+            let alive = await client.probeLiveness(within: .seconds(5))
+            Self.syncLog.notice("liveness probe answered=\(alive, privacy: .public)")
+            if !alive { self?.networkBecameReachable() }
+        }
     }
 
     // MARK: Foreground banners
