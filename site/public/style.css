@@ -5,6 +5,8 @@
   --link: #0066cc;
   --background: #ffffff;
   --rule: #d2d2d7;
+  --badge-background: #000000;
+  --badge-text: #ffffff;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -14,6 +16,8 @@
     --link: #4aa3ff;
     --background: #000000;
     --rule: #424245;
+    --badge-background: #ffffff;
+    --badge-text: #000000;
   }
 }
 
@@ -31,57 +35,109 @@ body {
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-/* Landing page */
+/* Landing page
+   Everything scales with the viewport height so the icon, title, both
+   screenshots, badges and links fit on one screen. --chrome is the height
+   of everything except the screenshots; the screenshots get the rest,
+   within a legible minimum and the original 300px maximum. Short or tiny
+   windows scroll instead of shrinking further. */
 
 .home {
+  --vh: 1vh;
+  --space: clamp(12px, calc(var(--vh) * 3.2), 44px);
+  --icon: clamp(52px, calc(var(--vh) * 9), 112px);
+  --title: clamp(26px, calc(var(--vh) * 5), 44px);
+  --gap: clamp(12px, 3vw, 32px);
+  --badge: 44px;
+  --links: 26px;
+  --chrome: calc(var(--space) * 4.4 + var(--icon) + var(--title) * 1.15 + var(--badge) + 16px + var(--links) + 4px);
+  --phone: min(300px, max(140px, calc((var(--vh) * 100 - var(--chrome)) * 598 / 1300)));
   max-width: 1080px;
+  min-height: 100vh;
   margin: 0 auto;
-  padding: 72px 0 56px;
+  padding: var(--space) 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   text-align: center;
 }
 
+/* The small viewport height keeps the page on screen while a phone's
+   browser bars are showing. */
+@supports (height: 1svh) {
+  .home { --vh: 1svh; min-height: 100svh; }
+}
+
 .icon {
-  width: 112px;
-  height: 112px;
+  width: var(--icon);
+  height: var(--icon);
   border-radius: 22.37%;
 }
 
 .home h1 {
-  margin: 20px 0 48px;
-  font-size: 44px;
+  margin: calc(var(--space) * 0.4) 0 var(--space);
+  font-size: var(--title);
+  line-height: 1.15;
   font-weight: 800;
   letter-spacing: -0.02em;
 }
 
 .shots {
   display: flex;
-  gap: 32px;
-  align-items: center;
+  gap: var(--gap);
   justify-content: center;
-}
-
-.shots img {
-  display: block;
-  height: auto;
+  width: 100%;
 }
 
 .shots .phone {
-  width: 300px;
-  border-radius: 40px;
+  display: block;
+  width: var(--phone);
+  max-width: calc((100% - var(--gap)) / 2);
+  height: auto;
+  /* 40px corners at the 300px width, scaling with the image. */
+  border-radius: 13.33% / 6.15%;
   box-shadow: 0 0 0 1px var(--rule), 0 20px 50px rgba(0, 0, 0, 0.12);
 }
 
-.links {
-  margin-top: 56px;
+/* Store-style badges, side by side and centred. */
+.badges {
+  margin-top: var(--space);
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
 }
 
-@media (max-width: 760px) {
-  .home { padding-top: 48px; }
-  .shots .phone { width: min(300px, 80%); border-radius: 32px; }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--badge);
+  padding: 0 16px 0 12px;
+  border-radius: 10px;
+  background: var(--badge-background);
+  color: var(--badge-text);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  text-align: left;
+}
+
+.badge:hover { text-decoration: none; opacity: 0.85; }
+.badge:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
+.badge svg { flex: none; }
+.badge span { display: flex; flex-direction: column; gap: 2px; }
+.badge small { font-size: 10px; font-weight: 500; letter-spacing: 0.01em; }
+
+.links {
+  margin-top: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  justify-content: center;
+  line-height: var(--links);
 }
 
 /* Text pages */
