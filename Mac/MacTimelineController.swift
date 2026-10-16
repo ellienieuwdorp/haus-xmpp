@@ -15,6 +15,9 @@ import SwiftUI
 /// - **Paging**: older history is asked for when the reader's own scroll comes within two screens of the oldest loaded
 ///   message (`TimelineScrollPolicy.OlderHistoryRequests`).
 ///
+/// Search and the starred filter list a slice of the chat, as on the iPhone (`ConversationPresenter`): opening one asks
+/// for the whole history the store keeps, never pages, and closing it puts the reader back where they were.
+///
 /// The rows are not read from the model inside a view update: the controller observes what they are built from and
 /// applies a change in its own main-queue turn, so it can look at the reader's row before the change and correct the
 /// position after it. Position corrections go through `ScrollViewProxy`, never by moving the clip view (the next scroll
@@ -35,6 +38,14 @@ import SwiftUI
     private(set) var highlightedID: String?
     /// The day of the topmost message while the reader scrolls; nil at rest and at the top of history.
     private(set) var dayChip: TimelineScrollPolicy.DayChip?
+    /// Search is open: the timeline lists the messages whose text contains `query`, all of them while it is blank.
+    private(set) var searching = false
+    /// The search field's text as typed.
+    private(set) var query = ""
+    /// Only starred messages are listed; with search, the starred ones that match.
+    private(set) var starredOnly = false
+    /// A filter opened and the store is asked for the whole history it may list.
+    private(set) var loadingAll = false
 
     /// Where the scroll view laid things out. Not observed: it changes on every scrolled frame.
     @ObservationIgnored let layout = MacTimelineLayout()
@@ -58,6 +69,14 @@ import SwiftUI
     /// chat slightly taller than the frame at its top, its newest message under the composer.
     @ObservationIgnored private var settlingAtOpen = true
     @ObservationIgnored private var settleAttempts = 0
+    /// Where the reader was in the whole timeline when a filter opened, to return to when the last one closes.
+    @ObservationIgnored private var unfilteredPlace: ReaderPlace?
+    /// Where the last filter change put the reader, and when. The bars and the composer come and go with a filter, and
+    /// the resize they make reaches `resized` from the change's own layout pass, before the change positions the
+    /// timeline, or soon after; the near-bottom rule would read the list before the change, so such a resize positions
+    /// the timeline as the change did.
+    @ObservationIgnored private var refiltered: (place: ReaderPlace, at: ContinuousClock.Instant)?
+    @ObservationIgnored private var loadingAllTask: Task<Void, Never>?
 
     /// The bottom spacer's ID: the end of the content, below the typing bubble.
     nonisolated static let endID = "end\u{0}"
@@ -94,7 +113,7 @@ import SwiftUI
         let token = observation
         return withObservationTracking {
             guard model.messagesLoadedFor == chatID else { return Content() }
-            let presenter = makePresenter()
+            let presenter = filtered(makePresenter())
             return Content(isLoaded: true, rows: TimelineItems.rows(for: presenter.timelineMessages), typing: presenter.typing,
                            loadingEarlier: presenter.loadingEarlier, isGroup: presenter.isGroup)
         } onChange: { [weak self] in
@@ -256,6 +275,16 @@ import SwiftUI
         let change = size.height - layout.size.height
         let wasNearBottom = layout.size.height > 0 && layout.distanceFromBottom + change < TimelineScrollPolicy.nearBottomDistance
         layout.size = size
+        if let refiltered, ContinuousClock.now - refiltered.at < .milliseconds(500) {
+            guard change != 0, isLoaded else { return }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard self.layout.isAttached, let place = self.refiltered?.place else { return }
+                    self.position(place)
+                }
+            }
+            return
+        }
         guard change != 0, wasNearBottom, isLoaded else { return }
         // Never from inside the layout pass reporting the size: the proxy may not be used there.
         DispatchQueue.main.async {
@@ -299,6 +328,7 @@ import SwiftUI
         scrolling = phase.isScrolling
         if scrolling {
             settlingAtOpen = false
+            refiltered = nil
             dayChipIdle?.cancel()
             updateDayChip()
         } else {
@@ -320,7 +350,8 @@ import SwiftUI
     }
 
     private func requestOlderIfNeeded() {
-        guard olderRequests.shouldRequest(oldestID: rows.first?.message.id, distanceFromTop: distanceFromTop,
+        // A filtered list ends where the loaded history ends; it never pages.
+        guard !isFiltered, olderRequests.shouldRequest(oldestID: rows.first?.message.id, distanceFromTop: distanceFromTop,
                                           viewportHeight: layout.height, byReader: readerIsScrolling) else { return }
         // Never applied from inside this callback: the page comes back from the store in a later turn.
         Task {
@@ -338,6 +369,7 @@ import SwiftUI
     private func readerMoved() {
         readerMovedAt = .now
         settlingAtOpen = false
+        refiltered = nil
         dayChipIdle?.cancel()
         updateDayChip(force: true)
         scheduleDayChipIdle()
@@ -379,8 +411,10 @@ import SwiftUI
     // MARK: Jumping to a message
 
     /// Scrolls to a message and tints it for a moment. A message older than the loaded window is paged in first, as far
-    /// as the store and the server's archive go; a message that never turns up leaves the timeline where it was.
+    /// as the store and the server's archive go; a message that never turns up leaves the timeline where it was. Search
+    /// and the starred filter close first: a result is shown in the whole conversation.
     func scrollTo(messageID id: String) {
+        clearFilter()
         revealing?.cancel()
         revealing = Task { await reveal { id } }
     }
@@ -388,6 +422,7 @@ import SwiftUI
     /// Scrolls to the message a reply quotes, from the reference the reply carries (`TimelineReply.messageID`). The
     /// store resolves it to a stored message; one not stored yet is looked for again after each page of history.
     func scrollTo(quotedMessage reference: String) {
+        clearFilter()
         revealing?.cancel()
         revealing = Task { [model, chatID] in await reveal { await model.quotedMessageID(reference, in: chatID) } }
     }
@@ -446,6 +481,123 @@ import SwiftUI
             try? await Task.sleep(for: .seconds(1.2))
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.6)) { self?.highlightedID = nil }
+        }
+    }
+
+    // MARK: Search and starred
+
+    var isFiltered: Bool { searching || starredOnly }
+
+    /// What search matches: the field's text without its surrounding spaces.
+    private var searchTerm: String { searching ? query.trimmingCharacters(in: .whitespacesAndNewlines) : "" }
+
+    /// What the presenter lists under the open filters.
+    func filtered(_ presenter: ConversationPresenter) -> ConversationPresenter {
+        var presenter = presenter
+        presenter.showingSearch = searching
+        presenter.searchTerm = searchTerm
+        presenter.starredOnly = starredOnly
+        return presenter
+    }
+
+    /// Opens or closes search; closing it empties the field, as on the iPhone.
+    func setSearching(_ on: Bool) {
+        guard on != searching else { return }
+        let wasFiltered = isFiltered
+        searching = on
+        if !on { query = "" }
+        refilter(wasFiltered: wasFiltered)
+    }
+
+    func setQuery(_ text: String) {
+        guard searching, text != query else { return }
+        let before = searchTerm
+        query = text
+        if searchTerm != before { refilter(wasFiltered: true) }
+    }
+
+    func setStarredOnly(_ on: Bool) {
+        guard on != starredOnly else { return }
+        let wasFiltered = isFiltered
+        starredOnly = on
+        refilter(wasFiltered: wasFiltered)
+    }
+
+    /// Esc: closes search, as its Done does, or with search closed the starred filter, as its Show All does. Closing
+    /// search keeps the starred filter on, as on the iPhone.
+    func closeFilter() {
+        if searching { setSearching(false) } else { setStarredOnly(false) }
+    }
+
+    /// Closes search and the starred filter together.
+    func clearFilter() {
+        guard isFiltered else { return }
+        searching = false
+        query = ""
+        starredOnly = false
+        refilter(wasFiltered: true)
+    }
+
+    private enum ReaderPlace {
+        case newest
+        case row(id: String, top: CGFloat, height: CGFloat)
+    }
+
+    /// Lists what the filters now select. A filtered list opens at its newest match, as the chat opens at its newest
+    /// message; the whole timeline comes back with the reader's row where it was when the first filter opened.
+    private func refilter(wasFiltered: Bool) {
+        settlingAtOpen = false
+        if !wasFiltered, isFiltered {
+            unfilteredPlace = readerPlace()
+            loadAllHistory()
+        }
+        let next = observe()
+        let restore = isFiltered ? nil : unfilteredPlace
+        if !isFiltered { unfilteredPlace = nil }
+        guard isLoaded, next.isLoaded, layout.isAttached else {
+            apply(next)
+            return
+        }
+        let place = restore ?? .newest
+        // Before the layout pass: the frame may resize inside it.
+        refiltered = (place, .now)
+        applying = true
+        defer { applying = false }
+        apply(next)
+        layout.forceLayout()
+        position(place)
+        updateDayChip()
+    }
+
+    private func position(_ place: ReaderPlace) {
+        if case .row(let id, let top, let height) = place, indexByID[id] != nil {
+            self.place(id, top: TimelineScrollPolicy.reachableTop(top, rowHeight: height, frameHeight: layout.height))
+        } else {
+            scrollToNewest()
+        }
+    }
+
+    private func readerPlace() -> ReaderPlace {
+        guard isLoaded, layout.isAttached else { return .newest }
+        layout.forceLayout()
+        guard layout.distanceFromBottom >= TimelineScrollPolicy.nearBottomDistance, let reader = readerRow() else { return .newest }
+        return .row(id: reader.id, top: reader.top, height: reader.bottom - reader.top)
+    }
+
+    /// Search and the starred filter read the loaded messages, so they need the whole window rather than the newest
+    /// pages, as on the iPhone. `loadOlderMessages` answers true without loading while a page is already coming in, so
+    /// it is asked until it says the window is at its ceiling.
+    private func loadAllHistory() {
+        guard loadingAllTask == nil else { return }
+        loadingAll = true
+        loadingAllTask = Task { [model, chatID] in
+            for _ in 0..<100 {
+                guard !Task.isCancelled, isFiltered else { break }
+                if model.messagesLoadedFor == chatID, await !model.loadOlderMessages(all: true) { break }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            loadingAll = false
+            loadingAllTask = nil
         }
     }
 

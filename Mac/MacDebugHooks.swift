@@ -42,7 +42,9 @@ import SwiftUI
 ///   its clip view on a 120 Hz timer, and logs how late the main thread ran the ticks and the app's memory footprint
 ///   (`ScrollProbe`); with `paging` the sweep counts as the reader's gesture, so older pages come in near the top. Give
 ///   `-haus-capture-frames` a short time so its renders are done before the sweep. Frames may be `0` seconds for a tour
-///   that only captures by name.
+///   that only captures by name. Search steps (`MacConversationFindTour`): `find <text>` (opens search with that text),
+///   `find-close`, `find-esc` (as Esc in the timeline), `starred on|off` and `show-result <message id>` (as a click on
+///   that result).
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
 ///   also in the sample conversations, where previews are otherwise off. `-haus-untinted-send`: the composer's Send in
 ///   the clear variant of its glass style, as an enabled accent-tinted circle leaves the conversation out of a capture.
@@ -300,6 +302,7 @@ import SwiftUI
                 log("focus: \(name)")
             case "attach", "drop", "paste", "import", "remove-attachment", "copy-image", "save-over": MacAttachmentTour.step(words[0], argument, model: model)
             case "drop-highlight": tour.dropHighlight = argument != "off"
+            case "find", "find-close", "find-esc", "starred", "show-result": MacConversationFindTour.step(words[0], argument)
             case "snap":
                 guard let directory = value(after: "-haus-capture"), let window = mainWindow, let png = render(window) else { log("tour snap: needs -haus-capture <dir>"); break }
                 emit(png, directory: directory, file: slug(argument) + ".png")
@@ -833,7 +836,9 @@ import SwiftUI
     private static func dumpMenus() {
         func walk(_ menu: NSMenu, depth: Int) {
             for item in menu.items where !item.isSeparatorItem {
-                let key = item.keyEquivalent.isEmpty ? "" : " [\(item.keyEquivalentModifierMask.contains(.shift) ? "⇧" : "")⌘\(item.keyEquivalent)]"
+                let mask = item.keyEquivalentModifierMask
+                let modifiers = (mask.contains(.control) ? "⌃" : "") + (mask.contains(.option) ? "⌥" : "") + (mask.contains(.shift) ? "⇧" : "")
+                let key = item.keyEquivalent.isEmpty ? "" : " [\(modifiers)⌘\(item.keyEquivalent)]"
                 log("menu \(String(repeating: "  ", count: depth))\(item.title)\(key)")
                 if let submenu = item.submenu, depth < 2 { walk(submenu, depth: depth + 1) }
             }

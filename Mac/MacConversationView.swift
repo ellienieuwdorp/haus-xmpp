@@ -9,6 +9,8 @@ import SwiftUI
 /// perform the shared menu's actions (`MacMessageHandlers`), with the iPhone's retry and unsend dialogs. Links in
 /// bubbles open through `LinkOpening`, and preview cards show as on the iPhone. Photos and videos show as framed stills
 /// and files as a line; a click opens one in Quick Look, or asks for its download when it is not on this Mac yet.
+/// Search and the starred filter list a slice of the chat under bars at the top (`MacConversationFindBars`); search
+/// hides the composer, as on the iPhone, and a reply or an edit in it waits there until search closes.
 struct MacConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -36,6 +38,8 @@ struct MacConversationView: View {
     @State private var composerIntent = MacComposerIntent()
     /// Files are being dragged over the chat and it would take them.
     @State private var dropTargeted = false
+    /// Bumped by Find; the find bar's field takes focus on each change.
+    @State private var findRequests = 0
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -76,8 +80,9 @@ struct MacConversationView: View {
                                       title: AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title))
             }
         }
+        .onDisappear { MacComposer.endEditing(composerIntent, account: model.accountID, chatID: chatID) }
         // Its own view, so only it reads the messages: this view's body never reruns for a new message.
-        .overlay { MacEmptyNotice(presenter: presenter) }
+        .overlay { if let timeline { MacEmptyNotice(timeline: timeline, presenter: presenter) } }
         .safeAreaInset(edge: .top) {
             // Messages from a device nobody decided on wait, encrypted, until the user reviews it (the iPhone shows a
             // card in the chat); the review itself is on the details' Devices & Encryption page.
@@ -93,16 +98,37 @@ struct MacConversationView: View {
                 .padding(.horizontal, 16).padding(.top, 8)
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let timeline { MacConversationFindBars(timeline: timeline, focusRequests: findRequests) }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // A blocked chat says so and offers Unblock in place of the composer. The timeline's frame ends above it,
             // so the timeline follows the composer's height as it does the window's (`MacTimelineController.resized`).
             if model.isBlocked(chatID) {
                 BlockedChatBar(model: model, chatID: chatID, name: title)
                     .padding(.horizontal, 16).padding(.vertical, 10)
-            } else {
+            } else if timeline?.searching != true {
                 MacComposer(model: model, chatID: chatID, intent: composerIntent)
             }
         }
+        .focusedSceneValue(\.conversationFind, timeline.map { timeline in
+            MacConversationFindCommands(find: find, starredOnly: timeline.starredOnly, setStarredOnly: { timeline.setStarredOnly($0) })
+        })
+        .onChange(of: model.conversationIntent, initial: true) { _, intent in
+            // The details' Search and Starred tiles leave what they want opened here, as on the iPhone. Applied in a turn
+            // of its own: the timeline scrolls as the filter changes, which it may not do inside a view update.
+            switch intent {
+            case .search(let id) where id == chatID:
+                model.conversationIntent = nil
+                DispatchQueue.main.async { find() }
+            case .starred(let id) where id == chatID:
+                model.conversationIntent = nil
+                DispatchQueue.main.async { timeline?.setStarredOnly(true) }
+            default: break
+            }
+        }
+        // A reply or an edit needs the composer, which search hides; as on the iPhone, it closes search.
+        .onChange(of: composerIntent.focusRequests) { _, _ in timeline?.setSearching(false) }
         .blockConfirmation(model: model, request: $blockRequest)
         .confirmationDialog(retryIsImpossible ? "This file can’t be sent" : "Send this message again?", isPresented: Binding(
             get: { retryMessageID != nil }, set: { if !$0 { retryMessageID = nil } }
@@ -255,6 +281,12 @@ struct MacConversationView: View {
         if let url = attachment.localURL { quickLook = url } else if attachment.download.canRequest { model.downloadAttachment(message.id) }
     }
 
+    /// Opens search, or moves keyboard focus back into its field when it is open.
+    private func find() {
+        timeline?.setSearching(true)
+        findRequests += 1
+    }
+
     private func copied(_ text: String, because reason: String) {
         copy(text)
         copiedReason = reason
@@ -268,6 +300,7 @@ struct MacConversationView: View {
     private func timeline(_ timeline: MacTimelineController, presenter: ConversationPresenter) -> some View {
         MacTimeline(controller: timeline) { row in
             MacTimelineRow(row: row, isGroup: timeline.isGroup, handlers: messageHandlers, openAttachment: { openAttachment(of: row.message) })
+                .modifier(MacFindResult(timeline: timeline, id: row.message.id))
                 .onAppear {
                     visibleRows.ids.insert(row.message.id)
                     markIfReading(row.message.id, presenter: presenter)
@@ -280,6 +313,8 @@ struct MacConversationView: View {
                 }
                 .onDisappear { visibleRows.ids.remove(row.message.id) }
         }
+        // Esc in the timeline closes the find bar, as Esc in its field does, or else the starred filter.
+        .onExitCommand(perform: timeline.isFiltered ? { timeline.closeFilter() } : nil)
         // The user started reading this chat (the app active, its window key and visible, the screen unlocked, the user
         // not idle): what was already on screen counts as seen now (critique G3).
         .onChange(of: model.readingStarts) { _, _ in
@@ -297,13 +332,19 @@ struct MacConversationView: View {
     }
 }
 
-/// What an empty timeline says (`ConversationPresenter.emptyNotice`).
+/// What an empty timeline says (`ConversationPresenter.emptyNotice`) under the open filters; a filter that has found
+/// nothing yet waits for the earlier messages it is loading.
 private struct MacEmptyNotice: View {
+    let timeline: MacTimelineController
     let presenter: ConversationPresenter
 
     var body: some View {
-        if let notice = presenter.emptyNotice {
-            ContentUnavailableView(notice.title, systemImage: notice.systemImage)
+        if let notice = timeline.filtered(presenter).emptyNotice {
+            if timeline.isFiltered, timeline.loadingAll {
+                ProgressView().controlSize(.small)
+            } else {
+                ContentUnavailableView(notice.title, systemImage: notice.systemImage)
+            }
         }
     }
 }
