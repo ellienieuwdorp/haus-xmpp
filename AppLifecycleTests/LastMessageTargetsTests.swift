@@ -32,6 +32,21 @@ final class LastMessageTargetsTests: XCTestCase {
         XCTAssertNil(targets.edit)
     }
 
+    /// A focused message is the only target: an own message can be replied to, and a command it does not offer stays
+    /// off instead of acting on another message.
+    func testAFocusedMessageIsTheOnlyTarget() {
+        let own = LastMessageTargets(focused: sent("s1", canEdit: true))
+        XCTAssertEqual(own.reply?.id, "s1")
+        XCTAssertEqual(own.edit?.id, "s1")
+        XCTAssertEqual(own.star?.id, "s1")
+        XCTAssertNil(own.react, "this sent message takes no reactions")
+        let unsent = LastMessageTargets(focused: received("unsent", retracted: true))
+        XCTAssertNil(unsent.reply)
+        XCTAssertNil(unsent.react)
+        XCTAssertNil(unsent.edit)
+        XCTAssertEqual(unsent.star?.id, "unsent")
+    }
+
     func testAnEmptyChatHasNoTargets() {
         XCTAssertEqual(LastMessageTargets(messages: []), LastMessageTargets(messages: [received("x", unreadable: .decryptFailed)]))
         XCTAssertNil(LastMessageTargets(messages: []).star)
