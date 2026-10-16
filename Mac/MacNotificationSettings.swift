@@ -73,7 +73,7 @@ struct MacPushNotificationRows: View {
         }
         switch model.notificationAuthorization {
         case .notDetermined:
-            Button("Allow Notifications…") { Task { await model.requestNotificationPermission() } }
+            Button("Allow Notifications…") { Task { await model.allowNotifications() } }
                 .accessibilityIdentifier("allowNotifications")
         case .provisional, .denied:
             Button("Open \(ThisDevice.settingsApp)") {

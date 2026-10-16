@@ -29,6 +29,21 @@ import XMPPProtocol
         XCTAssertEqual(PushStatus.gate(for: .denied, interactive: true), .notAllowed)
     }
 
+    /// A reconnect stopped at Off because nobody had answered the prompt; an answer given from Settings finishes that
+    /// setup, including a no (the setup itself then reports Not Allowed). A switch turned off, a setup that is not
+    /// stopped, a prompt still unanswered and a build without push start nothing.
+    func testAnsweredPromptResumesOnlyASetupStoppedForIt() {
+        for answer: UNAuthorizationStatus in [.authorized, .provisional, .denied] {
+            XCTAssertTrue(PushStatus.resumesSetup(after: answer, status: .off, wanted: true, offered: true), "\(answer.rawValue)")
+        }
+        XCTAssertFalse(PushStatus.resumesSetup(after: .authorized, status: .off, wanted: false, offered: true), "turned off")
+        XCTAssertFalse(PushStatus.resumesSetup(after: .notDetermined, status: .off, wanted: true, offered: true), "unanswered")
+        XCTAssertFalse(PushStatus.resumesSetup(after: .authorized, status: .off, wanted: true, offered: false), "no push in this build")
+        for status: PushStatus in [.on, .settingUp, .notAllowed, .unsupported, .unreachable] {
+            XCTAssertFalse(PushStatus.resumesSetup(after: .authorized, status: status, wanted: true, offered: true), "\(status)")
+        }
+    }
+
     func testFailuresMapToTheSettingsCopy() {
         XCTAssertEqual(PushStatus.after(XMPPNotificationError.pushUnavailable), .unsupported)
         XCTAssertEqual(PushStatus.after(PushRegistration.Failure.denied), .notAllowed)

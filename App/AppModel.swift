@@ -1628,6 +1628,18 @@ final class AppModel {
         if permissionRequest == request { permissionRequest = nil }
         refreshNotificationPermission()
     }
+
+    /// Settings' Allow Notifications button: asks, and then finishes a push setup that stopped at the unanswered prompt
+    /// on this connection (`PushStatus.resumesSetup`), after any setup still running has settled.
+    func allowNotifications() async {
+        await requestNotificationPermission()
+        await pushTask?.value
+        let authorization = await Self.notificationAuthorization()
+        guard PushStatus.resumesSetup(after: authorization, status: pushStatus, wanted: pushWanted, offered: PushService.isOffered),
+              let client, let session = sessionAccount, isConnected else { return }
+        startPushSetup(client: client, session: session, token: generation, interactive: false)
+        await pushTask?.value
+    }
     #endif
 
     /// Settings: turn push off. Revokes the gateway registration and disables it at the account server; offline, or
