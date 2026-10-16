@@ -174,7 +174,7 @@ struct MacDeviceReviewSheet: View {
                 .frame(width: 52, height: 52)
                 .background(.orange.opacity(0.15), in: Circle())
                 .accessibilityHidden(true)
-            Text(isGroup ? "Do you recognize these devices?" : "Do you recognize \(shown.count == 1 ? "this device" : "these devices")?")
+            Text("Do you recognize \(shown.count == 1 ? "this device" : "these devices")?")
                 .font(.title3.bold()).multilineTextAlignment(.center).padding(.top, 4)
             Text(guidance)
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -241,6 +241,7 @@ struct MacDeviceReviewSheet: View {
                         if !blocked {
                             Button(role: .destructive) { rejecting = listed } label: { Text("Don’t Trust").frame(maxWidth: .infinity) }
                                 .secondaryActionStyle().foregroundStyle(.red)
+                                .accessibilityLabel("Don’t trust device \(String(device.deviceID))")
                                 .accessibilityIdentifier("deviceReview.reject.\(device.deviceID)")
                                 // Anchored to its button, so the dialog points at the device it decides.
                                 .confirmationDialog("Don’t trust device \(String(device.deviceID))?",
@@ -251,6 +252,7 @@ struct MacDeviceReviewSheet: View {
                         }
                         Button { decide(listed, .accepted) } label: { Text("Trust").frame(maxWidth: .infinity) }
                             .prominentActionStyle()
+                            .accessibilityLabel("Trust device \(String(device.deviceID))")
                             .accessibilityIdentifier("deviceReview.trust.\(device.deviceID)")
                     }
                     .controlSize(.large)
@@ -267,6 +269,7 @@ struct MacDeviceReviewSheet: View {
                     .contentShape(Rectangle())
                 }
                 .listRowButton()
+                .accessibilityLabel("Compare fingerprints of device \(String(device.deviceID))")
                 .accessibilityIdentifier("deviceReview.compare.\(device.deviceID)")
             }
         }
