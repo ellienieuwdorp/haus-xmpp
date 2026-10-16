@@ -16,9 +16,15 @@ import SwiftUI
 ///   window as `<n>-<name>.png`, rendered from its own views (`cacheDisplay`), at the screen's scale.
 /// - `-haus-capture-frames <dir> <seconds>`: the main window at about 10 frames a second, `frame-0001.png` onwards,
 ///   with any other open window (Settings) drawn over its centre.
-/// - `-haus-tour "<step>; …"`: with `-haus-capture-frames`, starts the frames as soon as the main window exists and plays
-///   the steps while they run, for a recording: `wait <seconds>`, `select <chat>`, `deselect`, `inspector on|off`,
-///   `settings general|appearance|about`, `close-settings`.
+/// - `-haus-tour "<step>; …"`: plays the steps once the main window exists; with `-haus-capture-frames`, the frames start
+///   then and run while the steps play, for a recording. Steps: `wait <seconds>`, `select <chat>`, `deselect`,
+///   `inspector on|off`, `settings general|appearance|about`, `close-settings`, and for the open chat's composer:
+///   `type <text>` (inserted at the caret as typing would), `key return|shift-return|option-return|command-return|escape|up`,
+///   `reply <message id>|newest` (the newest received message), `edit <message id>|newest` (what Up-arrow would edit),
+///   and `snap <name>`, which captures the main window as `<name>.png` into `-haus-capture`'s directory.
+/// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
+///   also in the sample conversations, where previews are otherwise off. `-haus-untinted-send`: the composer's Send in
+///   the clear variant of its glass style, as an enabled accent-tinted circle leaves the conversation out of a capture.
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-window-size <width>x<height>`: the main window's content size in points, for captures at a set size.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-sheet account|new-chat|own-devices`,
@@ -222,12 +228,10 @@ import SwiftUI
 
     /// `-haus-tour`: frames from the moment the main window exists, while the steps change what it shows.
     private static func runTour(_ script: String, window: MacWindowState, model: AppModel) async {
-        guard let directory = value(after: "-haus-capture-frames"),
-              let seconds = value(after: "-haus-capture-frames", offset: 2).flatMap(Double.init) else {
-            log("tour: needs -haus-capture-frames <dir> <seconds>")
-            return
+        var frames: Task<Void, Never>?
+        if let directory = value(after: "-haus-capture-frames"), let seconds = value(after: "-haus-capture-frames", offset: 2).flatMap(Double.init) {
+            frames = Task { await captureFrames(to: directory, seconds: seconds) }
         }
-        let frames = Task { await captureFrames(to: directory, seconds: seconds) }
         for step in script.split(separator: ";").map({ $0.trimmingCharacters(in: .whitespaces) }).filter({ !$0.isEmpty }) {
             let words = step.split(separator: " ", maxSplits: 1).map(String.init)
             let argument = words.count > 1 ? words[1] : ""
@@ -241,11 +245,46 @@ import SwiftUI
                 tour.settingsPane = MacSettingsView.Pane(rawValue: argument) ?? .general
                 if otherWindows.isEmpty { openSettings?() }
             case "close-settings": otherWindows.forEach { $0.close() }
+            case "type", "key", "reply", "edit": composerStep(words[0], argument, model: model)
+            case "snap":
+                guard let directory = value(after: "-haus-capture"), let window = mainWindow, let png = render(window) else { log("tour snap: needs -haus-capture <dir>"); break }
+                emit(png, directory: directory, file: slug(argument) + ".png")
             default: log("tour \(step): unknown")
             }
         }
-        await frames.value
+        await frames?.value
         log("tour done; selected \(window.selection ?? "none"), messages loaded for \(model.messagesLoadedFor ?? "none")")
+    }
+
+    /// The composer's tour steps, through the same paths the keyboard and the message actions take.
+    private static func composerStep(_ step: String, _ argument: String, model: AppModel) {
+        guard let textView = MacComposerTour.textView, let intent = MacComposerTour.intent else { log("tour \(step): no composer"); return }
+        switch step {
+        case "type":
+            textView.insertText(argument, replacementRange: textView.selectedRange())
+        case "key":
+            let keys: [String: (Selector, NSEvent.ModifierFlags)] = [
+                "return": (#selector(NSResponder.insertNewline(_:)), []), "shift-return": (#selector(NSResponder.insertNewline(_:)), .shift),
+                "option-return": (#selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)), .option),
+                "escape": (#selector(NSResponder.cancelOperation(_:)), []), "up": (#selector(NSResponder.moveUp(_:)), []),
+            ]
+            if argument == "command-return" {
+                textView.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: textView.window?.windowNumber ?? 0,
+                                                       context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!)
+            } else if let (selector, modifiers) = keys[argument] {
+                if !textView.handleCommand(selector, modifiers: modifiers) { textView.doCommand(by: selector) }
+            } else { log("tour key \(argument): unknown") }
+        case "reply":
+            let message = argument == "newest" ? model.messages.last { !$0.isOutgoing && $0.unreadableReason == nil } : model.messages.first { $0.id == argument }
+            if let message { intent.reply(to: message) } else { log("tour reply \(argument): no such message") }
+        case "edit":
+            let message = argument == "newest"
+                ? ConversationPresenter(source: model, chatID: model.messagesLoadedFor ?? "", title: "").newestEditable
+                : model.messages.first { $0.id == argument }
+            if let message { intent.edit(message) } else { log("tour edit \(argument): no such message") }
+        default: break
+        }
+        log("composer \(step) \(argument): draft \(textView.string.count) characters, replying \(intent.replyingTo?.id ?? "-"), editing \(intent.editing?.id ?? "-")")
     }
 
     private static var mainWindow: NSWindow? {
