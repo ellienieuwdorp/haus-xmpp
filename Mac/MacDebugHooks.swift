@@ -436,9 +436,15 @@ import SwiftUI
     /// Visible windows other than the main window and its sheets: the Settings window.
     private static var otherWindows: [NSWindow] {
         NSApp.windows.filter { window in
-            window.isVisible && !window.isSheet && !(window is NSPanel) && window.contentView != nil
+            window.isVisible && !window.isSheet && !(window is NSPanel) && window.contentView != nil && !isRemote(window)
                 && window.identifier?.rawValue.hasPrefix(MacAppDelegate.mainWindowID) != true
         }
+    }
+
+    /// A window the system draws from another process, such as the text input indicator beside a focused text view:
+    /// it renders blank here and is left out of captures.
+    private static func isRemote(_ window: NSWindow) -> Bool {
+        window.contentView?.subviews.contains { String(describing: type(of: $0)) == "NSRemoteView" } == true
     }
 
     private static func captureWindows(to directory: String) {
@@ -498,7 +504,7 @@ import SwiftUI
         guard let main = renderRep(window) else { return nil }
         let overlays = otherWindows.compactMap { renderRep($0) }
         // A popover's frame is glass and renders blank; its content alone renders, on a flat fill drawn below.
-        let attached = (window.childWindows ?? []).filter { $0.isVisible && !$0.isSheet }.compactMap { child -> (NSWindow, NSBitmapImageRep)? in
+        let attached = (window.childWindows ?? []).filter { $0.isVisible && !$0.isSheet && !isRemote($0) }.compactMap { child -> (NSWindow, NSBitmapImageRep)? in
             guard let view = child.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
             view.cacheDisplay(in: view.bounds, to: rep)
             return (child, rep)
