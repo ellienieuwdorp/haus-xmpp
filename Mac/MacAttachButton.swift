@@ -15,7 +15,9 @@ struct MacAttachButton: View {
 
     var body: some View {
         Button(action: showMenu) {
-            Image(systemName: "plus").font(.system(size: 18, weight: .semibold))
+            // Dimmed here as well: the style's opacity does not reach a circle drawn straight into the composer's glass
+            // container, as this one is, only one nested in the field's glass, as Send is.
+            Image(systemName: "plus").font(.system(size: 18, weight: .semibold)).opacity(enabled ? 1 : 0.35)
         }
         .buttonStyle(CircularGlassButtonStyle(diameter: 44, tinted: false))
         .background(MacMenuAnchor(box: anchor))
