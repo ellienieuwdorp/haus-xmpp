@@ -46,7 +46,10 @@ struct GroupJoinView: View {
                     Text(joining ? "Checking group…" : "Join group").fontWeight(.semibold)
                 }.frame(maxWidth: .infinity)
             }
-            .buttonStyle(.glassProminent).controlSize(.large)
+            .prominentActionStyle().controlSize(.large)
+            #if os(macOS)
+            .keyboardShortcut(.defaultAction)
+            #endif
             .disabled(joining || !model.session.isReady || room.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || nickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityIdentifier("joinGroup")
             .padding(.horizontal, 16).padding(.vertical, 8)
