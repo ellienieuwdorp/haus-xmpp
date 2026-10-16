@@ -422,9 +422,18 @@ private struct MacMessageCommandsSource: View {
     private var commands: MacMessageCommands {
         // `items` is the observed list the rows go into, so a change of rows reruns whatever reads this.
         _ = timeline.items
-        // The message with the timeline's keyboard focus, while the timeline has it.
+        // The message with the timeline's keyboard focus, while the timeline has it. The reader may have scrolled it
+        // away since, so a command brings it back into view, ringed, before acting on it.
         if timeline.hasKeyboardFocus, let id = timeline.focusedID, let focused = timeline.rows.first(where: { $0.message.id == id })?.message {
-            return MacMessageCommands(targets: LastMessageTargets(focused: focused), isFocused: true, isBlocked: model.isBlocked(chatID), handlers: handlers)
+            let handlers = handlers, timeline = timeline
+            let revealing = MacMessageHandlers(perform: { kind, message, link in
+                timeline.reveal(message.id)
+                handlers.perform(kind, message, link)
+            }, react: { emoji, message in
+                timeline.reveal(message.id)
+                handlers.react(emoji, message)
+            })
+            return MacMessageCommands(targets: LastMessageTargets(focused: focused), isFocused: true, isBlocked: model.isBlocked(chatID), handlers: revealing)
         }
         let messages = timeline.isFiltered ? presenter.timelineMessages : timeline.rows.map(\.message)
         return MacMessageCommands(targets: LastMessageTargets(messages: messages), isFocused: false, isBlocked: model.isBlocked(chatID), handlers: handlers)
