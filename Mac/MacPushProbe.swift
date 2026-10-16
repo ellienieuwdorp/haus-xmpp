@@ -16,7 +16,10 @@ import UserNotifications
 ///   delivers quietly to Notification Center.
 /// - `-haus-register-push`: registers for remote notifications. The token goes to standard output as the file
 ///   `push-token.hex` (`HAUS-FILE`, see `MacDebugHooks`); it is never logged.
-/// - `-haus-arm-extension-probe suppress|pass`: arms `MacExtensionProbe` for the next remote request.
+/// - `-haus-arm-extension-probe suppress|pass|liveness`: arms `MacExtensionProbe` for the next remote request.
+/// - `-haus-liveness-answer`: answers every fresh liveness ring for as long as the run lasts, as a live app that can keep
+///   the promise would, whatever this run's session; with an armed `liveness` probe it shows the ring and the answer
+///   crossing between the sandboxed extension and the sandboxed app. Each answer is logged.
 /// - `-haus-extension-probe-results`: the extension's probe records; `-haus-extension-probe-clear` removes them.
 /// - `-haus-delivered-notifications`: what Notification Center holds for the app (category, which fields are set,
 ///   attachments); `-haus-clear-delivered` removes it all afterwards.
@@ -25,7 +28,8 @@ import UserNotifications
 @MainActor enum MacPushProbe {
     private static let flags = ["-haus-notification-settings", "-haus-request-provisional", "-haus-register-push", "-haus-arm-extension-probe",
                                 "-haus-extension-probe-results", "-haus-extension-probe-clear", "-haus-delivered-notifications",
-                                "-haus-clear-delivered", "-haus-group-avatar-probe"]
+                                "-haus-clear-delivered", "-haus-group-avatar-probe", "-haus-liveness-answer"]
+    private static var livenessResponder: AppLiveness.Responder?
 
     static func start() {
         guard flags.contains(where: MacDebugHooks.has) else { return }
@@ -47,6 +51,15 @@ import UserNotifications
                 guard let mode = MacExtensionProbe.Mode(rawValue: value) else { log("extension probe: unknown mode \(value)"); return }
                 do { log("extension probe armed: \(mode.rawValue), nonce item status \(try MacExtensionProbe.arm(mode))") }
                 catch { log("extension probe: FAILED to arm \(error)") }
+            }
+            if MacDebugHooks.has("-haus-liveness-answer") {
+                do {
+                    let live = LivenessConditions(wantsConnection: true, quiescing: false, ownsLease: true, servesExtensionAccount: true)
+                    let responder = AppLiveness.Responder(files: AppLiveness.Files(groupRoot: try SharedStorage.groupContainer()),
+                                                          conditions: { live }, answered: { log("liveness ring answered") })
+                    log(responder.start() ? "liveness answering on \(AppLiveness.ringName)" : "liveness answering FAILED to observe the ring")
+                    livenessResponder = responder
+                } catch { log("liveness answering: FAILED \(error)") }
             }
             if MacDebugHooks.has("-haus-register-push") {
                 log("registering for remote notifications")
