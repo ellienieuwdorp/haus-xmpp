@@ -2379,12 +2379,15 @@ final class AppModel {
             let overview = try await encryption.refreshGroupDevices(account: account, room: room, transport: client)
             guard generation == token, transportWanted, !quiescing else { return nil }
             groupChats[room] = GroupChatState(members: overview.room.members, devices: overview.devices)
+            let joinedAt = Date()
             _ = try await client.joinGroupRoom(room, nickname: nickname)
             let confirmed = try await client.groupRoomSnapshot(room)
             guard generation == token, transportWanted, !quiescing else { return nil }
             preferences.set(nickname, forKey: "groupNickname.\(account).\(room)")
             groupChats[room]?.joined = confirmed?.joined == true
             try await store.upsertChat(accountID: account, chatID: room, title: String(room.prefix { $0 != "@" }))
+            // The room's archive is first walked on the next connection: what arrives until then is news, not history.
+            try await store.recordJoinedRoom(accountID: account, room: room, at: joinedAt)
             // On the device only, where a commit (app or extension) can tell a mention of this nickname.
             try await store.setGroupNickname(accountID: account, room: room, nickname: nickname)
             guard generation == token else { return nil }
