@@ -17,6 +17,16 @@ struct GroupJoinView: View {
     var body: some View {
         Form {
             Section {
+                #if os(macOS)
+                // A Mac form row is the field's own label and the field; LabeledContent around a field shows its
+                // title as a second label.
+                TextField("Address", text: $room, prompt: Text("group@rooms.server"))
+                    .autocorrectionDisabled()
+                    .accessibilityLabel("Group address").accessibilityIdentifier("groupAddress")
+                TextField("Nickname", text: $nickname, prompt: Text("Your nickname"))
+                    .autocorrectionDisabled()
+                    .accessibilityIdentifier("groupNickname")
+                #else
                 LabeledContent("Address") {
                     TextField("group@rooms.server", text: $room)
                         .multilineTextAlignment(.trailing)
@@ -29,8 +39,10 @@ struct GroupJoinView: View {
                         .noAutocapitalization().autocorrectionDisabled()
                         .accessibilityIdentifier("groupNickname")
                 }
+                #endif
             } footer: { Text("Members-only, encrypted groups you already belong to.") }
         }
+        .groupedFormStyle()
         .navigationTitle("Join a group").inlineNavigationTitle()
         .safeAreaInset(edge: .bottom) {
             Button {
