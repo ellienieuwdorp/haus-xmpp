@@ -25,6 +25,8 @@ import AppKit
             dump(window, matching: argument)
         case "rotors":
             logRotors(in: window)
+        case "ax-press":
+            await pressElement(matching: [argument], in: window)
         case "focus-timeline":
             MacTimelineController.current?.debugFocusByKey()
         default: break
@@ -129,6 +131,37 @@ import AppKit
             return lines < 400
         }
         MacDebugHooks.log("ax: \(lines) of \(visited) element(s)")
+    }
+
+    /// Performs the press action of the first element, in the newest sheet over the window or else in the window,
+    /// whose accessibility identifier is one of the texts (or starts with one ending in a dot) or, for a button
+    /// lacking an identifier, whose description contains one, as VoiceOver's VO-Space would. Logs what it pressed and returns whether it found one.
+    @discardableResult static func pressElement(matching texts: [String], in window: NSWindow) async -> Bool {
+        await buildAccessibilityTree()
+        let label = texts.joined(separator: "|")
+        var sheets: [NSWindow] = []
+        var top: NSWindow? = window.attachedSheet
+        while let sheet = top { sheets.insert(sheet, at: 0); top = sheet.attachedSheet }
+        for candidate in sheets + [window] {
+            var found: Element?
+            walk(root(of: candidate), depth: 0) { element, _ in
+                let identifier: String? = ask(element, "accessibilityIdentifier")
+                let matches = texts.contains { text in
+                    if let identifier, !identifier.isEmpty { return identifier == text || text.hasSuffix(".") && identifier.hasPrefix(text) }
+                    return role(element) == .button && describe(element).localizedCaseInsensitiveContains(text)
+                }
+                if matches, element.responds(to: NSSelectorFromString("accessibilityPerformPress")) { found = element }
+                return found == nil
+            }
+            if let found {
+                let selector = NSSelectorFromString("accessibilityPerformPress")
+                let pressed = found.method(for: selector).map { unsafeBitCast($0, to: (@convention(c) (AnyObject, Selector) -> Bool).self)(found, selector) } ?? false
+                MacDebugHooks.log("ax-press '\(label)': \(describe(found))\(candidate === window ? "" : " in a sheet"), pressed \(pressed)")
+                return true
+            }
+        }
+        MacDebugHooks.log("ax-press '\(label)': no element")
+        return false
     }
 
     /// The window's content view: the window itself lists no children until an assistive app has asked for them.

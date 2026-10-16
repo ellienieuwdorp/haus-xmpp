@@ -260,12 +260,14 @@ struct DeviceFingerprintSheet: View {
                     }
                     .prominentActionStyle()
                     .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("deviceFingerprint.verify.\(device.deviceID)")
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 10, trailing: 0)).listRowSeparator(.hidden)
                     Button { review(.accepted) } label: {
                         Text("Accept without verifying").frame(maxWidth: .infinity)
                     }
                     .secondaryActionStyle()
                     .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("deviceFingerprint.accept.\(device.deviceID)")
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
                 }
                 .fontWeight(.semibold).controlSize(.large)
@@ -283,6 +285,7 @@ struct DeviceFingerprintSheet: View {
                     }
                     .listRowButton()
                     .disabled(!device.active)
+                    .accessibilityIdentifier("deviceFingerprint.block.\(device.deviceID)")
                     // Anchored to its button, so the dialog's popover points at what it confirms.
                     .confirmationDialog("Don’t trust device \(String(device.deviceID))?", isPresented: $confirmingRejection, titleVisibility: .visible) {
                         Button("Don’t Trust", role: .destructive) { review(.rejected) }
@@ -293,6 +296,7 @@ struct DeviceFingerprintSheet: View {
                         }
                         .listRowButton()
                         .disabled(!model.session.isReady)
+                        .accessibilityIdentifier("deviceFingerprint.remove.\(device.deviceID)")
                     }
                 } footer: {
                     Text(device.active

@@ -64,6 +64,7 @@
 		266DD3BF0E770B1AF799415B /* ChatListOrderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FB06E272254B30049EBB048 /* ChatListOrderTests.swift */; };
 		266F17B43A7421C54AAA3CFC /* CoalescedReloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5F90485C4526281BAF76DD6 /* CoalescedReloadTests.swift */; };
 		267CEC631E56DBC1EBE98E9B /* MacLifecycleDebug.swift in Sources */ = {isa = PBXBuildFile; fileRef = C330E74F87D4C44D0C45570E /* MacLifecycleDebug.swift */; };
+		27D9B832DBF91F4A50C4A8D2 /* MacDeviceReviewDebug.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BFB7DF54D7EE2058412BCD7 /* MacDeviceReviewDebug.swift */; };
 		2851A08BBCAE4361516AB371 /* PushService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 676414A9C32CD62D47B379B7 /* PushService.swift */; };
 		287E574EFF6F8D7F383161DF /* ChatDeviceReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76923466401F896851BD2F2B /* ChatDeviceReview.swift */; };
 		2A3C4AB690E44E6C07C11D44 /* OMEMO in Frameworks */ = {isa = PBXBuildFile; productRef = 27FEAC6DD0531618099A0C83 /* OMEMO */; };
@@ -465,6 +466,7 @@
 		2993C1C3A89DD5D6B2EABA75 /* ComposerPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerPlan.swift; sourceTree = "<group>"; };
 		2A5C546425283FA7DF4F92F8 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		2AC8B2A7BBFCEA0E69E72232 /* PushUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushUITests.swift; sourceTree = "<group>"; };
+		2BFB7DF54D7EE2058412BCD7 /* MacDeviceReviewDebug.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacDeviceReviewDebug.swift; sourceTree = "<group>"; };
 		2DD386EFF424BCD206EF0717 /* LinkPreviewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewModelTests.swift; sourceTree = "<group>"; };
 		2ED6559AE6FDE78A5F7E53EA /* AppearanceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceUITests.swift; sourceTree = "<group>"; };
 		2EE701CB57B7105AB84D9504 /* LastSeenTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LastSeenTrackerTests.swift; sourceTree = "<group>"; };
@@ -746,6 +748,7 @@
 				CD9735757EA84131345E175B /* MacConversationView.swift */,
 				E5E34D508A44BE27F0D182FD /* MacDebugHooks.swift */,
 				A5E408B62A510F3B497AE648 /* MacDeviceReview.swift */,
+				2BFB7DF54D7EE2058412BCD7 /* MacDeviceReviewDebug.swift */,
 				9E8B694210C22F9137AC0711 /* MacImageEncoding.swift */,
 				B57B2F4C459976BC8495A7C6 /* MacKeyboardDebug.swift */,
 				F7D7B0F60E83D75595B85518 /* MacLifecycle.swift */,
@@ -1667,6 +1670,7 @@
 				62B5ACD2D3F79879ED0BBD03 /* MacConversationView.swift in Sources */,
 				0039E3C2A70F59E9C7A04141 /* MacDebugHooks.swift in Sources */,
 				736B7D99E713AEC14704DA77 /* MacDeviceReview.swift in Sources */,
+				27D9B832DBF91F4A50C4A8D2 /* MacDeviceReviewDebug.swift in Sources */,
 				3A7A62B7523F6748224D8BF5 /* MacExtensionProbe.swift in Sources */,
 				7EF13805E692A99C6CE1BF26 /* MacImageEncoding.swift in Sources */,
 				564DD323EEBE9F651ADE3EEE /* MacKeyboardDebug.swift in Sources */,
