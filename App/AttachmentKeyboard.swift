@@ -141,8 +141,11 @@ final class AttachmentKeyboardResponder: UIView {
         controller.view.addSubview(responder)
     }
 
+    /// Also drops the composer's actions, which hold the composer that owns this keyboard. `close()` keeps them:
+    /// a photo taken with the Camera chip comes back through them after the panel has closed.
     func uninstall() {
         close()
+        actions = nil
         responder.removeFromSuperview()
         host = nil
     }
@@ -294,7 +297,6 @@ private final class CameraDelegate: NSObject, UIImagePickerControllerDelegate, U
 
 /// Replaces the software keyboard: an optional limited-access row, the recent photos rail and the format chips.
 final class AttachmentKeyboardView: UIInputView {
-    private unowned let keyboard: AttachmentKeyboard
     private let limitedRow = LimitedAccessRow()
     private let rail: RecentPhotosRail
     private let chips: FormatChipRow
@@ -308,7 +310,6 @@ final class AttachmentKeyboardView: UIInputView {
     private var compact = false
 
     init(keyboard: AttachmentKeyboard) {
-        self.keyboard = keyboard
         rail = RecentPhotosRail(keyboard: keyboard)
         chips = FormatChipRow(keyboard: keyboard)
         super.init(frame: CGRect(x: 0, y: 0, width: 390, height: 335), inputViewStyle: .keyboard)
@@ -316,8 +317,8 @@ final class AttachmentKeyboardView: UIInputView {
         // iOS 26 draws the keyboard backdrop behind an input view; the panel adds nothing of its own.
         backgroundColor = .clear
         accessibilityIdentifier = "attachmentPanel"
-        limitedRow.onSelectMore = { [unowned keyboard] in keyboard.presentLimitedPicker() }
-        limitedRow.onSettings = { [unowned keyboard] in keyboard.openSettings() }
+        limitedRow.onSelectMore = { [weak keyboard] in keyboard?.presentLimitedPicker() }
+        limitedRow.onSettings = { [weak keyboard] in keyboard?.openSettings() }
         rail.onAccessChanged = { [weak self] limited in self?.showLimitedRow(limited) }
         for part in [limitedRow, rail, chips] as [UIView] {
             part.translatesAutoresizingMaskIntoConstraints = false
@@ -626,7 +627,9 @@ private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, 
 /// Up to 96 of the newest photos and videos, square tiles in one sideways row. Tapping adds to the tray in tap
 /// order; tapping a selected tile takes it back out.
 private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UICollectionViewDelegate {
-    private unowned let keyboard: AttachmentKeyboard
+    /// Weak, like every reference back from the panel: UIKit keeps the last panel it showed after the chat that
+    /// owned the keyboard has gone, and a chip's action runs a turn after its tap.
+    private weak var keyboard: AttachmentKeyboard?
     private let layout = UICollectionViewFlowLayout()
     private let collection: UICollectionView
     private let library = RecentPhotosLibrary.shared
@@ -760,7 +763,7 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
     private func showAccessPrompt() {
         let denied = PHPhotoLibrary.authorizationStatus(for: .readWrite) != .notDetermined
         collection.backgroundView = message("Allow photo access to pick from your recent photos.", button: denied ? "Open Settings" : "Allow Access") { [weak self] in
-            if denied { self?.keyboard.openSettings() } else {
+            if denied { self?.keyboard?.openSettings() } else {
                 PHPhotoLibrary.requestAuthorization(for: .readWrite) { _ in Task { @MainActor [weak self] in self?.reload() } }
             }
         }
@@ -827,7 +830,7 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: false)
-        guard let asset = asset(at: indexPath.item) else { return }
+        guard let keyboard, let asset = asset(at: indexPath.item) else { return }
         let id = asset.localIdentifier
         if selection.contains(id) { keyboard.deselect(id); return }
         guard !loading.contains(id) else { return }
@@ -981,10 +984,10 @@ private final class FormatChipRow: UIView {
         var chips: [(title: String, symbol: String, identifier: String, action: () -> Void)] = []
         // The simulator and some iPads have no camera; the chip is left out rather than shown dead.
         if UIImagePickerController.isSourceTypeAvailable(.camera) {
-            chips.append(("Camera", "camera.fill", "attachCamera", { [unowned keyboard] in keyboard.takePhoto() }))
+            chips.append(("Camera", "camera.fill", "attachCamera", { [weak keyboard] in keyboard?.takePhoto() }))
         }
-        chips.append(("Photos", "photo.on.rectangle.angled", "attachPhotos", { [unowned keyboard] in keyboard.pickPhotos() }))
-        chips.append(("File", "doc", "attachFiles", { [unowned keyboard] in keyboard.pickFiles() }))
+        chips.append(("Photos", "photo.on.rectangle.angled", "attachPhotos", { [weak keyboard] in keyboard?.pickPhotos() }))
+        chips.append(("File", "doc", "attachFiles", { [weak keyboard] in keyboard?.pickFiles() }))
         stack.axis = .horizontal
         stack.spacing = 12
         stack.alignment = .top

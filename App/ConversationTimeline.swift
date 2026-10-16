@@ -67,6 +67,12 @@ struct ConversationTimeline: UIViewControllerRepresentable {
         controller.onReachTop = onReachTop
         controller.attachmentKeyboard = attachmentKeyboard
     }
+
+    /// Uninstalls the attachment panel, which lets go of the composer's actions: they hold the composer state that
+    /// owns the keyboard, so the chat would otherwise never be freed.
+    static func dismantleUIViewController(_ controller: ConversationTimelineController, coordinator: ()) {
+        controller.attachmentKeyboard = nil
+    }
 }
 
 /// What a bubble asks of a link: open it as a tap does, or one of the long-press menu's link actions.
