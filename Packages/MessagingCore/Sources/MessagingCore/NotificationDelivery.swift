@@ -52,12 +52,29 @@ public struct NotificationRunReport: Sendable, Equatable, Codable {
     public init() {}
 }
 
-/// A settled run suppresses the remote alert; anything else shows the fallback.
+/// A settled run suppresses the remote alert, and so does one handed off to the running app; anything else shows the
+/// fallback.
 public enum NotificationRunOutcome: Sendable, Equatable {
     case settled(NotificationRunReport)
+    /// The app owns the lease and answered the liveness handshake in time (`LivenessHandshake`): it presents what
+    /// the push was about itself. The run posted nothing, claimed nothing and computed no badge.
+    case handedOff
     case fallback(NotificationFallbackReason)
 
-    public var suppressesRemoteAlert: Bool { if case .settled = self { true } else { false } }
+    public var suppressesRemoteAlert: Bool {
+        switch self {
+        case .settled, .handedOff: true
+        case .fallback: false
+        }
+    }
+
+    /// The outcome of a run that ended with `error`. A committed run already posted and deleted its claims, so a
+    /// failure afterwards (closing the store) does not show the fallback on top of the real notifications.
+    public static func ended(by error: any Error, progress: NotificationRunProgress) -> NotificationRunOutcome {
+        if progress.isCommitted { return .settled(progress.report) }
+        if case BackgroundSynchronizationError.handedOff = error { return .handedOff }
+        return .fallback(NotificationFallbackReason(error))
+    }
 }
 
 /// Where a run is. A push that arrives while its run is still before `presenting` joins it: the run's network work

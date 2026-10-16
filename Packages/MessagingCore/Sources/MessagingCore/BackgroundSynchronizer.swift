@@ -38,6 +38,8 @@ public enum BackgroundSynchronizationError: Error, Sendable, Equatable {
     case identityUnavailable, deadlineExceeded, invalidTimeBudget, connectionEnded
     /// The server refused or did not answer a query on the account's own archive: the run cannot claim catch-up.
     case ownArchiveIncomplete
+    /// The app holds the lease and answered the liveness handshake in time: it presents what the push was about.
+    case handedOff
 }
 
 /// An extension performs one bounded catch-up under the same kernel lease as the app.
@@ -49,10 +51,12 @@ public struct BackgroundSynchronizer: Sendable {
     /// Presents what a run committed, under the lease.
     public typealias Presentation = @Sendable (MessageStore, PresentationStage) async throws -> Void
 
-    /// `leaseWait` is spent inside `timeBudget`: the app or another run may briefly hold the lease.
+    /// `leaseWait` is spent inside `timeBudget`: the app or another run may briefly hold the lease. With `liveness`, a
+    /// busy lease first asks a running app (`LivenessHandshake`); an answer in time throws `handedOff`.
     /// `presentation` runs early once the own archive committed and rooms follow (`.direct`), and once at the end.
     public func synchronize(databaseURL: URL, wrappingKey: Data, account: BackgroundAccount,
                             timeBudget: Duration = .seconds(20), leaseWait: Duration = .seconds(6),
+                            liveness: (any LivenessChannel)? = nil,
                             progress: NotificationRunProgress? = nil,
                             presentation: Presentation? = nil) async throws {
         guard timeBudget > .zero, timeBudget <= .seconds(25), leaseWait >= .zero, leaseWait < timeBudget else {
@@ -67,7 +71,13 @@ public struct BackgroundSynchronizer: Sendable {
         do {
             // Busy means wait a bounded time, then defer: never expire another process's lock or reset its attempts.
             progress?.enter(.leaseWait)
-            let waited = try await acquireTransportOwnership(store, waitingUpTo: leaseWait)
+            let clock = ContinuousClock(), waitStarted = clock.now
+            let waited: Duration
+            do { waited = try await acquireTransportOwnership(store, waitingUpTo: leaseWait, liveness: liveness) }
+            catch BackgroundSynchronizationError.handedOff {
+                progress?.update { $0.leaseWaitMilliseconds = Int((clock.now - waitStarted) / .milliseconds(1)) }
+                throw BackgroundSynchronizationError.handedOff
+            }
             progress?.update { $0.leaseWaitMilliseconds = Int(waited / .milliseconds(1)) }
             progress?.enter(.syncing)
             guard try await store.encryptionState(accountID: account.accountID) != nil else {
@@ -346,16 +356,35 @@ func consumeUntilDisconnect(after mark: CatchUpMark, _ consume: () async throws 
 }
 
 /// Polls the non-blocking kernel lease until it is free or `limit` passes; cancellable. Returns the time spent waiting.
-func acquireTransportOwnership(_ store: MessageStore, waitingUpTo limit: Duration,
-                               interval: Duration = .milliseconds(250)) async throws -> Duration {
+/// With `liveness`, the first busy answer also asks a running app, once per wait (`LivenessHandshake`). While its
+/// answer window is open the wait reads the answer every `answerPoll`, and an accepted one ends the wait with
+/// `BackgroundSynchronizationError.handedOff`. The lease is still tried first on every round, and without an
+/// accepted answer the wait ends exactly as it did without the handshake.
+func acquireTransportOwnership(_ store: MessageStore, waitingUpTo limit: Duration, interval: Duration = .milliseconds(250),
+                               liveness: (any LivenessChannel)? = nil, answerPoll: Duration = .milliseconds(50)) async throws -> Duration {
     let clock = ContinuousClock(), start = clock.now
+    var request: LivenessRequest?, asked = false
     while true {
         do {
             try await store.acquireTransportOwnership()
             return clock.now - start
         } catch MessageStoreError.transportOwnedElsewhere {
             guard clock.now - start + interval <= limit else { throw MessageStoreError.transportOwnedElsewhere }
-            try await Task.sleep(for: interval)
+            if let liveness, !asked {
+                asked = true
+                let question = LivenessRequest()
+                // A request that could not be saved can never be answered: the wait goes on as without the handshake.
+                if (try? liveness.ask(question)) != nil { request = question }
+            }
+            let wake = clock.now + interval
+            if let liveness, let request {
+                while clock.now < wake, LivenessHandshake.isListening(to: request) {
+                    if LivenessHandshake.accepts(liveness.latestAnswer(), to: request) { throw BackgroundSynchronizationError.handedOff }
+                    try await Task.sleep(for: answerPoll)
+                }
+            }
+            let left = wake - clock.now
+            if left > .zero { try await Task.sleep(for: left) }
         }
     }
 }
