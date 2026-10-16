@@ -110,13 +110,17 @@ extension TimelineScrollPolicy {
     /// never less than the iPhone's lead. A tall desktop window crosses a fixed 1,200 pt in a flick or two.
     static func olderHistoryLead(viewportHeight: CGFloat) -> CGFloat { max(olderHistoryLead, 2 * viewportHeight) }
 
-    /// When to ask for older history: once each time the reader's own scroll (or a key that scrolls) enters the lead,
-    /// and once more each time a page lands while it is still inside. A request that brings nothing leaves the oldest
-    /// message as it was, so an exhausted history is not asked again until the reader leaves the lead and comes back.
-    /// One request is in flight at a time; a burst of them would mean a page landed without the reader's row being held.
+    /// When to ask for older history: while the reader's own scroll (or a key that scrolls) is inside the lead, one
+    /// request at a time. A request that finds nothing more to ask for (the window is at its ceiling, the archive has
+    /// no more or cannot be read now) is not repeated from the same oldest message until the reader leaves the lead and
+    /// comes back, or older messages arrive some other way.
     struct OlderHistoryRequests: Equatable {
-        /// The oldest loaded message when older history was last asked for.
-        private(set) var askedAtOldest: String?
+        /// A request is running.
+        private(set) var inFlight = false
+        /// The oldest loaded message when the last request found nothing more to ask for.
+        private var exhaustedAt: String?
+        /// The running request repeats one that brought nothing yet.
+        private var repeating = false
 
         init() {}
 
@@ -124,12 +128,31 @@ extension TimelineScrollPolicy {
         /// message), which never page.
         mutating func shouldRequest(oldestID: String?, distanceFromTop: CGFloat, viewportHeight: CGFloat, byReader: Bool) -> Bool {
             guard distanceFromTop < TimelineScrollPolicy.olderHistoryLead(viewportHeight: viewportHeight) else {
-                askedAtOldest = nil
+                exhaustedAt = nil
                 return false
             }
-            guard byReader, let oldestID, oldestID != askedAtOldest else { return false }
-            askedAtOldest = oldestID
+            guard byReader, !inFlight, let oldestID, oldestID != exhaustedAt else { return false }
+            inFlight = true
             return true
+        }
+
+        /// The running request finished. Returns whether to ask once more at once, which keeps the request in flight:
+        /// raising the window over a store that holds no older messages brings nothing, and the archive behind it is
+        /// asked only by the next request.
+        /// - Parameters:
+        ///   - oldestID: the oldest loaded message now.
+        ///   - broughtOlder: older messages arrived while it ran.
+        ///   - mayBringMore: the model says asking again may still bring older messages.
+        mutating func finished(oldestID: String?, broughtOlder: Bool, mayBringMore: Bool) -> Bool {
+            guard mayBringMore else {
+                exhaustedAt = oldestID
+                inFlight = false
+                repeating = false
+                return false
+            }
+            repeating = !broughtOlder && !repeating
+            inFlight = repeating
+            return repeating
         }
     }
 

@@ -3243,19 +3243,25 @@ final class AppModel {
 
     /// The reader reached the oldest loaded message. A full window means the store may hold more; otherwise the
     /// store is exhausted for this chat and the server's older archive pages are the next source.
-    func loadOlderMessages(all: Bool = false) async {
-        guard !loadingOlder, let chat = openChatID else { return }
+    /// - Returns: whether asking again may still bring older messages: false once the window is at its ceiling, or
+    ///   when the archive has no more for this chat or cannot be read from here (sample data, no connection).
+    @discardableResult
+    func loadOlderMessages(all: Bool = false) async -> Bool {
+        guard let chat = openChatID else { return false }
+        guard !loadingOlder else { return true }
         if all || messages.count >= timelineWindow {
-            guard timelineWindow < AppModel.timelineCeiling else { return }
+            guard timelineWindow < AppModel.timelineCeiling else { return false }
             loadingOlder = true
             defer { loadingOlder = false }
             timelineWindow = all ? AppModel.timelineCeiling : min(AppModel.timelineCeiling, timelineWindow + AppModel.timelinePage)
             await refresh(.openChat)
-            return
+            return true
         }
         // The window is not raised here: each committed page reloads the same window, which fills further, and the
         // next reach-top raises it as above.
-        requestBackfill(archive: isGroup(chat) ? chat : nil, pages: AppModel.backfillPagesPerScroll)
+        let archive = isGroup(chat) ? chat : nil
+        requestBackfill(archive: archive, pages: AppModel.backfillPagesPerScroll)
+        return !isDemo && session.isReady && !backfillSettled.contains(archive ?? accountID)
     }
 
     /// True while the archive holding `chat` (the account's own for a direct chat, the room's for a group) backfills.

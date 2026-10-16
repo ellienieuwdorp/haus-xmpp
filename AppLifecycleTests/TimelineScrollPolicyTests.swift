@@ -102,21 +102,41 @@ final class DesktopTimelineScrollPolicyTests: XCTestCase {
         XCTAssertEqual(Policy.olderHistoryLead(viewportHeight: 900), 1800)
     }
 
-    func testOlderHistoryIsAskedOncePerArrivalAndAgainOnlyWhenAPageLanded() {
+    func testOlderHistoryIsAskedOneRequestAtATimeWhileTheReaderIsInTheLead() {
         var requests = Policy.OlderHistoryRequests()
         // Opening the chat or jumping programmatically near the top never pages.
         XCTAssertFalse(requests.shouldRequest(oldestID: "m100", distanceFromTop: 0, viewportHeight: 700, byReader: false))
         XCTAssertTrue(requests.shouldRequest(oldestID: "m100", distanceFromTop: 1300, viewportHeight: 700, byReader: true))
-        // Still inside the lead with the same oldest message: one request in flight, or history exhausted.
         XCTAssertFalse(requests.shouldRequest(oldestID: "m100", distanceFromTop: 600, viewportHeight: 700, byReader: true))
-        // A page landed while the reader is still inside the lead.
+        // A page landed: the reader's next scroll inside the lead asks again.
+        XCTAssertFalse(requests.finished(oldestID: "m50", broughtOlder: true, mayBringMore: true))
         XCTAssertTrue(requests.shouldRequest(oldestID: "m50", distanceFromTop: 900, viewportHeight: 700, byReader: true))
-        // Leaving the lead and coming back asks again, so an archive that failed earlier gets another try.
-        XCTAssertFalse(requests.shouldRequest(oldestID: "m50", distanceFromTop: 1500, viewportHeight: 700, byReader: true))
-        XCTAssertTrue(requests.shouldRequest(oldestID: "m50", distanceFromTop: 1000, viewportHeight: 700, byReader: true))
         // Nothing loaded, nothing to page from.
         var empty = Policy.OlderHistoryRequests()
         XCTAssertFalse(empty.shouldRequest(oldestID: nil, distanceFromTop: 0, viewportHeight: 700, byReader: true))
+    }
+
+    /// A window raised over a store with no older messages brings nothing, but the archive behind it may: the request
+    /// is repeated once at once rather than waiting for the reader to leave the lead.
+    func testARequestThatBroughtNothingButMayBringMoreIsRepeatedOnce() {
+        var requests = Policy.OlderHistoryRequests()
+        XCTAssertTrue(requests.shouldRequest(oldestID: "m1", distanceFromTop: 0, viewportHeight: 700, byReader: true))
+        XCTAssertTrue(requests.finished(oldestID: "m1", broughtOlder: false, mayBringMore: true))
+        XCTAssertFalse(requests.shouldRequest(oldestID: "m1", distanceFromTop: 0, viewportHeight: 700, byReader: true), "still in flight")
+        // The repeat started an archive fetch whose pages land later; the reader's scrolling asks again meanwhile.
+        XCTAssertFalse(requests.finished(oldestID: "m1", broughtOlder: false, mayBringMore: true))
+        XCTAssertTrue(requests.shouldRequest(oldestID: "m1", distanceFromTop: 0, viewportHeight: 700, byReader: true))
+    }
+
+    /// Exhausted history is not asked again from the same oldest message until the reader leaves the lead and comes
+    /// back, so an archive that failed earlier gets another try.
+    func testExhaustedHistoryIsAskedAgainOnlyAfterLeavingTheLead() {
+        var requests = Policy.OlderHistoryRequests()
+        XCTAssertTrue(requests.shouldRequest(oldestID: "m1", distanceFromTop: 0, viewportHeight: 700, byReader: true))
+        XCTAssertFalse(requests.finished(oldestID: "m1", broughtOlder: false, mayBringMore: false))
+        XCTAssertFalse(requests.shouldRequest(oldestID: "m1", distanceFromTop: 0, viewportHeight: 700, byReader: true))
+        XCTAssertFalse(requests.shouldRequest(oldestID: "m1", distanceFromTop: 1500, viewportHeight: 700, byReader: true))
+        XCTAssertTrue(requests.shouldRequest(oldestID: "m1", distanceFromTop: 1000, viewportHeight: 700, byReader: true))
     }
 
     func testTheJumpButtonShowsOnceHalfAScreenAboveTheNewest() {

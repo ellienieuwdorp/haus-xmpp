@@ -278,7 +278,15 @@ import SwiftUI
         guard olderRequests.shouldRequest(oldestID: rows.first?.message.id, distanceFromTop: distanceFromTop,
                                           viewportHeight: layout.height, byReader: readerIsScrolling) else { return }
         // Never applied from inside this callback: the page comes back from the store in a later turn.
-        Task { await model.loadOlderMessages() }
+        Task {
+            var again = true
+            while again {
+                let oldest = model.messages.first?.id
+                let more = await model.loadOlderMessages()
+                // The rows follow the model in a turn of their own, so the model says whether older messages came.
+                again = olderRequests.finished(oldestID: rows.first?.message.id, broughtOlder: model.messages.first?.id != oldest, mayBringMore: more)
+            }
+        }
     }
 
     /// A key or a jump moved the timeline: it counts as the reader's scroll for paging and shows the day chip.
@@ -340,11 +348,14 @@ import SwiftUI
 
     private func reveal(_ id: String) async {
         // Each round raises the window by a page or backfills a few archive pages; the window's ceiling bounds the rounds.
+        // A round may bring nothing yet (a raised window over a store holding no more, before the archive is asked),
+        // so only a few such rounds in a row, or the model saying nothing more can come, end the search.
+        var idle = 0
         for _ in 0..<40 {
             guard indexByID[id] == nil, !Task.isCancelled, model.messagesLoadedFor == chatID,
                   !model.messages.contains(where: { $0.id == id }) else { break }
             let oldest = model.messages.first?.id
-            await model.loadOlderMessages()
+            let more = await model.loadOlderMessages()
             // A window raise has reloaded by now; an archive backfill pages in over time.
             let clock = ContinuousClock()
             var deadline = clock.now + .seconds(1)
@@ -353,8 +364,13 @@ import SwiftUI
                 guard clock.now < deadline else { break }
                 try? await Task.sleep(for: .milliseconds(100))
             }
-            guard model.messages.first?.id != oldest else { break }
-            update()
+            if model.messages.first?.id == oldest {
+                idle += 1
+                guard more, idle < 3 else { break }
+            } else {
+                idle = 0
+                update()
+            }
         }
         update()
         guard !Task.isCancelled, indexByID[id] != nil, let proxy = layout.proxy else {
