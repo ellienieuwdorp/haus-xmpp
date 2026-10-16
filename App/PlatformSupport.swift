@@ -202,6 +202,18 @@ extension View {
         labelStyle(.titleOnly)
         #endif
     }
+
+    /// On the Mac, lets Quit, log out and shut down go ahead while this sheet is open. AppKit refuses to terminate
+    /// while a modal window's `preventsApplicationTerminationWhenModal` is on, and SwiftUI leaves it on for some sheets,
+    /// a form with Connect beside Cancel among them: Quit only beeps. For sheets whose unfinished input is not worth
+    /// keeping the Mac up for. iOS has no such veto.
+    func allowsQuitWhileOpen() -> some View {
+        #if os(iOS)
+        self
+        #else
+        background(TerminationPermission())
+        #endif
+    }
 }
 
 /// The iPhone's grouped `List`; on the Mac a grouped `Form`, whose rows, controls and section footers (wrapped in full,
@@ -324,6 +336,24 @@ extension ToolbarItemPlacement {
 }
 
 #if os(macOS)
+/// Clears `preventsApplicationTerminationWhenModal` on the sheet it joins (`allowsQuitWhileOpen`). SwiftUI sets the
+/// sheet window's value as it presents the sheet, after the content has joined the window, so the value is cleared
+/// again on the next pass of the main queue. Later updates of the sheet's content and toolbar leave it alone.
+private struct TerminationPermission: NSViewRepresentable {
+    final class Anchor: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            window.preventsApplicationTerminationWhenModal = false
+            DispatchQueue.main.async { [weak window] in window?.preventsApplicationTerminationWhenModal = false }
+        }
+    }
+
+    func makeNSView(context: Context) -> Anchor { Anchor() }
+
+    func updateNSView(_ anchor: Anchor, context: Context) {}
+}
+
 /// The Mac's Save panel for a file the app made, which it then copies there. iOS saves through the share sheet.
 @MainActor enum PlatformFileSave {
     /// False when the user cancelled; throws when the copy failed.

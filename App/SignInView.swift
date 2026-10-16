@@ -259,6 +259,7 @@ struct SignInView: View {
             // A restore signs this install in as the transferred account: nothing is left to sign in to here.
             .onChange(of: model.transferRestored) { _, restored in if restored { dismiss() } }
         }
+        .allowsQuitWhileOpen()
     }
     #endif
 
