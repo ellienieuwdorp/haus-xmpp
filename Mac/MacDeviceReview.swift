@@ -41,29 +41,57 @@ struct MacDeviceReviewBanner: View {
     }
 
     private var card: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "exclamationmark.shield")
-                .font(.system(size: 15, weight: .semibold)).foregroundStyle(.orange)
-                .frame(width: 30, height: 30).background(.orange.opacity(0.15), in: Circle())
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(ChatDeviceReview.headline(sendingWaits: sendingWaits, isGroup: isGroup, ownDevicesOnly: ownDevicesOnly, title: title))
-                    .font(.callout.weight(.semibold))
-                Text(ChatDeviceReview.explanation(sendingWaits: sendingWaits))
-                    .font(.callout).foregroundStyle(.secondary)
+        // The buttons sit beside the text while it keeps a readable column, and under it in a narrow conversation (the
+        // inspector open beside it).
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 12) {
+                icon
+                message.frame(minWidth: 0, idealWidth: 280, maxWidth: .infinity, alignment: .leading)
+                buttons
             }
-            Spacer(minLength: 8)
-            Button("Later") { withAnimation { dismissed = true } }
-                .accessibilityIdentifier("deviceReview.later")
-            Button("Review…") { reviewing = true }
-                .buttonStyle(.borderedProminent)
-                .accessibilityIdentifier("deviceReview.open")
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 12) {
+                    icon
+                    message.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                HStack {
+                    Spacer(minLength: 0)
+                    buttons
+                }
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .padding(.horizontal, 16).padding(.top, 8)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("deviceReview.card")
+    }
+
+    private var icon: some View {
+        Image(systemName: "exclamationmark.shield")
+            .font(.system(size: 15, weight: .semibold)).foregroundStyle(.orange)
+            .frame(width: 30, height: 30).background(.orange.opacity(0.15), in: Circle())
+            .accessibilityHidden(true)
+    }
+
+    private var message: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(ChatDeviceReview.headline(sendingWaits: sendingWaits, isGroup: isGroup, ownDevicesOnly: ownDevicesOnly, title: title))
+                .font(.callout.weight(.semibold))
+            Text(ChatDeviceReview.explanation(sendingWaits: sendingWaits))
+                .font(.callout).foregroundStyle(.secondary)
+        }
+    }
+
+    private var buttons: some View {
+        HStack(spacing: 8) {
+            Button("Later") { withAnimation { dismissed = true } }
+                .accessibilityIdentifier("deviceReview.later")
+            Button("Review…") { reviewing = true }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("deviceReview.open")
+        }
+        .fixedSize()
     }
 }
 
