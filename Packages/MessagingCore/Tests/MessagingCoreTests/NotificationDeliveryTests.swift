@@ -451,19 +451,21 @@ struct NotificationBadgeAndReactionDeliveryTests {
     @Test func aSlowDonationDoesNotShortenTheSystemAddsLimit() async throws {
         try await withStore { store in
             try await receive(store, at: 1)
-            // Scaled down: a 240 ms donation (allowance 250 ms) followed by a 200 ms system add, with a 300 ms add limit.
-            let posting = FakePosting(allowance: .milliseconds(250))
-            await posting.configure(preparation: .milliseconds(240), systemAdd: .milliseconds(200))
+            // A 2.5 s donation (allowance 4 s) followed by a 0.5 s system add, with a 1.5 s add limit: 3 s of work within
+            // 5.5 s with the allowance, against 1.5 s without it. Each side has well over a second of slack, so a busy
+            // machine that stalls the run doesn't decide the outcome.
+            let posting = FakePosting(allowance: .seconds(4))
+            await posting.configure(preparation: .milliseconds(2500), systemAdd: .milliseconds(500))
             let progress = NotificationRunProgress()
-            try await NotificationPresenter(posting: posting, addTimeout: .milliseconds(300)).present(store: store, accountID: account, progress: progress)
+            try await NotificationPresenter(posting: posting, addTimeout: .milliseconds(1500)).present(store: store, accountID: account, progress: progress)
             #expect(progress.isCommitted && progress.report.posted == 1)
             // Without the allowance the same timings fall back, which is what the donation used to cause.
             try await receive(store, at: 2)
             let unallowed = FakePosting()
-            await unallowed.configure(preparation: .milliseconds(240), systemAdd: .milliseconds(200))
+            await unallowed.configure(preparation: .milliseconds(2500), systemAdd: .milliseconds(500))
             let failed = NotificationRunProgress()
             do {
-                try await NotificationPresenter(posting: unallowed, addTimeout: .milliseconds(300)).present(store: store, accountID: account, progress: failed)
+                try await NotificationPresenter(posting: unallowed, addTimeout: .milliseconds(1500)).present(store: store, accountID: account, progress: failed)
                 Issue.record("the add limit alone must not cover the donation")
             } catch { #expect(NotificationFallbackReason(error) == .postFailed) }
         }
