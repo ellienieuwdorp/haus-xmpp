@@ -40,7 +40,11 @@ struct MacRootView: View {
         }
         .id(model.accountID)
         .onChange(of: model.accountID) { _, _ in window.selection = nil; window.inspectorShown = false }
-        .onChange(of: window.selection) { previous, _ in if let previous { model.closeChat(previous) } }
+        .onChange(of: window.selection) { previous, selection in
+            if let previous { model.closeChat(previous) }
+            // Pages of the chat just left; a route that also chose the new chat has already pushed its own.
+            window.inspectorPath.removeAll { !Self.route($0, isFor: selection) }
+        }
         // The window closed (the app keeps running): nothing is on screen to read.
         .onDisappear { if let chatID = window.selection { model.closeChat(chatID) } }
         .onChange(of: model.notificationRoute, initial: true) { _, route in
@@ -58,6 +62,7 @@ struct MacRootView: View {
             case .details(let chatID), .encryption(let chatID), .groupDetails(let chatID):
                 window.selection = chatID
                 window.inspectorShown = true
+                window.inspectorPath = route == .details(chatID) ? [] : [route]
             }
         }
         .onChange(of: model.signInRequested) { _, requested in
@@ -90,12 +95,18 @@ struct MacRootView: View {
         }
     }
 
+    private static func route(_ route: ChatRoute, isFor chatID: String?) -> Bool {
+        switch route {
+        case .chat(let id), .details(let id), .encryption(let id), .groupDetails(let id): id == chatID
+        }
+    }
+
     @ViewBuilder private var detail: some View {
         if let chatID = window.selection {
             MacConversationView(model: model, chatID: chatID) { window.inspectorShown = true }
                 .id(chatID)
                 .inspector(isPresented: $window.inspectorShown) {
-                    MacChatInspector(model: model, chatID: chatID)
+                    MacChatInspector(model: model, chatID: chatID, path: $window.inspectorPath)
                         .inspectorColumnWidth(min: 280, ideal: 320, max: 420)
                 }
                 .toolbar {
@@ -131,9 +142,10 @@ struct MacRootView: View {
 struct MacChatInspector: View {
     @Bindable var model: AppModel
     let chatID: String
+    @Binding var path: [ChatRoute]
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ChatDetailsView(model: model, chatID: chatID)
                 .navigationDestination(for: ChatRoute.self) { route in
                     switch route {
