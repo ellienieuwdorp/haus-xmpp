@@ -53,13 +53,27 @@ struct MacBubbleText: NSViewRepresentable {
     /// from the live view so measuring never disturbs what it shows.
     @MainActor static func measure(_ text: NSAttributedString, width: CGFloat?) -> CGSize {
         let available = width.map { $0.isFinite ? max(1, $0) : .greatestFiniteMagnitude } ?? .greatestFiniteMagnitude
+        let key = Measured(text: text, width: available)
+        if let size = measured[key] { return size }
         measuring.storage.setAttributedString(text)
         measuring.container.size = NSSize(width: available, height: .greatestFiniteMagnitude)
         measuring.layout.ensureLayout(for: measuring.container)
         let used = measuring.layout.usedRect(for: measuring.container)
-        return CGSize(width: min(available, ceil(used.width)), height: ceil(used.height))
+        let size = CGSize(width: min(available, ceil(used.width)), height: ceil(used.height))
+        // Layout asks each bubble several times (its natural width, then the capped one), and again whenever a row
+        // scrolls back in; a bounded cache answers those without laying the text out again.
+        if measured.count >= 2_000 { measured.removeAll(keepingCapacity: true) }
+        // A copy as the key: the caller's string may be mutable.
+        measured[Measured(text: NSAttributedString(attributedString: text), width: available)] = size
+        return size
     }
 
+    private struct Measured: Hashable {
+        let text: NSAttributedString
+        let width: CGFloat
+    }
+
+    @MainActor private static var measured: [Measured: CGSize] = [:]
     @MainActor private static let measuring = TextStack()
 
     /// TextKit 1 for both the live views and the measuring, so the two lay lines out alike.
