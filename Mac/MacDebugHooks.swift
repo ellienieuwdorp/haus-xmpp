@@ -44,7 +44,14 @@ import SwiftUI
 ///   `-haus-capture-frames` a short time so its renders are done before the sweep. Frames may be `0` seconds for a tour
 ///   that only captures by name. Search steps (`MacConversationFindTour`): `find <text>` (opens search with that text),
 ///   `find-close`, `find-esc` (as Esc in the timeline), `starred on|off` and `show-result <message id>` (as a click on
-///   that result).
+///   that result). Menu bar steps: `menus` (logs what the Message menu's commands target, then the File, Edit, View,
+///   Chat, Message and Window menus: each item, its shortcut and whether it is enabled), `command <menu>/<item>[/<item>]`
+///   (performs that menu item as a click would, after the menu's validation; a disabled or missing item is logged
+///   instead), `header` (logs the window's title and subtitle), `badge` (logs the Dock tile's badge), `block <chat>` and
+///   `unblock <chat>` (sample conversations only, as `-haus-block`) and `close-window` (closes the main window, as its
+///   close button does).
+///   The window of an unobtrusive run is never key, so the Chat and Message menus read the main window's targets
+///   directly there (`Tour.chatCommands`, `Tour.messageCommands`) instead of as focused scene values.
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
 ///   also in the sample conversations, where previews are otherwise off. `-haus-untinted-send`: the composer's Send in
 ///   the clear variant of its glass style, as an enabled accent-tinted circle leaves the conversation out of a capture.
@@ -138,6 +145,7 @@ import SwiftUI
     }
 
     static func start(model: AppModel, window: MacWindowState, lifecycle: MacLifecycle) {
+        if MacUnobtrusive.isOn { tour.chatCommands = { [weak window] in window.map { MacChatCommands(model: model, window: $0) } } }
         // An earlier build wrote relative capture directories into the container; take them out again.
         if sandboxed {
             for flag in ["-haus-capture", "-haus-capture-frames"] {
@@ -255,6 +263,10 @@ import SwiftUI
         var hoveredMessage: String?
         /// The chat shows its drop highlight as though files were dragged over it.
         var dropHighlight = false
+        /// The main window's Chat and Message menu targets, for the menu bar of an unobtrusive run: its window is never
+        /// key, so no focused scene value reaches the menus (`MacCommands`).
+        var chatCommands: (() -> MacChatCommands?)?
+        var messageCommands: [(token: UUID, make: () -> MacMessageCommands)] = []
     }
 
     struct MessageRequest: Equatable {
@@ -313,6 +325,13 @@ import SwiftUI
                 let parts = argument.split(separator: " ")
                 if let window = mainWindow { await ScrollProbe.sweep(in: window, seconds: Double(parts[0]) ?? 10, paging: parts.dropFirst().first == "paging") }
             case "scroll", "scroll-to", "quote", "resize", "timeline": await MacTimelineDebug.step(words[0], argument, window: mainWindow)
+            case "menus": logMenuBar()
+            case "command": performMenuItem(argument)
+            case "header": log("header: \(mainWindow.map { "'\($0.title)' / '\($0.subtitle)'" } ?? "no main window")")
+            case "badge": log("Dock badge \(NSApp.dockTile.badgeLabel ?? "none")")
+            case "block" where model.isDemo: await model.block(argument)
+            case "unblock" where model.isDemo: for entry in model.blockEntries(for: argument) { await model.unblock(entry) }
+            case "close-window": mainWindow?.performClose(nil)
             default: log("tour \(step): unknown")
             }
         }
@@ -450,6 +469,61 @@ import SwiftUI
         if let preview = message.linkPreview {
             log("menu \(id) on its card: " + MacMessageMenu(message: message, link: preview.url).items.map(MacMessageMenu.title(for:)).joined(separator: " | "))
         }
+    }
+
+    /// The Chat and Message menus as the menu bar would show them once opened: validated first, so a disabled item is
+    /// what a click would find disabled.
+    private static func logMenuBar() {
+        func walk(_ menu: NSMenu, path: String) {
+            open(menu)
+            let items = menu.items.filter { !$0.isSeparatorItem }.map { item -> String in
+                if let submenu = item.submenu { walk(submenu, path: path + "/" + item.title) }
+                return item.title + shortcut(item) + (item.isEnabled ? "" : " (off)") + (item.state == .on ? " (on)" : "")
+            }
+            log("menu bar \(path): " + items.joined(separator: " | "))
+        }
+        let message = tour.messageCommands.last?.make()
+        log("menu bar targets: chat \(tour.chatCommands?()?.selected?.chat.id ?? "none"); last message: reply \(message?.reply?.id ?? "none"), edit "
+            + "\(message?.edit?.id ?? "none"), react \(message?.react?.id ?? "none"), star \(message?.star?.id ?? "none")")
+        for title in ["File", "Edit", "View", "Chat", "Message", "Window"] {
+            guard let menu = NSApp.mainMenu?.item(withTitle: title)?.submenu else { log("menu bar \(title): missing"); continue }
+            walk(menu, path: title)
+        }
+    }
+
+    /// `Chat/Mute/For 1 hour`: the item at that path, performed through its menu as a click would.
+    private static func performMenuItem(_ path: String) {
+        var titles = path.split(separator: "/").map(String.init)
+        guard !titles.isEmpty, var menu = NSApp.mainMenu else { return }
+        let last = titles.removeLast()
+        for title in titles {
+            open(menu)
+            guard let submenu = menu.item(withTitle: title)?.submenu else { log("command \(path): no menu \(title)"); return }
+            menu = submenu
+        }
+        open(menu)
+        guard let index = menu.items.firstIndex(where: { $0.title == last }) else {
+            log("command \(path): no item; the menu has " + menu.items.map(\.title).filter { !$0.isEmpty }.joined(separator: ", "))
+            return
+        }
+        guard menu.items[index].isEnabled else { log("command \(path): disabled"); return }
+        menu.performActionForItem(at: index)
+        log("command \(path): performed")
+    }
+
+    /// What opening the menu does before it shows: its delegate (SwiftUI's) brings the items up to date, then each
+    /// item is validated.
+    private static func open(_ menu: NSMenu) {
+        menu.delegate?.menuNeedsUpdate?(menu)
+        menu.update()
+    }
+
+    private static func shortcut(_ item: NSMenuItem) -> String {
+        guard !item.keyEquivalent.isEmpty else { return "" }
+        let flags = item.keyEquivalentModifierMask
+        let key = switch item.keyEquivalent { case "\t": "⇥"; case "\u{19}": "⇥"; default: item.keyEquivalent.uppercased() }
+        return " [" + (flags.contains(.control) ? "⌃" : "") + (flags.contains(.option) ? "⌥" : "") + (flags.contains(.shift) ? "⇧" : "")
+            + (flags.contains(.command) ? "⌘" : "") + key + "]"
     }
 
     private static var mainWindow: NSWindow? {
