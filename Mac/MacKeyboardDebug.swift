@@ -3,10 +3,10 @@ import AppKit
 
 /// The keyboard and VoiceOver tour steps (`-haus-tour`; see `MacDebugHooks`). Debug builds only.
 ///
-/// Keys are key events handed to the main window in process (`NSWindow.sendEvent`), as AppKit hands it a key from the
-/// event queue, never posted through the window server. The accessibility steps read the window's accessibility tree
-/// through the `NSAccessibility` protocol, which is what an assistive app reads through its own API (Accessibility
-/// Inspector's hierarchy), without asking for any permission.
+/// Keys are key events handed to the main window in process (`NSWindow.sendEvent`), as AppKit hands it one from the
+/// event queue; nothing is posted through the window server. The accessibility steps read the window's accessibility
+/// tree in process, element by element, as an assistive app reads it through its own API (Accessibility Inspector's
+/// hierarchy), without asking for any permission.
 @MainActor enum MacKeyboardDebug {
     static func step(_ name: String, _ argument: String, window: NSWindow?) async {
         guard let window else { return MacDebugHooks.log("tour \(name): no main window") }
@@ -33,8 +33,8 @@ import AppKit
 
     private static var treeBuilt = false
 
-    /// SwiftUI builds its accessibility elements only once an assistive app asks for them, by setting
-    /// `AXManualAccessibility` on the app as it connects; the steps set it themselves, the first time.
+    /// SwiftUI builds its accessibility elements only once an assistive app asks for them, which it does by setting
+    /// `AXEnhancedUserInterface` or `AXManualAccessibility` on the app; the steps set them themselves, the first time.
     private static func buildAccessibilityTree() async {
         guard !treeBuilt else { return }
         treeBuilt = true
@@ -62,7 +62,7 @@ import AppKit
         for type in [NSEvent.EventType.keyDown, .keyUp] {
             guard let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: key.flags, timestamp: ProcessInfo.processInfo.systemUptime,
                                                windowNumber: window.windowNumber, context: nil, characters: key.characters,
-                                               charactersIgnoringModifiers: key.flags.contains(.shift) && name == "shift-tab" ? "\u{19}" : key.characters,
+                                               charactersIgnoringModifiers: key.characters,
                                                isARepeat: false, keyCode: key.code) else { return false }
             // A command key goes to the menus first, as the event queue would send it, each brought up to date as the
             // menu bar keeps them (nothing refreshes them in a run that is never active).
@@ -113,7 +113,7 @@ import AppKit
 
     // MARK: Accessibility tree
 
-    /// Every element with something to say (a label, title or value, actions or rotors), indented by depth. With a
+    /// Every element with something to say (a label, title or value, or actions), indented by depth. With a
     /// text, only the elements whose description contains it, and only the first 400 lines.
     private static func dump(_ window: NSWindow, matching filter: String) {
         var lines = 0, visited = 0
@@ -197,7 +197,7 @@ import AppKit
                 let search = NSAccessibilityCustomRotor.SearchParameters()
                 search.searchDirection = .next
                 while entries.count < 40, let result = rotor.itemSearchDelegate?.rotor(rotor, resultFor: search) {
-                    let target = (result.targetElement as AnyObject? as? Element).map(describe) ?? "?"
+                    let target = result.targetElement.flatMap { $0 as? Element }.map(describe) ?? "resolved when VoiceOver moves there"
                     entries.append("'\(result.customLabel ?? "")' -> \(target.prefix(90))")
                     search.currentItem = result
                 }

@@ -669,6 +669,8 @@ import SwiftUI
         let ids = rows.map(\.message.id)
         guard let next = TimelineMessageFocus.step(from: id ?? focusedID, forward: forward, ids: ids, placed: placedRows(), frameHeight: layout.height) else { return }
         focusedID = next
+        // A menu asked for and not opened yet belongs to the message the keys just left.
+        pendingMenu = nil
         reveal(next)
         readerMoved(showingDayChip: false)
         if !forward { requestOlderIfNeeded() }
