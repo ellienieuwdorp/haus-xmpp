@@ -509,6 +509,8 @@ final class AppModel {
             upgradeState = .newerData
         } catch {
             if upgradeState != .none { upgradeState = .none }
+            // The error names a step and a file at most, never message contents.
+            Self.syncLog.error("could not open storage: \(String(reflecting: error), privacy: .public)")
             self.error = "Could not open local message storage."
             hasLoadedChats = true // nothing more will arrive; show the empty state behind the alert rather than a blank screen
         }

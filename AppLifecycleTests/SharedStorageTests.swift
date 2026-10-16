@@ -118,10 +118,12 @@ import XMPPProtocol
         let file = fixture.root.appending(path: "file")
         try Data().write(to: file)
         XCTAssertThrowsError(try SharedStorage.usableContainer(file))
+        #if os(macOS)
         let readOnly = fixture.root.appending(path: "read-only", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: readOnly, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o555])
         addTeardownBlock { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: readOnly.path) }
         XCTAssertThrowsError(try SharedStorage.usableContainer(readOnly))
+        #endif
     }
 }
 
