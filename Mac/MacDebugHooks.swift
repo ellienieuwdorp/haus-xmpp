@@ -41,7 +41,9 @@ import SwiftUI
 ///   (key events handed to the main window in process, then `focus`: tab, shift-tab, up, down, shift-up, command-up,
 ///   command-down, page-up, page-down, home, end, return, space, escape, command-r; a menu the keyboard opens is logged
 ///   instead of shown), `ax [<text>]` (the window's accessibility elements that say something, or those whose
-///   description contains the text), `rotors` (each custom rotor and its entries) and `focus-timeline` (gives the
+///   description contains the text), `ax-press <identifier or text>` (VoiceOver's press on the first element with that
+///   accessibility identifier, or whose description contains the text, in the newest sheet first),
+///   `rotors` (each custom rotor and its entries) and `focus-timeline` (gives the
 ///   timeline keyboard focus as Tab into it does, and reports it focused, which SwiftUI does not reliably do in a
 ///   window that is never key). Timeline steps (`MacTimelineDebug`): `capture <name>`
 ///   (the main window and any other open window as `<name>.png` beside the frames),
@@ -63,7 +65,12 @@ import SwiftUI
 ///   (performs that menu item as a click would, after the menu's validation; a disabled or missing item is logged
 ///   instead), `header` (logs the window's title and subtitle), `badge` (logs the Dock tile's badge), `block <chat>` and
 ///   `unblock <chat>` (sample conversations only, as `-haus-block`) and `close-window` (closes the main window, as its
-///   close button does).
+///   close button does). Device trust steps (`MacDeviceReviewTour`): `chat <address>`, `join <room>`, `devices`, `messages [<count>]`,
+///   `device <id>` (a device row of the inspector's devices or group page, which opens its fingerprint sheet), `review`
+///   (the conversation banner's Review…), `own-review` (the account's review, as the sidebar card's Review opens it), `trust|verify|dont-trust|compare|remove
+///   <id>` (that device's button in the open review or fingerprint sheet), `confirm <button>` (a confirmation's button)
+///   and `close-sheet` (the newest sheet's Done or Close), each pressed as VoiceOver would, and `snap-sheet <name>` (the
+///   newest sheet alone as `<name>.png`).
 ///   The window of an unobtrusive run is never key, so the Chat and Message menus, Find in Conversation and Starred
 ///   Messages read the main window's targets directly there (`Tour.chatCommands`, `Tour.messageCommands`,
 ///   `Tour.conversationFind`) instead of as focused scene values.
@@ -338,13 +345,19 @@ import SwiftUI
                 let size = argument.split(separator: "x").compactMap { Double($0) }
                 if size.count == 2 { mainWindow?.setContentSize(NSSize(width: size[0], height: size[1])) }
             case "menu": logMenu(for: argument, model: model, window: window)
-            case "focus", "press", "ax", "rotors", "focus-timeline": await MacKeyboardDebug.step(words[0], argument, window: mainWindow)
+            case "focus", "press", "ax", "rotors", "focus-timeline", "ax-press": await MacKeyboardDebug.step(words[0], argument, window: mainWindow)
             case "attach", "drop", "paste", "import", "remove-attachment", "copy-image", "save-over": MacAttachmentTour.step(words[0], argument, model: model)
             case "drop-highlight": tour.dropHighlight = argument != "off"
             case "find", "find-close", "find-esc", "starred", "show-result": MacConversationFindTour.step(words[0], argument)
             case "minimums": if let window = mainWindow { logMinimums(window) }
             case "snap":
                 guard let directory = value(after: "-haus-capture"), let window = mainWindow, let png = render(window) else { log("tour snap: needs -haus-capture <dir>"); break }
+                emit(png, directory: directory, file: slug(argument) + ".png")
+            case "snap-sheet":
+                // The newest sheet over the main window, alone: the main window's captures draw a sheet blank.
+                var sheet = mainWindow?.attachedSheet
+                while let next = sheet?.attachedSheet { sheet = next }
+                guard let directory = value(after: "-haus-capture-frames") ?? value(after: "-haus-capture"), let sheet, let png = render(sheet) else { log("tour snap-sheet: needs a sheet and a capture directory"); break }
                 emit(png, directory: directory, file: slug(argument) + ".png")
             case "capture":
                 guard let directory = value(after: "-haus-capture-frames"), let main = mainWindow, let png = renderWithOverlays(main) else { log("tour capture: needs -haus-capture-frames <dir> <seconds>"); break }
@@ -361,6 +374,8 @@ import SwiftUI
             case "unblock" where model.isDemo: for entry in model.blockEntries(for: argument) { await model.unblock(entry) }
             case "close-window": mainWindow?.performClose(nil)
             case "stalls": MacTimelineDebug.StallProbe.shared.report(argument)
+            case "chat", "join", "devices", "messages", "device", "review", "own-review", "trust", "verify", "dont-trust", "compare", "remove", "confirm", "close-sheet":
+                await MacDeviceReviewTour.step(words[0], argument, model: model, window: window, mainWindow: mainWindow)
             default: log("tour \(step): unknown")
             }
         }

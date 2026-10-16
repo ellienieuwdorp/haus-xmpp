@@ -173,7 +173,7 @@ struct OwnDeviceReviewSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            GroupedList {
                 Section {
                     VStack(spacing: 6) {
                         Image(systemName: "person.badge.shield.checkmark")
@@ -295,7 +295,7 @@ struct OwnDeviceReviewSheet: View {
 }
 
 /// What became of a device, in the words the Devices page uses.
-private struct OutcomeLabel: View {
+struct OutcomeLabel: View {
     let outcome: OwnDeviceOutcome
 
     var body: some View {

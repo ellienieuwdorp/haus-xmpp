@@ -65,7 +65,9 @@
 		266DD3BF0E770B1AF799415B /* ChatListOrderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FB06E272254B30049EBB048 /* ChatListOrderTests.swift */; };
 		266F17B43A7421C54AAA3CFC /* CoalescedReloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5F90485C4526281BAF76DD6 /* CoalescedReloadTests.swift */; };
 		267CEC631E56DBC1EBE98E9B /* MacLifecycleDebug.swift in Sources */ = {isa = PBXBuildFile; fileRef = C330E74F87D4C44D0C45570E /* MacLifecycleDebug.swift */; };
+		27D9B832DBF91F4A50C4A8D2 /* MacDeviceReviewDebug.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BFB7DF54D7EE2058412BCD7 /* MacDeviceReviewDebug.swift */; };
 		2851A08BBCAE4361516AB371 /* PushService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 676414A9C32CD62D47B379B7 /* PushService.swift */; };
+		287E574EFF6F8D7F383161DF /* ChatDeviceReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76923466401F896851BD2F2B /* ChatDeviceReview.swift */; };
 		2A3C4AB690E44E6C07C11D44 /* OMEMO in Frameworks */ = {isa = PBXBuildFile; productRef = 27FEAC6DD0531618099A0C83 /* OMEMO */; };
 		2B10F6DBD7A3501384360B82 /* ChatRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4053E5EBC94DF0A0EB297556 /* ChatRoute.swift */; };
 		2B6F6EE21CB1902B7965ADC6 /* AttachmentKeyboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2899AB2C75D3ED5F81F7097D /* AttachmentKeyboard.swift */; };
@@ -172,6 +174,7 @@
 		722EB5F61638A68D81ADB597 /* MessageCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 938A95EE75D3E4F6101F667C /* MessageCopy.swift */; };
 		7238FCF3E5AAFC3E03D01CDC /* LinkOpeningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76D023BAB4D377B71C155E35 /* LinkOpeningTests.swift */; };
 		72C7E7A9558B483CDAC73323 /* NotificationNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0554E0B736A32101FBE1D193 /* NotificationNavigationTests.swift */; };
+		736B7D99E713AEC14704DA77 /* MacDeviceReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E408B62A510F3B497AE648 /* MacDeviceReview.swift */; };
 		7395E545B3333E1738CC480D /* MessagingCore in Frameworks */ = {isa = PBXBuildFile; productRef = 4702D6FBBC555110B4C0D753 /* MessagingCore */; };
 		73B095083678D2996D5D7F02 /* ConversationPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54188CA656DDDED16D876198 /* ConversationPresenter.swift */; };
 		756464BFCE1F8C202DEF8D79 /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = D593009330BED930403B0C1D /* XMPPProtocol */; };
@@ -186,6 +189,7 @@
 		7CD1E97E364C0BA4BFA357C1 /* Typing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EA646B2D3BEC5BEF134632A /* Typing.swift */; };
 		7EF13805E692A99C6CE1BF26 /* MacImageEncoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E8B694210C22F9137AC0711 /* MacImageEncoding.swift */; };
 		7FFC4EC5F01132F274E4FE22 /* AttachmentPanelUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B95C6EE7F3E7728C7B101AA /* AttachmentPanelUITests.swift */; };
+		81C3B365A3151DFBFB994057 /* ChatDeviceReviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B226EAD4CD306DB18FFD839 /* ChatDeviceReviewTests.swift */; };
 		8290092DD02C2F32C99ECE22 /* AppLivenessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24019C584A3AC0496BF09C3D /* AppLivenessTests.swift */; };
 		82DABDA964172CDB035A9347 /* LinkOpening.swift in Sources */ = {isa = PBXBuildFile; fileRef = D91703893D572016132C7E6D /* LinkOpening.swift */; };
 		869CA74D260CAE034C9A8E88 /* Blocking.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52494E5FB5E0C728DAC3BAB6 /* Blocking.swift */; };
@@ -242,6 +246,7 @@
 		AA3B9094C11899EDAC99B279 /* UITestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FEA9AED98D6D9D58F880157 /* UITestSupport.swift */; };
 		AA75A0E2BD837B7FF7533A91 /* MessageCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 938A95EE75D3E4F6101F667C /* MessageCopy.swift */; };
 		AD28AE3565331AEC7B0DB812 /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 8A5BF090C4AC8104D198F8D4 /* XMPPProtocol */; };
+		ADB6337C959C454BB9F66FEB /* ChatDeviceReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76923466401F896851BD2F2B /* ChatDeviceReview.swift */; };
 		ADE78B3AFC93AC477F8243CF /* MacMessageActionsText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F094A558FCEE66781F451CB /* MacMessageActionsText.swift */; };
 		AF8853E57ECFFA85DE4D6292 /* SharedSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECE35FFDB91D6C5604DB273F /* SharedSession.swift */; };
 		AFB6F1D10E4FD1F38E77344C /* XMPPNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D6CA8152B21BE66BD1AEA1DD /* XMPPNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -467,6 +472,7 @@
 		2993C1C3A89DD5D6B2EABA75 /* ComposerPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerPlan.swift; sourceTree = "<group>"; };
 		2A5C546425283FA7DF4F92F8 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		2AC8B2A7BBFCEA0E69E72232 /* PushUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushUITests.swift; sourceTree = "<group>"; };
+		2BFB7DF54D7EE2058412BCD7 /* MacDeviceReviewDebug.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacDeviceReviewDebug.swift; sourceTree = "<group>"; };
 		2DD386EFF424BCD206EF0717 /* LinkPreviewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewModelTests.swift; sourceTree = "<group>"; };
 		2ED6559AE6FDE78A5F7E53EA /* AppearanceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceUITests.swift; sourceTree = "<group>"; };
 		2EE701CB57B7105AB84D9504 /* LastSeenTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LastSeenTrackerTests.swift; sourceTree = "<group>"; };
@@ -531,6 +537,7 @@
 		697CE48AFD71A7D39DBA7C50 /* NotificationAccessGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationAccessGateTests.swift; sourceTree = "<group>"; };
 		6A1BC7BC0C97AA3012CE6BC9 /* AppModel+LinkPreviews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel+LinkPreviews.swift"; sourceTree = "<group>"; };
 		6A4AA9E900B55208704104DF /* AccountIdentityMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountIdentityMigrationTests.swift; sourceTree = "<group>"; };
+		6B226EAD4CD306DB18FFD839 /* ChatDeviceReviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDeviceReviewTests.swift; sourceTree = "<group>"; };
 		6CA069AD085EB46EE92CD8B0 /* AppIcon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = AppIcon.png; sourceTree = "<group>"; };
 		6D54E8053F6733211E434A65 /* Mac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Mac.entitlements; sourceTree = "<group>"; };
 		6DA9426455CEFD6FB3A366F0 /* MessageStore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MessageStore; path = Packages/MessageStore; sourceTree = SOURCE_ROOT; };
@@ -540,6 +547,7 @@
 		72CEDFA5595A4C5D13AC3286 /* ChatListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListView.swift; sourceTree = "<group>"; };
 		736643F511B0D31C7102998D /* CircularGlassButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircularGlassButtonStyle.swift; sourceTree = "<group>"; };
 		75BD0028734A76DE6D90D9E9 /* LICENSE-ADDITIONAL-PERMISSION */ = {isa = PBXFileReference; path = "LICENSE-ADDITIONAL-PERMISSION"; sourceTree = "<group>"; };
+		76923466401F896851BD2F2B /* ChatDeviceReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDeviceReview.swift; sourceTree = "<group>"; };
 		76D023BAB4D377B71C155E35 /* LinkOpeningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkOpeningTests.swift; sourceTree = "<group>"; };
 		78365EB9C0FD315465BADD51 /* KeyRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRecovery.swift; sourceTree = "<group>"; };
 		7867D06A08D4C485E2B463D5 /* ConversationSearchBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSearchBar.swift; sourceTree = "<group>"; };
@@ -577,6 +585,7 @@
 		A1CB468485582E56EB551F30 /* EmojiCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiCatalog.swift; sourceTree = "<group>"; };
 		A30F5EC1BE6CAD1654139384 /* LinkPreviewFetchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewFetchTests.swift; sourceTree = "<group>"; };
 		A4D58701C743B4C1C79D20B9 /* AppModel+ConversationSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel+ConversationSource.swift"; sourceTree = "<group>"; };
+		A5E408B62A510F3B497AE648 /* MacDeviceReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacDeviceReview.swift; sourceTree = "<group>"; };
 		A6BF0339B117304DCA097DFF /* AppearanceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceStoreTests.swift; sourceTree = "<group>"; };
 		A7BD0CDB24630A5C7CD70BF3 /* BlockedAddresses.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockedAddresses.swift; sourceTree = "<group>"; };
 		A86E29FBC0D52EDFCAC0C6C7 /* NotificationService-Unfiltered.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "NotificationService-Unfiltered.entitlements"; sourceTree = "<group>"; };
@@ -745,6 +754,8 @@
 				B06DE019BE7587FFAB79B0B4 /* MacConversationFind.swift */,
 				CD9735757EA84131345E175B /* MacConversationView.swift */,
 				E5E34D508A44BE27F0D182FD /* MacDebugHooks.swift */,
+				A5E408B62A510F3B497AE648 /* MacDeviceReview.swift */,
+				2BFB7DF54D7EE2058412BCD7 /* MacDeviceReviewDebug.swift */,
 				9E8B694210C22F9137AC0711 /* MacImageEncoding.swift */,
 				B57B2F4C459976BC8495A7C6 /* MacKeyboardDebug.swift */,
 				F7D7B0F60E83D75595B85518 /* MacLifecycle.swift */,
@@ -845,6 +856,7 @@
 				FD6825CFD10709370F6BDF5F /* AvatarNotificationImageTests.swift */,
 				9349A585AC7A9915D3300410 /* BlockingAvailabilityTests.swift */,
 				69109BFFF3B0297A85EED828 /* ChatCapabilitiesTests.swift */,
+				6B226EAD4CD306DB18FFD839 /* ChatDeviceReviewTests.swift */,
 				7FB06E272254B30049EBB048 /* ChatListOrderTests.swift */,
 				DBBB905D505AB060F64A8D32 /* ChatMuteSummaryTests.swift */,
 				D5F90485C4526281BAF76DD6 /* CoalescedReloadTests.swift */,
@@ -978,6 +990,7 @@
 				132E8AF2B3DAEEFB92B03C03 /* BlockingViews.swift */,
 				175366071B61DD1E158B1B82 /* ChatCapabilities.swift */,
 				4749F05E18328FC50A0611E5 /* ChatDetailsView.swift */,
+				76923466401F896851BD2F2B /* ChatDeviceReview.swift */,
 				6F58D19ADB9B16E477A41843 /* ChatListOrder.swift */,
 				72CEDFA5595A4C5D13AC3286 /* ChatListView.swift */,
 				7EE5082F6FC8DC6C22351DAF /* ChatNotifications.swift */,
@@ -1390,6 +1403,7 @@
 				B63F029BBF3865575DB6339E /* BlockingViews.swift in Sources */,
 				A51A8DBD3054B191CB4671D8 /* ChatCapabilities.swift in Sources */,
 				916F0C5F79286B7F598B2F69 /* ChatDetailsView.swift in Sources */,
+				ADB6337C959C454BB9F66FEB /* ChatDeviceReview.swift in Sources */,
 				64514BA93D136848F3BE0B90 /* ChatListOrder.swift in Sources */,
 				028100ACCB75CDF7DD034832 /* ChatListView.swift in Sources */,
 				77CD710091E8A7B5DA9CC11D /* ChatNotifications.swift in Sources */,
@@ -1555,6 +1569,7 @@
 				F521E4B769AFAB80401B9E66 /* AvatarNotificationImageTests.swift in Sources */,
 				41926927A121678B2EDB61DF /* BlockingAvailabilityTests.swift in Sources */,
 				BE7EE3B8CB94E27CE1018CED /* ChatCapabilitiesTests.swift in Sources */,
+				81C3B365A3151DFBFB994057 /* ChatDeviceReviewTests.swift in Sources */,
 				266DD3BF0E770B1AF799415B /* ChatListOrderTests.swift in Sources */,
 				877BBE6E720200760BFC2B8B /* ChatMuteSummaryTests.swift in Sources */,
 				266F17B43A7421C54AAA3CFC /* CoalescedReloadTests.swift in Sources */,
@@ -1616,6 +1631,7 @@
 				0884A61AD9ABCD8CA670771D /* BlockingViews.swift in Sources */,
 				E64B7AFAA4464D1CB9B41D11 /* ChatCapabilities.swift in Sources */,
 				5FD69FBA803AE2C9C278541B /* ChatDetailsView.swift in Sources */,
+				287E574EFF6F8D7F383161DF /* ChatDeviceReview.swift in Sources */,
 				87B1BAFEEB64B9C199387EC6 /* ChatListOrder.swift in Sources */,
 				2F2A5773EBBC35BDDD6DA674 /* ChatNotifications.swift in Sources */,
 				2B10F6DBD7A3501384360B82 /* ChatRoute.swift in Sources */,
@@ -1667,6 +1683,8 @@
 				9D8DEC3262E478CDDFBD0B97 /* MacConversationFind.swift in Sources */,
 				62B5ACD2D3F79879ED0BBD03 /* MacConversationView.swift in Sources */,
 				0039E3C2A70F59E9C7A04141 /* MacDebugHooks.swift in Sources */,
+				736B7D99E713AEC14704DA77 /* MacDeviceReview.swift in Sources */,
+				27D9B832DBF91F4A50C4A8D2 /* MacDeviceReviewDebug.swift in Sources */,
 				3A7A62B7523F6748224D8BF5 /* MacExtensionProbe.swift in Sources */,
 				7EF13805E692A99C6CE1BF26 /* MacImageEncoding.swift in Sources */,
 				564DD323EEBE9F651ADE3EEE /* MacKeyboardDebug.swift in Sources */,
