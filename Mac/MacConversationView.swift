@@ -43,6 +43,14 @@ struct MacConversationView: View {
     /// Where Encryption details goes: the inspector's page for this chat's devices, or a group's details.
     private var encryptionRoute: ChatRoute { isGroup ? .groupDetails(chatID) : .encryption(chatID) }
 
+    private var debugDropHighlight: Bool {
+        #if DEBUG
+        MacDebugHooks.tour.dropHighlight
+        #else
+        false
+        #endif
+    }
+
     /// The failed message the retry dialog is for was a file failed when encryption was set up again: its key is gone,
     /// so the store refuses a retry and the dialog only explains.
     private var retryIsImpossible: Bool {
@@ -130,7 +138,7 @@ struct MacConversationView: View {
             Text("It disappears here. \(title) may still see it if their app doesn't support unsending.")
         }
         .onDrop(of: MacAttachmentDrop.types, delegate: MacAttachmentDrop(model: model, chatID: chatID, intent: composerIntent, targeted: $dropTargeted))
-        .overlay { if dropTargeted { MacAttachmentDropHighlight() } }
+        .overlay { if dropTargeted || debugDropHighlight { MacAttachmentDropHighlight() } }
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(title)
         .navigationSubtitle(model.trustSummary(for: chatID).pill)
