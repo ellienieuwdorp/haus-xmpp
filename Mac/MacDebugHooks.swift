@@ -638,7 +638,9 @@ import SwiftUI
     private static func dumpMenus() {
         func walk(_ menu: NSMenu, depth: Int) {
             for item in menu.items where !item.isSeparatorItem {
-                let key = item.keyEquivalent.isEmpty ? "" : " [\(item.keyEquivalentModifierMask.contains(.shift) ? "⇧" : "")⌘\(item.keyEquivalent)]"
+                let mask = item.keyEquivalentModifierMask
+                let modifiers = (mask.contains(.control) ? "⌃" : "") + (mask.contains(.option) ? "⌥" : "") + (mask.contains(.shift) ? "⇧" : "")
+                let key = item.keyEquivalent.isEmpty ? "" : " [\(modifiers)⌘\(item.keyEquivalent)]"
                 log("menu \(String(repeating: "  ", count: depth))\(item.title)\(key)")
                 if let submenu = item.submenu, depth < 2 { walk(submenu, depth: depth + 1) }
             }
