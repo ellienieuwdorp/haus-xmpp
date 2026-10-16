@@ -1,5 +1,6 @@
 #if DEBUG
-import Foundation
+import AppKit
+import MessageStore
 import MessagingCore
 import Synchronization
 import UserNotifications
@@ -80,17 +81,25 @@ enum MacDebugNotificationLog {
 ///   `NotificationActionCenter` as the notification centre's delegate hands over a clicked one, and its outcome. With
 ///   `-haus-log-notifications` the newest logged request; otherwise the newest delivered one in Notification Center.
 /// - `notify delivered`: what Notification Center holds for the app (see `MacPushProbe`).
+/// - `notify state`: each chat's unread count and notification setting, the selected chat and the Dock badge.
+/// - `notify messages <chat>`: the chat's read pointer and stored messages (ID prefix, direction, time, body length,
+///   why unreadable), never their text.
 /// - `notify previews on|off`, `notify reactions on|off`: the Settings switches.
 /// - `notify mute <chat>` (for an hour), `notify unmute <chat>`, `notify mentions <chat>`, `notify all <chat>`: the
 ///   chat's notification menu.
 @MainActor enum MacNotificationDebug {
-    static func run(_ argument: String, model: AppModel) async {
+    static func run(_ argument: String, model: AppModel, window: MacWindowState) async {
         let words = argument.split(separator: " ", maxSplits: 1).map(String.init)
         let rest = words.count > 1 ? words[1] : ""
         switch words.first ?? "" {
         case "reply": await act(NotificationActionIdentifier.reply, text: rest.isEmpty ? "Reply from a notification" : rest)
         case "read": await act(NotificationActionIdentifier.markRead, text: nil)
         case "delivered": await MacPushProbe.logDelivered()
+        case "messages": log("notify messages: \(await model.debugMessageReport(rest))")
+        case "state":
+            let chats = model.chats.map { "\($0.id) unread \($0.unreadCount)\($0.notification == ChatNotificationSetting() ? "" : " (\($0.notification))")" }
+            log("notify state: \(chats.isEmpty ? "no chats" : chats.joined(separator: ", ")); selected \(window.selection ?? "none"), "
+                + "Dock badge \(NSApp.dockTile.badgeLabel ?? "none")")
         case "previews":
             await model.setNotificationPreviews(rest == "on")
             log("notify previews: \(model.notificationPreviewsEnabled ? "on" : "off")")

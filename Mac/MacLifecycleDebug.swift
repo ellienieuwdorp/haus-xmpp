@@ -108,7 +108,7 @@ import SwiftUI
             case "accept": await accept(argument, model: model)
             case "draft": if let chat = window.selection { model.draftChanged(argument, in: chat) }
             case "report": MacDebugHooks.log("report: \(await model.debugLeaseReport()), scenePhase \(phases)")
-            case "notify": await MacNotificationDebug.run(argument, model: model)
+            case "notify": await MacNotificationDebug.run(argument, model: model, window: window)
             case "quit": MacDebugHooks.quit()
             default: MacDebugHooks.log("step \(step): unknown")
             }

@@ -4477,6 +4477,18 @@ extension AppModel: NotificationActionEnvironment {
         return "lease store \(stored) model \(hasTransportOwnership ? "held" : "free"), session \(session.label), quiescing \(quiescing ? 1 : 0)"
     }
 
+    /// For the Mac's notification checks (`MacNotificationDebug`): the chat's read pointer and its stored messages,
+    /// without their text.
+    func debugMessageReport(_ chatID: String) async -> String {
+        guard let store else { return "closed" }
+        let pointer = try? await store.readPointer(accountID: accountID, chatID: chatID)
+        let rows = ((try? await store.messages(accountID: accountID, chatID: chatID)) ?? []).map { message in
+            "\(message.id.prefix(8)) \(message.isOutgoing ? "out" : "in") at \(message.sentAt.timeIntervalSince1970) body \(message.body.count)"
+                + (message.unreadableReason.map { " unreadable \($0)" } ?? "")
+        }
+        return "pointer \(pointer.map { "\($0.messageID.prefix(8)) at \($0.sentAt.timeIntervalSince1970)" } ?? "none"); \(rows.joined(separator: " | "))"
+    }
+
     /// Holds one UI crypto operation open for `duration`, so a quiesce that starts meanwhile cannot finish before it:
     /// the Mac's simulated missed sleep deadline.
     func debugHoldEncryptionOperation(for duration: Duration) {
