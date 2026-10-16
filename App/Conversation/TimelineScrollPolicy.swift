@@ -199,6 +199,21 @@ extension TimelineScrollPolicy {
         return min(max(top, min(0, travel)), max(0, travel))
     }
 
+    /// The row to scroll to, and the top edge to give it, to move the content by `delta` (positive moves it down,
+    /// towards older messages): the one that carries it furthest without going past `delta` or the wrong way. A scroll
+    /// to a row can only leave it inside the frame or the frame inside it (`reachableTop`), so a row near an edge moves
+    /// less, a row taller than the frame moves only while it covers the frame, and a row off screen would jump to the
+    /// edge. Nil when no row moves the content by more than half a point.
+    static func scrollStep(_ rows: [PlacedRow], by delta: CGFloat, frameHeight: CGFloat) -> (row: PlacedRow, top: CGFloat)? {
+        let steps = rows.compactMap { row -> (row: PlacedRow, top: CGFloat)? in
+            let top = reachableTop(row.top + delta, rowHeight: row.bottom - row.top, frameHeight: frameHeight)
+            let move = top - row.top
+            guard move * delta > 0, abs(move) > 0.5, abs(move) <= abs(delta) + 0.5 else { return nil }
+            return (row, top)
+        }
+        return steps.max { abs($0.top - $0.row.top) < abs($1.top - $1.row.top) }
+    }
+
     /// The floating day chip: which day it shows, where its capsule sits and how visible it is.
     struct DayChip: Equatable {
         let text: String

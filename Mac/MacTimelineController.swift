@@ -317,23 +317,16 @@ import SwiftUI
         if key == .top || key == .pageUp { requestOlderIfNeeded() }
     }
 
-    /// Moves the content by `delta` (positive moves it down, towards older messages). A scroll to a row can only put it
-    /// somewhere inside the frame, so each step goes through the laid-out row that can travel furthest, and steps repeat
-    /// (bringing new rows into layout) until the distance is covered or an end is reached.
+    /// Moves the content by `delta` (positive moves it down, towards older messages). Each step goes through the
+    /// laid-out row a scroll can carry furthest (`TimelineScrollPolicy.scrollStep`), and steps repeat (bringing new rows
+    /// into layout) until the distance is covered or an end is reached.
     private func scroll(by delta: CGFloat) {
         var remaining = delta
-        let height = layout.height
         for _ in 0..<4 where abs(remaining) > 0.5 {
-            // Only a row inside the frame now can be moved by a scroll to it; clamping one outside would move it back.
-            let moves = placedRows().compactMap { row -> (TimelineScrollPolicy.PlacedRow, CGFloat)? in
-                let rowHeight = row.bottom - row.top
-                guard TimelineScrollPolicy.reachableTop(row.top, rowHeight: rowHeight, frameHeight: height) == row.top else { return nil }
-                return (row, TimelineScrollPolicy.reachableTop(row.top + remaining, rowHeight: rowHeight, frameHeight: height))
-            }
-            guard let (row, target) = moves.max(by: { abs($0.1 - $0.0.top) < abs($1.1 - $1.0.top) }), abs(target - row.top) > 0.5 else { return }
-            place(row.id, top: target)
-            guard let after = layout.frame(of: row.id)?.minY, abs(after - row.top) > 0.5 else { return }
-            remaining -= after - row.top
+            guard let step = TimelineScrollPolicy.scrollStep(placedRows(), by: remaining, frameHeight: layout.height) else { return }
+            place(step.row.id, top: step.top)
+            guard let after = layout.frame(of: step.row.id)?.minY, abs(after - step.row.top) > 0.5 else { return }
+            remaining -= after - step.row.top
         }
     }
 

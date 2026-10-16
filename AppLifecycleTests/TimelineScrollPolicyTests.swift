@@ -176,6 +176,23 @@ final class DesktopTimelineScrollPolicyTests: XCTestCase {
         XCTAssertEqual(Policy.reachableTop(-500, rowHeight: 900, frameHeight: 700), -200)
     }
 
+    /// Page Up and Page Down move through the row that carries the content furthest: below a message taller than the
+    /// screen that is the tall message, which a scroll to the short row under it could move only a few points.
+    func testAScrollStepGoesThroughTheRowThatCarriesItFurthest() throws {
+        let tall = Placed(id: "tall", index: 0, top: -2450, bottom: 550, dayHeader: nil)
+        let short = Placed(id: "short", index: 1, top: 550, bottom: 600, dayHeader: nil)
+        let up = try XCTUnwrap(Policy.scrollStep([tall, short], by: 560, frameHeight: 600))
+        XCTAssertEqual(up.row, tall)
+        XCTAssertEqual(up.top, -1890)
+        // Down, the tall message would have to leave the frame uncovered: only the short row moves, by what it can.
+        let down = try XCTUnwrap(Policy.scrollStep([tall, short], by: -560, frameHeight: 600))
+        XCTAssertEqual(down.row, short)
+        XCTAssertEqual(down.top, 0)
+        // A row laid out off screen would jump to the edge, further than asked.
+        let above = Placed(id: "above", index: 0, top: -1500, bottom: -1450, dayHeader: nil)
+        XCTAssertNil(Policy.scrollStep([above], by: 560, frameHeight: 600))
+    }
+
     func testTheDayChipShowsTheDayAboveTheScreenAndIsPushedByTheNext() throws {
         let headers: [Int: String] = [0: "Monday", 40: "Tuesday"]
         func chip(_ rows: [Placed]) -> Policy.DayChip? {
