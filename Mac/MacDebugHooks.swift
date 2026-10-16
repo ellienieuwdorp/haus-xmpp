@@ -23,7 +23,10 @@ import SwiftUI
 ///   applies only after a tour). Message actions by message ID in the open chat, as the bubble's menu performs them:
 ///   `reply|edit|star|retry|unsend|encryption|report|select-text <id>`, `react <id> <emoji>`, `pick-emoji <id>`
 ///   (the emoji picker's popover), `hover <id>|off` (shows that bubble's hover toolbar until `hover off`), and
-///   `menu <id>` (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's).
+///   `menu <id>` (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's). `scroll <seconds>`
+///   sweeps the open chat's timeline from the newest loaded message to the oldest and back, moving its clip view on a
+///   120 Hz timer, and logs how late the main thread ran the ticks and the app's memory footprint (`ScrollProbe`);
+///   give `-haus-capture-frames` a short time so its renders are done before the sweep.
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-window-size <width>x<height>`: the main window's content size in points, for captures at a set size.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-sheet account|new-chat|own-devices`,
@@ -266,11 +269,94 @@ import SwiftUI
                 let size = argument.split(separator: "x").compactMap { Double($0) }
                 if size.count == 2 { mainWindow?.setContentSize(NSSize(width: size[0], height: size[1])) }
             case "menu": logMenu(for: argument, model: model, window: window)
+            case "scroll":
+                if let window = mainWindow { await ScrollProbe.sweep(in: window, seconds: Double(argument) ?? 10) }
             default: log("tour \(step): unknown")
             }
         }
         await frames.value
         log("tour done; selected \(window.selection ?? "none"), messages loaded for \(model.messagesLoadedFor ?? "none")")
+    }
+
+    /// A scripted scroll through the open timeline, timed on the main thread. The window is off-screen, so no display
+    /// link runs: the ticks of a 120 Hz timer stand in for refreshes, and a tick that comes late means the main thread
+    /// was busy (laying out and building the rows that scrolled in). Render-server work is not in it.
+    @MainActor final class ScrollProbe: NSObject {
+        private let scrollView: NSScrollView
+        private let seconds: Double
+        private var started: CFTimeInterval = 0
+        private var last: CFTimeInterval = 0
+        private var intervals: [Double] = []
+        private var peak: UInt64 = 0
+        private var timer: Timer?
+        private var finished: CheckedContinuation<Void, Never>?
+
+        private init(scrollView: NSScrollView, seconds: Double) {
+            self.scrollView = scrollView
+            self.seconds = seconds
+        }
+
+        /// The timeline is the scroll view with the tallest document: the chat list holds a few rows.
+        static func sweep(in window: NSWindow, seconds: Double) async {
+            func scrollViews(in view: NSView) -> [NSScrollView] { ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrollViews(in:)) }
+            guard let root = window.contentView,
+                  let scrollView = scrollViews(in: root).max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }) else {
+                log("scroll: no scroll view")
+                return
+            }
+            let probe = ScrollProbe(scrollView: scrollView, seconds: seconds)
+            let before = footprint()
+            log(String(format: "scroll: start, document %.0f pt, footprint %.1f MB", scrollView.documentView?.frame.height ?? 0, megabytes(before)))
+            await withCheckedContinuation { continuation in
+                probe.finished = continuation
+                probe.start()
+            }
+            let after = footprint()
+            let sorted = probe.intervals.sorted()
+            let p95 = sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))]
+            log(String(format: "scroll: %d ticks, %d over 16.7 ms, %d over 33 ms, p95 %.1f ms, worst %.1f ms; document %.0f pt; footprint %.1f MB after, peak %.1f MB",
+                       sorted.count, sorted.filter { $0 > 1 / 60.0 }.count, sorted.filter { $0 > 1 / 30.0 }.count, p95 * 1_000, (sorted.last ?? 0) * 1_000,
+                       scrollView.documentView?.frame.height ?? 0, megabytes(after), megabytes(max(probe.peak, after))))
+        }
+
+        private func start() {
+            started = CACurrentMediaTime()
+            last = started
+            let timer = Timer(timeInterval: 1 / 120.0, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.tick() } }
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+        }
+
+        /// Up from the bottom for the first half, back down for the second.
+        private func tick() {
+            let now = CACurrentMediaTime()
+            intervals.append(now - last)
+            last = now
+            if intervals.count.isMultiple(of: 60) { peak = max(peak, ScrollProbe.footprint()) }
+            let progress = min(1, (now - started) / seconds)
+            let clip = scrollView.contentView
+            let range = max(0, (scrollView.documentView?.frame.height ?? 0) - clip.bounds.height)
+            let fromTop = range * abs(1 - 2 * progress)
+            let flipped = scrollView.documentView?.isFlipped ?? true
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: flipped ? fromTop : range - fromTop))
+            scrollView.reflectScrolledClipView(clip)
+            guard progress >= 1 else { return }
+            timer?.invalidate()
+            finished?.resume()
+            finished = nil
+        }
+
+        private static func megabytes(_ bytes: UInt64) -> Double { Double(bytes) / 1_048_576 }
+
+        /// The memory the system charges the app for, as Activity Monitor's Memory column shows it.
+        private static func footprint() -> UInt64 {
+            var info = task_vm_info_data_t()
+            var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+            let result = withUnsafeMutablePointer(to: &info) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+            }
+            return result == KERN_SUCCESS ? info.phys_footprint : 0
+        }
     }
 
     /// The bubble's menu for one message of the open chat, as `MacMessageMenu` lists it, and its VoiceOver actions.
