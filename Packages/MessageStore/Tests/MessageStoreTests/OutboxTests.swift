@@ -93,6 +93,8 @@ private func outgoing(_ id: String, account: String = "a", time: Double = 100, b
     let owner = try MessageStore(url: url)
     let contender = try MessageStore(url: url)
     try await owner.acquireTransportOwnership()
+    // What the app's expiring background time checks; other tests may hold locks too, so only this side is certain.
+    #expect(MessageStore.processHoldsTransportLock)
     try await owner.upsertChat(accountID: "a", chatID: "peer", title: "Peer")
     try await owner.enqueueOutgoing(outgoing("1"))
     _ = try #require(await owner.claimNextOutgoing(accountID: "a"))

@@ -1,6 +1,7 @@
 import Foundation
 import CSQLite
 import Darwin
+import os
 
 /// Protected-directory SQLite persistence. The caller validates authenticated transport identities.
 /// Crypto writes use revision CAS; socket work additionally requires exclusive OS ownership.
@@ -607,6 +608,10 @@ public actor MessageStore {
 
     /// Whether this store holds the transport lease right now. A caller that gave it up, or never got it, reads false.
     public var holdsTransportOwnership: Bool { transportOwnership.isHeld }
+
+    /// Whether any store in this process holds a transport lock, or is taking one, right now. Readable from any thread
+    /// without awaiting a store: what the app checks as its background time runs out. Never false while one is held.
+    public static var processHoldsTransportLock: Bool { TransportOwnership.locked.withLock { $0 > 0 } }
 
     /// Switches a database file nobody has open to write-ahead logging, as every build keeps its live store. A copy put
     /// back at the schema of the build that opens it (which then does not migrate it) would otherwise stay in
@@ -2886,6 +2891,8 @@ final class Connection: @unchecked Sendable {
 /// The sidecar is never removed, so all owners lock the same inode. CLOEXEC prevents inheritance
 /// into launched helpers; process death closes the descriptor and releases ownership.
 private final class TransportOwnership: @unchecked Sendable {
+    /// Locks held across the process, counted before the kernel call so the count never reads lower than the truth.
+    static let locked = OSAllocatedUnfairLock(initialState: 0)
     private let descriptor: Int32
     private(set) var isHeld = false
     init(url: URL) throws {
@@ -2895,9 +2902,12 @@ private final class TransportOwnership: @unchecked Sendable {
     }
     func acquire() throws {
         if isHeld { return }
+        Self.locked.withLock { $0 += 1 }
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
-            if errno == EWOULDBLOCK { throw MessageStoreError.transportOwnedElsewhere }
-            throw MessageStoreError.database(code: errno, message: "Unable to acquire transport lock")
+            let code = errno
+            Self.locked.withLock { $0 -= 1 }
+            if code == EWOULDBLOCK { throw MessageStoreError.transportOwnedElsewhere }
+            throw MessageStoreError.database(code: code, message: "Unable to acquire transport lock")
         }
         isHeld = true
     }
@@ -2908,8 +2918,13 @@ private final class TransportOwnership: @unchecked Sendable {
             throw MessageStoreError.database(code: errno, message: "Unable to release transport lock")
         }
         isHeld = false
+        Self.locked.withLock { $0 -= 1 }
     }
-    deinit { Darwin.close(descriptor) }
+    deinit {
+        // Closing the descriptor drops a lock still held.
+        Darwin.close(descriptor)
+        if isHeld { Self.locked.withLock { $0 -= 1 } }
+    }
 }
 
 /// Device and inode of a path: which file a connection opened, compared again once the lease is held.
