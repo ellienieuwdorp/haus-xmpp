@@ -295,11 +295,7 @@ struct DeviceFingerprintSheet: View {
                         .disabled(!model.session.isReady)
                     }
                 } footer: {
-                    Text(device.active
-                         ? (allowsMaintenance && device.jid == model.accountID
-                            ? "Blocked devices are left out of new messages, and what they send is never opened. Removing an old device takes it off your account’s advertised devices; sign out on it first, or it may advertise itself again."
-                            : "Blocked devices are left out of new messages, and what they send is never opened.")
-                         : "No longer advertised. Its fingerprint is read-only.")
+                    Text(device.active ? blockingFooter : "No longer advertised. Its fingerprint is read-only.")
                 }
             }
             .navigationTitle("Device \(String(device.deviceID))")
@@ -321,5 +317,16 @@ struct DeviceFingerprintSheet: View {
             } message: { Text("It will be removed from your account’s advertised encryption devices. Previous messages cannot be recalled.") }
         }
         .macSheetSize(width: 460, height: 620)
+    }
+
+    /// What blocking does: a 1:1 chat and the account's own devices leave a blocked device out, while another member's
+    /// blocked device holds a group's sends (`ChatDeviceReview.holds`).
+    private var blockingFooter: String {
+        if model.isGroup(chatID) && device.jid != model.accountID {
+            return "Blocking another member’s device pauses sending to the whole group, and nothing it sends is opened."
+        }
+        return allowsMaintenance && device.jid == model.accountID
+            ? "Blocked devices are left out of new messages, and what they send is never opened. Removing an old device takes it off your account’s advertised devices; sign out on it first, or it may advertise itself again."
+            : "Blocked devices are left out of new messages, and what they send is never opened."
     }
 }

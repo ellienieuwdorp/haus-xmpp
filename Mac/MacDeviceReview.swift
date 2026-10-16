@@ -148,7 +148,8 @@ struct MacDeviceReviewSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
             }
             .sheet(item: $comparing) { device in
-                DeviceFingerprintSheet(model: model, chatID: chatID, device: current(device), name: name(of: device)) { trust in
+                DeviceFingerprintSheet(model: model, chatID: chatID, device: current(device), name: name(of: device),
+                                       rejectionMessage: ChatDeviceReview.rejectionMessage(for: device, account: model.accountID, isGroup: isGroup)) { trust in
                     comparing = nil
                     decide(device, trust)
                 }
