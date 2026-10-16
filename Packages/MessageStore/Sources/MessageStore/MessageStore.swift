@@ -1,6 +1,7 @@
 import Foundation
 import CSQLite
 import Darwin
+import os
 
 /// Protected-directory SQLite persistence. The caller validates authenticated transport identities.
 /// Crypto writes use revision CAS; socket work additionally requires exclusive OS ownership.
@@ -546,7 +547,7 @@ public actor MessageStore {
         // A restore or directory move replaced the file while this connection waited: it must not write into, or
         // connect for, data nobody will read again.
         guard FileIdentity(path: url.path) == fileIdentity else {
-            transportOwnership.release()
+            try transportOwnership.release()
             throw MessageStoreError.replaced
         }
     }
@@ -608,6 +609,10 @@ public actor MessageStore {
     /// Whether this store holds the transport lease right now. A caller that gave it up, or never got it, reads false.
     public var holdsTransportOwnership: Bool { transportOwnership.isHeld }
 
+    /// Whether any store in this process holds a transport lock, or is taking one, right now. Readable from any thread
+    /// without awaiting a store: what the app checks as its background time runs out. Never false while one is held.
+    public static var processHoldsTransportLock: Bool { TransportOwnership.locked.withLock { $0 > 0 } }
+
     /// Switches a database file nobody has open to write-ahead logging, as every build keeps its live store. A copy put
     /// back at the schema of the build that opens it (which then does not migrate it) would otherwise stay in
     /// rollback-journal mode.
@@ -622,10 +627,16 @@ public actor MessageStore {
     /// Stop and join all socket/sender/crypto work before closing. This deterministic lifecycle
     /// boundary must complete before deleting or replacing a database or its SQLite sidecars.
     /// Repeated closes are harmless; later database operations fail with a controlled error.
+    /// Holding the lease, interrupted submissions are marked first and the kernel lock goes last, after SQLite closed,
+    /// whichever step failed; the first failure is thrown afterwards.
     public func close() throws {
         guard connection.isOpen else { return }
-        if transportOwnership.isHeld { try releaseTransportOwnership() }
-        try connection.close()
+        guard transportOwnership.isHeld else { return try connection.close() }
+        let marked = Result { try markSubmissionsUnconfirmed() }
+        let closed = Result { try connection.close() }
+        try transportOwnership.release()
+        try marked.get()
+        try closed.get()
     }
 
     /// Containing-app migration only. Stop/join all work and close every other connection
@@ -634,19 +645,30 @@ public actor MessageStore {
     /// the move fails; reopening the original/destination is an explicit caller decision.
     public func closeForMigration(_ move: @Sendable () throws -> Void) throws {
         try requireTransportOwnership()
-        defer { transportOwnership.release() }
-        try connection.close()
-        try move()
+        let moved = Result { try connection.close(); try move() }
+        try transportOwnership.release()
+        try moved.get()
     }
 
     /// Caller MUST stop and join every socket/sender before release. Invalidates attempt tokens.
+    /// The kernel lock is released even when marking interrupted submissions fails (another connection kept the
+    /// database busy past the timeout, a full disk): a process suspended holding it is killed, and every owner marks
+    /// them itself after acquiring (`recoverInterruptedSubmissions`). The failure is thrown once the lock is free. A
+    /// transaction a failed rollback left open would keep SQLite's own locks, so that connection is closed first and
+    /// the store is unusable afterwards.
     public func releaseTransportOwnership() throws {
         try requireTransportOwnership()
+        let marked = Result { try markSubmissionsUnconfirmed() }
+        if case .failure = marked, connection.inTransaction { try? connection.close() }
+        try transportOwnership.release()
+        try marked.get()
+    }
+
+    private func markSubmissionsUnconfirmed() throws {
         try connection.transaction {
             try connection.execute("UPDATE outbox SET state='unconfirmed',attempt_id=NULL WHERE state='submitting'")
             try connection.execute("UPDATE outgoing_updates SET state='unconfirmed',attempt_id=NULL WHERE state='submitting'")
         }
-        transportOwnership.release()
     }
 
     private func requireTransportOwnership() throws {
@@ -2795,6 +2817,8 @@ enum Value {
 final class Connection: @unchecked Sendable {
     private(set) var handle: OpaquePointer?
     var isOpen: Bool { handle != nil }
+    /// A transaction is open (SQLite is out of autocommit mode).
+    var inTransaction: Bool { handle.map { sqlite3_get_autocommit($0) == 0 } ?? false }
     init(url: URL, create: Bool = true) throws {
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX | (create ? SQLITE_OPEN_CREATE : 0)
         let result = sqlite3_open_v2(url.path, &handle, flags, nil)
@@ -2867,6 +2891,8 @@ final class Connection: @unchecked Sendable {
 /// The sidecar is never removed, so all owners lock the same inode. CLOEXEC prevents inheritance
 /// into launched helpers; process death closes the descriptor and releases ownership.
 private final class TransportOwnership: @unchecked Sendable {
+    /// Locks held across the process, counted before the kernel call so the count never reads lower than the truth.
+    static let locked = OSAllocatedUnfairLock(initialState: 0)
     private let descriptor: Int32
     private(set) var isHeld = false
     init(url: URL) throws {
@@ -2876,16 +2902,29 @@ private final class TransportOwnership: @unchecked Sendable {
     }
     func acquire() throws {
         if isHeld { return }
+        Self.locked.withLock { $0 += 1 }
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
-            if errno == EWOULDBLOCK { throw MessageStoreError.transportOwnedElsewhere }
-            throw MessageStoreError.database(code: errno, message: "Unable to acquire transport lock")
+            let code = errno
+            Self.locked.withLock { $0 -= 1 }
+            if code == EWOULDBLOCK { throw MessageStoreError.transportOwnedElsewhere }
+            throw MessageStoreError.database(code: code, message: "Unable to acquire transport lock")
         }
         isHeld = true
     }
-    func release() {
-        if isHeld { _ = flock(descriptor, LOCK_UN); isHeld = false }
+    /// Held until the kernel confirms the unlock.
+    func release() throws {
+        guard isHeld else { return }
+        guard flock(descriptor, LOCK_UN) == 0 else {
+            throw MessageStoreError.database(code: errno, message: "Unable to release transport lock")
+        }
+        isHeld = false
+        Self.locked.withLock { $0 -= 1 }
     }
-    deinit { Darwin.close(descriptor) }
+    deinit {
+        // Closing the descriptor drops a lock still held.
+        Darwin.close(descriptor)
+        if isHeld { Self.locked.withLock { $0 -= 1 } }
+    }
 }
 
 /// Device and inode of a path: which file a connection opened, compared again once the lease is held.

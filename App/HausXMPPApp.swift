@@ -37,6 +37,10 @@ struct HausXMPPApp: App {
     private var driver = SceneLifecycleDriver()
     private unowned let model: AppModel
     private var backgroundLaunchObserver: (any NSObjectProtocol)?
+    /// Begun as the scene leaves `.active`, while the app is still in front: iOS grants background time asynchronously,
+    /// so it is asked for before the app can be suspended. Ends at `.active` again, or at `.background` once the model's
+    /// transition has begun its own.
+    private var departure: BackgroundActivity?
 
     init(model: AppModel) {
         self.model = model
@@ -44,7 +48,9 @@ struct HausXMPPApp: App {
     }
 
     func phaseChanged(from previous: SceneLifecycleDriver.Phase, to phase: SceneLifecycleDriver.Phase) {
+        if phase == .inactive, departure == nil { departure = BackgroundActivity("Leave the foreground") }
         model.applyLifecycle(driver.updates(for: .phaseChanged(from: previous, to: phase)))
+        if phase != .inactive { departure?.end(); departure = nil }
     }
 
     /// At the start of `prepare()`: a launch into the background must not connect, and its first activation counts as

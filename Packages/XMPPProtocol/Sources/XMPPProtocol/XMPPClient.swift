@@ -1056,13 +1056,13 @@ public actor XMPPClient {
 
     /// CSI is a hint, independent of presence. It is not a guarantee of suspended traffic or push.
     /// Recorded for the session either way: a stream that is not online yet binds with it, and every later
-    /// announcement and resume restates it. Online, it is written now; a server without CSI throws
-    /// `clientStateUnavailable`.
+    /// announcement and resume restates it. Online, it is written now, bounded like a farewell (a background transition
+    /// queues behind it); a server without CSI throws `clientStateUnavailable`.
     public func setClientActive(_ active: Bool) async throws {
         clientActive = active
         guard phase == .online else { return }
         guard csiOffered else { throw XMPPNotificationError.clientStateUnavailable }
-        try await write(PushNotifications.clientStateXML(active: active))
+        try await withFarewellDeadline { try await self.write(PushNotifications.clientStateXML(active: active)) }
         announcedClientActive = active
     }
 

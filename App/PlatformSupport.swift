@@ -1,3 +1,5 @@
+import MessageStore
+import OSLog
 import SwiftUI
 import UserNotifications
 #if os(iOS)
@@ -268,6 +270,7 @@ extension ToolbarItemPlacement {
 @MainActor final class BackgroundActivity {
     /// How long a Mac activity may hold off App Nap if the work never ends it.
     static let macLimit: Duration = .seconds(60)
+    private static let log = Logger(subsystem: "haus.xmpp.ios", category: "lifecycle")
 
     #if os(iOS)
     private var task: UIBackgroundTaskIdentifier
@@ -275,10 +278,21 @@ extension ToolbarItemPlacement {
     private var activity: (any NSObjectProtocol)?
     #endif
 
-    /// Begins the activity at once.
+    /// Begins the activity at once. Its name goes to the log, so it names the work, never an account or a chat.
+    ///
+    /// On iOS, when background time runs out, the task ends there if no transport lock is held in this process: the
+    /// app may then be suspended safely, and what the work had left resumes with it. While a lock is held the task is
+    /// left running, so iOS ends the process (a background task not ended in time, 0x2182bad2), which frees the lock.
+    /// Ending it instead would suspend the app holding the lock, which iOS also kills (0xdead10cc) and which keeps
+    /// every extension run waiting until then; unlocking beneath the work that holds it would let two processes own
+    /// the transport. A notification action decides the same way (`NotificationActionCenter.perform`).
     init(_ name: String) {
         #if os(iOS)
-        task = UIApplication.shared.beginBackgroundTask(withName: name)
+        task = .invalid
+        task = UIApplication.shared.beginBackgroundTask(withName: name) { [self] in
+            MainActor.assumeIsolated { expire(name) }
+        }
+        if task == .invalid { Self.log.error("background time refused: \(name, privacy: .public)") }
         #else
         activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep], reason: name)
         Task { [weak self] in
@@ -298,6 +312,16 @@ extension ToolbarItemPlacement {
         nil
         #endif
     }
+
+    #if os(iOS)
+    private func expire(_ name: String) {
+        guard !MessageStore.processHoldsTransportLock else {
+            return Self.log.error("background time ran out holding the transport lease: \(name, privacy: .public)")
+        }
+        Self.log.notice("background time ran out, lease free: \(name, privacy: .public)")
+        end()
+    }
+    #endif
 
     /// Ends the activity; later calls do nothing.
     func end() {

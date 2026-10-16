@@ -89,7 +89,9 @@ final class AppModel {
     /// A restore owns the store's lease until it closes the store; a background transition meanwhile must not release it.
     @ObservationIgnored private var restoringData = false
     @ObservationIgnored private var snapshots: PreUpgradeSnapshot?
-    @ObservationIgnored private var openingStorage = false
+    /// `openStorage` in progress. Its snapshot or migration can hold the lease before `store` is set, so a background
+    /// transition joins it.
+    @ObservationIgnored private var storageOpening: Task<Void, Never>?
     /// Where this install stands with a transfer to another install (see `AccountTransfer`). Anything but `.none`
     /// replaces the app with the transfer screen and keeps storage closed.
     private(set) var transferState: TransferState = .none
@@ -176,6 +178,9 @@ final class AppModel {
     @ObservationIgnored private var activeEncryptionOperations = 0
     @ObservationIgnored private var acquiringOwnership = false
     @ObservationIgnored private var hasTransportOwnership = false
+    /// Background time begun when a release from the background left the kernel lock held (`releaseLeaseInBackground`):
+    /// the app is not suspended holding it. The next release that frees the lock ends it.
+    @ObservationIgnored private var unreleasedLease: BackgroundActivity?
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
     @ObservationIgnored private var reconnection = ReconnectPolicy()
     @ObservationIgnored private var userWantsOffline = false
@@ -237,6 +242,7 @@ final class AppModel {
     var isCatchingUp: Bool { catchUp != nil }
     /// Numbers-only timings of the current connection's setup, for the lab measurement.
     private static let syncLog = Logger(subsystem: "haus.xmpp.ios", category: "sync")
+    private static let lifecycleLog = Logger(subsystem: "haus.xmpp.ios", category: "lifecycle")
     @ObservationIgnored private var onlineAt: ContinuousClock.Instant?
     @ObservationIgnored private var firstMessageLogged = false
     @ObservationIgnored private var liveStoredLogged = false
@@ -405,9 +411,17 @@ final class AppModel {
     /// snapshot of it is taken; while that is not possible (a launch into the background, the lease held elsewhere, a
     /// failed snapshot, restored data waiting for the previous build) storage stays closed and nothing connects.
     private func openStorage(withoutSnapshot: Bool = false) async {
-        guard store == nil, !openingStorage else { return }
-        openingStorage = true
-        defer { openingStorage = false }
+        guard store == nil, storageOpening == nil else { return }
+        let opening = Task { await openStorageOnce(withoutSnapshot: withoutSnapshot) }
+        storageOpening = opening
+        await opening.value
+        storageOpening = nil
+    }
+
+    private func openStorageOnce(withoutSnapshot: Bool) async {
+        // A snapshot or migration holds the lease across awaits: the app must not be suspended with it.
+        let activity = BackgroundActivity("Open message storage")
+        defer { activity.end() }
         do {
             // Before anything opens or creates a store: data moved to another install stays out of reach, and a
             // transfer a crash interrupted is undone first.
@@ -918,19 +932,29 @@ final class AppModel {
         // The extension may set the icon badge while the app is away: the next chat-list load sets it again.
         appBadge = nil
         if transition.quiescesTransport { quiescing = true }
+        // Begun before anything is awaited, the previous transition included: iOS grants background time asynchronously,
+        // and an app it suspends while holding the lease's file lock is killed.
+        let protection = transition.quiescesTransport ? BackgroundActivity("Finish encrypted synchronization") : nil
         let previous = lifecycleTask
+        let requested = ContinuousClock.now
+        if transition.quiescesTransport {
+            Self.lifecycleLog.notice("background transition requested, behind another: \(previous != nil, privacy: .public)")
+        }
         lifecycleTask = Task { [weak self] in
+            defer { protection?.end() }
             await previous?.value
             guard let self else { return }
             if transition.quiescesTransport {
-                let task = BackgroundActivity("Finish encrypted synchronization")
+                // Storage still opening may hold the lease before `store` is set; it is joined, never cut short.
+                await self.storageOpening?.value
+                let waited = Int((ContinuousClock.now - requested) / .milliseconds(1))
+                Self.lifecycleLog.notice("background transition started after \(waited, privacy: .public) ms")
                 // The session hibernates (up to days with push): it must read as away, not "Online", until it resumes.
                 if transition.presence == .away, let client = self.client, self.isConnected {
                     await typingEnd?.value
                     try? await client.setAvailability(self.awayAvailability, clientActive: transition.clientActive ?? false)
                 }
                 await self.quiesceTransport()
-                task.end()
             } else {
                 guard self.transportWanted else { return }
                 // Only when the stream stays up and the user comes or goes; never on iOS, where both follow the
@@ -949,7 +973,9 @@ final class AppModel {
                 if transition.presence == nil, let active = transition.clientActive, let client = self.client {
                     try? await client.setClientActive(active)
                 }
-                if transition.resumesTransport { await self.refresh() }
+                // Not awaited: a background transition queued behind this one disconnects first, then joins the load
+                // with the rest of the work it waits for. Nothing starts once the app has gone away again.
+                if transition.resumesTransport, self.transportWanted { self.refreshSoon() }
             }
         }
     }
@@ -1109,10 +1135,7 @@ final class AppModel {
             // Whatever the lease is now, not what it was: a background transition during the restore left it alone,
             // and the restore gives it up here if the app is no longer in front.
             hasTransportOwnership = await store.holdsTransportOwnership
-            if hasTransportOwnership, !transportWanted {
-                hasTransportOwnership = false
-                try? await store.releaseTransportOwnership()
-            }
+            if hasTransportOwnership, !transportWanted { await releaseLeaseInBackground(store) }
             quiescing = false
             upgradeState = .none
             self.error = "The backup could not be restored: " + PreUpgradeSnapshot.describe(error)
@@ -1428,7 +1451,35 @@ final class AppModel {
         // A restore holds the lease until it closes the store, and releases it itself if it is refused.
         guard !restoringData else { return }
         hasTransportOwnership = false
-        try? await store?.releaseTransportOwnership()
+        guard let store else { return }
+        await releaseLeaseInBackground(store)
+    }
+
+    /// Gives up the lease where the app may be suspended next (a quiesce, a background notification action). The store
+    /// frees the kernel lock even when marking interrupted sends fails, so only a failed unlock keeps it; that is tried
+    /// again. If the lock still holds, the model keeps the ownership the store has, and background time is asked for
+    /// that only a later release ends: when it runs out with the lock held, iOS ends the process (`BackgroundActivity`).
+    private func releaseLeaseInBackground(_ store: MessageStore) async {
+        hasTransportOwnership = false
+        for attempt in 1...3 {
+            do {
+                try await store.releaseTransportOwnership()
+                Self.lifecycleLog.notice("lease released")
+            } catch MessageStoreError.transportOwnershipRequired {
+            } catch {
+                // Sends the release could not mark stay as they are; every owner recovers them after acquiring.
+                Self.lifecycleLog.error("lease release failed, attempt \(attempt, privacy: .public): \(String(reflecting: error), privacy: .public)")
+            }
+            guard await store.holdsTransportOwnership else {
+                unreleasedLease?.end()
+                unreleasedLease = nil
+                return
+            }
+            if attempt < 3 { try? await Task.sleep(for: .milliseconds(100)) }
+        }
+        Self.lifecycleLog.fault("lease still held: the transport lock did not unlock")
+        hasTransportOwnership = true
+        if unreleasedLease == nil { unreleasedLease = BackgroundActivity("Hold the unreleased lease") }
     }
 
     /// Everything the background transition stops, without giving up the lease: blocks new transport, crypto and
@@ -1436,12 +1487,18 @@ final class AppModel {
     private func stopTransportWork() async {
         quiescing = true
         defer { quiescing = false }
+        let clock = ContinuousClock(), start = clock.now
         let events = eventTask
         let setup = setupTask
         let backfill = backfillTask
         let drain = drainTask
         let previous = resetSession()
         await previous?.disconnectAndWait()
+        let disconnected = clock.now
+        defer {
+            let disconnect = Int((disconnected - start) / .milliseconds(1)), joins = Int((clock.now - disconnected) / .milliseconds(1))
+            Self.lifecycleLog.notice("transport stopped: disconnect \(disconnect, privacy: .public) ms, joins \(joins, privacy: .public) ms")
+        }
         await events?.value
         // Setup's archive walk, initialize, rejoin and pending retry are all structured children of it.
         await setup?.value
@@ -4209,7 +4266,7 @@ extension AppModel: NotificationActionEnvironment {
         // meanwhile keeps it.
         if session.holdsLease, !hasTransportOwnership, let store {
             if session.client != nil { await presentActionArrivals(store: store, session: session) }
-            try? await store.releaseTransportOwnership()
+            await releaseLeaseInBackground(store)
         }
         session.holdsLease = false
         actionSession = nil
