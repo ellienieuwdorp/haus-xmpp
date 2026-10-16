@@ -18,7 +18,14 @@ import SwiftUI
 ///   with any other open window (Settings) drawn over its centre.
 /// - `-haus-tour "<step>; …"`: with `-haus-capture-frames`, starts the frames as soon as the main window exists and plays
 ///   the steps while they run, for a recording: `wait <seconds>`, `select <chat>`, `deselect`, `inspector on|off`,
-///   `settings general|appearance|about`, `close-settings`.
+///   `settings general|appearance|about`, `close-settings`. Timeline steps (`MacTimelineDebug`): `capture <name>` (the main
+///   window as `<name>.png` beside the frames), `scroll top|bottom|page-up|page-down` (as the keys do),
+///   `scroll-to <message id>` (as a quote click does), `resize <width>x<height>` and `timeline` (logs the reader's row
+///   and distances). Frames may be `0` seconds for a tour that only captures by name.
+/// - `-haus-timeline-trace`: logs each timeline update that held the reader's row, with how far the update moved it and
+///   its drift over the next 30 refreshes, and each scroll the controller placed.
+/// - `-haus-timeline-unbound`: leaves the timeline's position unbound, so SwiftUI keeps the absolute offset through a
+///   prepend as it does during a scroll gesture, and the controller's hold does all the work (`MacTimelineDebug`).
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-window-size <width>x<height>`: the main window's content size in points, for captures at a set size.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-sheet account|new-chat|own-devices`,
@@ -241,6 +248,8 @@ import SwiftUI
                 tour.settingsPane = MacSettingsView.Pane(rawValue: argument) ?? .general
                 if otherWindows.isEmpty { openSettings?() }
             case "close-settings": otherWindows.forEach { $0.close() }
+            case "capture": if let main = mainWindow, let png = renderWithOverlays(main) { emit(png, directory: directory, file: slug(argument) + ".png") }
+            case "scroll", "scroll-to", "resize", "timeline": await MacTimelineDebug.step(words[0], argument, window: mainWindow)
             default: log("tour \(step): unknown")
             }
         }
