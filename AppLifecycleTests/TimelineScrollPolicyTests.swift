@@ -132,7 +132,15 @@ final class DesktopTimelineScrollPolicyTests: XCTestCase {
                     Placed(id: "a", index: 0, top: -30, bottom: 20, dayHeader: nil),
                     Placed(id: "b", index: 1, top: 20, bottom: 70, dayHeader: nil)]
         XCTAssertEqual(Policy.readerRow(rows, visibleTop: 0, visibleBottom: 700)?.id, "b")
-        XCTAssertNil(Policy.readerRow(Array(rows.prefix(2)), visibleTop: 0, visibleBottom: 700))
+        XCTAssertNil(Policy.readerRow(Array(rows.prefix(1)), visibleTop: 0, visibleBottom: 700))
+    }
+
+    /// Inside a message taller than the screen no top edge is visible: that message is held, at its negative offset.
+    func testTheReaderInsideATallMessageIsThatMessage() {
+        let rows = [Placed(id: "a", index: 0, top: -900, bottom: -200, dayHeader: nil),
+                    Placed(id: "b", index: 1, top: -200, bottom: 1200, dayHeader: nil),
+                    Placed(id: "c", index: 2, top: 1200, bottom: 1260, dayHeader: nil)]
+        XCTAssertEqual(Policy.readerRow(rows, visibleTop: 0, visibleBottom: 600), rows[1])
     }
 
     /// A scroll to a row lines up the same unit point of the row and the frame, and that point stays inside 0…1.

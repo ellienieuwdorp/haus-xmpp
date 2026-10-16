@@ -150,10 +150,13 @@ extension TimelineScrollPolicy {
         let dayHeader: String?
     }
 
-    /// The reader's row: the first message whose top edge is inside the visible area. Its distance from the top edge is
-    /// what an update or a resize keeps. Never the loading-earlier row.
+    /// The reader's row: the first message whose top edge is inside the visible area, or, when none starts there (a
+    /// message taller than the area), the one reaching into it from above. Its distance from the top edge, negative in
+    /// that case, is what an update or a resize keeps. Never the loading-earlier row.
     static func readerRow(_ rows: [PlacedRow], visibleTop: CGFloat, visibleBottom: CGFloat) -> PlacedRow? {
-        rows.first { $0.top >= visibleTop - 0.5 && $0.top < visibleBottom && canAnchor(on: $0.id) }
+        let anchorable = rows.filter { canAnchor(on: $0.id) }
+        return anchorable.first { $0.top >= visibleTop - 0.5 && $0.top < visibleBottom }
+            ?? anchorable.first { $0.top < visibleBottom && $0.bottom > visibleTop }
     }
 
     /// The `UnitPoint.y` for a scroll-to-row that should leave the row's top edge at `top`. Scrolling to a row with an
