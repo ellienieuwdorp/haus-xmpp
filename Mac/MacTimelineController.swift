@@ -43,6 +43,9 @@ import SwiftUI
     @ObservationIgnored private let makePresenter: () -> ConversationPresenter
     @ObservationIgnored private var indexByID: [String: Int] = [:]
     @ObservationIgnored private var olderRequests = TimelineScrollPolicy.OlderHistoryRequests()
+    /// Counts the observations registered: only the latest one's change applies an update, so an update applied out of
+    /// turn (a jump paging history in) never leaves a second chain of observations behind.
+    @ObservationIgnored private var observation = 0
     @ObservationIgnored private var readerMovedAt: ContinuousClock.Instant?
     @ObservationIgnored private var scrolling = false
     /// An update is being applied: the geometry it reports on the way is between two layouts and never pages.
@@ -79,16 +82,24 @@ import SwiftUI
         var isGroup = false
     }
 
-    /// Builds the content and observes everything it read; the first change to any of it schedules an update.
+    /// Builds the content and observes everything it read; the first change to any of it schedules an update, unless
+    /// a later call has registered its own observation since.
     private func observe() -> Content {
-        withObservationTracking {
+        observation += 1
+        let token = observation
+        return withObservationTracking {
             guard model.messagesLoadedFor == chatID else { return Content() }
             let presenter = makePresenter()
             return Content(isLoaded: true, rows: TimelineItems.rows(for: presenter.timelineMessages), typing: presenter.typing,
                            loadingEarlier: presenter.loadingEarlier, isGroup: presenter.isGroup)
         } onChange: { [weak self] in
             // Called as the model is about to change, inside whatever is changing it: apply in a turn of our own.
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.update() } }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.observation == token else { return }
+                    self.update()
+                }
+            }
         }
     }
 
