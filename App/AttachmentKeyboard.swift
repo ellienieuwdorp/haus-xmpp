@@ -936,7 +936,8 @@ private final class RecentPhotoCell: UICollectionViewCell {
         let isVideo = asset.mediaType == .video
         durationLabel.isHidden = !isVideo
         scrim.isHidden = !isVideo
-        let seconds = Int(asset.duration.rounded())
+        // Int(_:) traps on a NaN or infinite value, and PhotoKit does not promise a finite duration.
+        let seconds = asset.duration.isFinite ? Int(min(max(asset.duration, 0), 359_999).rounded()) : 0
         let duration = seconds >= 3600 ? String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
             : String(format: "%d:%02d", seconds / 60, seconds % 60)
         durationLabel.text = isVideo ? duration : nil
