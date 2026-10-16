@@ -36,6 +36,8 @@ struct MacBubbleText: NSViewRepresentable {
     func updateNSView(_ view: BubbleTextView, context: Context) {
         context.coordinator.openLink = openLink
         view.messageMenu = menu
+        let row = context.environment.timelineRow
+        view.timelineKey = row.timeline.map { timeline in { [weak timeline, id = row.id] key in timeline?.bubbleTextKey(key, in: id) } }
         let resultClick = context.environment.findResultClick
         view.plainClick = resultClick.isActive ? { resultClick() } : nil
         if view.textStorage?.isEqual(to: text) != true { view.textStorage?.setAttributedString(text) }
@@ -94,6 +96,8 @@ struct MacBubbleText: NSViewRepresentable {
 
 final class BubbleTextView: NSTextView {
     var messageMenu: ((URL?) -> NSMenu)?
+    /// Takes the keys that belong to the timeline once this text has keyboard focus (`timelineKeys`).
+    var timelineKey: ((MacTimelineKey) -> Void)?
     /// What a single click that lands on no link and leaves nothing selected does besides placing the caret: a search
     /// result's jump.
     var plainClick: (() -> Void)?
@@ -134,6 +138,23 @@ final class BubbleTextView: NSTextView {
         super.mouseDown(with: event)
         if selectedRange().length == 0 { plainClick() }
     }
+
+    /// A click into the text gives it keyboard focus, for selecting with the keys; the timeline's keys still work here:
+    /// the scrolling keys scroll it, Up and Down (without Shift, which extends the selection) move on to the message
+    /// before or after this one, and Esc goes to the composer.
+    override func doCommand(by selector: Selector) {
+        guard let timelineKey, let key = Self.timelineKeys[selector] else { return super.doCommand(by: selector) }
+        timelineKey(key)
+    }
+
+    private static let timelineKeys: [Selector: MacTimelineKey] = [
+        #selector(scrollPageUp(_:)): .scroll(.pageUp), #selector(pageUp(_:)): .scroll(.pageUp),
+        #selector(scrollPageDown(_:)): .scroll(.pageDown), #selector(pageDown(_:)): .scroll(.pageDown),
+        #selector(scrollToBeginningOfDocument(_:)): .scroll(.top), #selector(moveToBeginningOfDocument(_:)): .scroll(.top),
+        #selector(scrollToEndOfDocument(_:)): .scroll(.bottom), #selector(moveToEndOfDocument(_:)): .scroll(.bottom),
+        #selector(moveUp(_:)): .focus(forward: false), #selector(moveDown(_:)): .focus(forward: true),
+        #selector(cancelOperation(_:)): .escape,
+    ]
 
     /// The message's menu without first selecting the word under the pointer, as a text view would.
     override func rightMouseDown(with event: NSEvent) {

@@ -158,8 +158,8 @@ struct MacFindResult: ViewModifier {
                 .onHover { hovering = $0 }
                 .onTapGesture { timeline.scrollTo(messageID: id) }
                 .environment(\.findResultClick, FindResultClick(timeline: timeline, id: id))
+                // The row's VoiceOver actions start with Show in Conversation, from `findResultClick`.
                 .help("Show in Conversation")
-                .accessibilityAction(named: "Show in Conversation") { timeline.scrollTo(messageID: id) }
         } else {
             content
         }

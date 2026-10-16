@@ -32,8 +32,13 @@ import SwiftUI
 ///   Message actions by message ID in the open chat, as the bubble's menu performs them:
 ///   `reply|edit|star|retry|unsend|encryption|report|select-text <id>`, `react <id> <emoji>`, `pick-emoji <id>` (the
 ///   emoji picker's popover), `hover <id>|off` (shows that bubble's hover toolbar until `hover off`), and `menu <id>`
-///   (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's), and `focus` (logs which view
-///   has the keyboard: the composer, a bubble's text or another). Timeline steps (`MacTimelineDebug`): `capture <name>`
+///   (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's). Keyboard and VoiceOver steps
+///   (`MacKeyboardDebug`): `focus` (logs which view has the keyboard: the composer, a bubble's text or another, the
+///   timeline's focus and focused message, and the focused accessibility element), `press <key> [<key>…]` (key events
+///   handed to the main window in process, then `focus`: tab, shift-tab, up, down, shift-up, command-up, command-down,
+///   page-up, page-down, home, end, return, space, escape, command-r; a menu the keyboard opens is logged instead of
+///   shown), `ax [<text>]` (the window's accessibility elements that say something, or those whose description
+///   contains the text) and `rotors` (each custom rotor and its entries). Timeline steps (`MacTimelineDebug`): `capture <name>`
 ///   (the main window and any other open window as `<name>.png` beside the frames),
 ///   `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as the reader's scroll, positive
 ///   towards older messages), `scroll-to <message id>` (a stored message by its ID), `quote <reference>` (as a click on
@@ -311,10 +316,7 @@ import SwiftUI
                 let size = argument.split(separator: "x").compactMap { Double($0) }
                 if size.count == 2 { mainWindow?.setContentSize(NSSize(width: size[0], height: size[1])) }
             case "menu": logMenu(for: argument, model: model, window: window)
-            case "focus":
-                let responder = mainWindow?.firstResponder
-                let name = responder === MacComposerTour.textView ? "composer" : responder is BubbleTextView ? "bubble text" : responder.map { String(describing: type(of: $0)) } ?? "none"
-                log("focus: \(name)")
+            case "focus", "press", "ax", "rotors": await MacKeyboardDebug.step(words[0], argument, window: mainWindow)
             case "attach", "drop", "paste", "import", "remove-attachment", "copy-image", "save-over": MacAttachmentTour.step(words[0], argument, model: model)
             case "drop-highlight": tour.dropHighlight = argument != "off"
             case "find", "find-close", "find-esc", "starred", "show-result": MacConversationFindTour.step(words[0], argument)

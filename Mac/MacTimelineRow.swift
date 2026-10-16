@@ -2,7 +2,9 @@ import AppKit
 import SwiftUI
 
 /// One message: the day header above it when the day changes, the sender's name in a group, and the bubble. The
-/// bubble carries the message's menu (`MacMessageMenu`), on a right-click and from the hover toolbar beside it.
+/// bubble carries the message's menu (`MacMessageMenu`), on a right-click, from the hover toolbar beside it, and on
+/// Return while it has the timeline's keyboard focus. VoiceOver reads the day header as a heading and the rest as one
+/// element, with the menu's actions.
 struct MacTimelineRow: View {
     let row: TimelineRow
     let isGroup: Bool
@@ -10,6 +12,10 @@ struct MacTimelineRow: View {
     let openAttachment: () -> Void
     @Environment(\.appearance) private var appearance
     @Environment(\.openURL) private var openURL
+    @Environment(\.openQuotedMessage) private var openQuotedMessage
+    @Environment(\.findResultClick) private var findResultClick
+    @Environment(\.timelineRow) private var timelineRow
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
     @State private var choosingEmoji = false
     @State private var selectAllRequests = 0
@@ -26,35 +32,42 @@ struct MacTimelineRow: View {
                     .padding(.horizontal, 10).padding(.vertical, 4)
                     .background(.quaternary, in: Capsule())
                     .padding(.vertical, 10)
+                    .accessibilityAddTraits(.isHeader)
             }
-            if row.startsRun, let author = message.author {
-                Text(ContactName.display(for: author, title: nil))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color(platform: AvatarPalette.color(for: author)))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, 12)
-            }
-            // The pills are the bubble's sibling, not part of it, so they never widen it: the bubble's width comes from
-            // what it holds alone.
-            VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 0) {
-                bubble
-                if !message.reactions.isEmpty {
-                    // Into the bubble's 6 pt bottom padding only, clear of the footer, with 2 pt kept below so the pills
-                    // stay clear of the next message, as on the iPhone.
-                    MacReactionRow(reactions: message.reactions, react: message.canReact ? { react($0) } : nil)
-                        .padding(.horizontal, 10)
-                        .padding(.top, -3)
-                        .padding(.bottom, 2)
+            VStack(spacing: 2) {
+                if row.startsRun, let author = message.author {
+                    Text(ContactName.display(for: author, title: nil))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color(platform: AvatarPalette.color(for: author)))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.leading, 12)
                 }
+                // The pills are the bubble's sibling, not part of it, so they never widen it: the bubble's width comes
+                // from what it holds alone.
+                VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 0) {
+                    bubble
+                    if !message.reactions.isEmpty {
+                        // Into the bubble's 6 pt bottom padding only, clear of the footer, with 2 pt kept below so the
+                        // pills stay clear of the next message, as on the iPhone.
+                        MacReactionRow(reactions: message.reactions, react: message.canReact ? { react($0) } : nil)
+                            .padding(.horizontal, 10)
+                            .padding(.top, -3)
+                            .padding(.bottom, 2)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: message.isOutgoing ? .trailing : .leading)
             }
-            .frame(maxWidth: .infinity, alignment: message.isOutgoing ? .trailing : .leading)
+            // One element: the description reads the author, the text, the file, the quote, the time, the status and the
+            // reactions, so none of the parts (the bubble's text view among them) reads again.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(message.accessibilityDescription)
+            .accessibilityActions { accessibilityActions }
+            .accessibilityAction(.showMenu) { timelineRow.timeline?.openMenu(for: message.id) }
+            .modifier(MacRotorEntry(context: timelineRow))
         }
         .padding(.top, row.startsRun && row.dateHeader == nil ? 8 : 2)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(message.accessibilityDescription)
-        .accessibilityActions { accessibilityActions }
         #if DEBUG
         .onChange(of: MacDebugHooks.tour.messageRequest) { _, request in
             guard let request, request.messageID == message.id else { return }
@@ -72,6 +85,8 @@ struct MacTimelineRow: View {
             MacBubble(message: message, accent: appearance.accent, openAttachment: openAttachment, selectAllRequests: selectAllRequests,
                       textMenu: textMenu, cardMenu: { menu(link: $0) })
                 .contextMenu { menu(link: nil) }
+                .overlay { MacMessageFocusRing(cornerRadius: 16) }
+                .background { MacMessageKeyboardMenu(menu: keyboardMenu) }
                 .popover(isPresented: $choosingEmoji, arrowEdge: .top) {
                     MacEmojiPicker(message: message) { emoji in
                         choosingEmoji = false
@@ -91,9 +106,13 @@ struct MacTimelineRow: View {
     }
 
     /// The menu's actions, then the file's (open it, then the Mac's copy, save and share), one per link and one per quick
-    /// reaction, as on the iPhone.
+    /// reaction, as on the iPhone; the quoted message after the links. A search or starred result shows itself in the
+    /// conversation first.
     @ViewBuilder private var accessibilityActions: some View {
         let menu = MacMessageMenu(message: message)
+        if findResultClick.isActive {
+            Button("Show in Conversation") { findResultClick() }
+        }
         ForEach(menu.items, id: \.kind) { item in
             Button(MacMessageMenu.title(for: item)) { perform(item.kind, link: nil) }
         }
@@ -108,6 +127,9 @@ struct MacTimelineRow: View {
         ForEach(Array(message.links.enumerated()), id: \.offset) { _, link in
             Button(MessageActionMenu.linkAccessibilityTitle(for: link)) { openURL(link.url) }
         }
+        if let showQuote {
+            Button(MacKeyboardMenuItems.showQuoteTitle, action: showQuote)
+        }
         ForEach(MessageActionMenu.reactionToggles(for: message), id: \.emoji) { toggle in
             Button(toggle.title) { react(toggle.emoji) }
         }
@@ -115,6 +137,19 @@ struct MacTimelineRow: View {
 
     private func textMenu(_ link: URL?) -> NSMenu {
         MacMessageNSMenu.make(MacMessageMenu(message: message, link: link), perform: perform, react: react, moreReactions: { choosingEmoji = true })
+    }
+
+    /// The bubble's menu as the keyboard opens it, with what a click on the bubble would do.
+    private func keyboardMenu() -> NSMenu {
+        let menu = textMenu(nil)
+        MacKeyboardMenuItems.add(to: menu, message: message, openAttachment: openAttachment, openLink: { openURL($0) }, showQuote: showQuote)
+        return menu
+    }
+
+    /// Scrolls to the message the reply quotes, as a click on the quote does.
+    private var showQuote: (() -> Void)? {
+        guard !message.showsPlaceholder, let reference = message.reply?.messageID else { return nil }
+        return { [openQuotedMessage] in openQuotedMessage(reference) }
     }
 
     /// Beside the bubble in the gutter, on its outer side, centred on it; where the gutter is too narrow, over the
@@ -139,7 +174,7 @@ struct MacTimelineRow: View {
             .alignmentGuide(.top) { $0.height / 2 }
             .opacity(shown ? 1 : 0)
             .allowsHitTesting(shown)
-            .animation(.easeOut(duration: 0.12), value: shown)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: shown)
     }
 
     private func menu(link: URL?) -> some View {
@@ -152,6 +187,19 @@ struct MacTimelineRow: View {
     }
 
     private func react(_ emoji: String) { handlers.react(emoji, message) }
+}
+
+/// Makes the message's element an entry of the timeline's rotors (`MacTimelineRotors`).
+private struct MacRotorEntry: ViewModifier {
+    let context: MacTimelineRowContext
+
+    func body(content: Content) -> some View {
+        if let namespace = context.rotors {
+            content.accessibilityRotorEntry(id: context.id, in: namespace)
+        } else {
+            content
+        }
+    }
 }
 
 /// Caps the bubble at `min(560, 0.84 × width, width − 32)`, letting shorter bubbles hug
@@ -257,6 +305,8 @@ struct MacBubble<CardMenu: View>: View {
                     }
                 }
                 .buttonStyle(.plain)
+                // Not a stop of its own in the window's keyboard focus: the keyboard opens the file from the message's menu.
+                .focusable(false)
                 .modifier(MacAttachmentDragSource(attachment: attachment))
                 .help(attachment.localURL == nil ? attachment.downloadDetail : "Open in Quick Look")
             }
@@ -315,6 +365,8 @@ struct MacReactionRow: View {
                         if let react {
                             Button { react(reaction.emoji) } label: { pill(reaction.emoji, count: reaction.count > 1 ? "\(reaction.count)" : nil) }
                                 .buttonStyle(.plain)
+                                // The keyboard reacts from the message's menu; a stop per pill would crowd the focus order.
+                                .focusable(false)
                                 .help(MessageActionMenu.reactionTitle(reaction.emoji, selected: reaction.isSelected))
                                 .accessibilityLabel(reaction.accessibilityDescription)
                         } else {

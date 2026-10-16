@@ -96,10 +96,13 @@ struct MacChatCommands {
     func neighbour(forward: Bool) -> String? { ChatListOrder.neighbour(of: selection, in: chats.map(\.id), forward: forward) }
 }
 
-/// The open conversation's last-message commands, for the Message menu. They act as the bubble's menu does on that
-/// message: reply and edit through the composer, star and reactions through the conversation.
+/// The open conversation's message commands, for the Message menu: on the message with the timeline's keyboard focus,
+/// else on the last messages. They act as the bubble's menu does on that message: reply and edit through the composer,
+/// star and reactions through the conversation.
 struct MacMessageCommands {
     let targets: LastMessageTargets
+    /// The targets are the focused message, not the last ones; the items say so.
+    let isFocused: Bool
     /// A blocked chat has no composer and sends nothing, so it neither replies, edits nor reacts.
     let isBlocked: Bool
     let handlers: MacMessageHandlers
@@ -152,9 +155,10 @@ struct MacChatMenu: View {
     }
 }
 
-/// The Message menu: the composer's and the bubble's actions on the conversation's last message (`LastMessageTargets`),
-/// each disabled when no loaded message offers it. ⌘R replies, as Mail's Reply does; ⇧⌘E edits, as plain ⌘E is Use
-/// Selection for Find (Up-arrow in an empty composer edits too).
+/// The Message menu: the composer's and the bubble's actions on the message with the timeline's keyboard focus, else
+/// on the conversation's last message (`LastMessageTargets`), each disabled when no loaded message offers it; the items
+/// name the last message only when that is what they act on. ⌘R replies, as Mail's Reply does; ⇧⌘E edits, as plain ⌘E
+/// is Use Selection for Find (Up-arrow in an empty composer edits too).
 struct MacMessageMenuCommands: View {
     let focused: MacMessageCommands?
 
@@ -167,15 +171,16 @@ struct MacMessageMenuCommands: View {
 
     var body: some View {
         let commands = commands
-        Button("Reply to Last Message", systemImage: "arrowshape.turn.up.left") { act(.reply, on: commands?.reply) }
+        let focused = commands?.isFocused == true
+        Button(focused ? "Reply" : "Reply to Last Message", systemImage: "arrowshape.turn.up.left") { act(.reply, on: commands?.reply) }
             .keyboardShortcut("r")
             .disabled(commands?.reply == nil)
-        Button("Edit Last Message", systemImage: "pencil") { act(.edit, on: commands?.edit) }
+        Button(focused ? "Edit" : "Edit Last Message", systemImage: "pencil") { act(.edit, on: commands?.edit) }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(commands?.edit == nil)
         // `.disabled` on a Menu does not reach its menu bar item, so without a target it is a plain disabled item.
         if let message = commands?.react {
-            Menu("React to Last Message", systemImage: "face.smiling") {
+            Menu(focused ? "React" : "React to Last Message", systemImage: "face.smiling") {
                 ForEach(MacMessageMenu(message: message).reactions, id: \.emoji) { reaction in
                     Toggle(isOn: Binding(get: { reaction.isSelected }, set: { _ in commands?.handlers.react(reaction.emoji, message) })) {
                         Text(Self.reactionLabel(reaction.emoji))
@@ -184,12 +189,12 @@ struct MacMessageMenuCommands: View {
                 }
             }
         } else {
-            Button("React to Last Message", systemImage: "face.smiling") {}
+            Button(focused ? "React" : "React to Last Message", systemImage: "face.smiling") {}
                 .disabled(true)
         }
         Divider()
         let starred = commands?.star?.isStarred == true
-        Button(starred ? "Unstar Last Message" : "Star Last Message", systemImage: starred ? "star.slash" : "star") { act(.star, on: commands?.star) }
+        Button((starred ? "Unstar" : "Star") + (focused ? "" : " Last Message"), systemImage: starred ? "star.slash" : "star") { act(.star, on: commands?.star) }
             .disabled(commands?.star == nil)
     }
 

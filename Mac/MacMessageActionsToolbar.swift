@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// React, Reply and More beside a bubble, on its outer side, while the pointer is over the message. It floats in the
-/// gutter as an overlay, so showing it never moves anything. VoiceOver skips it: the row's actions hold the same.
+/// gutter as an overlay, so showing it never moves anything. VoiceOver and the keyboard skip it: the row's actions and
+/// the menu Return opens hold the same.
 struct MacMessageToolbar<MenuContent: View>: View {
     let message: TimelineMessage
     let react: () -> Void
@@ -23,6 +24,7 @@ struct MacMessageToolbar<MenuContent: View>: View {
             .menuStyle(.button)
             .menuIndicator(.hidden)
             .buttonStyle(.plain)
+            .focusable(false)
             .frame(width: Self.side, height: Self.side)
             .help("More")
         }
@@ -39,6 +41,7 @@ struct MacMessageToolbar<MenuContent: View>: View {
             Image(systemName: symbol).frame(width: Self.side, height: Self.side).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focusable(false)
         .help(help)
         .accessibilityLabel(title)
     }

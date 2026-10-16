@@ -3,8 +3,12 @@ import SwiftUI
 
 /// The open chat's timeline: a SwiftUI `ScrollView` over a `LazyVStack` of rows, positioned by
 /// `MacTimelineController`. It opens at the newest message in its first frame, keeps the reader's row through updates
-/// and resizes, pages in older history near the top, and has a jump-to-newest button, a floating day chip and the
-/// scrolling keys (Page Up and Down, Home and End, ⌘↑ and ⌘↓) while it has keyboard focus.
+/// and resizes, pages in older history near the top, and has a jump-to-newest button and a floating day chip.
+///
+/// It is one stop in the window's keyboard focus, between the sidebar (and the find bar) and the composer. With focus,
+/// the scrolling keys work (Page Up and Down, Home and End, ⌘↑ and ⌘↓), ↑ and ↓ move a focus ring from message to
+/// message, and Return or Space opens the focused message's menu; the Message menu acts on it too. VoiceOver reads
+/// each message as one element and offers rotors over the messages, their links and the starred ones.
 struct MacTimeline<Row: View>: View {
     let controller: MacTimelineController
     /// One message's row.
@@ -12,12 +16,14 @@ struct MacTimeline<Row: View>: View {
     /// The reader's row, written by SwiftUI as the reader scrolls and never by code: a scroll-to-row is ignored while
     /// the bound position holds a row code set.
     @State private var topID: String?
+    @FocusState private var focused: Bool
+    @Namespace private var rotors
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 // Equal while it shows the same timeline: the rows follow the controller, not this view's updates.
-                MacTimelineRows(controller: controller, row: row).equatable()
+                MacTimelineRows(controller: controller, rotors: rotors, row: row).equatable()
             }
             .coordinateSpace(.named(MacTimelineLayout.space))
             .modifier(ReaderPosition(id: $topID))
@@ -28,8 +34,11 @@ struct MacTimeline<Row: View>: View {
             .onScrollPhaseChange { _, phase in controller.phaseChanged(phase) }
             .onAppear { controller.layout.proxy = proxy }
             .focusable()
+            .focused($focused)
+            // The focused message carries the ring; the scroll view itself would draw one around the whole timeline.
             .focusEffectDisabled()
-            .onKeyPress(keys: [.pageUp, .pageDown, .home, .end, .upArrow, .downArrow]) { press in
+            .onKeyPress(keys: [.pageUp, .pageDown, .home, .end, .upArrow, .downArrow, .return, .space]) { press in
+                let plain = press.modifiers.isDisjoint(with: [.command, .shift, .option, .control])
                 switch press.key {
                 case .pageUp: controller.scroll(.pageUp)
                 case .pageDown: controller.scroll(.pageDown)
@@ -37,10 +46,19 @@ struct MacTimeline<Row: View>: View {
                 case .end: controller.scroll(.bottom)
                 case .upArrow where press.modifiers == .command: controller.scroll(.top)
                 case .downArrow where press.modifiers == .command: controller.scroll(.bottom)
+                case .upArrow where plain: controller.moveFocus(forward: false)
+                case .downArrow where plain: controller.moveFocus(forward: true)
+                case .return where plain, .space where plain: return controller.openFocusedMenu() ? .handled : .ignored
                 default: return .ignored
                 }
                 return .handled
             }
+            .onChange(of: focused) { _, focused in
+                controller.keyboardFocusChanged(focused, byKey: NSApp.currentEvent?.type == .keyDown)
+            }
+            .onChange(of: controller.focusRequests) { _, _ in focused = true }
+            .accessibilityLabel("Messages")
+            .modifier(MacTimelineRotors(controller: controller, namespace: rotors))
             .overlay(alignment: .top) { MacDayChip(controller: controller) }
             .overlay(alignment: .bottomTrailing) { MacJumpToNewest(controller: controller) }
         }
@@ -69,6 +87,7 @@ private struct ReaderPosition: ViewModifier {
 /// Equal for the same controller: the row builder reads what it needs when it runs, so a newer copy of it changes nothing.
 private struct MacTimelineRows<Row: View>: View, Equatable {
     let controller: MacTimelineController
+    let rotors: Namespace.ID
     let row: (TimelineRow) -> Row
 
     nonisolated static func == (left: Self, right: Self) -> Bool { left.controller === right.controller }
@@ -81,7 +100,9 @@ private struct MacTimelineRows<Row: View>: View, Equatable {
                     switch item {
                     case .loadingEarlier: MacLoadingEarlierRow()
                     case .message(let message):
-                        row(message).background { MacTimelineHighlight(controller: controller, id: message.message.id) }
+                        row(message)
+                            .background { MacTimelineHighlight(controller: controller, id: message.message.id) }
+                            .environment(\.timelineRow, MacTimelineRowContext(timeline: controller, id: message.message.id, rotors: rotors))
                     case .typing(let typing): MacTypingRow(typing: typing)
                     case .end: Color.clear.frame(height: MacTimelineController.topMargin)
                     }
@@ -173,6 +194,7 @@ private struct MacDayChip: View {
 /// Back to the newest message, while the reader is well above it.
 private struct MacJumpToNewest: View {
     let controller: MacTimelineController
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if controller.showsJumpToNewest {
@@ -183,7 +205,7 @@ private struct MacJumpToNewest: View {
             .accessibilityLabel("Scroll to Newest Message")
             .help("Scroll to the newest message")
             .padding(.trailing, 12).padding(.bottom, 8)
-            .transition(.opacity.combined(with: .scale(scale: 0.8)))
+            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.8)))
         }
     }
 }
