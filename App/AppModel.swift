@@ -2690,8 +2690,10 @@ final class AppModel {
     private func recordJoinBoundary(_ room: String, token: UUID) async {
         guard let boundary = joinBoundaries[room], boundary.token == token, let store else { return }
         joinBoundaries[room] = nil
-        do { try await store.recordJoinedRoom(accountID: accountID, room: room, historyThrough: boundary.historyThrough) }
-        catch { Self.syncLog.error("room join boundary not saved: \(ConnectionSetup.detail(error), privacy: .public)") }
+        do {
+            try await store.recordJoinedRoom(accountID: accountID, room: room, historyThrough: boundary.historyThrough)
+            Self.syncLog.notice("room join boundary recorded\(boundary.historyThrough == .distantPast ? " (empty archive)" : "", privacy: .public)")
+        } catch { Self.syncLog.error("room join boundary not saved: \(ConnectionSetup.detail(error), privacy: .public)") }
     }
 
     /// Group devices from the store first, then from the server. The pill follows the cached devices; joining only
