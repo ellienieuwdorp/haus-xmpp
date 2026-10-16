@@ -24,7 +24,7 @@ actor FakePosting: NotificationPosting {
 
     func add(_ request: PlannedNotification) async throws {
         // Like the UNUserNotificationCenter completion-handler bridge: a hung add ignores cancellation.
-        if hang { await ignoringCancellation(for: .seconds(2)) }
+        if hang { await ignoringCancellation(for: .seconds(10)) }
         if preparation > .zero { await ignoringCancellation(for: preparation) }
         if systemAdd > .zero { await ignoringCancellation(for: systemAdd) }
         if failAtIndex == added.count { throw Failure.rejected }
@@ -112,8 +112,9 @@ struct NotificationPresenterTests {
                 try await NotificationPresenter(posting: posting, addTimeout: .milliseconds(50)).present(store: store, accountID: account, progress: slow)
                 Issue.record("A hanging add must not settle")
             } catch { #expect(NotificationFallbackReason(error) == .postFailed) }
-            // The timeout returns at its limit although the hung add ignores cancellation.
-            #expect(clock.now - start < .seconds(1))
+            // The timeout returns at its limit although the hung add ignores cancellation for 10 s; the bound leaves
+            // room for a busy machine that stalls the whole run for seconds.
+            #expect(clock.now - start < .seconds(5))
             #expect(!slow.isCommitted)
             // The retry reposts the same identifiers: the one already added is replaced, not duplicated.
             await posting.configure()
@@ -365,11 +366,12 @@ struct NotificationRunCoordinatorTests {
 struct NotificationTimeoutTests {
     @Test func cancellingTheCallerReturnsWithoutWaitingForTheOperation() async throws {
         let clock = ContinuousClock(), start = clock.now
-        let task = Task { try await withTimeout(.seconds(5)) { await ignoringCancellation(for: .seconds(2)); return 1 } }
+        let task = Task { try await withTimeout(.seconds(30)) { await ignoringCancellation(for: .seconds(20)); return 1 } }
         try await Task.sleep(for: .milliseconds(50))
         task.cancel()
         await #expect(throws: CancellationError.self) { try await task.value }
-        #expect(clock.now - start < .seconds(1))
+        // Far below both the operation and the timeout, with room for a run stalled for seconds.
+        #expect(clock.now - start < .seconds(5))
     }
 }
 
@@ -449,19 +451,21 @@ struct NotificationBadgeAndReactionDeliveryTests {
     @Test func aSlowDonationDoesNotShortenTheSystemAddsLimit() async throws {
         try await withStore { store in
             try await receive(store, at: 1)
-            // Scaled down: a 240 ms donation (allowance 250 ms) followed by a 200 ms system add, with a 300 ms add limit.
-            let posting = FakePosting(allowance: .milliseconds(250))
-            await posting.configure(preparation: .milliseconds(240), systemAdd: .milliseconds(200))
+            // A 2.5 s donation (allowance 4 s) followed by a 0.5 s system add, with a 1.5 s add limit: 3 s of work within
+            // 5.5 s with the allowance, against 1.5 s without it. Each side has well over a second of slack, so a busy
+            // machine that stalls the run doesn't decide the outcome.
+            let posting = FakePosting(allowance: .seconds(4))
+            await posting.configure(preparation: .milliseconds(2500), systemAdd: .milliseconds(500))
             let progress = NotificationRunProgress()
-            try await NotificationPresenter(posting: posting, addTimeout: .milliseconds(300)).present(store: store, accountID: account, progress: progress)
+            try await NotificationPresenter(posting: posting, addTimeout: .milliseconds(1500)).present(store: store, accountID: account, progress: progress)
             #expect(progress.isCommitted && progress.report.posted == 1)
             // Without the allowance the same timings fall back, which is what the donation used to cause.
             try await receive(store, at: 2)
             let unallowed = FakePosting()
-            await unallowed.configure(preparation: .milliseconds(240), systemAdd: .milliseconds(200))
+            await unallowed.configure(preparation: .milliseconds(2500), systemAdd: .milliseconds(500))
             let failed = NotificationRunProgress()
             do {
-                try await NotificationPresenter(posting: unallowed, addTimeout: .milliseconds(300)).present(store: store, accountID: account, progress: failed)
+                try await NotificationPresenter(posting: unallowed, addTimeout: .milliseconds(1500)).present(store: store, accountID: account, progress: failed)
                 Issue.record("the add limit alone must not cover the donation")
             } catch { #expect(NotificationFallbackReason(error) == .postFailed) }
         }
