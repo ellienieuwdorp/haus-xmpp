@@ -129,16 +129,16 @@ struct ChatNotificationRow: View {
     }
 }
 
-/// The details screens' 30 pt tinted tile. The glyph keeps the body size of the default text setting: a glyph
-/// that followed Dynamic Type drew outside the fixed tile at accessibility sizes.
+/// The details screens' tinted tile, the size of `SettingsIconTile`. The glyph keeps the body size of the default text
+/// setting: a glyph that followed Dynamic Type drew outside the fixed tile at accessibility sizes.
 struct DetailsIconTile: View {
     let systemName: String
 
     var body: some View {
         Image(systemName: systemName)
-            .font(.system(size: 17))
+            .font(.system(size: IconTileMetrics.glyph + 2))
             .foregroundStyle(.white)
-            .frame(width: 30, height: 30)
-            .background(.tint, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .frame(width: IconTileMetrics.side, height: IconTileMetrics.side)
+            .background(.tint, in: RoundedRectangle(cornerRadius: IconTileMetrics.radius, style: .continuous))
     }
 }

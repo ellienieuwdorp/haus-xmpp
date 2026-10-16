@@ -3,6 +3,7 @@ import AppKit
 import Security
 import SQLite3
 import MessagingCore
+import OMEMO
 import SwiftUI
 
 /// Launch arguments for checking the Mac app without driving its UI: captures of its own windows, a timed quit, the
@@ -19,8 +20,8 @@ import SwiftUI
 ///   logged instead.
 /// - `-haus-tour "<step>; …"`: plays the steps once the main window exists; with `-haus-capture-frames`, the frames start
 ///   then and run while the steps play, for a recording. Steps: `wait <seconds>`, `select <chat>`, `deselect`,
-///   `inspector on|off`, `settings general|appearance|about`, `close-settings`, `size <width>x<height>` (as
-///   `-haus-window-size`, which applies only after a tour), and for the open chat's composer: `type <text>` (inserted at
+///   `inspector on|off`, `inspector-page details|encryption`, `settings general|appearance|about`, `close-settings`,
+///   `size <width>x<height>` (as `-haus-window-size`, which applies only after a tour), and for the open chat's composer: `type <text>` (inserted at
 ///   the caret as typing would), `key return|shift-return|option-return|command-return|escape|up`, `reply newest` (the
 ///   newest received message), `edit newest` (what Up-arrow would edit), `attach photo|file|scan|<path in the
 ///   container>` (handed to the composer as a drop would), `drop photo|slow-photo|file|scan` (item providers dropped on
@@ -32,13 +33,14 @@ import SwiftUI
 ///   Message actions by message ID in the open chat, as the bubble's menu performs them:
 ///   `reply|edit|star|retry|unsend|encryption|report|select-text <id>`, `react <id> <emoji>`, `pick-emoji <id>` (the
 ///   emoji picker's popover), `hover <id>|off` (shows that bubble's hover toolbar until `hover off`), and `menu <id>`
-///   (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's). Keyboard and VoiceOver steps
-///   (`MacKeyboardDebug`): `focus` (logs which view has the keyboard: the composer, a bubble's text or another, the
-///   timeline's focus and focused message, and the focused accessibility element), `press <key> [<key>…]` (key events
-///   handed to the main window in process, then `focus`: tab, shift-tab, up, down, shift-up, command-up, command-down,
-///   page-up, page-down, home, end, return, space, escape, command-r; a menu the keyboard opens is logged instead of
-///   shown), `ax [<text>]` (the window's accessibility elements that say something, or those whose description
-///   contains the text) and `rotors` (each custom rotor and its entries). Timeline steps (`MacTimelineDebug`): `capture <name>`
+///   (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's), `minimums` (logs the minimum
+///   size of the window's content and of each hosting view in it, the split view's columns among them). Keyboard and
+///   VoiceOver steps (`MacKeyboardDebug`): `focus` (logs which view has the keyboard: the composer, a bubble's text or
+///   another, the timeline's focus and focused message, and the focused accessibility element), `press <key> [<key>…]`
+///   (key events handed to the main window in process, then `focus`: tab, shift-tab, up, down, shift-up, command-up,
+///   command-down, page-up, page-down, home, end, return, space, escape, command-r; a menu the keyboard opens is logged
+///   instead of shown), `ax [<text>]` (the window's accessibility elements that say something, or those whose
+///   description contains the text) and `rotors` (each custom rotor and its entries). Timeline steps (`MacTimelineDebug`): `capture <name>`
 ///   (the main window and any other open window as `<name>.png` beside the frames),
 ///   `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as the reader's scroll, positive
 ///   towards older messages), `scroll-to <message id>` (a stored message by its ID), `quote <reference>` (as a click on
@@ -67,9 +69,14 @@ import SwiftUI
 ///   prepend as it does during a scroll gesture, and the controller's hold does all the work (`MacTimelineDebug`).
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-window-size <width>x<height>`: the main window's content size in points, for captures at a set size.
-/// - `-haus-select <chat>`, `-haus-inspector`, `-haus-sheet account|new-chat|own-devices`,
-///   `-haus-settings general|appearance|about`, `-haus-close-window <seconds>`: what the window shows.
+/// - `-haus-select <chat>`, `-haus-inspector`, `-haus-inspector-page details|encryption`,
+///   `-haus-sheet account|new-chat|own-devices|fingerprint|backup|group-join`, `-haus-settings general|appearance|about`,
+///   `-haus-close-window <seconds>`:
+///   what the window shows. The inspector's `encryption` page is Devices & Encryption for a chat, Group details for a
+///   group.
 /// - `-haus-block <chat>`: blocks a sample conversation (sample data only), for captures of a blocked chat.
+/// - `-haus-notification-settings`: Settings shows its Notifications section without a signed-in account, for captures
+///   with sample data.
 /// - `-haus-self-check`: the App Group container, the store in it, and a data-protection Keychain round trip.
 /// - `-haus-lab-sign-in`: signs in with `HAUS_LAB_USERNAME` and `HAUS_LAB_PASSWORD` (a lab account; pass
 ///   `-lab-ui-test` and `HAUS_LAB_CA_DER` for the lab's certificate authority, as the iPhone's lab tests do).
@@ -229,6 +236,7 @@ import SwiftUI
                 log("selected \(chat): \(model.messagesLoadedFor == chat ? "\(model.messages.count) messages" : "not loaded")")
             }
             if has("-haus-inspector") { window.inspectorShown = true }
+            if let page = value(after: "-haus-inspector-page") { showInspectorPage(page, window: window, model: model) }
             switch value(after: "-haus-sheet") {
             case "account": window.showingAccount = true
             case "new-chat": window.showingNewChat = true
@@ -286,6 +294,13 @@ import SwiftUI
 
     static let tour = Tour()
 
+    /// The open chat's details (`details`) or its devices and encryption page (`encryption`, group details for a group),
+    /// on the inspector's own path, as a route from a message's menu would open them.
+    private static func showInspectorPage(_ page: String, window: MacWindowState, model: AppModel) {
+        guard let chatID = window.selection else { return }
+        window.inspectorPath = page == "encryption" ? [model.isGroup(chatID) ? .groupDetails(chatID) : .encryption(chatID)] : []
+    }
+
     /// `-haus-tour`: frames from the moment the main window exists, while the steps change what it shows.
     private static func runTour(_ script: String, window: MacWindowState, model: AppModel) async {
         var frames: Task<Void, Never>?
@@ -301,6 +316,7 @@ import SwiftUI
             case "select": window.selection = argument
             case "deselect": window.selection = nil
             case "inspector": window.inspectorShown = argument != "off"
+            case "inspector-page": showInspectorPage(argument, window: window, model: model)
             case "settings":
                 tour.settingsPane = MacSettingsView.Pane(rawValue: argument) ?? .general
                 if otherWindows.isEmpty { openSettings?() }
@@ -320,6 +336,7 @@ import SwiftUI
             case "attach", "drop", "paste", "import", "remove-attachment", "copy-image", "save-over": MacAttachmentTour.step(words[0], argument, model: model)
             case "drop-highlight": tour.dropHighlight = argument != "off"
             case "find", "find-close", "find-esc", "starred", "show-result": MacConversationFindTour.step(words[0], argument)
+            case "minimums": if let window = mainWindow { logMinimums(window) }
             case "snap":
                 guard let directory = value(after: "-haus-capture"), let window = mainWindow, let png = render(window) else { log("tour snap: needs -haus-capture <dir>"); break }
                 emit(png, directory: directory, file: slug(argument) + ".png")
@@ -912,6 +929,24 @@ import SwiftUI
         for subview in view.subviews { dumpViews(subview, depth: depth + 1) }
     }
 
+    /// The window's content minimum and each SwiftUI hosting view's minimum width and height, as the split view's
+    /// columns read them: a column whose minimum follows its own width makes AppKit lay the window out again and again.
+    private static func logMinimums(_ window: NSWindow) {
+        log("minimums: window content \(window.contentLayoutRect.size), content min \(window.contentMinSize)")
+        func walk(_ view: NSView) {
+            let minimums = view.constraints.filter { $0.firstItem === view && ($0.identifier ?? "").hasPrefix("NSHostingView.min") }
+            if !minimums.isEmpty {
+                let name = String(describing: type(of: view))
+                let kind = name.contains("SidebarStyleContext") ? "sidebar column" : name.contains("ColumnView") ? "detail column"
+                    : name.contains("NavigationPaneModifier") ? "split pane" : "hosting view"
+                let values = minimums.map { "\($0.identifier?.replacingOccurrences(of: "NSHostingView.", with: "") ?? "") \(Int($0.constant))" }
+                log("minimums: \(kind) \(Int(view.frame.width))x\(Int(view.frame.height)) \(values.joined(separator: ", "))")
+            }
+            view.subviews.forEach(walk)
+        }
+        if let root = window.contentView?.superview { walk(root) }
+    }
+
     private static func dumpMenus() {
         func walk(_ menu: NSMenu, depth: Int) {
             for item in menu.items where !item.isSeparatorItem {
@@ -949,16 +984,54 @@ import SwiftUI
 /// Opens the Settings window when `-haus-settings` asks for it; Settings is opened through the environment, so this
 /// sits on the main window's content.
 struct MacDebugPresentation: ViewModifier {
+    let model: AppModel
     let window: MacWindowState
     @Environment(\.openSettings) private var openSettings
+    /// `-haus-sheet fingerprint`: a sample device's fingerprint comparison, as a device row opens it.
+    @State private var fingerprint: EncryptionDevice?
+    /// `-haus-sheet backup`: a sample previous version's backup, as Settings opens it when there is one.
+    @State private var backup: PreUpgradeSnapshot.Manifest?
+    /// `-haus-sheet group-join`: the group join form as a group link in a message opens it.
+    @State private var joiningGroup = false
 
     func body(content: Content) -> some View {
         content.task {
             MacDebugHooks.openSettings = openSettings
+            switch MacDebugHooks.value(after: "-haus-sheet") {
+            case "fingerprint": fingerprint = OwnDeviceReview.sampleDevices(account: model.accountID).last
+            case "backup": backup = Self.sampleBackup
+            case "group-join": joiningGroup = true
+            default: break
+            }
             guard MacDebugHooks.has("-haus-settings") else { return }
             try? await Task.sleep(for: .milliseconds(300))
             openSettings()
         }
+        .sheet(item: $fingerprint) { device in
+            DeviceFingerprintSheet(model: model, chatID: DemoSamples.alex, device: device, name: "Alex", allowsMaintenance: true) { _ in fingerprint = nil }
+                .themedRoot()
+        }
+        .sheet(isPresented: Binding(get: { backup != nil }, set: { if !$0 { backup = nil } })) {
+            if let backup { PreviousVersionBackupView(model: model, backup: backup).themedRoot() }
+        }
+        .sheet(isPresented: $joiningGroup) {
+            NavigationStack {
+                GroupJoinView(model: model, room: "trail@rooms.preview.local") { _ in joiningGroup = false }
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { joiningGroup = false } } }
+            }
+            .frame(minWidth: 420, idealWidth: 460, minHeight: 360, idealHeight: 420)
+            .themedRoot()
+        }
+    }
+
+    /// Taken a day ago, so the footer reads as for a fresh backup.
+    private static var sampleBackup: PreUpgradeSnapshot.Manifest? {
+        let json = """
+        {"id": "sample", "takenAt": \(Date().addingTimeInterval(-86_400).timeIntervalSinceReferenceDate),
+         "database": {"schemaVersion": 1, "rowCounts": {}}, "installation": "sample", "folders": [],
+         "notificationsDisabled": false, "accountRecord": false, "pushRegistrations": []}
+        """
+        return try? JSONDecoder().decode(PreUpgradeSnapshot.Manifest.self, from: Data(json.utf8))
     }
 }
 #endif

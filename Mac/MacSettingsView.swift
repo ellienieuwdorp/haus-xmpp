@@ -10,31 +10,35 @@ struct MacSettingsView: View {
     @State private var showingConnection = false
 
     var body: some View {
+        // Each pane has its own height, as Mac settings windows resize between panes: the long General pane scrolls,
+        // the short ones end with their content.
         TabView(selection: $pane) {
             Tab("General", systemImage: "gearshape", value: .general) {
                 NavigationStack {
                     SettingsView(model: model, showingConnection: $showingConnection)
                 }
                 .labelStyle(.listRow)
+                .frame(width: 560, height: 640)
             }
             Tab("Appearance", systemImage: "paintpalette", value: .appearance) {
                 NavigationStack {
                     AppearanceView()
                 }
                 .labelStyle(.listRow)
+                .frame(width: 560, height: 400)
             }
             Tab("About", systemImage: "info.circle", value: .about) {
                 NavigationStack {
                     AboutView()
                 }
                 .labelStyle(.listRow)
+                .frame(width: 560, height: 520)
             }
         }
         .toggleStyle(.switch)
-        .frame(width: 560, height: 620)
         .sheet(isPresented: $showingConnection) {
             SignInView(model: model)
-                .frame(minWidth: 460, idealWidth: 480, minHeight: 560, idealHeight: 620)
+                .frame(minWidth: 440, idealWidth: 460, minHeight: 460, idealHeight: 520)
                 .themedRoot()
         }
         #if DEBUG

@@ -163,7 +163,81 @@ extension View {
         listStyle(.inset)
         #endif
     }
+
+    /// `.buttonStyle(.glassProminent)`. On the Mac, the bordered prominent push button: glass is for controls that
+    /// float over content there, and a form's or sheet's main action is a push button.
+    func prominentActionStyle() -> some View {
+        #if os(iOS)
+        buttonStyle(.glassProminent)
+        #else
+        buttonStyle(.borderedProminent)
+        #endif
+    }
+
+    /// `.buttonStyle(.glass)`; the Mac's bordered push button, beside a `prominentActionStyle()` one.
+    func secondaryActionStyle() -> some View {
+        #if os(iOS)
+        buttonStyle(.glass)
+        #else
+        buttonStyle(.bordered)
+        #endif
+    }
+
+    /// A list row that is a button (an icon tile and a title) stays a row on the Mac, as a tapped row is on the
+    /// iPhone, instead of becoming a bordered push button the width of its title. Nothing changes on iOS.
+    func listRowButton() -> some View {
+        #if os(iOS)
+        self
+        #else
+        buttonStyle(ListRowButtonStyle())
+        #endif
+    }
+
+    /// `.labelStyle(.iconOnly)` for a toolbar's Close: the iPhone's glyph-only bar button, and on the Mac, where a
+    /// sheet's buttons sit at its bottom edge as push buttons, the word.
+    func closeButtonLabel() -> some View {
+        #if os(iOS)
+        labelStyle(.iconOnly)
+        #else
+        labelStyle(.titleOnly)
+        #endif
+    }
 }
+
+/// The iPhone's grouped `List`; on the Mac a grouped `Form`, whose rows, controls and section footers (wrapped in full,
+/// where a Mac list cuts them to one line) are those of a Mac settings pane or inspector.
+struct GroupedList<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        #if os(iOS)
+        List { content }
+        #else
+        Form { content }.formStyle(.grouped)
+        #endif
+    }
+}
+
+#if os(macOS)
+/// `listRowButton()`: the label across the row's width, the whole row the target, dimmed while pressed or disabled.
+private struct ListRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Row(configuration: configuration)
+    }
+
+    private struct Row: View {
+        let configuration: Configuration
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            configuration.label
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .opacity(!isEnabled ? 0.4 : configuration.isPressed ? 0.6 : 1)
+        }
+    }
+}
+#endif
 
 extension ToolbarItemPlacement {
     /// `.topBarLeading`; the toolbar's navigation area on the Mac.
