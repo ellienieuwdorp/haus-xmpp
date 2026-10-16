@@ -20,6 +20,9 @@ import UserNotifications
 /// - `-haus-liveness-answer`: answers every fresh liveness ring for as long as the run lasts, as a live app that can keep
 ///   the promise would, whatever this run's session; with an armed `liveness` probe it shows the ring and the answer
 ///   crossing between the sandboxed extension and the sandboxed app. Each answer is logged.
+/// - `-haus-liveness-self-test`: with `-haus-liveness-answer`, rings once as the extension would and reports whether the
+///   answer to its nonce came back in the window: the ring through notifyd and the files in the App Group, inside the
+///   sandbox, without needing a remote notification.
 /// - `-haus-extension-probe-results`: the extension's probe records; `-haus-extension-probe-clear` removes them.
 /// - `-haus-delivered-notifications`: what Notification Center holds for the app (category, which fields are set,
 ///   attachments); `-haus-clear-delivered` removes it all afterwards.
@@ -28,7 +31,7 @@ import UserNotifications
 @MainActor enum MacPushProbe {
     private static let flags = ["-haus-notification-settings", "-haus-request-provisional", "-haus-register-push", "-haus-arm-extension-probe",
                                 "-haus-extension-probe-results", "-haus-extension-probe-clear", "-haus-delivered-notifications",
-                                "-haus-clear-delivered", "-haus-group-avatar-probe", "-haus-liveness-answer"]
+                                "-haus-clear-delivered", "-haus-group-avatar-probe", "-haus-liveness-answer", "-haus-liveness-self-test"]
     private static var livenessResponder: AppLiveness.Responder?
 
     static func start() {
@@ -59,6 +62,7 @@ import UserNotifications
                                                           conditions: { live }, answered: { log("liveness ring answered") })
                     log(responder.start() ? "liveness answering on \(AppLiveness.ringName)" : "liveness answering FAILED to observe the ring")
                     livenessResponder = responder
+                    if MacDebugHooks.has("-haus-liveness-self-test") { await livenessSelfTest() }
                 } catch { log("liveness answering: FAILED \(error)") }
             }
             if MacDebugHooks.has("-haus-register-push") {
@@ -86,6 +90,24 @@ import UserNotifications
                 do { try MacExtensionProbe.clear(); log("extension probe cleared") } catch { log("extension probe: FAILED to clear \(error)") }
             }
         }
+    }
+
+    /// The extension's side of one ring, from this process: the answer has to come back through the ring's observer.
+    private static func livenessSelfTest() async {
+        do {
+            let channel = AppLiveness.ExtensionChannel(files: AppLiveness.Files(groupRoot: try SharedStorage.groupContainer()))
+            let request = LivenessRequest()
+            try channel.ask(request)
+            let clock = ContinuousClock(), start = clock.now
+            while LivenessHandshake.isListening(to: request) {
+                if LivenessHandshake.accepts(channel.latestAnswer(), to: request) {
+                    log("liveness self-test: answered in \(Int((clock.now - start) / .milliseconds(1))) ms, nonce matches")
+                    return
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            log("liveness self-test: no answer in the window")
+        } catch { log("liveness self-test: FAILED \(error)") }
     }
 
     static func received(token: Data) {
