@@ -162,8 +162,10 @@ private enum ExtensionRun {
                                            push: PushRegistrationState.sessionSubscription(
                                                saved: account.push, state: try? PushRegistrationState.load(accountID: accountID)),
                                            leftForeground: SharedSession.leftForeground()),
-                // A busy lease asks a running app first: if it answers, it presents and this run hands the push over.
-                liveness: AppLiveness.ExtensionChannel(files: AppLiveness.Files(groupRoot: root.deletingLastPathComponent())),
+                // On the Mac a busy lease asks the running app first: if it answers, it presents and this run hands the
+                // push over.
+                liveness: AppLiveness.isOffered
+                    ? AppLiveness.ExtensionChannel(files: AppLiveness.Files(groupRoot: root.deletingLastPathComponent())) : nil,
                 progress: progress, presentation: { store, stage in
                     // Keep the transport lease through presentation. Preferences cannot change under this lease;
                     // logout authorization is reread before each presentation (direct messages first, then the rest).

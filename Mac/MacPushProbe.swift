@@ -57,7 +57,8 @@ import UserNotifications
             }
             if MacDebugHooks.has("-haus-liveness-answer") {
                 do {
-                    let live = LivenessConditions(wantsConnection: true, quiescing: false, ownsLease: true, servesExtensionAccount: true)
+                    let live = LivenessConditions(wantsConnection: true, quiescing: false, ownsLease: true, servesExtensionAccount: true,
+                                                  presentsCatchUp: true)
                     let responder = AppLiveness.Responder(files: AppLiveness.Files(groupRoot: try SharedStorage.groupContainer()),
                                                           conditions: { live }, answered: { log("liveness ring answered") })
                     log(responder.start() ? "liveness answering on \(AppLiveness.ringName)" : "liveness answering FAILED to observe the ring")

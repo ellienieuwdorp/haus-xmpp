@@ -35,18 +35,21 @@ private final class FakeApp: LivenessChannel, @unchecked Sendable {
     func latestAnswer() -> LivenessAnswer? { lock.withLock { answer } }
 }
 
-private let live = LivenessConditions(wantsConnection: true, quiescing: false, ownsLease: true, servesExtensionAccount: true)
+private let live = LivenessConditions(wantsConnection: true, quiescing: false, ownsLease: true, servesExtensionAccount: true,
+                                      presentsCatchUp: true)
+private let account = "alice@example.org"
 
-/// Runs `body` with a store whose lease another owner (the app) holds for the whole test.
-private func withBusyLease(_ body: (MessageStore) async throws -> Void) async throws {
+/// Runs `body` with the extension's store and the app's, which holds the lease for the whole test.
+private func withBusyLease(_ body: (_ extension: MessageStore, _ app: MessageStore) async throws -> Void) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "liveness-\(UUID())")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let url = directory.appending(path: "messages.sqlite")
     let app = try MessageStore(url: url)
     try await app.acquireTransportOwnership()
+    try await app.saveEncryptionState(accountID: account, expectedRevision: nil, data: Data([1]))
     let extensionStore = try MessageStore(url: url)
-    try await body(extensionStore)
+    try await body(extensionStore, app)
     try await extensionStore.close()
     try await app.close()
 }
@@ -61,12 +64,14 @@ struct LivenessHandshakeTests {
     }
 
     /// Each condition the promise needs, missing on its own, keeps the app silent: a quiescing app (on its way to the
-    /// background or to sleep) is about to drop the lease and the connection.
+    /// background or to sleep) is about to drop the lease and the connection, and an app that dismisses what it
+    /// catches up on (the iPhone) could lose the message to a reconnect.
     @Test(arguments: [
-        LivenessConditions(wantsConnection: true, quiescing: true, ownsLease: true, servesExtensionAccount: true),
-        LivenessConditions(wantsConnection: false, quiescing: false, ownsLease: true, servesExtensionAccount: true),
-        LivenessConditions(wantsConnection: true, quiescing: false, ownsLease: false, servesExtensionAccount: true),
-        LivenessConditions(wantsConnection: true, quiescing: false, ownsLease: true, servesExtensionAccount: false),
+        LivenessConditions(wantsConnection: true, quiescing: true, ownsLease: true, servesExtensionAccount: true, presentsCatchUp: true),
+        LivenessConditions(wantsConnection: false, quiescing: false, ownsLease: true, servesExtensionAccount: true, presentsCatchUp: true),
+        LivenessConditions(wantsConnection: true, quiescing: false, ownsLease: false, servesExtensionAccount: true, presentsCatchUp: true),
+        LivenessConditions(wantsConnection: true, quiescing: false, ownsLease: true, servesExtensionAccount: false, presentsCatchUp: true),
+        LivenessConditions(wantsConnection: true, quiescing: false, ownsLease: true, servesExtensionAccount: true, presentsCatchUp: false),
     ])
     func anAppThatCannotKeepThePromiseStaysSilent(_ conditions: LivenessConditions) {
         let now = Date()
@@ -106,7 +111,7 @@ struct LivenessHandshakeTests {
     // MARK: The extension's lease wait
 
     @Test func anAnswerInTimeHandsThePushToTheApp() async throws {
-        try await withBusyLease { store in
+        try await withBusyLease { store, _ in
             let app = FakeApp(conditions: live)
             let clock = ContinuousClock(), start = clock.now
             await #expect(throws: BackgroundSynchronizationError.handedOff) {
@@ -118,7 +123,7 @@ struct LivenessHandshakeTests {
     }
 
     @Test func noAnswerKeepsTheWaitAndTheFallback() async throws {
-        try await withBusyLease { store in
+        try await withBusyLease { store, _ in
             let app = FakeApp { _ in nil }
             let clock = ContinuousClock(), start = clock.now
             await #expect(throws: MessageStoreError.transportOwnedElsewhere) {
@@ -133,7 +138,7 @@ struct LivenessHandshakeTests {
     /// An answer after the window, while the wait goes on toward its fallback, never suppresses. (The real app does not
     /// answer a request this old at all; this one does.)
     @Test func aLateAnswerDoesNotHandOff() async throws {
-        try await withBusyLease { store in
+        try await withBusyLease { store, _ in
             let app = FakeApp(after: .seconds(LivenessHandshake.answerWindow + 0.3)) { LivenessAnswer(nonce: $0.nonce) }
             await #expect(throws: MessageStoreError.transportOwnedElsewhere) {
                 try await acquireTransportOwnership(store, waitingUpTo: .seconds(2.5), liveness: app)
@@ -143,8 +148,10 @@ struct LivenessHandshakeTests {
     }
 
     @Test func aQuiescingAppNeverSuppresses() async throws {
-        try await withBusyLease { store in
-            let app = FakeApp(conditions: LivenessConditions(wantsConnection: true, quiescing: true, ownsLease: true, servesExtensionAccount: true))
+        try await withBusyLease { store, _ in
+            var quiescing = live
+            quiescing.quiescing = true
+            let app = FakeApp(conditions: quiescing)
             await #expect(throws: MessageStoreError.transportOwnedElsewhere) {
                 try await acquireTransportOwnership(store, waitingUpTo: .seconds(2), liveness: app)
             }
@@ -154,7 +161,7 @@ struct LivenessHandshakeTests {
 
     /// An answer to another request (a stale file, another wait's nonce) is ignored.
     @Test func anAnswerWithAnotherNonceIsIgnored() async throws {
-        try await withBusyLease { store in
+        try await withBusyLease { store, _ in
             let app = FakeApp { LivenessAnswer(nonce: $0.nonce + "-other", answeredAt: Date()) }
             await #expect(throws: MessageStoreError.transportOwnedElsewhere) {
                 try await acquireTransportOwnership(store, waitingUpTo: .seconds(2), liveness: app)
@@ -172,6 +179,30 @@ struct LivenessHandshakeTests {
         _ = try await acquireTransportOwnership(store, waitingUpTo: .seconds(6), liveness: app)
         #expect(app.asked == 0)
         try await store.close()
+    }
+
+    // MARK: After a hand-off
+
+    /// Between the answer and the message the Mac may sleep, quit or lose its stream (a probe that went unanswered, a
+    /// reconnect that failed); the message then comes with a later connection's catch-up, hours later perhaps. The
+    /// hand-off claims nothing, so what the app already holds stays held, and the desktop claim after a catch-up posts
+    /// it whatever its age: the push still ends in a banner. (The phone's claim would dismiss it as history, which is
+    /// why only an app that presents its catch-up answers.)
+    @Test func whatArrivesAfterAHandOffIsPostedByTheNextCatchUp() async throws {
+        try await withBusyLease { store, app in
+            let now = Date().timeIntervalSince1970
+            try await receive(app, chat: "bob@example.org", body: "Held while catching up", at: now - 60)
+            await #expect(throws: BackgroundSynchronizationError.handedOff) {
+                try await acquireTransportOwnership(store, waitingUpTo: .seconds(6), liveness: FakeApp(conditions: live))
+            }
+            #expect(try await app.pendingNotifications(accountID: account).candidates.count == 1)
+            try await receive(app, chat: "carol@example.org", body: "Sent before the sleep", at: now - 8 * 3_600)
+            let posting = FakePosting()
+            let posted = try await NotificationPresenter(posting: posting)
+                .presentCaughtUp(store: app, accountID: account, readingChatID: nil, presents: true)
+            #expect(posted == 2)
+            #expect(Set(await posting.added.map(\.body)) == ["Held while catching up", "Sent before the sleep"])
+        }
     }
 
     // MARK: Outcome

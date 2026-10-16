@@ -35,13 +35,18 @@ public struct LivenessConditions: Sendable, Equatable {
     public var ownsLease: Bool
     /// The app's account is the one the extension serves (the saved notification account).
     public var servesExtensionAccount: Bool
+    /// What the app catches up on gets banners (`AttentionRules.holdsCatchUpBanners`, a desktop app). Between the answer
+    /// and the message the app may still sleep, quit or reconnect; then the message comes with its next catch-up, and
+    /// only an app that posts what it caught up on keeps the promise. The iPhone dismisses it, so it never answers.
+    public var presentsCatchUp: Bool
 
-    public init(wantsConnection: Bool, quiescing: Bool, ownsLease: Bool, servesExtensionAccount: Bool) {
+    public init(wantsConnection: Bool, quiescing: Bool, ownsLease: Bool, servesExtensionAccount: Bool, presentsCatchUp: Bool) {
         self.wantsConnection = wantsConnection; self.quiescing = quiescing
         self.ownsLease = ownsLease; self.servesExtensionAccount = servesExtensionAccount
+        self.presentsCatchUp = presentsCatchUp
     }
 
-    var canPromise: Bool { wantsConnection && !quiescing && ownsLease && servesExtensionAccount }
+    var canPromise: Bool { wantsConnection && !quiescing && ownsLease && servesExtensionAccount && presentsCatchUp }
 }
 
 /// How the extension rings a running app and reads its answer. The apps use the App Group and a Darwin notification

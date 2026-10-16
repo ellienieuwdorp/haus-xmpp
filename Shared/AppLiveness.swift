@@ -13,6 +13,16 @@ import MessagingCore
 enum AppLiveness {
     static var ringName: String { SharedStorage.group + ".liveness.request" }
 
+    /// Only the Mac takes part (`LivenessConditions.presentsCatchUp`): the iPhone app never answers, so its extension
+    /// never asks and push stays the iPhone's delivery path.
+    static var isOffered: Bool {
+        #if os(macOS)
+        true
+        #else
+        false
+        #endif
+    }
+
     /// The request and answer files in `directory` (`Liveness/` in the App Group container).
     struct Files: Sendable {
         let directory: URL

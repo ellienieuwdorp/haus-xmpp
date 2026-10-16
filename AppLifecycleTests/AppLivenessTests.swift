@@ -4,7 +4,8 @@ import MessagingCore
 
 /// The liveness handshake's files and the app's responder, in a temporary directory instead of the App Group.
 @MainActor final class AppLivenessTests: XCTestCase {
-    private static let live = LivenessConditions(wantsConnection: true, quiescing: false, ownsLease: true, servesExtensionAccount: true)
+    private static let live = LivenessConditions(wantsConnection: true, quiescing: false, ownsLease: true, servesExtensionAccount: true,
+                                                 presentsCatchUp: true)
 
     private func files() -> AppLiveness.Files {
         let url = FileManager.default.temporaryDirectory.appending(path: "liveness-\(UUID())", directoryHint: .isDirectory)
