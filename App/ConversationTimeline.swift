@@ -1227,7 +1227,30 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             linkCard.fit(width: width - 2 * LinkPreviewCardView.bubbleInset)
         }
         bubbleWidth.constant = width
+        fitReactions(cellWidth: layoutAttributes.size.width)
         return super.preferredLayoutAttributesFitting(layoutAttributes)
+    }
+
+    /// The pills run from 8pt inside the bubble's outer edge towards the far margin, never past it. When they do not
+    /// all fit, the last ones fold into a single "+N" pill, so the row stays one line and every pill on it can be reached.
+    private func fitReactions(cellWidth: CGFloat) {
+        for case let pill as ReactionPill in reactionRow.arrangedSubviews {
+            if pill.isOverflow { pill.removeFromSuperview() } else { pill.isHidden = false }
+        }
+        let pills = reactionRow.arrangedSubviews
+        let available = cellWidth - 2 * 16 - 8
+        func width(_ view: UIView) -> CGFloat { view.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize).width }
+        let widths = pills.map(width)
+        func rowWidth(_ count: Int) -> CGFloat { widths.prefix(count).reduce(0, +) + CGFloat(max(0, count - 1)) * reactionRow.spacing }
+        guard rowWidth(pills.count) > available else { return }
+        var shown = pills.count - 1
+        var overflow = ReactionPill(overflow: pills.count - shown)
+        while shown > 1, rowWidth(shown) + reactionRow.spacing + width(overflow) > available {
+            shown -= 1
+            overflow = ReactionPill(overflow: pills.count - shown)
+        }
+        for pill in pills.dropFirst(shown) { pill.isHidden = true }
+        reactionRow.addArrangedSubview(overflow)
     }
 
     /// The link at `point` (bubble coordinates): the card's, or the one drawn under the point in the text.
@@ -1933,13 +1956,24 @@ private final class TypingIndicatorCell: UICollectionViewCell {
 }
 
 /// One reaction chip: emoji plus count. The user's own reaction looks like anyone else's; the message's VoiceOver
-/// label says "including you", and the long-press reaction row marks it.
+/// label says "including you", and the long-press reaction row marks it. An overflow chip says how many more emoji
+/// the row has no room for; the message's VoiceOver label still reads them all.
 @MainActor
 private final class ReactionPill: UIView {
     private let onTap: (() -> Void)?
+    let isOverflow: Bool
 
-    init(_ reaction: TimelineReaction, onTap: (() -> Void)?) {
+    convenience init(_ reaction: TimelineReaction, onTap: (() -> Void)?) {
+        self.init(emoji: reaction.emoji, count: reaction.count > 1 ? "\(reaction.count)" : nil, onTap: onTap)
+    }
+
+    convenience init(overflow hidden: Int) {
+        self.init(emoji: nil, count: "+\(hidden)", onTap: nil)
+    }
+
+    private init(emoji text: String?, count number: String?, onTap: (() -> Void)?) {
         self.onTap = onTap
+        isOverflow = text == nil
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         isAccessibilityElement = false
@@ -1954,12 +1988,13 @@ private final class ReactionPill: UIView {
         layer.shadowOffset = CGSize(width: 0, height: 1)
         let emoji = UILabel()
         emoji.font = .systemFont(ofSize: 14)
-        emoji.text = reaction.emoji
+        emoji.text = text
+        emoji.isHidden = text == nil
         let count = UILabel()
         count.font = .systemFont(ofSize: 12, weight: .semibold)
         count.textColor = .label
-        count.text = "\(reaction.count)"
-        count.isHidden = reaction.count <= 1
+        count.text = number
+        count.isHidden = number == nil
         let stack = UIStackView(arrangedSubviews: [emoji, count])
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.spacing = 3
