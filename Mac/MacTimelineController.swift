@@ -502,7 +502,8 @@ enum MacTimelineItem: Identifiable, Equatable {
     var distanceFromBottom: CGFloat {
         if let end = frame(of: MacTimelineController.endID) { return end.maxY - height }
         guard let geometry else { return .infinity }
-        return geometry.contentSize.height + geometry.contentInsets.bottom - geometry.contentOffset.y - geometry.containerSize.height
+        // The container is the frame, between the insets; the offset counts from above the top inset.
+        return geometry.contentSize.height - geometry.contentOffset.y - geometry.contentInsets.top - geometry.containerSize.height
     }
 
     /// Runs SwiftUI's pending update and layout now, so the rows' frames are current before anything is corrected.
