@@ -53,8 +53,9 @@ import SwiftUI
     private(set) var hasKeyboardFocus = false
     /// Bumped to give the timeline keyboard focus (`requestKeyboardFocus`).
     private(set) var focusRequests = 0
-    /// A message whose menu should open below its bubble; the row opens it (`menuOpened`).
-    private(set) var pendingMenu: String?
+    /// A message whose menu should open below its bubble; the row opens it (`claimMenu`).
+    private(set) var pendingMenu: MenuRequest?
+    @ObservationIgnored private var menuRequests = 0
     /// Esc in the timeline or in a bubble's text: the conversation moves keyboard focus to the composer.
     @ObservationIgnored var onEscape: () -> Void = {}
 
@@ -696,10 +697,23 @@ import SwiftUI
     func openMenu(for id: String) {
         focusedID = id
         reveal(id)
-        pendingMenu = id
+        menuRequests += 1
+        pendingMenu = MenuRequest(id: id, number: menuRequests)
     }
 
-    func menuOpened() { pendingMenu = nil }
+    /// One press of Return or Space, or one Show Menu: each opens one menu.
+    struct MenuRequest: Equatable {
+        let id: String
+        let number: Int
+    }
+
+    /// True once for each request, while it is pending and its message still has focus: the lazy stack can build a row
+    /// twice, and each copy's bubble sees the same request.
+    func claimMenu(_ request: MenuRequest) -> Bool {
+        guard pendingMenu == request, focusedID == request.id else { return false }
+        pendingMenu = nil
+        return true
+    }
 
     /// Gives the timeline keyboard focus: Shift-Tab from the composer and Tab from the find field come here, as the
     /// window's key view loop does not know the scroll view SwiftUI makes focusable.

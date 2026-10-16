@@ -73,15 +73,14 @@ private struct MacMessageKeyboardMenuAnchor: View {
             .allowsHitTesting(false)
             .accessibilityHidden(true)
             .onChange(of: timeline.pendingMenu, initial: true) { _, pending in
-                guard pending == id else { return }
-                timeline.menuOpened()
+                guard let pending, pending.id == id else { return }
                 // Not inside the update, and once the anchor is in its window: the menu runs its own event loop.
-                DispatchQueue.main.async { open() }
+                DispatchQueue.main.async { open(pending) }
             }
     }
 
-    private func open() {
-        guard let view = anchor.view, view.window != nil else { return }
+    private func open(_ request: MacTimelineController.MenuRequest) {
+        guard let view = anchor.view, view.window != nil, timeline.claimMenu(request) else { return }
         let menu = menu()
         #if DEBUG
         // A menu runs its own event loop, which nothing ends in a scripted run: the tour reads it instead.
