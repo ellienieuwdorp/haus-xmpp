@@ -86,7 +86,7 @@ struct MacConversationView: View {
         // The Message menu's targets; their own view too, as they change with the messages.
         .background {
             if let timeline {
-                MacMessageCommandsSource(model: model, chatID: chatID, timeline: timeline, handlers: messageHandlers)
+                MacMessageCommandsSource(model: model, chatID: chatID, timeline: timeline, presenter: presenter, handlers: messageHandlers)
             }
         }
         .safeAreaInset(edge: .top) {
@@ -388,11 +388,13 @@ private struct MacConversationSubtitle: View {
     }
 }
 
-/// Publishes the Message menu's commands for the open chat, from the rows the timeline already built.
+/// Publishes the Message menu's commands for the open chat, from the rows the timeline already built. Under search or
+/// the starred filter those rows are a slice, so the targets come from the whole chat: "last message" stays the chat's.
 private struct MacMessageCommandsSource: View {
     let model: AppModel
     let chatID: String
     let timeline: MacTimelineController
+    let presenter: ConversationPresenter
     let handlers: MacMessageHandlers
     #if DEBUG
     @State private var debugToken = UUID()
@@ -401,7 +403,8 @@ private struct MacMessageCommandsSource: View {
     private var commands: MacMessageCommands {
         // `items` is the observed list the rows go into, so a change of rows reruns whatever reads this.
         _ = timeline.items
-        return MacMessageCommands(targets: LastMessageTargets(messages: timeline.rows.map(\.message)), isBlocked: model.isBlocked(chatID), handlers: handlers)
+        let messages = timeline.isFiltered ? presenter.timelineMessages : timeline.rows.map(\.message)
+        return MacMessageCommands(targets: LastMessageTargets(messages: messages), isBlocked: model.isBlocked(chatID), handlers: handlers)
     }
 
     var body: some View {
