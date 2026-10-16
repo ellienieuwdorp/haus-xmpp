@@ -40,7 +40,9 @@ import SwiftUI
 ///   (key events handed to the main window in process, then `focus`: tab, shift-tab, up, down, shift-up, command-up,
 ///   command-down, page-up, page-down, home, end, return, space, escape, command-r; a menu the keyboard opens is logged
 ///   instead of shown), `ax [<text>]` (the window's accessibility elements that say something, or those whose
-///   description contains the text) and `rotors` (each custom rotor and its entries). Timeline steps (`MacTimelineDebug`): `capture <name>`
+///   description contains the text), `rotors` (each custom rotor and its entries) and `focus-timeline` (gives the
+///   timeline keyboard focus as Tab into it does, and reports it focused, which SwiftUI does not reliably do in a
+///   window that is never key). Timeline steps (`MacTimelineDebug`): `capture <name>`
 ///   (the main window and any other open window as `<name>.png` beside the frames),
 ///   `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as the reader's scroll, positive
 ///   towards older messages), `scroll-to <message id>` (a stored message by its ID), `quote <reference>` (as a click on
@@ -332,7 +334,7 @@ import SwiftUI
                 let size = argument.split(separator: "x").compactMap { Double($0) }
                 if size.count == 2 { mainWindow?.setContentSize(NSSize(width: size[0], height: size[1])) }
             case "menu": logMenu(for: argument, model: model, window: window)
-            case "focus", "press", "ax", "rotors": await MacKeyboardDebug.step(words[0], argument, window: mainWindow)
+            case "focus", "press", "ax", "rotors", "focus-timeline": await MacKeyboardDebug.step(words[0], argument, window: mainWindow)
             case "attach", "drop", "paste", "import", "remove-attachment", "copy-image", "save-over": MacAttachmentTour.step(words[0], argument, model: model)
             case "drop-highlight": tour.dropHighlight = argument != "off"
             case "find", "find-close", "find-esc", "starred", "show-result": MacConversationFindTour.step(words[0], argument)
@@ -535,7 +537,7 @@ import SwiftUI
 
     /// What opening the menu does before it shows: its delegate (SwiftUI's) brings the items up to date, then each
     /// item is validated.
-    private static func open(_ menu: NSMenu) {
+    static func open(_ menu: NSMenu) {
         menu.delegate?.menuNeedsUpdate?(menu)
         menu.update()
     }

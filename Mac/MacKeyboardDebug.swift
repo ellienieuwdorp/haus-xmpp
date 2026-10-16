@@ -10,6 +10,7 @@ import AppKit
 @MainActor enum MacKeyboardDebug {
     static func step(_ name: String, _ argument: String, window: NSWindow?) async {
         guard let window else { return MacDebugHooks.log("tour \(name): no main window") }
+        if ["focus", "press", "ax", "rotors"].contains(name) { await buildAccessibilityTree() }
         switch name {
         case "press":
             for key in argument.split(separator: " ").map(String.init) {
@@ -24,8 +25,23 @@ import AppKit
             dump(window, matching: argument)
         case "rotors":
             logRotors(in: window)
+        case "focus-timeline":
+            MacTimelineController.current?.debugFocusByKey()
         default: break
         }
+    }
+
+    private static var treeBuilt = false
+
+    /// SwiftUI builds its accessibility elements only once an assistive app asks for them, by setting
+    /// `AXManualAccessibility` on the app as it connects; the steps set it themselves, the first time.
+    private static func buildAccessibilityTree() async {
+        guard !treeBuilt else { return }
+        treeBuilt = true
+        for attribute in ["AXEnhancedUserInterface", "AXManualAccessibility"] {
+            (NSApp as AnyObject).accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: attribute))
+        }
+        try? await Task.sleep(for: .milliseconds(500))
     }
 
     // MARK: Keys
@@ -48,8 +64,16 @@ import AppKit
                                                windowNumber: window.windowNumber, context: nil, characters: key.characters,
                                                charactersIgnoringModifiers: key.flags.contains(.shift) && name == "shift-tab" ? "\u{19}" : key.characters,
                                                isARepeat: false, keyCode: key.code) else { return false }
-            // A command key goes to the menus first, as the event queue would send it.
-            if type == .keyDown, key.flags.contains(.command), NSApp.mainMenu?.performKeyEquivalent(with: event) == true { continue }
+            // A command key goes to the menus first, as the event queue would send it, each brought up to date as the
+            // menu bar keeps them (nothing refreshes them in a run that is never active).
+            if type == .keyDown, key.flags.contains(.command), let main = NSApp.mainMenu {
+                func update(_ menu: NSMenu) {
+                    MacDebugHooks.open(menu)
+                    menu.items.compactMap(\.submenu).forEach(update)
+                }
+                update(main)
+                if main.performKeyEquivalent(with: event) { continue }
+            }
             window.sendEvent(event)
         }
         return true
@@ -65,19 +89,23 @@ import AppKit
         case let view as MacComposerTextView where view === MacComposerTour.textView: "composer (draft \(view.string.count) characters)"
         case let view as BubbleTextView: "bubble text '\(view.string.prefix(30))'"
         case let field as NSTextView where field.isFieldEditor: "field editor of \(field.delegate.map { String(describing: type(of: $0)) } ?? "-")"
+            + " '\(field.string)'"
         case let view?: String(describing: type(of: view))
         case nil: "none"
         }
         let timeline = MacTimelineController.current
         let focused = focusedElement(in: window).map(describe) ?? "none"
+        let ids = timeline?.rows.map(\.message.id) ?? []
+        let index = timeline?.focusedID.flatMap(ids.firstIndex(of:)).map { " (\($0 + 1) of \(ids.count))" } ?? ""
+        let intent = MacComposerTour.intent.map { "replying \($0.replyingTo?.id ?? "-"), editing \($0.editing?.id ?? "-")" } ?? "no composer"
         MacDebugHooks.log("focus after \(what): responder \(name); timeline focused \(timeline?.hasKeyboardFocus ?? false), message "
-            + "\(timeline?.focusedID ?? "none"); accessibility focus \(focused)")
+            + "\(timeline?.focusedID ?? "none")\(index); composer \(intent); accessibility focus \(focused)")
     }
 
-    private static func focusedElement(in window: NSWindow) -> NSAccessibilityProtocol? {
-        var found: NSAccessibilityProtocol?
+    private static func focusedElement(in window: NSWindow) -> Element? {
+        var found: Element?
         walk(root(of: window), depth: 0) { element, _ in
-            if found == nil, element.isAccessibilityFocused(), role(element) != .window { found = element }
+            if found == nil, isFocused(element), role(element) != .window { found = element }
             return found == nil
         }
         return found
@@ -88,8 +116,9 @@ import AppKit
     /// Every element with something to say (a label, title or value, actions or rotors), indented by depth. With a
     /// text, only the elements whose description contains it, and only the first 400 lines.
     private static func dump(_ window: NSWindow, matching filter: String) {
-        var lines = 0
+        var lines = 0, visited = 0
         walk(root(of: window), depth: 0) { element, depth in
+            visited += 1
             let text = describe(element)
             let speaks = label(element)?.isEmpty == false || title(element)?.isEmpty == false || value(element) != nil
                 || actions(element).isEmpty == false
@@ -98,47 +127,60 @@ import AppKit
             MacDebugHooks.log("ax " + String(repeating: "  ", count: min(depth, 30)) + text)
             return lines < 400
         }
-        MacDebugHooks.log("ax: \(lines) element(s)")
+        MacDebugHooks.log("ax: \(lines) of \(visited) element(s)")
     }
 
     /// The window's content view: the window itself lists no children until an assistive app has asked for them.
-    private static func root(of window: NSWindow) -> NSAccessibilityProtocol { window.contentView ?? window }
+    private static func root(of window: NSWindow) -> Element { window.contentView ?? window }
 
     /// Depth first; `visit` returns false to stop.
-    private static func walk(_ root: NSAccessibilityProtocol, depth: Int, visit: (NSAccessibilityProtocol, Int) -> Bool) {
+    private static func walk(_ root: Element, depth: Int, visit: (Element, Int) -> Bool) {
         var stopped = false
-        func go(_ element: NSAccessibilityProtocol, _ depth: Int) {
+        func go(_ element: Element, _ depth: Int) {
             guard !stopped, depth < 60 else { return }
             if !visit(element, depth) { stopped = true; return }
-            for child in children(element) {
-                guard let child = child as? NSAccessibilityProtocol else { continue }
-                go(child, depth + 1)
-            }
+            for case let child as Element in children(element) { go(child, depth + 1) }
         }
         go(root, depth)
     }
 
-    private static func describe(_ element: NSAccessibilityProtocol) -> String {
+    private static func describe(_ element: Element) -> String {
         var parts = [role(element)?.rawValue ?? "?"]
         if let label = label(element), !label.isEmpty { parts.append("label '\(label.prefix(200))'") }
         if let title = title(element), !title.isEmpty { parts.append("title '\(title.prefix(80))'") }
         if let value = value(element) { parts.append("value '\(String(describing: value).prefix(80))'") }
-        if let subrole = element.accessibilitySubrole() { parts.append("subrole \(subrole.rawValue)") }
+        if let subrole = subrole(element) { parts.append("subrole \(subrole)") }
         let actions = actions(element)
         if !actions.isEmpty { parts.append("actions [" + actions.joined(separator: ", ") + "]") }
         let rotors = rotors(element)
         if !rotors.isEmpty { parts.append("rotors [" + rotors.map(rotorName).joined(separator: ", ") + "]") }
-        if element.isAccessibilityFocused() { parts.append("FOCUSED") }
+        if isFocused(element) { parts.append("FOCUSED") }
         return parts.joined(separator: " ")
     }
 
-    private static func role(_ element: NSAccessibilityProtocol) -> NSAccessibility.Role? { element.accessibilityRole() }
-    private static func label(_ element: NSAccessibilityProtocol) -> String? { element.accessibilityLabel() }
-    private static func title(_ element: NSAccessibilityProtocol) -> String? { element.accessibilityTitle() }
-    private static func value(_ element: NSAccessibilityProtocol) -> Any? { element.accessibilityValue() }
-    private static func children(_ element: NSAccessibilityProtocol) -> [Any] { element.accessibilityChildren() ?? [] }
-    private static func actions(_ element: NSAccessibilityProtocol) -> [String] { (element.accessibilityCustomActions() ?? []).map(\.name) }
-    private static func rotors(_ element: NSAccessibilityProtocol) -> [NSAccessibilityCustomRotor] { element.accessibilityCustomRotors() }
+    /// An element of the tree: AppKit's views and cells, and SwiftUI's own nodes, which answer the same messages
+    /// without declaring the protocol, so each is asked only what it answers.
+    private typealias Element = NSObject
+
+    private static func ask<T>(_ element: Element, _ selector: String) -> T? {
+        let selector = NSSelectorFromString(selector)
+        guard element.responds(to: selector) else { return nil }
+        return element.perform(selector)?.takeUnretainedValue() as? T
+    }
+
+    private static func role(_ element: Element) -> NSAccessibility.Role? { (ask(element, "accessibilityRole") as String?).map(NSAccessibility.Role.init) }
+    private static func subrole(_ element: Element) -> String? { ask(element, "accessibilitySubrole") }
+    private static func label(_ element: Element) -> String? { ask(element, "accessibilityLabel") }
+    private static func title(_ element: Element) -> String? { ask(element, "accessibilityTitle") }
+    private static func value(_ element: Element) -> Any? { ask(element, "accessibilityValue") as AnyObject? }
+    private static func children(_ element: Element) -> [Any] { ask(element, "accessibilityChildren") ?? [] }
+    private static func actions(_ element: Element) -> [String] { (ask(element, "accessibilityCustomActions") as [NSAccessibilityCustomAction]?)?.map(\.name) ?? [] }
+    private static func rotors(_ element: Element) -> [NSAccessibilityCustomRotor] { ask(element, "accessibilityCustomRotors") ?? [] }
+    private static func isFocused(_ element: Element) -> Bool {
+        let selector = NSSelectorFromString("isAccessibilityFocused")
+        guard element.responds(to: selector), let method = element.method(for: selector) else { return false }
+        return unsafeBitCast(method, to: (@convention(c) (AnyObject, Selector) -> Bool).self)(element, selector)
+    }
 
     private static func rotorName(_ rotor: NSAccessibilityCustomRotor) -> String {
         rotor.type == .custom ? rotor.label : "system \(rotor.type.rawValue)"
@@ -155,7 +197,7 @@ import AppKit
                 let search = NSAccessibilityCustomRotor.SearchParameters()
                 search.searchDirection = .next
                 while entries.count < 40, let result = rotor.itemSearchDelegate?.rotor(rotor, resultFor: search) {
-                    let target = (result.targetElement as? NSAccessibilityProtocol).map(describe) ?? "?"
+                    let target = (result.targetElement as AnyObject? as? Element).map(describe) ?? "?"
                     entries.append("'\(result.customLabel ?? "")' -> \(target.prefix(90))")
                     search.currentItem = result
                 }
