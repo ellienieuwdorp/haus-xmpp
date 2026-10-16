@@ -82,8 +82,8 @@ enum MacDebugNotificationLog {
 ///   `-haus-log-notifications` the newest logged request; otherwise the newest delivered one in Notification Center.
 /// - `notify delivered`: what Notification Center holds for the app (see `MacPushProbe`).
 /// - `notify state`: each chat's unread count and notification setting, the selected chat and the Dock badge.
-/// - `notify messages <chat>`: the chat's read pointer and stored messages (ID prefix, direction, time, body length,
-///   why unreadable), never their text.
+/// - `notify messages <chat>`: the chat's read pointer and stored messages (ID prefix, direction and transport state,
+///   time, body length, why unreadable), never their text.
 /// - `notify previews on|off`, `notify reactions on|off`: the Settings switches.
 /// - `notify mute <chat>` (for an hour), `notify unmute <chat>`, `notify mentions <chat>`, `notify all <chat>`: the
 ///   chat's notification menu.
@@ -133,7 +133,7 @@ enum MacDebugNotificationLog {
         }
         let clock = ContinuousClock(), start = clock.now
         let outcome = await NotificationActionCenter.shared.perform(request)
-        log("notify \(action): \(outcome.rawValue) after \((clock.now - start).formatted(.units(allowed: [.milliseconds])))")
+        log("notify \(action): \(outcome.rawValue) after \(Int((clock.now - start) / .milliseconds(1))) ms")
     }
 
     private static func log(_ text: String) { MacDebugHooks.log(text) }

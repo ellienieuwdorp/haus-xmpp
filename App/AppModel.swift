@@ -4483,7 +4483,7 @@ extension AppModel: NotificationActionEnvironment {
         guard let store else { return "closed" }
         let pointer = try? await store.readPointer(accountID: accountID, chatID: chatID)
         let rows = ((try? await store.messages(accountID: accountID, chatID: chatID)) ?? []).map { message in
-            "\(message.id.prefix(8)) \(message.isOutgoing ? "out" : "in") at \(message.sentAt.timeIntervalSince1970) body \(message.body.count)"
+            "\(message.id.prefix(8)) \(message.isOutgoing ? "out \(message.transportState.map { "\($0)" } ?? "")" : "in") at \(message.sentAt.timeIntervalSince1970) body \(message.body.count)"
                 + (message.unreadableReason.map { " unreadable \($0)" } ?? "")
         }
         return "pointer \(pointer.map { "\($0.messageID.prefix(8)) at \($0.sentAt.timeIntervalSince1970)" } ?? "none"); \(rows.joined(separator: " | "))"
