@@ -15,7 +15,7 @@ import UserNotifications
 ///   push switch. Without it a Debug run is the Release Mac app: no push, and a subscription left by an earlier run is
 ///   turned off on the next connection.
 /// - `-haus-push-switch on|off`: once the app is prepared (and after `-haus-lab-sign-in`), turns push on or off as the
-///   Settings switch does, and logs the status it ends at.
+///   Settings switch does, and logs the status it ends at. `off` first waits up to 20 s for a setup in flight.
 /// - `-haus-push-status <seconds>`: logs the push status and the notification authorization each time either changes,
 ///   for that long.
 /// - APNs token callbacks are logged with the token's length and the first 8 hex digits of its SHA-256, never the token,
@@ -135,6 +135,12 @@ import UserNotifications
             await model.enableNotifications()
             log("push switch on: \(model.pushStatus.text)")
         case "off":
+            // A setup the sign-in started settles first, so the run shows the switch going from its status to Off.
+            let clock = ContinuousClock(), end = clock.now + .seconds(20)
+            while model.pushStatus == .settingUp || model.pushStatus == .off && model.pushWanted, clock.now < end {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            log("push switch turning off from: \(model.pushStatus.text)")
             await model.disableNotifications()
             log("push switch off: \(model.pushStatus.text)")
         case let other?: log("push switch: unknown value \(other)")

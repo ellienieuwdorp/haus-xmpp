@@ -90,8 +90,8 @@ struct MacPushNotificationRows: View {
     private var permission: String? {
         switch model.notificationAuthorization {
         case .provisional: "Delivered quietly, without banners"
-        case .denied: model.pushStatus == .notAllowed ? nil : "Not allowed in \(ThisDevice.settingsApp)"
-        case .notDetermined: "Not allowed yet"
+        case .denied: model.pushStatus == .notAllowed ? nil : "Notifications off in \(ThisDevice.settingsApp)"
+        case .notDetermined: "Notifications not allowed yet"
         default: nil
         }
     }
