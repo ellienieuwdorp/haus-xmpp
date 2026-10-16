@@ -55,7 +55,7 @@ import SwiftUI
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-window-size <width>x<height>`: the main window's content size in points, for captures at a set size.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-inspector-page details|encryption`,
-///   `-haus-sheet account|new-chat|own-devices|fingerprint|backup`, `-haus-settings general|appearance|about`,
+///   `-haus-sheet account|new-chat|own-devices|fingerprint|backup|group-join`, `-haus-settings general|appearance|about`,
 ///   `-haus-close-window <seconds>`:
 ///   what the window shows. The inspector's `encryption` page is Devices & Encryption for a chat, Group details for a
 ///   group.
@@ -907,6 +907,8 @@ struct MacDebugPresentation: ViewModifier {
     @State private var fingerprint: EncryptionDevice?
     /// `-haus-sheet backup`: a sample previous version's backup, as Settings opens it when there is one.
     @State private var backup: PreUpgradeSnapshot.Manifest?
+    /// `-haus-sheet group-join`: the group join form as a group link in a message opens it.
+    @State private var joiningGroup = false
 
     func body(content: Content) -> some View {
         content.task {
@@ -914,6 +916,7 @@ struct MacDebugPresentation: ViewModifier {
             switch MacDebugHooks.value(after: "-haus-sheet") {
             case "fingerprint": fingerprint = OwnDeviceReview.sampleDevices(account: model.accountID).last
             case "backup": backup = Self.sampleBackup
+            case "group-join": joiningGroup = true
             default: break
             }
             guard MacDebugHooks.has("-haus-settings") else { return }
@@ -926,6 +929,14 @@ struct MacDebugPresentation: ViewModifier {
         }
         .sheet(isPresented: Binding(get: { backup != nil }, set: { if !$0 { backup = nil } })) {
             if let backup { PreviousVersionBackupView(model: model, backup: backup).themedRoot() }
+        }
+        .sheet(isPresented: $joiningGroup) {
+            NavigationStack {
+                GroupJoinView(model: model, room: "trail@rooms.preview.local") { _ in joiningGroup = false }
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { joiningGroup = false } } }
+            }
+            .frame(minWidth: 420, idealWidth: 460, minHeight: 360, idealHeight: 420)
+            .themedRoot()
         }
     }
 
