@@ -4426,13 +4426,14 @@ extension AppModel: NotificationActionEnvironment {
     /// The extension's poster, with the app's pre-scaled notification avatars, so banners match the extension's requests.
     private func notificationPoster(account: String) -> any NotificationPosting {
         let root = storageRoot
-        let poster = UserNotificationPoster(avatarData: { hash in
+        let avatarData: @Sendable (String) -> Data? = { hash in
             guard let root else { return nil }
             return AvatarStore.notificationImageData(root: root, account: account, hash: hash)
-        })
+        }
+        let poster = UserNotificationPoster(avatarData: avatarData)
         #if DEBUG && os(macOS)
         // `-haus-log-notifications` / `-haus-post-notifications`: a lab run logs what it posts (or would post).
-        if let logged = MacDebugNotificationLog.poster(posting: poster) { return logged }
+        if let logged = MacDebugNotificationLog.poster(posting: poster, avatarData: avatarData) { return logged }
         #endif
         return poster
     }

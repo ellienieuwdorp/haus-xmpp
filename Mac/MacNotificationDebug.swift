@@ -22,10 +22,10 @@ enum MacDebugNotificationLog {
     }()
 
     /// The poster the model uses in place of `system`; nil without either flag.
-    static func poster(posting system: any NotificationPosting) -> (any NotificationPosting)? {
+    static func poster(posting system: any NotificationPosting, avatarData: @escaping @Sendable (String) -> Data?) -> (any NotificationPosting)? {
         switch mode {
-        case .log?: LoggingPoster(forwarding: nil)
-        case .post?: LoggingPoster(forwarding: system)
+        case .log?: LoggingPoster(forwarding: nil, avatarData: avatarData)
+        case .post?: LoggingPoster(forwarding: system, avatarData: avatarData)
         case nil: nil
         }
     }
@@ -47,14 +47,16 @@ enum MacDebugNotificationLog {
 
     struct LoggingPoster: NotificationPosting {
         let forwarding: (any NotificationPosting)?
+        /// The poster's source of the sender's pre-scaled avatar, to log whether the request carries an image.
+        let avatarData: @Sendable (String) -> Data?
 
         func add(_ request: PlannedNotification) async throws {
             do { try await forwarding?.add(request) } catch {
-                write("notification add FAILED: \(describe(request)), \(error)")
+                write("notification add FAILED: \(describe(request, avatarData: avatarData)), \(error)")
                 throw error
             }
             if request.categoryIdentifier == NotificationIdentity.messageCategory { newest.withLock { $0 = request } }
-            write("notification posted: \(describe(request))")
+            write("notification posted: \(describe(request, avatarData: avatarData))")
         }
 
         func deliveredNotifications() async -> [DeliveredNotification] { await forwarding?.deliveredNotifications() ?? [] }
@@ -68,10 +70,13 @@ enum MacDebugNotificationLog {
     }
 
     /// Which fields are set. A body is quoted only when it is one of the fixed generic texts.
-    private static func describe(_ request: PlannedNotification) -> String {
+    private static func describe(_ request: PlannedNotification, avatarData: (String) -> Data?) -> String {
         let fixed = [NotificationPlanner.hiddenBody, NotificationPlanner.hiddenReactionBody, NotificationPlanner.fallbackBody]
         let body = request.body.isEmpty ? "empty" : fixed.contains(request.body) ? "\"\(request.body)\"" : "\(request.body.count) chars"
-        let sender = request.communication.map { $0.sender.avatarHash == nil ? "sender without avatar" : "sender with avatar" } ?? "no sender"
+        let sender = request.communication.map { communication in
+            guard let hash = communication.sender.avatarHash else { return "sender without avatar" }
+            return avatarData(hash).map { "sender with avatar (\($0.count)-byte image)" } ?? "sender with avatar (no image)"
+        } ?? "no sender"
         return "thread \(request.threadIdentifier) category \(request.categoryIdentifier), title \(request.title.isEmpty ? "empty" : "set"), "
             + "body \(body), \(sender), destination \(request.destination == nil ? "none" : "set"), sound \(request.playsSound ? "yes" : "no")"
     }
