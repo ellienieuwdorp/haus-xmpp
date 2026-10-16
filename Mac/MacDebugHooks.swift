@@ -106,7 +106,8 @@ import SwiftUI
 /// - `-haus-unobtrusive`: see `MacUnobtrusive`.
 /// - `-haus-lifecycle-steps "<step>; …"`: a lifecycle scenario after the hooks above (`MacLifecycleDebug`).
 /// - `-haus-log-notifications`: logs the notifications the model would post instead of posting them;
-///   `-haus-post-notifications` logs and posts them. Both also in a test session (`MacDebugNotificationLog`).
+///   `-haus-post-notifications` logs and posts them. Both also in a test session (`MacDebugNotificationLog`), which
+///   without either posts nothing and says so at launch.
 /// - Push and notification extension checks: see `MacPushProbe`.
 @MainActor enum MacDebugHooks {
     private static let arguments = ProcessInfo.processInfo.arguments
@@ -130,6 +131,9 @@ import SwiftUI
     static func prepareLaunch() {
         MacUnobtrusive.install()
         if has("-haus-fresh-store") { emptyTestStore() }
+        if MacDebugNotificationLog.silencesTestSession {
+            log("notifications: off in this test session; -haus-log-notifications logs them")
+        }
         if let schema = value(after: "-haus-store-schema").flatMap(Int32.init) { stampTestStore(schema: schema) }
     }
 

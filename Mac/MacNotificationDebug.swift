@@ -21,6 +21,12 @@ enum MacDebugNotificationLog {
         return arguments.contains("-haus-log-notifications") ? .log : nil
     }()
 
+    /// A test session without either flag posts and logs nothing, so a banner check that forgot the flag would read
+    /// silence as "no banner". Said at launch and in `notify state`.
+    static var silencesTestSession: Bool {
+        mode == nil && ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"].flatMap(UUID.init(uuidString:)) != nil
+    }
+
     /// The poster the model uses in place of `system`; nil without either flag.
     static func poster(posting system: any NotificationPosting, avatarData: @escaping @Sendable (String) -> Data?) -> (any NotificationPosting)? {
         switch mode {
@@ -98,7 +104,8 @@ enum MacDebugNotificationLog {
 ///   `NotificationActionCenter` as the notification centre's delegate hands over a clicked one, and its outcome. With
 ///   `-haus-log-notifications` the newest logged request; otherwise the newest delivered one in Notification Center.
 /// - `notify delivered`: what Notification Center holds for the app (see `MacPushProbe`).
-/// - `notify state`: each chat's unread count and notification setting, the selected chat and the Dock badge.
+/// - `notify state`: each chat's unread count and notification setting, the selected chat and the Dock badge, and
+///   whether this test session posts nothing (no `-haus-log-notifications`).
 /// - `notify messages <chat>`: the chat's read pointer and stored messages (ID prefix, direction and transport state,
 ///   time, body length, why unreadable), never their text.
 /// - `notify previews on|off`, `notify reactions on|off`: the Settings switches.
@@ -116,7 +123,8 @@ enum MacDebugNotificationLog {
         case "state":
             let chats = model.chats.map { "\($0.id) unread \($0.unreadCount)\($0.notification == ChatNotificationSetting() ? "" : " (\($0.notification))")" }
             log("notify state: \(chats.isEmpty ? "no chats" : chats.joined(separator: ", ")); selected \(window.selection ?? "none"), "
-                + "Dock badge \(NSApp.dockTile.badgeLabel ?? "none")")
+                + "Dock badge \(NSApp.dockTile.badgeLabel ?? "none")"
+                + (MacDebugNotificationLog.silencesTestSession ? "; notifications off in this test session" : ""))
         case "previews":
             await model.setNotificationPreviews(rest == "on")
             log("notify previews: \(model.notificationPreviewsEnabled ? "on" : "off")")
