@@ -11,10 +11,12 @@ import SwiftUI
 /// - `messages [<count>]`: logs the open chat's newest messages (default 4): direction, encryption, state and text.
 ///   For lab runs with synthetic messages only.
 /// - The rest press a button as VoiceOver would (`MacKeyboardDebug.pressElement`), so they run the button's own action:
-///   `device <id>` a device row in the inspector, `review` the banner's Review…, `own-review` the sidebar card's Review,
+///   `device <id>` a device row in the inspector, `review` the banner's Review…,
 ///   `trust|verify|dont-trust|compare|remove <id>` that device's button in the newest open sheet (the review sheet, the
 ///   account's review or a fingerprint sheet), `confirm <button>` a confirmation dialog's button, `close-sheet` the
 ///   newest sheet's Done or Close.
+/// - `own-review`: opens the account's device review, as the sidebar card's Review does (the sidebar's rows are not in
+///   the accessibility tree of a window that was never on screen, so the button cannot be pressed).
 @MainActor enum MacDeviceReviewTour {
     static func step(_ name: String, _ argument: String, model: AppModel, window: MacWindowState, mainWindow: NSWindow?) async {
         let buttons: [String: [String]] = [
@@ -31,9 +33,11 @@ import SwiftUI
             return
         }
         switch name {
-        case "review", "own-review", "confirm", "close-sheet":
+        case "own-review":
+            window.reviewingOwnDevices = true
+        case "review", "confirm", "close-sheet":
             guard let mainWindow else { return MacDebugHooks.log("tour \(name): no main window") }
-            let texts = ["review": ["deviceReview.open"], "own-review": ["ownDeviceReview.open"], "close-sheet": ["Done", "Close"]][name] ?? [argument]
+            let texts = ["review": ["deviceReview.open"], "close-sheet": ["Done", "Close"]][name] ?? [argument]
             await MacKeyboardDebug.pressElement(matching: texts, in: mainWindow)
         case "chat":
             guard let chat = await model.createChat(argument) else { return MacDebugHooks.log("tour chat: refused (\(model.error ?? "no reason"))") }

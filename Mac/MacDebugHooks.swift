@@ -67,7 +67,7 @@ import SwiftUI
 ///   `unblock <chat>` (sample conversations only, as `-haus-block`) and `close-window` (closes the main window, as its
 ///   close button does). Device trust steps (`MacDeviceReviewTour`): `chat <address>`, `join <room>`, `devices`, `messages [<count>]`,
 ///   `device <id>` (a device row of the inspector's devices or group page, which opens its fingerprint sheet), `review`
-///   (the conversation banner's Review…), `own-review` (the sidebar card's Review), `trust|verify|dont-trust|compare|remove
+///   (the conversation banner's Review…), `own-review` (the account's review, as the sidebar card's Review opens it), `trust|verify|dont-trust|compare|remove
 ///   <id>` (that device's button in the open review or fingerprint sheet), `confirm <button>` (a confirmation's button)
 ///   and `close-sheet` (the newest sheet's Done or Close), each pressed as VoiceOver would, and `snap-sheet <name>` (the
 ///   newest sheet alone as `<name>.png`).
