@@ -918,19 +918,21 @@ final class AppModel {
         // The extension may set the icon badge while the app is away: the next chat-list load sets it again.
         appBadge = nil
         if transition.quiescesTransport { quiescing = true }
+        // Begun before anything is awaited, the previous transition included: iOS grants background time asynchronously,
+        // and an app it suspends while holding the lease's file lock is killed.
+        let protection = transition.quiescesTransport ? BackgroundActivity("Finish encrypted synchronization") : nil
         let previous = lifecycleTask
         lifecycleTask = Task { [weak self] in
+            defer { protection?.end() }
             await previous?.value
             guard let self else { return }
             if transition.quiescesTransport {
-                let task = BackgroundActivity("Finish encrypted synchronization")
                 // The session hibernates (up to days with push): it must read as away, not "Online", until it resumes.
                 if transition.presence == .away, let client = self.client, self.isConnected {
                     await typingEnd?.value
                     try? await client.setAvailability(self.awayAvailability, clientActive: transition.clientActive ?? false)
                 }
                 await self.quiesceTransport()
-                task.end()
             } else {
                 guard self.transportWanted else { return }
                 // Only when the stream stays up and the user comes or goes; never on iOS, where both follow the
@@ -949,7 +951,8 @@ final class AppModel {
                 if transition.presence == nil, let active = transition.clientActive, let client = self.client {
                     try? await client.setClientActive(active)
                 }
-                if transition.resumesTransport { await self.refresh() }
+                // A background transition queued meanwhile waits for this one: nothing more starts.
+                if transition.resumesTransport, self.transportWanted { await self.refresh() }
             }
         }
     }
