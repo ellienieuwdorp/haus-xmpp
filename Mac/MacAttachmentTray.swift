@@ -309,6 +309,8 @@ struct MacAttachmentDropHighlight: View {
                 let provider = NSItemProvider()
                 let delay: TimeInterval = argument == "slow-photo" ? 2 : 0
                 provider.registerDataRepresentation(for: .jpeg) { load in
+                    // The provider calls it once, from any thread.
+                    nonisolated(unsafe) let load = load
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) { load(data, nil) }
                     return nil
                 }
