@@ -53,6 +53,11 @@ import SwiftUI
     @ObservationIgnored private var dayChipIdle: Task<Void, Never>?
     @ObservationIgnored private var highlightEnd: Task<Void, Never>?
     @ObservationIgnored private var revealing: Task<Void, Never>?
+    /// Set from opening until the timeline first rests at its end with the frame's insets in place, or the reader moves
+    /// it. SwiftUI may place the initial offset before the toolbar's and the composer's insets arrive, which leaves a
+    /// chat slightly taller than the frame at its top, its newest message under the composer.
+    @ObservationIgnored private var settlingAtOpen = true
+    @ObservationIgnored private var settleAttempts = 0
 
     /// The bottom spacer's ID: the end of the content, below the typing bubble.
     nonisolated static let endID = "end\u{0}"
@@ -268,11 +273,32 @@ import SwiftUI
         if jump != showsJumpToNewest { withAnimation(.easeOut(duration: 0.2)) { showsJumpToNewest = jump } }
         if !applying { requestOlderIfNeeded() }
         updateDayChip()
+        settleAtOpen(geometry)
+    }
+
+    /// Puts a just-opened timeline at its end once the insets are known (`settlingAtOpen`). Measured from the scroll
+    /// geometry, which carries the insets, rather than from row frames that may not be laid out yet.
+    private func settleAtOpen(_ geometry: ScrollGeometry) {
+        guard settlingAtOpen, layout.isAttached, geometry.contentInsets.top > 0 || geometry.contentInsets.bottom > 0 else { return }
+        let toEnd = geometry.contentSize.height - geometry.contentOffset.y - geometry.contentInsets.top - geometry.containerSize.height
+        guard toEnd > 0.5, settleAttempts < 3 else {
+            settlingAtOpen = false
+            return
+        }
+        settleAttempts += 1
+        // Never from inside the layout pass reporting the geometry: the proxy may not be used there.
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                guard self.settlingAtOpen else { return }
+                self.scrollToNewest()
+            }
+        }
     }
 
     func phaseChanged(_ phase: ScrollPhase) {
         scrolling = phase.isScrolling
         if scrolling {
+            settlingAtOpen = false
             dayChipIdle?.cancel()
             updateDayChip()
         } else {
@@ -311,6 +337,7 @@ import SwiftUI
     /// A key or a jump moved the timeline: it counts as the reader's scroll for paging and shows the day chip.
     private func readerMoved() {
         readerMovedAt = .now
+        settlingAtOpen = false
         dayChipIdle?.cancel()
         updateDayChip(force: true)
         scheduleDayChipIdle()
@@ -366,6 +393,7 @@ import SwiftUI
     }
 
     private func reveal(_ resolve: () async -> String?) async {
+        settlingAtOpen = false
         var target = await resolve()
         // Each round raises the window by a page or backfills a few archive pages; the window's ceiling bounds the rounds.
         // A round may bring nothing yet (a raised window over a store holding no more, before the archive is asked),
