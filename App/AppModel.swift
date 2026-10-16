@@ -264,8 +264,8 @@ final class AppModel {
     /// A room's join boundary query (`ArchiveSynchronizer.roomJoinBoundary`) holds the archive query: no backfill starts.
     @ObservationIgnored private var joinBoundaryQueries = 0
     /// Rooms this model asked to join, by connection, with their archive's newest time before the join. Recorded as the
-    /// room's read baseline once its own presence admits us (`updateGroupPresence`); a refusal or another connection
-    /// drops it, and a later join asks again.
+    /// room's read baseline once its own presence admits us on that connection (`updateGroupPresence`); a refusal drops
+    /// it, another connection ignores it, and a later join asks again.
     @ObservationIgnored private var joinBoundaries: [String: (token: UUID, historyThrough: Date)] = [:]
     /// Per connection: archives (account or room JID) with nothing more to backfill, or whose server refused, so a
     /// reach-top, which fires on every scroll frame near the top, does not ask again.
