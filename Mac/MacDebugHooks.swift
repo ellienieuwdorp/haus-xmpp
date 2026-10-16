@@ -33,7 +33,8 @@ import SwiftUI
 ///   `reply|edit|star|retry|unsend|encryption|report|select-text <id>`, `react <id> <emoji>`, `pick-emoji <id>` (the
 ///   emoji picker's popover), `hover <id>|off` (shows that bubble's hover toolbar until `hover off`), and `menu <id>`
 ///   (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's), and `focus` (logs which view
-///   has the keyboard: the composer, a bubble's text or another). Timeline steps (`MacTimelineDebug`): `capture <name>`
+///   has the keyboard: the composer, a bubble's text or another), `minimums` (logs the minimum size of the window's
+///   content and of each hosting view in it, the split view's columns among them). Timeline steps (`MacTimelineDebug`): `capture <name>`
 ///   (the main window and any other open window as `<name>.png` beside the frames),
 ///   `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as the reader's scroll, positive
 ///   towards older messages), `scroll-to <message id>` (a stored message by its ID), `quote <reference>` (as a click on
@@ -313,6 +314,7 @@ import SwiftUI
                 log("focus: \(name)")
             case "attach", "drop", "paste", "import", "remove-attachment", "copy-image", "save-over": MacAttachmentTour.step(words[0], argument, model: model)
             case "drop-highlight": tour.dropHighlight = argument != "off"
+            case "minimums": if let window = mainWindow { logMinimums(window) }
             case "snap":
                 guard let directory = value(after: "-haus-capture"), let window = mainWindow, let png = render(window) else { log("tour snap: needs -haus-capture <dir>"); break }
                 emit(png, directory: directory, file: slug(argument) + ".png")
@@ -841,6 +843,24 @@ import SwiftUI
         let frame = view.convert(view.bounds, to: nil)
         log("view \(String(repeating: " ", count: depth))\(type(of: view)) \(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))x\(Int(frame.height)) layer \(view.layer.map { "\(type(of: $0))" } ?? "-")")
         for subview in view.subviews { dumpViews(subview, depth: depth + 1) }
+    }
+
+    /// The window's content minimum and each SwiftUI hosting view's minimum width and height, as the split view's
+    /// columns read them: a column whose minimum follows its own width makes AppKit lay the window out again and again.
+    private static func logMinimums(_ window: NSWindow) {
+        log("minimums: window content \(window.contentLayoutRect.size), content min \(window.contentMinSize)")
+        func walk(_ view: NSView) {
+            let minimums = view.constraints.filter { $0.firstItem === view && ($0.identifier ?? "").hasPrefix("NSHostingView.min") }
+            if !minimums.isEmpty {
+                let name = String(describing: type(of: view))
+                let kind = name.contains("SidebarStyleContext") ? "sidebar column" : name.contains("ColumnView") ? "detail column"
+                    : name.contains("NavigationPaneModifier") ? "split pane" : "hosting view"
+                let values = minimums.map { "\($0.identifier?.replacingOccurrences(of: "NSHostingView.", with: "") ?? "") \(Int($0.constant))" }
+                log("minimums: \(kind) \(Int(view.frame.width))x\(Int(view.frame.height)) \(values.joined(separator: ", "))")
+            }
+            view.subviews.forEach(walk)
+        }
+        if let root = window.contentView?.superview { walk(root) }
     }
 
     private static func dumpMenus() {
