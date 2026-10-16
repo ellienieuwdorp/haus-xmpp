@@ -27,14 +27,15 @@ import SwiftUI
 ///   bubble's menu performs them: `reply|edit|star|retry|unsend|encryption|report|select-text <id>`,
 ///   `react <id> <emoji>`, `pick-emoji <id>` (the emoji picker's popover), `hover <id>|off` (shows that bubble's hover
 ///   toolbar until `hover off`), and `menu <id>` (logs the bubble's menu, as no event can open it; an unknown ID lists
-///   the chat's). Timeline steps (`MacTimelineDebug`): `capture <name>` (the main window and any other open window as
-///   `<name>.png` beside the frames), `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as
-///   the reader's scroll, positive towards older messages), `scroll-to <message id>` (a stored message by its ID),
-///   `quote <reference>` (as a click on a quote naming that message does), `resize <width>x<height>` and `timeline`
-///   (logs the reader's row and distances). `scroll <seconds>` sweeps the open chat's timeline from the newest loaded
-///   message to the oldest and back, moving its clip view on a 120 Hz timer, and logs how late the main thread ran the
-///   ticks and the app's memory footprint (`ScrollProbe`); give `-haus-capture-frames` a short time so its renders are
-///   done before the sweep. Frames may be `0` seconds for a tour that only captures by name.
+///   the chat's), and `focus` (logs which view has the keyboard: the composer, a bubble's text or another). Timeline
+///   steps (`MacTimelineDebug`): `capture <name>` (the main window and any other open window as `<name>.png` beside the
+///   frames), `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as the reader's scroll,
+///   positive towards older messages), `scroll-to <message id>` (a stored message by its ID), `quote <reference>` (as a
+///   click on a quote naming that message does), `resize <width>x<height>` and `timeline` (logs the reader's row and
+///   distances). `scroll <seconds>` sweeps the open chat's timeline from the newest loaded message to the oldest and
+///   back, moving its clip view on a 120 Hz timer, and logs how late the main thread ran the ticks and the app's memory
+///   footprint (`ScrollProbe`); give `-haus-capture-frames` a short time so its renders are done before the sweep.
+///   Frames may be `0` seconds for a tour that only captures by name.
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
 ///   also in the sample conversations, where previews are otherwise off. `-haus-untinted-send`: the composer's Send in
 ///   the clear variant of its glass style, as an enabled accent-tinted circle leaves the conversation out of a capture.
@@ -284,6 +285,10 @@ import SwiftUI
                 let size = argument.split(separator: "x").compactMap { Double($0) }
                 if size.count == 2 { mainWindow?.setContentSize(NSSize(width: size[0], height: size[1])) }
             case "menu": logMenu(for: argument, model: model, window: window)
+            case "focus":
+                let responder = mainWindow?.firstResponder
+                let name = responder === MacComposerTour.textView ? "composer" : responder is BubbleTextView ? "bubble text" : responder.map { String(describing: type(of: $0)) } ?? "none"
+                log("focus: \(name)")
             case "snap":
                 guard let directory = value(after: "-haus-capture"), let window = mainWindow, let png = render(window) else { log("tour snap: needs -haus-capture <dir>"); break }
                 emit(png, directory: directory, file: slug(argument) + ".png")
