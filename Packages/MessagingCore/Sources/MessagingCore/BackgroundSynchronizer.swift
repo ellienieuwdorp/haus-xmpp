@@ -363,7 +363,7 @@ func consumeUntilDisconnect(after mark: CatchUpMark, _ consume: () async throws 
 func acquireTransportOwnership(_ store: MessageStore, waitingUpTo limit: Duration, interval: Duration = .milliseconds(250),
                                liveness: (any LivenessChannel)? = nil, answerPoll: Duration = .milliseconds(50)) async throws -> Duration {
     let clock = ContinuousClock(), start = clock.now
-    var request: LivenessRequest?, asked = false
+    var question: (request: LivenessRequest, listensUntil: ContinuousClock.Instant)?, asked = false
     while true {
         do {
             try await store.acquireTransportOwnership()
@@ -372,14 +372,15 @@ func acquireTransportOwnership(_ store: MessageStore, waitingUpTo limit: Duratio
             guard clock.now - start + interval <= limit else { throw MessageStoreError.transportOwnedElsewhere }
             if let liveness, !asked {
                 asked = true
-                let question = LivenessRequest()
+                // The window also runs on this process's monotonic clock: a wall clock set back meanwhile cannot stretch it.
+                let request = LivenessRequest(), listensUntil = clock.now + .seconds(LivenessHandshake.answerWindow)
                 // A request that could not be saved can never be answered: the wait goes on as without the handshake.
-                if (try? liveness.ask(question)) != nil { request = question }
+                if (try? liveness.ask(request)) != nil { question = (request, listensUntil) }
             }
             let wake = clock.now + interval
-            if let liveness, let request {
-                while clock.now < wake, LivenessHandshake.isListening(to: request) {
-                    if LivenessHandshake.accepts(liveness.latestAnswer(), to: request) { throw BackgroundSynchronizationError.handedOff }
+            if let liveness, let question {
+                while clock.now < wake, clock.now <= question.listensUntil, LivenessHandshake.isListening(to: question.request) {
+                    if LivenessHandshake.accepts(liveness.latestAnswer(), to: question.request) { throw BackgroundSynchronizationError.handedOff }
                     try await Task.sleep(for: answerPoll)
                 }
             }
