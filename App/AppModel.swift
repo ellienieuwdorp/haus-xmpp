@@ -1731,7 +1731,23 @@ final class AppModel {
                 authorization = await Self.notificationAuthorization()
             }
             guard generation == token, pushIntent == intent else { return }
+            #if os(macOS)
+            let (_, alertStyle) = await Self.notificationPermission()
+            guard generation == token, pushIntent == intent else { return }
+            if let stop = PushStatus.gate(for: authorization, alertStyle: alertStyle, interactive: false) {
+                if sessionAccount?.accountID == account, sessionAccount?.push != nil {
+                    activeEncryptionOperations += 1
+                    defer { activeEncryptionOperations -= 1 }
+                    try stagePushTurnOff(account: account)
+                    try await settlePushCleanup(client: client, account: account, token: token)
+                    guard generation == token, pushIntent == intent else { return }
+                }
+                pushStatus = stop
+                return
+            }
+            #else
             if let stop = PushStatus.gate(for: authorization, interactive: false) { pushStatus = stop; return }
+            #endif
             if pushStatus != .on { pushStatus = .settingUp }
             let deviceToken = try await PushRegistration.request()
             refreshNotificationPermission()
@@ -4573,12 +4589,21 @@ extension AppModel: NotificationActionEnvironment {
             // App Clips' ephemeral authorization does not exist on macOS.
             self.mayPostNotifications = [.authorized, .provisional].contains(status)
             let asked = self.notificationAuthorization != .notDetermined
+            let changed = (self.notificationAuthorization, self.notificationAlertStyle) != (status, alertStyle)
             self.notificationAuthorization = status
             self.notificationAlertStyle = alertStyle
             // Once asked, the badge moves from the Dock tile to the notification centre.
             if asked != (status != .notDetermined), let badge = self.appBadge {
                 self.appBadge = nil
                 self.setAppBadge(badge)
+            }
+            // Banners allowed or taken away in System Settings while connected: push follows now rather than on the
+            // next connection (`PushStatus.gate(for:alertStyle:interactive:)`).
+            let alertsAllowed = PushStatus.gate(for: status, alertStyle: alertStyle, interactive: false) == nil
+            if changed, status != .notDetermined, self.pushWanted, PushService.isOffered,
+               alertsAllowed ? self.pushStatus == .notAllowed : [.on, .settingUp].contains(self.pushStatus),
+               let client = self.client, let session = self.sessionAccount, self.isConnected {
+                self.startPushSetup(client: client, session: session, token: self.generation, interactive: false)
             }
             #if DEBUG
             if MacDebugNotificationLog.mode == .log { self.mayPostNotifications = true }

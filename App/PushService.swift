@@ -95,6 +95,15 @@ enum PushStatus: Equatable {
         }
     }
 
+    /// The Mac's gate, which also needs alerts: macOS starts the notification extension only for an app that may
+    /// show them, so under quiet delivery (provisional authorization, or the alert style None) a push would skip the
+    /// extension and leave the gateway's generic text in Notification Center beside the notification the app posts
+    /// itself. Push waits until banners or alerts are allowed, and a subscription is turned off while they are not.
+    static func gate(for authorization: UNAuthorizationStatus, alertStyle: UNAlertStyle, interactive: Bool) -> PushStatus? {
+        if let stop = gate(for: authorization, interactive: interactive) { return stop }
+        return authorization == .notDetermined || authorization == .authorized && alertStyle != .none ? nil : .notAllowed
+    }
+
     /// Whether a push setup starts again once the permission prompt was answered outside one (the Mac's Allow
     /// Notifications button in Settings). A reconnect that found the prompt unanswered stopped at Off with push still
     /// wanted; once there is an answer the setup goes on, and stops at Not Allowed itself if the answer was no. Push
