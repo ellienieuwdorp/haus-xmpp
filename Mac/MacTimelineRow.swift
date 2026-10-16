@@ -15,6 +15,10 @@ struct MacTimelineRow: View {
     @State private var selectAllRequests = 0
     /// Whether the gutter on the bubble's outer side holds the hover toolbar; in a narrow window it sits on the bubble.
     @State private var toolbarFitsBeside = true
+    /// The hover toolbar was shown on this row. Built only from then on: a toolbar on every row (a glass capsule, a menu
+    /// button and the room beside the bubble, measured again on each resize) added half again to each step of a window
+    /// resize.
+    @State private var toolbarBuilt = false
 
     private var message: TimelineMessage { row.message }
 
@@ -52,6 +56,9 @@ struct MacTimelineRow: View {
         .padding(.top, row.startsRun && row.dateHeader == nil ? 8 : 2)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        .onChange(of: toolbarShown, initial: true) { _, shown in
+            if shown, !toolbarBuilt { withAnimation(.easeOut(duration: 0.12)) { toolbarBuilt = true } }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(message.accessibilityDescription)
         .accessibilityActions { accessibilityActions }
@@ -79,12 +86,16 @@ struct MacTimelineRow: View {
                     }
                 }
         }
-        .onGeometryChange(for: Bool.self) { proxy in
-            // The room between the bubble's outer edge and the scroll view's, in the bubble's own coordinates.
-            guard let visible = proxy.bounds(of: .scrollView) else { return true }
-            let room = message.isOutgoing ? -visible.minX : visible.maxX - proxy.size.width
-            return room >= MacMessageToolbarSize.maximumWidth + 6 + 4
-        } action: { toolbarFitsBeside = $0 }
+        .background {
+            if toolbarBuilt {
+                Color.clear.onGeometryChange(for: Bool.self) { proxy in
+                    // The room between the bubble's outer edge and the scroll view's, in the bubble's own coordinates.
+                    guard let visible = proxy.bounds(of: .scrollView) else { return true }
+                    let room = message.isOutgoing ? -visible.minX : visible.maxX - proxy.size.width
+                    return room >= MacMessageToolbarSize.maximumWidth + 6 + 4
+                } action: { toolbarFitsBeside = $0 }
+            }
+        }
         .overlay(alignment: toolbarFitsBeside ? (message.isOutgoing ? .leading : .trailing) : (message.isOutgoing ? .topLeading : .topTrailing)) {
             toolbar
         }
@@ -117,19 +128,29 @@ struct MacTimelineRow: View {
         MacMessageNSMenu.make(MacMessageMenu(message: message, link: link), perform: perform, react: react, moreReactions: { choosingEmoji = true })
     }
 
-    /// Beside the bubble in the gutter, on its outer side, centred on it; where the gutter is too narrow, over the
-    /// bubble's top outer corner instead, so it never runs past the window's edge. Always laid out and only faded in,
-    /// so a menu opened from it stays attached when the pointer moves into the menu and off the row.
-    private var toolbar: some View {
-        let replies = MessageActionMenu.items(for: message).contains { $0.kind == .reply }
+    private var toolbarShown: Bool {
         #if DEBUG
         let forced = MacDebugHooks.tour.hoveredMessage == message.id
         #else
         let forced = false
         #endif
-        let shown = hovering || choosingEmoji || forced
-        return MacMessageToolbar(message: message, react: { choosingEmoji = true },
-                                 reply: replies ? { perform(.reply, link: nil) } : nil) { menu(link: nil) }
+        return hovering || choosingEmoji || forced
+    }
+
+    /// Beside the bubble in the gutter, on its outer side, centred on it; where the gutter is too narrow, over the
+    /// bubble's top outer corner instead, so it never runs past the window's edge. Once built it stays laid out and only
+    /// fades, so a menu opened from it stays attached when the pointer moves into the menu and off the row.
+    private var toolbar: some View {
+        let replies = MessageActionMenu.items(for: message).contains { $0.kind == .reply }
+        let shown = toolbarShown
+        // The guides go on the stack around it: on a view inside a condition they would not reach the overlay.
+        return ZStack {
+            if toolbarBuilt {
+                MacMessageToolbar(message: message, react: { choosingEmoji = true },
+                                  reply: replies ? { perform(.reply, link: nil) } : nil) { menu(link: nil) }
+                    .transition(.opacity)
+            }
+        }
             .fixedSize()
             // Beside: 6 pt outside the bubble's leading edge (sent) or trailing edge (received). On the corner: 6 pt in
             // from that edge, centred on the bubble's top edge. Each guide from the size alone, as the second would
