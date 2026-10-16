@@ -76,6 +76,11 @@ struct ConversationPresenter {
         sender == source.accountID ? "you" : (isGroup ? sender : title)
     }
 
+    /// What Up-arrow in an empty composer edits: the newest loaded message whose menu offers Edit.
+    var newestEditable: ChatMessage? {
+        source.messages.last { $0.chatID == chatID && !$0.body.isEmpty && source.canRevise($0) }
+    }
+
     var emptyNotice: (title: String, systemImage: String)? {
         Self.emptyNotice(isEmpty: messages.isEmpty, loadedFor: source.messagesLoadedFor, chatID: chatID, searchTerm: searchTerm, starredOnly: starredOnly)
     }
