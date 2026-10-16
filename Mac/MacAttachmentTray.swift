@@ -267,8 +267,8 @@ struct MacAttachmentDropHighlight: View {
 /// `-haus-tour`'s attachment steps (`MacDebugHooks`), through the composer's own paths: `attach` hands files to its
 /// seam as a drop on the field would, `drop` hands item providers to the tray as a drop on the chat would, `paste` and
 /// `import` go through the text view's pasteboard reading (from a private pasteboard, never the user's),
-/// `remove-attachment` uses the tray's remove, and `copy-image` copies a bubble's photo to a private pasteboard and logs
-/// what landed there.
+/// `remove-attachment` uses the tray's remove, `copy-image` copies a bubble's photo to a private pasteboard and logs what
+/// landed there, and `save-over` runs Save As…'s copy over an existing file and logs what is left of it.
 @MainActor enum MacAttachmentTour {
     private static let pasteboard = NSPasteboard(name: NSPasteboard.Name("haus.tour.attachments"))
 
@@ -320,6 +320,19 @@ struct MacAttachmentDropHighlight: View {
             }
             guard let provider else { MacDebugHooks.log("tour drop \(argument): no sample"); return }
             MacAttachmentIntake.add(MacAttachmentIntake.jobs(for: [provider], limit: model.attachmentLimit), to: state, model: model)
+        case "save-over":
+            // Save As… over an existing file, first from a source that cannot be read, then from the newest photo.
+            let folder = FileManager.default.temporaryDirectory.appending(path: "SaveOver", directoryHint: .isDirectory)
+            let destination = folder.appending(path: "Existing.jpg")
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try? Data("existing".utf8).write(to: destination)
+            let missing = Result { try MacAttachmentActions.save(folder.appending(path: "missing.jpg"), to: destination) }
+            let kept = (try? Data(contentsOf: destination)) == Data("existing".utf8)
+            let photo = model.messages.last { $0.attachment?.mediaType.hasPrefix("image/") == true }.flatMap { model.attachmentFiles[$0.id] }
+            let replaced = photo.map { photo in Result { try MacAttachmentActions.save(photo, to: destination) } }
+            let matches = photo.flatMap { try? Data(contentsOf: $0) } == (try? Data(contentsOf: destination))
+            MacDebugHooks.log("tour save-over: unreadable source \((try? missing.get()) == nil ? "failed" : "saved"), existing kept \(kept); photo \(replaced.map { (try? $0.get()) == nil ? "failed" : "saved" } ?? "none"), replaced \(matches)")
+            try? FileManager.default.removeItem(at: folder)
         case "remove-attachment":
             if let index = Int(argument), state.tray.indices.contains(index) { state.tray.remove(at: index) }
         case "copy-image":

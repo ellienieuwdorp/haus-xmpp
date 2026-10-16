@@ -24,7 +24,8 @@ import SwiftUI
 ///   `attach photo|file|scan|<path in the container>` (handed to the composer as a drop would),
 ///   `drop photo|slow-photo|file|scan` (item providers dropped on the chat), `paste photo|file|scan|<text>`
 ///   and `import photo|scan` (Continuity Camera's handover), both from a private pasteboard, `remove-attachment <index>`,
-///   `copy-image <message id>|newest` (to a private pasteboard, logging its types) (`MacAttachmentTour`),
+///   `copy-image <message id>|newest` (to a private pasteboard, logging its types), `save-over` (Save As… over an
+///   existing file in the app's temporary directory, logging whether it survives a failed copy) (`MacAttachmentTour`),
 ///   and `snap <name>`, which captures the main window as `<name>.png` into `-haus-capture`'s directory.
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
 ///   also in the sample conversations, where previews are otherwise off. `-haus-untinted-send`: the composer's Send in
@@ -250,7 +251,7 @@ import SwiftUI
                 if otherWindows.isEmpty { openSettings?() }
             case "close-settings": otherWindows.forEach { $0.close() }
             case "type", "key", "reply", "edit": composerStep(words[0], argument, model: model)
-            case "attach", "drop", "paste", "import", "remove-attachment", "copy-image": MacAttachmentTour.step(words[0], argument, model: model)
+            case "attach", "drop", "paste", "import", "remove-attachment", "copy-image", "save-over": MacAttachmentTour.step(words[0], argument, model: model)
             case "snap":
                 guard let directory = value(after: "-haus-capture"), let window = mainWindow, let png = render(window) else { log("tour snap: needs -haus-capture <dir>"); break }
                 emit(png, directory: directory, file: slug(argument) + ".png")

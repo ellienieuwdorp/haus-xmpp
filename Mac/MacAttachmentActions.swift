@@ -56,14 +56,25 @@ struct MacAttachmentDragSource: ViewModifier {
         let finish = { (response: NSApplication.ModalResponse) in
             guard response == .OK, let destination = panel.url else { return }
             do {
-                if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
-                try FileManager.default.copyItem(at: url, to: destination)
+                try save(url, to: destination)
             } catch {
                 let alert = NSAlert(error: error)
                 if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
             }
         }
         if let window { panel.beginSheetModal(for: window, completionHandler: finish) } else { panel.begin(completionHandler: finish) }
+    }
+
+    /// Copies the file to a destination that may already hold one. An existing file is replaced only once the whole
+    /// copy is made: a copy that fails (a full disk, an unreadable cache) leaves what was there untouched.
+    static func save(_ url: URL, to destination: URL) throws {
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: destination.path) else { return try manager.copyItem(at: url, to: destination) }
+        let staging = try exportFolder()
+        defer { try? manager.removeItem(at: staging) }
+        let copy = staging.appending(path: destination.lastPathComponent)
+        try manager.copyItem(at: url, to: copy)
+        _ = try manager.replaceItemAt(destination, withItemAt: copy)
     }
 
     /// The system's share popover, at the pointer, which is where the menu item that asked for it was.
