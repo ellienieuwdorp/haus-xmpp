@@ -3124,31 +3124,39 @@ final class AppModel {
         encryptionOverviewChatID == chatID ? encryptionOverview : nil
     }
 
-    func setDeviceTrust(_ device: EncryptionDevice, trust: DeviceTrust, chatID: String) async {
-        guard hasTransportOwnership, transportWanted, !quiescing else { return }
+    /// Saves one fingerprint-scoped decision and releases what waited on it. Returns whether the decision was saved:
+    /// a device of the other version that only held incoming messages leaves the chat's overview once decided, so a
+    /// review listing it keeps the outcome itself.
+    @discardableResult
+    func setDeviceTrust(_ device: EncryptionDevice, trust: DeviceTrust, chatID: String) async -> Bool {
+        guard hasTransportOwnership, transportWanted, !quiescing else { return false }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
-        guard let encryption else { return }
+        guard let encryption else { return false }
         let account = accountID
         let token = generation
         do {
             try await encryption.setTrust(account: account, deviceID: device.id, trust: trust)
-            guard generation == token else { return }
-            encryptionAttention.trustDecided(in: chatID)
-            // A group re-fetches on this connection too: its recipients are re-validated against the room.
-            await loadEncryptionDetails(for: chatID, refreshFromServer: isGroup(chatID), force: isGroup(chatID))
-            guard generation == token else { return }
-            if let client, isConnected {
-                // A trust decision can only unblock rows that waited for trust; keys-pending rows wait for device lists.
-                try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.trustPending])
-                guard generation == token else { return }
-                // Released messages leave the retained rows: the other version's waiting devices go with them.
-                if !isGroup(chatID) { await loadEncryptionDetails(for: chatID, refreshFromServer: false) }
-                await flushEncryptionControls(account: account, client: client)
-                await refresh()
-                startOutbox()
-            }
-        } catch { if generation == token { self.error = "This device changed. Refresh its fingerprint before reviewing it again." } }
+        } catch {
+            if generation == token { self.error = "This device changed. Refresh its fingerprint before reviewing it again." }
+            return false
+        }
+        guard generation == token else { return true }
+        encryptionAttention.trustDecided(in: chatID)
+        // A group re-fetches on this connection too: its recipients are re-validated against the room.
+        await loadEncryptionDetails(for: chatID, refreshFromServer: isGroup(chatID), force: isGroup(chatID))
+        guard generation == token else { return true }
+        if let client, isConnected {
+            // A trust decision can only unblock rows that waited for trust; keys-pending rows wait for device lists.
+            try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.trustPending])
+            guard generation == token else { return true }
+            // Released messages leave the retained rows: the other version's waiting devices go with them.
+            if !isGroup(chatID) { await loadEncryptionDetails(for: chatID, refreshFromServer: false) }
+            await flushEncryptionControls(account: account, client: client)
+            await refresh()
+            startOutbox()
+        }
+        return true
     }
 
     func repairDeviceSession(_ device: EncryptionDevice, chatID: String) async {

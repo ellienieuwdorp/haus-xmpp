@@ -41,9 +41,28 @@ final class ChatDeviceReviewTests: XCTestCase {
         XCTAssertEqual(ChatDeviceReview.outcome(of: listed, in: [device(contact, 4, trust: .accepted)], account: account, isGroup: false), .accepted)
         XCTAssertEqual(ChatDeviceReview.outcome(of: listed, in: [device(contact, 4, trust: .rejected)], account: account, isGroup: false), .rejected)
         XCTAssertNil(ChatDeviceReview.outcome(of: listed, in: [], account: account, isGroup: false))
+        XCTAssertNil(ChatDeviceReview.outcome(of: listed, in: [device(contact, 4, active: false)], account: account, isGroup: false))
 
         let groupDevice = device(member, 1)
         XCTAssertNil(ChatDeviceReview.outcome(of: groupDevice, in: [device(member, 1, trust: .rejected)], account: account, isGroup: true))
         XCTAssertEqual(ChatDeviceReview.outcome(of: groupDevice, in: [device(member, 1, trust: .verified)], account: account, isGroup: true), .verified)
+    }
+
+    /// A chat sending legacy OMEMO lists an OMEMO 2 device only while it holds messages; once decided and released it
+    /// leaves the chat's devices, and the review shows the decision it saved (then a later verification) rather than
+    /// asking again. The stored record wins while there is one.
+    func testReadingOnlyDeviceKeepsTheSavedDecisionAfterLeavingTheChat() {
+        let listed = device(contact, 4, .modern)
+        XCTAssertEqual(ChatDeviceReview.devices([device(contact, 2, .legacy, trust: .accepted), listed], account: account, isGroup: false), [listed])
+        XCTAssertNil(ChatDeviceReview.outcome(of: listed, in: [device(contact, 2, .legacy, trust: .accepted)], decided: [:], account: account, isGroup: false))
+        XCTAssertEqual(ChatDeviceReview.outcome(of: listed, in: [], decided: [listed.id: .accepted], account: account, isGroup: false), .accepted)
+        XCTAssertEqual(ChatDeviceReview.outcome(of: listed, in: [], decided: [listed.id: .verified], account: account, isGroup: false), .verified)
+        XCTAssertEqual(ChatDeviceReview.outcome(of: listed, in: [], decided: [listed.id: .rejected], account: account, isGroup: false), .rejected)
+        XCTAssertEqual(ChatDeviceReview.outcome(of: listed, in: [device(contact, 4, .modern, trust: .rejected)], decided: [listed.id: .accepted],
+                                                account: account, isGroup: false), .rejected)
+        // A decision saved for another key of the same device ID is not this one's.
+        let replaced = EncryptionDevice(jid: contact, profile: .modern, deviceID: 4, identityKey: OwnDeviceReview.sampleIdentities[1].modern,
+                                        trust: .undecided, active: true, identityChanged: true)
+        XCTAssertNil(ChatDeviceReview.outcome(of: replaced, in: [], decided: [listed.id: .accepted], account: account, isGroup: false))
     }
 }

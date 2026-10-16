@@ -21,10 +21,14 @@ enum ChatDeviceReview {
         return device.trust == .undecided
     }
 
-    /// The decision made on a listed device since the review opened, from the stored `devices`: nil while it still
-    /// keeps the chat waiting (or is no longer stored, which the next decision reports as a changed device).
-    static func outcome(of device: EncryptionDevice, in devices: [EncryptionDevice], account: String, isGroup: Bool) -> DeviceTrust? {
-        guard let current = devices.first(where: { $0.id == device.id }), !holds(current, account: account, isGroup: isGroup) else { return nil }
+    /// The decision made on a listed device since the review opened: its stored record's trust once that no longer keeps
+    /// the chat waiting, else the decision the review saved (`decided`, by fingerprint-scoped ID) for a device the chat
+    /// no longer lists, as the other version's device does once the messages it held are released. Nil while it waits,
+    /// and for a record that went inactive undecided (its key was replaced), which the next decision reports as changed.
+    static func outcome(of device: EncryptionDevice, in devices: [EncryptionDevice], decided: [String: DeviceTrust] = [:],
+                        account: String, isGroup: Bool) -> DeviceTrust? {
+        guard let current = devices.first(where: { $0.id == device.id }) else { return decided[device.id] }
+        guard !holds(current, account: account, isGroup: isGroup), current.trust != .undecided else { return nil }
         return current.trust
     }
 

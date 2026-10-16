@@ -105,6 +105,8 @@ struct MacDeviceReviewSheet: View {
     @Environment(\.dismiss) private var dismiss
     /// Every device listed since the sheet opened, so a decided one stays with its outcome until the sheet closes.
     @State private var shown: [EncryptionDevice] = []
+    /// Decisions saved from this sheet by fingerprint-scoped ID, for devices the chat stops listing once decided.
+    @State private var decided: [String: DeviceTrust] = [:]
     @State private var rejecting: EncryptionDevice?
     @State private var comparing: EncryptionDevice?
 
@@ -192,8 +194,14 @@ struct MacDeviceReviewSheet: View {
         return "Compare \(subject) with the one \(title) reads out from their device. Trust only devices you recognize."
     }
 
-    /// The stored record of a listed device, whose trust may have changed since the list was made.
-    private func current(_ device: EncryptionDevice) -> EncryptionDevice { stored.first { $0.id == device.id } ?? device }
+    /// The stored record of a listed device, whose trust may have changed since the list was made; for one the chat no
+    /// longer lists, the listed record with the decision saved here.
+    private func current(_ device: EncryptionDevice) -> EncryptionDevice {
+        if let record = stored.first(where: { $0.id == device.id }) { return record }
+        var listed = device
+        if let trust = decided[device.id] { listed.trust = trust }
+        return listed
+    }
 
     /// Who to compare with in the fingerprint sheet; nil for one of the account's own devices.
     private func name(of device: EncryptionDevice) -> String? {
@@ -205,12 +213,13 @@ struct MacDeviceReviewSheet: View {
     }
 
     private func decide(_ device: EncryptionDevice, _ trust: DeviceTrust) {
-        Task { await model.setDeviceTrust(current(device), trust: trust, chatID: chatID) }
+        let record = current(device)
+        Task { if await model.setDeviceTrust(record, trust: trust, chatID: chatID) { decided[record.id] = trust } }
     }
 
     @ViewBuilder private func section(for listed: EncryptionDevice) -> some View {
         let device = current(listed)
-        let outcome = ChatDeviceReview.outcome(of: listed, in: stored, account: model.accountID, isGroup: isGroup)
+        let outcome = ChatDeviceReview.outcome(of: listed, in: stored, decided: decided, account: model.accountID, isGroup: isGroup)
         // A group waits on another member's blocked device too; it can only be trusted from here.
         let blocked = outcome == nil && device.trust == .rejected
         let readingOnly = !isGroup && model.encryptionOverview(for: chatID).map { device.profile != $0.profile } == true
