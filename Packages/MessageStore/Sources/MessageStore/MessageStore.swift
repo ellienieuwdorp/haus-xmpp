@@ -2095,6 +2095,15 @@ public actor MessageStore {
         }
     }
 
+    /// The first newest-first query found `archiveID` empty, so none of it is history: its read baseline is the earliest
+    /// possible. A later connection's first page then holds only what arrived since, and stays unread and alerts, where
+    /// it would otherwise be taken for the history of a new device. A baseline already recorded stays.
+    public func recordEmptyArchive(accountID: String, archiveID: String) throws {
+        try requireTransportOwnership()
+        guard !accountID.isEmpty, !archiveID.isEmpty else { throw MessageStoreError.invalidValue }
+        try connection.transaction { try recordReadBaseline(accountID: accountID, archiveID: archiveID, sentAt: .distantPast) }
+    }
+
     /// Reference source stays separate: a room assigns stanza IDs after encryption.
     public func reactionReference(accountID: String, messageID: String) throws -> String? {
         guard let message = try message(accountID: accountID, messageID: messageID), message.encryptionProfile == "modern" else { return nil }

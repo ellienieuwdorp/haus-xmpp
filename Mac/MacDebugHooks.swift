@@ -104,7 +104,8 @@ import SwiftUI
 ///   before it opens, as a newer build would have left it (for the screen an older build shows over newer data).
 /// - `-haus-unobtrusive`: see `MacUnobtrusive`.
 /// - `-haus-lifecycle-steps "<step>; …"`: a lifecycle scenario after the hooks above (`MacLifecycleDebug`).
-/// - `-haus-log-notifications`: logs the notifications the model would post instead of posting them.
+/// - `-haus-log-notifications`: logs the notifications the model would post instead of posting them;
+///   `-haus-post-notifications` logs and posts them. Both also in a test session (`MacDebugNotificationLog`).
 /// - Push and notification extension checks: see `MacPushProbe`.
 @MainActor enum MacDebugHooks {
     private static let arguments = ProcessInfo.processInfo.arguments

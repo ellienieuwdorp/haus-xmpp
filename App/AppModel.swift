@@ -36,6 +36,8 @@ final class AppModel {
     /// The chat list has been read from storage for the current account. Until then the Chats screen shows nothing:
     /// a cold start of a signed-in account must not flash the "no conversations" state before its rows arrive.
     private(set) var hasLoadedChats = false
+    /// Retained ciphertext per chat at the last chat-list load, so a resolved review can clear its notification.
+    @ObservationIgnored private var reviewCounts: [String: Int] = [:]
     private(set) var messages: [ChatMessage] = []
     /// The chat whose messages `messages` currently holds; nil while a load is pending.
     private(set) var messagesLoadedFor: String?
@@ -1608,7 +1610,7 @@ final class AppModel {
         guard testSessionID == nil, !isDemo, !accountID.isEmpty else { return }
         #if DEBUG
         // A scripted check never puts a system prompt on screen.
-        if MacUnobtrusive.isOn || MacDebugNotificationLog.poster != nil { return }
+        if MacUnobtrusive.isOn || MacDebugNotificationLog.mode != nil { return }
         #endif
         guard await Self.notificationAuthorization() == .notDetermined else { refreshNotificationPermission(); return }
         _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
@@ -4007,11 +4009,14 @@ final class AppModel {
         summaries += pending.keys.filter { !known.contains($0) }.sorted().map {
             ChatSummary(id: $0, title: $0, preview: reviewPreview, isPinned: false)
         }
-        // A pointer moved (here, on another device, or before this launch): its chat's notifications may go.
+        // A pointer moved (here, on another device, or before this launch), or retained ciphertext was resolved: its
+        // chat's notifications, or its review notification, may go.
         let previousUnread = Dictionary(chats.map { ($0.id, $0.unreadCount) }, uniquingKeysWith: max)
-        if !hasLoadedChats || summaries.contains(where: { $0.unreadCount < (previousUnread[$0.id] ?? 0) }) {
+        if !hasLoadedChats || summaries.contains(where: { $0.unreadCount < (previousUnread[$0.id] ?? 0) })
+            || reviewCounts.contains(where: { pending[$0.key, default: 0] < $0.value }) {
             removeReadNotifications(account: account, store: store)
         }
+        reviewCounts = pending
         // A reorder (pin, new activity) animates; List only does so inside an explicit transaction.
         withAnimation(summaries.map(\.id) == chats.map(\.id) ? nil : .default) { chats = summaries }
         hasLoadedChats = true
@@ -4134,7 +4139,7 @@ extension AppModel: NotificationActionEnvironment {
     }
 
     func authorizedNotificationAccount() -> String? {
-        guard testSessionID == nil, !isDemo, !accountID.isEmpty, sessionAccount?.accountID == accountID,
+        guard postsNotificationsInThisSession, !isDemo, !accountID.isEmpty, sessionAccount?.accountID == accountID,
               !ProcessInfo.processInfo.arguments.contains("--inspect-notification"),
               let saved = try? NotificationAccount.load(), saved.accountID == accountID else { return nil }
         return accountID
@@ -4353,7 +4358,11 @@ extension AppModel: NotificationActionEnvironment {
         content.categoryIdentifier = NotificationIdentity.noticeCategory
         content.userInfo = [NotificationNavigation.replyFailureKey: destination.payload]
         content.sound = .default
-        try? await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+        #if DEBUG && os(macOS)
+        guard MacDebugNotificationLog.shouldPost(notice: request) else { return }
+        #endif
+        try? await center.add(request)
     }
 
     func endNotificationAction() async {
@@ -4473,22 +4482,25 @@ extension AppModel: NotificationActionEnvironment {
 
     /// The extension's poster, with the app's pre-scaled notification avatars, so banners match the extension's requests.
     private func notificationPoster(account: String) -> any NotificationPosting {
-        #if DEBUG && os(macOS)
-        // `-haus-log-notifications`: a lab run logs what would be posted, without asking for permission.
-        if let poster = MacDebugNotificationLog.poster { return poster }
-        #endif
         let root = storageRoot
-        return UserNotificationPoster(avatarData: { hash in
+        let avatarData: @Sendable (String) -> Data? = { hash in
             guard let root else { return nil }
             return AvatarStore.notificationImageData(root: root, account: account, hash: hash)
-        })
+        }
+        let poster = UserNotificationPoster(avatarData: avatarData)
+        #if DEBUG && os(macOS)
+        // `-haus-log-notifications` / `-haus-post-notifications`: a lab run logs what it posts (or would post).
+        if let logged = MacDebugNotificationLog.poster(posting: poster, avatarData: avatarData) { return logged }
+        #endif
+        return poster
     }
 
-    /// A test session posts nothing, except a DEBUG Mac run that only logs its notifications (`-haus-log-notifications`):
-    /// banner checks can then use a private test store and leave the shared App Group store alone.
+    /// A test session posts nothing, and its account's notifications take no actions, except in a DEBUG Mac run that
+    /// logs its notifications (`MacDebugNotificationLog`): banner checks can then use a private test store and leave
+    /// the shared App Group store alone.
     private var postsNotificationsInThisSession: Bool {
         #if DEBUG && os(macOS)
-        if MacDebugNotificationLog.poster != nil { return true }
+        if MacDebugNotificationLog.mode != nil { return true }
         #endif
         return testSessionID == nil
     }
@@ -4511,7 +4523,7 @@ extension AppModel: NotificationActionEnvironment {
             self.mayPostNotifications = [.authorized, .provisional].contains(status)
             self.notificationAuthorization = status
             #if DEBUG
-            if MacDebugNotificationLog.poster != nil { self.mayPostNotifications = true }
+            if MacDebugNotificationLog.mode == .log { self.mayPostNotifications = true }
             #endif
             #endif
             // Turned off in iOS Settings while away; turning it back on is picked up by the next connection.
@@ -4530,6 +4542,18 @@ extension AppModel: NotificationActionEnvironment {
         let held = await store?.holdsTransportOwnership
         let stored = held.map { $0 ? "held" : "free" } ?? "closed"
         return "lease store \(stored) model \(hasTransportOwnership ? "held" : "free"), session \(session.label), quiescing \(quiescing ? 1 : 0)"
+    }
+
+    /// For the Mac's notification checks (`MacNotificationDebug`): the chat's read pointer and its stored messages,
+    /// without their text.
+    func debugMessageReport(_ chatID: String) async -> String {
+        guard let store else { return "closed" }
+        let pointer = try? await store.readPointer(accountID: accountID, chatID: chatID)
+        let rows = ((try? await store.messages(accountID: accountID, chatID: chatID)) ?? []).map { message in
+            "\(message.id.prefix(8)) \(message.isOutgoing ? "out \(message.transportState.map { "\($0)" } ?? "")" : "in") at \(message.sentAt.timeIntervalSince1970) body \(message.body.count)"
+                + (message.unreadableReason.map { " unreadable \($0)" } ?? "")
+        }
+        return "pointer \(pointer.map { "\($0.messageID.prefix(8)) at \($0.sentAt.timeIntervalSince1970)" } ?? "none"); \(rows.joined(separator: " | "))"
     }
 
     /// Holds one UI crypto operation open for `duration`, so a quiesce that starts meanwhile cannot finish before it:

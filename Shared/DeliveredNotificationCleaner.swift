@@ -65,10 +65,13 @@ enum DeliveredNotificationCleaner {
     /// app after any pointer moved (a local read, another device's marker, an XEP-0490 item), and for the extension at
     /// the end of a run.
     /// Reaction notifications go the same way: a pointer that moved after they were posted means the chat was seen
-    /// (`ReactionNotificationCleanup`, which also drops ones withdrawn in part or whole).
+    /// (`ReactionNotificationCleanup`, which also drops ones withdrawn in part or whole). So do review notifications
+    /// whose ciphertext is no longer retained (`RetainedNotificationCleanup`): the message they stood for is in the
+    /// chat now, where the extension's end-of-run cleanup would also have removed them.
     static func removeRead(accountID: String, store: MessageStore, center: UNUserNotificationCenter = .current()) async throws {
         let notifications = await center.deliveredNotifications()
         let delivered = notifications.map { Delivered($0.request, accountID: accountID) }
+        let current = notifications.map { DeliveredNotification($0.request) }
         let named = Set(delivered.compactMap(\.messageID))
         var stale: [String] = []
         if !named.isEmpty {
@@ -76,8 +79,8 @@ enum DeliveredNotificationCleaner {
             let read = try await store.readNotificationMessageIDs(accountID: accountID, messageIDs: Set(named.sorted().prefix(1_000)))
             stale = identifiers(accountID: accountID, readMessageIDs: read, delivered: delivered)
         }
-        stale += try await ReactionNotificationCleanup.staleIdentifiers(store: store, accountID: accountID,
-                                                                         delivered: notifications.map { DeliveredNotification($0.request) })
+        stale += try await ReactionNotificationCleanup.staleIdentifiers(store: store, accountID: accountID, delivered: current)
+        stale += try await RetainedNotificationCleanup.staleIdentifiers(store: store, accountID: accountID, delivered: current)
         remove(Array(Set(stale)).sorted(), center: center)
     }
 

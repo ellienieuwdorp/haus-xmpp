@@ -78,11 +78,7 @@ import UserNotifications
                 } catch { log("extension probe: FAILED to read results \(error)") }
             }
             if MacDebugHooks.has("-haus-group-avatar-probe") { await groupAvatarProbe(donates: MacDebugHooks.has("-haus-group-avatar-donate")) }
-            if MacDebugHooks.has("-haus-delivered-notifications") {
-                let delivered = await center.deliveredNotifications()
-                log("delivered: \(delivered.count)")
-                for notification in delivered { log("delivered \(describe(notification))") }
-            }
+            if MacDebugHooks.has("-haus-delivered-notifications") { await logDelivered() }
             if MacDebugHooks.has("-haus-clear-delivered") {
                 center.removeAllDeliveredNotifications()
                 log("delivered notifications removed")
@@ -109,6 +105,13 @@ import UserNotifications
             }
             log("liveness self-test: no answer in the window")
         } catch { log("liveness self-test: FAILED \(error)") }
+    }
+
+    /// What Notification Center holds for the app, oldest first.
+    static func logDelivered() async {
+        let delivered = await UNUserNotificationCenter.current().deliveredNotifications().sorted { $0.date < $1.date }
+        log("delivered: \(delivered.count)")
+        for notification in delivered { log("delivered \(describe(notification))") }
     }
 
     static func received(token: Data) {

@@ -16,7 +16,8 @@ import SwiftUI
 /// input that long ago, in place of the real input clock; `idle 0` is input just now), `input` (the real clock again),
 /// `sleep` (a fake acknowledgement), `sleep-miss` (a UI crypto operation held past the sleep deadline first),
 /// `wake`, `select <chat>`, `accept <jid>` (accepts that lab contact's undecided devices, as the Devices page would),
-/// `draft <text>` (the open chat's composer changed), `report` (lease and session), `quit`.
+/// `draft <text>` (the open chat's composer changed), `report` (lease and session), `notify <step>` (notification actions
+/// and settings, `MacNotificationDebug`), `quit`.
 @MainActor enum MacLifecycleDebug {
     /// The scene phase each window's content last reported, by window.
     static var scenePhases: [String: ScenePhase] = [:]
@@ -107,6 +108,7 @@ import SwiftUI
             case "accept": await accept(argument, model: model)
             case "draft": if let chat = window.selection { model.draftChanged(argument, in: chat) }
             case "report": MacDebugHooks.log("report: \(await model.debugLeaseReport()), scenePhase \(phases)")
+            case "notify": await MacNotificationDebug.run(argument, model: model, window: window)
             case "quit": MacDebugHooks.quit()
             default: MacDebugHooks.log("step \(step): unknown")
             }
@@ -144,33 +146,6 @@ struct MacScenePhaseLog: ViewModifier {
             MacLifecycleDebug.scenePhases[window] = nil
             MacDebugHooks.log("scenePhase \(window) content gone")
         }
-    }
-}
-
-/// `-haus-log-notifications`: the model posts its notifications here instead of the notification centre, so a lab run
-/// shows what would be posted without asking for permission (which would put a system prompt on screen). Logs the
-/// thread and kind only, never a title or body.
-enum MacDebugNotificationLog {
-    static let poster: (any NotificationPosting)? =
-        ProcessInfo.processInfo.arguments.contains("-haus-log-notifications") ? LoggingPoster() : nil
-
-    struct LoggingPoster: NotificationPosting {
-        func add(_ request: PlannedNotification) async throws {
-            write("notification posted: thread \(request.threadIdentifier) category \(request.categoryIdentifier)")
-        }
-        func deliveredNotifications() async -> [DeliveredNotification] { [] }
-        func removeDelivered(identifiers: [String]) async {
-            if !identifiers.isEmpty { write("notification removed: \(identifiers.count)") }
-        }
-    }
-
-    /// As `MacDebugHooks.log`, from outside the main actor.
-    private static func write(_ text: String) {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        formatter.dateFormat = "HH:mm:ss.SSS"
-        FileHandle.standardOutput.write(Data("HAUS \(formatter.string(from: Date())) \(text)\n".utf8))
     }
 }
 #endif

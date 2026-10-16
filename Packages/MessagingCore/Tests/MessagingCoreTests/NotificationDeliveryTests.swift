@@ -186,6 +186,30 @@ struct NotificationPresenterTests {
         }
     }
 
+    /// The app's cleanup asks the same question without a run: only this account's review notifications whose
+    /// ciphertext is gone are stale.
+    @Test func retainedCleanupKeepsPendingReviewsAndOtherAccounts() async throws {
+        try await withStore { store in
+            let revision = try #require(try await store.encryptionStateRevision(accountID: account))
+            for (digest, at) in [("held", 1.0), ("still", 2.0)] {
+                try await store.retainEncryptedIncoming(accountID: account, sender: "bob@example.org", digest: digest, wire: Data([1]), reason: .trustPending,
+                    notification: PendingNotificationContext(chatID: "bob@example.org", sentAt: Date(timeIntervalSince1970: at)))
+            }
+            let posting = FakePosting()
+            try await NotificationPresenter(posting: posting).present(store: store, accountID: account, progress: NotificationRunProgress())
+            let review = await posting.added
+            let approved = StoredMessage(id: UUID().uuidString, accountID: account, chatID: "bob@example.org", senderID: "bob@example.org",
+                                         body: "Synthetic", sentAt: Date(timeIntervalSince1970: 1), encryptionProfile: "modern")
+            try await store.commitEncryptedIncoming(accountID: account, sender: "bob@example.org", digest: "held", expectedRevision: revision,
+                                                    state: Data([9]), message: approved)
+            let other = try #require(NotificationReference.retained(accountID: "other@example.org"))
+            let delivered = await posting.delivered.filter { $0.reference?.kind == .retained }
+                + [DeliveredNotification(identifier: "other-review", categoryIdentifier: NotificationIdentity.messageCategory, destination: nil, reference: other)]
+            let stale = try await RetainedNotificationCleanup.staleIdentifiers(store: store, accountID: account, delivered: delivered)
+            #expect(stale == [review[0].identifier])
+        }
+    }
+
     @Test func successRemovesDeliveredFallbacksAndRetractedMessagesOnly() async throws {
         try await withStore { store in
             let kept = try await receive(store, at: 1, wireID: "w1")
