@@ -29,6 +29,8 @@ import SwiftUI
             report(timeline, "after scroll \(argument)")
         case "scroll-to":
             timeline.scrollTo(messageID: argument)
+        case "quote":
+            timeline.scrollTo(quotedMessage: argument)
         case "resize":
             let size = argument.split(separator: "x").compactMap { Double($0) }
             guard size.count == 2, let window else { return }

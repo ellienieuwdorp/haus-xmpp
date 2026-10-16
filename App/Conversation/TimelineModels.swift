@@ -13,7 +13,8 @@ struct TimelineReply: Sendable, Equatable {
     let body: String
     /// The quoted photo or video on disk, shown as a small still at the quote's trailing edge; nil shows the text alone.
     var thumbnail: TimelineAttachment? = nil
-    /// The quoted message, for jumping to it from the quote.
+    /// The quoted message as the reply names it, for jumping to it from the quote: its local ID for a reply sent from
+    /// here, the ID its sender saw for a received one. The store resolves either (`AppModel.quotedMessageID`).
     var messageID: String? = nil
     /// Side of that still, in the bubble and in the composer's reply strip.
     static let thumbnailSide: CGFloat = 36

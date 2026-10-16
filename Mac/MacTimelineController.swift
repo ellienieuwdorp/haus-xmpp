@@ -343,17 +343,25 @@ import SwiftUI
     /// as the store and the server's archive go; a message that never turns up leaves the timeline where it was.
     func scrollTo(messageID id: String) {
         revealing?.cancel()
-        revealing = Task { await reveal(id) }
+        revealing = Task { await reveal { id } }
     }
 
-    private func reveal(_ id: String) async {
+    /// Scrolls to the message a reply quotes, from the reference the reply carries (`TimelineReply.messageID`). The
+    /// store resolves it to a stored message; one not stored yet is looked for again after each page of history.
+    func scrollTo(quotedMessage reference: String) {
+        revealing?.cancel()
+        revealing = Task { [model, chatID] in await reveal { await model.quotedMessageID(reference, in: chatID) } }
+    }
+
+    private func reveal(_ resolve: () async -> String?) async {
+        var target = await resolve()
         // Each round raises the window by a page or backfills a few archive pages; the window's ceiling bounds the rounds.
         // A round may bring nothing yet (a raised window over a store holding no more, before the archive is asked),
         // so only a few such rounds in a row, or the model saying nothing more can come, end the search.
         var idle = 0
         for _ in 0..<40 {
-            guard indexByID[id] == nil, !Task.isCancelled, model.messagesLoadedFor == chatID,
-                  !model.messages.contains(where: { $0.id == id }) else { break }
+            guard !Task.isCancelled, model.messagesLoadedFor == chatID else { break }
+            if let target, indexByID[target] != nil || model.messages.contains(where: { $0.id == target }) { break }
             let oldest = model.messages.first?.id
             let more = await model.loadOlderMessages()
             // A window raise has reloaded by now; an archive backfill pages in over time.
@@ -371,11 +379,12 @@ import SwiftUI
                 idle = 0
                 update()
             }
+            if target == nil { target = await resolve() }
         }
         update()
-        guard !Task.isCancelled, indexByID[id] != nil, let proxy = layout.proxy else {
+        guard !Task.isCancelled, let id = target, indexByID[id] != nil, let proxy = layout.proxy else {
             #if DEBUG
-            MacDebugHooks.log("timeline: \(id) not found")
+            MacDebugHooks.log("timeline: \(target ?? "quoted message") not found")
             #endif
             return
         }
@@ -536,7 +545,8 @@ struct MacTimelineAnchor: NSViewRepresentable {
 struct OpenQuotedMessage: Equatable {
     weak var timeline: MacTimelineController?
 
-    @MainActor func callAsFunction(_ id: String) { timeline?.scrollTo(messageID: id) }
+    /// `reference` is the quote's `TimelineReply.messageID`.
+    @MainActor func callAsFunction(_ reference: String) { timeline?.scrollTo(quotedMessage: reference) }
 
     static func == (left: Self, right: Self) -> Bool { left.timeline === right.timeline }
 }
