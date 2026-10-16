@@ -36,7 +36,8 @@ import SwiftUI
 ///   (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's), `minimums` (logs the minimum
 ///   size of the window's content and of each hosting view in it, the split view's columns among them). Keyboard and
 ///   VoiceOver steps (`MacKeyboardDebug`): `focus` (logs which view has the keyboard: the composer, a bubble's text or
-///   another, the timeline's focus and focused message, and the focused accessibility element), `press <key> [<key>…]`
+///   another, the timeline's focus and focused message, the focused accessibility element and whether Full Keyboard Access
+///   is on), `press <key> [<key>…]`
 ///   (key events handed to the main window in process, then `focus`: tab, shift-tab, up, down, shift-up, command-up,
 ///   command-down, page-up, page-down, home, end, return, space, escape, command-r; a menu the keyboard opens is logged
 ///   instead of shown), `ax [<text>]` (the window's accessibility elements that say something, or those whose

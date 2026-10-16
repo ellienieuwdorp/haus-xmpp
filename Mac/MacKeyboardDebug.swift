@@ -99,7 +99,8 @@ import AppKit
         let index = timeline?.focusedID.flatMap(ids.firstIndex(of:)).map { " (\($0 + 1) of \(ids.count))" } ?? ""
         let intent = MacComposerTour.intent.map { "replying \($0.replyingTo?.id ?? "-"), editing \($0.editing?.id ?? "-")" } ?? "no composer"
         MacDebugHooks.log("focus after \(what): responder \(name); timeline focused \(timeline?.hasKeyboardFocus ?? false), message "
-            + "\(timeline?.focusedID ?? "none")\(index); composer \(intent); accessibility focus \(focused)")
+            + "\(timeline?.focusedID ?? "none")\(index); composer \(intent); accessibility focus \(focused); "
+            + "full keyboard access \(NSApp.isFullKeyboardAccessEnabled ? "on" : "off")")
     }
 
     private static func focusedElement(in window: NSWindow) -> Element? {
