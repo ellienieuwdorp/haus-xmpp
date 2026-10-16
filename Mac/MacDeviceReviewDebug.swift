@@ -13,7 +13,8 @@ import SwiftUI
 /// - The rest press a button as VoiceOver would (`MacKeyboardDebug.pressElement`), so they run the button's own action:
 ///   `device <id>` a device row in the inspector, `review` the banner's Review…,
 ///   `trust|verify|dont-trust|compare|remove <id>` that device's button in the newest open sheet (the review sheet, the
-///   account's review or a fingerprint sheet), `confirm <button>` a confirmation dialog's button, `close-sheet` the
+///   account's review or a fingerprint sheet; `<id>.legacy` or `<id>.modern` picks one version where the review sheet
+///   lists a device in both, else the first), `confirm <button>` a confirmation dialog's button, `close-sheet` the
 ///   newest sheet's Done or Close.
 /// - `own-review`: opens the account's device review, as the sidebar card's Review does (the sidebar's rows are not in
 ///   the accessibility tree of a window that was never on screen, so the button cannot be pressed).
@@ -31,7 +32,9 @@ import SwiftUI
         ]
         if let button = buttons[name] {
             guard let mainWindow else { return MacDebugHooks.log("tour \(name): no main window") }
-            await MacKeyboardDebug.pressElement(matching: button.identifiers.map { $0 + argument } + button.titles, in: mainWindow)
+            // The review sheet's identifiers end in the device's version; the bare ID matches them as a prefix.
+            let identifiers = button.identifiers.flatMap { [$0 + argument, $0 + argument + "."] }
+            await MacKeyboardDebug.pressElement(matching: identifiers + button.titles, in: mainWindow)
             return
         }
         switch name {

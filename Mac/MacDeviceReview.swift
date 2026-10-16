@@ -213,6 +213,11 @@ struct MacDeviceReviewSheet: View {
         device.jid == model.accountID ? "Your account" : isGroup ? device.jid : "\(title)’s device"
     }
 
+    /// A device ID can be listed once per version (its OMEMO 2 record holding messages while the chat sends legacy), so
+    /// each button names the version too.
+    private func spoken(_ device: EncryptionDevice) -> String { "\(String(device.deviceID)), \(device.profile.label)" }
+    private func key(_ device: EncryptionDevice) -> String { "\(device.deviceID).\(device.profile.rawValue)" }
+
     private func decide(_ device: EncryptionDevice, _ trust: DeviceTrust) {
         let record = current(device)
         Task { if await model.setDeviceTrust(record, trust: trust, chatID: chatID) { decided[record.id] = trust } }
@@ -251,8 +256,8 @@ struct MacDeviceReviewSheet: View {
                         if !blocked {
                             Button(role: .destructive) { rejecting = listed } label: { Text("Don’t Trust").frame(maxWidth: .infinity) }
                                 .secondaryActionStyle().foregroundStyle(.red)
-                                .accessibilityLabel("Don’t trust device \(String(device.deviceID))")
-                                .accessibilityIdentifier("deviceReview.reject.\(device.deviceID)")
+                                .accessibilityLabel("Don’t trust device \(spoken(device))")
+                                .accessibilityIdentifier("deviceReview.reject.\(key(device))")
                                 // Anchored to its button, so the dialog points at the device it decides.
                                 .confirmationDialog("Don’t trust device \(String(device.deviceID))?",
                                                     isPresented: Binding(get: { rejecting?.id == listed.id }, set: { if !$0 { rejecting = nil } }),
@@ -262,8 +267,8 @@ struct MacDeviceReviewSheet: View {
                         }
                         Button { decide(listed, .accepted) } label: { Text("Trust").frame(maxWidth: .infinity) }
                             .prominentActionStyle()
-                            .accessibilityLabel("Trust device \(String(device.deviceID))")
-                            .accessibilityIdentifier("deviceReview.trust.\(device.deviceID)")
+                            .accessibilityLabel("Trust device \(spoken(device))")
+                            .accessibilityIdentifier("deviceReview.trust.\(key(device))")
                     }
                     .controlSize(.large)
                 }
@@ -279,8 +284,8 @@ struct MacDeviceReviewSheet: View {
                     .contentShape(Rectangle())
                 }
                 .listRowButton()
-                .accessibilityLabel("Compare fingerprints of device \(String(device.deviceID))")
-                .accessibilityIdentifier("deviceReview.compare.\(device.deviceID)")
+                .accessibilityLabel("Compare fingerprints of device \(spoken(device))")
+                .accessibilityIdentifier("deviceReview.compare.\(key(device))")
             }
         }
     }
