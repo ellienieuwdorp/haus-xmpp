@@ -94,20 +94,34 @@ struct MacAttachmentDragSource: ViewModifier {
 
     /// Where shared and dragged copies wait for the app that takes them.
     private static var exports: URL { FileManager.default.temporaryDirectory.appending(path: "Exports", directoryHint: .isDirectory) }
+    /// Whoever takes a shared or dragged copy (Finder, Mail, AirDrop) has made its own by then.
+    private static let exportLifetime: TimeInterval = 3600
 
     /// A copy of the cached file under its own name, in a folder of its own so two files of one name never collide.
-    /// A clone on APFS, so it takes no space until one of them changes. Copies older than an hour go first: whoever
-    /// took them (Finder, Mail, AirDrop) has made its own copy by then.
+    /// A clone on APFS, so it takes no space until one of them changes. It goes an hour later, or at the next launch.
     static func namedCopy(of url: URL, name: String) throws -> URL {
+        removeExports(olderThan: .now - exportLifetime)
+        let copy = try exportFolder().appending(path: name)
+        try FileManager.default.copyItem(at: url, to: copy)
+        Task {
+            try? await Task.sleep(for: .seconds(exportLifetime + 1))
+            removeExports(olderThan: .now - exportLifetime)
+        }
+        return copy
+    }
+
+    /// Every copy made before `cutoff`; by default all of them, which at launch are an earlier run's. Decrypted files
+    /// must not outlive their use.
+    static func removeExports(olderThan cutoff: Date = .distantFuture) {
         let manager = FileManager.default
-        let cutoff = Date.now.addingTimeInterval(-3600)
         for folder in (try? manager.contentsOfDirectory(at: exports, includingPropertiesForKeys: [.creationDateKey])) ?? [] {
             if let created = try? folder.resourceValues(forKeys: [.creationDateKey]).creationDate, created < cutoff { try? manager.removeItem(at: folder) }
         }
+    }
+
+    private static func exportFolder() throws -> URL {
         let folder = exports.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-        try manager.createDirectory(at: folder, withIntermediateDirectories: true)
-        let copy = folder.appending(path: name)
-        try manager.copyItem(at: url, to: copy)
-        return copy
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
     }
 }
