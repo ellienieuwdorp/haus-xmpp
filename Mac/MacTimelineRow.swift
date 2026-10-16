@@ -106,10 +106,11 @@ struct MacTimelineRow: View {
         }
         .background {
             if toolbarBuilt {
+                let isOutgoing = message.isOutgoing
                 Color.clear.onGeometryChange(for: Bool.self) { proxy in
                     // The room between the bubble's outer edge and the scroll view's, in the bubble's own coordinates.
                     guard let visible = proxy.bounds(of: .scrollView) else { return true }
-                    let room = message.isOutgoing ? -visible.minX : visible.maxX - proxy.size.width
+                    let room = isOutgoing ? -visible.minX : visible.maxX - proxy.size.width
                     return room >= MacMessageToolbarSize.maximumWidth + 6 + 4
                 } action: { toolbarFitsBeside = $0 }
             }
