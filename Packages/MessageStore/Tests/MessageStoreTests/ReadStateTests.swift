@@ -196,16 +196,16 @@ private func commit(_ store: MessageStore, digest: String, sender: String = peer
     }
 }
 
-/// A room joined during a connection is first walked on the next one. The join is its baseline, so what arrived in
-/// between, stored or retained for review, stays unread and alerts once that first page brings it, while history from
-/// before the join stays read. A room that already has a checkpoint keeps its own baseline.
+/// A room joined during a connection is first walked on the next one. The archive's newest time before the join is its
+/// baseline, so what arrived in between, stored or retained for review, stays unread and alerts once that first page
+/// brings it, while history from before the join stays read. A room that already has a checkpoint keeps its own baseline.
 @Test func joinedRoomCountsWhatArrivesBeforeItsFirstWalk() async throws {
     try await withEncryptedStore(account: account) { store, _ in
         let at = { (second: Double) in Date(timeIntervalSince1970: 1_800_000_000 + second) }
         let member = { (id: String, second: Double) in StoredMessage(id: id, accountID: account, chatID: room, senderID: "member@x", body: "Synthetic group",
                                                                       sentAt: at(second), encryptionProfile: "modern", wireID: "origin-" + id) }
         try await store.upsertChat(accountID: account, chatID: room, title: "Room")
-        try await store.recordJoinedRoom(accountID: account, room: room, at: at(2))
+        try await store.recordJoinedRoom(accountID: account, room: room, historyThrough: at(2))
         // After the join: one message read live, one held for review.
         try await commit(store, digest: "g3", sender: "member@x", message: member("g3", 3), groupRoom: room, roomStanzaID: "room-3")
         try await store.retainEncryptedIncoming(accountID: account, sender: "member@x", digest: "p4", wire: Data([4]),
@@ -222,7 +222,7 @@ private func commit(_ store: MessageStore, digest: String, sender: String = peer
         try await store.saveNewestArchivePage(accountID: account, archiveID: other, cursor: "o1", oldestID: "o1", complete: true)
         try await commit(store, digest: "o5", sender: "member@x", message: StoredMessage(id: "o5", accountID: account, chatID: other, senderID: "member@x",
             body: "Synthetic group", sentAt: at(5), encryptionProfile: "modern", wireID: "origin-o5"), groupRoom: other, roomStanzaID: "other-5")
-        try await store.recordJoinedRoom(accountID: account, room: other, at: at(6))
+        try await store.recordJoinedRoom(accountID: account, room: other, historyThrough: at(6))
         #expect(try await store.unreadCounts(accountID: account)[other] == 1)
     }
 }

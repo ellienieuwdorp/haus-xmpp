@@ -389,6 +389,26 @@ struct ArchiveSynchronizerTests {
         }
     }
 
+    /// A room's join boundary is its newest entry's archive time (the earliest time for an empty archive). The entry's
+    /// tokens are acknowledged, since the archive keeps it for the first walk; a failed acknowledgement ends the stream.
+    @Test func roomJoinBoundaryAcknowledgesTheNewestEntryAndDisconnectsWhenItCannot() async throws {
+        try await fixture { store async throws in
+            let synchronizer = ArchiveSynchronizer(store: store), trace = Trace()
+            let newest = try await synchronizer.roomJoinBoundary(fetchNewest: { page("r9", sequence: 4) },
+                acknowledge: { tokens in await trace.record("ack:" + tokens.map { String($0.sequence) }.joined(separator: ",")) },
+                disconnect: { await trace.record("disconnect") })
+            #expect(newest == Date(timeIntervalSince1970: 100))
+            let empty = try await synchronizer.roomJoinBoundary(fetchNewest: { emptyPage }, acknowledge: { _ in await trace.record("ack:empty") },
+                                                                disconnect: { await trace.record("disconnect") })
+            #expect(empty == .distantPast)
+            await #expect(throws: Failure.acknowledgement) {
+                try await synchronizer.roomJoinBoundary(fetchNewest: { page("r9", sequence: 5) }, acknowledge: { _ in throw Failure.acknowledgement },
+                                                        disconnect: { await trace.record("disconnect") })
+            }
+            #expect(await trace.events == ["ack:4", "disconnect"])
+        }
+    }
+
     @Test func firstSyncOfAShortArchiveMarksBackfillComplete() async throws {
         try await fixture { store async throws in
             let trace = Trace()
