@@ -242,6 +242,25 @@ import SwiftUI
 
     // MARK: Reader input
 
+    /// The frame's new size. Its height changes with the window and with whatever sits below the timeline (the composer
+    /// growing or shrinking by a line, a reply bar). SwiftUI keeps the reader's top row, and the end only when the reader
+    /// was exactly at it; a reader who was within `nearBottomDistance` of the end keeps the newest message in view, as an
+    /// arriving message would follow them. The size arrives after the change, so the distance before it is the distance
+    /// now less the change.
+    func resized(_ size: CGSize) {
+        let change = size.height - layout.size.height
+        let wasNearBottom = layout.size.height > 0 && layout.distanceFromBottom + change < TimelineScrollPolicy.nearBottomDistance
+        layout.size = size
+        guard change != 0, wasNearBottom, isLoaded else { return }
+        // Never from inside the layout pass reporting the size: the proxy may not be used there.
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                guard self.layout.isAttached, self.layout.distanceFromBottom > 0.5 else { return }
+                self.scrollToNewest()
+            }
+        }
+    }
+
     /// Every change of the scroll view's geometry: the jump button, paging and the day chip follow it.
     func scrolled(_ geometry: ScrollGeometry) {
         layout.geometry = geometry

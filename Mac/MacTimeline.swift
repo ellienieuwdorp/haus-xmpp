@@ -23,7 +23,7 @@ struct MacTimeline<Row: View>: View {
             .modifier(ReaderPosition(id: $topID))
             .defaultScrollAnchor(.bottom, for: .initialOffset)
             .defaultScrollAnchor(.bottom, for: .sizeChanges)
-            .onGeometryChange(for: CGSize.self) { $0.size } action: { controller.layout.size = $0 }
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { controller.resized($0) }
             .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in controller.scrolled(geometry) }
             .onScrollPhaseChange { _, phase in controller.phaseChanged(phase) }
             .onAppear { controller.layout.proxy = proxy }

@@ -30,8 +30,6 @@ struct MacConversationView: View {
     @State private var quickLook: URL?
     /// The composer's reply or edit, set by message actions.
     @State private var composerIntent = MacComposerIntent()
-    /// The bottom inset the composer takes; it changes when the field grows or shrinks by a line, never per keystroke.
-    @State private var composerHeight: CGFloat = 0
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -73,16 +71,14 @@ struct MacConversationView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            // A blocked chat says so and offers Unblock in place of the composer.
-            Group {
-                if model.isBlocked(chatID) {
-                    BlockedChatBar(model: model, chatID: chatID, name: title)
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                } else {
-                    MacComposer(model: model, chatID: chatID, intent: composerIntent)
-                }
+            // A blocked chat says so and offers Unblock in place of the composer. The timeline's frame ends above it,
+            // so the timeline follows the composer's height as it does the window's (`MacTimelineController.resized`).
+            if model.isBlocked(chatID) {
+                BlockedChatBar(model: model, chatID: chatID, name: title)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+            } else {
+                MacComposer(model: model, chatID: chatID, intent: composerIntent)
             }
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
         }
         .blockConfirmation(model: model, request: $blockRequest)
         .background(Color(nsColor: .textBackgroundColor))
