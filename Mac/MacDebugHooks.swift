@@ -21,10 +21,18 @@ import SwiftUI
 ///   `inspector on|off`, `settings general|appearance|about`, `close-settings`, and for the open chat's composer:
 ///   `type <text>` (inserted at the caret as typing would), `key return|shift-return|option-return|command-return|escape|up`,
 ///   `reply <message id>|newest` (the newest received message), `edit <message id>|newest` (what Up-arrow would edit),
-///   and `snap <name>`, which captures the main window as `<name>.png` into `-haus-capture`'s directory.
+///   and `snap <name>`, which captures the main window as `<name>.png` into `-haus-capture`'s directory. Timeline steps
+///   (`MacTimelineDebug`): `capture <name>` (the main window and any other open window as `<name>.png` beside the
+///   frames), `scroll top|bottom|page-up|page-down` (as the keys do), `scroll-to <message id>` (a stored message by its
+///   ID), `quote <reference>` (as a click on a quote naming that message does), `resize <width>x<height>` and `timeline`
+///   (logs the reader's row and distances). Frames may be `0` seconds for a tour that only captures by name.
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
 ///   also in the sample conversations, where previews are otherwise off. `-haus-untinted-send`: the composer's Send in
 ///   the clear variant of its glass style, as an enabled accent-tinted circle leaves the conversation out of a capture.
+/// - `-haus-timeline-trace`: logs each timeline update that held the reader's row, with how far the update moved it and
+///   its drift over the next 30 refreshes, and each scroll the controller placed.
+/// - `-haus-timeline-unbound`: leaves the timeline's position unbound, so SwiftUI keeps the absolute offset through a
+///   prepend as it does during a scroll gesture, and the controller's hold does all the work (`MacTimelineDebug`).
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-window-size <width>x<height>`: the main window's content size in points, for captures at a set size.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-sheet account|new-chat|own-devices`,
@@ -249,6 +257,10 @@ import SwiftUI
             case "snap":
                 guard let directory = value(after: "-haus-capture"), let window = mainWindow, let png = render(window) else { log("tour snap: needs -haus-capture <dir>"); break }
                 emit(png, directory: directory, file: slug(argument) + ".png")
+            case "capture":
+                guard let directory = value(after: "-haus-capture-frames"), let main = mainWindow, let png = renderWithOverlays(main) else { log("tour capture: needs -haus-capture-frames <dir> <seconds>"); break }
+                emit(png, directory: directory, file: slug(argument) + ".png")
+            case "scroll", "scroll-to", "quote", "resize", "timeline": await MacTimelineDebug.step(words[0], argument, window: mainWindow)
             default: log("tour \(step): unknown")
             }
         }

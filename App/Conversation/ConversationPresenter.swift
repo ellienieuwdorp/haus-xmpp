@@ -154,7 +154,7 @@ struct ConversationPresenter {
                                sentAt: message.sentAt, status: status(message),
                                failure: message.transportState == .failed ? message.rejection.map { RejectionCopy.reason($0, isGroup: isGroup) } : nil,
                                reply: message.reply.map { TimelineReply(author: authorName($0.senderID), body: quotedUnsent ? "Message unsent" : $0.body,
-                                                                        thumbnail: quotedUnsent ? nil : quoteStill(of: $0, sources: sources)) },
+                                                                        thumbnail: quotedUnsent ? nil : quoteStill(of: $0, sources: sources), messageID: $0.messageID) },
                                securityNotice: !source.isDemo && message.encryptionProfile == nil ? "Not encrypted" : nil,
                                reactions: message.isRetracted ? [] : emoji.map { TimelineReaction(emoji: $0, count: counts[$0]!, isSelected: selected.contains($0)) },
                                canReact: !message.isRetracted && source.canReact(to: message),

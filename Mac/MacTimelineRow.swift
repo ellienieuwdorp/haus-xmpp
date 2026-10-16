@@ -100,6 +100,7 @@ struct MacBubble: View {
     let message: TimelineMessage
     let accent: AccentTheme
     let openAttachment: () -> Void
+    @Environment(\.openQuotedMessage) private var openQuotedMessage
 
     private var textColor: Color { message.isOutgoing ? Color(platform: accent.bubbleText) : .primary }
     private var metaColor: Color { message.isOutgoing ? Color(platform: accent.bubbleText.withAlphaComponent(0.75)) : .secondary }
@@ -139,6 +140,12 @@ struct MacBubble: View {
                         MacQuoteStill(attachment: still, tint: metaColor)
                     }
                 }
+                // A click on the quote shows the quoted message, paging it in when it is older than the loaded window.
+                .contentShape(Rectangle())
+                .onTapGesture { if let id = reply.messageID { openQuotedMessage(id) } }
+                .pointerStyle(.link)
+                .help("Show the quoted message")
+                .accessibilityAction(named: "Show Quoted Message") { if let id = reply.messageID { openQuotedMessage(id) } }
             }
             if let attachment = message.attachment, !message.showsPlaceholder {
                 Button(action: openAttachment) {

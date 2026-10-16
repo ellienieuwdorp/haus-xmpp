@@ -573,7 +573,9 @@ final class AppModel {
                 for index in 1...250 {
                     try await store.insertMessage(StoredMessage(id: "sample-history-\(index)", accountID: account, chatID: chatID, senderID: index.isMultiple(of: 3) ? account : chatID,
                                                                 body: "History message \(index)" + (index.isMultiple(of: 7) ? ", with a second sentence so some bubbles wrap onto another line." : ""),
-                                                                sentAt: Date(timeIntervalSince1970: 1_789_300_000 + Double(index) * 60), isOutgoing: index.isMultiple(of: 3)))
+                                                                sentAt: Date(timeIntervalSince1970: 1_789_300_000 + Double(index) * 60), isOutgoing: index.isMultiple(of: 3),
+                                                                // Received messages carry their sender's ID, as a quote of one names it.
+                                                                wireID: index.isMultiple(of: 3) ? nil : "history-wire-\(index)"))
                 }
             }
             #endif
@@ -3243,19 +3245,35 @@ final class AppModel {
 
     /// The reader reached the oldest loaded message. A full window means the store may hold more; otherwise the
     /// store is exhausted for this chat and the server's older archive pages are the next source.
-    func loadOlderMessages(all: Bool = false) async {
-        guard !loadingOlder, let chat = openChatID else { return }
+    /// - Returns: whether asking again may still bring older messages: false once the window is at its ceiling, or
+    ///   when the archive has no more for this chat or cannot be read from here (sample data, no connection).
+    @discardableResult
+    func loadOlderMessages(all: Bool = false) async -> Bool {
+        guard let chat = openChatID else { return false }
+        guard !loadingOlder else { return true }
         if all || messages.count >= timelineWindow {
-            guard timelineWindow < AppModel.timelineCeiling else { return }
+            guard timelineWindow < AppModel.timelineCeiling else { return false }
             loadingOlder = true
             defer { loadingOlder = false }
             timelineWindow = all ? AppModel.timelineCeiling : min(AppModel.timelineCeiling, timelineWindow + AppModel.timelinePage)
             await refresh(.openChat)
-            return
+            return true
         }
         // The window is not raised here: each committed page reloads the same window, which fills further, and the
         // next reach-top raises it as above.
-        requestBackfill(archive: isGroup(chat) ? chat : nil, pages: AppModel.backfillPagesPerScroll)
+        let archive = isGroup(chat) ? chat : nil
+        requestBackfill(archive: archive, pages: AppModel.backfillPagesPerScroll)
+        return !isDemo && session.isReady && !backfillSettled.contains(archive ?? accountID)
+    }
+
+    /// The stored message a reply's quote points at in `chatID`, from the reference the reply carries: a reply sent
+    /// from here names its original by local ID, a received one by the ID its sender saw, which resolves as a
+    /// reaction's target does. Nil while that message is not in the store.
+    func quotedMessageID(_ reference: String, in chatID: String) async -> String? {
+        guard let store else { return nil }
+        let account = accountID
+        if let local = try? await store.message(accountID: account, messageID: reference), local.chatID == chatID { return local.id }
+        return try? await store.reactionTarget(accountID: account, chatID: chatID, wireID: reference)?.id
     }
 
     /// True while the archive holding `chat` (the account's own for a direct chat, the room's for a group) backfills.

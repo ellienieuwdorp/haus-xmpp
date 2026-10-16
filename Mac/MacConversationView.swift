@@ -2,18 +2,18 @@ import AppKit
 import QuickLook
 import SwiftUI
 
-/// The open chat: the rows the shared presenter builds, in a SwiftUI `LazyVStack` that opens at the newest message in
-/// its first frame (scrolling there after layout shows a visible jump) and follows the bottom while the reader is
-/// there, above the composer (`MacComposer`). No paging and no prepend hold yet. A bubble's right-click menu has the
-/// shared menu's Copy and Report. Links in bubbles open through `LinkOpening`, and preview cards show as on the
-/// iPhone. Photos and videos show as framed stills and files as a line; a click opens one in Quick Look, or asks for
-/// its download when it is not on this Mac yet.
+/// The open chat. The timeline (`MacTimeline`) opens at the newest message in its first frame, follows the bottom while
+/// the reader is there, keeps the reader's row through older pages and resizes, and pages in older history near the top;
+/// the composer (`MacComposer`) sits below it. A bubble's right-click menu has the shared menu's Copy and Report. Links
+/// in bubbles open through `LinkOpening`, and preview cards show as on the iPhone. Photos and videos show as framed
+/// stills and files as a line; a click opens one in Quick Look, or asks for its download when it is not on this Mac yet.
 struct MacConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
     /// Opens the chat's details, where its devices are reviewed.
     var showDetails: () -> Void = {}
-    @State private var nearBottom = true
+    /// The timeline's rows and scroll position; made when the view first appears.
+    @State private var timeline: MacTimelineController?
     /// Rows laid out in the viewport now (LazyVStack's prefetch may add a row just past the edge), so the start of
     /// reading marks the newest one the user can see. Not observed: rows scrolling in and out must not rebuild the
     /// whole timeline, and only the `readingStarts` change reads it.
@@ -32,9 +32,6 @@ struct MacConversationView: View {
     @State private var composerIntent = MacComposerIntent()
     /// The bottom inset the composer takes; it changes when the field grows or shrinks by a line, never per keystroke.
     @State private var composerHeight: CGFloat = 0
-    /// How far the timeline's end lies below the last line visible above the composer. Not observed, like
-    /// `visibleRows`: only the composer's resize reads it.
-    @State private var bottomGap = BottomGap()
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -44,17 +41,22 @@ struct MacConversationView: View {
         Group {
             // Built only once this chat's first page is loaded, so the scroll view's initial offset is the tail of
             // real content, not of an empty stack.
-            if model.messagesLoadedFor == chatID {
-                timeline(presenter)
+            if let timeline, timeline.isLoaded {
+                self.timeline(timeline, presenter: presenter)
             } else {
                 Color.clear
             }
         }
-        .overlay {
-            if let notice = presenter.emptyNotice {
-                ContentUnavailableView(notice.title, systemImage: notice.systemImage)
+        .onAppear {
+            guard timeline == nil else { return }
+            let model = model, chatID = chatID
+            timeline = MacTimelineController(model: model, chatID: chatID) {
+                ConversationPresenter(source: model, chatID: chatID,
+                                      title: AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title))
             }
         }
+        // Its own view, so only it reads the messages: this view's body never reruns for a new message.
+        .overlay { MacEmptyNotice(presenter: presenter) }
         .safeAreaInset(edge: .top) {
             // Messages from a device nobody decided on wait, encrypted, until the user reviews it (the iPhone shows a
             // card in the chat); the review itself is on the details' Devices & Encryption page.
@@ -164,65 +166,28 @@ struct MacConversationView: View {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    private func timeline(_ presenter: ConversationPresenter) -> some View {
-        let rows = TimelineItems.rows(for: presenter.timelineMessages)
-        let typing = presenter.typing
-        let tail = rows.last?.message.id
-        return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(rows, id: \.message.id) { row in
-                        MacTimelineRow(row: row, isGroup: presenter.isGroup, report: { id in
-                            blockRequest = BlockRequest(kind: .report, chatID: chatID, name: title, messageID: id)
-                        }, openAttachment: { openAttachment(of: row.message) })
-                            .id(row.message.id)
-                            .onAppear {
-                                visibleRows.ids.insert(row.message.id)
-                                markIfReading(row.message.id, presenter: presenter)
-                                // Fetched on display, never at insert, under the model's policy (setting, contact, demo).
-                                if row.message.wantsLinkPreview { model.linkPreviewDisplayed(row.message.id) }
-                                // As on the iPhone: a file not on disk yet is fetched on sight when its chat allows it.
-                                if row.message.attachment?.localURL == nil, row.message.attachment != nil, !row.message.showsPlaceholder {
-                                    model.attachmentDisplayed(row.message.id)
-                                }
-                            }
-                            .onDisappear { visibleRows.ids.remove(row.message.id) }
-                    }
-                    if let typing {
-                        MacTypingRow(typing: typing).id(TimelineItems.typingID)
+    private func timeline(_ timeline: MacTimelineController, presenter: ConversationPresenter) -> some View {
+        MacTimeline(controller: timeline) { row in
+            MacTimelineRow(row: row, isGroup: timeline.isGroup, report: { id in
+                blockRequest = BlockRequest(kind: .report, chatID: chatID, name: title, messageID: id)
+            }, openAttachment: { openAttachment(of: row.message) })
+                .onAppear {
+                    visibleRows.ids.insert(row.message.id)
+                    markIfReading(row.message.id, presenter: presenter)
+                    // Fetched on display, never at insert, under the model's policy (setting, contact, demo).
+                    if row.message.wantsLinkPreview { model.linkPreviewDisplayed(row.message.id) }
+                    // As on the iPhone: a file not on disk yet is fetched on sight when its chat allows it.
+                    if row.message.attachment?.localURL == nil, row.message.attachment != nil, !row.message.showsPlaceholder {
+                        model.attachmentDisplayed(row.message.id)
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .scrollTargetLayout()
-            }
-            .defaultScrollAnchor(.bottom, for: .initialOffset)
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height < TimelineScrollPolicy.nearBottomDistance
-            } action: { _, isNear in nearBottom = isNear }
-            // Rule 3, simplified: a new tail (or the typing bubble) follows when the reader was at the bottom or sent it.
-            .onChange(of: [tail, typing == nil ? nil : TimelineItems.typingID]) { _, _ in
-                let ownSend = rows.last?.message.isOutgoing ?? false
-                guard nearBottom || ownSend else { return }
-                let target = typing == nil ? tail : TimelineItems.typingID
-                if let target { proxy.scrollTo(target, anchor: .bottom) }
-            }
-            .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                geometry.contentSize.height - geometry.contentOffset.y - geometry.contentInsets.top - geometry.containerSize.height
-            } action: { _, gap in bottomGap.value = gap }
-            // The field grew or shrank: a reader who was at the bottom keeps the newest message in view above it, and
-            // anyone reading further up stays where they are. The viewport has already changed with the field by the
-            // time this runs, so the gap before it is the gap now less the field's change.
-            .onChange(of: composerHeight) { previous, height in
-                guard let tail, bottomGap.value - (height - previous) < TimelineScrollPolicy.nearBottomDistance else { return }
-                proxy.scrollTo(typing == nil ? tail : TimelineItems.typingID, anchor: .bottom)
-            }
-            // The user started reading this chat (the app active, its window key and visible, the screen unlocked,
-            // the user not idle): what was already on screen counts as seen now (critique G3).
-            .onChange(of: model.readingStarts) { _, _ in
-                guard let shown = rows.last(where: { visibleRows.ids.contains($0.message.id) && presenter.marksDisplayed($0.message.id) }) else { return }
-                markIfReading(shown.message.id, presenter: presenter)
-            }
+                .onDisappear { visibleRows.ids.remove(row.message.id) }
+        }
+        // The user started reading this chat (the app active, its window key and visible, the screen unlocked, the user
+        // not idle): what was already on screen counts as seen now (critique G3).
+        .onChange(of: model.readingStarts) { _, _ in
+            guard let shown = timeline.rows.last(where: { visibleRows.ids.contains($0.message.id) && presenter.marksDisplayed($0.message.id) }) else { return }
+            markIfReading(shown.message.id, presenter: presenter)
         }
     }
 
@@ -232,6 +197,17 @@ struct MacConversationView: View {
     private func markIfReading(_ id: String, presenter: ConversationPresenter) {
         guard presenter.marksDisplayed(id) else { return }
         Task { await model.markDisplayed(id) }
+    }
+}
+
+/// What an empty timeline says (`ConversationPresenter.emptyNotice`).
+private struct MacEmptyNotice: View {
+    let presenter: ConversationPresenter
+
+    var body: some View {
+        if let notice = presenter.emptyNotice {
+            ContentUnavailableView(notice.title, systemImage: notice.systemImage)
+        }
     }
 }
 
@@ -245,8 +221,4 @@ private struct PhoneLink {
 /// A plain reference holder, so changing it never invalidates the view that owns it.
 @MainActor private final class VisibleRows {
     var ids: Set<String> = []
-}
-
-@MainActor private final class BottomGap {
-    var value: CGFloat = 0
 }
