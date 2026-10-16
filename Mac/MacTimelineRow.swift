@@ -13,6 +13,8 @@ struct MacTimelineRow: View {
     @State private var hovering = false
     @State private var choosingEmoji = false
     @State private var selectAllRequests = 0
+    /// Whether the gutter on the bubble's outer side holds the hover toolbar; in a narrow window it sits on the bubble.
+    @State private var toolbarFitsBeside = true
 
     private var message: TimelineMessage { row.message }
 
@@ -77,7 +79,15 @@ struct MacTimelineRow: View {
                     }
                 }
         }
-        .overlay(alignment: message.isOutgoing ? .leading : .trailing) { toolbar }
+        .onGeometryChange(for: Bool.self) { proxy in
+            // The room between the bubble's outer edge and the scroll view's, in the bubble's own coordinates.
+            guard let visible = proxy.bounds(of: .scrollView) else { return true }
+            let room = message.isOutgoing ? -visible.minX : visible.maxX - proxy.size.width
+            return room >= MacMessageToolbarSize.maximumWidth + 6 + 4
+        } action: { toolbarFitsBeside = $0 }
+        .overlay(alignment: toolbarFitsBeside ? (message.isOutgoing ? .leading : .trailing) : (message.isOutgoing ? .topLeading : .topTrailing)) {
+            toolbar
+        }
     }
 
     /// The menu's actions, then the file's, one per link and one per quick reaction, as on the iPhone.
@@ -100,8 +110,9 @@ struct MacTimelineRow: View {
         MacMessageNSMenu.make(MacMessageMenu(message: message, link: link), perform: perform, react: react, moreReactions: { choosingEmoji = true })
     }
 
-    /// Beside the bubble in the gutter, on its outer side, centred on it. Always laid out and only faded in, so a menu
-    /// opened from it stays attached when the pointer moves into the menu and off the row.
+    /// Beside the bubble in the gutter, on its outer side, centred on it; where the gutter is too narrow, over the
+    /// bubble's top outer corner instead, so it never runs past the window's edge. Always laid out and only faded in,
+    /// so a menu opened from it stays attached when the pointer moves into the menu and off the row.
     private var toolbar: some View {
         let replies = MessageActionMenu.items(for: message).contains { $0.kind == .reply }
         #if DEBUG
@@ -113,10 +124,12 @@ struct MacTimelineRow: View {
         return MacMessageToolbar(message: message, react: { choosingEmoji = true },
                                  reply: replies ? { perform(.reply, link: nil) } : nil) { menu(link: nil) }
             .fixedSize()
-            // 6 pt outside the bubble's leading edge (sent) or trailing edge (received); each guide from the width
-            // alone, as the second would otherwise read the first.
-            .alignmentGuide(.leading) { $0.width + 6 }
-            .alignmentGuide(.trailing) { _ in -6 }
+            // Beside: 6 pt outside the bubble's leading edge (sent) or trailing edge (received). On the corner: 6 pt in
+            // from that edge, centred on the bubble's top edge. Each guide from the size alone, as the second would
+            // otherwise read the first.
+            .alignmentGuide(.leading) { [beside = toolbarFitsBeside] in beside ? $0.width + 6 : -6 }
+            .alignmentGuide(.trailing) { [beside = toolbarFitsBeside] in beside ? -6 : $0.width + 6 }
+            .alignmentGuide(.top) { $0.height / 2 }
             .opacity(shown ? 1 : 0)
             .allowsHitTesting(shown)
             .animation(.easeOut(duration: 0.12), value: shown)

@@ -8,7 +8,7 @@ struct MacMessageToolbar<MenuContent: View>: View {
     let reply: (() -> Void)?
     @ViewBuilder let menu: () -> MenuContent
 
-    private static var side: CGFloat { 24 }
+    private static var side: CGFloat { MacMessageToolbarSize.side }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -42,4 +42,10 @@ struct MacMessageToolbar<MenuContent: View>: View {
         .help(help)
         .accessibilityLabel(title)
     }
+}
+
+enum MacMessageToolbarSize {
+    static let side: CGFloat = 24
+    /// With all three buttons and the capsule's padding, for deciding where it fits.
+    static let maximumWidth: CGFloat = 3 * side + 4
 }
