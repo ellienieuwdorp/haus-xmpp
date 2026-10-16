@@ -377,8 +377,11 @@ private struct MacBubble: View {
             .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6)
             .background(message.isOutgoing ? accent.swatch : Color.tertiaryFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             if !message.reactions.isEmpty {
+                // Into the bubble's 6 pt bottom padding only, clear of the footer, with 2 pt kept below so the pills
+                // stay clear of the next message, as on the iPhone.
                 reactions
-                    .padding(.top, -6)
+                    .padding(.top, -3)
+                    .padding(.bottom, 2)
                     .padding(message.isOutgoing ? .trailing : .leading, 10)
             }
         }
@@ -412,7 +415,8 @@ private struct MacBubble: View {
                 .font(.caption)
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(.background, in: Capsule())
-                .overlay { Capsule().strokeBorder(reaction.isSelected ? accent.swatch : Color.secondary.opacity(0.3), lineWidth: reaction.isSelected ? 1.5 : 0.5) }
+                // The user's own reaction looks like anyone else's; its label says "including you".
+                .overlay { Capsule().strokeBorder(Color.secondary.opacity(0.3), lineWidth: 0.5) }
                 .accessibilityLabel(reaction.accessibilityDescription)
             }
         }

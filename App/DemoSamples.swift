@@ -91,7 +91,7 @@ enum DemoSamples {
                                                                                     kind: receipt, payload: "{}", updatedAt: message.sentAt.addingTimeInterval(30)))
             }
         }
-        // Our heart on the photo, ringed in the accent, and Alex's thumbs up as the answer to the plan.
+        // Our heart on the photo and Alex's thumbs up as the answer to the plan.
         try await store.recordReaction(accountID: account, reaction: AuthenticatedReaction(id: "sample-reaction-own", chatID: alex, actorID: account,
                                                                                            targetWireID: "sample-alex-photo", reactions: ["❤️"], updatedAt: minutes(-51)))
         try await store.recordReaction(accountID: account, reaction: AuthenticatedReaction(id: "sample-reaction-alex", chatID: alex, actorID: alex,
