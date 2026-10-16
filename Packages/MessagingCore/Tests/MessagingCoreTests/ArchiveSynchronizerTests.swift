@@ -369,6 +369,26 @@ struct ArchiveSynchronizerTests {
         }
     }
 
+    /// An archive that was empty at the first walk held no history: what the next connection's first page brings arrived
+    /// meanwhile, and stays unread.
+    @Test func anArchiveEmptyAtTheFirstWalkHasNoHistory() async throws {
+        try await fixture { store async throws in
+            let peer = "bob@localhost"
+            let empty = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in }, fetchPage: { _, _ in emptyPage },
+                                              process: { _ in }, acknowledge: { _ in }, disconnect: {}, progress: { _ in })
+            try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: empty)
+            try await store.upsertChat(accountID: account, chatID: peer, title: "Peer")
+            try await store.insertMessage(StoredMessage(id: "m1", accountID: account, chatID: peer, senderID: peer, body: "Synthetic",
+                                                        sentAt: Date(timeIntervalSince1970: 100), encryptionProfile: "modern", wireID: "a1"))
+            let next = ArchiveSyncOperations(knownRooms: { [] }, refreshRoom: { _ in },
+                                             fetchPage: { bound, _ in bound == .before(nil) ? page("a1") : emptyPage },
+                                             process: { _ in }, acknowledge: { _ in }, disconnect: {}, progress: { _ in })
+            try await ArchiveSynchronizer(store: store).synchronize(account: account, operations: next)
+            #expect(try await store.archiveCheckpoint(accountID: account, archiveID: account)?.cursor == "a1")
+            #expect(try await store.unreadCounts(accountID: account) == [peer: 1])
+        }
+    }
+
     @Test func firstSyncOfAShortArchiveMarksBackfillComplete() async throws {
         try await fixture { store async throws in
             let trace = Trace()

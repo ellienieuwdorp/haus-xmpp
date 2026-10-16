@@ -287,8 +287,12 @@ public struct ArchiveSynchronizer: Sendable {
             if !page.handledTokens.isEmpty { try await operations.acknowledge(page.handledTokens) }
             pages += 1; messages += page.messages.count
             await operations.progress(ArchiveSyncProgress(archive: room, pages: pages, messages: messages))
-            // An empty archive: nothing to check-point and nothing older to backfill.
-            if page.lastID == nil, newestFirst { return true }
+            // An empty archive: nothing to check-point and nothing older to backfill. On a first walk nothing in it is
+            // history either, so the next connection's first page (what arrived meanwhile) is not taken for history.
+            if page.lastID == nil, newestFirst {
+                if checkpoint == nil { try await store.recordEmptyArchive(accountID: account, archiveID: archive) }
+                return true
+            }
             if page.complete, !newestFirst { return true }
         }
     }
