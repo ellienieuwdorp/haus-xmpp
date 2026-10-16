@@ -4347,7 +4347,11 @@ extension AppModel: NotificationActionEnvironment {
         content.categoryIdentifier = NotificationIdentity.noticeCategory
         content.userInfo = [NotificationNavigation.replyFailureKey: destination.payload]
         content.sound = .default
-        try? await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+        #if DEBUG && os(macOS)
+        guard MacDebugNotificationLog.shouldPost(notice: request) else { return }
+        #endif
+        try? await center.add(request)
     }
 
     func endNotificationAction() async {

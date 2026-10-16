@@ -5,8 +5,9 @@ import MessagingCore
 import Synchronization
 import UserNotifications
 
-/// `-haus-log-notifications` and `-haus-post-notifications`: the model's notifications are logged (thread, category and
-/// which fields are set, never a title or body), and with `-haus-post-notifications` also posted as usual. Either flag
+/// `-haus-log-notifications` and `-haus-post-notifications`: the model's notifications, message requests and reply
+/// notices alike, are logged (thread, category and which fields are set; never a title, and a body only when it is
+/// fixed text), and with `-haus-post-notifications` also posted as usual. Either flag
 /// lets a test session (`--fresh-store`) post, which it otherwise never does, so banner checks can leave the shared App
 /// Group store alone. `-haus-log-notifications` posts nothing and asks for no permission (which would put a system
 /// prompt on screen); `-haus-post-notifications` needs authorization, which `-haus-request-provisional` grants without
@@ -27,6 +28,17 @@ enum MacDebugNotificationLog {
         case .post?: LoggingPoster(forwarding: system)
         case nil: nil
         }
+    }
+
+    /// A notice the model adds to the notification centre itself (a notification reply's outcome) rather than through
+    /// `poster`: logged as the poster logs a request, and to be posted only with `-haus-post-notifications`. True when
+    /// the caller should post it.
+    static func shouldPost(notice request: UNNotificationRequest) -> Bool {
+        guard let mode else { return true }
+        let content = request.content
+        write("notification posted: thread \(content.threadIdentifier) category \(content.categoryIdentifier), "
+            + "title \(content.title.isEmpty ? "empty" : "set"), body \"\(content.body)\", sound \(content.sound == nil ? "no" : "yes")")
+        return mode == .post
     }
 
     /// The newest `message` request of this run, for `MacNotificationDebug`'s actions when nothing is posted.
