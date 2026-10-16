@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import UserNotifications
 #if os(iOS)
@@ -268,6 +269,7 @@ extension ToolbarItemPlacement {
 @MainActor final class BackgroundActivity {
     /// How long a Mac activity may hold off App Nap if the work never ends it.
     static let macLimit: Duration = .seconds(60)
+    private static let log = Logger(subsystem: "haus.xmpp.ios", category: "lifecycle")
 
     #if os(iOS)
     private var task: UIBackgroundTaskIdentifier
@@ -275,10 +277,15 @@ extension ToolbarItemPlacement {
     private var activity: (any NSObjectProtocol)?
     #endif
 
-    /// Begins the activity at once.
+    /// Begins the activity at once. On iOS a task still running when background time runs out is left running, so iOS
+    /// ends the process: work that holds the transport lease is never cut short with the lease kept, or the lease given
+    /// up beneath it. Its name goes to the log, so it names the work, never an account or a chat.
     init(_ name: String) {
         #if os(iOS)
-        task = UIApplication.shared.beginBackgroundTask(withName: name)
+        task = UIApplication.shared.beginBackgroundTask(withName: name) {
+            Self.log.error("background time ran out: \(name, privacy: .public)")
+        }
+        if task == .invalid { Self.log.error("background time refused: \(name, privacy: .public)") }
         #else
         activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep], reason: name)
         Task { [weak self] in
