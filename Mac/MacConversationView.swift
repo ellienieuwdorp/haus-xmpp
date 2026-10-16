@@ -121,7 +121,7 @@ struct MacConversationView: View {
                 BlockedChatBar(model: model, chatID: chatID, name: title)
                     .padding(.horizontal, 16).padding(.vertical, 10)
             } else if timeline?.searching != true {
-                MacComposer(model: model, chatID: chatID, intent: composerIntent)
+                MacComposer(model: model, chatID: chatID, intent: composerIntent, focusTimeline: timeline.map { timeline in { timeline.requestKeyboardFocus() } })
             }
         }
         // Files dropped anywhere in the chat but on the find bars join the composer's tray; a drop during search closes
@@ -325,8 +325,9 @@ struct MacConversationView: View {
     }
 
     private func timeline(_ timeline: MacTimelineController, presenter: ConversationPresenter) -> some View {
-        MacTimeline(controller: timeline) { row in
-            MacTimelineRow(row: row, isGroup: timeline.isGroup, handlers: messageHandlers, openAttachment: { openAttachment(of: row.message) })
+        let contactName = isGroup ? nil : title
+        return MacTimeline(controller: timeline, contactName: contactName) { row in
+            MacTimelineRow(row: row, isGroup: timeline.isGroup, contactName: contactName, handlers: messageHandlers, openAttachment: { openAttachment(of: row.message) })
                 .modifier(MacFindResult(timeline: timeline, id: row.message.id))
                 .onAppear {
                     visibleRows.ids.insert(row.message.id)
@@ -340,7 +341,6 @@ struct MacConversationView: View {
                 }
                 .onDisappear { visibleRows.ids.remove(row.message.id) }
         }
-        .onExitCommand { timeline.onEscape() }
         // The user started reading this chat (the app active, its window key and visible, the screen unlocked, the user
         // not idle): what was already on screen counts as seen now (critique G3).
         .onChange(of: model.readingStarts) { _, _ in

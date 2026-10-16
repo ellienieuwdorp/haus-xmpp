@@ -7,6 +7,8 @@ enum MacTimelineKey: Equatable {
     /// Up (false) or Down (true): keyboard focus goes back to the timeline and on to the next message.
     case focus(forward: Bool)
     case escape
+    /// The text left the window with keyboard focus: the timeline takes it back.
+    case refocus
 }
 
 /// One message row's link to its timeline, for what the bubble does for the keyboard and VoiceOver: the focus ring,
@@ -116,18 +118,20 @@ struct MacMessageKeyboardMenu: View {
 /// lazy stack has not built yet are reachable too.
 struct MacTimelineRotors: ViewModifier {
     let controller: MacTimelineController
+    /// The contact's name in a direct chat (`TimelineMessage.senderName`).
+    let contactName: String?
     let namespace: Namespace.ID
 
     func body(content: Content) -> some View {
         content
             .accessibilityRotor("Messages") {
-                ForEach(controller.rows.map(\.message)) { message in entry(Self.label(for: message), message) }
+                ForEach(controller.rows.map(\.message)) { message in entry(Self.label(for: message, contactName: contactName), message) }
             }
             .accessibilityRotor(.links) {
                 ForEach(links) { link in entry(link.title, link.message) }
             }
             .accessibilityRotor("Starred Messages") {
-                ForEach(controller.rows.map(\.message).filter(\.isStarred)) { message in entry(Self.label(for: message), message) }
+                ForEach(controller.rows.map(\.message).filter(\.isStarred)) { message in entry(Self.label(for: message, contactName: contactName), message) }
             }
     }
 
@@ -148,10 +152,17 @@ struct MacTimelineRotors: ViewModifier {
     }
 
     /// Who and what, then the time: the start of what the row itself reads, short enough for the rotor's list.
-    static func label(for message: TimelineMessage) -> String {
-        let speaker = message.isOutgoing ? "You" : (message.author ?? "Contact")
+    static func label(for message: TimelineMessage, contactName: String?) -> String {
+        let speaker = message.isOutgoing ? "You" : message.senderName(contactName: contactName) ?? "Contact"
         let content = message.displayedText.isEmpty ? message.attachment.map { "\($0.kindLabel) \($0.name)" } ?? "" : message.displayedText
         let time = message.sentAt?.formatted(date: .omitted, time: .shortened)
         return [content.isEmpty ? speaker : "\(speaker): \(content)", time].compactMap { $0 }.joined(separator: ", ")
+    }
+}
+
+extension TimelineMessage {
+    /// Who sent a received message, by name: the group member, or in a direct chat the contact.
+    func senderName(contactName: String?) -> String? {
+        author.map { ContactName.display(for: $0, title: nil) } ?? contactName
     }
 }

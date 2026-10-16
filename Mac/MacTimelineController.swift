@@ -697,6 +697,15 @@ import SwiftUI
         menuRequests += 1
     }
 
+    /// Gives the timeline keyboard focus: Shift-Tab from the composer and Tab from the find field come here, as the
+    /// window's key view loop does not know the scroll view SwiftUI makes focusable.
+    func requestKeyboardFocus() { focusRequests += 1 }
+
+    /// A bubble's text took keyboard focus (a click, Select Text): the keys go on from that message.
+    func bubbleTextFocused(_ id: String) {
+        if focusedID != id { focusedID = id }
+    }
+
     /// A key that a bubble's text passed on: Up and Down give the timeline keyboard focus and move on from that bubble,
     /// the scrolling keys scroll the timeline, and Esc goes to the composer.
     func bubbleTextKey(_ key: MacTimelineKey, in id: String) {
@@ -705,15 +714,24 @@ import SwiftUI
             scroll(move)
         case .focus(let forward):
             moveFocus(forward: forward, from: id)
-            focusRequests += 1
+            requestKeyboardFocus()
         case .escape:
             onEscape()
+        case .refocus:
+            requestKeyboardFocus()
         }
     }
 
     #if DEBUG
     /// The open chat's timeline, for the tour's scroll steps.
     static weak var current: MacTimelineController?
+
+    /// The window of an unobtrusive run is never key, and SwiftUI does not reliably report the timeline focused there:
+    /// this gives it focus and makes the report Tab into it would make.
+    func debugFocusByKey() {
+        requestKeyboardFocus()
+        keyboardFocusChanged(true, byKey: true)
+    }
 
     /// Moves the content by `delta` points as a reader's scroll would (positive towards older messages), for the tour.
     func debugScroll(by delta: CGFloat) {

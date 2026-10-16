@@ -7,10 +7,13 @@ import SwiftUI
 ///
 /// It is one stop in the window's keyboard focus, between the sidebar (and the find bar) and the composer. With focus,
 /// the scrolling keys work (Page Up and Down, Home and End, ⌘↑ and ⌘↓), ↑ and ↓ move a focus ring from message to
-/// message, and Return or Space opens the focused message's menu; the Message menu acts on it too. VoiceOver reads
+/// message, Return or Space opens the focused message's menu, and Esc goes to the composer (`onEscape`); the Message
+/// menu acts on the focused message too. VoiceOver reads
 /// each message as one element and offers rotors over the messages, their links and the starred ones.
 struct MacTimeline<Row: View>: View {
     let controller: MacTimelineController
+    /// The contact's name in a direct chat, for the rotors' entries.
+    var contactName: String? = nil
     /// One message's row.
     @ViewBuilder let row: (TimelineRow) -> Row
     /// The reader's row, written by SwiftUI as the reader scrolls and never by code: a scroll-to-row is ignored while
@@ -37,18 +40,21 @@ struct MacTimeline<Row: View>: View {
             .focused($focused)
             // The focused message carries the ring; the scroll view itself would draw one around the whole timeline.
             .focusEffectDisabled()
-            .onKeyPress(keys: [.pageUp, .pageDown, .home, .end, .upArrow, .downArrow, .return, .space]) { press in
-                let plain = press.modifiers.isDisjoint(with: [.command, .shift, .option, .control])
+            .onKeyPress(keys: [.pageUp, .pageDown, .home, .end, .upArrow, .downArrow, .return, .space, .escape]) { press in
+                // Arrow keys also carry the numeric pad and function flags; only these four tell the keys apart.
+                let modifiers = press.modifiers.intersection([.command, .shift, .option, .control])
+                let plain = modifiers.isEmpty
                 switch press.key {
                 case .pageUp: controller.scroll(.pageUp)
                 case .pageDown: controller.scroll(.pageDown)
                 case .home: controller.scroll(.top)
                 case .end: controller.scroll(.bottom)
-                case .upArrow where press.modifiers == .command: controller.scroll(.top)
-                case .downArrow where press.modifiers == .command: controller.scroll(.bottom)
+                case .upArrow where modifiers == .command: controller.scroll(.top)
+                case .downArrow where modifiers == .command: controller.scroll(.bottom)
                 case .upArrow where plain: controller.moveFocus(forward: false)
                 case .downArrow where plain: controller.moveFocus(forward: true)
                 case .return where plain, .space where plain: return controller.openFocusedMenu() ? .handled : .ignored
+                case .escape: controller.onEscape()
                 default: return .ignored
                 }
                 return .handled
@@ -58,7 +64,7 @@ struct MacTimeline<Row: View>: View {
             }
             .onChange(of: controller.focusRequests) { _, _ in focused = true }
             .accessibilityLabel("Messages")
-            .modifier(MacTimelineRotors(controller: controller, namespace: rotors))
+            .modifier(MacTimelineRotors(controller: controller, contactName: contactName, namespace: rotors))
             .overlay(alignment: .top) { MacDayChip(controller: controller) }
             .overlay(alignment: .bottomTrailing) { MacJumpToNewest(controller: controller) }
         }

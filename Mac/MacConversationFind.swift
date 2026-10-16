@@ -33,7 +33,7 @@ private struct MacFindBar: View {
     var body: some View {
         HStack(spacing: 10) {
             MacSearchField(text: Binding(get: { timeline.query }, set: { timeline.setQuery($0) }), prompt: "Search in Conversation",
-                           focusRequests: focusRequests) { timeline.setSearching(false) }
+                           focusRequests: focusRequests, onTab: { timeline.requestKeyboardFocus() }) { timeline.setSearching(false) }
                 .frame(maxWidth: 320)
             // No minimum width on the field: with the inspector open it made the bar and the split view fight over the
             // column's width until the window stopped responding.
@@ -84,11 +84,14 @@ private struct MacStarredBar: View {
 }
 
 /// A native search field. Esc closes the find bar (not only clears the field, as a plain search field would) unless
-/// an input method is composing; keyboard focus moves into it when it appears and on each `focusRequests` change.
+/// an input method is composing, and Tab moves on to the results; keyboard focus moves into it when it appears and on
+/// each `focusRequests` change.
 private struct MacSearchField: NSViewRepresentable {
     @Binding var text: String
     let prompt: String
     let focusRequests: Int
+    /// Tab: the window's key view loop would skip the timeline, which SwiftUI makes focusable.
+    let onTab: () -> Void
     let onCancel: () -> Void
 
     final class Coordinator: NSObject, NSSearchFieldDelegate {
@@ -104,8 +107,12 @@ private struct MacSearchField: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-            guard selector == #selector(NSResponder.cancelOperation(_:)), !textView.hasMarkedText() else { return false }
-            parent.onCancel()
+            guard !textView.hasMarkedText() else { return false }
+            switch selector {
+            case #selector(NSResponder.cancelOperation(_:)): parent.onCancel()
+            case #selector(NSResponder.insertTab(_:)): parent.onTab()
+            default: return false
+            }
             return true
         }
     }

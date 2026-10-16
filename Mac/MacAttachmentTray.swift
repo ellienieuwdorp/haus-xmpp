@@ -212,6 +212,7 @@ struct MacAttachmentTray: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(item.preview != nil ? .isImage : .isStaticText)
         .accessibilityLabel(item.prepared == nil ? "\(label), preparing" : label)
         .overlay(alignment: .topTrailing) {
             Button { onRemove(item.id) } label: {

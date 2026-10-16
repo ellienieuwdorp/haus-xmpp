@@ -66,16 +66,19 @@ struct MacComposer: View {
     let model: AppModel
     let chatID: String
     @Bindable var intent: MacComposerIntent
+    /// Shift-Tab from the field: keyboard focus goes back to the timeline above.
+    let focusTimeline: (() -> Void)?
     @State private var state: MacComposerState
     @State private var choosingPhotos = false
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var choosingFiles = false
     @Environment(\.appearance) private var appearance
 
-    init(model: AppModel, chatID: String, intent: MacComposerIntent) {
+    init(model: AppModel, chatID: String, intent: MacComposerIntent, focusTimeline: (() -> Void)? = nil) {
         self.model = model
         self.chatID = chatID
         self.intent = intent
+        self.focusTimeline = focusTimeline
         // Restored without announcing it: the peer hears typing only once the user changes the draft.
         _state = State(initialValue: MacComposerDrafts.state(account: model.accountID, chat: chatID))
     }
@@ -258,7 +261,7 @@ struct MacComposer: View {
     }
 
     private var keyActions: MacComposerKeyActions {
-        MacComposerKeyActions(send: send, editLast: editLast, cancel: cancelCurrent, attach: attach, canAttach: { canAttach })
+        MacComposerKeyActions(send: send, editLast: editLast, cancel: cancelCurrent, attach: attach, canAttach: { canAttach }, focusPrevious: focusTimeline)
     }
 
     private func cancel(isEdit: Bool) {

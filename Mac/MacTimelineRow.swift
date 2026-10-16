@@ -8,6 +8,8 @@ import SwiftUI
 struct MacTimelineRow: View {
     let row: TimelineRow
     let isGroup: Bool
+    /// The contact's name in a direct chat, which VoiceOver reads as the sender of what they sent.
+    var contactName: String? = nil
     let handlers: MacMessageHandlers
     let openAttachment: () -> Void
     @Environment(\.appearance) private var appearance
@@ -60,7 +62,8 @@ struct MacTimelineRow: View {
             // One element: the description reads the author, the text, the file, the quote, the time, the status and the
             // reactions, so none of the parts (the bubble's text view among them) reads again.
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(message.accessibilityDescription)
+            .accessibilityAddTraits(.isStaticText)
+            .accessibilityLabel(message.accessibilityDescription(sender: message.senderName(contactName: contactName)))
             .accessibilityActions { accessibilityActions }
             .accessibilityAction(.showMenu) { timelineRow.timeline?.openMenu(for: message.id) }
             .modifier(MacRotorEntry(context: timelineRow))
@@ -107,31 +110,31 @@ struct MacTimelineRow: View {
 
     /// The menu's actions, then the file's (open it, then the Mac's copy, save and share), one per link and one per quick
     /// reaction, as on the iPhone; the quoted message after the links. A search or starred result shows itself in the
-    /// conversation first.
+    /// conversation first. SwiftUI hands them to VoiceOver last declared first, so they are declared from the end.
     @ViewBuilder private var accessibilityActions: some View {
         let menu = MacMessageMenu(message: message)
-        if findResultClick.isActive {
-            Button("Show in Conversation") { findResultClick() }
-        }
-        ForEach(menu.items, id: \.kind) { item in
-            Button(MacMessageMenu.title(for: item)) { perform(item.kind, link: nil) }
-        }
-        if let attachment = MessageActionMenu.attachmentAction(for: message) {
-            Button(attachment.title, action: openAttachment)
-        }
-        if let attachment = menu.attachment {
-            ForEach(attachment.items, id: \.kind) { item in
-                Button(item.title) { attachment.perform(item.kind) }
-            }
-        }
-        ForEach(Array(message.links.enumerated()), id: \.offset) { _, link in
-            Button(MessageActionMenu.linkAccessibilityTitle(for: link)) { openURL(link.url) }
+        ForEach(MessageActionMenu.reactionToggles(for: message).reversed(), id: \.emoji) { toggle in
+            Button(toggle.title) { react(toggle.emoji) }
         }
         if let showQuote {
             Button(MacKeyboardMenuItems.showQuoteTitle, action: showQuote)
         }
-        ForEach(MessageActionMenu.reactionToggles(for: message), id: \.emoji) { toggle in
-            Button(toggle.title) { react(toggle.emoji) }
+        ForEach(Array(message.links.enumerated()).reversed(), id: \.offset) { _, link in
+            Button(MessageActionMenu.linkAccessibilityTitle(for: link)) { openURL(link.url) }
+        }
+        if let attachment = menu.attachment {
+            ForEach(attachment.items.reversed(), id: \.kind) { item in
+                Button(item.title) { attachment.perform(item.kind) }
+            }
+        }
+        if let attachment = MessageActionMenu.attachmentAction(for: message) {
+            Button(attachment.title, action: openAttachment)
+        }
+        ForEach(menu.items.reversed(), id: \.kind) { item in
+            Button(MacMessageMenu.title(for: item)) { perform(item.kind, link: nil) }
+        }
+        if findResultClick.isActive {
+            Button("Show in Conversation") { findResultClick() }
         }
     }
 
@@ -501,6 +504,7 @@ struct MacTypingRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 8)
         .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isStaticText)
         .accessibilityLabel(typing.accessibilityLabel)
     }
 }
