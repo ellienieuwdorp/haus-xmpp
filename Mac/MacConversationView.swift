@@ -35,6 +35,8 @@ struct MacConversationView: View {
     /// How far the timeline's end lies below the last line visible above the composer. Not observed, like
     /// `visibleRows`: only the composer's resize reads it.
     @State private var bottomGap = BottomGap()
+    /// Files are being dragged over the chat and it would take them.
+    @State private var dropTargeted = false
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -83,6 +85,8 @@ struct MacConversationView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
         }
         .blockConfirmation(model: model, request: $blockRequest)
+        .onDrop(of: MacAttachmentDrop.types, delegate: MacAttachmentDrop(model: model, chatID: chatID, intent: composerIntent, targeted: $dropTargeted))
+        .overlay { if dropTargeted { MacAttachmentDropHighlight() } }
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(title)
         .navigationSubtitle(model.trustSummary(for: chatID).pill)

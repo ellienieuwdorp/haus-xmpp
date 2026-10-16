@@ -13,13 +13,18 @@ import UniformTypeIdentifiers
     var cancel: () -> Bool
     /// True when the composer took them; false leaves the paste or drop to the text view.
     var attach: (MacComposerAttachments) -> Bool
+    /// Whether `attach` would take files now; Continuity Camera offers its items only then.
+    var canAttach: () -> Bool
 }
 
-/// Files or an image handed to the composer by a paste or a drop.
+/// Files or an image handed to the composer by a paste, a drop or Continuity Camera.
 enum MacComposerAttachments {
     case files([URL])
-    /// An image on the pasteboard with no file behind it (a screenshot, an image copied from a page).
+    /// An image on the pasteboard with no file behind it (a screenshot, an image copied from a page, a photo taken on
+    /// an iPhone).
     case image(Data, UTType)
+    /// A PDF with no file behind it: a document scanned on an iPhone.
+    case pdf(Data)
 
     /// File URLs win (Finder also puts the file's name as text and its icon as an image); text wins over an image
     /// rendition of itself (Pages, Notes and browsers put both); an image without text is an image. nil pastes text.
@@ -32,13 +37,14 @@ enum MacComposerAttachments {
         for (type, uti) in imageTypes where types.contains(type) {
             if let data = pasteboard.data(forType: type) { return .image(data, uti) }
         }
+        if types.contains(.pdf), let data = pasteboard.data(forType: .pdf) { return .pdf(data) }
         return nil
     }
 
     static let imageTypes: [(NSPasteboard.PasteboardType, UTType)] = [
         (.png, .png), (.tiff, .tiff), (NSPasteboard.PasteboardType(UTType.jpeg.identifier), .jpeg), (NSPasteboard.PasteboardType(UTType.heic.identifier), .heic),
     ]
-    static let pasteboardTypes: [NSPasteboard.PasteboardType] = [.fileURL] + imageTypes.map(\.0)
+    static let pasteboardTypes: [NSPasteboard.PasteboardType] = [.fileURL] + imageTypes.map(\.0) + [.pdf]
 }
 
 /// The composer's text field: a plain-text `NSTextView` in an `NSScrollView`, sized to its text up to `maxLines` and
@@ -68,6 +74,7 @@ struct MacComposerTextField: NSViewRepresentable {
         textView.string = state.draft
         context.coordinator.textView = textView
         context.coordinator.focusRequests = focusRequests
+        state.textView = textView
         #if DEBUG
         MacComposerTour.textView = textView
         #endif
@@ -255,6 +262,15 @@ final class MacComposerTextView: NSTextView {
             return super.readSelection(from: pasteboard, type: plain)
         }
         return super.readSelection(from: pasteboard, type: type)
+    }
+
+    /// Continuity Camera (Take Photo, Scan Documents, Add Sketch from an iPhone or iPad) asks the responder chain for
+    /// one that takes images or PDFs; what it brings comes back through `readSelection(from:)` to `attach`.
+    override func validRequestor(forSendType sendType: NSPasteboard.PasteboardType?, returnType: NSPasteboard.PasteboardType?) -> Any? {
+        if sendType == nil, let returnType, returnType != .fileURL, MacComposerAttachments.pasteboardTypes.contains(returnType), actions?.canAttach() == true {
+            return self
+        }
+        return super.validRequestor(forSendType: sendType, returnType: returnType)
     }
 
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
