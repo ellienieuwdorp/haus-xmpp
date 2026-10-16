@@ -71,7 +71,12 @@ struct MacRootView: View {
                 }
             }
             .inspectorColumnWidth(Self.inspectorWidth)
-            .background(MacColumnPresence { inspectorOnScreen = $0 })
+            .background(MacColumnPresence { present in
+                inspectorOnScreen = present
+                // A pushed page stays alive in the hidden column, and its toolbar items (Refresh) would move into the
+                // conversation's toolbar; the inspector opens on the chat's details again.
+                if !present, !showsInspector { window.inspectorPath.removeAll() }
+            })
         }
         .id(model.accountID)
         .onChange(of: model.accountID) { _, _ in window.selection = nil; window.inspectorShown = false }
