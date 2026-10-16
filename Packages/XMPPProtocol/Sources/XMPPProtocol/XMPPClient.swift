@@ -159,6 +159,10 @@ public actor XMPPClient {
     private var liveness: Task<Void, Never>?
     /// Counts inbound reads; a probe that does not move it means the socket is dead.
     private var inboundActivity: UInt64 = 0
+    #if DEBUG
+    /// The stream `silenceTransport()` cut off.
+    private var silencedGeneration: UUID?
+    #endif
     /// Silence longer than this gets a probe; a probe unanswered within `probeTimeout` ends the stream.
     static let silenceInterval: Duration = .seconds(60)
     static let probeTimeout: Duration = .seconds(15)
@@ -578,6 +582,9 @@ public actor XMPPClient {
             while generation == token && attempt == attemptID && !Task.isCancelled {
                 let data = try await Self.receive(conn)
                 guard generation == token, attempt == attemptID else { return }
+                #if DEBUG
+                if silencedGeneration == token { continue }
+                #endif
                 inboundActivity &+= 1
                 for frame in try framer.feed(data) {
                     guard generation == token, attempt == attemptID else { return }
@@ -1008,6 +1015,18 @@ public actor XMPPClient {
         }
         return false
     }
+
+    #if DEBUG
+    /// Debug builds only: from now on the online stream reads and writes nothing, as when the network path dies without
+    /// an error. Writes still complete and nothing ends the stream: only the liveness loop or `probeLiveness(within:)`
+    /// notices, and the server sees an unresponsive session (overdue acknowledgements, then push). A new stream is not
+    /// affected. False when no stream is online.
+    public func silenceTransport() -> Bool {
+        guard phase == .online else { return false }
+        silencedGeneration = generation
+        return true
+    }
+    #endif
 
     /// Ends the stream `token` unless bytes arrived since `seen`.
     private func endUnansweredProbe(_ token: UUID, seen: UInt64) {
@@ -1501,6 +1520,10 @@ public actor XMPPClient {
         guard generation == expectedGeneration else { throw XMPPClientError.connectionClosed }
         guard let connection else { throw XMPPClientError.notConnected }
         let token = generation
+        #if DEBUG
+        // A dead path still takes writes into the socket's buffer.
+        if silencedGeneration == token { return }
+        #endif
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: Data(xml.utf8), completion: .contentProcessed { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }

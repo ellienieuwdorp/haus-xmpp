@@ -17,7 +17,9 @@ import SwiftUI
 /// `sleep` (a fake acknowledgement), `sleep-miss` (a UI crypto operation held past the sleep deadline first),
 /// `wake`, `select <chat>`, `accept <jid>` (accepts that lab contact's undecided devices, as the Devices page would),
 /// `draft <text>` (the open chat's composer changed), `report` (lease and session), `notify <step>` (notification actions
-/// and settings, `MacNotificationDebug`), `quit`.
+/// and settings, `MacNotificationDebug`), `drop-socket` (the live stream stops reading and writing without an error, as
+/// on a dead network path: the app notices only through its liveness probes, so a push the server then sends reaches
+/// the extension, whose liveness ring makes the app probe and reconnect), `quit`.
 @MainActor enum MacLifecycleDebug {
     /// The scene phase each window's content last reported, by window.
     static var scenePhases: [String: ScenePhase] = [:]
@@ -109,6 +111,7 @@ import SwiftUI
             case "draft": if let chat = window.selection { model.draftChanged(argument, in: chat) }
             case "report": MacDebugHooks.log("report: \(await model.debugLeaseReport()), scenePhase \(phases)")
             case "notify": await MacNotificationDebug.run(argument, model: model, window: window)
+            case "drop-socket": MacDebugHooks.log("step drop-socket: \(await model.debugSilenceTransport() ? "stream silenced" : "no stream online")")
             case "quit": MacDebugHooks.quit()
             default: MacDebugHooks.log("step \(step): unknown")
             }

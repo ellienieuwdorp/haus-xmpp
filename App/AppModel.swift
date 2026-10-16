@@ -4611,6 +4611,12 @@ extension AppModel: NotificationActionEnvironment {
         return "pointer \(pointer.map { "\($0.messageID.prefix(8)) at \($0.sentAt.timeIntervalSince1970)" } ?? "none"); \(rows.joined(separator: " | "))"
     }
 
+    /// Cuts the live stream off without telling anyone (`XMPPClient.silenceTransport()`), for the Mac's check of the
+    /// liveness handshake's probe and reconnect. False when no stream is online.
+    func debugSilenceTransport() async -> Bool {
+        await client?.silenceTransport() ?? false
+    }
+
     /// Holds one UI crypto operation open for `duration`, so a quiesce that starts meanwhile cannot finish before it:
     /// the Mac's simulated missed sleep deadline.
     func debugHoldEncryptionOperation(for duration: Duration) {
