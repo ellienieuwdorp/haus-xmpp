@@ -3,7 +3,8 @@ import SwiftUI
 /// Any emoji as a reaction, in a popover on the bubble: the quick reactions, the recent other ones (shared with the
 /// iPhone's picker under the same preference), a search by name and the whole catalogue (`EmojiCatalog`). A popover
 /// rather than the system Character Viewer, which types its choice into whatever text view holds the focus: the choice
-/// would land in the composer, and nothing says when the viewer was closed without one.
+/// would land in the composer, and nothing says when the viewer was closed without one. The viewer still reaches every
+/// sequence the catalogue cannot name: what it types into the focused search field becomes the result to choose.
 struct MacEmojiPicker: View {
     let message: TimelineMessage
     let react: (String) -> Void
@@ -25,7 +26,7 @@ struct MacEmojiPicker: View {
             if let reason = message.reactionUnavailableReason {
                 Text(reason).font(.caption).foregroundStyle(.secondary)
             }
-            TextField("Search emoji", text: $query)
+            TextField("Search or enter an emoji", text: $query)
                 .textFieldStyle(.roundedBorder)
                 .focused($searchFocused)
                 .onSubmit { if let first = results.first { choose(first.emoji) } }
