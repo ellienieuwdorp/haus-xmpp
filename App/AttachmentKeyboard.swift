@@ -752,7 +752,7 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
 
     private func refreshVisibleCells() {
         for case let cell as RecentPhotoCell in collection.visibleCells {
-            guard let path = collection.indexPath(for: cell), let asset = assets?.object(at: path.item) else { continue }
+            guard let path = collection.indexPath(for: cell), let asset = asset(at: path.item) else { continue }
             configureState(cell, asset: asset, index: path.item)
         }
     }
@@ -799,13 +799,20 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         return container
     }
 
+    /// `object(at:)` raises for an index past the end. Until the next layout pass after a reload, the visible cells
+    /// keep their old index paths, which a smaller read no longer has.
+    private func asset(at item: Int) -> PHAsset? {
+        guard let assets, item < assets.count else { return nil }
+        return assets.object(at: item)
+    }
+
     // MARK: Data source
 
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int { assets?.count ?? 0 }
 
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "photo", for: indexPath) as! RecentPhotoCell
-        guard let asset = assets?.object(at: indexPath.item) else { return cell }
+        guard let asset = asset(at: indexPath.item) else { return cell }
         cell.show(asset: asset, manager: library.imageManager, side: itemSide, scale: traitCollection.displayScale)
         configureState(cell, asset: asset, index: indexPath.item)
         return cell
@@ -820,7 +827,7 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: false)
-        guard let asset = assets?.object(at: indexPath.item) else { return }
+        guard let asset = asset(at: indexPath.item) else { return }
         let id = asset.localIdentifier
         if selection.contains(id) { keyboard.deselect(id); return }
         guard !loading.contains(id) else { return }
