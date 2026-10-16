@@ -39,6 +39,11 @@ struct MacRootView: View {
             detail
         }
         .id(model.accountID)
+        // Its own view: it reads the chat list, which this view's body must not, or every new message would rebuild the
+        // open conversation.
+        .background { MacChatCommandsSource(model: model, window: window) }
+        // A Block or Report from the sidebar's menu or the Chat menu; here, so it shows with the sidebar collapsed too.
+        .blockConfirmation(model: model, request: $window.blockRequest)
         .onChange(of: model.accountID) { _, _ in window.selection = nil; window.inspectorShown = false }
         .onChange(of: window.selection) { previous, selection in
             if let previous { model.closeChat(previous) }
@@ -112,7 +117,7 @@ struct MacRootView: View {
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Button { window.inspectorShown.toggle() } label: { Label("Chat Details", systemImage: "info.circle") }
-                            .help("Show or hide the chat's details")
+                            .help("Show or hide the chat's details (⌥⌘I)")
                     }
                 }
         } else {
@@ -135,6 +140,18 @@ struct MacRootView: View {
                 }
             }
         }
+    }
+}
+
+/// Publishes the Chat menu's commands for the main window.
+private struct MacChatCommandsSource: View {
+    let model: AppModel
+    let window: MacWindowState
+
+    var body: some View {
+        Color.clear
+            .accessibilityHidden(true)
+            .focusedSceneValue(\.macChatCommands, MacChatCommands(model: model, window: window))
     }
 }
 

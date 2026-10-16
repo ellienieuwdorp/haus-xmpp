@@ -14,6 +14,8 @@ import SwiftUI
     var reviewingOwnDevices = false
     /// Restore from a transfer, from the signed-out sidebar.
     var showingRestore = false
+    /// A Block or Report chosen from a chat's menu (the sidebar's or the menu bar's), waiting for its confirmation.
+    var blockRequest: BlockRequest?
     /// Bumped by Find (⌘F); the sidebar focuses its search field when it changes.
     var searchRequests = 0
     /// Captured from the main window's content, so the Dock icon can bring the window back after it was closed.

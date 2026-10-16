@@ -68,6 +68,12 @@ struct MacConversationView: View {
         }
         // Its own view, so only it reads the messages: this view's body never reruns for a new message.
         .overlay { MacEmptyNotice(presenter: presenter) }
+        // The Message menu's targets; their own view too, as they change with the messages.
+        .background {
+            if let timeline {
+                MacMessageCommandsSource(model: model, chatID: chatID, timeline: timeline, handlers: messageHandlers)
+            }
+        }
         .safeAreaInset(edge: .top) {
             // Messages from a device nobody decided on wait, encrypted, until the user reviews it (the iPhone shows a
             // card in the chat); the review itself is on the details' Devices & Encryption page.
@@ -324,6 +330,26 @@ private struct MacConversationSubtitle: View {
                     clock = .now
                 }
             }
+    }
+}
+
+/// Publishes the Message menu's commands for the open chat, from the rows the timeline already built.
+private struct MacMessageCommandsSource: View {
+    let model: AppModel
+    let chatID: String
+    let timeline: MacTimelineController
+    let handlers: MacMessageHandlers
+
+    private var commands: MacMessageCommands {
+        // `items` is the observed list the rows go into, so a change of rows reruns whatever reads this.
+        _ = timeline.items
+        return MacMessageCommands(targets: LastMessageTargets(messages: timeline.rows.map(\.message)), isBlocked: model.isBlocked(chatID), handlers: handlers)
+    }
+
+    var body: some View {
+        Color.clear
+            .accessibilityHidden(true)
+            .focusedSceneValue(\.macMessageCommands, commands)
     }
 }
 
