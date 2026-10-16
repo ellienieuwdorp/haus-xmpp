@@ -113,20 +113,24 @@ jobs:
         run: xcodebuild -version
       - name: Pick a simulator
         id: simulator
-        # The first iPhone on the newest iOS runtime the image has.
+        # The first iPhone on the newest iOS runtime the pinned Xcode supports: none newer than its simulator SDK.
         run: |
-          udid=$(xcrun simctl list devices available --json | python3 -I -c '
-          import json, sys
+          sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          udid=$(xcrun simctl list devices available --json | SDK="$sdk" python3 -I -c '
+          import json, os, sys
           devices = json.load(sys.stdin)["devices"]
+          sdk = [int(part) for part in os.environ["SDK"].split(".")]
           version = lambda key: [int(part) for part in key.rsplit(".iOS-", 1)[1].split("-")]
-          for runtime in sorted((key for key in devices if ".iOS-" in key), key=version, reverse=True):
+          runtimes = [key for key in devices if ".iOS-" in key and version(key) <= sdk]
+          for runtime in sorted(runtimes, key=version, reverse=True):
               phones = [device for device in devices[runtime] if device["name"].startswith("iPhone")]
               if phones:
-                  print(phones[0]["udid"])
+                  print(phones[0]["udid"], runtime)
                   break
           ')
           test -n "$udid"
-          echo "udid=$udid" | tee -a "$GITHUB_OUTPUT"
+          echo "Simulator SDK $sdk: $udid"
+          echo "udid=${udid%% *}" >> "$GITHUB_OUTPUT"
       # Simulator builds are signed ad hoc, which needs no development team or certificate. The tests need that
       # signature: it carries the Keychain and App Group entitlements they exercise.
       - name: Test
