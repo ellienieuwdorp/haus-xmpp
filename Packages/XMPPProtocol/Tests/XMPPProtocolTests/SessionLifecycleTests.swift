@@ -176,6 +176,25 @@ struct SessionLifecycleTests {
         await server.stop()
     }
 
+    /// A probe on demand (the app was told the server pushed for this session): an answer keeps the stream, silence
+    /// ends it so the owner reconnects.
+    @Test func livenessProbeKeepsAnAnsweringStreamAndEndsASilentOne() async throws {
+        let server = try await LoopbackServer.start()
+        let client = server.client()
+        try await client.configureStreamManagement(persistence: Persistence(nil))
+        try await bindFresh(client, on: server)
+        async let answered = client.probeLiveness(within: .seconds(2))
+        #expect(try await server.next().name == "r")
+        try await server.send("<a xmlns='urn:xmpp:sm:3' h='1'/>")
+        #expect(await answered)
+        #expect(await client.isOnline)
+        async let silent = client.probeLiveness(within: .milliseconds(300))
+        #expect(try await server.next().name == "r")
+        #expect(await !silent)
+        #expect(await !client.isOnline)
+        await server.stop()
+    }
+
     /// A server that counts stanzas we never sent gets the XEP-0198 error, and the session is retired: the next
     /// connect binds instead of resuming into the same count for the rest of the 72 h window.
     @Test func acknowledgementAboveWhatWasSentRetiresTheSession() async throws {

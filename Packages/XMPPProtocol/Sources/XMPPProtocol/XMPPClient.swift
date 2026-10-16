@@ -976,6 +976,29 @@ public actor XMPPClient {
         }
     }
 
+    /// Asks the server for proof of life now rather than after `silenceInterval` of silence, for a caller with reason
+    /// to doubt the socket (the server pushed for this session, which it does when an acknowledgement is overdue). Any
+    /// inbound bytes within `limit` count as the answer, as in the liveness loop, and without one the stream ends the
+    /// same way, so the owner reconnects. True when the stream answered.
+    public func probeLiveness(within limit: Duration) async -> Bool {
+        guard phase == .online else { return false }
+        let token = generation, seen = inboundActivity
+        do {
+            if smOffered, streamManagement != nil { try await write("<r xmlns='urn:xmpp:sm:3'/>") }
+            else { Task { [weak self] in _ = try? await self?.requestIQ(type: "get", to: nil, payload: "<ping xmlns='urn:xmpp:ping'/>") } }
+        } catch { return false }
+        let deadline = ContinuousClock.now + limit
+        while ContinuousClock.now < deadline {
+            guard generation == token, phase == .online else { return false }
+            if inboundActivity != seen { return true }
+            guard (try? await Task.sleep(for: .milliseconds(50))) != nil else { return false }
+        }
+        guard generation == token, phase == .online else { return false }
+        if inboundActivity != seen { return true }
+        finish("Connection lost", error: XMPPClientError.timedOut)
+        return false
+    }
+
     func groupAccount() throws -> String {
         guard phase == .online, let account = OMEMOWire.bareJID(boundJID) else { throw XMPPClientError.notConnected }
         return account
