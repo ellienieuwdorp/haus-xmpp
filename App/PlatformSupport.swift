@@ -305,8 +305,8 @@ extension ToolbarItemPlacement {
     /// The unread badge on the app's icon, through the notification centre: the badge a notification's `content.badge`
     /// sets from the extension, shown only where the user allows badges, and kept after the app quits. Where
     /// `dockTileOnly`, the Mac labels its own Dock tile instead, which needs no permission but lasts only while the app
-    /// runs: before notifications are asked no extension runs, so nothing else writes the badge then. On the Mac each
-    /// clears the other, so the Dock never shows two counts; iOS has only the notification centre's.
+    /// runs: before notifications are asked no extension runs, so nothing else writes the badge then. The notification
+    /// centre's path clears that label, so the Dock never shows two counts. iOS ignores `dockTileOnly`.
     static func setBadgeCount(_ count: Int, dockTileOnly: Bool) async {
         #if os(macOS)
         NSApp.dockTile.badgeLabel = dockTileOnly && count > 0 ? String(count) : nil
