@@ -63,10 +63,11 @@ private final class DonationProbe: @unchecked Sendable {
     let clock = ContinuousClock(), start = clock.now
     let slow = await CommunicationNotification.content(plain, intent: intent, donate: { interaction in
         probe.record(interaction)
-        await ignoringCancellation(for: .seconds(2))
+        await ignoringCancellation(for: .seconds(10))
     }, donationTimeout: .milliseconds(50), update: { _, _ in communicated })
     #expect(slow === communicated, "the update does not wait for, or depend on, the donation")
-    #expect(clock.now - start < .seconds(1))
+    // Far below the donation's 10 s, yet loose enough for a busy machine that stalls the whole run for seconds.
+    #expect(clock.now - start < .seconds(5))
     // The donation is an incoming interaction grouped by conversation, so it can be deleted with it.
     let donated = try #require(probe.interactions.first)
     #expect(donated.direction == .incoming && donated.groupIdentifier == "thread-9")

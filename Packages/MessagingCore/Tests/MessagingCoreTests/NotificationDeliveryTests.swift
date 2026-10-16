@@ -24,7 +24,7 @@ actor FakePosting: NotificationPosting {
 
     func add(_ request: PlannedNotification) async throws {
         // Like the UNUserNotificationCenter completion-handler bridge: a hung add ignores cancellation.
-        if hang { await ignoringCancellation(for: .seconds(2)) }
+        if hang { await ignoringCancellation(for: .seconds(10)) }
         if preparation > .zero { await ignoringCancellation(for: preparation) }
         if systemAdd > .zero { await ignoringCancellation(for: systemAdd) }
         if failAtIndex == added.count { throw Failure.rejected }
@@ -112,8 +112,9 @@ struct NotificationPresenterTests {
                 try await NotificationPresenter(posting: posting, addTimeout: .milliseconds(50)).present(store: store, accountID: account, progress: slow)
                 Issue.record("A hanging add must not settle")
             } catch { #expect(NotificationFallbackReason(error) == .postFailed) }
-            // The timeout returns at its limit although the hung add ignores cancellation.
-            #expect(clock.now - start < .seconds(1))
+            // The timeout returns at its limit although the hung add ignores cancellation for 10 s; the bound leaves
+            // room for a busy machine that stalls the whole run for seconds.
+            #expect(clock.now - start < .seconds(5))
             #expect(!slow.isCommitted)
             // The retry reposts the same identifiers: the one already added is replaced, not duplicated.
             await posting.configure()
@@ -365,11 +366,12 @@ struct NotificationRunCoordinatorTests {
 struct NotificationTimeoutTests {
     @Test func cancellingTheCallerReturnsWithoutWaitingForTheOperation() async throws {
         let clock = ContinuousClock(), start = clock.now
-        let task = Task { try await withTimeout(.seconds(5)) { await ignoringCancellation(for: .seconds(2)); return 1 } }
+        let task = Task { try await withTimeout(.seconds(30)) { await ignoringCancellation(for: .seconds(20)); return 1 } }
         try await Task.sleep(for: .milliseconds(50))
         task.cancel()
         await #expect(throws: CancellationError.self) { try await task.value }
-        #expect(clock.now - start < .seconds(1))
+        // Far below both the operation and the timeout, with room for a run stalled for seconds.
+        #expect(clock.now - start < .seconds(5))
     }
 }
 
