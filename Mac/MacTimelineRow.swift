@@ -104,10 +104,12 @@ struct MacTimelineRow: View {
     /// opened from it stays attached when the pointer moves into the menu and off the row.
     private var toolbar: some View {
         let replies = MessageActionMenu.items(for: message).contains { $0.kind == .reply }
-        var shown = hovering || choosingEmoji
         #if DEBUG
-        shown = shown || MacDebugHooks.tour.hoveredMessage == message.id
+        let forced = MacDebugHooks.tour.hoveredMessage == message.id
+        #else
+        let forced = false
         #endif
+        let shown = hovering || choosingEmoji || forced
         return MacMessageToolbar(message: message, react: { choosingEmoji = true },
                                  reply: replies ? { perform(.reply, link: nil) } : nil) { menu(link: nil) }
             .fixedSize()
