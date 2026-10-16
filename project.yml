@@ -59,7 +59,7 @@ targets:
         NSCameraUsageDescription: Take a photo or video to send.
         NSMicrophoneUsageDescription: Record sound with videos you take to send.
         NSPhotoLibraryUsageDescription: Pick recent photos and videos to send.
-        # The attachment panel shows its own limited-access row with a Manage menu instead of the system prompt.
+        # The attachment panel shows its own limited-access row with a Select More button instead of the system prompt.
         PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
         # Communication notifications: the app declares the intent it donates through the extension.
         NSUserActivityTypes: [INSendMessageIntent]
