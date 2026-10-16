@@ -89,7 +89,9 @@ final class AppModel {
     /// A restore owns the store's lease until it closes the store; a background transition meanwhile must not release it.
     @ObservationIgnored private var restoringData = false
     @ObservationIgnored private var snapshots: PreUpgradeSnapshot?
-    @ObservationIgnored private var openingStorage = false
+    /// `openStorage` in progress. Its snapshot or migration can hold the lease before `store` is set, so a background
+    /// transition joins it.
+    @ObservationIgnored private var storageOpening: Task<Void, Never>?
     /// Where this install stands with a transfer to another install (see `AccountTransfer`). Anything but `.none`
     /// replaces the app with the transfer screen and keeps storage closed.
     private(set) var transferState: TransferState = .none
@@ -405,9 +407,17 @@ final class AppModel {
     /// snapshot of it is taken; while that is not possible (a launch into the background, the lease held elsewhere, a
     /// failed snapshot, restored data waiting for the previous build) storage stays closed and nothing connects.
     private func openStorage(withoutSnapshot: Bool = false) async {
-        guard store == nil, !openingStorage else { return }
-        openingStorage = true
-        defer { openingStorage = false }
+        guard store == nil, storageOpening == nil else { return }
+        let opening = Task { await openStorageOnce(withoutSnapshot: withoutSnapshot) }
+        storageOpening = opening
+        await opening.value
+        storageOpening = nil
+    }
+
+    private func openStorageOnce(withoutSnapshot: Bool) async {
+        // A snapshot or migration holds the lease across awaits: the app must not be suspended with it.
+        let activity = BackgroundActivity("Open message storage")
+        defer { activity.end() }
         do {
             // Before anything opens or creates a store: data moved to another install stays out of reach, and a
             // transfer a crash interrupted is undone first.
@@ -927,6 +937,8 @@ final class AppModel {
             await previous?.value
             guard let self else { return }
             if transition.quiescesTransport {
+                // Storage still opening may hold the lease before `store` is set; it is joined, never cut short.
+                await self.storageOpening?.value
                 // The session hibernates (up to days with push): it must read as away, not "Online", until it resumes.
                 if transition.presence == .away, let client = self.client, self.isConnected {
                     await typingEnd?.value
