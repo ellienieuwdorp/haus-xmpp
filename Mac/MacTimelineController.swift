@@ -721,7 +721,9 @@ import SwiftUI
 
     /// A bubble's text took keyboard focus (a click, Select Text): the keys go on from that message.
     func bubbleTextFocused(_ id: String) {
-        if focusedID != id { focusedID = id }
+        guard focusedID != id else { return }
+        focusedID = id
+        pendingMenu = nil
     }
 
     /// A key that a bubble's text passed on: Up and Down give the timeline keyboard focus and move on from that bubble,
