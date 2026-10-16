@@ -15,10 +15,15 @@ import SwiftUI
 /// - `-haus-capture <dir>`: once the chats (and a selected chat's messages) are loaded and laid out, every visible
 ///   window as `<n>-<name>.png`, rendered from its own views (`cacheDisplay`), at the screen's scale.
 /// - `-haus-capture-frames <dir> <seconds>`: the main window at about 10 frames a second, `frame-0001.png` onwards,
-///   with any other open window (Settings) drawn over its centre.
+///   with any other open window (Settings) drawn over its centre and its popovers where they hang; a sheet's words are
+///   logged instead.
 /// - `-haus-tour "<step>; …"`: with `-haus-capture-frames`, starts the frames as soon as the main window exists and plays
 ///   the steps while they run, for a recording: `wait <seconds>`, `select <chat>`, `deselect`, `inspector on|off`,
-///   `settings general|appearance|about`, `close-settings`.
+///   `settings general|appearance|about`, `close-settings`, `size <width>x<height>` (as `-haus-window-size`, which
+///   applies only after a tour). Message actions by message ID in the open chat, as the bubble's menu performs them:
+///   `reply|edit|star|retry|unsend|encryption|report|select-text <id>`, `react <id> <emoji>`, `pick-emoji <id>`
+///   (the emoji picker's popover), `hover <id>|off` (shows that bubble's hover toolbar until `hover off`), and
+///   `menu <id>` (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's).
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-window-size <width>x<height>`: the main window's content size in points, for captures at a set size.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-sheet account|new-chat|own-devices`,
@@ -216,6 +221,17 @@ import SwiftUI
     /// The Settings pane a tour asks for; `MacSettingsView` follows it.
     @Observable @MainActor final class Tour {
         var settingsPane: MacSettingsView.Pane?
+        /// A message action for the open conversation, or for one row, to perform; `serial` makes a repeat a change.
+        var messageRequest: MessageRequest?
+        /// The message whose hover toolbar shows as though the pointer were over it.
+        var hoveredMessage: String?
+    }
+
+    struct MessageRequest: Equatable {
+        let verb: String
+        let messageID: String
+        let argument: String
+        let serial: Int
     }
 
     static let tour = Tour()
@@ -241,11 +257,39 @@ import SwiftUI
                 tour.settingsPane = MacSettingsView.Pane(rawValue: argument) ?? .general
                 if otherWindows.isEmpty { openSettings?() }
             case "close-settings": otherWindows.forEach { $0.close() }
+            case "reply", "edit", "star", "retry", "unsend", "encryption", "report", "select-text", "react", "pick-emoji":
+                let parts = argument.split(separator: " ", maxSplits: 1).map(String.init)
+                tour.messageRequest = MessageRequest(verb: words[0], messageID: parts.first ?? "", argument: parts.count > 1 ? parts[1] : "",
+                                                     serial: (tour.messageRequest?.serial ?? 0) + 1)
+            case "hover": tour.hoveredMessage = argument == "off" ? nil : argument
+            case "size":
+                let size = argument.split(separator: "x").compactMap { Double($0) }
+                if size.count == 2 { mainWindow?.setContentSize(NSSize(width: size[0], height: size[1])) }
+            case "menu": logMenu(for: argument, model: model, window: window)
             default: log("tour \(step): unknown")
             }
         }
         await frames.value
         log("tour done; selected \(window.selection ?? "none"), messages loaded for \(model.messagesLoadedFor ?? "none")")
+    }
+
+    /// The bubble's menu for one message of the open chat, as `MacMessageMenu` lists it, and its VoiceOver actions.
+    private static func logMenu(for id: String, model: AppModel, window: MacWindowState) {
+        let messages = window.selection.map { ConversationPresenter(source: model, chatID: $0, title: $0).timelineMessages } ?? []
+        guard let message = messages.first(where: { $0.id == id }) else {
+            log("menu \(id): not in the open chat, which has " + messages.map(\.id).joined(separator: ", "))
+            return
+        }
+        let menu = MacMessageMenu(message: message)
+        let reactions = menu.showsReactions ? menu.reactions.map { $0.emoji + ($0.isSelected ? "*" : "") }.joined() + "+" : "none"
+        log("menu \(id): reactions \(reactions) (\(message.canReact ? "enabled" : message.reactionUnavailableReason ?? "disabled")); items "
+            + menu.items.map(MacMessageMenu.title(for:)).joined(separator: " | "))
+        for link in message.links {
+            log("menu \(id) on \(link.url.absoluteString): " + MacMessageMenu(message: message, link: link.url).items.map(MacMessageMenu.title(for:)).joined(separator: " | "))
+        }
+        if let preview = message.linkPreview {
+            log("menu \(id) on its card: " + MacMessageMenu(message: message, link: preview.url).items.map(MacMessageMenu.title(for:)).joined(separator: " | "))
+        }
     }
 
     private static var mainWindow: NSWindow? {
@@ -277,6 +321,7 @@ import SwiftUI
         var frame = 0
         while clock.now < end {
             let started = clock.now
+            if let window = mainWindow { logSheets(of: window) }
             if let window = mainWindow, let png = renderWithOverlays(window) {
                 frame += 1
                 emit(png, directory: directory, file: String(format: "frame-%04d.png", frame))
@@ -284,6 +329,20 @@ import SwiftUI
             try? await Task.sleep(until: started + .milliseconds(100), clock: clock)
         }
         log("captured \(frame) frame(s)")
+    }
+
+    private static var loggedSheets: Set<ObjectIdentifier> = []
+
+    /// Each sheet's text and buttons, once, as frames show it blank.
+    private static func logSheets(of window: NSWindow) {
+        func texts(in view: NSView) -> [String] {
+            let own: [String] = if let field = view as? NSTextField, !field.stringValue.isEmpty { [field.stringValue] }
+                else if let button = view as? NSButton, !button.title.isEmpty { ["[\(button.title)]"] } else { [] }
+            return own + view.subviews.flatMap(texts(in:))
+        }
+        for sheet in window.sheets where sheet.isVisible && loggedSheets.insert(ObjectIdentifier(sheet)).inserted {
+            log("sheet: " + (sheet.contentView.map(texts(in:)) ?? []).joined(separator: " | "))
+        }
     }
 
     /// The window's frame view, so the title bar and toolbar are in the picture with the content. Liquid Glass is
@@ -295,11 +354,19 @@ import SwiftUI
     }
 
     /// The main window with any other open window (Settings) drawn over its centre with a shadow, roughly where it
-    /// would sit in front of the main window. Both are rendered from their own views.
+    /// would sit in front of the main window, and its popovers (the emoji picker) where they are attached. All are
+    /// rendered from their own views. A sheet (a dialog) draws its content outside the views and would show blank, so
+    /// its words are logged instead (`logSheets`).
     private static func renderWithOverlays(_ window: NSWindow) -> Data? {
         guard let main = renderRep(window) else { return nil }
         let overlays = otherWindows.compactMap { renderRep($0) }
-        guard !overlays.isEmpty else { return main.representation(using: .png, properties: [:]) }
+        // A popover's frame is glass and renders blank; its content alone renders, on a flat fill drawn below.
+        let attached = (window.childWindows ?? []).filter { $0.isVisible && !$0.isSheet }.compactMap { child -> (NSWindow, NSBitmapImageRep)? in
+            guard let view = child.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            return (child, rep)
+        }
+        guard !overlays.isEmpty || !attached.isEmpty else { return main.representation(using: .png, properties: [:]) }
         guard let output = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: main.pixelsWide, pixelsHigh: main.pixelsHigh,
                                             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                                             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
@@ -324,6 +391,26 @@ import SwiftUI
             NSGraphicsContext.saveGraphicsState()
             NSBezierPath(roundedRect: frame, xRadius: 24, yRadius: 24).addClip()
             overlay.draw(in: frame)
+            NSGraphicsContext.restoreGraphicsState()
+        }
+        let scale = CGFloat(main.pixelsWide) / max(1, window.frame.width)
+        for (child, rep) in attached {
+            // The system keeps a popover on a screen, which the off-screen window is not on: its height above the
+            // window's bottom is right, its horizontal place is not, so it is kept inside the picture.
+            let x = min(max(0, (child.frame.minX - window.frame.minX) * scale), canvas.width - CGFloat(rep.pixelsWide))
+            let frame = NSRect(x: x, y: (child.frame.minY - window.frame.minY) * scale, width: CGFloat(rep.pixelsWide), height: CGFloat(rep.pixelsHigh))
+            NSGraphicsContext.saveGraphicsState()
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor.black.withAlphaComponent(0.3)
+            shadow.shadowBlurRadius = 24
+            shadow.shadowOffset = NSSize(width: 0, height: -6)
+            shadow.set()
+            NSColor.windowBackgroundColor.setFill()
+            NSBezierPath(roundedRect: frame, xRadius: 20, yRadius: 20).fill()
+            NSGraphicsContext.restoreGraphicsState()
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(roundedRect: frame, xRadius: 20, yRadius: 20).addClip()
+            rep.draw(in: frame)
             NSGraphicsContext.restoreGraphicsState()
         }
         NSGraphicsContext.restoreGraphicsState()
