@@ -1,0 +1,138 @@
+# Compiles the iPhone and Mac apps, unsigned, and runs the app's hosted unit tests (the `HausXMPPLifecycle` scheme) on
+# an iOS simulator. Nothing is signed, archived or uploaded, and the UI tests don't run here.
+#
+# Security properties, for anyone changing this file:
+# - Every job runs on a GitHub-hosted runner, a fresh VM per job; no job may target a self-hosted runner.
+# - Pull requests, from forks too, get exactly the same jobs as pushes. They run with a read-only token and no secrets.
+#   There is no `pull_request_target` or `workflow_run` trigger, and the workflow uses no secrets at all.
+# - The token can only read the repository (`contents: read`), and checkout doesn't keep it in .git/config.
+# - Actions are pinned to full commit SHAs.
+# - Nothing is signed with a real identity: there's no development team (Config/Local.xcconfig is gitignored and a
+#   checkout has none), the app builds turn code signing off, and the simulator tests use ad hoc signing.
+name: Apps
+
+# Everything the app targets and their tests compile or bundle (the same list for both events). Package tests have
+# their own workflow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'App/**'
+      - 'Shared/**'
+      - 'Mac/**'
+      - 'NotificationService/**'
+      - 'NotificationServiceMac/**'
+      - 'AppLifecycleTests/**'
+      - 'Packages/*/Package.swift'
+      - 'Packages/*/Sources/**'
+      - 'Packages/MessageStore/Tests/MessageStoreTests/Fixtures/**'
+      - 'Packages/OMEMOCrypto/*.libomemo-c'
+      - 'Packages/OMEMOCrypto/LICENSE.protobuf-c'
+      - 'LICENSE'
+      - 'LICENSE-ADDITIONAL-PERMISSION'
+      - 'THIRD_PARTY_LICENSES.md'
+      - 'project.yml'
+      - 'HausXMPP.xcodeproj/**'
+      - 'Config/**'
+      - '.github/workflows/apps.yml'
+  pull_request:
+    paths:
+      - 'App/**'
+      - 'Shared/**'
+      - 'Mac/**'
+      - 'NotificationService/**'
+      - 'NotificationServiceMac/**'
+      - 'AppLifecycleTests/**'
+      - 'Packages/*/Package.swift'
+      - 'Packages/*/Sources/**'
+      - 'Packages/MessageStore/Tests/MessageStoreTests/Fixtures/**'
+      - 'Packages/OMEMOCrypto/*.libomemo-c'
+      - 'Packages/OMEMOCrypto/LICENSE.protobuf-c'
+      - 'LICENSE'
+      - 'LICENSE-ADDITIONAL-PERMISSION'
+      - 'THIRD_PARTY_LICENSES.md'
+      - 'project.yml'
+      - 'HausXMPP.xcodeproj/**'
+      - 'Config/**'
+      - '.github/workflows/apps.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+# A newer push to a pull request cancels its older run. Pushes to main each get their own run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.scheme }}
+    # GitHub's macOS arm64 image with Xcode 27 (https://github.com/actions/runner-images). It also carries newer betas
+    # and release candidates; DEVELOPER_DIR pins the image's default, released Xcode 27.
+    runs-on: xcode-27
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scheme: HausXMPP
+            destination: generic/platform=iOS Simulator
+          - scheme: HausXMPPMac
+            destination: generic/platform=macOS
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+      SCHEME: ${{ matrix.scheme }}
+      DESTINATION: ${{ matrix.destination }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Show the toolchain
+        run: xcodebuild -version
+      - name: Build
+        run: |
+          xcodebuild build -project HausXMPP.xcodeproj -scheme "$SCHEME" -configuration Debug \
+            -destination "$DESTINATION" -derivedDataPath build/DerivedData -quiet \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+
+  lifecycle:
+    name: Lifecycle tests
+    runs-on: xcode-27
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Show the toolchain
+        run: xcodebuild -version
+      - name: Pick a simulator
+        id: simulator
+        # The first iPhone on the newest iOS runtime the image has.
+        run: |
+          udid=$(xcrun simctl list devices available --json | python3 -I -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          version = lambda key: [int(part) for part in key.rsplit(".iOS-", 1)[1].split("-")]
+          for runtime in sorted((key for key in devices if ".iOS-" in key), key=version, reverse=True):
+              phones = [device for device in devices[runtime] if device["name"].startswith("iPhone")]
+              if phones:
+                  print(phones[0]["udid"])
+                  break
+          ')
+          test -n "$udid"
+          echo "udid=$udid" | tee -a "$GITHUB_OUTPUT"
+      # Simulator builds are signed ad hoc, which needs no development team or certificate. The tests need that
+      # signature: it carries the Keychain and App Group entitlements they exercise.
+      - name: Test
+        env:
+          UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          xcodebuild test -project HausXMPP.xcodeproj -scheme HausXMPPLifecycle \
+            -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath build/DerivedData \
+            -parallel-testing-enabled NO -quiet
