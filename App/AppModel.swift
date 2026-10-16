@@ -4559,6 +4559,19 @@ extension AppModel: NotificationActionEnvironment {
         return "pointer \(pointer.map { "\($0.messageID.prefix(8)) at \($0.sentAt.timeIntervalSince1970)" } ?? "none"); \(rows.joined(separator: " | "))"
     }
 
+    /// For the Mac's lab checks (`MacLifecycleDebug`): the account's retained ciphertext (sender, why it waits, its
+    /// room) and the room members' OMEMO 2 devices with their trust, never any content.
+    func debugRetentionReport(_ chatID: String) async -> String {
+        guard let store, let encryption else { return "closed" }
+        let pending = ((try? await store.pendingEncryptedIncomingSummaries(accountID: accountID)) ?? []).map {
+            "\($0.sender) \($0.reason)\($0.room.map { " in \($0)" } ?? "")"
+        }
+        let devices = ((try? await encryption.cachedGroupDevices(account: accountID, room: chatID)) ?? []).map {
+            "\($0.jid) \($0.deviceID) \($0.trust)\($0.active ? "" : " inactive")"
+        }
+        return "retained [\(pending.joined(separator: ", "))], room devices [\(devices.joined(separator: ", "))]"
+    }
+
     /// Holds one UI crypto operation open for `duration`, so a quiesce that starts meanwhile cannot finish before it:
     /// the Mac's simulated missed sleep deadline.
     func debugHoldEncryptionOperation(for duration: Duration) {

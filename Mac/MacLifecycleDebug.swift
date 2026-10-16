@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import MessagingCore
+import OMEMO
 import SwiftUI
 
 /// Debug checks of the Mac lifecycle (`MacLifecycle`, `MacLifecycleDriver`). Debug builds only.
@@ -15,9 +16,11 @@ import SwiftUI
 /// (AppKit's own focus again), `hide`, `unhide`, `minimise`, `close`, `open`, `lock`, `unlock`, `idle <minutes>` (the last
 /// input that long ago, in place of the real input clock; `idle 0` is input just now), `input` (the real clock again),
 /// `sleep` (a fake acknowledgement), `sleep-miss` (a UI crypto operation held past the sleep deadline first),
-/// `wake`, `select <chat>`, `accept <jid>` (accepts that lab contact's undecided devices, as the Devices page would),
-/// `draft <text>` (the open chat's composer changed), `report` (lease and session), `notify <step>` (notification actions
-/// and settings, `MacNotificationDebug`), `quit`.
+/// `wake`, `select <chat>`, `accept <jid>|<room>` (accepts that lab contact's undecided devices, as the Devices page
+/// would, or a joined lab room's members' undecided devices, as Group details would), `draft <text>` (the open chat's
+/// composer changed), `report` (lease and session), `store <chat>` (a lab account's retained ciphertext, the room's
+/// devices and the chat's stored messages, without content), `notify <step>` (notification actions and settings,
+/// `MacNotificationDebug`), `quit`.
 @MainActor enum MacLifecycleDebug {
     /// The scene phase each window's content last reported, by window.
     static var scenePhases: [String: ScenePhase] = [:]
@@ -106,6 +109,8 @@ import SwiftUI
             case "wake": lifecycle.didWake()
             case "select": window.selection = argument
             case "accept": await accept(argument, model: model)
+            case "store" where model.isLabAccount:
+                MacDebugHooks.log("store \(argument): \(await model.debugRetentionReport(argument)); \(await model.debugMessageReport(argument))")
             case "draft": if let chat = window.selection { model.draftChanged(argument, in: chat) }
             case "report": MacDebugHooks.log("report: \(await model.debugLeaseReport()), scenePhase \(phases)")
             case "notify": await MacNotificationDebug.run(argument, model: model, window: window)
@@ -119,16 +124,26 @@ import SwiftUI
         NSApp.windows.first { $0.identifier?.rawValue.hasPrefix(MacAppDelegate.mainWindowID) == true }
     }
 
-    /// What the Devices page's Accept does, for a lab contact only: a lab run cannot click it.
-    private static func accept(_ jid: String, model: AppModel) async {
-        guard model.isLabAccount, jid.hasSuffix("@localhost") else {
-            MacDebugHooks.log("accept: only for a lab account and a lab contact")
+    /// What the Devices page's Accept does, for a lab contact only: a lab run cannot click it. For a joined lab room,
+    /// what Group details' Accept does for each undecided device of another member: a room is OMEMO 2 only, while a
+    /// contact's own page lists the version their 1:1 chat uses, which may be the other record of the same device ID.
+    private static func accept(_ address: String, model: AppModel) async {
+        guard model.isLabAccount, address.hasSuffix("@localhost") || model.isGroup(address) && address.hasSuffix("@rooms.localhost") else {
+            MacDebugHooks.log("accept: only for a lab account and a lab contact or room")
             return
         }
-        await model.loadEncryptionDetails(for: jid)
-        let devices = model.encryptionOverview(for: jid)?.devices.filter { $0.jid == jid && $0.trust == .undecided } ?? []
-        for device in devices { await model.setDeviceTrust(device, trust: .accepted, chatID: jid) }
-        MacDebugHooks.log("accept: \(devices.count) device(s) of \(jid)")
+        let devices: [EncryptionDevice]
+        if model.isGroup(address) {
+            await model.loadGroupDetails(room: address)
+            devices = model.groupChats[address]?.devices.filter {
+                $0.jid != model.accountID && $0.jid.hasSuffix("@localhost") && $0.active && $0.trust == .undecided
+            } ?? []
+        } else {
+            await model.loadEncryptionDetails(for: address)
+            devices = model.encryptionOverview(for: address)?.devices.filter { $0.jid == address && $0.trust == .undecided } ?? []
+        }
+        for device in devices { await model.setDeviceTrust(device, trust: .accepted, chatID: address) }
+        MacDebugHooks.log("accept: \(devices.count) device(s) of \(address)" + devices.map { " \($0.deviceID) \($0.profile.label)" }.joined(separator: ","))
     }
 }
 
