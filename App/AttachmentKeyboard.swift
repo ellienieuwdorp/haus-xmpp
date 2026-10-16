@@ -923,13 +923,15 @@ private final class RecentPhotoCell: UICollectionViewCell {
         options.isNetworkAccessAllowed = true
         let id = asset.localIdentifier
         let target = CGSize(width: max(side, 1) * scale, height: max(side, 1) * scale)
-        request = manager.requestImage(for: asset, targetSize: target, contentMode: .aspectFill, options: options) { [weak self] image, _ in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self, self.assetID == id else { return }
-                    self.imageView.image = image
-                }
+        // Sendable, so the handler is not main-actor code. Written here it otherwise would be, and Swift checks that
+        // on entry, which traps when PhotoKit answers on a queue of its own (an iCloud original downloaded for the
+        // tile). An answer on the main thread, such as the quick first one, is shown at once.
+        request = manager.requestImage(for: asset, targetSize: target, contentMode: .aspectFill, options: options) { @Sendable [weak self] image, _ in
+            let apply = { @MainActor in
+                guard let self, self.assetID == id else { return }
+                self.imageView.image = image
             }
+            if Thread.isMainThread { MainActor.assumeIsolated(apply) } else { DispatchQueue.main.async(execute: apply) }
         }
         let isVideo = asset.mediaType == .video
         durationLabel.isHidden = !isVideo
