@@ -48,13 +48,13 @@ import SwiftUI
     private(set) var loadingAll = false
     /// The message the arrow keys moved to (`MacTimelineKeyboard`), ringed while the timeline has keyboard focus. Kept
     /// when focus moves elsewhere, so coming back finds it.
-    var focusedID: String?
+    private(set) var focusedID: String?
     /// The timeline itself has keyboard focus, as SwiftUI reports it.
-    var hasKeyboardFocus = false
-    /// Bumped to give the timeline keyboard focus, from a key a bubble's text passed on.
+    private(set) var hasKeyboardFocus = false
+    /// Bumped to give the timeline keyboard focus (`requestKeyboardFocus`).
     private(set) var focusRequests = 0
-    /// Bumped to open the focused message's menu; that message's row opens it.
-    private(set) var menuRequests = 0
+    /// A message whose menu should open below its bubble; the row opens it (`menuOpened`).
+    private(set) var pendingMenu: String?
     /// Esc in the timeline or in a bubble's text: the conversation moves keyboard focus to the composer.
     @ObservationIgnored var onEscape: () -> Void = {}
 
@@ -360,7 +360,7 @@ import SwiftUI
         return layout.geometry.map { $0.contentOffset.y + $0.contentInsets.top } ?? .infinity
     }
 
-    func requestOlderIfNeeded() {
+    private func requestOlderIfNeeded() {
         // A filtered list ends where the loaded history ends; it never pages.
         guard !isFiltered, olderRequests.shouldRequest(oldestID: rows.first?.message.id, distanceFromTop: distanceFromTop,
                                           viewportHeight: layout.height, byReader: readerIsScrolling) else { return }
@@ -378,7 +378,7 @@ import SwiftUI
 
     /// A key or a jump moved the timeline: it counts as the reader's scroll for paging and shows the day chip, unless
     /// it only brought a focused message into view, which the chip would cover.
-    func readerMoved(showingDayChip: Bool = true) {
+    private func readerMoved(showingDayChip: Bool = true) {
         readerMovedAt = .now
         settlingAtOpen = false
         refiltered = nil
@@ -694,8 +694,10 @@ import SwiftUI
     func openMenu(for id: String) {
         focusedID = id
         reveal(id)
-        menuRequests += 1
+        pendingMenu = id
     }
+
+    func menuOpened() { pendingMenu = nil }
 
     /// Gives the timeline keyboard focus: Shift-Tab from the composer and Tab from the find field come here, as the
     /// window's key view loop does not know the scroll view SwiftUI makes focusable.

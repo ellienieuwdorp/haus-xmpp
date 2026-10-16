@@ -45,22 +45,37 @@ struct MacMessageFocusRing: View {
     }
 }
 
-/// Behind a bubble: opens its menu below it when the keyboard asks for it (`MacTimelineController.openMenu`). The
-/// menu is the bubble's own (`MacMessageNSMenu`), followed by what a click on the bubble does, which a keyboard cannot
-/// otherwise reach (`MacKeyboardMenuItems`).
+/// Behind the focused bubble only: opens its menu below it when the keyboard asks for it
+/// (`MacTimelineController.openMenu`). The menu is the bubble's own (`MacMessageNSMenu`), followed by what a click on
+/// the bubble does, which a keyboard cannot otherwise reach (`MacKeyboardMenuItems`).
 struct MacMessageKeyboardMenu: View {
     /// The menu, built when it opens.
     let menu: () -> NSMenu
     @Environment(\.timelineRow) private var context
+
+    var body: some View {
+        if let timeline = context.timeline, timeline.focusedID == context.id {
+            MacMessageKeyboardMenuAnchor(timeline: timeline, id: context.id, menu: menu)
+        }
+    }
+}
+
+/// The view the focused bubble's menu opens from. Also on appearing: focusing a message and asking for its menu
+/// happen together.
+private struct MacMessageKeyboardMenuAnchor: View {
+    let timeline: MacTimelineController
+    let id: String
+    let menu: () -> NSMenu
     @State private var anchor = MacMenuAnchor.Box()
 
     var body: some View {
         MacMenuAnchor(box: anchor)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
-            .onChange(of: context.timeline?.menuRequests) { _, _ in
-                guard let timeline = context.timeline, timeline.focusedID == context.id else { return }
-                // Not inside the update: the menu runs its own event loop until it closes.
+            .onChange(of: timeline.pendingMenu, initial: true) { _, pending in
+                guard pending == id else { return }
+                timeline.menuOpened()
+                // Not inside the update, and once the anchor is in its window: the menu runs its own event loop.
                 DispatchQueue.main.async { open() }
             }
     }
@@ -71,7 +86,7 @@ struct MacMessageKeyboardMenu: View {
         #if DEBUG
         // A menu runs its own event loop, which nothing ends in a scripted run: the tour reads it instead.
         if MacUnobtrusive.isOn {
-            MacDebugHooks.log("keyboard menu \(context.id): " + MacKeyboardMenuItems.titles(of: menu))
+            MacDebugHooks.log("keyboard menu \(id): " + MacKeyboardMenuItems.titles(of: menu))
             return
         }
         #endif

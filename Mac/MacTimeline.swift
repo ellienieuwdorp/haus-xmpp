@@ -8,8 +8,8 @@ import SwiftUI
 /// It is one stop in the window's keyboard focus, between the sidebar (and the find bar) and the composer. With focus,
 /// the scrolling keys work (Page Up and Down, Home and End, ⌘↑ and ⌘↓), ↑ and ↓ move a focus ring from message to
 /// message, Return or Space opens the focused message's menu, and Esc goes to the composer (`onEscape`); the Message
-/// menu acts on the focused message too. VoiceOver reads
-/// each message as one element and offers rotors over the messages, their links and the starred ones.
+/// menu acts on the focused message too. VoiceOver reads each message as one element and offers rotors over the
+/// messages, their links and the starred ones.
 struct MacTimeline<Row: View>: View {
     let controller: MacTimelineController
     /// The contact's name in a direct chat, for the rotors' entries.
