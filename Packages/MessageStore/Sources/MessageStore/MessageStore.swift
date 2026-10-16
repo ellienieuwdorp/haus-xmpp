@@ -2104,6 +2104,22 @@ public actor MessageStore {
         try connection.transaction { try recordReadBaseline(accountID: accountID, archiveID: archiveID, sentAt: .distantPast) }
     }
 
+    /// A room joined during a connection is first walked on the next one, whose first page would otherwise take
+    /// everything that arrived since the join for the history of a new member. Once the room admitted us, its archive's
+    /// newest time before the join (`historyThrough`, the archive's own clock; `.distantPast` for an empty archive) is
+    /// the room's read baseline instead: history from before it stays read, what followed is unread and alerts, and
+    /// the first walk keeps it. A room with a checkpoint already has its baseline (or predates baselines, when none may
+    /// be invented), so nothing changes for it.
+    public func recordJoinedRoom(accountID: String, room: String, historyThrough: Date) throws {
+        try requireTransportOwnership()
+        guard !accountID.isEmpty, !room.isEmpty else { throw MessageStoreError.invalidValue }
+        try connection.transaction {
+            guard try connection.query("SELECT 1 FROM archive_checkpoints WHERE account_id=? AND archive_id=?",
+                                       [.text(accountID), .text(room)]).isEmpty else { return }
+            try recordReadBaseline(accountID: accountID, archiveID: room, sentAt: historyThrough)
+        }
+    }
+
     /// Reference source stays separate: a room assigns stanza IDs after encryption.
     public func reactionReference(accountID: String, messageID: String) throws -> String? {
         guard let message = try message(accountID: accountID, messageID: messageID), message.encryptionProfile == "modern" else { return nil }

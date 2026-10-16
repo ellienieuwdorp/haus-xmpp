@@ -70,7 +70,8 @@ import SwiftUI
 ///   (the conversation banner's Review…), `own-review` (the account's review, as the sidebar card's Review opens it), `trust|verify|dont-trust|compare|remove
 ///   <id>` (that device's button in the open review or fingerprint sheet), `confirm <button>` (a confirmation's button)
 ///   and `close-sheet` (the newest sheet's Done or Close), each pressed as VoiceOver would, and `snap-sheet <name>` (the
-///   newest sheet alone as `<name>.png`).
+///   newest sheet alone as `<name>.png`). `store <chat>` logs what a lab account's store holds for it, as the lifecycle
+///   step of that name does.
 ///   The window of an unobtrusive run is never key, so the Chat and Message menus, Find in Conversation and Starred
 ///   Messages read the main window's targets directly there (`Tour.chatCommands`, `Tour.messageCommands`,
 ///   `Tour.conversationFind`) instead of as focused scene values.
@@ -376,6 +377,8 @@ import SwiftUI
             case "unblock" where model.isDemo: for entry in model.blockEntries(for: argument) { await model.unblock(entry) }
             case "close-window": mainWindow?.performClose(nil)
             case "stalls": MacTimelineDebug.StallProbe.shared.report(argument)
+            case "store" where model.isLabAccount:
+                log("store \(argument): \(await model.debugRetentionReport(argument)); \(await model.debugMessageReport(argument))")
             case "chat", "join", "devices", "messages", "device", "review", "own-review", "trust", "verify", "dont-trust", "compare", "remove", "confirm", "close-sheet":
                 await MacDeviceReviewTour.step(words[0], argument, model: model, window: window, mainWindow: mainWindow)
             default: log("tour \(step): unknown")

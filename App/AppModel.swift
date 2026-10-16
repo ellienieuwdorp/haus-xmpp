@@ -261,6 +261,12 @@ final class AppModel {
     @ObservationIgnored private var opportunisticBackfillDone = false
     /// Per connection: this connection's forward walk has finished, so the single archive query is free.
     @ObservationIgnored private var archiveWalkFinished = false
+    /// A room's join boundary query (`ArchiveSynchronizer.roomJoinBoundary`) holds the archive query: no backfill starts.
+    @ObservationIgnored private var joinBoundaryQueries = 0
+    /// Rooms this model asked to join, by connection, with their archive's newest time before the join. Recorded as the
+    /// room's read baseline once its own presence admits us on that connection (`updateGroupPresence`); a refusal drops
+    /// it, another connection ignores it, and a later join asks again.
+    @ObservationIgnored private var joinBoundaries: [String: (token: UUID, historyThrough: Date)] = [:]
     /// Per connection: archives (account or room JID) with nothing more to backfill, or whose server refused, so a
     /// reach-top, which fires on every scroll frame near the top, does not ask again.
     @ObservationIgnored private var backfillSettled: Set<String> = []
@@ -2416,6 +2422,11 @@ final class AppModel {
             let overview = try await encryption.refreshGroupDevices(account: account, room: room, transport: client)
             guard generation == token, transportWanted, !quiescing else { return nil }
             groupChats[room] = GroupChatState(members: overview.room.members, devices: overview.devices)
+            // Before the join, so the self-presence that admits us (handled by `updateGroupPresence`) finds it.
+            if let boundary = await roomJoinBoundary(room, client: client, store: store, token: token) {
+                joinBoundaries[room] = (token, boundary)
+            }
+            guard generation == token, transportWanted, !quiescing else { return nil }
             _ = try await client.joinGroupRoom(room, nickname: nickname)
             let confirmed = try await client.groupRoomSnapshot(room)
             guard generation == token, transportWanted, !quiescing else { return nil }
@@ -2672,6 +2683,9 @@ final class AppModel {
         do {
             let value = try await client.groupRoomSnapshot(room)
             guard generation == token else { return }
+            if value?.joined == true { await recordJoinBoundary(room, token: token) }
+            else if await client.groupRoomRefusedJoin(room) { joinBoundaries[room] = nil }
+            guard generation == token else { return }
             guard let snapshot = value else { groupChats[room]?.joined = false; return }
             groupChats[room]?.members = snapshot.members
             groupChats[room]?.joined = snapshot.joined
@@ -2683,6 +2697,40 @@ final class AppModel {
             groupChats[room]?.joined = false
             groupChats[room]?.issue = groupFailure(error)
         }
+    }
+
+    /// The archive time of `room`'s newest entry before we join it, or nil when the room has been walked already or the
+    /// boundary cannot be had: then its first walk takes all it finds for history, as for a room joined elsewhere. This
+    /// connection's walk read its rooms before this one was known, but holds the single archive query until it ends, so
+    /// a room joined during catch-up gets no boundary; a running backfill is waited for (it ends within its page budget).
+    /// A room without an archive refuses the query and keeps no archive baseline, as before.
+    private func roomJoinBoundary(_ room: String, client: XMPPClient, store: MessageStore, token: UUID) async -> Date? {
+        guard (try? await store.archiveCheckpoint(accountID: accountID, archiveID: room)) == nil else { return nil }
+        while let backfill = backfillTask {
+            await backfill.value
+            guard generation == token else { return nil }
+        }
+        guard archiveWalkFinished, catchUp == nil else {
+            Self.syncLog.notice("room join boundary skipped: this connection's archive walk has not finished")
+            return nil
+        }
+        joinBoundaryQueries += 1
+        defer { joinBoundaryQueries -= 1 }
+        do { return try await ArchiveSynchronizer(store: store).roomJoinBoundary(room: room, client: client) }
+        catch {
+            Self.syncLog.notice("room join boundary unavailable: \(ConnectionSetup.detail(error), privacy: .public)")
+            return nil
+        }
+    }
+
+    /// The room admitted us: its pre-join archive time becomes its read baseline (`MessageStore.recordJoinedRoom`).
+    private func recordJoinBoundary(_ room: String, token: UUID) async {
+        guard let boundary = joinBoundaries[room], boundary.token == token, let store else { return }
+        joinBoundaries[room] = nil
+        do {
+            try await store.recordJoinedRoom(accountID: accountID, room: room, historyThrough: boundary.historyThrough)
+            Self.syncLog.notice("room join boundary recorded\(boundary.historyThrough == .distantPast ? " (empty archive)" : "", privacy: .public)")
+        } catch { Self.syncLog.error("room join boundary not saved: \(ConnectionSetup.detail(error), privacy: .public)") }
     }
 
     /// Group devices from the store first, then from the server. The pill follows the cached devices; joining only
@@ -3396,7 +3444,8 @@ final class AppModel {
     /// only once the store says there is something to fetch, so a chat with no older history never flashes it.
     private func requestBackfill(archive: String?, pages: Int) {
         let archiveID = archive ?? accountID
-        guard transportWanted, !quiescing, hasTransportOwnership, session.isReady, archiveWalkFinished, catchUp == nil, backfillTask == nil, !isDemo,
+        guard transportWanted, !quiescing, hasTransportOwnership, session.isReady, archiveWalkFinished, catchUp == nil, backfillTask == nil,
+              joinBoundaryQueries == 0, !isDemo,
               !backfillSettled.contains(archiveID), backfillResumesAt.map({ ContinuousClock.now >= $0 }) ?? true,
               let client, let encryption, let store else { return }
         let account = accountID
@@ -4609,6 +4658,19 @@ extension AppModel: NotificationActionEnvironment {
                 + (message.unreadableReason.map { " unreadable \($0)" } ?? "")
         }
         return "pointer \(pointer.map { "\($0.messageID.prefix(8)) at \($0.sentAt.timeIntervalSince1970)" } ?? "none"); \(rows.joined(separator: " | "))"
+    }
+
+    /// For the Mac's lab checks (`MacLifecycleDebug`): the account's retained ciphertext (sender, why it waits, its
+    /// room) and the room members' OMEMO 2 devices with their trust, never any content.
+    func debugRetentionReport(_ chatID: String) async -> String {
+        guard let store, let encryption else { return "closed" }
+        let pending = ((try? await store.pendingEncryptedIncomingSummaries(accountID: accountID)) ?? []).map {
+            "\($0.sender) \($0.reason)\($0.room.map { " in \($0)" } ?? "")"
+        }
+        let devices = ((try? await encryption.cachedGroupDevices(account: accountID, room: chatID)) ?? []).map {
+            "\($0.jid) \($0.deviceID) \($0.trust)\($0.active ? "" : " inactive")"
+        }
+        return "retained [\(pending.joined(separator: ", "))], room devices [\(devices.joined(separator: ", "))]"
     }
 
     /// Holds one UI crypto operation open for `duration`, so a quiesce that starts meanwhile cannot finish before it:
