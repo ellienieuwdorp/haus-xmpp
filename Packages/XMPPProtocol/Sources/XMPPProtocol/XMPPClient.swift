@@ -162,9 +162,10 @@ public actor XMPPClient {
     #if DEBUG
     /// The stream `silenceTransport()` cut off.
     private var silencedGeneration: UUID?
-    /// Until when the stream `holdAcknowledgements(for:)` named answers no `<r/>`, and the one answer it then sends.
+    /// Until when the stream `holdAcknowledgements(for:)` named answers no `<r/>`, and the stream whose one answer at
+    /// the end is already scheduled.
     private var heldAcknowledgements: (generation: UUID, until: ContinuousClock.Instant)?
-    private var heldAcknowledgement: Task<Void, Never>?
+    private var heldAcknowledgementScheduled: UUID?
     #endif
     /// Silence longer than this gets a probe; a probe unanswered within `probeTimeout` ends the stream.
     static let silenceInterval: Duration = .seconds(60)
@@ -706,9 +707,10 @@ public actor XMPPClient {
                 if node.name == "r" {
                     #if DEBUG
                     if let held = heldAcknowledgements, held.generation == generation, ContinuousClock.now < held.until {
-                        if heldAcknowledgement == nil {
+                        if heldAcknowledgementScheduled != generation {
                             let token = generation
-                            heldAcknowledgement = Task { [weak self] in
+                            heldAcknowledgementScheduled = token
+                            Task { [weak self] in
                                 try? await Task.sleep(until: held.until, clock: .continuous)
                                 await self?.releaseHeldAcknowledgement(token)
                             }
@@ -1052,7 +1054,7 @@ public actor XMPPClient {
     }
 
     private func releaseHeldAcknowledgement(_ token: UUID) async {
-        heldAcknowledgement = nil
+        if heldAcknowledgementScheduled == token { heldAcknowledgementScheduled = nil }
         guard generation == token, phase == .online else { return }
         do { try await writeAcknowledgement() }
         catch { if generation == token { finish("Acknowledgement failed", error: error) } }
