@@ -238,7 +238,7 @@ private struct MacEmptyNotice: View {
 
     var body: some View {
         if let notice = timeline.filtered(presenter).emptyNotice {
-            if timeline.loadingAll {
+            if timeline.isFiltered, timeline.loadingAll {
                 ProgressView().controlSize(.small)
             } else {
                 ContentUnavailableView(notice.title, systemImage: notice.systemImage)
