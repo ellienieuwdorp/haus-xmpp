@@ -36,12 +36,18 @@ import SwiftUI
         MacUnobtrusive.setPolicy()
         super.init()
     }
-
-    func applicationWillFinishLaunching(_ notification: Notification) { MacDebugHooks.prepareLaunch() }
     #endif
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    /// The notification centre's delegate is set before launching finishes, so a launch by a click on a notification,
+    /// or on its Reply or Mark as Read, delivers that response to it.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        MacDebugHooks.prepareLaunch()
+        #endif
         PushRegistration.shared.installNotificationDelegate()
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
         MacAttachmentActions.removeExports()
         #if DEBUG
         MacLifecycleDebug.attach(to: lifecycle)
