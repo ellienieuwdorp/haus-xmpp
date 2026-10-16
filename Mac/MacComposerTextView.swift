@@ -181,7 +181,7 @@ final class MacComposerTextView: NSTextView {
         isContinuousSpellCheckingEnabled = true
         writingToolsBehavior = .complete
         setAccessibilityLabel("Message")
-        setAccessibilityHelp("Return sends. Shift-Return starts a new line.")
+        setAccessibilityHelp("Return sends. Shift-Return starts a new line. Tab moves on.")
         setAccessibilityIdentifier("messageComposer")
     }
 
@@ -240,6 +240,13 @@ final class MacComposerTextView: NSTextView {
             return true
         case #selector(moveUp(_:)):
             return string.isEmpty && !hasMarkedText() && actions?.editLast() == true
+        // Tab and Shift-Tab move keyboard focus on, as in a text field; Option-Tab still types a tab.
+        case #selector(insertTab(_:)):
+            window?.selectNextKeyView(self)
+            return true
+        case #selector(insertBacktab(_:)):
+            window?.selectPreviousKeyView(self)
+            return true
         case #selector(cancelOperation(_:)):
             return !hasMarkedText() && actions?.cancel() == true
         default:
