@@ -59,8 +59,6 @@ The `haus.xmpp.ios` identifiers belong to the official app. To run on a device w
 - `HAUS_APP_NAME` and `HAUS_DEV_APP_NAME`: the names on the home screen, for Release and Debug.
 - `HAUS_NOTIFICATION_FILTERING = NO`, unless Apple granted your extension's App ID the notification filtering entitlement (`com.apple.developer.usernotifications.filtering`). Apple grants it per App ID on request. Without it the notification extension cannot hide the push it was woken by, so after posting the new messages it replaces that push with a quiet "You may have new messages" entry that the next sync removes. Debug builds never have the entitlement, since the development App ID is a separate one.
 
-[TRADEMARKS.md](TRADEMARKS.md) lists what a published fork must change.
-
 Push notifications go through the project's push gateway, `push.xmpp.haus`, which can only notify the official app and its development build. A build with other identifiers connects and syncs normally but gets no push notifications.
 
 ### Signing in
@@ -101,12 +99,6 @@ App-level tests run in Xcode: the `HausXMPPLifecycle` scheme for hosted unit tes
 | `Config/` | Shared and local build settings |
 | `TestPlans/` | UI test plans |
 
-## Contributing and security
-
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Report security problems privately as described in [SECURITY.md](SECURITY.md), not in public issues.
-
 ## Licence
 
 Haus XMPP is free software under the [GNU General Public License, version 3 or later](LICENSE), with an [additional permission](LICENSE-ADDITIONAL-PERMISSION) that allows distribution through the App Store, the Mac App Store and TestFlight. Because it includes libomemo-c, which is licensed under GPLv3 only, the app as a whole is distributed under GPLv3. Third-party components and their licences are listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
-
-The name "Haus XMPP" and the app icon are not covered by the licence. Forks are welcome under a different name and icon; see [TRADEMARKS.md](TRADEMARKS.md).
