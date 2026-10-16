@@ -973,8 +973,9 @@ final class AppModel {
                 if transition.presence == nil, let active = transition.clientActive, let client = self.client {
                     try? await client.setClientActive(active)
                 }
-                // A background transition queued meanwhile waits for this one: nothing more starts.
-                if transition.resumesTransport, self.transportWanted { await self.refresh() }
+                // Not awaited: a background transition queued behind this one disconnects first, then joins the load
+                // with the rest of the work it waits for. Nothing starts once the app has gone away again.
+                if transition.resumesTransport, self.transportWanted { self.refreshSoon() }
             }
         }
     }
