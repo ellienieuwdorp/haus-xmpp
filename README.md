@@ -1,8 +1,8 @@
-# haus xmpp
+<h1 align="center">haus xmpp</h1>
 
-[**xmpp.haus**](https://xmpp.haus) · [Privacy](https://xmpp.haus/privacy/) · [Support](https://xmpp.haus/support/)
+<p align="center"><a href="https://xmpp.haus"><strong>xmpp.haus</strong></a></p>
 
-<img src="site/public/images/iphone-light.jpg" width="280" alt="A conversation in Haus XMPP on iPhone in light mode, with a photo, a link preview, a reply, reactions and read receipts">&nbsp;&nbsp;<img src="site/public/images/iphone-dark.jpg" width="280" alt="The same conversation in dark mode">
+<p align="center"><img src=".github/screenshots.png" width="600" alt="A conversation in Haus XMPP on iPhone, in light and dark mode, with a photo, a link preview, a reply, reactions and read receipts"></p>
 
 > [!WARNING]
 > **Haus XMPP is early software and not ready for personal conversations.** Most of what's listed below has been tested against a local Prosody test server, with disposable accounts and independent OMEMO implementations (python-omemo, QXmpp and libomemo.js) on the other side. Decrypted notification previews have been checked on a real iPhone. There hasn't been broad testing with other clients and servers yet, or a full release validation. There are no public builds.
