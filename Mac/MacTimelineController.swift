@@ -64,6 +64,13 @@ import SwiftUI
     @ObservationIgnored private var dayChipIdle: Task<Void, Never>?
     @ObservationIgnored private var highlightEnd: Task<Void, Never>?
     @ObservationIgnored private var revealing: Task<Void, Never>?
+    /// The reader is at the newest message, or near it: set when a scroll (theirs or this controller's) ends there and
+    /// cleared when one ends elsewhere. A resize or an update moves the end without moving the reader, so they leave it.
+    @ObservationIgnored private var followsEnd = true
+    @ObservationIgnored private var placePending = false
+    /// See `notePlace`.
+    @ObservationIgnored private var restingPlace: (id: String, top: CGFloat, height: CGFloat)?
+    @ObservationIgnored private var resizedAt: ContinuousClock.Instant?
     /// Set from opening until the timeline first rests at its end with the frame's insets in place, or the reader moves
     /// it. SwiftUI may place the initial offset before the toolbar's and the composer's insets arrive, which leaves a
     /// chat slightly taller than the frame at its top, its newest message under the composer.
@@ -154,7 +161,7 @@ import SwiftUI
         }
         // A scroll since the last layout pass may not have reported its rows yet.
         layout.forceLayout()
-        let wasNearBottom = layout.distanceFromBottom < TimelineScrollPolicy.nearBottomDistance
+        let wasNearBottom = followsEnd || layout.distanceFromBottom < TimelineScrollPolicy.nearBottomDistance
         let placement = TimelineScrollPolicy.Update(previousTailID: rows.last?.message.id, rows: next.rows, wasNearBottom: wasNearBottom,
                                                     typingChanged: typing != next.typing, typingLeft: typing != nil && next.typing == nil,
                                                     canAnimate: false).placement
@@ -172,6 +179,7 @@ import SwiftUI
                 let moved = layout.frame(of: reader.id).map { $0.minY - reader.top }
                 #endif
                 let anchor = hold(reader, among: before)
+                noteReader()
                 #if DEBUG
                 MacTimelineDebug.held(anchor, movedByUpdate: moved, by: self)
                 #else
@@ -259,6 +267,8 @@ import SwiftUI
             proxy.scrollTo(Self.endID, anchor: .bottom)
             layout.forceLayout()
         }
+        followsEnd = true
+        restingPlace = nil
         #if DEBUG
         if MacDebugHooks.has("-haus-timeline-trace") { MacDebugHooks.log("newest: end \(layout.frame(of: Self.endID)?.maxY ?? -1) of \(layout.height)") }
         #endif
@@ -267,14 +277,18 @@ import SwiftUI
     // MARK: Reader input
 
     /// The frame's new size. Its height changes with the window and with whatever sits below the timeline (the composer
-    /// growing or shrinking by a line, a reply bar). SwiftUI keeps the reader's top row, and the end only when the reader
-    /// was exactly at it; a reader who was within `nearBottomDistance` of the end keeps the newest message in view, as an
-    /// arriving message would follow them. The size arrives after the change, so the distance before it is the distance
-    /// now less the change.
+    /// growing or shrinking by a line, a reply bar), its width with the window and the inspector. SwiftUI keeps the
+    /// reader's top row, and the end only when the reader was exactly at it; a reader who was at the end, or within
+    /// `nearBottomDistance` of it, keeps the newest message in view, as an arriving message would follow them. A new
+    /// width rewraps the bubbles and moves the end with no scroll, so whether the reader was there is what `followsEnd`
+    /// last said, not the distance after the layout. The size arrives after the change, so the distance before a height
+    /// change is the distance now less the change.
     func resized(_ size: CGSize) {
         let change = size.height - layout.size.height
-        let wasNearBottom = layout.size.height > 0 && layout.distanceFromBottom + change < TimelineScrollPolicy.nearBottomDistance
+        let wasNearBottom = followsEnd || change != 0 && layout.size.height > 0 && layout.distanceFromBottom + change < TimelineScrollPolicy.nearBottomDistance
+        let changed = size != layout.size
         layout.size = size
+        if changed { resizedAt = .now }
         if let refiltered, ContinuousClock.now - refiltered.at < .milliseconds(500) {
             guard change != 0, isLoaded else { return }
             DispatchQueue.main.async {
@@ -285,24 +299,76 @@ import SwiftUI
             }
             return
         }
-        guard change != 0, wasNearBottom, isLoaded else { return }
-        // Never from inside the layout pass reporting the size: the proxy may not be used there.
+        guard changed, isLoaded else { return }
+        if wasNearBottom { followsEnd = true }
+        guard followsEnd || restingPlace != nil else { return }
+        keepPlace()
+    }
+
+    /// Puts the reader back after a resize, in the next main-queue turn: at the end when they follow it, else their resting
+    /// row where it was. Never from inside the layout pass reporting a size (the proxy may not be used there), and once
+    /// for all the sizes a step of a live resize or a frame of the inspector's animation reports before it runs, as each
+    /// correction lays the whole window out again.
+    private func keepPlace() {
+        guard !placePending else { return }
+        placePending = true
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                guard self.layout.isAttached, self.layout.distanceFromBottom > 0.5 else { return }
-                self.scrollToNewest()
+                self.placePending = false
+                guard self.layout.isAttached else { return }
+                self.layout.forceLayout()
+                if self.followsEnd {
+                    if self.layout.distanceFromBottom > 0.5 { self.scrollToNewest() }
+                } else if let rest = self.restingPlace, self.indexByID[rest.id] != nil {
+                    let frame = self.layout.frame(of: rest.id)
+                    guard frame.map({ abs($0.minY - rest.top) > 0.5 }) ?? true else { return }
+                    self.place(rest.id, top: TimelineScrollPolicy.reachableTop(rest.top, rowHeight: frame?.height ?? rest.height, frameHeight: self.layout.height))
+                }
             }
         }
     }
 
     /// Every change of the scroll view's geometry: the jump button, paging and the day chip follow it.
     func scrolled(_ geometry: ScrollGeometry) {
+        let previous = layout.geometry
         layout.geometry = geometry
-        let jump = TimelineScrollPolicy.showsJumpToNewest(distanceFromBottom: layout.distanceFromBottom, viewportHeight: layout.height)
+        followEnd(from: previous, to: geometry)
+        // Not for the end moving under a reader who follows it, as it does for a moment in each step of a resize.
+        let jump = !followsEnd && TimelineScrollPolicy.showsJumpToNewest(distanceFromBottom: MacTimelineLayout.distanceFromBottom(geometry), viewportHeight: layout.height)
         if jump != showsJumpToNewest { withAnimation(.easeOut(duration: 0.2)) { showsJumpToNewest = jump } }
         if !applying { requestOlderIfNeeded() }
         updateDayChip()
         settleAtOpen(geometry)
+    }
+
+    /// Keeps `followsEnd`, and the reader where they were through a resize. Read from the scroll geometry, which is one
+    /// consistent snapshot; the rows' reported frames can lag it by a pass while a resize lays them out. Only the offset
+    /// moving is a scroll, the reader's or this controller's, and says whether the reader is at the end now, except in
+    /// the second after a resize without a gesture or a key: the bound position then puts its top row back, and content
+    /// that shrank past the offset (a new width collapses the stack's estimated heights) pulls it to the end. Anything
+    /// else (rows rewrapped and measured at a new width, a taller composer) moves the end under the reader, and one who
+    /// followed it still does.
+    private func followEnd(from previous: ScrollGeometry?, to geometry: ScrollGeometry) {
+        let distance = MacTimelineLayout.distanceFromBottom(geometry)
+        let scrolledOnly = previous.map { $0.contentSize == geometry.contentSize && $0.containerSize == geometry.containerSize
+            && $0.contentInsets == geometry.contentInsets && $0.contentOffset != geometry.contentOffset } ?? false
+        let resizing = resizedAt.map { ContinuousClock.now - $0 < .seconds(1) } == true
+        if readerIsScrolling || scrolledOnly && !resizing {
+            followsEnd = distance < TimelineScrollPolicy.nearBottomDistance
+        } else if !applying, isLoaded, resizing || followsEnd && distance > 0.5 {
+            keepPlace()
+        }
+    }
+
+    /// After a scroll this controller made for the reader or an update: whether they are at the end now, and where.
+    private func noteReader() {
+        followsEnd = layout.distanceFromBottom < TimelineScrollPolicy.nearBottomDistance
+        notePlace()
+    }
+
+    /// Where the reader's last scroll came to rest, unless at the end: their top row and its distance from the top edge.
+    private func notePlace() {
+        restingPlace = followsEnd ? nil : readerRow().map { (id: $0.id, top: $0.top, height: $0.bottom - $0.top) }
     }
 
     /// Puts a just-opened timeline at its end once the insets are known (`settlingAtOpen`). Measured from the scroll
@@ -332,6 +398,7 @@ import SwiftUI
             dayChipIdle?.cancel()
             updateDayChip()
         } else {
+            notePlace()
             scheduleDayChipIdle()
         }
     }
@@ -368,6 +435,7 @@ import SwiftUI
     /// A key or a jump moved the timeline: it counts as the reader's scroll for paging and shows the day chip.
     private func readerMoved() {
         readerMovedAt = .now
+        noteReader()
         settlingAtOpen = false
         refiltered = nil
         dayChipIdle?.cancel()
@@ -566,6 +634,7 @@ import SwiftUI
         apply(next)
         layout.forceLayout()
         position(place)
+        noteReader()
         updateDayChip()
     }
 
@@ -706,9 +775,13 @@ enum MacTimelineItem: Identifiable, Equatable {
     /// spacer, which is current right after a forced layout pass (the scroll geometry can lag a programmatic move).
     var distanceFromBottom: CGFloat {
         if let end = frame(of: MacTimelineController.endID) { return end.maxY - height }
-        guard let geometry else { return .infinity }
-        // The container is the frame, between the insets; the offset counts from above the top inset.
-        return geometry.contentSize.height - geometry.contentOffset.y - geometry.contentInsets.top - geometry.containerSize.height
+        return geometry.map(Self.distanceFromBottom) ?? .infinity
+    }
+
+    /// The same from the scroll geometry alone. The container is the frame, between the insets; the offset counts from
+    /// above the top inset.
+    static func distanceFromBottom(_ geometry: ScrollGeometry) -> CGFloat {
+        geometry.contentSize.height - geometry.contentOffset.y - geometry.contentInsets.top - geometry.containerSize.height
     }
 
     /// Runs SwiftUI's pending update and layout now, so the rows' frames are current before anything is corrected.
