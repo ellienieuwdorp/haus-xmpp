@@ -3,40 +3,36 @@ import ImageIO
 import SwiftUI
 import XMPPProtocol
 
-/// The open chat's draft, kept apart from everything the timeline reads, so typing redraws the composer and never the
-/// messages.
+/// A chat's draft, kept apart from everything the timeline reads, so typing redraws the composer and never the
+/// messages. One per chat while the app runs (`MacComposerDrafts`), outliving the composer: a send that fails after the
+/// user moved to another chat puts its text back where they will find it.
 @MainActor @Observable final class MacComposerState {
-    var draft: String
+    var draft = ""
     /// True from Send until the text is queued.
     var sending = false
     /// The card for the first link in the draft; Send freezes it into the message.
     @ObservationIgnored let linkPreview = ComposerLinkPreview()
     /// The edit a successful Send just finished: its draft was already cleared, and anything typed since stays.
     @ObservationIgnored var finishedEdit: String?
-
-    init(draft: String) { self.draft = draft }
 }
 
-/// Unsent drafts per chat while the app runs, so switching chats and coming back finds the text where it was. Kept in
-/// memory only, so a draft never reaches the disk, and for one account: another account's chats start empty.
+/// Each chat's composer state while the app runs, so switching chats and coming back finds the draft where it was.
+/// Kept in memory only, so a draft never reaches the disk, and for one account: another account's chats start empty.
 @MainActor enum MacComposerDrafts {
     private static var account = ""
-    private static var drafts: [String: String] = [:]
+    private static var states: [String: MacComposerState] = [:]
 
-    static func draft(account: String, chat: String) -> String {
-        use(account)
-        return drafts[chat] ?? ""
-    }
-
-    static func save(_ draft: String, account: String, chat: String) {
-        use(account)
-        drafts[chat] = draft.isEmpty ? nil : draft
-    }
-
-    private static func use(_ account: String) {
-        guard account != self.account else { return }
-        self.account = account
-        drafts = [:]
+    static func state(account: String, chat: String) -> MacComposerState {
+        if account != self.account {
+            self.account = account
+            states = [:]
+        }
+        if let state = states[chat] { return state }
+        // Chats left empty, with nothing on its way, have nothing to come back to.
+        states = states.filter { !$0.value.draft.isEmpty || $0.value.sending }
+        let state = MacComposerState()
+        states[chat] = state
+        return state
     }
 }
 
@@ -55,9 +51,8 @@ struct MacComposer: View {
         self.model = model
         self.chatID = chatID
         self.intent = intent
-        // Restored without announcing it: the peer hears typing only once the user changes the draft. An edit started
-        // while the composer was away (a blocked chat) brings its text along.
-        _state = State(initialValue: MacComposerState(draft: intent.editing?.body ?? MacComposerDrafts.draft(account: model.accountID, chat: chatID)))
+        // Restored without announcing it: the peer hears typing only once the user changes the draft.
+        _state = State(initialValue: MacComposerDrafts.state(account: model.accountID, chat: chatID))
     }
 
     /// Built bare, so the bars read only what an author line needs.
@@ -114,12 +109,9 @@ struct MacComposer: View {
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
-        .onChange(of: state.draft) { _, draft in
-            model.draftChanged(draft, in: chatID)
-            // An edit's text is the message's, not a draft to come back to.
-            MacComposerDrafts.save(intent.editing == nil ? draft : "", account: model.accountID, chat: chatID)
-        }
-        .onChange(of: intent.editing?.id) { previous, _ in
+        .onChange(of: state.draft) { _, draft in model.draftChanged(draft, in: chatID) }
+        // Also on appearing: an edit started while the composer was away (a blocked chat) brings its text along.
+        .onChange(of: intent.editing?.id, initial: true) { previous, _ in
             if let message = intent.editing {
                 state.draft = message.body
             } else if previous != nil, state.finishedEdit != previous {
@@ -130,6 +122,12 @@ struct MacComposer: View {
         }
         .onChange(of: linkPreviewInput, initial: true) { _, input in
             state.linkPreview.update(draft: input.draft, enabled: input.enabled, suppressed: input.suppressed, source: linkPreviewSource)
+        }
+        // An edit ends with its chat: its text is the message's, not a draft to come back to.
+        .onDisappear {
+            guard intent.editing != nil else { return }
+            intent.cancelEditing()
+            state.draft = ""
         }
         #if DEBUG
         .onAppear { MacComposerTour.intent = intent }
@@ -236,7 +234,8 @@ struct MacComposer: View {
         let account = model.accountID
         let chatID = chatID
         // Cleared now, not once the send settles: anything typed meanwhile would otherwise leave the sent text behind.
-        // A failure puts the text back if the field is still empty.
+        // A failure puts the text back if the field is still empty, also when the user has moved to another chat
+        // (the state is the chat's, not this view's); a failed edit only while it is still open.
         state.draft = ""
         intent.focusComposer()
         if let editing = intent.editing {
@@ -246,7 +245,7 @@ struct MacComposer: View {
                         state.finishedEdit = editing.id
                         intent.cancelEditing()
                     }
-                } else if state.draft.isEmpty, model.accountID == account {
+                } else if intent.editing?.id == editing.id, state.draft.isEmpty, model.accountID == account {
                     state.draft = text
                 }
             }
