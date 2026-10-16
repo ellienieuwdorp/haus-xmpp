@@ -297,18 +297,27 @@ public struct NotificationPresenter: Sendable {
         // Read here or on another device (pointer, own marker, XEP-0490 item, or history before the baseline).
         let read = try await store.readNotificationMessageIDs(accountID: accountID, messageIDs: Set(bounded))
         var messages = stale.union(read).map { NotificationIdentity.message(accountID: accountID, messageID: $0) }
-        let retained = mine.filter { $0.reference?.kind == .retained && $0.reference?.belongs(to: accountID) == true }
-        if !retained.isEmpty {
-            let live = Set(try await store.retainedEncryptedIncomingKeys(accountID: accountID).map { key in
-                NotificationPlanner.identifier(accountID: accountID, key: key)
-            })
-            messages += retained.map(\.identifier).filter { !live.contains($0) }
-        }
+        messages += try await RetainedNotificationCleanup.staleIdentifiers(store: store, accountID: accountID, delivered: mine)
         messages += try await ReactionNotificationCleanup.staleIdentifiers(store: store, accountID: accountID, delivered: delivered)
         let summary = NotificationIdentity.overflow(accountID: accountID)
         if !summaryPosted, mine.contains(where: { $0.identifier == summary }) { messages.append(summary) }
         await posting.removeDelivered(identifiers: fallbacks + messages.sorted())
         return (fallbacks.count, messages.count)
+    }
+}
+
+/// Delivered review notifications ("Open the chat to review") whose ciphertext is no longer retained: it committed
+/// and alerts as the message itself, or became a placeholder. Another account's, and those of ciphertext still
+/// waiting, stay. Shared by the extension's end-of-run cleanup and the app's cleanup after a read pointer moved or a
+/// review was resolved.
+public enum RetainedNotificationCleanup {
+    public static func staleIdentifiers(store: MessageStore, accountID: String, delivered: [DeliveredNotification]) async throws -> [String] {
+        let retained = delivered.filter { $0.reference?.kind == .retained && $0.reference?.belongs(to: accountID) == true }
+        guard !retained.isEmpty else { return [] }
+        let live = Set(try await store.retainedEncryptedIncomingKeys(accountID: accountID).map { key in
+            NotificationPlanner.identifier(accountID: accountID, key: key)
+        })
+        return retained.map(\.identifier).filter { !live.contains($0) }
     }
 }
 

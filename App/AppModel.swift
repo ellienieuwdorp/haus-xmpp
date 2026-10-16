@@ -36,6 +36,8 @@ final class AppModel {
     /// The chat list has been read from storage for the current account. Until then the Chats screen shows nothing:
     /// a cold start of a signed-in account must not flash the "no conversations" state before its rows arrive.
     private(set) var hasLoadedChats = false
+    /// Retained ciphertext per chat at the last chat-list load, so a resolved review can clear its notification.
+    @ObservationIgnored private var reviewCounts: [String: Int] = [:]
     private(set) var messages: [ChatMessage] = []
     /// The chat whose messages `messages` currently holds; nil while a load is pending.
     private(set) var messagesLoadedFor: String?
@@ -3996,11 +3998,14 @@ final class AppModel {
         summaries += pending.keys.filter { !known.contains($0) }.sorted().map {
             ChatSummary(id: $0, title: $0, preview: reviewPreview, isPinned: false)
         }
-        // A pointer moved (here, on another device, or before this launch): its chat's notifications may go.
+        // A pointer moved (here, on another device, or before this launch), or retained ciphertext was resolved: its
+        // chat's notifications, or its review notification, may go.
         let previousUnread = Dictionary(chats.map { ($0.id, $0.unreadCount) }, uniquingKeysWith: max)
-        if !hasLoadedChats || summaries.contains(where: { $0.unreadCount < (previousUnread[$0.id] ?? 0) }) {
+        if !hasLoadedChats || summaries.contains(where: { $0.unreadCount < (previousUnread[$0.id] ?? 0) })
+            || reviewCounts.contains(where: { pending[$0.key, default: 0] < $0.value }) {
             removeReadNotifications(account: account, store: store)
         }
+        reviewCounts = pending
         // A reorder (pin, new activity) animates; List only does so inside an explicit transaction.
         withAnimation(summaries.map(\.id) == chats.map(\.id) ? nil : .default) { chats = summaries }
         hasLoadedChats = true
