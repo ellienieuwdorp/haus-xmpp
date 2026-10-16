@@ -483,6 +483,12 @@ import SwiftUI
     #if DEBUG
     /// The open chat's timeline, for the tour's scroll steps.
     static weak var current: MacTimelineController?
+
+    /// Moves the content by `delta` points as a reader's scroll would (positive towards older messages), for the tour.
+    func debugScroll(by delta: CGFloat) {
+        scroll(by: delta)
+        readerMoved()
+    }
     #endif
 }
 

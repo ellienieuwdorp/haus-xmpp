@@ -23,9 +23,10 @@ import SwiftUI
 ///   `reply <message id>|newest` (the newest received message), `edit <message id>|newest` (what Up-arrow would edit),
 ///   and `snap <name>`, which captures the main window as `<name>.png` into `-haus-capture`'s directory. Timeline steps
 ///   (`MacTimelineDebug`): `capture <name>` (the main window and any other open window as `<name>.png` beside the
-///   frames), `scroll top|bottom|page-up|page-down` (as the keys do), `scroll-to <message id>` (a stored message by its
-///   ID), `quote <reference>` (as a click on a quote naming that message does), `resize <width>x<height>` and `timeline`
-///   (logs the reader's row and distances). Frames may be `0` seconds for a tour that only captures by name.
+///   frames), `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as the reader's scroll,
+///   positive towards older messages), `scroll-to <message id>` (a stored message by its ID), `quote <reference>` (as a
+///   click on a quote naming that message does), `resize <width>x<height>` and `timeline` (logs the reader's row and
+///   distances). Frames may be `0` seconds for a tour that only captures by name.
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
 ///   also in the sample conversations, where previews are otherwise off. `-haus-untinted-send`: the composer's Send in
 ///   the clear variant of its glass style, as an enabled accent-tinted circle leaves the conversation out of a capture.
@@ -180,16 +181,16 @@ import SwiftUI
             } else if NSApp.windows.isEmpty {
                 log("no window after launch and no openWindow action")
             }
+            if let size = value(after: "-haus-window-size")?.split(separator: "x").compactMap({ Double($0) }), size.count == 2, let main = mainWindow {
+                main.setContentSize(NSSize(width: size[0], height: size[1]))
+                log("window content size \(main.contentLayoutRect.size)")
+            }
             if let tour = value(after: "-haus-tour") {
                 await runTour(tour, window: window, model: model)
                 return
             }
             // Sample conversations block locally, so a capture can show a blocked chat without a server.
             if let chat = value(after: "-haus-block"), model.isDemo { await model.block(chat) }
-            if let size = value(after: "-haus-window-size")?.split(separator: "x").compactMap({ Double($0) }), size.count == 2, let main = mainWindow {
-                main.setContentSize(NSSize(width: size[0], height: size[1]))
-                log("window content size \(main.contentLayoutRect.size)")
-            }
             if let chat = value(after: "-haus-select") {
                 window.selection = chat
                 await waitUntil(seconds: 10) { model.messagesLoadedFor == chat }

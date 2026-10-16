@@ -24,6 +24,10 @@ import SwiftUI
             case "page-down": .pageDown
             default: nil
             }
+            if let points = argument.split(separator: " ").last.flatMap({ Double($0) }), argument.hasPrefix("by ") {
+                timeline.debugScroll(by: points)
+                return report(timeline, "after scroll \(argument)")
+            }
             guard let key else { return MacDebugHooks.log("tour scroll \(argument): unknown") }
             timeline.scroll(key)
             report(timeline, "after scroll \(argument)")
@@ -50,7 +54,9 @@ import SwiftUI
         let reader = timeline.readerRow()
         MacDebugHooks.log("timeline \(what): \(timeline.rows.count) rows from \(timeline.rows.first?.message.id ?? "none"), reader \(reader?.id ?? "none") at "
             + "\(format(reader?.top)), from bottom \(format(timeline.layout.distanceFromBottom)), height \(format(timeline.layout.height)), "
-            + "top inset \(format(timeline.layout.geometry?.contentInsets.top)), jump button \(timeline.showsJumpToNewest), day chip \(timeline.dayChip?.text ?? "none")")
+            + "top inset \(format(timeline.layout.geometry?.contentInsets.top)), bottom inset \(format(timeline.layout.geometry?.contentInsets.bottom)), "
+            + "container \(format(timeline.layout.geometry?.containerSize.height)), offset \(format(timeline.layout.geometry?.contentOffset.y)), "
+            + "content \(format(timeline.layout.geometry?.contentSize.height)), newest row bottom \(format(timeline.rows.last.flatMap { timeline.layout.frame(of: $0.message.id) }?.maxY)), jump button \(timeline.showsJumpToNewest), day chip \(timeline.dayChip?.text ?? "none")")
     }
 
     /// After an update that held the reader's row: how far the update moved it before the correction, and its drift
