@@ -9,7 +9,7 @@ struct EncryptionDetailsView: View {
     private var name: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
 
     var body: some View {
-        List {
+        GroupedList {
             if let overview = model.encryptionOverview(for: chatID) {
                 if overview.hasIncompatibleDevices {
                     Section { Label(otherVersionNotice(overview), systemImage: "info.circle").font(.subheadline) }

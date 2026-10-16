@@ -8,10 +8,10 @@ struct GroupDetailsView: View {
     private var state: GroupChatState { model.groupChats[room] ?? GroupChatState() }
 
     var body: some View {
-        List {
+        GroupedList {
             Section {
                 VStack(spacing: 6) {
-                    ChatAvatar(key: room, name: room, isGroup: true, size: 96)
+                    ChatAvatar(key: room, name: room, isGroup: true, size: DetailsHeroMetrics.avatar)
                     Text(String(room.prefix { $0 != "@" })).font(.title2.bold()).padding(.top, 6)
                     Text(room).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
                     let needsReview = state.needsReview(account: model.accountID)
@@ -27,13 +27,22 @@ struct GroupDetailsView: View {
                     }
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 8)
+                #if os(macOS)
+                // A long room address wraps in the narrow inspector; its lines stay centred under the avatar.
+                .multilineTextAlignment(.center)
+                #endif
             }
             Section { ChatNotificationRow(model: model, chatID: room) }
             ForEach(state.members, id: \.self) { member in
                 Section {
                     let devices = state.devices.filter { $0.jid == member }
                     if member == model.accountID, let deviceID = state.localDeviceID, let fingerprint = state.localFingerprint {
-                        NavigationLink("This \(ThisDevice.noun)") { GroupLocalFingerprintView(deviceID: deviceID, fingerprint: fingerprint) }
+                        NavigationLink("This \(ThisDevice.noun)") {
+                            GroupLocalFingerprintView(deviceID: deviceID, fingerprint: fingerprint)
+                                #if os(macOS)
+                                .macInspectorPage("Your fingerprint")
+                                #endif
+                        }
                     } else if devices.isEmpty {
                         Text(member == model.accountID ? "This \(ThisDevice.noun)" : "No compatible devices found").foregroundStyle(.secondary)
                     }
@@ -85,7 +94,7 @@ private struct GroupLocalFingerprintView: View {
     let deviceID: UInt32
     let fingerprint: String
     var body: some View {
-        List {
+        GroupedList {
             Section {
                 LabeledContent("Device", value: String(deviceID))
                 FingerprintGrid(value: fingerprint).padding(.vertical, 8)

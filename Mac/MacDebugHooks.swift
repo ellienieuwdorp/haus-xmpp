@@ -18,7 +18,8 @@ import SwiftUI
 ///   with any other open window (Settings) drawn over its centre.
 /// - `-haus-tour "<step>; …"`: plays the steps once the main window exists; with `-haus-capture-frames`, the frames start
 ///   then and run while the steps play, for a recording. Steps: `wait <seconds>`, `select <chat>`, `deselect`,
-///   `inspector on|off`, `settings general|appearance|about`, `close-settings`, and for the open chat's composer:
+///   `inspector on|off`, `inspector-page details|encryption`, `settings general|appearance|about`, `close-settings`,
+///   and for the open chat's composer:
 ///   `type <text>` (inserted at the caret as typing would), `key return|shift-return|option-return|command-return|escape|up`,
 ///   `reply <message id>|newest` (the newest received message), `edit <message id>|newest` (what Up-arrow would edit),
 ///   and `snap <name>`, which captures the main window as `<name>.png` into `-haus-capture`'s directory. Timeline steps
@@ -36,9 +37,13 @@ import SwiftUI
 ///   prepend as it does during a scroll gesture, and the controller's hold does all the work (`MacTimelineDebug`).
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-window-size <width>x<height>`: the main window's content size in points, for captures at a set size.
-/// - `-haus-select <chat>`, `-haus-inspector`, `-haus-sheet account|new-chat|own-devices`,
-///   `-haus-settings general|appearance|about`, `-haus-close-window <seconds>`: what the window shows.
+/// - `-haus-select <chat>`, `-haus-inspector`, `-haus-inspector-page details|encryption`,
+///   `-haus-sheet account|new-chat|own-devices`, `-haus-settings general|appearance|about`, `-haus-close-window <seconds>`:
+///   what the window shows. The inspector's `encryption` page is Devices & Encryption for a chat, Group details for a
+///   group.
 /// - `-haus-block <chat>`: blocks a sample conversation (sample data only), for captures of a blocked chat.
+/// - `-haus-notification-settings`: Settings shows its Notifications section without a signed-in account, for captures
+///   with sample data.
 /// - `-haus-self-check`: the App Group container, the store in it, and a data-protection Keychain round trip.
 /// - `-haus-lab-sign-in`: signs in with `HAUS_LAB_USERNAME` and `HAUS_LAB_PASSWORD` (a lab account; pass
 ///   `-lab-ui-test` and `HAUS_LAB_CA_DER` for the lab's certificate authority, as the iPhone's lab tests do).
@@ -197,6 +202,7 @@ import SwiftUI
                 log("selected \(chat): \(model.messagesLoadedFor == chat ? "\(model.messages.count) messages" : "not loaded")")
             }
             if has("-haus-inspector") { window.inspectorShown = true }
+            if let page = value(after: "-haus-inspector-page") { tour.inspectorPage = page }
             switch value(after: "-haus-sheet") {
             case "account": window.showingAccount = true
             case "new-chat": window.showingNewChat = true
@@ -228,9 +234,15 @@ import SwiftUI
     /// Opens the Settings window; captured from the main window's content by `MacDebugPresentation`.
     static var openSettings: OpenSettingsAction?
 
-    /// The Settings pane a tour asks for; `MacSettingsView` follows it.
+    /// The Settings pane and inspector page a tour asks for; `MacSettingsView` and `MacChatInspector` follow them.
     @Observable @MainActor final class Tour {
         var settingsPane: MacSettingsView.Pane?
+        var inspectorPage: String?
+    }
+
+    /// The inspector's navigation path for `-haus-inspector-page` and the tour's `inspector-page`.
+    static func inspectorPath(_ page: String, chatID: String, isGroup: Bool) -> [ChatRoute] {
+        page == "encryption" ? [isGroup ? .groupDetails(chatID) : .encryption(chatID)] : []
     }
 
     static let tour = Tour()
@@ -250,6 +262,7 @@ import SwiftUI
             case "select": window.selection = argument
             case "deselect": window.selection = nil
             case "inspector": window.inspectorShown = argument != "off"
+            case "inspector-page": tour.inspectorPage = argument
             case "settings":
                 tour.settingsPane = MacSettingsView.Pane(rawValue: argument) ?? .general
                 if otherWindows.isEmpty { openSettings?() }

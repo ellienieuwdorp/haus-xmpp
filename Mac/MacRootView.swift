@@ -38,6 +38,16 @@ struct MacRootView: View {
         } detail: {
             detail
         }
+        // On the split view, not inside its detail column: a navigation stack in an inspector placed in the detail
+        // pushed its pages into the detail column's own navigation, replacing the conversation.
+        .inspector(isPresented: Binding(get: { window.inspectorShown && window.selection != nil }, set: { window.inspectorShown = $0 })) {
+            Group {
+                if let chatID = window.selection {
+                    MacChatInspector(model: model, chatID: chatID).id(chatID)
+                }
+            }
+            .inspectorColumnWidth(min: 280, ideal: 320, max: 420)
+        }
         .id(model.accountID)
         .onChange(of: model.accountID) { _, _ in window.selection = nil; window.inspectorShown = false }
         .onChange(of: window.selection) { previous, _ in if let previous { model.closeChat(previous) } }
@@ -94,10 +104,6 @@ struct MacRootView: View {
         if let chatID = window.selection {
             MacConversationView(model: model, chatID: chatID) { window.inspectorShown = true }
                 .id(chatID)
-                .inspector(isPresented: $window.inspectorShown) {
-                    MacChatInspector(model: model, chatID: chatID)
-                        .inspectorColumnWidth(min: 280, ideal: 320, max: 420)
-                }
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Button { window.inspectorShown.toggle() } label: { Label("Chat Details", systemImage: "info.circle") }
@@ -131,19 +137,55 @@ struct MacRootView: View {
 struct MacChatInspector: View {
     @Bindable var model: AppModel
     let chatID: String
+    @State private var path: [ChatRoute] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ChatDetailsView(model: model, chatID: chatID)
                 .navigationDestination(for: ChatRoute.self) { route in
                     switch route {
-                    case .encryption(let chatID): EncryptionDetailsView(model: model, chatID: chatID)
-                    case .groupDetails(let room): GroupDetailsView(model: model, room: room)
+                    case .encryption(let chatID): EncryptionDetailsView(model: model, chatID: chatID).macInspectorPage("Devices & Encryption")
+                    case .groupDetails(let room): GroupDetailsView(model: model, room: room).macInspectorPage("Group details")
                     // The conversation is already the detail column; details never link back to it.
                     case .chat, .details: EmptyView()
                     }
                 }
         }
         .labelStyle(.listRow)
+        #if DEBUG
+        .onChange(of: MacDebugHooks.tour.inspectorPage, initial: true) { _, page in
+            guard let page else { return }
+            path = MacDebugHooks.inspectorPath(page, chatID: chatID, isGroup: model.isGroup(chatID))
+        }
+        #endif
     }
+}
+
+/// A page pushed inside the inspector: its title and a Back button at the top of the inspector. The system's Back
+/// button would sit in the window toolbar's leading area, beside the conversation's title, where it reads as the
+/// conversation's own.
+struct MacInspectorPage: ViewModifier {
+    let title: String
+    @Environment(\.dismiss) private var dismiss
+
+    func body(content: Content) -> some View {
+        content
+            .navigationBarBackButtonHidden()
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HStack(spacing: 6) {
+                    Button { dismiss() } label: { Label("Back", systemImage: "chevron.left").labelStyle(.iconOnly) }
+                        .buttonStyle(.borderless)
+                        .help("Back")
+                    Text(title).font(.headline).lineLimit(1)
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .background(.bar)
+            }
+    }
+}
+
+extension View {
+    func macInspectorPage(_ title: String) -> some View { modifier(MacInspectorPage(title: title)) }
 }
