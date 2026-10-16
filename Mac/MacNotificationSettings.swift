@@ -32,9 +32,9 @@ struct MacNotificationPermissionRow: View {
     }
 
     private var status: String {
-        switch model.notificationAuthorization {
+        if model.notificationsArriveQuietly { return "Delivered quietly, without banners" }
+        return switch model.notificationAuthorization {
         case .authorized: "Allowed"
-        case .provisional: "Delivered quietly, without banners"
         case .denied: "Off in \(ThisDevice.settingsApp)"
         default: "Not allowed yet"
         }
@@ -43,8 +43,8 @@ struct MacNotificationPermissionRow: View {
 
 /// The iPhone's push switch and its statuses, with the permission row folded in. On the Mac the permission matters
 /// apart from push: the banners the app posts itself while it runs need it too, so it is shown and asked for whatever
-/// the switch says. Quiet delivery, which macOS grants without asking, shows no banners, so the row says so and points
-/// to System Settings.
+/// the switch says. Quiet delivery, which macOS grants without asking or the alert style None gives, shows no banners,
+/// so the row says so; once asked, System Settings is one button away.
 struct MacPushNotificationRows: View {
     @Bindable var model: AppModel
     @Environment(\.openURL) private var openURL
@@ -71,29 +71,35 @@ struct MacPushNotificationRows: View {
                 .disabled(!model.session.isReady)
                 .accessibilityIdentifier("retryPushNotifications")
         }
-        switch model.notificationAuthorization {
-        case .notDetermined:
+        // Once asked, System Settings holds the rest: banners or not, sounds, badges and previews.
+        if model.notificationAuthorization == .notDetermined {
             Button("Allow Notifications…") { Task { await model.allowNotifications() } }
                 .accessibilityIdentifier("allowNotifications")
-        case .provisional, .denied:
+        } else {
             Button("Open \(ThisDevice.settingsApp)") {
                 if let url = PlatformApplication.notificationSettingsURL { openURL(url) }
             }
             .accessibilityIdentifier("openNotificationSettings")
-        default:
-            EmptyView()
         }
     }
 
     /// What the permission adds to the push status; nothing once banners are allowed, or where the status already
     /// names it.
     private var permission: String? {
-        switch model.notificationAuthorization {
-        case .provisional: "Delivered quietly, without banners"
+        if model.notificationsArriveQuietly { return "Delivered quietly, without banners" }
+        return switch model.notificationAuthorization {
         case .denied: model.pushStatus == .notAllowed ? nil : "Notifications off in \(ThisDevice.settingsApp)"
         case .notDetermined: "Notifications not allowed yet"
         default: nil
         }
+    }
+}
+
+extension AppModel {
+    /// Notifications reach Notification Center but show no banner: the quiet delivery macOS grants without asking, or
+    /// a permission whose alert style was set to None in System Settings.
+    var notificationsArriveQuietly: Bool {
+        notificationAuthorization == .provisional || notificationAuthorization == .authorized && notificationAlertStyle == .none
     }
 }
 

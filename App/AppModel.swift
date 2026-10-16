@@ -287,6 +287,9 @@ final class AppModel {
     #if os(macOS)
     /// The Mac's notification permission as last read, for Settings, which shows it with the push status.
     private(set) var notificationAuthorization = UNAuthorizationStatus.notDetermined
+    /// How the Mac shows this app's notifications as last read: `.none` delivers quietly to Notification Center, even
+    /// with the permission granted.
+    private(set) var notificationAlertStyle = UNAlertStyle.none
     /// The permission prompt on screen, which every caller that comes meanwhile waits for (`requestNotificationPermission`).
     @ObservationIgnored private var permissionRequest: Task<Void, Never>?
     #endif
@@ -4528,14 +4531,17 @@ extension AppModel: NotificationActionEnvironment {
                 _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
             }
             #endif
+            #if os(iOS)
             let status = await Self.notificationAuthorization()
             guard let self else { return }
-            #if os(iOS)
             self.mayPostNotifications = [.authorized, .provisional, .ephemeral].contains(status)
             #else
+            let (status, alertStyle) = await Self.notificationPermission()
+            guard let self else { return }
             // App Clips' ephemeral authorization does not exist on macOS.
             self.mayPostNotifications = [.authorized, .provisional].contains(status)
             self.notificationAuthorization = status
+            self.notificationAlertStyle = alertStyle
             #if DEBUG
             if MacDebugNotificationLog.poster != nil { self.mayPostNotifications = true }
             #endif
@@ -4549,7 +4555,22 @@ extension AppModel: NotificationActionEnvironment {
         await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
+    #if os(macOS)
+    private nonisolated static func notificationPermission() async -> (UNAuthorizationStatus, UNAlertStyle) {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        return (settings.authorizationStatus, settings.alertStyle)
+    }
+    #endif
+
     #if DEBUG
+    #if os(macOS)
+    /// For captures of Settings (`-haus-notification-permission`): the permission as if macOS had reported it.
+    func debugShowNotificationPermission(_ status: UNAuthorizationStatus, alertStyle: UNAlertStyle) {
+        notificationAuthorization = status
+        notificationAlertStyle = alertStyle
+    }
+    #endif
+
     /// For the Mac's lifecycle checks (`MacLifecycleDebug`): whether this process holds the transport lease, by the
     /// store's own account and by the model's.
     func debugLeaseReport() async -> String {

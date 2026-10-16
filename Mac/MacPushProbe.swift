@@ -16,6 +16,8 @@ import UserNotifications
 ///   turned off on the next connection.
 /// - `-haus-push-switch on|off`: once the app is prepared (and after `-haus-lab-sign-in`), turns push on or off as the
 ///   Settings switch does, and logs the status it ends at. `off` first waits up to 20 s for a setup in flight.
+/// - `-haus-notification-permission not-determined|provisional|banners|quiet|denied`: Settings shows that permission
+///   (`quiet` is granted with the alert style None), for captures; nothing asks macOS.
 /// - `-haus-push-status <seconds>`: logs the push status and the notification authorization each time either changes,
 ///   for that long.
 /// - APNs token callbacks are logged with the token's length and the first 8 hex digits of its SHA-256, never the token,
@@ -125,8 +127,18 @@ import UserNotifications
 
     // MARK: Push switch
 
-    /// `-haus-push-switch` and `-haus-push-status`, once the model is prepared and any lab sign-in has connected.
+    /// `-haus-notification-permission`, `-haus-push-switch` and `-haus-push-status`, once the model is prepared and any
+    /// lab sign-in has connected.
     static func afterSignIn(_ model: AppModel) async {
+        switch MacDebugHooks.value(after: "-haus-notification-permission") {
+        case "not-determined": model.debugShowNotificationPermission(.notDetermined, alertStyle: .none)
+        case "provisional": model.debugShowNotificationPermission(.provisional, alertStyle: .none)
+        case "banners": model.debugShowNotificationPermission(.authorized, alertStyle: .banner)
+        case "quiet": model.debugShowNotificationPermission(.authorized, alertStyle: .none)
+        case "denied": model.debugShowNotificationPermission(.denied, alertStyle: .none)
+        case let other?: log("notification permission: unknown value \(other)")
+        case nil: break
+        }
         if let seconds = MacDebugHooks.value(after: "-haus-push-status").flatMap(Double.init) {
             Task { await logPushStatus(model, for: .seconds(seconds)) }
         }
