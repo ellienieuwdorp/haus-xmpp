@@ -1,31 +1,11 @@
-<div align="center">
-
-<img src="site/public/images/icon.png" width="112" alt="Haus XMPP app icon">
-
-# Haus XMPP
-
-**A native XMPP messenger for iPhone, encrypted end to end with OMEMO.**<br>
-Standard XMPP: any server, and people on any other XMPP client. A Mac app is on the way.
+# haus xmpp
 
 [**xmpp.haus**](https://xmpp.haus) · [Privacy](https://xmpp.haus/privacy/) · [Support](https://xmpp.haus/support/)
-
-![iOS 26+](https://img.shields.io/badge/iOS-26%2B-000000?logo=apple&logoColor=white)
-![macOS 26+](https://img.shields.io/badge/macOS-26%2B-000000?logo=apple&logoColor=white)
-![Swift 6](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)
-![OMEMO 2](https://img.shields.io/badge/encryption-OMEMO%202-5A4FCF)
-[![GPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--or--later-2F80ED)](LICENSE)
-![Status: early testing](https://img.shields.io/badge/status-early%20testing-E8A33D)
-
-<br>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="site/public/images/iphone-dark.jpg">
   <img src="site/public/images/iphone-light.jpg" width="300" alt="A conversation in Haus XMPP on iPhone, with a photo, a link preview, a reply, reactions and read receipts">
 </picture>
-
-</div>
-
-<br>
 
 > [!WARNING]
 > **Haus XMPP is early software and not ready for personal conversations.** Most of what is listed below has been tested against a local Prosody test server, with disposable accounts and independent OMEMO implementations (python-omemo, QXmpp and libomemo.js) as the other side. Decrypted notification previews have been checked on a physical iPhone. Broad testing against other clients and servers, and a full release validation, have not been done yet. There are no public builds.
