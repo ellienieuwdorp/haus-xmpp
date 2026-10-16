@@ -2149,8 +2149,8 @@ final class AppModel {
                 reconcile()
             }
         case .chatState(let update):
-            // A state never creates a chat: only listed chats (joined groups among them) show one.
-            guard chats.contains(where: { $0.id == update.chat }) else { return }
+            // A state never creates a chat: only listed chats (joined groups among them) show one, and never a blocked one.
+            guard chats.contains(where: { $0.id == update.chat }), !isBlocked(update.chat) else { return }
             typingTracker.apply(update.state, chat: update.chat, participant: update.participant ?? update.chat, settles: update.ridesOnMessage, now: .now)
             publishTyping()
         case .reaction, .retraction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier, .displayedSync, .messageError:
@@ -3437,6 +3437,14 @@ final class AppModel {
         }
     }
 
+    /// A blocked contact's typing ends with the block rather than at its expiry (the sample typing too).
+    private func dropTyping(in chatIDs: [String]) {
+        guard !chatIDs.isEmpty else { return }
+        for chatID in chatIDs { typingTracker.clear(chat: chatID) }
+        let current = typing.filter { !chatIDs.contains($0.key) }
+        if current != typing { typing = current }
+    }
+
     private func syncOpenChatTyping() {
         let open = openChatID.flatMap { typing[$0] }
         if open != openChatTyping { openChatTyping = open }
@@ -3704,6 +3712,7 @@ final class AppModel {
         blocklist = updated
         BlockedAddresses.save(updated, accountID: account, defaults: sessionDefaults)
         updateAppBadge(chats)
+        dropTyping(in: newlyBlocked)
         // What a newly blocked chat already had on screen goes too.
         for chatID in newlyBlocked {
             Task { await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID) }
@@ -3719,6 +3728,7 @@ final class AppModel {
         if isDemo {
             blocklist.apply(.blocked([chatID]))
             updateAppBadge(chats)
+            dropTyping(in: [chatID])
             return true
         }
         guard let client else { return false }

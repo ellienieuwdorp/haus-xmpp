@@ -52,6 +52,16 @@ final class TypingTests: XCTestCase {
         XCTAssertNil(tracker.typing["maya@x"])
     }
 
+    func testClearingAChatStopsEveryoneTypingThere() {
+        var tracker = TypingTracker()
+        tracker.apply(.composing, chat: "alex@x", participant: "alex@x", now: start)
+        tracker.messageArrived(chat: "alex@x", participant: "alex@x", now: start + 1)
+        tracker.apply(.composing, chat: "maya@x", participant: "maya@x", now: start)
+        tracker.clear(chat: "alex@x")
+        XCTAssertEqual(tracker.typing, ["maya@x": ["maya@x"]])
+        XCTAssertEqual(tracker.nextExpiry, start + TypingTracker.composingLifetime)
+    }
+
     func testSenderSendsComposingThrottledPausedAndActive() {
         var sender = TypingSender()
         XCTAssertNil(sender.draftChanged(isEmpty: true, now: start), "an untouched empty draft says nothing")
