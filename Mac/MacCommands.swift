@@ -153,8 +153,9 @@ struct MacMessageMenuCommands: View {
         Button("Edit Last Message", systemImage: "pencil") { act(.edit, on: commands?.edit) }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(commands?.edit == nil)
-        Menu("React to Last Message", systemImage: "face.smiling") {
-            if let message = commands?.react {
+        // `.disabled` on a Menu does not reach its menu bar item, so without a target it is a plain disabled item.
+        if let message = commands?.react {
+            Menu("React to Last Message", systemImage: "face.smiling") {
                 ForEach(MacMessageMenu(message: message).reactions, id: \.emoji) { reaction in
                     Toggle(isOn: Binding(get: { reaction.isSelected }, set: { _ in commands?.handlers.react(reaction.emoji, message) })) {
                         Text(Self.reactionLabel(reaction.emoji))
@@ -162,8 +163,10 @@ struct MacMessageMenuCommands: View {
                     .accessibilityLabel(reaction.title)
                 }
             }
+        } else {
+            Button("React to Last Message", systemImage: "face.smiling") {}
+                .disabled(true)
         }
-        .disabled(commands?.react == nil)
         Divider()
         let starred = commands?.star?.isStarred == true
         Button(starred ? "Unstar Last Message" : "Star Last Message", systemImage: starred ? "star.slash" : "star") { act(.star, on: commands?.star) }
