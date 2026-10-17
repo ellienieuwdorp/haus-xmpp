@@ -31,7 +31,7 @@ struct MacBubbleText: NSViewRepresentable {
         let perfStart = MacPerfProbe.clock()
         defer { MacPerfProbe.add("text.make", since: perfStart) }
         #endif
-        let view = BubbleTextView.make()
+        let view = BubbleTextView.make(drawsWhole: BubbleTextView.drawsWhole(text))
         view.delegate = context.coordinator
         context.coordinator.selectAllRequests = selectAllRequests
         return view
@@ -120,13 +120,29 @@ final class BubbleTextView: NSTextView {
     /// result's jump.
     var plainClick: (() -> Void)?
 
-    static func make() -> BubbleTextView {
+    /// Whether the text draws all of itself into a plain layer (`makeBackingLayer`); fixed when the view is made.
+    private var drawsWhole = false
+
+    /// Whether `text` is short enough to draw whole: laid out in the narrowest bubble, no taller than a few screens, so
+    /// its layer stays well inside the largest one Core Animation shows, even at twice the limit after an edit.
+    @MainActor static func drawsWhole(_ text: NSAttributedString) -> Bool {
+        // A short message passes without being laid out again at a width it is never shown at: 1,000 characters and
+        // 40 line breaks come to about 125 lines in the narrowest bubble, some 2,100 pt.
+        if text.length <= 1_000, text.string.utf16.lazy.filter({ $0 == 10 }).count <= 40 { return true }
+        return MacBubbleText.measure(text, width: narrowestText).height <= 4_000
+    }
+
+    /// The narrowest a bubble's text is laid out: the narrowest bubble (`BubbleWidth`) less its padding.
+    private static let narrowestText: CGFloat = 120 - 2 * 12
+
+    static func make(drawsWhole: Bool) -> BubbleTextView {
         let stack = MacBubbleText.TextStack()
         stack.container.size = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         stack.container.widthTracksTextView = true
         let view = BubbleTextView(frame: .zero, textContainer: stack.container)
         // The view keeps its text system; the stack's owner goes when this returns.
         view.stack = stack
+        view.drawsWhole = drawsWhole
         view.isEditable = false
         view.isSelectable = true
         view.isRichText = true
@@ -141,6 +157,56 @@ final class BubbleTextView: NSTextView {
     }
 
     private var stack: MacBubbleText.TextStack?
+
+    /// A plain layer that the text draws all of itself into, again only when the text view marks itself as needing
+    /// display. AppKit's own backing layer holds only the part of a view in sight and redisplays whenever the view's
+    /// visible rect changes, which for a view in a scroll view is every scrolled frame: every bubble's text would display
+    /// again on each frame of a scroll. AppKit leaves a layer it did not make to its view (it never marks it as needing
+    /// display), so the view keeps its scale and passes its own invalidations on.
+    override func makeBackingLayer() -> CALayer {
+        guard drawsWhole else { return super.makeBackingLayer() }
+        let layer = CALayer()
+        layer.needsDisplayOnBoundsChange = true
+        layer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+        layer.setNeedsDisplay()
+        return layer
+    }
+
+    override func setNeedsDisplay(_ invalidRect: NSRect) {
+        super.setNeedsDisplay(invalidRect)
+        // All of it: the bubble's text is short, and the layer's coordinates need not be the view's flipped ones.
+        if drawsWhole { layer?.setNeedsDisplay() }
+    }
+
+    override var needsDisplay: Bool {
+        get { super.needsDisplay }
+        set {
+            super.needsDisplay = newValue
+            if drawsWhole, newValue { layer?.setNeedsDisplay() }
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        matchWindowScale()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        matchWindowScale()
+    }
+
+    /// The colours are the appearance's: dark text in Light, light in Dark.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        if drawsWhole { layer?.setNeedsDisplay() }
+    }
+
+    private func matchWindowScale() {
+        guard drawsWhole, let window, let layer, layer.contentsScale != window.backingScaleFactor else { return }
+        layer.contentsScale = window.backingScaleFactor
+        layer.setNeedsDisplay()
+    }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         clickIsInSelection(event) ? super.menu(for: event) : messageMenu?(link(at: event))
