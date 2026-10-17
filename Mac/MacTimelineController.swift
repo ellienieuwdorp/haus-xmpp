@@ -551,13 +551,19 @@ import SwiftUI
     /// laid-out row a scroll can carry furthest (`TimelineScrollPolicy.scrollStep`), and steps repeat (bringing new rows
     /// into layout) until the distance is covered or an end is reached. A distance the laid-out rows cannot carry lands
     /// in one scroll instead (`TimelineScrollPolicy.landing`), on the rows' measured heights and an estimate for those
-    /// never laid out, so only the rows it lands on are built.
+    /// never laid out, so only the rows it lands on are built. A landing SwiftUI misses goes on in steps.
     private func scroll(by delta: CGFloat) {
         var remaining = delta
+        var lands = true
         for _ in 0..<4 where abs(remaining) > 0.5 {
             let placed = placedRows()
             let step = TimelineScrollPolicy.scrollStep(placed, by: remaining, frameHeight: layout.height)
-            if step.map({ abs($0.top - $0.row.top) }) ?? 0 < abs(remaining) - 0.5, land(placed, by: remaining) { return }
+            if lands, step.map({ abs($0.top - $0.row.top) }) ?? 0 < abs(remaining) - 0.5, let landed = land(placed, by: remaining) {
+                guard case .missed(let moved) = landed else { return }
+                remaining -= moved
+                lands = false
+                continue
+            }
             guard let step else { return }
             place(step.row.id, top: step.top)
             guard let after = layout.frame(of: step.row.id)?.minY, abs(after - step.row.top) > 0.5 else { return }
@@ -565,8 +571,15 @@ import SwiftUI
         }
     }
 
-    /// Scrolls to where moving by `delta` lands past the laid-out rows; false when that is a laid-out row.
-    private func land(_ placed: [TimelineScrollPolicy.PlacedRow], by delta: CGFloat) -> Bool {
+    private enum Landed {
+        case landed
+        /// The row it scrolled to never came into layout: SwiftUI places a row it has not built on its own estimates,
+        /// and can stop well short of it. The content moved by `moved`, read from a row laid out before and after.
+        case missed(moved: CGFloat)
+    }
+
+    /// Scrolls to where moving by `delta` lands past the laid-out rows; nil when that is a laid-out row.
+    private func land(_ placed: [TimelineScrollPolicy.PlacedRow], by delta: CGFloat) -> Landed? {
         let width = placed.first.flatMap { layout.frame(of: $0.id)?.width }
         // The estimate for a row never laid out at this width: the rows that were, less any taller than the frame, which
         // are rare and would make every row look long.
@@ -578,7 +591,7 @@ import SwiftUI
         let lead = Self.topMargin + (loadingEarlier ? height(TimelineItems.loadingEarlierID) : 0)
         let tail = Self.topMargin + (typing != nil ? height(TimelineItems.typingID) : 0)
         guard average > 0, let landing = TimelineScrollPolicy.landing(placed, by: delta, frameHeight: layout.height, rowCount: rows.count, lead: lead,
-                                                                      tail: tail, height: { height(self.rows[$0].message.id) }) else { return false }
+                                                                      tail: tail, height: { height(self.rows[$0].message.id) }) else { return nil }
         #if DEBUG
         if MacDebugHooks.has("-haus-timeline-trace") {
             MacDebugHooks.log("land by \(delta): \(landing) from \(placed.count) rows laid out, \(sample.count) measured, estimate \(average)")
@@ -588,12 +601,15 @@ import SwiftUI
         case .row(let index, let top):
             let id = rows[index].message.id
             place(id, top: TimelineScrollPolicy.reachableTop(top, rowHeight: height(id), frameHeight: layout.height), height: height(id))
+            guard layout.frame(of: id) == nil else { return .landed }
+            let moved = placed.lazy.compactMap { row in self.layout.frame(of: row.id).map { $0.minY - row.top } }.first
+            return .missed(moved: moved ?? delta)
         case .start:
             scrollToOldest()
         case .end:
             scrollToNewest()
         }
-        return true
+        return .landed
     }
 
     // MARK: Jumping to a message
