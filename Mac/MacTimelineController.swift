@@ -290,9 +290,11 @@ import SwiftUI
                 aimed = false
                 continue
             }
-            let miss = target - now.minY
+            // Laid out, the row may be another height than the one it was aimed with: it goes as near as it can reach.
+            let goal = TimelineScrollPolicy.reachableTop(target, rowHeight: now.height, frameHeight: layout.height)
+            let miss = goal - now.minY
             if abs(miss) <= 0.5 { return true }
-            if aimed { aim += miss }
+            if aimed { aim += miss } else { aim = goal }
             guard let y = TimelineScrollPolicy.anchorY(placingTopAt: aim, rowHeight: now.height, frameHeight: layout.height) else { return false }
             proxy.scrollTo(id, anchor: UnitPoint(x: 0.5, y: min(1, max(0, y))))
             layout.forceLayout()
