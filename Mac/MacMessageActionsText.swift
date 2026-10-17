@@ -123,8 +123,8 @@ final class BubbleTextView: NSTextView {
     /// Whether the text draws all of itself into a plain layer (`makeBackingLayer`); fixed when the view is made.
     private var drawsWhole = false
 
-    /// Whether `text` is short enough to draw whole: laid out in the narrowest bubble, no taller than a few screens, so
-    /// its layer stays well inside the largest one Core Animation shows, even at twice the limit after an edit.
+    /// Whether `text` is short enough to draw whole: at most 4,000 pt tall in the narrowest bubble. A layer drawn whole
+    /// is backed in full, so a long text keeps AppKit's layer, which backs only the part in sight.
     @MainActor static func drawsWhole(_ text: NSAttributedString) -> Bool {
         // A short message passes without being laid out again at a width it is never shown at: 1,000 characters and
         // 40 line breaks come to about 125 lines in the narrowest bubble, some 2,100 pt.
