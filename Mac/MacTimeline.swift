@@ -16,8 +16,9 @@ struct MacTimeline<Row: View>: View {
     var contactName: String? = nil
     /// One message's row.
     @ViewBuilder let row: (TimelineRow) -> Row
-    /// The reader's row, written by SwiftUI as the reader scrolls and never by code: a scroll-to-row is ignored while
-    /// the bound position holds a row code set.
+    /// The reader's row, written by SwiftUI as the reader scrolls. Code sets it only for the layout pass that lands a
+    /// page above the reader (`MacTimelineController.update`) and clears it right after: a scroll-to-row is ignored
+    /// while the bound position holds a row code set.
     @State private var topID: String?
     @FocusState private var focused: Bool
     @Namespace private var rotors
@@ -35,7 +36,10 @@ struct MacTimeline<Row: View>: View {
             .onGeometryChange(for: CGSize.self) { $0.size } action: { controller.resized($0) }
             .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in controller.scrolled(geometry) }
             .onScrollPhaseChange { _, phase in controller.phaseChanged(phase) }
-            .onAppear { controller.layout.proxy = proxy }
+            .onAppear {
+                controller.layout.proxy = proxy
+                controller.layout.position = $topID
+            }
             .focusable()
             .focused($focused)
             // The focused message carries the ring; the scroll view itself would draw one around the whole timeline.
@@ -44,15 +48,20 @@ struct MacTimeline<Row: View>: View {
                 // Arrow keys also carry the numeric pad and function flags; only these four tell the keys apart.
                 let modifiers = press.modifiers.intersection([.command, .shift, .option, .control])
                 let plain = modifiers.isEmpty
+                // Scrolls run in the next turn: while SwiftUI handles the key, the rows report no new frames, so a
+                // scroll would correct itself against where they were before it.
+                func later(_ action: @escaping @MainActor () -> Void) {
+                    DispatchQueue.main.async { MainActor.assumeIsolated { action() } }
+                }
                 switch press.key {
-                case .pageUp: controller.scroll(.pageUp)
-                case .pageDown: controller.scroll(.pageDown)
-                case .home: controller.scroll(.top)
-                case .end: controller.scroll(.bottom)
-                case .upArrow where modifiers == .command: controller.scroll(.top)
-                case .downArrow where modifiers == .command: controller.scroll(.bottom)
-                case .upArrow where plain: controller.moveFocus(forward: false)
-                case .downArrow where plain: controller.moveFocus(forward: true)
+                case .pageUp: later { controller.scroll(.pageUp) }
+                case .pageDown: later { controller.scroll(.pageDown) }
+                case .home: later { controller.scroll(.top) }
+                case .end: later { controller.scroll(.bottom) }
+                case .upArrow where modifiers == .command: later { controller.scroll(.top) }
+                case .downArrow where modifiers == .command: later { controller.scroll(.bottom) }
+                case .upArrow where plain: later { controller.moveFocus(forward: false) }
+                case .downArrow where plain: later { controller.moveFocus(forward: true) }
                 case .return where plain, .space where plain: return controller.openFocusedMenu() ? .handled : .ignored
                 case .escape: controller.onEscape()
                 default: return .ignored

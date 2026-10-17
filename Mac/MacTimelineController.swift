@@ -9,7 +9,9 @@ import SwiftUI
 ///
 /// - **Holding the reader's row through an older page.** During a gesture, and after a scroll this controller made,
 ///   SwiftUI keeps the absolute offset, so a page landing above the reader pushes their row a page down. The row and its
-///   distance from the top edge are noted before the update, layout is forced after it, and the row is scrolled back.
+///   distance from the top edge are noted before the update; the bound position is set to that row in the same layout
+///   pass as the page, so the stack lays out the reader's rows rather than the page's, and the row is then scrolled
+///   back to its distance.
 /// - **Following the newest message** when the reader was at the bottom or sent the message: a scroll to the end,
 ///   repeated after each layout pass until it holds (rows measured on arrival move the end), at most four times.
 /// - **Paging**: older history is asked for when the reader's own scroll comes within two screens of the oldest loaded
@@ -188,12 +190,33 @@ import SwiftUI
         let reader = TimelineScrollPolicy.readerRow(before, visibleTop: 0, visibleBottom: layout.height)
         applying = true
         defer { applying = false }
+        var bound = false
+        if case .keepAnchor = placement, let reader, let position = layout.position,
+           let index = next.rows.firstIndex(where: { $0.message.id == reader.id }), index != reader.index {
+            // Rows land above the reader. Bound in the same pass, the reader's rows stay laid out: kept at the old offset
+            // alone, the stack would build the new rows that land there and then the reader's again for the hold. A
+            // change of the bound row is what SwiftUI scrolls for, so one that holds this row already is cleared first.
+            let row = holdable(reader, among: before).first ?? reader
+            #if DEBUG
+            if MacDebugHooks.has("-haus-timeline-trace") {
+                MacDebugHooks.log("bind \(row.id) for reader \(reader.id), bound to \(position.wrappedValue ?? "nothing")")
+            }
+            #endif
+            if position.wrappedValue == row.id {
+                position.wrappedValue = nil
+                layout.forceLayout()
+            }
+            position.wrappedValue = row.id
+            bound = true
+        }
         apply(next)
         #if DEBUG
         MacPerfProbe.mark("apply")
         #endif
         // Lay the new rows out now, so the correction happens before the next frame is drawn.
         layout.forceLayout()
+        // Held by code, the bound row would be put back on every later layout pass and ignore every scroll to a row.
+        if bound { layout.position?.wrappedValue = nil }
         #if DEBUG
         MacPerfProbe.mark("postforce")
         #endif
@@ -237,8 +260,7 @@ import SwiftUI
     /// row that opened the loaded window, and holding that row's top edge would lift its bubble by the header's height.
     @discardableResult
     private func hold(_ reader: TimelineScrollPolicy.PlacedRow, among before: [TimelineScrollPolicy.PlacedRow]) -> TimelineScrollPolicy.PlacedRow {
-        let height = layout.height
-        let candidates = before.filter { $0.index >= reader.index && $0.top >= 0 && $0.bottom <= height }
+        let candidates = holdable(reader, among: before)
         // The first scroll brings the rows back into layout (a page landing mid-gesture pushes them off), so their new
         // heights can be compared.
         let first = candidates.first ?? reader
@@ -251,24 +273,33 @@ import SwiftUI
         return unchanged
     }
 
+    /// The rows from the reader's on that were inside the frame before an update, which a scroll can put back exactly.
+    private func holdable(_ reader: TimelineScrollPolicy.PlacedRow, among before: [TimelineScrollPolicy.PlacedRow]) -> [TimelineScrollPolicy.PlacedRow] {
+        before.filter { $0.index >= reader.index && $0.top >= 0 && $0.bottom <= layout.height }
+    }
+
     /// Scrolls so the row's top edge is at `target` (which must keep the row inside the frame, `reachableTop`), through
     /// SwiftUI: a scroll to the row with the unit-point anchor that should put it there, corrected by what it missed. A
-    /// row that is not laid out is first brought to the top edge. Returns whether the row ended within half a point.
+    /// row that is not laid out is first brought into layout: at the top edge, or near `target` from its `height` when
+    /// that is known. Returns whether the row ended within half a point.
     @discardableResult
-    func place(_ id: String, top target: CGFloat) -> Bool {
+    func place(_ id: String, top target: CGFloat, height: CGFloat? = nil) -> Bool {
         guard let proxy = layout.proxy else { return false }
         var aim = target
         var aimed = false
         for _ in 0..<4 {
             guard let now = layout.frame(of: id) else {
-                proxy.scrollTo(id, anchor: .top)
+                let y = height.flatMap { TimelineScrollPolicy.anchorY(placingTopAt: target, rowHeight: $0, frameHeight: layout.height) }
+                proxy.scrollTo(id, anchor: y.map { UnitPoint(x: 0.5, y: min(1, max(0, $0))) } ?? .top)
                 layout.forceLayout()
                 aimed = false
                 continue
             }
-            let miss = target - now.minY
+            // Laid out, the row may be another height than the one it was aimed with: it goes as near as it can reach.
+            let goal = TimelineScrollPolicy.reachableTop(target, rowHeight: now.height, frameHeight: layout.height)
+            let miss = goal - now.minY
             if abs(miss) <= 0.5 { return true }
-            if aimed { aim += miss }
+            if aimed { aim += miss } else { aim = goal }
             guard let y = TimelineScrollPolicy.anchorY(placingTopAt: aim, rowHeight: now.height, frameHeight: layout.height) else { return false }
             proxy.scrollTo(id, anchor: UnitPoint(x: 0.5, y: min(1, max(0, y))))
             layout.forceLayout()
@@ -307,13 +338,15 @@ import SwiftUI
     /// `nearBottomDistance` of it, keeps the newest message in view, as an arriving message would follow them. A new
     /// width rewraps the bubbles and moves the end with no scroll, so whether the reader was there is what `followsEnd`
     /// last said, not the distance after the layout. The size arrives after the change, so the distance before a height
-    /// change is the distance now less the change.
+    /// change is the distance now less the change, while the width stays: by the time a resize that changes both
+    /// reports, the new width may have collapsed the stack's estimated heights and pulled the offset to the end.
     func resized(_ size: CGSize) {
         #if DEBUG
         MacPerfProbe.count("ctl.resized")
         #endif
         let change = size.height - layout.size.height
-        let wasNearBottom = followsEnd || change != 0 && layout.size.height > 0 && layout.distanceFromBottom + change < TimelineScrollPolicy.nearBottomDistance
+        let wasNearBottom = followsEnd || change != 0 && size.width == layout.size.width && layout.size.height > 0
+            && layout.distanceFromBottom + change < TimelineScrollPolicy.nearBottomDistance
         let changed = size != layout.size
         layout.size = size
         if changed { resizedAt = .now }
@@ -379,9 +412,10 @@ import SwiftUI
     /// reports no phase), says whether the reader is at the end now; anything else (rows measured as they come into
     /// view, rewrapped at a new width, a taller composer) moves the end under the reader, and one who followed it still
     /// does. Outside a resize the reader's place is wherever they are now. In the second after one only the offset
-    /// moving with the reader's input counts: the bound position then puts its top row back, and content that shrank
-    /// past the offset (a new width collapses the stack's estimated heights) pulls it to the end. A correction queued
-    /// for a resize reads the place when it runs, so it never undoes a scroll that came after it.
+    /// moving with the reader's gesture, wheel or scroller counts: the bound position then puts its top row back, and
+    /// content that shrank past the offset (a new width collapses the stack's estimated heights) pulls it to the end. A
+    /// key or a jump notes its own place where it lands, so one just before the resize does not count either. A
+    /// correction queued for a resize reads the place when it runs, so it never undoes a scroll that came after it.
     private func followEnd(from previous: ScrollGeometry?, to geometry: ScrollGeometry) {
         let distance = MacTimelineLayout.distanceFromBottom(geometry)
         let scrolledOnly = previous.map { $0.contentSize == geometry.contentSize && $0.containerSize == geometry.containerSize
@@ -389,7 +423,7 @@ import SwiftUI
         // The frame's new size can reach this before `resized`.
         let resizing = previous.map { $0.containerSize != geometry.containerSize } == true
             || resizedAt.map { ContinuousClock.now - $0 < .seconds(1) } == true
-        let byReader = resizing ? scrolledOnly && (readerIsScrolling || Self.scrollInput) : readerIsScrolling || scrolledOnly
+        let byReader = resizing ? scrolledOnly && (scrolling || Self.scrollInput) : readerIsScrolling || scrolledOnly
         if byReader {
             followsEnd = distance < TimelineScrollPolicy.nearBottomDistance
         } else if !applying, isLoaded, resizing || followsEnd && distance > 0.5 {
@@ -504,9 +538,7 @@ import SwiftUI
         case .pageUp: scroll(by: page)
         case .pageDown: scroll(by: -page)
         case .top:
-            guard let first = loadingEarlier ? TimelineItems.loadingEarlierID : rows.first?.message.id else { return }
-            // Where the content's top margin puts it when scrolled all the way up.
-            place(first, top: Self.topMargin)
+            scrollToOldest()
         case .bottom:
             scrollToNewest()
         }
@@ -514,17 +546,75 @@ import SwiftUI
         if key == .top || key == .pageUp { requestOlderIfNeeded() }
     }
 
+    private func scrollToOldest() {
+        guard let first = loadingEarlier ? TimelineItems.loadingEarlierID : rows.first?.message.id else { return }
+        // Where the content's top margin puts it when scrolled all the way up.
+        place(first, top: Self.topMargin)
+    }
+
     /// Moves the content by `delta` (positive moves it down, towards older messages). Each step goes through the
     /// laid-out row a scroll can carry furthest (`TimelineScrollPolicy.scrollStep`), and steps repeat (bringing new rows
-    /// into layout) until the distance is covered or an end is reached.
+    /// into layout) until the distance is covered or an end is reached. A distance the laid-out rows cannot carry lands
+    /// in one scroll instead (`TimelineScrollPolicy.landing`), on the rows' measured heights and an estimate for those
+    /// never laid out, so only the rows it lands on are built. A landing SwiftUI misses goes on in steps.
     private func scroll(by delta: CGFloat) {
         var remaining = delta
+        var lands = true
         for _ in 0..<4 where abs(remaining) > 0.5 {
-            guard let step = TimelineScrollPolicy.scrollStep(placedRows(), by: remaining, frameHeight: layout.height) else { return }
+            let placed = placedRows()
+            let step = TimelineScrollPolicy.scrollStep(placed, by: remaining, frameHeight: layout.height)
+            if lands, step.map({ abs($0.top - $0.row.top) }) ?? 0 < abs(remaining) - 0.5, let landed = land(placed, by: remaining) {
+                guard case .missed(let moved) = landed else { return }
+                remaining -= moved
+                lands = false
+                continue
+            }
+            guard let step else { return }
             place(step.row.id, top: step.top)
             guard let after = layout.frame(of: step.row.id)?.minY, abs(after - step.row.top) > 0.5 else { return }
             remaining -= after - step.row.top
         }
+    }
+
+    private enum Landed {
+        case landed
+        /// The row it scrolled to never came into layout: SwiftUI places a row it has not built on its own estimates,
+        /// and can stop well short of it. The content moved by `moved`, read from a row laid out before and after.
+        case missed(moved: CGFloat)
+    }
+
+    /// Scrolls to where moving by `delta` lands past the laid-out rows; nil when that is a laid-out row.
+    private func land(_ placed: [TimelineScrollPolicy.PlacedRow], by delta: CGFloat) -> Landed? {
+        let width = placed.first.flatMap { layout.frame(of: $0.id)?.width }
+        // The estimate for a row never laid out at this width: the rows that were, less any taller than the frame, which
+        // are rare and would make every row look long.
+        let measured = rows.compactMap { layout.height(of: $0.message.id, width: width) }
+        let usual = measured.filter { $0 < layout.height }
+        let sample = usual.isEmpty ? measured : usual
+        let average = sample.isEmpty ? 0 : sample.reduce(0, +) / CGFloat(sample.count)
+        func height(_ id: String) -> CGFloat { layout.height(of: id, width: width) ?? average }
+        let lead = Self.topMargin + (loadingEarlier ? height(TimelineItems.loadingEarlierID) : 0)
+        let tail = Self.topMargin + (typing != nil ? height(TimelineItems.typingID) : 0)
+        guard average > 0, let landing = TimelineScrollPolicy.landing(placed, by: delta, frameHeight: layout.height, rowCount: rows.count, lead: lead,
+                                                                      tail: tail, height: { height(self.rows[$0].message.id) }) else { return nil }
+        #if DEBUG
+        if MacDebugHooks.has("-haus-timeline-trace") {
+            MacDebugHooks.log("land by \(delta): \(landing) from \(placed.count) rows laid out, \(sample.count) measured, estimate \(average)")
+        }
+        #endif
+        switch landing {
+        case .row(let index, let top):
+            let id = rows[index].message.id
+            place(id, top: TimelineScrollPolicy.reachableTop(top, rowHeight: height(id), frameHeight: layout.height), height: height(id))
+            guard layout.frame(of: id) == nil else { return .landed }
+            let moved = placed.lazy.compactMap { row in self.layout.frame(of: row.id).map { $0.minY - row.top } }.first
+            return .missed(moved: moved ?? delta)
+        case .start:
+            scrollToOldest()
+        case .end:
+            scrollToNewest()
+        }
+        return .landed
     }
 
     // MARK: Jumping to a message
@@ -876,6 +966,26 @@ import SwiftUI
         scroll(by: delta)
         readerMoved()
     }
+
+    /// Binds the row an update would hold, as SwiftUI binds the row the reader's own scroll stops on, for the tour. The
+    /// bound row goes to the top edge, which can make another row the one to hold, so it binds until they agree.
+    func debugBindReader() -> String? {
+        guard let position = layout.position else { return nil }
+        for _ in 0..<3 {
+            let placed = placedRows()
+            guard let reader = TimelineScrollPolicy.readerRow(placed, visibleTop: 0, visibleBottom: layout.height) else { return nil }
+            let row = holdable(reader, among: placed).first ?? reader
+            if position.wrappedValue == row.id { return row.id }
+            position.wrappedValue = row.id
+            layout.forceLayout()
+        }
+        return position.wrappedValue
+    }
+
+    /// Asks for the next older page where the reader is, as reaching the paging lead would, for the tour.
+    func debugLoadOlder() async {
+        _ = await model.loadOlderMessages()
+    }
     #endif
 }
 
@@ -915,6 +1025,8 @@ enum MacTimelineItem: Identifiable, Equatable {
     var geometry: ScrollGeometry?
     var size: CGSize = .zero
     var proxy: ScrollViewProxy?
+    /// The scroll view's bound position: the reader's row, at the top edge.
+    var position: Binding<String?>?
     /// A view inside the scroll view's content, for forcing a layout pass.
     weak var anchorView: NSView?
 
@@ -922,6 +1034,12 @@ enum MacTimelineItem: Identifiable, Equatable {
     var frames: [String: CGRect] { reported.filter { shown[$0.key] != nil } }
 
     func frame(of id: String) -> CGRect? { shown[id] == nil ? nil : reported[id] }
+
+    /// The height a row last reported, laid out now or not, if it was at `width`: rows rewrap at another width.
+    func height(of id: String, width: CGFloat?) -> CGFloat? {
+        guard let frame = reported[id], let width, abs(frame.width - width) <= 0.5 else { return nil }
+        return frame.height
+    }
 
     func report(_ id: String, _ frame: CGRect) { reported[id] = frame }
 
