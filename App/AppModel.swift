@@ -585,10 +585,13 @@ final class AppModel {
             // Long enough to cross several timeline pages; only tests and scroll checks ask for it.
             if ProcessInfo.processInfo.arguments.contains("-demo-long") {
                 let chatID = "history@preview.local"
+                // With -demo-tall, message 200 runs to 80 lines, taller than a window, for scroll checks inside it.
+                let tall = ProcessInfo.processInfo.arguments.contains("-demo-tall")
                 try await store.upsertChat(accountID: account, chatID: chatID, title: "History")
                 for index in 1...250 {
+                    let lines = tall && index == 200 ? (1...80).map { "\nLine \($0) of a message taller than the window." }.joined() : ""
                     try await store.insertMessage(StoredMessage(id: "sample-history-\(index)", accountID: account, chatID: chatID, senderID: index.isMultiple(of: 3) ? account : chatID,
-                                                                body: "History message \(index)" + (index.isMultiple(of: 7) ? ", with a second sentence so some bubbles wrap onto another line." : ""),
+                                                                body: "History message \(index)" + (index.isMultiple(of: 7) ? ", with a second sentence so some bubbles wrap onto another line." : "") + lines,
                                                                 sentAt: Date(timeIntervalSince1970: 1_789_300_000 + Double(index) * 60), isOutgoing: index.isMultiple(of: 3),
                                                                 // Received messages carry their sender's ID, as a quote of one names it.
                                                                 wireID: index.isMultiple(of: 3) ? nil : "history-wire-\(index)"))
