@@ -307,13 +307,15 @@ import SwiftUI
     /// `nearBottomDistance` of it, keeps the newest message in view, as an arriving message would follow them. A new
     /// width rewraps the bubbles and moves the end with no scroll, so whether the reader was there is what `followsEnd`
     /// last said, not the distance after the layout. The size arrives after the change, so the distance before a height
-    /// change is the distance now less the change.
+    /// change is the distance now less the change, while the width stays: by the time a resize that changes both
+    /// reports, the new width may have collapsed the stack's estimated heights and pulled the offset to the end.
     func resized(_ size: CGSize) {
         #if DEBUG
         MacPerfProbe.count("ctl.resized")
         #endif
         let change = size.height - layout.size.height
-        let wasNearBottom = followsEnd || change != 0 && layout.size.height > 0 && layout.distanceFromBottom + change < TimelineScrollPolicy.nearBottomDistance
+        let wasNearBottom = followsEnd || change != 0 && size.width == layout.size.width && layout.size.height > 0
+            && layout.distanceFromBottom + change < TimelineScrollPolicy.nearBottomDistance
         let changed = size != layout.size
         layout.size = size
         if changed { resizedAt = .now }
@@ -379,9 +381,10 @@ import SwiftUI
     /// reports no phase), says whether the reader is at the end now; anything else (rows measured as they come into
     /// view, rewrapped at a new width, a taller composer) moves the end under the reader, and one who followed it still
     /// does. Outside a resize the reader's place is wherever they are now. In the second after one only the offset
-    /// moving with the reader's input counts: the bound position then puts its top row back, and content that shrank
-    /// past the offset (a new width collapses the stack's estimated heights) pulls it to the end. A correction queued
-    /// for a resize reads the place when it runs, so it never undoes a scroll that came after it.
+    /// moving with the reader's gesture, wheel or scroller counts: the bound position then puts its top row back, and
+    /// content that shrank past the offset (a new width collapses the stack's estimated heights) pulls it to the end. A
+    /// key or a jump notes its own place where it lands, so one just before the resize does not count either. A
+    /// correction queued for a resize reads the place when it runs, so it never undoes a scroll that came after it.
     private func followEnd(from previous: ScrollGeometry?, to geometry: ScrollGeometry) {
         let distance = MacTimelineLayout.distanceFromBottom(geometry)
         let scrolledOnly = previous.map { $0.contentSize == geometry.contentSize && $0.containerSize == geometry.containerSize
@@ -389,7 +392,7 @@ import SwiftUI
         // The frame's new size can reach this before `resized`.
         let resizing = previous.map { $0.containerSize != geometry.containerSize } == true
             || resizedAt.map { ContinuousClock.now - $0 < .seconds(1) } == true
-        let byReader = resizing ? scrolledOnly && (readerIsScrolling || Self.scrollInput) : readerIsScrolling || scrolledOnly
+        let byReader = resizing ? scrolledOnly && (scrolling || Self.scrollInput) : readerIsScrolling || scrolledOnly
         if byReader {
             followsEnd = distance < TimelineScrollPolicy.nearBottomDistance
         } else if !applying, isLoaded, resizing || followsEnd && distance > 0.5 {
