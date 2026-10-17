@@ -33,7 +33,9 @@ import SwiftUI
 ///   Message actions by message ID in the open chat, as the bubble's menu performs them:
 ///   `reply|edit|star|retry|unsend|encryption|report|select-text <id>`, `react <id> <emoji>`, `pick-emoji <id>` (the
 ///   emoji picker's popover), `hover <id>|off` (shows that bubble's hover toolbar until `hover off`), and `menu <id>`
-///   (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's), `minimums` (logs the minimum
+///   (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's). Changes to a sample message as
+///   the model makes them, with no dialog or composer: `model-edit <id> <text>`, `model-unsend <id>`, `model-retry <id>`
+///   and `receipt <id> delivered|displayed` (a sample peer's receipt or read marker). `minimums` (logs the minimum
 ///   size of the window's content and of each hosting view in it, the split view's columns among them). Keyboard and
 ///   VoiceOver steps (`MacKeyboardDebug`): `focus` (logs which view has the keyboard: the composer, a bubble's text or
 ///   another, the timeline's focus and focused message, the focused accessibility element and whether Full Keyboard Access
@@ -391,6 +393,15 @@ import SwiftUI
                 tour.setMessageRequest(MessageRequest(verb: words[0], messageID: parts.first ?? "", argument: parts.count > 1 ? parts[1] : "",
                                                       serial: (tour.messageRequest?.serial ?? 0) + 1))
             case "hover": tour.setHoveredMessage(argument == "off" ? nil : argument)
+            case "model-edit", "model-unsend", "model-retry", "receipt":
+                let parts = argument.split(separator: " ", maxSplits: 1).map(String.init)
+                let id = parts.first ?? "", rest = parts.count > 1 ? parts[1] : ""
+                switch words[0] {
+                case "model-edit": _ = await model.edit(messageID: id, body: rest)
+                case "model-unsend": await model.unsend(messageID: id)
+                case "model-retry": await model.retryMessage(id)
+                default: await model.recordSampleReceipt(read: rest == "displayed", messageID: id)
+                }
             case "size":
                 let size = argument.split(separator: "x").compactMap { Double($0) }
                 if size.count == 2 { mainWindow?.setContentSize(NSSize(width: size[0], height: size[1])) }
