@@ -21,6 +21,8 @@ struct MacRootView: View {
     /// its minimum includes both their widths, and the split view adds the inspector's width once more for the
     /// inspector itself. Asking for nothing there keeps the columns' sum what the window really needs.
     private static let conversationMinWidth = 320.0
+    /// The window's content is never shorter, so a column laid out at half of it is AppKit's minimum-size pass
+    /// (`MacProbeShield`).
     static let windowMinHeight = 480.0
 
     private var showsInspector: Bool { window.inspectorShown && window.selection != nil }
@@ -62,10 +64,10 @@ struct MacRootView: View {
 
     private var split: some View {
         NavigationSplitView {
-            MacChatList(model: model, window: window)
+            MacProbeShield { MacChatList(model: model, window: window) }
                 .navigationSplitViewColumnWidth(min: Self.sidebarWidth.min, ideal: Self.sidebarWidth.ideal, max: Self.sidebarWidth.max)
         } detail: {
-            detail
+            MacProbeShield { detail }
         }
         // On the split view, not inside its detail column: a navigation stack in an inspector placed in the detail
         // pushed its pages into the detail column's own navigation, replacing the conversation.
@@ -281,6 +283,37 @@ struct MacWindowMinimum: NSViewRepresentable {
     func makeNSView(context: Context) -> View { View() }
 
     func updateNSView(_ view: View, context: Context) { view.width = width }
+}
+
+/// Keeps a split view column's content at its last real size through AppKit's minimum-size passes. With the inspector's
+/// split view in the window, open or not, every change of the window's size first lays the window's main column out at
+/// its minimum (about 320 by 170 points), then at its real size, and SwiftUI lays the sidebar and the conversation out at
+/// that minimum as well: a step of a live resize laid the timeline out three times more, each time rewrapping every
+/// bubble on screen. No real layout is shorter than the window's minimum height, so a much shorter one is such a pass;
+/// the content keeps the size it has, and the real size follows in the same pass before anything is drawn.
+struct MacProbeShield<Content: View>: View {
+    @ViewBuilder let content: Content
+    /// Outside the layout's cache, which SwiftUI rebuilds whenever the content changes.
+    @State private var last = LastSize()
+
+    final class LastSize { var size: CGSize? }
+
+    var body: some View { ShieldLayout(last: last) { content } }
+
+    private struct ShieldLayout: Layout {
+        let last: LastSize
+
+        /// Measuring is unchanged, so the column's minimum, and the window's, stay what the content asks for.
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            subviews.first?.sizeThatFits(proposal) ?? .zero
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            var size = bounds.size
+            if size.height < MacRootView.windowMinHeight / 2, let kept = last.size { size = kept } else { last.size = size }
+            for subview in subviews { subview.place(at: bounds.origin, proposal: ProposedViewSize(size)) }
+        }
+    }
 }
 
 /// Reports whether the column it sits in is on screen. A split view hides a collapsed column only once it has
