@@ -2816,7 +2816,8 @@ final class AppModel {
         }
     }
 
-    /// The chat's ID (the address in normal form), or nil with `error` set.
+    /// The chat's ID (the address in normal form), or nil with `error` set. An existing chat opens as it is, with the
+    /// title and settings it has.
     func createChat(_ recipient: String) async -> String? {
         // `Bob@Example.org` is the chat the server's `bob@example.org` replies land in.
         let address = JID(recipient.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -2830,7 +2831,7 @@ final class AppModel {
             return nil
         }
         do {
-            try await store.upsertChat(accountID: accountID, chatID: recipient, title: recipient)
+            try await store.createChatIfMissing(accountID: accountID, chatID: recipient, title: recipient)
             await refresh()
             return recipient
         } catch { self.error = "Could not create conversation."; return nil }
