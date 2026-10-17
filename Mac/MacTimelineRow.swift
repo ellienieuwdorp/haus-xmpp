@@ -82,8 +82,8 @@ struct MacTimelineRow: View {
             if shown, !toolbarBuilt { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { toolbarBuilt = true } }
         }
         #if DEBUG
-        .onChange(of: MacDebugHooks.tour.messageRequest) { _, request in
-            guard let request, request.messageID == message.id else { return }
+        .onChange(of: MacDebugHooks.tour.row(message.id).request) { _, request in
+            guard let request else { return }
             switch request.verb {
             case "select-text": perform(.selectText, link: nil)
             case "pick-emoji": choosingEmoji = true
@@ -172,7 +172,7 @@ struct MacTimelineRow: View {
 
     private var toolbarShown: Bool {
         #if DEBUG
-        let forced = MacDebugHooks.tour.hoveredMessage == message.id
+        let forced = MacDebugHooks.tour.row(message.id).hovered
         #else
         let forced = false
         #endif

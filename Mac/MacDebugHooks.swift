@@ -320,6 +320,32 @@ import SwiftUI
         var messageCommands: [(token: UUID, make: () -> MacMessageCommands)] = []
         /// The open chat's Find in Conversation and Starred Messages, likewise.
         var conversationFind: [(token: UUID, make: () -> MacConversationFindCommands?)] = []
+        /// `messageRequest` and `hoveredMessage` as each message's row reads them, one object per message, so a step on one
+        /// message runs only that row's body.
+        @ObservationIgnored private var rows: [String: Row] = [:]
+
+        func row(_ id: String) -> Row {
+            if let row = rows[id] { return row }
+            let row = Row()
+            rows[id] = row
+            return row
+        }
+
+        func setMessageRequest(_ request: MessageRequest) {
+            messageRequest = request
+            row(request.messageID).request = request
+        }
+
+        func setHoveredMessage(_ id: String?) {
+            if let hoveredMessage { row(hoveredMessage).hovered = false }
+            hoveredMessage = id
+            if let id { row(id).hovered = true }
+        }
+
+        @Observable @MainActor final class Row {
+            var request: MessageRequest?
+            var hovered = false
+        }
     }
 
     struct MessageRequest: Equatable {
@@ -362,9 +388,9 @@ import SwiftUI
             case "reply" where argument == "newest", "edit" where argument == "newest": composerStep(words[0], argument, model: model)
             case "reply", "edit", "star", "retry", "unsend", "encryption", "report", "select-text", "react", "pick-emoji":
                 let parts = argument.split(separator: " ", maxSplits: 1).map(String.init)
-                tour.messageRequest = MessageRequest(verb: words[0], messageID: parts.first ?? "", argument: parts.count > 1 ? parts[1] : "",
-                                                     serial: (tour.messageRequest?.serial ?? 0) + 1)
-            case "hover": tour.hoveredMessage = argument == "off" ? nil : argument
+                tour.setMessageRequest(MessageRequest(verb: words[0], messageID: parts.first ?? "", argument: parts.count > 1 ? parts[1] : "",
+                                                      serial: (tour.messageRequest?.serial ?? 0) + 1))
+            case "hover": tour.setHoveredMessage(argument == "off" ? nil : argument)
             case "size":
                 let size = argument.split(separator: "x").compactMap { Double($0) }
                 if size.count == 2 { mainWindow?.setContentSize(NSSize(width: size[0], height: size[1])) }
