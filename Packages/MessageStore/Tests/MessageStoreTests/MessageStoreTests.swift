@@ -46,3 +46,20 @@ private func message(_ id: String, account: String = "a", body: String = "hello"
     #expect(chats.first?.title == "Renamed")
     #expect(chats.first?.isPinned == true)
 }
+
+@Test func openingAnExistingChatByAddressKeepsItsTitleAndSettings() async throws {
+    let url = try databaseURL()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try MessageStore(url: url)
+    try await store.upsertChat(accountID: "a", chatID: "alex@example.org", title: "Alex")
+    try await store.setPinned(accountID: "a", chatID: "alex@example.org", pinned: true)
+    let muted = ChatNotificationSetting(mutedUntil: .distantFuture)
+    try await store.setChatNotificationSetting(accountID: "a", chatID: "alex@example.org", muted)
+    let before = try await store.chats(accountID: "a")
+    try await store.createChatIfMissing(accountID: "a", chatID: "alex@example.org", title: "alex@example.org")
+    try await store.createChatIfMissing(accountID: "a", chatID: "sam@example.org", title: "sam@example.org")
+    let after = try await store.chats(accountID: "a")
+    #expect(after.first { $0.id == "alex@example.org" } == before.first { $0.id == "alex@example.org" })
+    #expect(after.first { $0.id == "alex@example.org" }?.title == "Alex")
+    #expect(after.first { $0.id == "sam@example.org" }?.title == "sam@example.org")
+}

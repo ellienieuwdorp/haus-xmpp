@@ -446,6 +446,13 @@ public actor MessageStore {
             """, [.text(accountID), .text(chatID), .text(title)])
     }
 
+    /// Adds the chat under `title` unless it exists; an existing chat keeps its title and settings, as `upsertChat` would not.
+    public func createChatIfMissing(accountID: String, chatID: String, title: String) throws {
+        guard !accountID.isEmpty, !chatID.isEmpty else { throw MessageStoreError.invalidValue }
+        try connection.execute("INSERT INTO chats(account_id,id,title) VALUES(?,?,?) ON CONFLICT(account_id,id) DO NOTHING",
+                               [.text(accountID), .text(chatID), .text(title)])
+    }
+
     /// Repeated delivery preserves local starring. A conflicting payload is an error.
     @discardableResult public func insertMessage(_ message: StoredMessage) throws -> Bool {
         try connection.transaction { try insertMessageInTransaction(message) }
