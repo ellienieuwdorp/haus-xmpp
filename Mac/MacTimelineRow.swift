@@ -213,7 +213,7 @@ struct MacTimelineRow: View, Equatable {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: shown)
     }
 
-    private func menu(link: URL?) -> some View {
+    private func menu(link: URL?) -> MacMessageMenuContent {
         MacMessageMenuContent(menu: MacMessageMenu(message: message, link: link), perform: perform, react: react, moreReactions: { choosingEmoji = true })
     }
 
@@ -257,7 +257,7 @@ struct BubbleWidth: Layout {
 
 /// Text, quote, attachment line and the quiet footer (edited, security notice, time, status mark) inside the bubble.
 /// Reaction pills are `MacReactionRow`, hung off its outer bottom corner by the row.
-struct MacBubble<CardMenu: View>: View {
+struct MacBubble: View {
     let message: TimelineMessage
     let accent: AccentTheme
     let openAttachment: () -> Void
@@ -266,8 +266,9 @@ struct MacBubble<CardMenu: View>: View {
     let selectAllRequests: Int
     /// The message's menu for a right-click on the text, with the link's items when it lands on one.
     let textMenu: (URL?) -> NSMenu
-    /// The message's menu for a right-click on the preview card, which is a link too.
-    @ViewBuilder let cardMenu: (URL) -> CardMenu
+    /// The message's menu for a right-click on the preview card, which is a link too. Of one type, not generic: a
+    /// generic view looks the types in its body up again each time the body runs.
+    let cardMenu: (URL) -> MacMessageMenuContent
     @Environment(\.openURL) private var openURL
 
     private var textColor: Color { message.isOutgoing ? Color(platform: accent.bubbleText) : .primary }
