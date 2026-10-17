@@ -63,7 +63,7 @@ import SwiftUI
 ///   run-loop pass, 120 Hz timer gaps and the timeline's counters in between, and each timeline update's phases),
 ///   `display-count` (layer displays by class and owner in the next `perf stop`), `layers` (the window's views and
 ///   layers), `sidebar` (View › Hide Sidebar's toggle, timed), `sidebar-sweep <steps>` (the sidebar's divider moved
-///   step by step) and `force-noop <count>` (the timeline's forced layout with nothing pending). Search steps
+///   step by step), `force-noop <count>` (the timeline's forced layout with nothing pending), `split [label]` and `split-watch <seconds>` (the split views' items and widths, once or on every pass that changes them). Search steps
 ///   (`MacConversationFindTour`): `find <text>` (opens search with that text), `find-close`, `find-esc` (as Esc in the
 ///   timeline), `starred on|off` and `show-result <message id>` (as a click on that result). Menu bar steps: `menus` (logs what the Message menu's commands target, then the File, Edit, View,
 ///   Chat, Message and Window menus: each item, its shortcut and whether it is enabled), `command <menu>/<item>[/<item>]`
@@ -392,7 +392,7 @@ import SwiftUI
             case "unblock" where model.isDemo: for entry in model.blockEntries(for: argument) { await model.unblock(entry) }
             case "close-window": mainWindow?.performClose(nil)
             case "stalls": MacTimelineDebug.StallProbe.shared.report(argument)
-            case "perf", "display-count", "layers", "sidebar", "sidebar-sweep", "force-noop": await MacPerfProbe.step(words[0], argument, window: mainWindow)
+            case "perf", "display-count", "layers", "sidebar", "sidebar-sweep", "force-noop", "split", "split-watch": await MacPerfProbe.step(words[0], argument, window: mainWindow)
             case "store" where model.isLabAccount:
                 log("store \(argument): \(await model.debugRetentionReport(argument)); \(await model.debugMessageReport(argument))")
             case "chat", "join", "devices", "messages", "device", "review", "own-review", "trust", "verify", "dont-trust", "compare", "remove", "confirm", "close-sheet":
