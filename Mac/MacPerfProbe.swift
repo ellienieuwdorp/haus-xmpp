@@ -36,9 +36,9 @@ import SwiftUI
 /// - Build the Debug configuration optimised as Release is, so the tour steps exist but the code is what ships: an
 ///   xcconfig file with `SWIFT_OPTIMIZATION_LEVEL = -O`, `SWIFT_COMPILATION_MODE = wholemodule` and
 ///   `GCC_OPTIMIZATION_LEVEL = s`, named by `XCODE_XCCONFIG_FILE` in the environment of the `HausXMPPMac` build. Plain
-///   Debug numbers are several times slower and not comparable.
-/// - Run with `-haus-unobtrusive -demo -demo-long -haus-window-size 1200x800` on a fresh test store, one tour per run,
-///   in this order, so that each run's numbers compare with earlier runs':
+///   Debug spends its time differently, so its numbers do not compare with these.
+/// - Run with `-haus-unobtrusive -demo -demo-long -haus-window-size 1200x800` on an emptied test store
+///   (`XMPP_UI_TEST_STORE` and `-haus-fresh-store`), one tour per run, and the same tours each time:
 ///   1. Scrolling: `select history@preview.local; wait 3; force-noop 20; perf start; scroll 8; perf stop cold;
 ///      perf start; scroll 10 paging; perf stop paging; timeline; wait 1; perf start; scroll 8; perf stop warm-a;
 ///      perf start; scroll 8; perf stop warm-b` (the first sweep builds 100 rows; paging loads all 250 and logs its
@@ -330,7 +330,8 @@ import SwiftUI
         let n = sampled[key, default: 0]
         sampled[key] = n + 1
         guard n < 3 || n.isMultiple(of: 500) else { return }
-        let frames = Thread.callStackSymbols.dropFirst(2).prefix(28).map { line -> String in
+        // From the first frame outside this probe and its hook.
+        let frames = Thread.callStackSymbols.drop { $0.contains("MacPerfProbe") || $0.contains("assumeIsolated") }.prefix(24).map { line -> String in
             // "3   AppKit   0x… symbol + 12": keep the module and the symbol.
             let parts = line.split(separator: " ", omittingEmptySubsequences: true)
             return parts.count > 3 ? "\(parts[1]):\(parts[3...].joined(separator: " "))" : line
