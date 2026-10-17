@@ -344,9 +344,12 @@ struct MacBubble<CardMenu: View>: View {
                     .padding(.horizontal, -4)
             }
             if !message.displayedText.isEmpty {
+                let text = text
                 // Links are underlined, in the accent on received bubbles and in the text colour on the accent-filled sent ones.
                 MacBubbleText(text: text, linkColor: message.isOutgoing ? accent.bubbleText : accent.tint, selectAllRequests: selectAllRequests,
                               menu: textMenu, openLink: { openURL($0) })
+                    // How the text view draws is fixed when it is made: an edit across the limit makes another.
+                    .id(BubbleTextView.drawsWhole(text))
             }
             footer
         }
