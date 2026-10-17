@@ -48,15 +48,20 @@ struct MacTimeline<Row: View>: View {
                 // Arrow keys also carry the numeric pad and function flags; only these four tell the keys apart.
                 let modifiers = press.modifiers.intersection([.command, .shift, .option, .control])
                 let plain = modifiers.isEmpty
+                // Scrolls run in the next turn: while SwiftUI handles the key, the rows report no new frames, so a
+                // scroll would correct itself against where they were before it.
+                func later(_ action: @escaping @MainActor () -> Void) {
+                    DispatchQueue.main.async { MainActor.assumeIsolated { action() } }
+                }
                 switch press.key {
-                case .pageUp: controller.scroll(.pageUp)
-                case .pageDown: controller.scroll(.pageDown)
-                case .home: controller.scroll(.top)
-                case .end: controller.scroll(.bottom)
-                case .upArrow where modifiers == .command: controller.scroll(.top)
-                case .downArrow where modifiers == .command: controller.scroll(.bottom)
-                case .upArrow where plain: controller.moveFocus(forward: false)
-                case .downArrow where plain: controller.moveFocus(forward: true)
+                case .pageUp: later { controller.scroll(.pageUp) }
+                case .pageDown: later { controller.scroll(.pageDown) }
+                case .home: later { controller.scroll(.top) }
+                case .end: later { controller.scroll(.bottom) }
+                case .upArrow where modifiers == .command: later { controller.scroll(.top) }
+                case .downArrow where modifiers == .command: later { controller.scroll(.bottom) }
+                case .upArrow where plain: later { controller.moveFocus(forward: false) }
+                case .downArrow where plain: later { controller.moveFocus(forward: true) }
                 case .return where plain, .space where plain: return controller.openFocusedMenu() ? .handled : .ignored
                 case .escape: controller.onEscape()
                 default: return .ignored
