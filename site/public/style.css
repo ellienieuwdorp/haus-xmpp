@@ -100,14 +100,19 @@ a:hover { text-decoration: underline; }
   box-shadow: 0 0 0 1px var(--rule), 0 20px 50px rgba(0, 0, 0, 0.12);
 }
 
-/* Store-style badges, side by side and centred. */
+/* Store-style badges, side by side. Two equal columns with the
+   screenshots' gap put the space between the badges right under the
+   space between the screenshots, whatever the badge widths. */
 .badges {
   margin-top: var(--space);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px var(--gap);
+  width: 100%;
 }
+
+.badges .badge:nth-child(odd) { justify-self: end; }
+.badges .badge:nth-child(even) { justify-self: start; }
 
 .badge {
   display: inline-flex;
