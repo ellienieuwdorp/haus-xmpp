@@ -174,16 +174,22 @@ final class BubbleTextView: NSTextView {
 
     override func setNeedsDisplay(_ invalidRect: NSRect) {
         super.setNeedsDisplay(invalidRect)
-        // All of it: the bubble's text is short, and the layer's coordinates need not be the view's flipped ones.
-        if drawsWhole { layer?.setNeedsDisplay() }
+        if drawsWhole { redisplayLayer() }
     }
 
     override var needsDisplay: Bool {
         get { super.needsDisplay }
         set {
             super.needsDisplay = newValue
-            if drawsWhole, newValue { layer?.setNeedsDisplay() }
+            if drawsWhole, newValue { redisplayLayer() }
         }
+    }
+
+    /// All of it, once per display: the bubble's text is short, and the layer's coordinates need not be the view's
+    /// flipped ones. The text view marks itself many times over while its text and attributes are set.
+    private func redisplayLayer() {
+        guard let layer, !layer.needsDisplay() else { return }
+        layer.setNeedsDisplay()
     }
 
     override func viewDidMoveToWindow() {
@@ -199,7 +205,7 @@ final class BubbleTextView: NSTextView {
     /// The colours are the appearance's: dark text in Light, light in Dark.
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        if drawsWhole { layer?.setNeedsDisplay() }
+        if drawsWhole { redisplayLayer() }
     }
 
     private func matchWindowScale() {
