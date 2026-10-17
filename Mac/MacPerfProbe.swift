@@ -18,9 +18,10 @@ import SwiftUI
 /// - `perf update` lines, logged on their own between `perf start` and `perf stop`: each timeline update that keeps
 ///   the reader's place, split into phases (the forced layout before it, applying the rows, the forced layout after it,
 ///   and the hold or scroll that follows), with the time, rows built and text views made in each.
-/// - `display-count`: from then on, `perf stop` also counts the layers that redraw their contents (`-[CALayer display]`
+/// - `display-count`: the next `perf stop` also counts the layers that redraw their contents (`-[CALayer display]`
 ///   and every override of it in the window's layer classes) as `display <layer class>/<delegate class>`, a layer with no
-///   delegate under the nearest ancestor's delegate in brackets; each layer counts once per run-loop pass. With
+///   delegate under the nearest ancestor's delegate in brackets; each layer counts once per run-loop pass. That `stop`
+///   puts the original methods back, so later windows run without the hooks; give the step again to count again. With
 ///   `-haus-perf-stacks` it also logs sampled call stacks that mark a bubble text view's layers as needing display.
 ///   Symbolicating a stack stalls the main thread for milliseconds, so never time a run that passes that flag.
 /// - `layers`: the main window's views and layers by class, the bubble text views (all and visible), and the layers the
@@ -165,6 +166,7 @@ import SwiftUI
         gapTimer = nil
         for observer in observers { CFRunLoopObserverInvalidate(observer) }
         observers = []
+        removeHooks()
         let seconds = stoppedAt - startedAt
         let busy = passes.sorted()
         let total = busy.reduce(0, +)
@@ -229,7 +231,8 @@ import SwiftUI
 
     // MARK: Layer displays
 
-    private static var swizzled: Set<String> = []
+    /// The hooked methods by name, with the implementations they had before, which `removeHooks` puts back.
+    private static var hooks: [String: (method: Method, original: IMP)] = [:]
     /// The layers that displayed in this run-loop pass, so a layer counts once per pass however many overrides of
     /// `display` it runs through.
     private static var displayed: Set<ObjectIdentifier> = []
@@ -248,12 +251,23 @@ import SwiftUI
         }
         walk(root)
         for cls in classes where ownImplementation(cls, #selector(CALayer.display)) {
-            let name = NSStringFromClass(cls)
-            guard swizzled.insert(name).inserted, let method = class_getInstanceMethod(cls, #selector(CALayer.display)) else { continue }
-            method_setImplementation(method, displayCounting(method_getImplementation(method)))
+            hook(NSStringFromClass(cls), cls, #selector(CALayer.display), with: displayCounting)
         }
         if MacDebugHooks.has("-haus-perf-stacks") { installInvalidationStacks() }
-        MacDebugHooks.log("perf display-count: counting display on \(swizzled.sorted())")
+        MacDebugHooks.log("perf display-count: counting display on \(hooks.keys.sorted())")
+    }
+
+    private static func hook(_ name: String, _ cls: AnyClass, _ selector: Selector, with wrap: (IMP) -> IMP) {
+        guard hooks[name] == nil, let method = class_getInstanceMethod(cls, selector) else { return }
+        let original = method_getImplementation(method)
+        method_setImplementation(method, wrap(original))
+        hooks[name] = (method, original)
+    }
+
+    /// The wrapping blocks stay alive: Core Animation may still be inside one on another thread.
+    private static func removeHooks() {
+        for hook in hooks.values { method_setImplementation(hook.method, hook.original) }
+        hooks = [:]
     }
 
     /// Whether `cls` implements `selector` itself rather than inheriting it, so each call is hooked once.
@@ -299,9 +313,8 @@ import SwiftUI
         let classes = [CALayer.self, NSClassFromString("NSViewBackingLayer"), NSClassFromString("ContentLayer"), NSClassFromString("_NSTextViewBackingLayer")].compactMap { $0 }
         for cls in classes {
             for (selector, name) in [(#selector(CALayer.setNeedsDisplay as (CALayer) -> () -> Void), "setNeedsDisplay"), (#selector(CALayer.setNeedsDisplay(_:)), "setNeedsDisplayInRect")] {
-                guard cls == CALayer.self || ownImplementation(cls, selector), swizzled.insert("\(cls).\(name)").inserted,
-                      let method = class_getInstanceMethod(cls, selector) else { continue }
-                method_setImplementation(method, marking(method_getImplementation(method), selector: selector, name: name))
+                guard cls == CALayer.self || ownImplementation(cls, selector) else { continue }
+                hook("\(cls).\(name)", cls, selector) { marking($0, selector: selector, name: name) }
             }
         }
     }
