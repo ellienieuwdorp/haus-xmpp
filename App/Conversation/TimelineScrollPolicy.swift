@@ -214,6 +214,56 @@ extension TimelineScrollPolicy {
         return steps.max { abs($0.top - $0.row.top) < abs($1.top - $1.row.top) }
     }
 
+    /// Where a move by `delta` lands, when that is past the rows laid out.
+    enum Landing: Equatable {
+        /// The row at `index` with its top edge at `top`: the first row whose top edge is then inside the frame.
+        case row(index: Int, top: CGFloat)
+        /// Past the oldest row: the start of the content.
+        case start
+        /// Past the newest row, or too close to it to leave the frame filled: the end of the content.
+        case end
+    }
+
+    /// Where moving the content by `delta` (positive moves it down, towards older messages) puts it, when the row that
+    /// lands at the top edge is not laid out: walking on from the laid-out rows by each row's `height`, measured or
+    /// estimated. Stepping through laid-out rows (`scrollStep`) builds every screen on the way; one scroll to this row
+    /// builds only the one it lands on. Nil when the landing row is laid out, where a step is exact.
+    /// - Parameters:
+    ///   - rows: the rows laid out, top to bottom, at least one.
+    ///   - rowCount: how many rows there are; indices run from 0, the oldest.
+    ///   - lead: the content above the oldest row.
+    ///   - tail: the content below the newest row.
+    static func landing(_ rows: [PlacedRow], by delta: CGFloat, frameHeight: CGFloat, rowCount: Int, lead: CGFloat, tail: CGFloat,
+                        height: (Int) -> CGFloat) -> Landing? {
+        guard let first = rows.first, let last = rows.last else { return nil }
+        if delta > 0 {
+            // Below the top edge, the first laid-out row has the rows above it to walk through; above it, a laid-out
+            // row lands there.
+            var top = first.top + delta
+            guard top >= 0 else { return nil }
+            var index = first.index
+            while index > 0 {
+                let above = top - height(index - 1)
+                if above < 0 { break }
+                index -= 1
+                top = above
+            }
+            if index == 0, top > lead { return .start }
+            return index == first.index ? nil : .row(index: index, top: top)
+        }
+        guard delta < 0, last.top + delta < 0 else { return nil }
+        var top = last.bottom + delta
+        var index = last.index + 1
+        while index < rowCount, top < 0 {
+            top += height(index)
+            index += 1
+        }
+        guard index < rowCount else { return .end }
+        // The rest of the content has to fill the frame below the row.
+        let below = (index..<rowCount).reduce(tail) { $0 + height($1) }
+        return top + below < frameHeight ? .end : .row(index: index, top: top)
+    }
+
     /// The floating day chip: which day it shows, where its capsule sits and how visible it is.
     struct DayChip: Equatable {
         let text: String

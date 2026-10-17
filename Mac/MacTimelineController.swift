@@ -275,15 +275,17 @@ import SwiftUI
 
     /// Scrolls so the row's top edge is at `target` (which must keep the row inside the frame, `reachableTop`), through
     /// SwiftUI: a scroll to the row with the unit-point anchor that should put it there, corrected by what it missed. A
-    /// row that is not laid out is first brought to the top edge. Returns whether the row ended within half a point.
+    /// row that is not laid out is first brought into layout: at the top edge, or near `target` from its `height` when
+    /// that is known. Returns whether the row ended within half a point.
     @discardableResult
-    func place(_ id: String, top target: CGFloat) -> Bool {
+    func place(_ id: String, top target: CGFloat, height: CGFloat? = nil) -> Bool {
         guard let proxy = layout.proxy else { return false }
         var aim = target
         var aimed = false
         for _ in 0..<4 {
             guard let now = layout.frame(of: id) else {
-                proxy.scrollTo(id, anchor: .top)
+                let y = height.flatMap { TimelineScrollPolicy.anchorY(placingTopAt: target, rowHeight: $0, frameHeight: layout.height) }
+                proxy.scrollTo(id, anchor: y.map { UnitPoint(x: 0.5, y: min(1, max(0, $0))) } ?? .top)
                 layout.forceLayout()
                 aimed = false
                 continue
@@ -529,9 +531,7 @@ import SwiftUI
         case .pageUp: scroll(by: page)
         case .pageDown: scroll(by: -page)
         case .top:
-            guard let first = loadingEarlier ? TimelineItems.loadingEarlierID : rows.first?.message.id else { return }
-            // Where the content's top margin puts it when scrolled all the way up.
-            place(first, top: Self.topMargin)
+            scrollToOldest()
         case .bottom:
             scrollToNewest()
         }
@@ -539,17 +539,49 @@ import SwiftUI
         if key == .top || key == .pageUp { requestOlderIfNeeded() }
     }
 
+    private func scrollToOldest() {
+        guard let first = loadingEarlier ? TimelineItems.loadingEarlierID : rows.first?.message.id else { return }
+        // Where the content's top margin puts it when scrolled all the way up.
+        place(first, top: Self.topMargin)
+    }
+
     /// Moves the content by `delta` (positive moves it down, towards older messages). Each step goes through the
     /// laid-out row a scroll can carry furthest (`TimelineScrollPolicy.scrollStep`), and steps repeat (bringing new rows
-    /// into layout) until the distance is covered or an end is reached.
+    /// into layout) until the distance is covered or an end is reached. A distance the laid-out rows cannot carry lands
+    /// in one scroll instead (`TimelineScrollPolicy.landing`), on the rows' measured heights and an estimate for those
+    /// never laid out, so only the rows it lands on are built.
     private func scroll(by delta: CGFloat) {
         var remaining = delta
         for _ in 0..<4 where abs(remaining) > 0.5 {
-            guard let step = TimelineScrollPolicy.scrollStep(placedRows(), by: remaining, frameHeight: layout.height) else { return }
+            let placed = placedRows()
+            let step = TimelineScrollPolicy.scrollStep(placed, by: remaining, frameHeight: layout.height)
+            if step.map({ abs($0.top - $0.row.top) }) ?? 0 < abs(remaining) - 0.5, land(placed, by: remaining) { return }
+            guard let step else { return }
             place(step.row.id, top: step.top)
             guard let after = layout.frame(of: step.row.id)?.minY, abs(after - step.row.top) > 0.5 else { return }
             remaining -= after - step.row.top
         }
+    }
+
+    /// Scrolls to where moving by `delta` lands past the laid-out rows; false when that is a laid-out row.
+    private func land(_ placed: [TimelineScrollPolicy.PlacedRow], by delta: CGFloat) -> Bool {
+        let width = placed.first.flatMap { layout.frame(of: $0.id)?.width }
+        let average = placed.isEmpty ? 0 : placed.reduce(0) { $0 + $1.bottom - $1.top } / CGFloat(placed.count)
+        func height(_ id: String) -> CGFloat { layout.height(of: id, width: width) ?? average }
+        let lead = Self.topMargin + (loadingEarlier ? height(TimelineItems.loadingEarlierID) : 0)
+        let tail = Self.topMargin + (typing != nil ? height(TimelineItems.typingID) : 0)
+        guard average > 0, let landing = TimelineScrollPolicy.landing(placed, by: delta, frameHeight: layout.height, rowCount: rows.count, lead: lead,
+                                                                      tail: tail, height: { height(self.rows[$0].message.id) }) else { return false }
+        switch landing {
+        case .row(let index, let top):
+            let id = rows[index].message.id
+            place(id, top: TimelineScrollPolicy.reachableTop(top, rowHeight: height(id), frameHeight: layout.height), height: height(id))
+        case .start:
+            scrollToOldest()
+        case .end:
+            scrollToNewest()
+        }
+        return true
     }
 
     // MARK: Jumping to a message
@@ -949,6 +981,12 @@ enum MacTimelineItem: Identifiable, Equatable {
     var frames: [String: CGRect] { reported.filter { shown[$0.key] != nil } }
 
     func frame(of id: String) -> CGRect? { shown[id] == nil ? nil : reported[id] }
+
+    /// The height a row last reported, laid out now or not, if it was at `width`: rows rewrap at another width.
+    func height(of id: String, width: CGFloat?) -> CGFloat? {
+        guard let frame = reported[id], let width, abs(frame.width - width) <= 0.5 else { return nil }
+        return frame.height
+    }
 
     func report(_ id: String, _ frame: CGRect) { reported[id] = frame }
 
