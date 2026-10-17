@@ -53,7 +53,9 @@ import SwiftUI
 ///   `resize-sweep <width>x<height> <width>x<height> <steps>` (a live resize from one size to the other, timing each
 ///   step; also with no chat open) and `stalls [label]` (main-thread stalls over 50 ms since the last `stalls` step; the
 ///   first starts the probe), `drag <points> <seconds> [phaseless]` (the reader's scroll by that many points, with a
-///   gesture's phases or none, running while the next steps play).
+///   gesture's phases or none, running while the next steps play), `bind-reader` (binds the scroll position to the row
+///   an update would hold, as SwiftUI does where the reader's own scroll stops) and `older` (the next older page, as the
+///   reader reaching the paging lead asks for it).
 ///   `scroll <seconds> [paging]` sweeps the open chat's timeline from the newest loaded message to the oldest and back, moving
 ///   its clip view on a 120 Hz timer, and logs how late the main thread ran the ticks and the app's memory footprint
 ///   (`ScrollProbe`); with `paging` the sweep counts as the reader's gesture, so older pages come in near the top. Give
@@ -86,7 +88,8 @@ import SwiftUI
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
 ///   also in the sample conversations, where previews are otherwise off.
 /// - `-haus-timeline-trace`: logs each timeline update that held the reader's row, with how far the update moved it and
-///   its drift over the next 30 refreshes, and each scroll the controller placed.
+///   its drift over the next 30 refreshes, the row it bound for the update and what the position held before, and each
+///   scroll the controller placed or landed.
 /// - `-haus-perf-stacks`: `display-count` also logs sampled call stacks that mark a bubble text view's layers as needing
 ///   display (`MacPerfProbe`); they stall the main thread, so no timing from such a run counts.
 /// - `-haus-timeline-unbound`: leaves the timeline's position unbound, so SwiftUI keeps the absolute offset through a
@@ -386,7 +389,7 @@ import SwiftUI
             case "scroll" where Double(argument.split(separator: " ").first ?? "") != nil:
                 let parts = argument.split(separator: " ")
                 if let window = mainWindow { await ScrollProbe.sweep(in: window, seconds: Double(parts[0]) ?? 10, paging: parts.dropFirst().first == "paging") }
-            case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline", "drag": await MacTimelineDebug.step(words[0], argument, window: mainWindow)
+            case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline", "drag", "bind-reader", "older": await MacTimelineDebug.step(words[0], argument, window: mainWindow)
             case "menus": logMenuBar()
             case "command": performMenuItem(argument)
             case "header": log("header: \(mainWindow.map { "'\($0.title)' / '\($0.subtitle)'" } ?? "no main window")")

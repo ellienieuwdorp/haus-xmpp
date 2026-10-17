@@ -50,6 +50,10 @@ import SwiftUI
             report(timeline, "state")
         case "drag":
             drag(argument, timeline: timeline, window: window)
+        case "bind-reader":
+            MacDebugHooks.log("timeline bound \(timeline.debugBindReader() ?? "nothing")")
+        case "older":
+            await timeline.debugLoadOlder()
         default: break
         }
     }

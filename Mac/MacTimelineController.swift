@@ -197,6 +197,11 @@ import SwiftUI
             // alone, the stack would build the new rows that land there and then the reader's again for the hold. A
             // change of the bound row is what SwiftUI scrolls for, so one that holds this row already is cleared first.
             let row = holdable(reader, among: before).first ?? reader
+            #if DEBUG
+            if MacDebugHooks.has("-haus-timeline-trace") {
+                MacDebugHooks.log("bind \(row.id) for reader \(reader.id), bound to \(position.wrappedValue ?? "nothing")")
+            }
+            #endif
             if position.wrappedValue == row.id {
                 position.wrappedValue = nil
                 layout.forceLayout()
@@ -960,6 +965,26 @@ import SwiftUI
     func debugScroll(by delta: CGFloat) {
         scroll(by: delta)
         readerMoved()
+    }
+
+    /// Binds the row an update would hold, as SwiftUI binds the row the reader's own scroll stops on, for the tour. The
+    /// bound row goes to the top edge, which can make another row the one to hold, so it binds until they agree.
+    func debugBindReader() -> String? {
+        guard let position = layout.position else { return nil }
+        for _ in 0..<3 {
+            let placed = placedRows()
+            guard let reader = TimelineScrollPolicy.readerRow(placed, visibleTop: 0, visibleBottom: layout.height) else { return nil }
+            let row = holdable(reader, among: placed).first ?? reader
+            if position.wrappedValue == row.id { return row.id }
+            position.wrappedValue = row.id
+            layout.forceLayout()
+        }
+        return position.wrappedValue
+    }
+
+    /// Asks for the next older page where the reader is, as reaching the paging lead would, for the tour.
+    func debugLoadOlder() async {
+        _ = await model.loadOlderMessages()
     }
     #endif
 }
