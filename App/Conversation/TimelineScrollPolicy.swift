@@ -101,3 +101,227 @@ enum TimelineScrollPolicy {
         func followsAfterwards(isNearBottom: Bool) -> Bool { follows || isNearBottom }
     }
 }
+
+/// The desktop timeline's decisions (the Mac's SwiftUI scroll view applies them). Positions are in the coordinates of
+/// the scroll view's frame, which sits below the toolbar: 0 is its top edge, and content scrolled under the toolbar has
+/// negative positions.
+extension TimelineScrollPolicy {
+    /// How far above the oldest loaded message older history is asked for in a viewport this tall: two screens, and
+    /// never less than the iPhone's lead. A tall desktop window crosses a fixed 1,200 pt in a flick or two.
+    static func olderHistoryLead(viewportHeight: CGFloat) -> CGFloat { max(olderHistoryLead, 2 * viewportHeight) }
+
+    /// When to ask for older history: while the reader's own scroll (or a key that scrolls) is inside the lead, one
+    /// request at a time. A request that finds nothing more to ask for (the window is at its ceiling, the archive has
+    /// no more or cannot be read now) is not repeated from the same oldest message until the reader leaves the lead and
+    /// comes back, or older messages arrive some other way.
+    struct OlderHistoryRequests: Equatable {
+        /// A request is running.
+        private(set) var inFlight = false
+        /// The oldest loaded message when the last request found nothing more to ask for.
+        private var exhaustedAt: String?
+        /// The running request repeats one that brought nothing yet.
+        private var repeating = false
+
+        init() {}
+
+        /// Whether to ask now. `byReader` is false for programmatic moves (opening the chat, a jump to the newest
+        /// message), which never page.
+        mutating func shouldRequest(oldestID: String?, distanceFromTop: CGFloat, viewportHeight: CGFloat, byReader: Bool) -> Bool {
+            guard distanceFromTop < TimelineScrollPolicy.olderHistoryLead(viewportHeight: viewportHeight) else {
+                exhaustedAt = nil
+                return false
+            }
+            guard byReader, !inFlight, let oldestID, oldestID != exhaustedAt else { return false }
+            inFlight = true
+            return true
+        }
+
+        /// The running request finished. Returns whether to ask once more at once, which keeps the request in flight:
+        /// raising the window over a store that holds no older messages brings nothing, and the archive behind it is
+        /// asked only by the next request.
+        /// - Parameters:
+        ///   - oldestID: the oldest loaded message now.
+        ///   - broughtOlder: older messages arrived while it ran.
+        ///   - mayBringMore: the model says asking again may still bring older messages.
+        mutating func finished(oldestID: String?, broughtOlder: Bool, mayBringMore: Bool) -> Bool {
+            guard mayBringMore else {
+                exhaustedAt = oldestID
+                inFlight = false
+                repeating = false
+                return false
+            }
+            repeating = !broughtOlder && !repeating
+            inFlight = repeating
+            return repeating
+        }
+    }
+
+    /// The jump-to-newest button shows once the reader is more than half a screen above the newest message, so it
+    /// does not blink in and out while reading the last few messages.
+    static func showsJumpToNewest(distanceFromBottom: CGFloat, viewportHeight: CGFloat) -> Bool {
+        distanceFromBottom > max(nearBottomDistance, viewportHeight / 2)
+    }
+
+    /// A row on screen, top to bottom, as the scroll view laid it out.
+    struct PlacedRow: Equatable {
+        let id: String
+        /// Its position in the timeline's rows, for the walk back to the start of its day.
+        let index: Int
+        let top: CGFloat
+        let bottom: CGFloat
+        /// The day header the row opens with, if it starts a day.
+        let dayHeader: String?
+    }
+
+    /// The reader's row: the first message whose top edge is inside the visible area, or, when none starts there (a
+    /// message taller than the area), the one reaching into it from above. Its distance from the top edge, negative in
+    /// that case, is what an update or a resize keeps. Never the loading-earlier row.
+    static func readerRow(_ rows: [PlacedRow], visibleTop: CGFloat, visibleBottom: CGFloat) -> PlacedRow? {
+        let anchorable = rows.filter { canAnchor(on: $0.id) }
+        return anchorable.first { $0.top >= visibleTop - 0.5 && $0.top < visibleBottom }
+            ?? anchorable.first { $0.top < visibleBottom && $0.bottom > visibleTop }
+    }
+
+    /// The `UnitPoint.y` for a scroll-to-row that should leave the row's top edge at `top`. Scrolling to a row with an
+    /// anchor lines up that unit point of the row and of the scroll view's frame: the row's top lands at
+    /// `y × (frameHeight − rowHeight)`. SwiftUI clamps `y` to 0…1, so only tops from
+    /// `reachableTop` can be asked for. Nil when the row is as tall as the frame, where every anchor lands alike.
+    static func anchorY(placingTopAt top: CGFloat, rowHeight: CGFloat, frameHeight: CGFloat) -> CGFloat? {
+        let travel = frameHeight - rowHeight
+        guard abs(travel) > 1 else { return nil }
+        return top / travel
+    }
+
+    /// The nearest top edge to `top` that a scroll to the row can put it at: one that keeps the row inside the frame
+    /// (or, for a row taller than the frame, the frame inside the row).
+    static func reachableTop(_ top: CGFloat, rowHeight: CGFloat, frameHeight: CGFloat) -> CGFloat {
+        let travel = frameHeight - rowHeight
+        return min(max(top, min(0, travel)), max(0, travel))
+    }
+
+    /// The row to scroll to, and the top edge to give it, to move the content by `delta` (positive moves it down,
+    /// towards older messages): the one that carries it furthest without going past `delta` or the wrong way. A scroll
+    /// to a row can only leave it inside the frame or the frame inside it (`reachableTop`), so a row near an edge moves
+    /// less, a row taller than the frame moves only while it covers the frame, and a row off screen would jump to the
+    /// edge. Nil when no row moves the content by more than half a point.
+    static func scrollStep(_ rows: [PlacedRow], by delta: CGFloat, frameHeight: CGFloat) -> (row: PlacedRow, top: CGFloat)? {
+        let steps = rows.compactMap { row -> (row: PlacedRow, top: CGFloat)? in
+            let top = reachableTop(row.top + delta, rowHeight: row.bottom - row.top, frameHeight: frameHeight)
+            let move = top - row.top
+            guard move * delta > 0, abs(move) > 0.5, abs(move) <= abs(delta) + 0.5 else { return nil }
+            return (row, top)
+        }
+        return steps.max { abs($0.top - $0.row.top) < abs($1.top - $1.row.top) }
+    }
+
+    /// Where a move by `delta` lands, when that is past the rows laid out.
+    enum Landing: Equatable {
+        /// The row at `index` with its top edge at `top`: the first row whose top edge is then inside the frame or, when
+        /// none starts there, the message taller than the frame that covers it from above, at its negative offset.
+        case row(index: Int, top: CGFloat)
+        /// Past the oldest row: the start of the content.
+        case start
+        /// Past the newest row, or too close to it to leave the frame filled: the end of the content.
+        case end
+    }
+
+    /// Where moving the content by `delta` (positive moves it down, towards older messages) puts it, when the row that
+    /// lands at the top edge is not laid out: walking on from the laid-out rows by each row's `height`, measured or
+    /// estimated. Stepping through laid-out rows (`scrollStep`) builds every screen on the way; scrolling to where the
+    /// stack places this row and then to the row builds only the rows it lands among. Nil when the landing row is laid
+    /// out, where a step is exact.
+    /// - Parameters:
+    ///   - rows: the rows laid out, top to bottom, at least one.
+    ///   - rowCount: how many rows there are; indices run from 0, the oldest.
+    ///   - lead: the content above the oldest row.
+    ///   - tail: the content below the newest row.
+    static func landing(_ rows: [PlacedRow], by delta: CGFloat, frameHeight: CGFloat, rowCount: Int, lead: CGFloat, tail: CGFloat,
+                        height: (Int) -> CGFloat) -> Landing? {
+        guard let first = rows.first, let last = rows.last else { return nil }
+        if delta > 0 {
+            // Below the top edge, the first laid-out row has the rows above it to walk through; above it, a laid-out
+            // row lands there.
+            var top = first.top + delta
+            guard top >= 0 else { return nil }
+            var index = first.index
+            while index > 0 {
+                let above = top - height(index - 1)
+                if above < 0 { break }
+                index -= 1
+                top = above
+            }
+            if index == 0, top > lead { return .start }
+            // No row starts inside the frame: the one above, which reaches past its top edge, covers it.
+            if top >= frameHeight, index > 0 {
+                index -= 1
+                top -= height(index)
+            }
+            return index == first.index ? nil : .row(index: index, top: top)
+        }
+        guard delta < 0, last.top + delta < 0 else { return nil }
+        var top = last.bottom + delta
+        var index = last.index + 1
+        while index < rowCount, top < 0 {
+            top += height(index)
+            index += 1
+        }
+        if top >= frameHeight {
+            // No row starts inside the frame: the one above covers it, and a step is exact when that one is laid out.
+            guard index - 1 > last.index else { return nil }
+            index -= 1
+            top -= height(index)
+        }
+        guard index < rowCount else { return .end }
+        // The rest of the content has to fill the frame below the row.
+        let below = (index..<rowCount).reduce(tail) { $0 + height($1) }
+        return top + below < frameHeight ? .end : .row(index: index, top: top)
+    }
+
+    /// The floating day chip: which day it shows, where its capsule sits and how visible it is.
+    struct DayChip: Equatable {
+        let text: String
+        /// The capsule's top edge, in the scroll view's coordinates.
+        let top: CGFloat
+        /// Fades out as the next day's header pushes it up under the bars.
+        let opacity: CGFloat
+    }
+
+    /// The day of the message at the top of the screen, once its own header has scrolled past `line` (where the chip's
+    /// capsule rests). The next day's header pushes the chip up and away as it arrives, and a header coming back down
+    /// to the line takes its date back, so the chip and the inline header never show the same day twice.
+    /// - Parameters:
+    ///   - rows: the rows on screen, top to bottom.
+    ///   - dayHeader: the header of the row at an index, for a day that started above the screen.
+    ///   - headerTop: from a row's top edge to its header capsule's top edge.
+    ///   - chipHeight: the capsule's height.
+    static func dayChip(rows: [PlacedRow], dayHeader: (Int) -> String?, line: CGFloat, headerTop: CGFloat, chipHeight: CGFloat) -> DayChip? {
+        // The first row reaching below the line is the one the chip sits over.
+        guard let current = rows.first(where: { $0.bottom > line }) else { return nil }
+        var text: String?
+        var nextHeader: CGFloat?
+        if let header = current.dayHeader {
+            // Its own header is still below the line: that header shows the day, and the chip the day before it.
+            if current.top + headerTop >= line {
+                nextHeader = current.top + headerTop
+            } else {
+                text = header
+            }
+        }
+        if text == nil {
+            // The loaded rows always start with a header, so this walk ends within one day of messages.
+            var index = current.index - 1
+            while index >= 0, text == nil {
+                text = dayHeader(index)
+                index -= 1
+            }
+        }
+        guard let text else { return nil }
+        if nextHeader == nil, let next = rows.first(where: { $0.index > current.index && $0.dayHeader != nil }) {
+            nextHeader = next.top + headerTop
+        }
+        let gap: CGFloat = 6
+        let top = min(line, (nextHeader ?? .infinity) - gap - chipHeight)
+        let push = line - top
+        return DayChip(text: text, top: top, opacity: max(0, min(1, 1 - push / max(1, chipHeight))))
+    }
+}

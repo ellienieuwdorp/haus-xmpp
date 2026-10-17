@@ -44,7 +44,7 @@ enum AppInfo {
 /// licences are.
 struct AboutView: View {
     var body: some View {
-        List {
+        GroupedList {
             Section {
                 VStack(spacing: 10) {
                     AppIconView()
@@ -68,17 +68,8 @@ struct AboutView: View {
                 }
                 .accessibilityIdentifier("licencesRow")
             } footer: {
-                #if os(iOS)
                 legalNotice
-                #endif
             }
-            // A Mac list cuts its section footers to one line, so the notice is a plain row there.
-            #if os(macOS)
-            Section {
-                legalNotice
-                    .listRowSeparator(.hidden)
-            }
-            #endif
         }
         .navigationTitle("About")
         #if os(iOS)

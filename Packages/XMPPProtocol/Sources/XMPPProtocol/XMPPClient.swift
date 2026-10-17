@@ -159,6 +159,14 @@ public actor XMPPClient {
     private var liveness: Task<Void, Never>?
     /// Counts inbound reads; a probe that does not move it means the socket is dead.
     private var inboundActivity: UInt64 = 0
+    #if DEBUG
+    /// The stream `silenceTransport()` cut off.
+    private var silencedGeneration: UUID?
+    /// Until when the stream `holdAcknowledgements(for:)` named answers no `<r/>`, and the stream whose one answer at
+    /// the end is already scheduled.
+    private var heldAcknowledgements: (generation: UUID, until: ContinuousClock.Instant)?
+    private var heldAcknowledgementScheduled: UUID?
+    #endif
     /// Silence longer than this gets a probe; a probe unanswered within `probeTimeout` ends the stream.
     static let silenceInterval: Duration = .seconds(60)
     static let probeTimeout: Duration = .seconds(15)
@@ -578,6 +586,9 @@ public actor XMPPClient {
             while generation == token && attempt == attemptID && !Task.isCancelled {
                 let data = try await Self.receive(conn)
                 guard generation == token, attempt == attemptID else { return }
+                #if DEBUG
+                if silencedGeneration == token { continue }
+                #endif
                 inboundActivity &+= 1
                 for frame in try framer.feed(data) {
                     guard generation == token, attempt == attemptID else { return }
@@ -694,6 +705,19 @@ public actor XMPPClient {
             if node.namespace == "urn:xmpp:sm:3" {
                 guard let streamManagement else { throw XMPPClientError.unexpectedProtocol }
                 if node.name == "r" {
+                    #if DEBUG
+                    if let held = heldAcknowledgements, held.generation == generation, ContinuousClock.now < held.until {
+                        if heldAcknowledgementScheduled != generation {
+                            let token = generation
+                            heldAcknowledgementScheduled = token
+                            Task { [weak self] in
+                                try? await Task.sleep(until: held.until, clock: .continuous)
+                                await self?.releaseHeldAcknowledgement(token)
+                            }
+                        }
+                        return
+                    }
+                    #endif
                     try await writeAcknowledgement()
                 } else if node.name == "a", let h = Self.smCount(node.attributes["h"]) {
                     _ = try await acknowledge(h, streamManagement)
@@ -974,6 +998,73 @@ public actor XMPPClient {
             guard (try? await Task.sleep(for: Self.probeTimeout)) != nil, generation == token else { return }
             if inboundActivity == atProbe { finish("Connection lost", error: XMPPClientError.timedOut); return }
         }
+    }
+
+    /// Asks the server for proof of life now rather than after `silenceInterval` of silence, for a caller with reason
+    /// to doubt the socket (the server pushed for this session, which it does when an acknowledgement is overdue). Any
+    /// inbound bytes within `limit` count as the answer, as in the liveness loop, and without one the stream ends the
+    /// same way, so the owner reconnects. True when the stream answered.
+    public func probeLiveness(within limit: Duration) async -> Bool {
+        guard phase == .online else { return false }
+        let token = generation, seen = inboundActivity, deadline = ContinuousClock.now + limit
+        // Started before the write: a send stuck on a dead socket, or queued behind one, holds the probe no longer than
+        // `limit`. Ending the stream cancels the socket, which completes the stuck send.
+        let watchdog = Task { [weak self] in
+            guard (try? await Task.sleep(until: deadline, clock: .continuous)) != nil else { return }
+            await self?.endUnansweredProbe(token, seen: seen)
+        }
+        defer { watchdog.cancel() }
+        do {
+            if smOffered, streamManagement != nil { try await write("<r xmlns='urn:xmpp:sm:3'/>") }
+            else { Task { [weak self] in _ = try? await self?.requestIQ(type: "get", to: nil, payload: "<ping xmlns='urn:xmpp:ping'/>") } }
+        } catch {
+            // A send that failed on this stream will not carry an answer either; a cancelled caller ends nothing.
+            if !Task.isCancelled { endUnansweredProbe(token, seen: seen) }
+            return false
+        }
+        while generation == token, phase == .online {
+            if inboundActivity != seen { return true }
+            guard ContinuousClock.now < deadline else {
+                endUnansweredProbe(token, seen: seen)
+                return false
+            }
+            guard (try? await Task.sleep(for: .milliseconds(50))) != nil else { return false }
+        }
+        return false
+    }
+
+    #if DEBUG
+    /// Debug builds only: from now on the online stream reads and writes nothing, as when the network path dies without
+    /// an error. Writes still complete and nothing ends the stream: only the liveness loop or `probeLiveness(within:)`
+    /// notices, and the server sees an unresponsive session (overdue acknowledgements, then push). A new stream is not
+    /// affected. False when no stream is online.
+    public func silenceTransport() -> Bool {
+        guard phase == .online else { return false }
+        silencedGeneration = generation
+        return true
+    }
+
+    /// Debug builds only: for `duration` the online stream answers the server's `<r/>` with nothing, then sends one
+    /// `<a/>` and goes on as before. Everything else flows, so a liveness probe is answered, but the server sees its
+    /// acknowledgement overdue (and pushes, if push is enabled) on a healthy session. False when no stream is online.
+    public func holdAcknowledgements(for duration: Duration) -> Bool {
+        guard phase == .online else { return false }
+        heldAcknowledgements = (generation, ContinuousClock.now + duration)
+        return true
+    }
+
+    private func releaseHeldAcknowledgement(_ token: UUID) async {
+        if heldAcknowledgementScheduled == token { heldAcknowledgementScheduled = nil }
+        guard generation == token, phase == .online else { return }
+        do { try await writeAcknowledgement() }
+        catch { if generation == token { finish("Acknowledgement failed", error: error) } }
+    }
+    #endif
+
+    /// Ends the stream `token` unless bytes arrived since `seen`.
+    private func endUnansweredProbe(_ token: UUID, seen: UInt64) {
+        guard generation == token, phase == .online, inboundActivity == seen else { return }
+        finish("Connection lost", error: XMPPClientError.timedOut)
     }
 
     func groupAccount() throws -> String {
@@ -1462,6 +1553,10 @@ public actor XMPPClient {
         guard generation == expectedGeneration else { throw XMPPClientError.connectionClosed }
         guard let connection else { throw XMPPClientError.notConnected }
         let token = generation
+        #if DEBUG
+        // A dead path still takes writes into the socket's buffer.
+        if silencedGeneration == token { return }
+        #endif
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: Data(xml.utf8), completion: .contentProcessed { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }

@@ -9,7 +9,7 @@ struct EncryptionDetailsView: View {
     private var name: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
 
     var body: some View {
-        List {
+        GroupedList {
             if let overview = model.encryptionOverview(for: chatID) {
                 if overview.hasIncompatibleDevices {
                     Section { Label(otherVersionNotice(overview), systemImage: "info.circle").font(.subheadline) }
@@ -130,6 +130,12 @@ extension EncryptionDevice {
     }
     /// Trailing coloured status label; doubles as the fingerprint sheet's hero glyph.
     var badge: DeviceBadge { trust.badge }
+
+    /// A device of the account or a contact. Nothing published says what kind of device it is (an OMEMO device is an
+    /// ID and a key), so it is drawn as any device, never as a phone or a computer.
+    static let symbol = "laptopcomputer.and.iphone"
+    /// A device that is no longer advertised, or one being removed from the account.
+    static let removedSymbol = "minus.circle"
 }
 
 extension DeviceTrust {
@@ -149,25 +155,41 @@ struct DeviceRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "iphone")
-                .font(.system(size: 18)).foregroundStyle(.secondary)
+            Image(systemName: EncryptionDevice.symbol)
+                .font(.system(size: 14)).foregroundStyle(.secondary)
                 .frame(width: 36, height: 36)
                 .background(Color.tertiaryFill, in: Circle())
+            #if os(macOS)
+            // The inspector is a third of a phone's width: the status goes under the device's name, not beside it.
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Device \(String(device.deviceID))").foregroundStyle(.primary)
+                statusLabel
+            }
+            Spacer(minLength: 8)
+            #else
             Text("Device \(String(device.deviceID))").foregroundStyle(.primary)
             Spacer(minLength: 8)
-            // A plain HStack, not a Label: List pads a Label's icon column to body metrics and leaves a gap.
-            HStack(spacing: 4) {
-                Image(systemName: device.active ? device.badge.symbol : "iphone.slash")
-                Text(status ?? device.reviewStatus).multilineTextAlignment(.trailing)
-            }
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(device.active ? device.badge.color : .secondary)
-            .layoutPriority(1)
+            statusLabel.layoutPriority(1)
+            #endif
             Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
         }
         .frame(minHeight: 44)
         // The Spacer is not hittable on its own under a plain button style: the whole row is the target.
         .contentShape(Rectangle())
+    }
+
+    // A plain HStack, not a Label: List pads a Label's icon column to body metrics and leaves a gap.
+    private var statusLabel: some View {
+        HStack(spacing: 4) {
+            Image(systemName: device.active ? device.badge.symbol : EncryptionDevice.removedSymbol)
+            #if os(macOS)
+            Text(status ?? device.reviewStatus)
+            #else
+            Text(status ?? device.reviewStatus).multilineTextAlignment(.trailing)
+            #endif
+        }
+        .font(.footnote.weight(.semibold))
+        .foregroundStyle(device.active ? device.badge.color : .secondary)
     }
 }
 
@@ -208,7 +230,7 @@ struct DeviceFingerprintSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            GroupedList {
                 Section {
                     VStack(spacing: 6) {
                         Image(systemName: device.badge.symbol)
@@ -236,13 +258,13 @@ struct DeviceFingerprintSheet: View {
                         }
                         .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.glassProminent)
+                    .prominentActionStyle()
                     .frame(maxWidth: .infinity)
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 10, trailing: 0)).listRowSeparator(.hidden)
                     Button { review(.accepted) } label: {
                         Text("Accept without verifying").frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.glass)
+                    .secondaryActionStyle()
                     .frame(maxWidth: .infinity)
                     .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
                 }
@@ -251,6 +273,7 @@ struct DeviceFingerprintSheet: View {
                 if allowsMaintenance && device.active && device.trust.permitsEncryption {
                     Section {
                         Button("Repair encryption session", systemImage: "arrow.trianglehead.2.clockwise.rotate.90") { confirmingRepair = true }
+                            .listRowButton()
                             .disabled(!model.session.isReady)
                     } footer: { Text("Use this if messages from this device cannot be opened.") }
                 }
@@ -258,6 +281,7 @@ struct DeviceFingerprintSheet: View {
                     Button(role: .destructive) { if rejectionMessage == nil { review(.rejected) } else { confirmingRejection = true } } label: {
                         Label("Block this device", systemImage: "hand.raised").foregroundStyle(.red)
                     }
+                    .listRowButton()
                     .disabled(!device.active)
                     // Anchored to its button, so the dialog's popover points at what it confirms.
                     .confirmationDialog("Don’t trust device \(String(device.deviceID))?", isPresented: $confirmingRejection, titleVisibility: .visible) {
@@ -265,23 +289,20 @@ struct DeviceFingerprintSheet: View {
                     } message: { Text(rejectionMessage ?? "") }
                     if allowsMaintenance && device.active && device.jid == model.accountID {
                         Button(role: .destructive) { confirmingRetirement = true } label: {
-                            Label("Remove old device", systemImage: "iphone.slash").foregroundStyle(.red)
+                            Label("Remove old device", systemImage: EncryptionDevice.removedSymbol).foregroundStyle(.red)
                         }
+                        .listRowButton()
                         .disabled(!model.session.isReady)
                     }
                 } footer: {
-                    Text(device.active
-                         ? (allowsMaintenance && device.jid == model.accountID
-                            ? "Blocked devices are left out of new messages, and what they send is never opened. Removing an old device takes it off your account’s advertised devices; sign out on it first, or it may advertise itself again."
-                            : "Blocked devices are left out of new messages, and what they send is never opened.")
-                         : "No longer advertised. Its fingerprint is read-only.")
+                    Text(device.active ? blockingFooter : "No longer advertised. Its fingerprint is read-only.")
                 }
             }
             .navigationTitle("Device \(String(device.deviceID))")
             // A device ID can publish in both versions, each with its own fingerprint encoding: name the one being compared.
             .navigationSubtitle("\(device.jid) · \(versions ?? device.profile.label)")
             .inlineNavigationTitle()
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { dismiss() }.labelStyle(.iconOnly) } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { dismiss() }.closeButtonLabel() } }
             .confirmationDialog("Repair this encryption session?", isPresented: $confirmingRepair, titleVisibility: .visible) {
                 Button("Repair session") {
                     dismiss()
@@ -295,5 +316,17 @@ struct DeviceFingerprintSheet: View {
                 }
             } message: { Text("It will be removed from your account’s advertised encryption devices. Previous messages cannot be recalled.") }
         }
+        .macSheetSize(width: 460, height: 620)
+    }
+
+    /// What blocking does: a 1:1 chat and the account's own devices leave a blocked device out, while another member's
+    /// blocked device holds a group's sends (`ChatDeviceReview.holds`).
+    private var blockingFooter: String {
+        if model.isGroup(chatID) && device.jid != model.accountID {
+            return "Blocking another member’s device pauses sending to the whole group, and nothing it sends is opened."
+        }
+        return allowsMaintenance && device.jid == model.accountID
+            ? "Blocked devices are left out of new messages, and what they send is never opened. Removing an old device takes it off your account’s advertised devices; sign out on it first, or it may advertise itself again."
+            : "Blocked devices are left out of new messages, and what they send is never opened."
     }
 }

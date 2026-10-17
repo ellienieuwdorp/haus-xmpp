@@ -43,6 +43,12 @@ struct TypingTracker {
         settling.insert(key)
     }
 
+    /// Everyone in this chat stops typing at once, as when its contact is blocked.
+    mutating func clear(chat: String) {
+        for key in expiries.keys where key.chat == chat { expiries[key] = nil }
+        settling = settling.filter { $0.chat != chat }
+    }
+
     mutating func flushSettled() {
         for key in settling { expiries[key] = nil }
         settling = []

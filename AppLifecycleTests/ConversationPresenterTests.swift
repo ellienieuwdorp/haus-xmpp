@@ -31,7 +31,8 @@ final class ConversationPresenterTests: XCTestCase {
         func isGroup(_ chatID: String) -> Bool { groups.contains(chatID) }
         func canSend(to chatID: String) -> Bool { true }
         func canReact(to message: StoredMessage) -> Bool { reactable }
-        func canRevise(_ message: StoredMessage) -> Bool { false }
+        var revisable: Set<String> = []
+        func canRevise(_ message: StoredMessage) -> Bool { revisable.contains(message.id) }
         func isBackfilling(chat: String) -> Bool { false }
         var blocked: Set<String> = []
         func isBlocked(_ chatID: String) -> Bool { blocked.contains(chatID) }
@@ -291,6 +292,18 @@ final class ConversationPresenterTests: XCTestCase {
     }
 
     /// Opening a chat never flashes "No messages yet" while its first page is on the way.
+    /// Up-arrow edits what the bubble's menu would: the newest own message the chat lets us rewrite, skipping a file
+    /// with no caption (nothing to edit) and one that can no longer be revised.
+    func testUpArrowEditsTheNewestMessageThatOffersEdit() {
+        source.messages = [message("older", from: Self.account, body: "First"), message("photo", from: Self.account, body: ""),
+                           message("received"), message("locked", from: Self.account, body: "Too late")]
+        XCTAssertNil(presenter().newestEditable)
+        source.revisable = ["older", "photo"]
+        XCTAssertEqual(presenter().newestEditable?.id, "older")
+        source.revisable.insert("locked")
+        XCTAssertEqual(presenter().newestEditable?.id, "locked")
+    }
+
     func testOnlyALoadedEmptyChatSaysSo() {
         func notice(isEmpty: Bool = true, loadedFor: String?, search: String = "", starred: Bool = false) -> String? {
             ConversationPresenter.emptyNotice(isEmpty: isEmpty, loadedFor: loadedFor, chatID: "alex", searchTerm: search, starredOnly: starred)?.title

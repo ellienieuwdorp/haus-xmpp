@@ -26,11 +26,13 @@ struct SettingsView: View {
         }
     }
 
-    /// Every signed-in account (the sample conversations have none); DEBUG's notification harness shows it signed out
-    /// too, for captures.
+    /// Every signed-in account (the sample conversations have none); in DEBUG, the iPhone's notification harness and the
+    /// Mac's `-haus-notification-settings` show it signed out too, for captures.
     private var showsNotificationSettings: Bool {
         #if DEBUG && os(iOS)
         if NotificationHarness.isRequested { return true }
+        #elseif DEBUG
+        if MacDebugHooks.has("-haus-notification-settings") { return true }
         #endif
         return !model.accountID.isEmpty && !model.isDemo
     }
@@ -46,7 +48,21 @@ struct SettingsView: View {
     }
 
     private var settings: some View {
-        List {
+        GroupedList {
+            #if os(macOS)
+            // A Mac settings pane: who is signed in, with the account's actions as push buttons beside it.
+            Section {
+                LabeledContent {
+                    HStack {
+                        if model.session.isConnected {
+                            Button("Disconnect") { Task { await model.disconnect() } }
+                        }
+                        Button(model.accountID.isEmpty || model.isDemo ? "Sign In…" : "Switch Account…") { showingConnection = true }
+                            .accessibilityIdentifier("accountSignIn")
+                    }
+                } label: { profileCard }
+            }
+            #else
             Section {
                 Button { showingConnection = true } label: { profileCard }
                     .buttonStyle(.plain)
@@ -57,10 +73,9 @@ struct SettingsView: View {
                     Button("Disconnect") { Task { await model.disconnect() } }
                 }
             }
+            #endif
             if showsNotificationSettings {
                 Section {
-                    // The Mac registers no push yet, so it shows only the preferences that also apply to
-                    // the notifications it posts itself.
                     #if os(iOS)
                     // On while push is on or being set up; a status that reads "Off" shows it off.
                     Toggle(isOn: Binding(get: { model.pushWanted && ![.off, .notAllowed].contains(model.pushStatus) },
@@ -90,7 +105,9 @@ struct SettingsView: View {
                         }
                     }
                     #else
-                    MacNotificationPermissionRow(model: model)
+                    // A Mac build without push (`PushService.isOffered`) shows only the permission, which its own
+                    // banners need.
+                    if PushService.isOffered { MacPushNotificationRows(model: model) } else { MacNotificationPermissionRow(model: model) }
                     #endif
                     Toggle("Message previews", isOn: Binding(get: { model.notificationPreviewsEnabled },
                         set: { enabled in Task { await model.setNotificationPreviews(enabled) } }))
@@ -169,6 +186,7 @@ struct SettingsView: View {
                 } label: {
                     Label { Text("Explore sample conversations") } icon: { SettingsIconTile(systemName: "sparkles", color: .blue) }
                 }
+                .listRowButton()
                 .accessibilityIdentifier("exploreSamples")
                 .confirmationDialog("Explore sample conversations?", isPresented: $confirmingSamples, titleVisibility: .visible) {
                     Button("Sign Out and Explore") { Task { await model.loadDemo() } }
@@ -182,6 +200,7 @@ struct SettingsView: View {
                         Label { Text("Transfer to another app or device…") } icon: { SettingsIconTile(systemName: "shippingbox.and.arrow.backward.fill", color: .indigo) }
                     }
                     .foregroundStyle(.primary)
+                    .listRowButton()
                     .accessibilityIdentifier("transferAccount")
                 }
                 .sheet(isPresented: $showingTransfer) { TransferIntroView(model: model).macSheetSize(width: 460, height: 480).themedRoot() }
@@ -191,6 +210,7 @@ struct SettingsView: View {
                         Label { Text("Restore from a transfer…") } icon: { SettingsIconTile(systemName: "arrow.down.app.fill", color: .indigo) }
                     }
                     .foregroundStyle(.primary)
+                    .listRowButton()
                     .accessibilityIdentifier("restoreTransferRow")
                 }
                 .sheet(isPresented: $showingRestore) { RestoreTransferView(model: model).themedRoot() }
@@ -215,6 +235,7 @@ struct SettingsView: View {
                         }
                     }
                     .foregroundStyle(.primary)
+                    .listRowButton()
                     .accessibilityIdentifier("previousVersionBackupRow")
                 } footer: {
                     // Asked, never done on a clock reading: the clock can jump.
@@ -231,6 +252,7 @@ struct SettingsView: View {
                         }
                     }
                     .foregroundStyle(.primary)
+                    .listRowButton()
                     .accessibilityIdentifier("previousVersionBackupRow")
                 } footer: {
                     Text("A backup is on this \(ThisDevice.noun) but its description could not be read, so it cannot be restored.")
@@ -261,6 +283,7 @@ struct SettingsView: View {
                     Label { Text("Contact support") } icon: { SettingsIconTile(systemName: "envelope.fill", color: .blue) }
                 }
                 .foregroundStyle(.primary)
+                .listRowButton()
                 .accessibilityHint("Writes an email to \(AppInfo.supportAddress)")
                 .accessibilityIdentifier("contactSupport")
                 ExternalLinkRow(title: "Support website", url: AppInfo.support, systemName: "questionmark", color: .green)
@@ -273,6 +296,10 @@ struct SettingsView: View {
             Section {
                 Button("Sign Out", role: .destructive) { confirmingSignOut = true }
                     .disabled(model.accountID.isEmpty)
+                    #if os(macOS)
+                    // A Mac form's closing action sits at its trailing edge.
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    #endif
             }
         }
         .navigationTitle("Settings")
@@ -294,36 +321,70 @@ struct SettingsView: View {
 
     private var profileCard: some View {
         HStack(spacing: 14) {
-            ChatAvatar(key: model.accountID, name: localPart, image: model.avatars[model.accountID], size: 60)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(localPart.isEmpty ? "Not signed in" : localPart).font(.title3.weight(.bold))
-                if !model.accountID.isEmpty {
-                    Text(model.accountID).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            ChatAvatar(key: model.accountID, name: localPart, image: model.avatars[model.accountID], size: ProfileCardMetrics.avatar)
+            #if os(macOS)
+            // The sample account's ID is a bare domain, which would read as the name and the address both.
+            if model.isDemo {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Sample conversations").font(.title3.weight(.bold))
+                    Text("Stored on this \(ThisDevice.noun); nothing is sent").font(.subheadline).foregroundStyle(.secondary)
                 }
-                HStack(spacing: 6) {
-                    Circle().fill(status.color).frame(width: 8, height: 8)
-                    Text(status.text)
-                }
-                .font(.footnote).foregroundStyle(.secondary)
+            } else {
+                profileText
             }
+            #else
+            profileText
             Spacer(minLength: 0)
             Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+            #endif
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
     }
+
+    private var profileText: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(localPart.isEmpty ? "Not signed in" : localPart).font(.title3.weight(.bold))
+            if !model.accountID.isEmpty {
+                Text(model.accountID).font(.subheadline).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+            HStack(spacing: 6) {
+                Circle().fill(status.color).frame(width: 8, height: 8)
+                Text(status.text)
+            }
+            .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
 }
 
-/// 30pt rounded colour tile with a white glyph, like iOS Settings rows.
+/// Rounded colour tile with a white glyph, like the rows of iOS Settings (30 pt) and System Settings on the Mac (22 pt).
 struct SettingsIconTile: View {
     let systemName: String
     let color: Color
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
+        RoundedRectangle(cornerRadius: IconTileMetrics.radius, style: .continuous)
             .fill(color)
-            .frame(width: 30, height: 30)
-            .overlay { Image(systemName: systemName).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white) }
+            .frame(width: IconTileMetrics.side, height: IconTileMetrics.side)
+            .overlay { Image(systemName: systemName).font(.system(size: IconTileMetrics.glyph, weight: .semibold)).foregroundStyle(.white) }
             .accessibilityHidden(true)
     }
+}
+
+/// The profile card's avatar: the iPhone's large card, and a Mac pane's account row.
+private enum ProfileCardMetrics {
+    #if os(iOS)
+    static let avatar: CGFloat = 60
+    #else
+    static let avatar: CGFloat = 48
+    #endif
+}
+
+/// The settings and details rows' icon tiles: iOS Settings' size on the iPhone, System Settings' on the Mac.
+enum IconTileMetrics {
+    #if os(iOS)
+    static let side: CGFloat = 30, radius: CGFloat = 8, glyph: CGFloat = 15
+    #else
+    static let side: CGFloat = 22, radius: CGFloat = 6, glyph: CGFloat = 12
+    #endif
 }

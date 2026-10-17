@@ -29,6 +29,33 @@ import XMPPProtocol
         XCTAssertEqual(PushStatus.gate(for: .denied, interactive: true), .notAllowed)
     }
 
+    /// The Mac registers only while alerts may show: under quiet delivery macOS skips the extension, so a push would
+    /// add the gateway's generic text beside the app's own notification.
+    func testMacGateNeedsAlerts() {
+        XCTAssertNil(PushStatus.gate(for: .authorized, alertStyle: .banner, interactive: false))
+        XCTAssertNil(PushStatus.gate(for: .authorized, alertStyle: .alert, interactive: false))
+        XCTAssertEqual(PushStatus.gate(for: .authorized, alertStyle: .none, interactive: false), .notAllowed)
+        XCTAssertEqual(PushStatus.gate(for: .provisional, alertStyle: .none, interactive: false), .notAllowed)
+        XCTAssertEqual(PushStatus.gate(for: .denied, alertStyle: .none, interactive: true), .notAllowed)
+        XCTAssertNil(PushStatus.gate(for: .notDetermined, alertStyle: .none, interactive: true))
+        XCTAssertEqual(PushStatus.gate(for: .notDetermined, alertStyle: .none, interactive: false), .off)
+    }
+
+    /// A reconnect stopped at Off because nobody had answered the prompt; an answer given from Settings finishes that
+    /// setup, including a no (the setup itself then reports Not Allowed). A switch turned off, a setup that is not
+    /// stopped, a prompt still unanswered and a build without push start nothing.
+    func testAnsweredPromptResumesOnlyASetupStoppedForIt() {
+        for answer: UNAuthorizationStatus in [.authorized, .provisional, .denied] {
+            XCTAssertTrue(PushStatus.resumesSetup(after: answer, status: .off, wanted: true, offered: true), "\(answer.rawValue)")
+        }
+        XCTAssertFalse(PushStatus.resumesSetup(after: .authorized, status: .off, wanted: false, offered: true), "turned off")
+        XCTAssertFalse(PushStatus.resumesSetup(after: .notDetermined, status: .off, wanted: true, offered: true), "unanswered")
+        XCTAssertFalse(PushStatus.resumesSetup(after: .authorized, status: .off, wanted: true, offered: false), "no push in this build")
+        for status: PushStatus in [.on, .settingUp, .notAllowed, .unsupported, .unreachable] {
+            XCTAssertFalse(PushStatus.resumesSetup(after: .authorized, status: status, wanted: true, offered: true), "\(status)")
+        }
+    }
+
     func testFailuresMapToTheSettingsCopy() {
         XCTAssertEqual(PushStatus.after(XMPPNotificationError.pushUnavailable), .unsupported)
         XCTAssertEqual(PushStatus.after(PushRegistration.Failure.denied), .notAllowed)

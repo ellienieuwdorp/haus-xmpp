@@ -36,6 +36,8 @@ final class AppModel {
     /// The chat list has been read from storage for the current account. Until then the Chats screen shows nothing:
     /// a cold start of a signed-in account must not flash the "no conversations" state before its rows arrive.
     private(set) var hasLoadedChats = false
+    /// Retained ciphertext per chat at the last chat-list load, so a resolved review can clear its notification.
+    @ObservationIgnored private var reviewCounts: [String: Int] = [:]
     private(set) var messages: [ChatMessage] = []
     /// The chat whose messages `messages` currently holds; nil while a load is pending.
     private(set) var messagesLoadedFor: String?
@@ -178,6 +180,8 @@ final class AppModel {
     @ObservationIgnored private var activeEncryptionOperations = 0
     @ObservationIgnored private var acquiringOwnership = false
     @ObservationIgnored private var hasTransportOwnership = false
+    /// Answers the notification extension's liveness handshake (`startLivenessResponder`).
+    @ObservationIgnored private var livenessResponder: AppLiveness.Responder?
     /// Background time begun when a release from the background left the kernel lock held (`releaseLeaseInBackground`):
     /// the app is not suspended holding it. The next release that frees the lock ends it.
     @ObservationIgnored private var unreleasedLease: BackgroundActivity?
@@ -257,6 +261,12 @@ final class AppModel {
     @ObservationIgnored private var opportunisticBackfillDone = false
     /// Per connection: this connection's forward walk has finished, so the single archive query is free.
     @ObservationIgnored private var archiveWalkFinished = false
+    /// A room's join boundary query (`ArchiveSynchronizer.roomJoinBoundary`) holds the archive query: no backfill starts.
+    @ObservationIgnored private var joinBoundaryQueries = 0
+    /// Rooms this model asked to join, by connection, with their archive's newest time before the join. Recorded as the
+    /// room's read baseline once its own presence admits us on that connection (`updateGroupPresence`); a refusal drops
+    /// it, another connection ignores it, and a later join asks again.
+    @ObservationIgnored private var joinBoundaries: [String: (token: UUID, historyThrough: Date)] = [:]
     /// Per connection: archives (account or room JID) with nothing more to backfill, or whose server refused, so a
     /// reach-top, which fires on every scroll frame near the top, does not ask again.
     @ObservationIgnored private var backfillSettled: Set<String> = []
@@ -283,8 +293,13 @@ final class AppModel {
     /// Notification permission as last read; foreground banners are posted only with it.
     @ObservationIgnored private var mayPostNotifications = false
     #if os(macOS)
-    /// The Mac's notification permission as last read, for Settings. iOS shows push status instead.
+    /// The Mac's notification permission as last read, for Settings, which shows it with the push status.
     private(set) var notificationAuthorization = UNAuthorizationStatus.notDetermined
+    /// How the Mac shows this app's notifications as last read: `.none` delivers quietly to Notification Center, even
+    /// with the permission granted.
+    private(set) var notificationAlertStyle = UNAlertStyle.none
+    /// The permission prompt on screen, which every caller that comes meanwhile waits for (`requestNotificationPermission`).
+    @ObservationIgnored private var permissionRequest: Task<Void, Never>?
     #endif
     /// Per connection, where banners for what it catches up on stand (`AttentionRules.holdsCatchUpBanners`, the Mac).
     @ObservationIgnored private var catchUpBanners = CatchUpBanners.holding
@@ -395,6 +410,7 @@ final class AppModel {
                     await self?.receivePushToken(token)
                 }
             }
+            startLivenessResponder()
         }
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let usable = path.status == .satisfied
@@ -569,11 +585,16 @@ final class AppModel {
             // Long enough to cross several timeline pages; only tests and scroll checks ask for it.
             if ProcessInfo.processInfo.arguments.contains("-demo-long") {
                 let chatID = "history@preview.local"
+                // With -demo-tall, message 200 runs to 80 lines, taller than a window, for scroll checks inside it.
+                let tall = ProcessInfo.processInfo.arguments.contains("-demo-tall")
                 try await store.upsertChat(accountID: account, chatID: chatID, title: "History")
                 for index in 1...250 {
+                    let lines = tall && index == 200 ? (1...80).map { "\nLine \($0) of a message taller than the window." }.joined() : ""
                     try await store.insertMessage(StoredMessage(id: "sample-history-\(index)", accountID: account, chatID: chatID, senderID: index.isMultiple(of: 3) ? account : chatID,
-                                                                body: "History message \(index)" + (index.isMultiple(of: 7) ? ", with a second sentence so some bubbles wrap onto another line." : ""),
-                                                                sentAt: Date(timeIntervalSince1970: 1_789_300_000 + Double(index) * 60), isOutgoing: index.isMultiple(of: 3)))
+                                                                body: "History message \(index)" + (index.isMultiple(of: 7) ? ", with a second sentence so some bubbles wrap onto another line." : "") + lines,
+                                                                sentAt: Date(timeIntervalSince1970: 1_789_300_000 + Double(index) * 60), isOutgoing: index.isMultiple(of: 3),
+                                                                // Received messages carry their sender's ID, as a quote of one names it.
+                                                                wireID: index.isMultiple(of: 3) ? nil : "history-wire-\(index)"))
                 }
             }
             #endif
@@ -605,10 +626,47 @@ final class AppModel {
                 }
             }
             #endif
+            #if DEBUG
+            // Two of Alex's sends that failed, for the retry dialog's captures: a message the server returned, and a file
+            // failed when encryption was set up again, which can never be retried. Failing them takes the store's lease
+            // as the foreground does; nothing is sent, since the outbox never runs for the samples.
+            if ProcessInfo.processInfo.arguments.contains("-demo-failed") {
+                do {
+                    try await acquireForegroundOwnership(store, token: token)
+                    let file = StoredAttachment(name: "boathouse-plan.pdf", mediaType: "application/pdf", size: 48_213, hash: String(repeating: "0", count: 64),
+                                                secret: Data([0]), url: "https://example.org/upload/boathouse-plan.pdf", uploadState: .uploaded)
+                    let failed = [(StoredMessage(id: "sample-failed-0", accountID: account, chatID: DemoSamples.alex, senderID: account, body: "Did the photo come through?",
+                                                 sentAt: morning.addingTimeInterval(10), isOutgoing: true, wireID: "sample-failed-0"), "service-unavailable"),
+                                  (StoredMessage(id: "sample-failed-1", accountID: account, chatID: DemoSamples.alex, senderID: account, body: "",
+                                                 sentAt: morning.addingTimeInterval(11), isOutgoing: true, wireID: "sample-failed-1", attachment: file),
+                                   MessageStore.encryptionResetRejection)]
+                    for (message, rejection) in failed {
+                        try await store.enqueueOutgoing(message)
+                        guard let submission = try await store.claimNextOutgoing(accountID: account, messageIDs: [message.id]) else { continue }
+                        try await store.finishOutgoingSubmission(submission)
+                        try await store.rejectOutgoing(accountID: account, chatID: message.chatID, wireID: message.id, rejection: rejection)
+                    }
+                } catch { Self.syncLog.error("demo failed sends not added: \(String(describing: error), privacy: .public)") }
+            }
+            #endif
             guard generation == token else { return }
             #if DEBUG
             // Two own devices waiting for review, so the account-level prompt can be seen without a second client.
             if ProcessInfo.processInfo.arguments.contains("-demo-own-device") { ownDevices = OwnDeviceReview.sampleDevices(account: account) }
+            // A joined group whose members' devices are in each review state, for captures of the group's details.
+            if ProcessInfo.processInfo.arguments.contains("-demo-group") {
+                let room = OwnDeviceReview.sampleRoom
+                try await store.upsertChat(accountID: account, chatID: room, title: "Trail crew")
+                try await store.insertMessage(StoredMessage(id: "sample-group-1", accountID: account, chatID: room, senderID: room + "/Alex",
+                                                            body: "Who’s bringing the map?", sentAt: morning.addingTimeInterval(-600), isOutgoing: false))
+                try await store.markChatRead(accountID: account, chatID: room)
+                guard generation == token else { return }
+                var group = GroupChatState(members: [account, DemoSamples.alex, DemoSamples.maya], devices: OwnDeviceReview.sampleGroupDevices(account: account))
+                group.joined = true
+                group.localDeviceID = 31337
+                group.localFingerprint = OwnDeviceReview.sampleIdentities[0].modern.map { String(format: "%02x", $0) }.joined()
+                groupChats[room] = group
+            }
             #endif
             await refresh()
         } catch { if generation == token { self.error = "Could not load sample conversations." } }
@@ -726,8 +784,9 @@ final class AppModel {
             // sign-in sheet closes now, and the permission prompt, APNs and the gateway round trips follow on their own.
             startPushSetup(client: connection, session: connected, token: token, interactive: manual)
             #if os(macOS)
-            // Push stays off on the Mac, but its own banners need permission: asked on a manual sign-in, as iOS asks
-            // in its push setup, and only if it was never asked.
+            // The Mac's own banners need permission whether or not it registers for push (`PushService.isOffered`), or
+            // the server supports it: asked on a manual sign-in, as iOS asks in its push setup, and only if it was
+            // never asked. A push setup that asks too waits for this prompt.
             if manual { Task { await requestNotificationPermission() } }
             #endif
             return true
@@ -848,6 +907,10 @@ final class AppModel {
             setAppBadge(0)
             // Donated communication interactions name this account's contacts, rooms and avatars: they go with it.
             await CommunicationHistory.deleteAll()
+        } else if badgeUsesDockTile {
+            // A test session's count lives only on the Mac's Dock tile, and goes with the session.
+            appBadge = nil
+            setAppBadge(0)
         }
         sessionAccount = nil
         pushStatus = .off
@@ -1548,10 +1611,14 @@ final class AppModel {
         let token = generation
         guard let client, let session = sessionAccount, isConnected else {
             // The next connection finishes the setup; asked now, permission needs no prompt then.
+            #if os(macOS)
+            await requestNotificationPermission()
+            #else
             if await Self.notificationAuthorization() == .notDetermined {
                 _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
                 refreshNotificationPermission()
             }
+            #endif
             if generation == token, pushWanted { pushStatus = .settingUp }
             return
         }
@@ -1560,17 +1627,36 @@ final class AppModel {
     }
 
     #if os(macOS)
-    /// Asks for permission to show banners (alert, sound, badge), if it was never asked. Nothing registers for push.
-    /// After a manual sign-in, and from Settings.
+    /// Asks for permission to show banners (alert, sound, badge), if it was never asked. After a manual sign-in, from
+    /// Settings, and from a push setup that may ask; callers that come while the prompt is up wait for its answer, so
+    /// one sign-in shows one prompt.
     func requestNotificationPermission() async {
         guard testSessionID == nil, !isDemo, !accountID.isEmpty else { return }
         #if DEBUG
         // A scripted check never puts a system prompt on screen.
-        if MacUnobtrusive.isOn || MacDebugNotificationLog.poster != nil { return }
+        if MacUnobtrusive.isOn || MacDebugNotificationLog.mode != nil { return }
         #endif
-        guard await Self.notificationAuthorization() == .notDetermined else { refreshNotificationPermission(); return }
-        _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+        if let permissionRequest { await permissionRequest.value; return }
+        let request = Task { @MainActor in
+            guard await Self.notificationAuthorization() == .notDetermined else { return }
+            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+        }
+        permissionRequest = request
+        await request.value
+        if permissionRequest == request { permissionRequest = nil }
         refreshNotificationPermission()
+    }
+
+    /// Settings' Allow Notifications button: asks, and then finishes a push setup that stopped at the unanswered prompt
+    /// on this connection (`PushStatus.resumesSetup`), after any setup still running has settled.
+    func allowNotifications() async {
+        await requestNotificationPermission()
+        await pushTask?.value
+        let authorization = await Self.notificationAuthorization()
+        guard PushStatus.resumesSetup(after: authorization, status: pushStatus, wanted: pushWanted, offered: PushService.isOffered),
+              let client, let session = sessionAccount, isConnected else { return }
+        startPushSetup(client: client, session: session, token: generation, interactive: false)
+        await pushTask?.value
     }
     #endif
 
@@ -1584,16 +1670,7 @@ final class AppModel {
         pushStatus = .off
         let token = generation
         do {
-            let enabled = sessionAccount?.accountID == account ? sessionAccount?.push : nil
-            guard let state = try PushRegistrationState.turningOff(accountID: account, saved: try PushRegistrationState.load(accountID: account),
-                                                                   enabled: enabled) else { return }
-            try state.save()
-            if let session = sessionAccount, session.accountID == account, session.push != nil {
-                // The extension's guard declines from now on.
-                let saved = session.replacingPush(nil)
-                try saved.save()
-                sessionAccount = saved
-            }
+            guard try stagePushTurnOff(account: account) else { return }
             guard let client, isConnected, hasTransportOwnership, transportWanted, !quiescing, generation == token else { return }
             activeEncryptionOperations += 1
             defer { activeEncryptionOperations -= 1 }
@@ -1601,6 +1678,21 @@ final class AppModel {
         } catch {
             if generation == token, accountID == account { Self.syncLog.error("push revocation will retry on reconnect") }
         }
+    }
+
+    /// Stages the revocation and the disable of the account's subscription for `settlePushCleanup`, and takes the
+    /// subscription out of the saved account, so the extension's guard declines from now on. False when there is none.
+    @discardableResult private func stagePushTurnOff(account: String) throws -> Bool {
+        let enabled = sessionAccount?.accountID == account ? sessionAccount?.push : nil
+        guard let state = try PushRegistrationState.turningOff(accountID: account, saved: try PushRegistrationState.load(accountID: account),
+                                                               enabled: enabled) else { return false }
+        try state.save()
+        if let session = sessionAccount, session.accountID == account, session.push != nil {
+            let saved = session.replacingPush(nil)
+            try saved.save()
+            sessionAccount = saved
+        }
+        return true
     }
 
     /// Queues `reconcilePush` behind any setup still running (a reconnect during the permission prompt waits for the
@@ -1627,17 +1719,15 @@ final class AppModel {
             do {
                 activeEncryptionOperations += 1
                 defer { activeEncryptionOperations -= 1 }
+                // A build that offers no push (`PushService.isOffered`, the Mac for now) keeps no subscription: one a
+                // run that offered it left behind is turned off, whatever the switch said.
+                if !PushService.isOffered, sessionAccount?.accountID == account, sessionAccount?.push != nil {
+                    try stagePushTurnOff(account: account)
+                }
                 try await settlePushCleanup(client: client, account: account, token: token)
                 guard generation == token, pushIntent == intent else { return }
-                guard pushWanted else { pushStatus = .off; return }
-                #if os(macOS)
-                // Push is gated off on the Mac until its extension and token registration exist. Stored
-                // cleanup above still runs; nothing registers.
-                pushStatus = .off
-                return
-                #else
+                guard pushWanted, PushService.isOffered else { pushStatus = .off; return }
                 supported = try await client.supportsPushNotifications()
-                #endif
             }
             guard generation == token, pushIntent == intent else { return }
             guard supported else { pushStatus = .unsupported; return }
@@ -1645,12 +1735,32 @@ final class AppModel {
             if authorization == .notDetermined, interactive {
                 // Asks on the first sign-in only (a reconnect at launch never prompts).
                 if pushStatus != .on { pushStatus = .settingUp }
+                #if os(macOS)
+                await requestNotificationPermission()
+                #else
                 _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
                 refreshNotificationPermission()
+                #endif
                 authorization = await Self.notificationAuthorization()
             }
             guard generation == token, pushIntent == intent else { return }
+            #if os(macOS)
+            let (_, alertStyle) = await Self.notificationPermission()
+            guard generation == token, pushIntent == intent else { return }
+            if let stop = PushStatus.gate(for: authorization, alertStyle: alertStyle, interactive: false) {
+                if sessionAccount?.accountID == account, sessionAccount?.push != nil {
+                    activeEncryptionOperations += 1
+                    defer { activeEncryptionOperations -= 1 }
+                    try stagePushTurnOff(account: account)
+                    try await settlePushCleanup(client: client, account: account, token: token)
+                    guard generation == token, pushIntent == intent else { return }
+                }
+                pushStatus = stop
+                return
+            }
+            #else
             if let stop = PushStatus.gate(for: authorization, interactive: false) { pushStatus = stop; return }
+            #endif
             if pushStatus != .on { pushStatus = .settingUp }
             let deviceToken = try await PushRegistration.request()
             refreshNotificationPermission()
@@ -2124,8 +2234,8 @@ final class AppModel {
                 reconcile()
             }
         case .chatState(let update):
-            // A state never creates a chat: only listed chats (joined groups among them) show one.
-            guard chats.contains(where: { $0.id == update.chat }) else { return }
+            // A state never creates a chat: only listed chats (joined groups among them) show one, and never a blocked one.
+            guard chats.contains(where: { $0.id == update.chat }), !isBlocked(update.chat) else { return }
             typingTracker.apply(update.state, chat: update.chat, participant: update.participant ?? update.chat, settles: update.ridesOnMessage, now: .now)
             publishTyping()
         case .reaction, .retraction, .receipt, .encryptedMessage, .encryptedGroupMessage, .streamManagementBarrier, .displayedSync, .messageError:
@@ -2335,6 +2445,11 @@ final class AppModel {
             let overview = try await encryption.refreshGroupDevices(account: account, room: room, transport: client)
             guard generation == token, transportWanted, !quiescing else { return nil }
             groupChats[room] = GroupChatState(members: overview.room.members, devices: overview.devices)
+            // Before the join, so the self-presence that admits us (handled by `updateGroupPresence`) finds it.
+            if let boundary = await roomJoinBoundary(room, client: client, store: store, token: token) {
+                joinBoundaries[room] = (token, boundary)
+            }
+            guard generation == token, transportWanted, !quiescing else { return nil }
             _ = try await client.joinGroupRoom(room, nickname: nickname)
             let confirmed = try await client.groupRoomSnapshot(room)
             guard generation == token, transportWanted, !quiescing else { return nil }
@@ -2591,6 +2706,9 @@ final class AppModel {
         do {
             let value = try await client.groupRoomSnapshot(room)
             guard generation == token else { return }
+            if value?.joined == true { await recordJoinBoundary(room, token: token) }
+            else if await client.groupRoomRefusedJoin(room) { joinBoundaries[room] = nil }
+            guard generation == token else { return }
             guard let snapshot = value else { groupChats[room]?.joined = false; return }
             groupChats[room]?.members = snapshot.members
             groupChats[room]?.joined = snapshot.joined
@@ -2604,12 +2722,47 @@ final class AppModel {
         }
     }
 
+    /// The archive time of `room`'s newest entry before we join it, or nil when the room has been walked already or the
+    /// boundary cannot be had: then its first walk takes all it finds for history, as for a room joined elsewhere. This
+    /// connection's walk read its rooms before this one was known, but holds the single archive query until it ends, so
+    /// a room joined during catch-up gets no boundary; a running backfill is waited for (it ends within its page budget).
+    /// A room without an archive refuses the query and keeps no archive baseline, as before.
+    private func roomJoinBoundary(_ room: String, client: XMPPClient, store: MessageStore, token: UUID) async -> Date? {
+        guard (try? await store.archiveCheckpoint(accountID: accountID, archiveID: room)) == nil else { return nil }
+        while let backfill = backfillTask {
+            await backfill.value
+            guard generation == token else { return nil }
+        }
+        guard archiveWalkFinished, catchUp == nil else {
+            Self.syncLog.notice("room join boundary skipped: this connection's archive walk has not finished")
+            return nil
+        }
+        joinBoundaryQueries += 1
+        defer { joinBoundaryQueries -= 1 }
+        do { return try await ArchiveSynchronizer(store: store).roomJoinBoundary(room: room, client: client) }
+        catch {
+            Self.syncLog.notice("room join boundary unavailable: \(ConnectionSetup.detail(error), privacy: .public)")
+            return nil
+        }
+    }
+
+    /// The room admitted us: its pre-join archive time becomes its read baseline (`MessageStore.recordJoinedRoom`).
+    private func recordJoinBoundary(_ room: String, token: UUID) async {
+        guard let boundary = joinBoundaries[room], boundary.token == token, let store else { return }
+        joinBoundaries[room] = nil
+        do {
+            try await store.recordJoinedRoom(accountID: accountID, room: room, historyThrough: boundary.historyThrough)
+            Self.syncLog.notice("room join boundary recorded\(boundary.historyThrough == .distantPast ? " (empty archive)" : "", privacy: .public)")
+        } catch { Self.syncLog.error("room join boundary not saved: \(ConnectionSetup.detail(error), privacy: .public)") }
+    }
+
     /// Group devices from the store first, then from the server. The pill follows the cached devices; joining only
     /// gates sending. `force` defaults to true for the group page and its Refresh button; opening the chat passes
     /// false, so pop-back reuses this connection's refresh and a reconnect fetches once more. A failed refresh
     /// writes the diagnostics footer only.
     func loadGroupDetails(room: String, refreshFromServer: Bool = true, force: Bool = true) async {
-        guard transportWanted, !quiescing, let encryption, isGroup(room) else { return }
+        // Sample data has no stored devices to read; a sample group keeps the ones it was made with.
+        guard transportWanted, !quiescing, let encryption, isGroup(room), !isDemo else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
         let account = accountID, token = generation
@@ -2663,7 +2816,8 @@ final class AppModel {
         }
     }
 
-    /// The chat's ID (the address in normal form), or nil with `error` set.
+    /// The chat's ID (the address in normal form), or nil with `error` set. An existing chat opens as it is, with the
+    /// title and settings it has.
     func createChat(_ recipient: String) async -> String? {
         // `Bob@Example.org` is the chat the server's `bob@example.org` replies land in.
         let address = JID(recipient.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -2677,7 +2831,7 @@ final class AppModel {
             return nil
         }
         do {
-            try await store.upsertChat(accountID: accountID, chatID: recipient, title: recipient)
+            try await store.createChatIfMissing(accountID: accountID, chatID: recipient, title: recipient)
             await refresh()
             return recipient
         } catch { self.error = "Could not create conversation."; return nil }
@@ -2774,6 +2928,11 @@ final class AppModel {
     }
 
     func canReact(to message: StoredMessage) -> Bool {
+        #if DEBUG
+        if isDemo, Self.demoReactions {
+            return message.accountID == accountID && message.chatID == openChatID && message.wireID != nil && message.unreadableReason == nil
+        }
+        #endif
         guard message.accountID == accountID, message.chatID == openChatID,
               message.encryptionProfile == "modern" || message.encryptionProfile == "legacy" else { return false }
         if isGroup(message.chatID) { return message.encryptionProfile == "modern" && canSend(to: message.chatID) && reactableGroupMessages.contains(message.id) }
@@ -2782,7 +2941,35 @@ final class AppModel {
         return encryptionOverview?.profile == .legacy && message.wireID != nil
     }
 
+    #if DEBUG
+    /// The Mac tour's `receipt` step: a sample peer's receipt or read marker for one of our sample messages, recorded as
+    /// the receive path records one.
+    func recordSampleReceipt(read: Bool, messageID: String) async {
+        guard isDemo, let store,
+              let message = messages.first(where: { $0.id == messageID }), message.isOutgoing, let wireID = message.wireID else { return }
+        try? await store.recordReceipt(accountID: accountID, event: MessageEvent(id: UUID().uuidString, chatID: message.chatID, actorID: message.chatID,
+                                                                                targetWireID: wireID, kind: read ? .displayed : .delivered, payload: "{}", updatedAt: Date()))
+        await refresh(.openChat)
+    }
+
+    /// `-demo-reactions`: sample messages take reactions, recorded on this device as a peer's would be and never sent,
+    /// for captures of the pills after reacting.
+    private static let demoReactions = ProcessInfo.processInfo.arguments.contains("-demo-reactions")
+    #endif
+
     func toggleReaction(_ emoji: String, messageID: String) async {
+        #if DEBUG
+        if isDemo, Self.demoReactions {
+            guard let store, let message = messages.first(where: { $0.id == messageID }), canReact(to: message), let wireID = message.wireID else { return }
+            let account = accountID
+            let mine = messageReactions[messageID]?.first(where: { $0.actorID == account })?.reactions ?? []
+            try? await store.recordReaction(accountID: account, reaction: AuthenticatedReaction(id: UUID().uuidString, chatID: message.chatID, actorID: account,
+                                                                                                targetWireID: wireID, reactions: mine.contains(emoji) ? [] : [emoji],
+                                                                                                updatedAt: Date()))
+            await refresh(.openChat)
+            return
+        }
+        #endif
         guard hasTransportOwnership, transportWanted, !quiescing else { return }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
@@ -3061,31 +3248,39 @@ final class AppModel {
         encryptionOverviewChatID == chatID ? encryptionOverview : nil
     }
 
-    func setDeviceTrust(_ device: EncryptionDevice, trust: DeviceTrust, chatID: String) async {
-        guard hasTransportOwnership, transportWanted, !quiescing else { return }
+    /// Saves one fingerprint-scoped decision and releases what waited on it. Returns whether the decision was saved:
+    /// a device of the other version that only held incoming messages leaves the chat's overview once decided, so a
+    /// review listing it keeps the outcome itself.
+    @discardableResult
+    func setDeviceTrust(_ device: EncryptionDevice, trust: DeviceTrust, chatID: String) async -> Bool {
+        guard hasTransportOwnership, transportWanted, !quiescing else { return false }
         activeEncryptionOperations += 1
         defer { activeEncryptionOperations -= 1 }
-        guard let encryption else { return }
+        guard let encryption else { return false }
         let account = accountID
         let token = generation
         do {
             try await encryption.setTrust(account: account, deviceID: device.id, trust: trust)
-            guard generation == token else { return }
-            encryptionAttention.trustDecided(in: chatID)
-            // A group re-fetches on this connection too: its recipients are re-validated against the room.
-            await loadEncryptionDetails(for: chatID, refreshFromServer: isGroup(chatID), force: isGroup(chatID))
-            guard generation == token else { return }
-            if let client, isConnected {
-                // A trust decision can only unblock rows that waited for trust; keys-pending rows wait for device lists.
-                try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.trustPending])
-                guard generation == token else { return }
-                // Released messages leave the retained rows: the other version's waiting devices go with them.
-                if !isGroup(chatID) { await loadEncryptionDetails(for: chatID, refreshFromServer: false) }
-                await flushEncryptionControls(account: account, client: client)
-                await refresh()
-                startOutbox()
-            }
-        } catch { if generation == token { self.error = "This device changed. Refresh its fingerprint before reviewing it again." } }
+        } catch {
+            if generation == token { self.error = "This device changed. Refresh its fingerprint before reviewing it again." }
+            return false
+        }
+        guard generation == token else { return true }
+        encryptionAttention.trustDecided(in: chatID)
+        // A group re-fetches on this connection too: its recipients are re-validated against the room.
+        await loadEncryptionDetails(for: chatID, refreshFromServer: isGroup(chatID), force: isGroup(chatID))
+        guard generation == token else { return true }
+        if let client, isConnected {
+            // A trust decision can only unblock rows that waited for trust; keys-pending rows wait for device lists.
+            try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.trustPending])
+            guard generation == token else { return true }
+            // Released messages leave the retained rows: the other version's waiting devices go with them.
+            if !isGroup(chatID) { await loadEncryptionDetails(for: chatID, refreshFromServer: false) }
+            await flushEncryptionControls(account: account, client: client)
+            await refresh()
+            startOutbox()
+        }
+        return true
     }
 
     func repairDeviceSession(_ device: EncryptionDevice, chatID: String) async {
@@ -3243,19 +3438,35 @@ final class AppModel {
 
     /// The reader reached the oldest loaded message. A full window means the store may hold more; otherwise the
     /// store is exhausted for this chat and the server's older archive pages are the next source.
-    func loadOlderMessages(all: Bool = false) async {
-        guard !loadingOlder, let chat = openChatID else { return }
+    /// - Returns: whether asking again may still bring older messages: false once the window is at its ceiling, or
+    ///   when the archive has no more for this chat or cannot be read from here (sample data, no connection).
+    @discardableResult
+    func loadOlderMessages(all: Bool = false) async -> Bool {
+        guard let chat = openChatID else { return false }
+        guard !loadingOlder else { return true }
         if all || messages.count >= timelineWindow {
-            guard timelineWindow < AppModel.timelineCeiling else { return }
+            guard timelineWindow < AppModel.timelineCeiling else { return false }
             loadingOlder = true
             defer { loadingOlder = false }
             timelineWindow = all ? AppModel.timelineCeiling : min(AppModel.timelineCeiling, timelineWindow + AppModel.timelinePage)
             await refresh(.openChat)
-            return
+            return true
         }
         // The window is not raised here: each committed page reloads the same window, which fills further, and the
         // next reach-top raises it as above.
-        requestBackfill(archive: isGroup(chat) ? chat : nil, pages: AppModel.backfillPagesPerScroll)
+        let archive = isGroup(chat) ? chat : nil
+        requestBackfill(archive: archive, pages: AppModel.backfillPagesPerScroll)
+        return !isDemo && session.isReady && !backfillSettled.contains(archive ?? accountID)
+    }
+
+    /// The stored message a reply's quote points at in `chatID`, from the reference the reply carries: a reply sent
+    /// from here names its original by local ID, a received one by the ID its sender saw, which resolves as a
+    /// reaction's target does. Nil while that message is not in the store.
+    func quotedMessageID(_ reference: String, in chatID: String) async -> String? {
+        guard let store else { return nil }
+        let account = accountID
+        if let local = try? await store.message(accountID: account, messageID: reference), local.chatID == chatID { return local.id }
+        return try? await store.reactionTarget(accountID: account, chatID: chatID, wireID: reference)?.id
     }
 
     /// True while the archive holding `chat` (the account's own for a direct chat, the room's for a group) backfills.
@@ -3267,7 +3478,8 @@ final class AppModel {
     /// only once the store says there is something to fetch, so a chat with no older history never flashes it.
     private func requestBackfill(archive: String?, pages: Int) {
         let archiveID = archive ?? accountID
-        guard transportWanted, !quiescing, hasTransportOwnership, session.isReady, archiveWalkFinished, catchUp == nil, backfillTask == nil, !isDemo,
+        guard transportWanted, !quiescing, hasTransportOwnership, session.isReady, archiveWalkFinished, catchUp == nil, backfillTask == nil,
+              joinBoundaryQueries == 0, !isDemo,
               !backfillSettled.contains(archiveID), backfillResumesAt.map({ ContinuousClock.now >= $0 }) ?? true,
               let client, let encryption, let store else { return }
         let account = accountID
@@ -3371,6 +3583,14 @@ final class AppModel {
             guard !Task.isCancelled else { return }
             self?.publishTyping()
         }
+    }
+
+    /// A blocked contact's typing ends with the block rather than at its expiry (the sample typing too).
+    private func dropTyping(in chatIDs: [String]) {
+        guard !chatIDs.isEmpty else { return }
+        for chatID in chatIDs { typingTracker.clear(chat: chatID) }
+        let current = typing.filter { !chatIDs.contains($0.key) }
+        if current != typing { typing = current }
     }
 
     private func syncOpenChatTyping() {
@@ -3640,6 +3860,7 @@ final class AppModel {
         blocklist = updated
         BlockedAddresses.save(updated, accountID: account, defaults: sessionDefaults)
         updateAppBadge(chats)
+        dropTyping(in: newlyBlocked)
         // What a newly blocked chat already had on screen goes too.
         for chatID in newlyBlocked {
             Task { await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID) }
@@ -3654,6 +3875,8 @@ final class AppModel {
         let account = accountID
         if isDemo {
             blocklist.apply(.blocked([chatID]))
+            updateAppBadge(chats)
+            dropTyping(in: [chatID])
             return true
         }
         guard let client else { return false }
@@ -3686,6 +3909,7 @@ final class AppModel {
         let account = accountID
         if isDemo {
             blocklist.apply(.unblocked([address]))
+            updateAppBadge(chats)
             return
         }
         guard let client else { return }
@@ -3905,11 +4129,14 @@ final class AppModel {
         summaries += pending.keys.filter { !known.contains($0) }.sorted().map {
             ChatSummary(id: $0, title: $0, preview: reviewPreview, isPinned: false)
         }
-        // A pointer moved (here, on another device, or before this launch): its chat's notifications may go.
+        // A pointer moved (here, on another device, or before this launch), or retained ciphertext was resolved: its
+        // chat's notifications, or its review notification, may go.
         let previousUnread = Dictionary(chats.map { ($0.id, $0.unreadCount) }, uniquingKeysWith: max)
-        if !hasLoadedChats || summaries.contains(where: { $0.unreadCount < (previousUnread[$0.id] ?? 0) }) {
+        if !hasLoadedChats || summaries.contains(where: { $0.unreadCount < (previousUnread[$0.id] ?? 0) })
+            || reviewCounts.contains(where: { pending[$0.key, default: 0] < $0.value }) {
             removeReadNotifications(account: account, store: store)
         }
+        reviewCounts = pending
         // A reorder (pin, new activity) animates; List only does so inside an explicit transaction.
         withAnimation(summaries.map(\.id) == chats.map(\.id) ? nil : .default) { chats = summaries }
         hasLoadedChats = true
@@ -3929,7 +4156,19 @@ final class AppModel {
     private func setAppBadge(_ count: Int) {
         guard appBadge != count else { return }
         appBadge = count
-        Task { await PlatformApplication.setBadgeCount(count) }
+        let dockTileOnly = badgeUsesDockTile
+        Task { await PlatformApplication.setBadgeCount(count, dockTileOnly: dockTileOnly) }
+    }
+
+    /// The Mac labels its Dock tile until notifications are asked, and in a test session, whose counts must not reach
+    /// the app's real badge; otherwise the badge is the notification centre's, which the extension sets too
+    /// (`PlatformApplication.setBadgeCount`).
+    private var badgeUsesDockTile: Bool {
+        #if os(macOS)
+        testSessionID != nil || notificationAuthorization == .notDetermined
+        #else
+        false
+        #endif
     }
 }
 
@@ -4032,7 +4271,7 @@ extension AppModel: NotificationActionEnvironment {
     }
 
     func authorizedNotificationAccount() -> String? {
-        guard testSessionID == nil, !isDemo, !accountID.isEmpty, sessionAccount?.accountID == accountID,
+        guard postsNotificationsInThisSession, !isDemo, !accountID.isEmpty, sessionAccount?.accountID == accountID,
               !ProcessInfo.processInfo.arguments.contains("--inspect-notification"),
               let saved = try? NotificationAccount.load(), saved.accountID == accountID else { return nil }
         return accountID
@@ -4251,7 +4490,11 @@ extension AppModel: NotificationActionEnvironment {
         content.categoryIdentifier = NotificationIdentity.noticeCategory
         content.userInfo = [NotificationNavigation.replyFailureKey: destination.payload]
         content.sound = .default
-        try? await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+        #if DEBUG && os(macOS)
+        guard MacDebugNotificationLog.shouldPost(notice: request) else { return }
+        #endif
+        try? await center.add(request)
     }
 
     func endNotificationAction() async {
@@ -4293,6 +4536,52 @@ extension AppModel: NotificationActionEnvironment {
         if progress.report.posted > 0 { Self.syncLog.notice("notification action presented=\(progress.report.posted, privacy: .public)") }
     }
 
+    // MARK: Liveness handshake
+
+    /// Answers a notification extension that found the lease busy (`LivenessHandshake`), so a push for this live session
+    /// is presented once, by the app, instead of next to the extension's fallback. Only on the Mac (`AppLiveness.isOffered`)
+    /// and only for the real store: a UI test session's store is not the one the extension opens.
+    private func startLivenessResponder() {
+        guard AppLiveness.isOffered, livenessResponder == nil, let container = try? SharedStorage.groupContainer() else { return }
+        let responder = AppLiveness.Responder(files: AppLiveness.Files(groupRoot: container),
+                                              conditions: { [weak self] in self?.livenessConditions ?? Self.silent },
+                                              answered: { [weak self] in self?.keepLivenessPromise() })
+        if responder.start() { livenessResponder = responder }
+        else { Self.syncLog.error("liveness responder could not observe its ring") }
+    }
+
+    private static let silent = LivenessConditions(wantsConnection: false, quiescing: true, ownsLease: false, servesExtensionAccount: false,
+                                                   presentsCatchUp: false)
+
+    /// The answer promises that this process keeps the lease and presents: never while a sleep or sign-out quiesces,
+    /// only for the account the extension serves, and only where what a later catch-up brings still gets its banner.
+    private var livenessConditions: LivenessConditions {
+        LivenessConditions(wantsConnection: wantsConnection && testSessionID == nil, quiescing: quiescing,
+                           ownsLease: hasTransportOwnership,
+                           servesExtensionAccount: sessionAccount.map { saved in
+                               (try? NotificationAccount.load())?.accountID == saved.accountID
+                           } ?? false,
+                           presentsCatchUp: Self.attention.holdsCatchUpBanners)
+    }
+
+    /// After an answer the push is this process's to present. The server pushed because an acknowledgement from this
+    /// session was overdue, so the socket may be dead without an error: probe it now (a dead stream ends, and the
+    /// reconciler resumes it, which replays what the server queued), or connect at once when no stream is up. What
+    /// arrives is presented by the usual foreground claim, or held and posted once the connection has caught up; a
+    /// sleep or quit before it arrives leaves it to the next connection's catch-up, which posts it the same way.
+    private func keepLivenessPromise() {
+        Self.syncLog.notice("liveness answered, connected=\(self.isConnected, privacy: .public)")
+        guard isConnected, let client else {
+            networkBecameReachable()
+            return
+        }
+        Task { [weak self] in
+            let alive = await client.probeLiveness(within: .seconds(5))
+            Self.syncLog.notice("liveness probe answered=\(alive, privacy: .public)")
+            if !alive { self?.networkBecameReachable() }
+        }
+    }
+
     // MARK: Foreground banners
 
     /// Claims what this connection committed; banners for other chats when permitted and caught up.
@@ -4325,22 +4614,25 @@ extension AppModel: NotificationActionEnvironment {
 
     /// The extension's poster, with the app's pre-scaled notification avatars, so banners match the extension's requests.
     private func notificationPoster(account: String) -> any NotificationPosting {
-        #if DEBUG && os(macOS)
-        // `-haus-log-notifications`: a lab run logs what would be posted, without asking for permission.
-        if let poster = MacDebugNotificationLog.poster { return poster }
-        #endif
         let root = storageRoot
-        return UserNotificationPoster(avatarData: { hash in
+        let avatarData: @Sendable (String) -> Data? = { hash in
             guard let root else { return nil }
             return AvatarStore.notificationImageData(root: root, account: account, hash: hash)
-        })
+        }
+        let poster = UserNotificationPoster(avatarData: avatarData)
+        #if DEBUG && os(macOS)
+        // `-haus-log-notifications` / `-haus-post-notifications`: a lab run logs what it posts (or would post).
+        if let logged = MacDebugNotificationLog.poster(posting: poster, avatarData: avatarData) { return logged }
+        #endif
+        return poster
     }
 
-    /// A test session posts nothing, except a DEBUG Mac run that only logs its notifications (`-haus-log-notifications`):
-    /// banner checks can then use a private test store and leave the shared App Group store alone.
+    /// A test session posts nothing, and its account's notifications take no actions, except in a DEBUG Mac run that
+    /// logs its notifications (`MacDebugNotificationLog`): banner checks can then use a private test store and leave
+    /// the shared App Group store alone.
     private var postsNotificationsInThisSession: Bool {
         #if DEBUG && os(macOS)
-        if MacDebugNotificationLog.poster != nil { return true }
+        if MacDebugNotificationLog.mode != nil { return true }
         #endif
         return testSessionID == nil
     }
@@ -4354,16 +4646,34 @@ extension AppModel: NotificationActionEnvironment {
                 _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
             }
             #endif
+            #if os(iOS)
             let status = await Self.notificationAuthorization()
             guard let self else { return }
-            #if os(iOS)
             self.mayPostNotifications = [.authorized, .provisional, .ephemeral].contains(status)
             #else
+            let (status, alertStyle) = await Self.notificationPermission()
+            guard let self else { return }
             // App Clips' ephemeral authorization does not exist on macOS.
             self.mayPostNotifications = [.authorized, .provisional].contains(status)
+            let asked = self.notificationAuthorization != .notDetermined
+            let changed = (self.notificationAuthorization, self.notificationAlertStyle) != (status, alertStyle)
             self.notificationAuthorization = status
+            self.notificationAlertStyle = alertStyle
+            // Once asked, the badge moves from the Dock tile to the notification centre.
+            if asked != (status != .notDetermined), let badge = self.appBadge {
+                self.appBadge = nil
+                self.setAppBadge(badge)
+            }
+            // Banners allowed or taken away in System Settings while connected: push follows now rather than on the
+            // next connection (`PushStatus.gate(for:alertStyle:interactive:)`).
+            let alertsAllowed = PushStatus.gate(for: status, alertStyle: alertStyle, interactive: false) == nil
+            if changed, status != .notDetermined, self.pushWanted, PushService.isOffered,
+               alertsAllowed ? self.pushStatus == .notAllowed : [.on, .settingUp].contains(self.pushStatus),
+               let client = self.client, let session = self.sessionAccount, self.isConnected {
+                self.startPushSetup(client: client, session: session, token: self.generation, interactive: false)
+            }
             #if DEBUG
-            if MacDebugNotificationLog.poster != nil { self.mayPostNotifications = true }
+            if MacDebugNotificationLog.mode == .log { self.mayPostNotifications = true }
             #endif
             #endif
             // Turned off in iOS Settings while away; turning it back on is picked up by the next connection.
@@ -4375,13 +4685,71 @@ extension AppModel: NotificationActionEnvironment {
         await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
+    #if os(macOS)
+    private nonisolated static func notificationPermission() async -> (UNAuthorizationStatus, UNAlertStyle) {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        return (settings.authorizationStatus, settings.alertStyle)
+    }
+    #endif
+
     #if DEBUG
+    #if os(macOS)
+    /// For captures of Settings (`-haus-notification-permission`): the permission as if macOS had reported it.
+    func debugShowNotificationPermission(_ status: UNAuthorizationStatus, alertStyle: UNAlertStyle) {
+        notificationAuthorization = status
+        notificationAlertStyle = alertStyle
+    }
+    #endif
+
     /// For the Mac's lifecycle checks (`MacLifecycleDebug`): whether this process holds the transport lease, by the
     /// store's own account and by the model's.
     func debugLeaseReport() async -> String {
         let held = await store?.holdsTransportOwnership
         let stored = held.map { $0 ? "held" : "free" } ?? "closed"
         return "lease store \(stored) model \(hasTransportOwnership ? "held" : "free"), session \(session.label), quiescing \(quiescing ? 1 : 0)"
+    }
+
+    /// For the Mac's notification checks (`MacNotificationDebug`): the chat's read pointer and its stored messages,
+    /// without their text.
+    func debugMessageReport(_ chatID: String) async -> String {
+        guard let store else { return "closed" }
+        let pointer = try? await store.readPointer(accountID: accountID, chatID: chatID)
+        let rows = ((try? await store.messages(accountID: accountID, chatID: chatID)) ?? []).map { message in
+            "\(message.id.prefix(8)) \(message.isOutgoing ? "out \(message.transportState.map { "\($0)" } ?? "")" : "in") at \(message.sentAt.timeIntervalSince1970) body \(message.body.count)"
+                + (message.unreadableReason.map { " unreadable \($0)" } ?? "")
+        }
+        return "pointer \(pointer.map { "\($0.messageID.prefix(8)) at \($0.sentAt.timeIntervalSince1970)" } ?? "none"); \(rows.joined(separator: " | "))"
+    }
+
+    /// For the Mac's lab checks (`MacLifecycleDebug`): the account's retained ciphertext (sender, why it waits, its
+    /// room) and the room members' OMEMO 2 devices with their trust, never any content.
+    func debugRetentionReport(_ chatID: String) async -> String {
+        guard let store, let encryption else { return "closed" }
+        let pending = ((try? await store.pendingEncryptedIncomingSummaries(accountID: accountID)) ?? []).map {
+            "\($0.sender) \($0.reason)\($0.room.map { " in \($0)" } ?? "")"
+        }
+        let devices = ((try? await encryption.cachedGroupDevices(account: accountID, room: chatID)) ?? []).map {
+            "\($0.jid) \($0.deviceID) \($0.trust)\($0.active ? "" : " inactive")"
+        }
+        return "retained [\(pending.joined(separator: ", "))], room devices [\(devices.joined(separator: ", "))]"
+    }
+
+    /// For the Mac's badge checks: the count last set and where it went.
+    var debugBadgeReport: String {
+        "icon badge \(appBadge.map(String.init) ?? "unset") through \(badgeUsesDockTile ? "the Dock tile" : "the notification centre")"
+    }
+
+    /// Cuts the live stream off without telling anyone (`XMPPClient.silenceTransport()`), for the Mac's check of the
+    /// liveness handshake's probe and reconnect. False when no stream is online.
+    func debugSilenceTransport() async -> Bool {
+        await client?.silenceTransport() ?? false
+    }
+
+    /// Leaves the server's acknowledgement requests unanswered for `duration` on a live stream
+    /// (`XMPPClient.holdAcknowledgements(for:)`), for the Mac's check of a push to a healthy app. False when no stream
+    /// is online.
+    func debugHoldAcknowledgements(for duration: Duration) async -> Bool {
+        await client?.holdAcknowledgements(for: duration) ?? false
     }
 
     /// Holds one UI crypto operation open for `duration`, so a quiesce that starts meanwhile cannot finish before it:

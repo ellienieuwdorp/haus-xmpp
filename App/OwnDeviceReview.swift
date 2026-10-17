@@ -93,6 +93,23 @@ extension OwnDeviceReview {
             EncryptionDevice(jid: account, profile: .modern, deviceID: 1907, identityKey: changed.modern, trust: .undecided, active: true, identityChanged: true)
         ]
     }
+
+    #if DEBUG
+    /// `-demo-group`: the sample group's address.
+    static let sampleRoom = "trail@rooms.preview.local"
+
+    /// `-demo-group`: the sample group's devices, one in each state a member's device can be in, and another device of
+    /// the account.
+    static func sampleGroupDevices(account: String) -> [EncryptionDevice] {
+        let first = sampleIdentities[0], second = sampleIdentities[1]
+        return [
+            EncryptionDevice(jid: account, profile: .modern, deviceID: 48213, identityKey: second.modern, trust: .accepted, active: true, identityChanged: false),
+            EncryptionDevice(jid: DemoSamples.alex, profile: .modern, deviceID: 5120, identityKey: first.modern, trust: .verified, active: true, identityChanged: false),
+            EncryptionDevice(jid: DemoSamples.alex, profile: .modern, deviceID: 977, identityKey: second.modern, trust: .accepted, active: false, identityChanged: false),
+            EncryptionDevice(jid: DemoSamples.maya, profile: .modern, deviceID: 20417, identityKey: first.modern, trust: .undecided, active: true, identityChanged: true)
+        ]
+    }
+    #endif
 }
 
 /// The chat list's account-level prompt, shaped like a chat's trust review card.
@@ -100,6 +117,13 @@ struct OwnDeviceReviewCard: View {
     let candidates: [OwnDeviceCandidate]
     let review: () -> Void
     let later: () -> Void
+
+    // The iPhone's thumb-sized card; regular Mac push buttons in a card that fits a sidebar row.
+    #if os(iOS)
+    private static let buttonPadding: CGFloat = 4, padding: CGFloat = 14, cornerRadius: CGFloat = 26
+    #else
+    private static let buttonPadding: CGFloat = 0, padding: CGFloat = 12, cornerRadius: CGFloat = 16
+    #endif
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -113,18 +137,23 @@ struct OwnDeviceReviewCard: View {
                     Text("Encrypted messages wait until you decide. Nothing is trusted automatically.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                #if os(macOS)
+                // A sidebar row's text is one line unless it asks for more; the card's text wraps in full.
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+                #endif
             }
             HStack(spacing: 8) {
-                Button(action: review) { Text("Review").frame(maxWidth: .infinity).padding(.vertical, 4) }
+                Button(action: review) { Text("Review").frame(maxWidth: .infinity).padding(.vertical, Self.buttonPadding) }
                     .buttonStyle(.borderedProminent)
                     .accessibilityIdentifier("ownDeviceReview.open")
-                Button(action: later) { Text("Later").frame(maxWidth: .infinity).padding(.vertical, 4) }
+                Button(action: later) { Text("Later").frame(maxWidth: .infinity).padding(.vertical, Self.buttonPadding) }
                     .buttonStyle(.bordered)
             }
             .buttonBorderShape(.capsule)
         }
-        .padding(14)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .padding(Self.padding)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("ownDeviceReview.card")
     }
@@ -144,7 +173,7 @@ struct OwnDeviceReviewSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            GroupedList {
                 Section {
                     VStack(spacing: 6) {
                         Image(systemName: "person.badge.shield.checkmark")
@@ -164,7 +193,7 @@ struct OwnDeviceReviewSheet: View {
             .navigationTitle("Your Devices")
             .inlineNavigationTitle()
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { dismiss() }.labelStyle(.iconOnly) }
+                ToolbarItem(placement: .cancellationAction) { Button("Close", systemImage: "xmark") { dismiss() }.closeButtonLabel() }
             }
             .sheet(item: $comparing) { candidate in
                 // The comparison sheet names one record; a decision there applies to all of this device's records.
@@ -216,7 +245,7 @@ struct OwnDeviceReviewSheet: View {
                     // Styled buttons take their own taps, so both can share the device's row.
                     HStack(spacing: 10) {
                         Button(role: .destructive) { rejecting = candidate } label: { Text("Don’t Trust").frame(maxWidth: .infinity) }
-                            .buttonStyle(.glass).foregroundStyle(.red)
+                            .secondaryActionStyle().foregroundStyle(.red)
                             .accessibilityIdentifier("ownDevice.reject.\(candidate.deviceID)")
                             // Anchored to its button, so the dialog's popover points at the device it decides.
                             .confirmationDialog("Don’t trust device \(String(candidate.deviceID))?",
@@ -225,7 +254,7 @@ struct OwnDeviceReviewSheet: View {
                                 Button("Don’t Trust", role: .destructive) { Task { await model.decideOwnDevice(candidate, trust: .rejected) } }
                             } message: { Text(OwnDeviceReview.rejectionMessage) }
                         Button { Task { await model.decideOwnDevice(candidate, trust: .accepted) } } label: { Text("Trust").frame(maxWidth: .infinity) }
-                            .buttonStyle(.glassProminent)
+                            .prominentActionStyle()
                             .accessibilityIdentifier("ownDevice.trust.\(candidate.deviceID)")
                     }
                     .fontWeight(.semibold).controlSize(.large)
@@ -247,7 +276,7 @@ struct OwnDeviceReviewSheet: View {
             }
             if OwnDeviceReview.offersRemoval(after: outcome) {
                 Button(role: .destructive) { removing = candidate } label: {
-                    Label("Remove from Account", systemImage: "iphone.slash").foregroundStyle(.red)
+                    Label("Remove from Account", systemImage: EncryptionDevice.removedSymbol).foregroundStyle(.red)
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                         .contentShape(Rectangle())
                 }
@@ -266,12 +295,12 @@ struct OwnDeviceReviewSheet: View {
 }
 
 /// What became of a device, in the words the Devices page uses.
-private struct OutcomeLabel: View {
+struct OutcomeLabel: View {
     let outcome: OwnDeviceOutcome
 
     var body: some View {
         let (symbol, text, color): (String, String, Color) = switch outcome {
-        case .removed: ("iphone.slash", "Removed", .secondary)
+        case .removed: (EncryptionDevice.removedSymbol, "Removed", .secondary)
         case .decided(let trust):
             (trust.badge.symbol, trust == .accepted ? "Trusted · not verified" : trust == .rejected ? "Not trusted" : trust.badge.text, trust.badge.color)
         }

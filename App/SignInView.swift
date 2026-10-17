@@ -12,6 +12,11 @@ struct SignInView: View {
     @State private var consent = false
     @State private var showingAdvanced = false
     @State private var showingRestore = false
+    #if os(macOS)
+    @FocusState private var focus: Field?
+
+    private enum Field { case address, password }
+    #endif
 
     init(model: AppModel) {
         self.model = model
@@ -62,6 +67,9 @@ struct SignInView: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        macForm
+        #else
         NavigationStack {
             List {
                 Section {
@@ -129,14 +137,7 @@ struct SignInView: View {
                 }
                 Section {
                     VStack(spacing: 16) {
-                        Button {
-                            Task {
-                                if await model.connect(username: address, password: password, server: manualServer) {
-                                    password = ""
-                                    dismiss()
-                                }
-                            }
-                        } label: {
+                        Button(action: connect) {
                             Text(model.session.isConnecting ? "Connecting…" : "Connect")
                                 .font(.headline)
                                 .frame(maxWidth: .infinity, minHeight: 50)
@@ -160,12 +161,114 @@ struct SignInView: View {
             // A restore signs this install in as the transferred account: nothing is left to sign in to here.
             .onChange(of: model.transferRestored) { _, restored in if restored { dismiss() } }
         }
+        #endif
     }
 
-    private func row<Field: View>(_ title: String, @ViewBuilder field: () -> Field) -> some View {
+    private func connect() {
+        Task {
+            if await model.connect(username: address, password: password, server: manualServer) {
+                password = ""
+                dismiss()
+            }
+        }
+    }
+
+    #if os(macOS)
+    /// The connection's state under the form, unless it is the plain Offline every sheet starts with.
+    private var sessionNote: String? {
+        model.session == .offline(reason: nil) ? nil : model.session.label
+    }
+
+    /// A Mac sheet: a grouped form whose fields carry their labels, Return moving from the address to the password and
+    /// connecting from there, and Cancel and Connect (the default button) at the bottom edge.
+    private var macForm: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    VStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 48, height: 48)
+                            .overlay { Image(systemName: "bubble.left.fill").font(.system(size: 22)).foregroundStyle(.white) }
+                            .accessibilityHidden(true)
+                        Text("Sign In").font(.title2.bold()).padding(.top, 4)
+                        Text("Use your XMPP address.").foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                }
+                Section {
+                    TextField("Address", text: $address, prompt: Text("name@example.org"))
+                        .autocorrectionDisabled()
+                        .textContentType(.username)
+                        .focused($focus, equals: .address)
+                        .onSubmit { focus = .password }
+                        .accessibilityIdentifier("labUsername")
+                    SecureField("Password", text: $password, prompt: Text("Required"))
+                        .textContentType(.password)
+                        .focused($focus, equals: .password)
+                        .onSubmit { if canConnect { connect() } }
+                        .accessibilityIdentifier("labPassword")
+                    #if DEBUG
+                    if isLab {
+                        Toggle("Use a disposable lab account", isOn: $consent)
+                            .accessibilityIdentifier("labConsent")
+                    }
+                    #endif
+                } footer: {
+                    Text(route).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                Section {
+                    DisclosureGroup("Advanced", isExpanded: $showingAdvanced) {
+                        TextField("Server", text: $server, prompt: Text("Automatic"))
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("serverHost")
+                        if !serverHost.isEmpty {
+                            Picker("Security", selection: $security) {
+                                Text("STARTTLS").tag(XMPPTransportSecurity.startTLS)
+                                Text("Direct TLS").tag(XMPPTransportSecurity.directTLS)
+                            }
+                            .pickerStyle(.segmented)
+                            .accessibilityIdentifier("serverSecurity")
+                            TextField("Port", text: $port, prompt: Text(String(security.defaultPort)))
+                                .accessibilityIdentifier("serverPort")
+                        }
+                    }
+                } footer: {
+                    if let sessionNote { Text(sessionNote).frame(maxWidth: .infinity, alignment: .leading) }
+                }
+                if model.canRestoreTransfer {
+                    Section {
+                        Button("Restore from a Transfer…") { showingRestore = true }
+                            .accessibilityIdentifier("signInRestoreTransfer")
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .defaultFocus($focus, .address)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(model.session.isConnecting ? "Connecting…" : "Connect", action: connect)
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!canConnect)
+                }
+            }
+            .sheet(isPresented: $showingRestore) { RestoreTransferView(model: model).themedRoot() }
+            // A restore signs this install in as the transferred account: nothing is left to sign in to here.
+            .onChange(of: model.transferRestored) { _, restored in if restored { dismiss() } }
+        }
+        .allowsQuitWhileOpen()
+    }
+    #endif
+
+    #if os(iOS)
+    private func row<Content: View>(_ title: String, @ViewBuilder field: () -> Content) -> some View {
         HStack(spacing: 12) {
             Text(title).foregroundStyle(.secondary).frame(width: 88, alignment: .leading)
             field()
         }
     }
+    #endif
 }

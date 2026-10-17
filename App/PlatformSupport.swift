@@ -163,7 +163,93 @@ extension View {
         listStyle(.inset)
         #endif
     }
+
+    /// `.buttonStyle(.glassProminent)`. On the Mac, the bordered prominent push button: glass is for controls that
+    /// float over content there, and a form's or sheet's main action is a push button.
+    func prominentActionStyle() -> some View {
+        #if os(iOS)
+        buttonStyle(.glassProminent)
+        #else
+        buttonStyle(.borderedProminent)
+        #endif
+    }
+
+    /// `.buttonStyle(.glass)`; the Mac's bordered push button, beside a `prominentActionStyle()` one.
+    func secondaryActionStyle() -> some View {
+        #if os(iOS)
+        buttonStyle(.glass)
+        #else
+        buttonStyle(.bordered)
+        #endif
+    }
+
+    /// A list row that is a button (an icon tile and a title) stays a row on the Mac, as a tapped row is on the
+    /// iPhone, instead of becoming a bordered push button the width of its title. Nothing changes on iOS.
+    func listRowButton() -> some View {
+        #if os(iOS)
+        self
+        #else
+        buttonStyle(ListRowButtonStyle())
+        #endif
+    }
+
+    /// `.labelStyle(.iconOnly)` for a toolbar's Close: the iPhone's glyph-only bar button, and on the Mac, where a
+    /// sheet's buttons sit at its bottom edge as push buttons, the word.
+    func closeButtonLabel() -> some View {
+        #if os(iOS)
+        labelStyle(.iconOnly)
+        #else
+        labelStyle(.titleOnly)
+        #endif
+    }
+
+    /// On the Mac, lets Quit, log out and shut down go ahead while this sheet is open. AppKit refuses to terminate
+    /// while a modal window's `preventsApplicationTerminationWhenModal` is on, and SwiftUI leaves it on for some sheets,
+    /// a form with Connect beside Cancel among them: Quit only beeps. For sheets whose unfinished input is not worth
+    /// keeping the Mac up for. iOS has no such veto.
+    func allowsQuitWhileOpen() -> some View {
+        #if os(iOS)
+        self
+        #else
+        background(TerminationPermission())
+        #endif
+    }
 }
+
+/// The iPhone's grouped `List`; on the Mac a grouped `Form`, whose rows, controls and section footers (wrapped in full,
+/// where a Mac list cuts them to one line) are those of a Mac settings pane or inspector.
+struct GroupedList<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        #if os(iOS)
+        List { content }
+        #else
+        Form { content }.formStyle(.grouped)
+        #endif
+    }
+}
+
+#if os(macOS)
+/// `listRowButton()`: the label across the row's width, the whole row the target, dimmed while pressed or disabled.
+private struct ListRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Row(configuration: configuration)
+    }
+
+    private struct Row: View {
+        let configuration: Configuration
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            configuration.label
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .opacity(!isEnabled ? 0.4 : configuration.isPressed ? 0.6 : 1)
+        }
+    }
+}
+#endif
 
 extension ToolbarItemPlacement {
     /// `.topBarLeading`; the toolbar's navigation area on the Mac.
@@ -197,6 +283,15 @@ extension ToolbarItemPlacement {
         #endif
     }
 
+    /// Asks APNs for this app's device token; the application delegate receives it (`PushRegistration.received`).
+    static func registerForRemoteNotifications() {
+        #if os(iOS)
+        UIApplication.shared.registerForRemoteNotifications()
+        #else
+        NSApp.registerForRemoteNotifications()
+        #endif
+    }
+
     /// The system's notification settings for this app: the app's page in iOS Settings, or System Settings >
     /// Notifications on the Mac.
     static var notificationSettingsURL: URL? {
@@ -207,14 +302,17 @@ extension ToolbarItemPlacement {
         #endif
     }
 
-    /// The unread badge on the app's icon. iOS sets it through the notification centre, which needs badge permission;
-    /// the Mac sets its Dock tile, which needs none (and the Mac asks for no notification permission yet).
-    static func setBadgeCount(_ count: Int) async {
-        #if os(iOS)
-        try? await UNUserNotificationCenter.current().setBadgeCount(count)
-        #else
-        NSApp.dockTile.badgeLabel = count > 0 ? String(count) : nil
+    /// The unread badge on the app's icon, through the notification centre: the badge a notification's `content.badge`
+    /// sets from the extension, shown only where the user allows badges, and kept after the app quits. Where
+    /// `dockTileOnly`, the Mac labels its own Dock tile instead, which needs no permission but lasts only while the app
+    /// runs: before notifications are asked no extension runs, so nothing else writes the badge then. The notification
+    /// centre's path clears that label, so the Dock never shows two counts. iOS ignores `dockTileOnly`.
+    static func setBadgeCount(_ count: Int, dockTileOnly: Bool) async {
+        #if os(macOS)
+        NSApp.dockTile.badgeLabel = dockTileOnly && count > 0 ? String(count) : nil
+        if dockTileOnly { return }
         #endif
+        try? await UNUserNotificationCenter.current().setBadgeCount(count)
     }
 
     static var didBecomeActiveNotification: Notification.Name {
@@ -250,6 +348,24 @@ extension ToolbarItemPlacement {
 }
 
 #if os(macOS)
+/// Clears `preventsApplicationTerminationWhenModal` on the sheet it joins (`allowsQuitWhileOpen`). SwiftUI sets the
+/// sheet window's value as it presents the sheet, after the content has joined the window, so the value is cleared
+/// again on the next pass of the main queue. Later updates of the sheet's content and toolbar leave it alone.
+private struct TerminationPermission: NSViewRepresentable {
+    final class Anchor: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            window.preventsApplicationTerminationWhenModal = false
+            DispatchQueue.main.async { [weak window] in window?.preventsApplicationTerminationWhenModal = false }
+        }
+    }
+
+    func makeNSView(context: Context) -> Anchor { Anchor() }
+
+    func updateNSView(_ anchor: Anchor, context: Context) {}
+}
+
 /// The Mac's Save panel for a file the app made, which it then copies there. iOS saves through the share sheet.
 @MainActor enum PlatformFileSave {
     /// False when the user cancelled; throws when the copy failed.

@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import MessagingCore
+import OMEMO
 import SwiftUI
 
 /// Debug checks of the Mac lifecycle (`MacLifecycle`, `MacLifecycleDriver`). Debug builds only.
@@ -15,8 +16,16 @@ import SwiftUI
 /// (AppKit's own focus again), `hide`, `unhide`, `minimise`, `close`, `open`, `lock`, `unlock`, `idle <minutes>` (the last
 /// input that long ago, in place of the real input clock; `idle 0` is input just now), `input` (the real clock again),
 /// `sleep` (a fake acknowledgement), `sleep-miss` (a UI crypto operation held past the sleep deadline first),
-/// `wake`, `select <chat>`, `accept <jid>` (accepts that lab contact's undecided devices, as the Devices page would),
-/// `draft <text>` (the open chat's composer changed), `report` (lease and session), `quit`.
+/// `wake`, `select <chat>`, `accept <jid>|<room>` (accepts that lab or staging contact's undecided devices, as the
+/// Devices page would, or a joined lab room's members' undecided devices, as Group details would), `draft <text>` (the
+/// open chat's composer changed), `report` (lease and session), `store <chat>` (a lab account's retained ciphertext, the
+/// room's devices and the chat's stored messages, without content), `notify <step>` (notification actions and settings,
+/// `MacNotificationDebug`), `drop-socket` (the live stream stops reading and writing without an error, as on a dead
+/// network path: the app notices only through its liveness probes, so a push the server then sends reaches the
+/// extension, whose liveness ring makes the app probe and reconnect), `hold-acks <seconds>` (the live stream leaves the
+/// server's acknowledgement requests unanswered that long, default 35, then answers once and goes on: the server pushes
+/// for a healthy session, and the app's probe is answered without a reconnect), `sign-out` (as Settings' Sign Out, which
+/// turns push off at the gateway and the server, so a staging run ends clean), `quit`.
 @MainActor enum MacLifecycleDebug {
     /// The scene phase each window's content last reported, by window.
     static var scenePhases: [String: ScenePhase] = [:]
@@ -105,8 +114,19 @@ import SwiftUI
             case "wake": lifecycle.didWake()
             case "select": window.selection = argument
             case "accept": await accept(argument, model: model)
+            case "store" where model.isLabAccount:
+                MacDebugHooks.log("store \(argument): \(await model.debugRetentionReport(argument)); \(await model.debugMessageReport(argument))")
             case "draft": if let chat = window.selection { model.draftChanged(argument, in: chat) }
             case "report": MacDebugHooks.log("report: \(await model.debugLeaseReport()), scenePhase \(phases)")
+            case "notify": await MacNotificationDebug.run(argument, model: model, window: window)
+            case "drop-socket": MacDebugHooks.log("step drop-socket: \(await model.debugSilenceTransport() ? "stream silenced" : "no stream online")")
+            case "hold-acks":
+                let seconds = Double(argument) ?? 35
+                let held = await model.debugHoldAcknowledgements(for: .seconds(seconds))
+                MacDebugHooks.log("step hold-acks: \(held ? "acknowledgements held \(Int(seconds)) s" : "no stream online")")
+            case "sign-out":
+                await model.signOut()
+                MacDebugHooks.log("step sign-out: \(model.accountID.isEmpty ? "signed out" : "still signed in")")
             case "quit": MacDebugHooks.quit()
             default: MacDebugHooks.log("step \(step): unknown")
             }
@@ -117,16 +137,29 @@ import SwiftUI
         NSApp.windows.first { $0.identifier?.rawValue.hasPrefix(MacAppDelegate.mainWindowID) == true }
     }
 
-    /// What the Devices page's Accept does, for a lab contact only: a lab run cannot click it.
-    private static func accept(_ jid: String, model: AppModel) async {
-        guard model.isLabAccount, jid.hasSuffix("@localhost") else {
-            MacDebugHooks.log("accept: only for a lab account and a lab contact")
+    /// What the Devices page's Accept does, for a contact on a lab or staging server only: a lab run cannot click it.
+    /// For a joined lab room, what Group details' Accept does for each undecided device of another member: a room is
+    /// OMEMO 2 only, while a contact's own page lists the version their 1:1 chat uses, which may be the other record of
+    /// the same device ID.
+    private static func accept(_ address: String, model: AppModel) async {
+        let parts = address.split(separator: "@")
+        let isLabContact = parts.count == 2 && AppModel.labDomains.contains(String(parts[1]))
+        guard model.isLabAccount, isLabContact || model.isGroup(address) && address.hasSuffix("@rooms.localhost") else {
+            MacDebugHooks.log("accept: only for a lab account and a lab contact or room")
             return
         }
-        await model.loadEncryptionDetails(for: jid)
-        let devices = model.encryptionOverview(for: jid)?.devices.filter { $0.jid == jid && $0.trust == .undecided } ?? []
-        for device in devices { await model.setDeviceTrust(device, trust: .accepted, chatID: jid) }
-        MacDebugHooks.log("accept: \(devices.count) device(s) of \(jid)")
+        let devices: [EncryptionDevice]
+        if model.isGroup(address) {
+            await model.loadGroupDetails(room: address)
+            devices = model.groupChats[address]?.devices.filter {
+                $0.jid != model.accountID && $0.jid.hasSuffix("@localhost") && $0.active && $0.trust == .undecided
+            } ?? []
+        } else {
+            await model.loadEncryptionDetails(for: address)
+            devices = model.encryptionOverview(for: address)?.devices.filter { $0.jid == address && $0.trust == .undecided } ?? []
+        }
+        for device in devices { await model.setDeviceTrust(device, trust: .accepted, chatID: address) }
+        MacDebugHooks.log("accept: \(devices.count) device(s) of \(address)" + devices.map { " \($0.deviceID) \($0.profile.label)" }.joined(separator: ","))
     }
 }
 
@@ -144,33 +177,6 @@ struct MacScenePhaseLog: ViewModifier {
             MacLifecycleDebug.scenePhases[window] = nil
             MacDebugHooks.log("scenePhase \(window) content gone")
         }
-    }
-}
-
-/// `-haus-log-notifications`: the model posts its notifications here instead of the notification centre, so a lab run
-/// shows what would be posted without asking for permission (which would put a system prompt on screen). Logs the
-/// thread and kind only, never a title or body.
-enum MacDebugNotificationLog {
-    static let poster: (any NotificationPosting)? =
-        ProcessInfo.processInfo.arguments.contains("-haus-log-notifications") ? LoggingPoster() : nil
-
-    struct LoggingPoster: NotificationPosting {
-        func add(_ request: PlannedNotification) async throws {
-            write("notification posted: thread \(request.threadIdentifier) category \(request.categoryIdentifier)")
-        }
-        func deliveredNotifications() async -> [DeliveredNotification] { [] }
-        func removeDelivered(identifiers: [String]) async {
-            if !identifiers.isEmpty { write("notification removed: \(identifiers.count)") }
-        }
-    }
-
-    /// As `MacDebugHooks.log`, from outside the main actor.
-    private static func write(_ text: String) {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        formatter.dateFormat = "HH:mm:ss.SSS"
-        FileHandle.standardOutput.write(Data("HAUS \(formatter.string(from: Date())) \(text)\n".utf8))
     }
 }
 #endif

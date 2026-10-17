@@ -446,6 +446,13 @@ public actor MessageStore {
             """, [.text(accountID), .text(chatID), .text(title)])
     }
 
+    /// Adds the chat under `title` unless it exists; an existing chat keeps its title and settings, as `upsertChat` would not.
+    public func createChatIfMissing(accountID: String, chatID: String, title: String) throws {
+        guard !accountID.isEmpty, !chatID.isEmpty else { throw MessageStoreError.invalidValue }
+        try connection.execute("INSERT INTO chats(account_id,id,title) VALUES(?,?,?) ON CONFLICT(account_id,id) DO NOTHING",
+                               [.text(accountID), .text(chatID), .text(title)])
+    }
+
     /// Repeated delivery preserves local starring. A conflicting payload is an error.
     @discardableResult public func insertMessage(_ message: StoredMessage) throws -> Bool {
         try connection.transaction { try insertMessageInTransaction(message) }
@@ -2092,6 +2099,31 @@ public actor MessageStore {
                 """, key + [.integer(next), .text(cursor), stamp.map { .real($0.timeIntervalSince1970) } ?? .null])
             if let historyThrough { try recordReadBaseline(accountID: accountID, archiveID: archiveID, sentAt: historyThrough) }
             return next
+        }
+    }
+
+    /// The first newest-first query found `archiveID` empty, so none of it is history: its read baseline is the earliest
+    /// possible. A later connection's first page then holds only what arrived since, and stays unread and alerts, where
+    /// it would otherwise be taken for the history of a new device. A baseline already recorded stays.
+    public func recordEmptyArchive(accountID: String, archiveID: String) throws {
+        try requireTransportOwnership()
+        guard !accountID.isEmpty, !archiveID.isEmpty else { throw MessageStoreError.invalidValue }
+        try connection.transaction { try recordReadBaseline(accountID: accountID, archiveID: archiveID, sentAt: .distantPast) }
+    }
+
+    /// A room joined during a connection is first walked on the next one, whose first page would otherwise take
+    /// everything that arrived since the join for the history of a new member. Once the room admitted us, its archive's
+    /// newest time before the join (`historyThrough`, the archive's own clock; `.distantPast` for an empty archive) is
+    /// the room's read baseline instead: history from before it stays read, what followed is unread and alerts, and
+    /// the first walk keeps it. A room with a checkpoint already has its baseline (or predates baselines, when none may
+    /// be invented), so nothing changes for it.
+    public func recordJoinedRoom(accountID: String, room: String, historyThrough: Date) throws {
+        try requireTransportOwnership()
+        guard !accountID.isEmpty, !room.isEmpty else { throw MessageStoreError.invalidValue }
+        try connection.transaction {
+            guard try connection.query("SELECT 1 FROM archive_checkpoints WHERE account_id=? AND archive_id=?",
+                                       [.text(accountID), .text(room)]).isEmpty else { return }
+            try recordReadBaseline(accountID: accountID, archiveID: room, sentAt: historyThrough)
         }
     }
 

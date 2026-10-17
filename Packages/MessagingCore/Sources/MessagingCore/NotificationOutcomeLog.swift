@@ -5,7 +5,7 @@ import Foundation
 public struct NotificationOutcomeRecord: Codable, Sendable, Equatable {
     public let started: Double
     public let finished: Double
-    /// "suppressed" or "fallback".
+    /// "suppressed", "handed-off" or "fallback".
     public let outcome: String
     public let reason: NotificationFallbackReason?
     /// The furthest phase the run reached.
@@ -20,6 +20,7 @@ public struct NotificationOutcomeRecord: Codable, Sendable, Equatable {
         self.finished = finished.timeIntervalSince1970
         switch outcome {
         case .settled: self.outcome = "suppressed"; reason = nil
+        case .handedOff: self.outcome = "handed-off"; reason = nil
         case let .fallback(value): self.outcome = "fallback"; reason = value
         }
         phase = progress.phase
