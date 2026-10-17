@@ -154,6 +154,7 @@ import SwiftUI
         if content.rows != rows || content.typing != typing || content.loadingEarlier != loadingEarlier {
             if content.rows != rows {
                 indexByID = Dictionary(content.rows.enumerated().map { ($1.message.id, $0) }, uniquingKeysWith: { first, _ in first })
+                Self.findLinks(in: content.rows)
             }
             rows = content.rows
             typing = content.typing
@@ -162,6 +163,15 @@ import SwiftUI
         }
         if content.isGroup != isGroup { isGroup = content.isGroup }
         if content.isLoaded != isLoaded { isLoaded = content.isLoaded }
+    }
+
+    /// Finds the rows' links (`TimelineMessage.links`) away from the main thread, newest first, so a row built later
+    /// reads them from `LinkScan`'s cache: a message's first scan takes more than half of its row's body.
+    private static func findLinks(in rows: [TimelineRow]) {
+        let texts = rows.reversed().compactMap { $0.message.showsPlaceholder ? nil : $0.message.body }
+        Task.detached(priority: .utility) {
+            for text in texts { _ = LinkScan.links(in: text) }
+        }
     }
 
     /// Applies the model's current content and keeps the reader where the policy says.
