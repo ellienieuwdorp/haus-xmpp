@@ -214,6 +214,23 @@ final class DesktopTimelineScrollPolicyTests: XCTestCase {
         XCTAssertNil(landing(-300))
     }
 
+    /// A message taller than the frame can cover it with no row starting on screen: the move lands inside that message,
+    /// at the offset the distance gives it, rather than on the row below it, which a scroll could only bring to the edge.
+    func testAMoveIntoATallMessageLandsInsideIt() {
+        // Rows 90 to 105 laid out, 50 pt each, row 90 at −100; rows 79 and 120 are 3,000 pt.
+        let laidOut = (90...105).map { Placed(id: "m\($0)", index: $0, top: CGFloat($0 - 92) * 50, bottom: CGFloat($0 - 91) * 50, dayHeader: nil) }
+        func landing(_ delta: CGFloat) -> Policy.Landing? {
+            Policy.landing(laidOut, by: delta, frameHeight: 600, rowCount: 200, lead: 12, tail: 12) { $0 == 79 || $0 == 120 ? 3000 : 50 }
+        }
+        // Up: row 79's top was 3,600 pt above the top edge; it reaches 2,400 pt below it.
+        XCTAssertEqual(landing(3000), .row(index: 79, top: -600))
+        // Down: row 120's top was 1,400 pt below the top edge.
+        XCTAssertEqual(landing(-3000), .row(index: 120, top: -1600))
+        // A laid-out message still covering the frame after the move: a step through it is exact.
+        let tall = [Placed(id: "a", index: 0, top: 0, bottom: 50, dayHeader: nil), Placed(id: "b", index: 1, top: 50, bottom: 3050, dayHeader: nil)]
+        XCTAssertNil(Policy.landing(tall, by: -1000, frameHeight: 600, rowCount: 10, lead: 12, tail: 12) { _ in 50 })
+    }
+
     func testTheDayChipShowsTheDayAboveTheScreenAndIsPushedByTheNext() throws {
         let headers: [Int: String] = [0: "Monday", 40: "Tuesday"]
         func chip(_ rows: [Placed]) -> Policy.DayChip? {

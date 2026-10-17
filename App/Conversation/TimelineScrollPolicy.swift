@@ -216,7 +216,8 @@ extension TimelineScrollPolicy {
 
     /// Where a move by `delta` lands, when that is past the rows laid out.
     enum Landing: Equatable {
-        /// The row at `index` with its top edge at `top`: the first row whose top edge is then inside the frame.
+        /// The row at `index` with its top edge at `top`: the first row whose top edge is then inside the frame or, when
+        /// none starts there, the message taller than the frame that covers it from above, at its negative offset.
         case row(index: Int, top: CGFloat)
         /// Past the oldest row: the start of the content.
         case start
@@ -249,6 +250,11 @@ extension TimelineScrollPolicy {
                 top = above
             }
             if index == 0, top > lead { return .start }
+            // No row starts inside the frame: the one above, which reaches past its top edge, covers it.
+            if top >= frameHeight, index > 0 {
+                index -= 1
+                top -= height(index)
+            }
             return index == first.index ? nil : .row(index: index, top: top)
         }
         guard delta < 0, last.top + delta < 0 else { return nil }
@@ -257,6 +263,12 @@ extension TimelineScrollPolicy {
         while index < rowCount, top < 0 {
             top += height(index)
             index += 1
+        }
+        if top >= frameHeight {
+            // No row starts inside the frame: the one above covers it, and a step is exact when that one is laid out.
+            guard index - 1 > last.index else { return nil }
+            index -= 1
+            top -= height(index)
         }
         guard index < rowCount else { return .end }
         // The rest of the content has to fill the frame below the row.
