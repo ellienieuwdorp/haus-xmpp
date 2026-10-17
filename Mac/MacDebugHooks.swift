@@ -61,7 +61,7 @@ import SwiftUI
 ///   that only captures by name. Performance steps (`MacPerfProbe`, whose header says how to build for them, which tours
 ///   make the baseline and what the numbers do not mean): `perf start` and `perf stop <label>` (main-thread time per
 ///   run-loop pass, 120 Hz timer gaps and the timeline's counters in between, and each timeline update's phases),
-///   `display-count` (layer displays by class and owner in later `perf stop`s), `layers` (the window's views and
+///   `display-count` (layer displays by class and owner in the next `perf stop`), `layers` (the window's views and
 ///   layers), `sidebar` (View › Hide Sidebar's toggle, timed), `sidebar-sweep <steps>` (the sidebar's divider moved
 ///   step by step) and `force-noop <count>` (the timeline's forced layout with nothing pending). Search steps
 ///   (`MacConversationFindTour`): `find <text>` (opens search with that text), `find-close`, `find-esc` (as Esc in the
