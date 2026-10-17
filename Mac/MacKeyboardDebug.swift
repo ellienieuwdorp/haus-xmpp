@@ -27,6 +27,8 @@ import AppKit
             logRotors(in: window)
         case "ax-press":
             await pressElement(matching: [argument], in: window)
+        case "ax-action":
+            await performAction(argument, in: window)
         case "focus-timeline":
             MacTimelineController.current?.debugFocusByKey()
         default: break
@@ -162,6 +164,24 @@ import AppKit
         }
         MacDebugHooks.log("ax-press '\(label)': no element")
         return false
+    }
+
+    /// `ax-action <text> | <action>`: performs the custom action of that name on the first element whose label or value
+    /// contains the text, as VoiceOver's actions menu does.
+    private static func performAction(_ argument: String, in window: NSWindow) async {
+        await buildAccessibilityTree()
+        let parts = argument.components(separatedBy: " | ")
+        guard parts.count == 2 else { return MacDebugHooks.log("tour ax-action: give <text> | <action>") }
+        var result = "no element with that action"
+        walk(root(of: window), depth: 0) { element, _ in
+            let text = [label(element), value(element).map { String(describing: $0) }].compactMap { $0 }.joined(separator: " ")
+            guard text.localizedCaseInsensitiveContains(parts[0]),
+                  let action = (ask(element, "accessibilityCustomActions") as [NSAccessibilityCustomAction]?)?.first(where: { $0.name == parts[1] }) else { return true }
+            let performed = action.handler?() ?? ((action.target as? NSObject)?.perform(action.selector, with: action) != nil)
+            result = "\(describe(element)), performed \(performed)"
+            return false
+        }
+        MacDebugHooks.log("ax-action '\(argument)': \(result)")
     }
 
     /// The window's content view: the window itself lists no children until an assistive app has asked for them.

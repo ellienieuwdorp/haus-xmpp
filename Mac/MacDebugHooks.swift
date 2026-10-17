@@ -45,6 +45,7 @@ import SwiftUI
 ///   instead of shown), `ax [<text>]` (the window's accessibility elements that say something, or those whose
 ///   description contains the text), `ax-press <identifier or text>` (VoiceOver's press on the first element with that
 ///   accessibility identifier, or whose description contains the text, in the newest sheet first),
+///   `ax-action <text> | <action>` (VoiceOver's action of that name on the first element whose label or value contains the text),
 ///   `rotors` (each custom rotor and its entries) and `focus-timeline` (gives the
 ///   timeline keyboard focus as Tab into it does, and reports it focused, which SwiftUI does not reliably do in a
 ///   window that is never key). Timeline steps (`MacTimelineDebug`): `capture <name>`
@@ -406,7 +407,7 @@ import SwiftUI
                 let size = argument.split(separator: "x").compactMap { Double($0) }
                 if size.count == 2 { mainWindow?.setContentSize(NSSize(width: size[0], height: size[1])) }
             case "menu": logMenu(for: argument, model: model, window: window)
-            case "focus", "press", "ax", "rotors", "focus-timeline", "ax-press": await MacKeyboardDebug.step(words[0], argument, window: mainWindow)
+            case "focus", "press", "ax", "rotors", "focus-timeline", "ax-press", "ax-action": await MacKeyboardDebug.step(words[0], argument, window: mainWindow)
             case "attach", "drop", "paste", "import", "remove-attachment", "copy-image", "save-over": MacAttachmentTour.step(words[0], argument, model: model)
             case "drop-highlight": tour.dropHighlight = argument != "off"
             case "find", "find-close", "find-esc", "starred", "show-result": MacConversationFindTour.step(words[0], argument)
