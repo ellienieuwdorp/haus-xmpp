@@ -380,7 +380,9 @@ import SwiftUI
     /// Puts the reader back after a resize, in the next main-queue turn: at the end when they follow it, else their resting
     /// row where it was. Never from inside the layout pass reporting a size (the proxy may not be used there), and once
     /// for all the sizes a step of a live resize or a frame of the inspector's animation reports before it runs, as each
-    /// correction lays the whole window out again.
+    /// correction lays the whole window out again. The rows' frames are read as the last pass left them unless a layout
+    /// is still pending, or the timeline has just opened and its rows may not have reported theirs yet: forcing one
+    /// anyway laid the whole window out once more in every step of a live resize and every frame of a sidebar animation.
     private func keepPlace() {
         guard !placePending else { return }
         placePending = true
@@ -388,7 +390,7 @@ import SwiftUI
             MainActor.assumeIsolated {
                 self.placePending = false
                 guard self.layout.isAttached else { return }
-                self.layout.forceLayout()
+                if self.settlingAtOpen || self.layout.layoutPending { self.layout.forceLayout() }
                 if self.followsEnd {
                     if self.layout.distanceFromBottom > 0.5 { self.scrollToNewest() }
                 } else if let rest = self.restingPlace, self.indexByID[rest.id] != nil {
@@ -1133,18 +1135,29 @@ enum MacTimelineItem: Identifiable, Equatable {
         geometry.contentSize.height - geometry.contentOffset.y - geometry.contentInsets.top - geometry.containerSize.height
     }
 
-    /// Runs SwiftUI's pending update and layout now, so the rows' frames are current before anything is corrected.
-    func forceLayout() {
-        #if DEBUG
-        let perfStart = MacPerfProbe.clock()
-        defer { MacPerfProbe.add("ctl.force", since: perfStart) }
-        #endif
+    /// Whether SwiftUI or AppKit has a layout pass to run in the window: the rows' reported frames may be out of date.
+    var layoutPending: Bool {
+        hostingViews.contains { $0.needsLayout } || anchorView?.window?.contentView?.needsLayout == true
+    }
+
+    /// The hosting views around the timeline, innermost first.
+    private var hostingViews: [NSView] {
         var hosts: [NSView] = []
         var view = anchorView?.superview
         while let current = view {
             if NSStringFromClass(type(of: current)).contains("NSHostingView") { hosts.append(current) }
             view = current.superview
         }
+        return hosts
+    }
+
+    /// Runs SwiftUI's pending update and layout now, so the rows' frames are current before anything is corrected.
+    func forceLayout() {
+        #if DEBUG
+        let perfStart = MacPerfProbe.clock()
+        defer { MacPerfProbe.add("ctl.force", since: perfStart) }
+        #endif
+        let hosts = hostingViews
         guard let root = hosts.last ?? anchorView?.window?.contentView else { return }
         for host in hosts { host.needsLayout = true }
         root.needsLayout = true
