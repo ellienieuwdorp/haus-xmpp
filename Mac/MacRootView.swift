@@ -5,8 +5,7 @@ import SwiftUI
 struct MacRootView: View {
     @Bindable var model: AppModel
     @Bindable var window: MacWindowState
-    /// The inspector's column is on screen: from when it starts to open until it has finished closing.
-    @State private var inspectorOnScreen = false
+    @State private var inspectorPresence = MacInspectorPresence()
 
     /// The columns' widths. The split view reads each column's minimum from its content, and the window's minimum must
     /// leave room for all of them: when the window is narrower than the columns' minimums add up to, AppKit's split
@@ -27,10 +26,9 @@ struct MacRootView: View {
 
     private var showsInspector: Bool { window.inspectorShown && window.selection != nil }
 
-    private var windowMinWidth: Double {
-        // Until the inspector has gone, not from the moment it is asked to close: its column still counts while it
-        // animates away.
-        max(720, Self.conversationMinWidth + Self.sidebarWidth.max + (showsInspector || inspectorOnScreen ? Self.inspectorWidth : 0))
+    /// The window's minimum width, with the inspector's column in it or not.
+    static func windowMinWidth(inspector: Bool) -> Double {
+        max(720, conversationMinWidth + sidebarWidth.max + (inspector ? inspectorWidth : 0))
     }
 
     var body: some View {
@@ -49,7 +47,7 @@ struct MacRootView: View {
         // main column, and in a window near it, opening the inspector widened that column past the window for the whole
         // animation, then rewrapped the whole timeline at its final width in one long pass.
         .frame(minHeight: Self.windowMinHeight)
-        .background(MacWindowMinimum(width: windowMinWidth))
+        .background(MacRootMinimum(showsInspector: showsInspector, presence: inspectorPresence))
         .alert("Something needs attention", isPresented: Binding(
             get: { model.error != nil }, set: { if !$0 { model.error = nil } }
         )) {
@@ -79,10 +77,11 @@ struct MacRootView: View {
             }
             .inspectorColumnWidth(Self.inspectorWidth)
             .background(MacColumnPresence { present in
-                inspectorOnScreen = present
+                inspectorPresence.onScreen = present
                 // A pushed page stays alive in the hidden column, and its toolbar items (Refresh) would move into the
-                // conversation's toolbar; the inspector opens on the chat's details again.
-                if !present, !showsInspector { window.inspectorPath.removeAll() }
+                // conversation's toolbar; the inspector opens on the chat's details again. Only when there is one, so
+                // the closing inspector writes no state it leaves unchanged.
+                if !present, !showsInspector, !window.inspectorPath.isEmpty { window.inspectorPath.removeAll() }
             })
         }
         .id(model.accountID)
@@ -274,6 +273,24 @@ struct MacInspectorPage: ViewModifier {
 
 extension View {
     func macInspectorPage(_ title: String) -> some View { modifier(MacInspectorPage(title: title)) }
+}
+
+/// Whether the inspector's column is on screen: from when it starts to open until it has finished closing. Its own
+/// object, read only by `MacRootMinimum`: as the root view's state, the column going re-ran the root view, the
+/// conversation's toolbar items with it, in the closing animation's last frame, its longest.
+@MainActor @Observable private final class MacInspectorPresence {
+    var onScreen = false
+}
+
+/// The window's minimum width: with the inspector's column until it has gone, not from the moment it is asked to close,
+/// since the column still counts while it animates away.
+private struct MacRootMinimum: View {
+    let showsInspector: Bool
+    let presence: MacInspectorPresence
+
+    var body: some View {
+        MacWindowMinimum(width: MacRootView.windowMinWidth(inspector: showsInspector || presence.onScreen))
+    }
 }
 
 /// Holds the window's content at least `width` wide, with a required constraint of its own on the window's content
