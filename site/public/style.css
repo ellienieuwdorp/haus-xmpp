@@ -100,19 +100,14 @@ a:hover { text-decoration: underline; }
   box-shadow: 0 0 0 1px var(--rule), 0 20px 50px rgba(0, 0, 0, 0.12);
 }
 
-/* Store-style badges, side by side. Two equal columns with the
-   screenshots' gap put the space between the badges right under the
-   space between the screenshots, whatever the badge widths. */
+/* Store-style badges, side by side, with the screenshots' gap. */
 .badges {
   margin-top: var(--space);
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px var(--gap);
-  width: 100%;
+  justify-content: center;
 }
-
-.badges .badge:nth-child(odd) { justify-self: end; }
-.badges .badge:nth-child(even) { justify-self: start; }
 
 .badge {
   display: inline-flex;
@@ -144,6 +139,18 @@ a:hover { text-decoration: underline; }
   justify-content: center;
   line-height: var(--links);
 }
+
+/* Two items in equal columns either side of the centre line, so the
+   space between them sits under the space between the screenshots
+   whatever their widths. */
+.pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+}
+
+.pair > :nth-child(odd) { justify-self: end; }
+.pair > :nth-child(even) { justify-self: start; }
 
 /* Text pages */
 
