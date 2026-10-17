@@ -33,7 +33,9 @@ import SwiftUI
 ///   Message actions by message ID in the open chat, as the bubble's menu performs them:
 ///   `reply|edit|star|retry|unsend|encryption|report|select-text <id>`, `react <id> <emoji>`, `pick-emoji <id>` (the
 ///   emoji picker's popover), `hover <id>|off` (shows that bubble's hover toolbar until `hover off`), and `menu <id>`
-///   (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's), `minimums` (logs the minimum
+///   (logs the bubble's menu, as no event can open it; an unknown ID lists the chat's). Changes to a sample message as
+///   the model makes them, with no dialog or composer: `model-edit <id> <text>`, `model-unsend <id>`, `model-retry <id>`
+///   and `receipt <id> delivered|displayed` (a sample peer's receipt or read marker). `minimums` (logs the minimum
 ///   size of the window's content and of each hosting view in it, the split view's columns among them). Keyboard and
 ///   VoiceOver steps (`MacKeyboardDebug`): `focus` (logs which view has the keyboard: the composer, a bubble's text or
 ///   another, the timeline's focus and focused message, the focused accessibility element and whether Full Keyboard Access
@@ -43,6 +45,7 @@ import SwiftUI
 ///   instead of shown), `ax [<text>]` (the window's accessibility elements that say something, or those whose
 ///   description contains the text), `ax-press <identifier or text>` (VoiceOver's press on the first element with that
 ///   accessibility identifier, or whose description contains the text, in the newest sheet first),
+///   `ax-action <text> | <action>` (VoiceOver's action of that name on the first element whose label or value contains the text),
 ///   `rotors` (each custom rotor and its entries) and `focus-timeline` (gives the
 ///   timeline keyboard focus as Tab into it does, and reports it focused, which SwiftUI does not reliably do in a
 ///   window that is never key). Timeline steps (`MacTimelineDebug`): `capture <name>`
@@ -320,6 +323,32 @@ import SwiftUI
         var messageCommands: [(token: UUID, make: () -> MacMessageCommands)] = []
         /// The open chat's Find in Conversation and Starred Messages, likewise.
         var conversationFind: [(token: UUID, make: () -> MacConversationFindCommands?)] = []
+        /// `messageRequest` and `hoveredMessage` as each message's row reads them, one object per message, so a step on one
+        /// message runs only that row's body.
+        @ObservationIgnored private var rows: [String: Row] = [:]
+
+        func row(_ id: String) -> Row {
+            if let row = rows[id] { return row }
+            let row = Row()
+            rows[id] = row
+            return row
+        }
+
+        func setMessageRequest(_ request: MessageRequest) {
+            messageRequest = request
+            row(request.messageID).request = request
+        }
+
+        func setHoveredMessage(_ id: String?) {
+            if let hoveredMessage { row(hoveredMessage).hovered = false }
+            hoveredMessage = id
+            if let id { row(id).hovered = true }
+        }
+
+        @Observable @MainActor final class Row {
+            var request: MessageRequest?
+            var hovered = false
+        }
     }
 
     struct MessageRequest: Equatable {
@@ -362,14 +391,23 @@ import SwiftUI
             case "reply" where argument == "newest", "edit" where argument == "newest": composerStep(words[0], argument, model: model)
             case "reply", "edit", "star", "retry", "unsend", "encryption", "report", "select-text", "react", "pick-emoji":
                 let parts = argument.split(separator: " ", maxSplits: 1).map(String.init)
-                tour.messageRequest = MessageRequest(verb: words[0], messageID: parts.first ?? "", argument: parts.count > 1 ? parts[1] : "",
-                                                     serial: (tour.messageRequest?.serial ?? 0) + 1)
-            case "hover": tour.hoveredMessage = argument == "off" ? nil : argument
+                tour.setMessageRequest(MessageRequest(verb: words[0], messageID: parts.first ?? "", argument: parts.count > 1 ? parts[1] : "",
+                                                      serial: (tour.messageRequest?.serial ?? 0) + 1))
+            case "hover": tour.setHoveredMessage(argument == "off" ? nil : argument)
+            case "model-edit", "model-unsend", "model-retry", "receipt":
+                let parts = argument.split(separator: " ", maxSplits: 1).map(String.init)
+                let id = parts.first ?? "", rest = parts.count > 1 ? parts[1] : ""
+                switch words[0] {
+                case "model-edit": _ = await model.edit(messageID: id, body: rest)
+                case "model-unsend": await model.unsend(messageID: id)
+                case "model-retry": await model.retryMessage(id)
+                default: await model.recordSampleReceipt(read: rest == "displayed", messageID: id)
+                }
             case "size":
                 let size = argument.split(separator: "x").compactMap { Double($0) }
                 if size.count == 2 { mainWindow?.setContentSize(NSSize(width: size[0], height: size[1])) }
             case "menu": logMenu(for: argument, model: model, window: window)
-            case "focus", "press", "ax", "rotors", "focus-timeline", "ax-press": await MacKeyboardDebug.step(words[0], argument, window: mainWindow)
+            case "focus", "press", "ax", "rotors", "focus-timeline", "ax-press", "ax-action": await MacKeyboardDebug.step(words[0], argument, window: mainWindow)
             case "attach", "drop", "paste", "import", "remove-attachment", "copy-image", "save-over": MacAttachmentTour.step(words[0], argument, model: model)
             case "drop-highlight": tour.dropHighlight = argument != "off"
             case "find", "find-close", "find-esc", "starred", "show-result": MacConversationFindTour.step(words[0], argument)

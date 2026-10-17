@@ -17,9 +17,9 @@ struct MacTimeline<Row: View>: View {
     /// One message's row.
     @ViewBuilder let row: (TimelineRow) -> Row
     /// The reader's row, written by SwiftUI as the reader scrolls. Code sets it only for the layout pass that lands a
-    /// page above the reader (`MacTimelineController.update`) and clears it right after: a scroll-to-row is ignored
-    /// while the bound position holds a row code set.
-    @State private var topID: String?
+    /// page above the reader (`MacTimelineController.update`), or an offset for the pass that lands a long jump
+    /// (`approach`), and clears it right after: a scroll-to-row is ignored while the bound position holds a row code set.
+    @State private var position = ScrollPosition(idType: String.self)
     @FocusState private var focused: Bool
     @Namespace private var rotors
 
@@ -30,7 +30,7 @@ struct MacTimeline<Row: View>: View {
                 MacTimelineRows(controller: controller, rotors: rotors, row: row).equatable()
             }
             .coordinateSpace(.named(MacTimelineLayout.space))
-            .modifier(ReaderPosition(id: $topID))
+            .modifier(ReaderPosition(position: $position))
             .defaultScrollAnchor(.bottom, for: .initialOffset)
             .defaultScrollAnchor(.bottom, for: .sizeChanges)
             .onGeometryChange(for: CGSize.self) { $0.size } action: { controller.resized($0) }
@@ -38,7 +38,7 @@ struct MacTimeline<Row: View>: View {
             .onScrollPhaseChange { _, phase in controller.phaseChanged(phase) }
             .onAppear {
                 controller.layout.proxy = proxy
-                controller.layout.position = $topID
+                controller.layout.scrollPosition = $position
             }
             .focusable()
             .focused($focused)
@@ -80,20 +80,20 @@ struct MacTimeline<Row: View>: View {
     }
 }
 
-/// Binds the reader's row through `scrollPosition(id:anchor: .top)`, which keeps it through resizes and through content
+/// Binds the reader's row through `scrollPosition(_:anchor: .top)`, which keeps it through resizes and through content
 /// changes while no gesture runs. `-haus-timeline-unbound` (DEBUG) leaves it out, to test the controller's hold alone.
 private struct ReaderPosition: ViewModifier {
-    @Binding var id: String?
+    @Binding var position: ScrollPosition
 
     func body(content: Content) -> some View {
         #if DEBUG
         if MacDebugHooks.has("-haus-timeline-unbound") {
             content
         } else {
-            content.scrollPosition(id: $id, anchor: .top)
+            content.scrollPosition($position, anchor: .top)
         }
         #else
-        content.scrollPosition(id: $id, anchor: .top)
+        content.scrollPosition($position, anchor: .top)
         #endif
     }
 }

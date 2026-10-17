@@ -5,7 +5,11 @@ import SwiftUI
 /// bubble carries the message's menu (`MacMessageMenu`), on a right-click, from the hover toolbar beside it, and on
 /// Return while it has the timeline's keyboard focus. VoiceOver reads the day header as a heading and the rest as one
 /// element, with the menu's actions.
-struct MacTimelineRow: View {
+///
+/// Equal for the same row of the same chat (`.equatable()` where the conversation makes it), so a timeline update runs
+/// only the bodies of the rows it changed: the handlers act on the conversation's model and state, which every copy of
+/// them shares, so a newer copy of them changes nothing.
+struct MacTimelineRow: View, Equatable {
     let row: TimelineRow
     let isGroup: Bool
     /// The contact's name in a direct chat, which VoiceOver reads as the sender of what they sent.
@@ -29,6 +33,10 @@ struct MacTimelineRow: View {
     @State private var toolbarBuilt = false
 
     private var message: TimelineMessage { row.message }
+
+    nonisolated static func == (left: Self, right: Self) -> Bool {
+        left.row == right.row && left.isGroup == right.isGroup && left.contactName == right.contactName
+    }
 
     var body: some View {
         #if DEBUG
@@ -82,8 +90,8 @@ struct MacTimelineRow: View {
             if shown, !toolbarBuilt { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { toolbarBuilt = true } }
         }
         #if DEBUG
-        .onChange(of: MacDebugHooks.tour.messageRequest) { _, request in
-            guard let request, request.messageID == message.id else { return }
+        .onChange(of: MacDebugHooks.tour.row(message.id).request) { _, request in
+            guard let request else { return }
             switch request.verb {
             case "select-text": perform(.selectText, link: nil)
             case "pick-emoji": choosingEmoji = true
@@ -172,7 +180,7 @@ struct MacTimelineRow: View {
 
     private var toolbarShown: Bool {
         #if DEBUG
-        let forced = MacDebugHooks.tour.hoveredMessage == message.id
+        let forced = MacDebugHooks.tour.row(message.id).hovered
         #else
         let forced = false
         #endif
@@ -183,11 +191,11 @@ struct MacTimelineRow: View {
     /// bubble's top outer corner instead, so it never runs past the window's edge. Once built it stays laid out and only
     /// fades, so a menu opened from it stays attached when the pointer moves into the menu and off the row.
     private var toolbar: some View {
-        let replies = MessageActionMenu.items(for: message).contains { $0.kind == .reply }
         let shown = toolbarShown
         // The guides go on the stack around it: on a view inside a condition they would not reach the overlay.
         return ZStack {
             if toolbarBuilt {
+                let replies = MessageActionMenu.items(for: message).contains { $0.kind == .reply }
                 MacMessageToolbar(message: message, react: { choosingEmoji = true },
                                   reply: replies ? { perform(.reply, link: nil) } : nil) { menu(link: nil) }
                     .transition(.opacity)
@@ -205,7 +213,7 @@ struct MacTimelineRow: View {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: shown)
     }
 
-    private func menu(link: URL?) -> some View {
+    private func menu(link: URL?) -> MacMessageMenuContent {
         MacMessageMenuContent(menu: MacMessageMenu(message: message, link: link), perform: perform, react: react, moreReactions: { choosingEmoji = true })
     }
 
@@ -249,7 +257,7 @@ struct BubbleWidth: Layout {
 
 /// Text, quote, attachment line and the quiet footer (edited, security notice, time, status mark) inside the bubble.
 /// Reaction pills are `MacReactionRow`, hung off its outer bottom corner by the row.
-struct MacBubble<CardMenu: View>: View {
+struct MacBubble: View {
     let message: TimelineMessage
     let accent: AccentTheme
     let openAttachment: () -> Void
@@ -258,8 +266,9 @@ struct MacBubble<CardMenu: View>: View {
     let selectAllRequests: Int
     /// The message's menu for a right-click on the text, with the link's items when it lands on one.
     let textMenu: (URL?) -> NSMenu
-    /// The message's menu for a right-click on the preview card, which is a link too.
-    @ViewBuilder let cardMenu: (URL) -> CardMenu
+    /// The message's menu for a right-click on the preview card, which is a link too. Of one type, not generic: a
+    /// generic view looks the types in its body up again each time the body runs.
+    let cardMenu: (URL) -> MacMessageMenuContent
     @Environment(\.openURL) private var openURL
 
     private var textColor: Color { message.isOutgoing ? Color(platform: accent.bubbleText) : .primary }

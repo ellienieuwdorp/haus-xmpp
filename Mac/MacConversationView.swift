@@ -38,6 +38,10 @@ struct MacConversationView: View {
     @State private var dropTargeted = false
     /// Bumped by Find; the find bar's field takes focus on each change.
     @State private var findRequests = 0
+    /// The bubbles' `openURL`, one for the view's life: a new action on each update of this view would change every
+    /// row's environment and run all their bodies again. What it performs is set while the view is shown: it holds this
+    /// view, whose state holds it.
+    @State private var linkAction = MacLinkAction()
     #if DEBUG
     @State private var debugToken = UUID()
     #endif
@@ -74,6 +78,7 @@ struct MacConversationView: View {
             }
         }
         .onAppear {
+            linkAction.perform = { open($0) }
             guard timeline == nil else { return }
             let model = model, chatID = chatID
             let timeline = MacTimelineController(model: model, chatID: chatID) {
@@ -88,7 +93,10 @@ struct MacConversationView: View {
             }
             self.timeline = timeline
         }
-        .onDisappear { MacComposer.endEditing(composerIntent, account: model.accountID, chatID: chatID) }
+        .onDisappear {
+            linkAction.perform = { _ in }
+            MacComposer.endEditing(composerIntent, account: model.accountID, chatID: chatID)
+        }
         // Its own view, so only it reads the messages: this view's body never reruns for a new message.
         .overlay { if let timeline { MacEmptyNotice(timeline: timeline, presenter: presenter) } }
         // The Message menu's targets; their own view too, as they change with the messages.
@@ -192,7 +200,7 @@ struct MacConversationView: View {
         // Closed by the root when the selection moves on or the window closes: SwiftUI may build the detail column more
         // than once for one selection, and a late disappearance would close the chat the new view just opened.
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
-        .environment(\.openURL, OpenURLAction { url in open(url); return .handled })
+        .environment(\.openURL, linkAction.action)
         .confirmationDialog(phoneLink?.number ?? "", isPresented: Binding(get: { phoneLink != nil }, set: { if !$0 { phoneLink = nil } }),
                             titleVisibility: .visible, presenting: phoneLink) { link in
             Button("Call") { NSWorkspace.shared.open(link.call) }
@@ -303,6 +311,7 @@ struct MacConversationView: View {
         let contactName = isGroup ? nil : title
         return MacTimeline(controller: timeline, contactName: contactName) { row in
             MacTimelineRow(row: row, isGroup: timeline.isGroup, contactName: contactName, handlers: messageHandlers, openAttachment: { openAttachment(of: row.message) })
+                .equatable()
                 .modifier(MacFindResult(timeline: timeline, id: row.message.id))
                 .onAppear {
                     visibleRows.ids.insert(row.message.id)
@@ -436,4 +445,14 @@ private struct PhoneLink {
 /// A plain reference holder, so changing it never invalidates the view that owns it.
 @MainActor private final class VisibleRows {
     var ids: Set<String> = []
+}
+
+/// An `openURL` action that keeps its identity while what it does is set again.
+@MainActor private final class MacLinkAction {
+    var perform: (URL) -> Void = { _ in }
+
+    private(set) lazy var action = OpenURLAction { [weak self] url in
+        MainActor.assumeIsolated { self?.perform(url) }
+        return .handled
+    }
 }

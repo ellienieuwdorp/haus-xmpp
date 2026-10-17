@@ -16,6 +16,8 @@ struct MacBubbleText: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var openLink: (URL) -> Void = { _ in }
         var selectAllRequests = 0
+        /// The link colour the view has.
+        var linkColor: NSColor?
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
             guard let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)) else { return false }
@@ -31,9 +33,13 @@ struct MacBubbleText: NSViewRepresentable {
         let perfStart = MacPerfProbe.clock()
         defer { MacPerfProbe.add("text.make", since: perfStart) }
         #endif
-        let view = BubbleTextView.make(drawsWhole: BubbleTextView.drawsWhole(text))
+        let view = BubbleTextView.make(text, drawsWhole: BubbleTextView.drawsWhole(text))
         view.delegate = context.coordinator
         context.coordinator.selectAllRequests = selectAllRequests
+        // Here, before the view is in a window, so the first update finds nothing to change: setting the text or the
+        // link attributes on a view in a window marks all of it for display.
+        context.coordinator.linkColor = linkColor
+        view.linkTextAttributes = Self.linkAttributes(linkColor)
         return view
     }
 
@@ -53,12 +59,19 @@ struct MacBubbleText: NSViewRepresentable {
         view.debugMessageID = row.id
         #endif
         if view.textStorage?.isEqual(to: text) != true { view.textStorage?.setAttributedString(text) }
-        view.linkTextAttributes = [.foregroundColor: linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue, .cursor: NSCursor.pointingHand]
+        if context.coordinator.linkColor != linkColor {
+            context.coordinator.linkColor = linkColor
+            view.linkTextAttributes = Self.linkAttributes(linkColor)
+        }
         if context.coordinator.selectAllRequests != selectAllRequests {
             context.coordinator.selectAllRequests = selectAllRequests
             view.window?.makeFirstResponder(view)
             view.selectAll(nil)
         }
+    }
+
+    private static func linkAttributes(_ color: NSColor) -> [NSAttributedString.Key: Any] {
+        [.foregroundColor: color, .underlineStyle: NSUnderlineStyle.single.rawValue, .cursor: NSCursor.pointingHand]
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: BubbleTextView, context: Context) -> CGSize? {
@@ -139,8 +152,9 @@ final class BubbleTextView: NSTextView {
     /// The narrowest a bubble's text is laid out: the narrowest bubble (`BubbleWidth`) less its padding.
     private static let narrowestText: CGFloat = 120 - 2 * 12
 
-    static func make(drawsWhole: Bool) -> BubbleTextView {
+    static func make(_ text: NSAttributedString, drawsWhole: Bool) -> BubbleTextView {
         let stack = MacBubbleText.TextStack()
+        stack.storage.setAttributedString(text)
         stack.container.size = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         stack.container.widthTracksTextView = true
         let view = BubbleTextView(frame: .zero, textContainer: stack.container)

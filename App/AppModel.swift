@@ -2941,6 +2941,16 @@ final class AppModel {
     }
 
     #if DEBUG
+    /// The Mac tour's `receipt` step: a sample peer's receipt or read marker for one of our sample messages, recorded as
+    /// the receive path records one.
+    func recordSampleReceipt(read: Bool, messageID: String) async {
+        guard isDemo, let store,
+              let message = messages.first(where: { $0.id == messageID }), message.isOutgoing, let wireID = message.wireID else { return }
+        try? await store.recordReceipt(accountID: accountID, event: MessageEvent(id: UUID().uuidString, chatID: message.chatID, actorID: message.chatID,
+                                                                                targetWireID: wireID, kind: read ? .displayed : .delivered, payload: "{}", updatedAt: Date()))
+        await refresh(.openChat)
+    }
+
     /// `-demo-reactions`: sample messages take reactions, recorded on this device as a peer's would be and never sent,
     /// for captures of the pills after reacting.
     private static let demoReactions = ProcessInfo.processInfo.arguments.contains("-demo-reactions")

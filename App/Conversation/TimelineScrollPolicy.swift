@@ -227,8 +227,9 @@ extension TimelineScrollPolicy {
 
     /// Where moving the content by `delta` (positive moves it down, towards older messages) puts it, when the row that
     /// lands at the top edge is not laid out: walking on from the laid-out rows by each row's `height`, measured or
-    /// estimated. Stepping through laid-out rows (`scrollStep`) builds every screen on the way; one scroll to this row
-    /// builds only the one it lands on. Nil when the landing row is laid out, where a step is exact.
+    /// estimated. Stepping through laid-out rows (`scrollStep`) builds every screen on the way; scrolling to where the
+    /// stack places this row and then to the row builds only the rows it lands among. Nil when the landing row is laid
+    /// out, where a step is exact.
     /// - Parameters:
     ///   - rows: the rows laid out, top to bottom, at least one.
     ///   - rowCount: how many rows there are; indices run from 0, the oldest.
