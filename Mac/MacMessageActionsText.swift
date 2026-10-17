@@ -360,8 +360,9 @@ final class BubbleTextView: NSTextView {
         case "text-select":
             let parts = argument.split(separator: " ")
             guard parts.count == 3, let location = Int(parts[1]), let length = Int(parts[2]),
-                  let text = texts.first(where: { $0.debugMessageID == parts[0] }) else {
-                return MacDebugHooks.log("tour text-select: no text in sight for \(argument)")
+                  let text = texts.first(where: { $0.debugMessageID == parts[0] }), location >= 0, length >= 0,
+                  location + length <= text.string.utf16.count else {
+                return MacDebugHooks.log("tour text-select: no text in sight with that range for \(argument)")
             }
             text.setSelectedRange(NSRange(location: location, length: length))
             report([text], name: nil)
