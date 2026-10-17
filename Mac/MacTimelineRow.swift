@@ -5,7 +5,11 @@ import SwiftUI
 /// bubble carries the message's menu (`MacMessageMenu`), on a right-click, from the hover toolbar beside it, and on
 /// Return while it has the timeline's keyboard focus. VoiceOver reads the day header as a heading and the rest as one
 /// element, with the menu's actions.
-struct MacTimelineRow: View {
+///
+/// Equal for the same row of the same chat (`.equatable()` where the conversation makes it), so a timeline update runs
+/// only the bodies of the rows it changed: the handlers act on the conversation's model and state, which every copy of
+/// them shares, so a newer copy of them changes nothing.
+struct MacTimelineRow: View, Equatable {
     let row: TimelineRow
     let isGroup: Bool
     /// The contact's name in a direct chat, which VoiceOver reads as the sender of what they sent.
@@ -29,6 +33,10 @@ struct MacTimelineRow: View {
     @State private var toolbarBuilt = false
 
     private var message: TimelineMessage { row.message }
+
+    nonisolated static func == (left: Self, right: Self) -> Bool {
+        left.row == right.row && left.isGroup == right.isGroup && left.contactName == right.contactName
+    }
 
     var body: some View {
         #if DEBUG
