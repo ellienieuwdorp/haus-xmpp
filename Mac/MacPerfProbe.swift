@@ -135,6 +135,7 @@ import SwiftUI
         RunLoop.main.add(timer, forMode: .common)
         gapTimer = timer
         guard observers.isEmpty else { return }
+        wokeAt = 0
         let wake = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, CFRunLoopActivity.afterWaiting.rawValue, true, Int.min) { _, _ in
             MainActor.assumeIsolated { wokeAt = CACurrentMediaTime() }
         }
@@ -158,6 +159,8 @@ import SwiftUI
         active = false
         gapTimer?.invalidate()
         gapTimer = nil
+        for observer in observers { CFRunLoopObserverInvalidate(observer) }
+        observers = []
         let seconds = CACurrentMediaTime() - startedAt
         let busy = passes.sorted()
         let total = busy.reduce(0, +)
