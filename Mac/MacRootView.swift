@@ -155,12 +155,18 @@ struct MacRootView: View {
 
     @ViewBuilder private var detail: some View {
         if let chatID = window.selection {
-            MacConversationView(model: model, chatID: chatID) { window.inspectorShown = true }
+            MacConversationView(model: model, chatID: chatID)
                 .id(chatID)
                 // Both bounds, so the frame takes the width it is offered and asks for none: the window's minimum
                 // keeps the conversation readable (`conversationMinWidth`), and a wide banner or tray cannot raise it.
                 .frame(minWidth: 0, maxWidth: .infinity)
+                // Here, outside the chat's identity, so a switch updates these items instead of replacing them.
                 .toolbar {
+                    // The contact's picture before the name, as the iPhone's header shows it; a click opens the details.
+                    ToolbarItem(placement: .navigation) {
+                        MacChatHeaderAvatar(model: model, chatID: chatID) { window.inspectorShown = true }
+                    }
+                    .sharedBackgroundVisibility(.hidden)
                     ToolbarItem(placement: .primaryAction) {
                         Button { window.inspectorShown.toggle() } label: { Label("Chat Details", systemImage: "info.circle") }
                             .help("Show or hide the chat's details (⌥⌘I)")
@@ -186,6 +192,24 @@ struct MacRootView: View {
                 }
             }
         }
+    }
+}
+
+/// The open chat's picture in the toolbar, before its name.
+private struct MacChatHeaderAvatar: View {
+    let model: AppModel
+    let chatID: String
+    let showDetails: () -> Void
+
+    var body: some View {
+        Button(action: showDetails) {
+            ChatAvatar(key: chatID, name: AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title),
+                       image: model.avatars[chatID], isGroup: model.isGroup(chatID), size: 28)
+        }
+        .buttonStyle(.plain)
+        .help("Show the chat's details")
+        .accessibilityLabel("Chat Details")
+        .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
     }
 }
 
