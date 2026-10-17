@@ -21,6 +21,7 @@ struct MacRootView: View {
     /// its minimum includes both their widths, and the split view adds the inspector's width once more for the
     /// inspector itself. Asking for nothing there keeps the columns' sum what the window really needs.
     private static let conversationMinWidth = 320.0
+    static let windowMinHeight = 480.0
 
     private var showsInspector: Bool { window.inspectorShown && window.selection != nil }
 
@@ -42,7 +43,11 @@ struct MacRootView: View {
                 KeyRecoveryView(model: model)
             }
         }
-        .frame(minWidth: windowMinWidth, minHeight: 480)
+        // The width by a constraint on the window, not this frame: SwiftUI counts a frame's minimum into the split view's
+        // main column, and in a window near it, opening the inspector widened that column past the window for the whole
+        // animation, then rewrapped the whole timeline at its final width in one long pass.
+        .frame(minHeight: Self.windowMinHeight)
+        .background(MacWindowMinimum(width: windowMinWidth))
         .alert("Something needs attention", isPresented: Binding(
             get: { model.error != nil }, set: { if !$0 { model.error = nil } }
         )) {
@@ -243,6 +248,39 @@ struct MacInspectorPage: ViewModifier {
 
 extension View {
     func macInspectorPage(_ title: String) -> some View { modifier(MacInspectorPage(title: title)) }
+}
+
+/// Holds the window's content at least `width` wide, with a required constraint of its own on the window's content
+/// view. AppKit keeps a window's content at its constraints' minimum, live and programmatic resizes alike, and widens the
+/// window when the minimum grows past it, as it does for the minimum SwiftUI reports from the content.
+struct MacWindowMinimum: NSViewRepresentable {
+    let width: Double
+
+    final class View: NSView {
+        var width: Double = 0 { didSet { if width != oldValue { apply() } } }
+        private var constraint: NSLayoutConstraint?
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            super.viewWillMove(toWindow: newWindow)
+            if newWindow == nil { constraint?.isActive = false; constraint = nil }
+        }
+
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); apply() }
+
+        private func apply() {
+            guard let content = window?.contentView else { return }
+            if constraint?.firstItem !== content {
+                constraint?.isActive = false
+                constraint = content.widthAnchor.constraint(greaterThanOrEqualToConstant: width)
+                constraint?.isActive = true
+            }
+            constraint?.constant = width
+        }
+    }
+
+    func makeNSView(context: Context) -> View { View() }
+
+    func updateNSView(_ view: View, context: Context) { view.width = width }
 }
 
 /// Reports whether the column it sits in is on screen. A split view hides a collapsed column only once it has
