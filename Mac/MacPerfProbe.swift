@@ -31,6 +31,10 @@ import SwiftUI
 /// - `sidebar-sweep <steps>`: moves the sidebar's divider from its width to zero and back in even steps, one every
 ///   8 ms, each laid out, displayed and committed at once, and logs the step times.
 /// - `force-noop <count>`: times the timeline's forced layout with nothing pending, the fixed cost of each correction.
+/// - `split [label]`: logs the window's split views with each item's controller, width and state, and the open timeline's
+///   chain of hosting, scroll and split views with their addresses; two of these around a change show what it rebuilt.
+/// - `split-watch <seconds>`: runs while the next steps play and logs every pass that changes the window's width or
+///   minimum, a split item's width or the timeline's, or that takes over 8 ms, with the pass's time.
 /// The timeline's own steps (`MacTimelineDebug`, `MacDebugHooks.ScrollProbe`) drive the scenarios: `scroll <seconds>
 /// [paging]`, `scroll by <points>`, `drag <points> <seconds>`, `resize-sweep`.
 ///
@@ -101,6 +105,10 @@ import SwiftUI
             if let window { await sidebarSweep(window, steps: Int(argument) ?? 30) }
         case "force-noop":
             await forceNoop(Int(argument) ?? 20)
+        case "split":
+            if let window { logSplit(window, argument) }
+        case "split-watch":
+            if let window { watchSplit(window, seconds: Double(argument) ?? 1) }
         default: break
         }
     }
@@ -228,6 +236,59 @@ import SwiftUI
         samples.sort()
         MacDebugHooks.log("perf force-noop \(samples.count): median \(String(format: "%.2f", quantile(samples, 0.5) * 1_000)) ms, max \(String(format: "%.2f", (samples.last ?? 0) * 1_000)) ms")
     }
+
+    // MARK: Split view
+
+    /// `split [label]`: the window's split views, each item's controller, width and state, and the open timeline's view
+    /// chain up to the window, each view with its address, so two of these logs show what a change rebuilt.
+    private static func logSplit(_ window: NSWindow, _ label: String) {
+        for split in splitViews(in: window.contentView?.superview) {
+            let controller = split.delegate as? NSSplitViewController
+            let items = controller?.splitViewItems.map { item in
+                "\(NSStringFromClass(type(of: item.viewController))) \(address(item.viewController.view)) w \(Int(item.viewController.view.frame.width))"
+                    + "\(item.isCollapsed ? " collapsed" : "")\(item.viewController.view.isHidden ? " hidden" : "") behavior \(item.behavior.rawValue)"
+            } ?? split.arrangedSubviews.map { "\(NSStringFromClass(type(of: $0))) w \(Int($0.frame.width))" }
+            MacDebugHooks.log("split \(label): \(address(split)) \(Int(split.frame.width)) [\(items.joined(separator: "; "))]")
+        }
+        var chain: [String] = []
+        var view = MacTimelineController.current?.layout.anchorView
+        while let current = view {
+            let name = NSStringFromClass(type(of: current))
+            if name.contains("Hosting") || current is NSScrollView || current is NSSplitView || name.contains("Split") { chain.append("\(name.prefix(60)) \(address(current))") }
+            view = current.superview
+        }
+        let size = MacTimelineController.current?.layout.size ?? .zero
+        MacDebugHooks.log("split \(label) window \(Int(window.frame.width)) content min \(Int(window.contentMinSize.width)), timeline \(Int(size.width))x\(Int(size.height)), chain: \(chain.joined(separator: " < "))")
+    }
+
+    /// `split-watch <seconds>`: for that long, every main run-loop pass that changes the window's width or minimum, a
+    /// split view item's width or the open timeline's width, or that takes over 8 ms, logs them with the pass's time.
+    private static func watchSplit(_ window: NSWindow, seconds: Double) {
+        let splits = splitViews(in: window.contentView?.superview)
+        let end = CACurrentMediaTime() + seconds
+        var last = "", woke: CFTimeInterval = 0
+        let activities = CFRunLoopActivity.beforeWaiting.rawValue | CFRunLoopActivity.afterWaiting.rawValue
+        let observer = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, activities, true, Int.max - 1) { observer, activity in
+            MainActor.assumeIsolated {
+                if activity == .afterWaiting { woke = CACurrentMediaTime(); return }
+                let widths = splits.map { $0.arrangedSubviews.map { "\(Int($0.frame.width))\($0.isHidden ? " hidden" : "")" }.joined(separator: "/") }
+                let timeline = MacTimelineController.current?.layout.size.width ?? 0
+                let state = "window \(Int(window.frame.width)), min \(Int(window.contentMinSize.width)), splits \(widths.joined(separator: " | ")), timeline \(Int(timeline))"
+                let pass = woke > 0 ? CACurrentMediaTime() - woke : 0
+                if state != last || pass > 0.008 { MacDebugHooks.log("split-watch \(ms(pass)) ms: \(state)") }
+                last = state
+                if CACurrentMediaTime() > end, let observer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }
+            }
+        }
+        if let observer { CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes) }
+    }
+
+    private static func splitViews(in view: NSView?) -> [NSSplitView] {
+        guard let view else { return [] }
+        return ((view as? NSSplitView).map { [$0] } ?? []) + view.subviews.flatMap(splitViews(in:))
+    }
+
+    private static func address(_ object: AnyObject) -> String { String(UInt(bitPattern: ObjectIdentifier(object).hashValue), radix: 16) }
 
     // MARK: Layer displays
 
@@ -404,8 +465,7 @@ import SwiftUI
 
     /// The split view whose controller has a sidebar item: the `NavigationSplitView`'s.
     private static func sidebarSplit(_ window: NSWindow) -> (NSSplitView, NSSplitViewController, NSSplitViewItem)? {
-        func splitViews(in view: NSView) -> [NSSplitView] { ((view as? NSSplitView).map { [$0] } ?? []) + view.subviews.flatMap(splitViews(in:)) }
-        for split in splitViews(in: window.contentView?.superview ?? NSView()) {
+        for split in splitViews(in: window.contentView?.superview) {
             if let controller = split.delegate as? NSSplitViewController, let item = controller.splitViewItems.first(where: { $0.behavior == .sidebar }) {
                 return (split, controller, item)
             }

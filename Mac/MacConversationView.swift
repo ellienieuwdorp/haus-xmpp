@@ -14,8 +14,6 @@ import SwiftUI
 struct MacConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
-    /// Opens the chat's details.
-    var showDetails: () -> Void = {}
     /// The timeline's rows and scroll position; made when the view first appears.
     @State private var timeline: MacTimelineController?
     /// Rows laid out in the viewport now (LazyVStack's prefetch may add a row just past the edge), so the start of
@@ -178,19 +176,6 @@ struct MacConversationView: View {
         .background(Color(nsColor: .textBackgroundColor))
         .navigationTitle(title)
         .background { MacConversationSubtitle(model: model, chatID: chatID) }
-        .toolbar {
-            // The contact's picture before the name, as the iPhone's header shows it; a click opens the details.
-            ToolbarItem(placement: .navigation) {
-                Button(action: showDetails) {
-                    ChatAvatar(key: chatID, name: title, image: model.avatars[chatID], isGroup: model.isGroup(chatID), size: 28)
-                }
-                .buttonStyle(.plain)
-                .help("Show the chat's details")
-                .accessibilityLabel("Chat Details")
-                .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
-            }
-            .sharedBackgroundVisibility(.hidden)
-        }
         .quickLookPreview($quickLook)
         #if DEBUG
         // A tour step performing a message action as its menu item would (`MacDebugHooks`).
