@@ -568,12 +568,22 @@ import SwiftUI
     /// Scrolls to where moving by `delta` lands past the laid-out rows; false when that is a laid-out row.
     private func land(_ placed: [TimelineScrollPolicy.PlacedRow], by delta: CGFloat) -> Bool {
         let width = placed.first.flatMap { layout.frame(of: $0.id)?.width }
-        let average = placed.isEmpty ? 0 : placed.reduce(0) { $0 + $1.bottom - $1.top } / CGFloat(placed.count)
+        // The estimate for a row never laid out at this width: the rows that were, less any taller than the frame, which
+        // are rare and would make every row look long.
+        let measured = rows.compactMap { layout.height(of: $0.message.id, width: width) }
+        let usual = measured.filter { $0 < layout.height }
+        let sample = usual.isEmpty ? measured : usual
+        let average = sample.isEmpty ? 0 : sample.reduce(0, +) / CGFloat(sample.count)
         func height(_ id: String) -> CGFloat { layout.height(of: id, width: width) ?? average }
         let lead = Self.topMargin + (loadingEarlier ? height(TimelineItems.loadingEarlierID) : 0)
         let tail = Self.topMargin + (typing != nil ? height(TimelineItems.typingID) : 0)
         guard average > 0, let landing = TimelineScrollPolicy.landing(placed, by: delta, frameHeight: layout.height, rowCount: rows.count, lead: lead,
                                                                       tail: tail, height: { height(self.rows[$0].message.id) }) else { return false }
+        #if DEBUG
+        if MacDebugHooks.has("-haus-timeline-trace") {
+            MacDebugHooks.log("land by \(delta): \(landing) from \(placed.count) rows laid out, \(sample.count) measured, estimate \(average)")
+        }
+        #endif
         switch landing {
         case .row(let index, let top):
             let id = rows[index].message.id
