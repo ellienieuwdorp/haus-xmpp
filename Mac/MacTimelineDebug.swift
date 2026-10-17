@@ -60,24 +60,26 @@ import SwiftUI
 
     /// `resize-sweep <width>x<height> <width>x<height> <steps>`: resizes the main window from the first size to the
     /// second in even steps, one a frame, as a live resize would, and logs how long each step held the main thread: the
-    /// resize with its layout and display, and what ran in the turns after it before the next frame was due.
+    /// resize with its layout and display, and what ran in the turns after it before the next frame was due; and the
+    /// resize's CPU time, which leaves out waiting for a core on a busy machine.
     private static func resizeSweep(_ argument: String, window: NSWindow?) async {
         let parts = argument.split(separator: " ")
         let sizes = parts.prefix(2).map { $0.split(separator: "x").compactMap { Double($0) } }
         guard let window, sizes.count == 2, sizes.allSatisfy({ $0.count == 2 }), let steps = parts.dropFirst(2).first.flatMap({ Int($0) }), steps > 0 else {
             return MacDebugHooks.log("tour resize-sweep \(argument): needs <width>x<height> <width>x<height> <steps>")
         }
-        var synchronous: [Double] = [], whole: [Double] = [], phases: [[Double]] = [[], [], []]
+        var synchronous: [Double] = [], whole: [Double] = [], phases: [[Double]] = [[], [], []], cpu: [Double] = []
         for step in 0...steps {
             let progress = Double(step) / Double(steps)
             let size = NSSize(width: sizes[0][0] + (sizes[1][0] - sizes[0][0]) * progress, height: sizes[0][1] + (sizes[1][1] - sizes[0][1]) * progress)
-            let started = CACurrentMediaTime()
+            let started = CACurrentMediaTime(), startedCPU = MacPerfProbe.cpuTime()
             window.setContentSize(size)
             let sized = CACurrentMediaTime()
             window.contentView?.layoutSubtreeIfNeeded()
             let laidOut = CACurrentMediaTime()
             window.displayIfNeeded()
             synchronous.append(CACurrentMediaTime() - started)
+            cpu.append(MacPerfProbe.cpuTime() - startedCPU)
             phases[0].append(sized - started); phases[1].append(laidOut - sized); phases[2].append(CACurrentMediaTime() - laidOut)
             // A frame later, after whatever the resize scheduled for the next turns.
             try? await Task.sleep(for: .milliseconds(16))
@@ -87,7 +89,7 @@ import SwiftUI
             let sorted = values.sorted()
             return String(format: "median %.1f ms, worst %.1f ms, total %.0f ms", sorted[sorted.count / 2] * 1_000, (sorted.last ?? 0) * 1_000, sorted.reduce(0, +) * 1_000)
         }
-        MacDebugHooks.log("timeline resize-sweep \(argument): \(steps + 1) steps; resize and layout \(summary(synchronous)); step with the next frame \(summary(whole)); setContentSize \(summary(phases[0])), layout \(summary(phases[1])), display \(summary(phases[2]))")
+        MacDebugHooks.log("timeline resize-sweep \(argument): \(steps + 1) steps; resize and layout \(summary(synchronous)); step with the next frame \(summary(whole)); setContentSize \(summary(phases[0])), layout \(summary(phases[1])), display \(summary(phases[2])); resize and layout CPU \(summary(cpu))")
     }
 
     /// `drag <points> <seconds> [phaseless]`: moves the timeline's clip view by `points` (positive towards older messages)

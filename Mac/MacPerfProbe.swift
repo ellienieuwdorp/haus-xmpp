@@ -11,10 +11,12 @@ import SwiftUI
 ///   back to sleep (after Core Animation's commit), in the common modes, and a 120 Hz common-mode timer logs how late its
 ///   ticks ran; the passes the two steps run in count from `start` and up to `stop`. `stop` logs the busy time and share,
 ///   the pass p50/p90/p99/max, the passes over 8.3, 16.7 and 33 ms, the timer's gaps over 16.7 and 33 ms with p95 and
-///   max, and the counters, which `start` resets. Counters are only bumped between the two: `row.body` (message row
-///   bodies), `text.make`, `text.update` and `text.size` (bubble text views made, updated and asked for a size, with their
-///   time), `text.miss` (sizes not in the measurement cache), `ctl.resized`, `ctl.scrolled` and `ctl.force` (the timeline
-///   controller's size and geometry callbacks and its forced layouts).
+///   max, the main thread's CPU time in the same passes (total, p90 and max), and the counters, which `start` resets.
+///   Wall time includes the time the thread waited for a core; on a busy machine its CPU time compares better. Counters
+///   are only bumped between the two: `row.body` (message row bodies), `text.make`, `text.update` and `text.size` (bubble
+///   text views made, updated and asked for a size, with their time), `text.miss` (sizes not in the measurement cache),
+///   `ctl.resized`, `ctl.scrolled` and `ctl.force` (the timeline controller's size and geometry callbacks and its forced
+///   layouts).
 /// - `perf update` lines, logged on their own between `perf start` and `perf stop`: each timeline update that keeps
 ///   the reader's place, split into phases (the forced layout before it, applying the rows, the forced layout after it,
 ///   and the hold or scroll that follows), with the time, rows built and text views made in each.
@@ -29,7 +31,7 @@ import SwiftUI
 /// - `sidebar`: toggles the sidebar as View › Hide Sidebar does (`NSSplitViewController.toggleSidebar`), and logs each
 ///   distinct sidebar and timeline width with its time until the animation settles.
 /// - `sidebar-sweep <steps>`: moves the sidebar's divider from its width to zero and back in even steps, one every
-///   8 ms, each laid out, displayed and committed at once, and logs the step times.
+///   8 ms, each laid out, displayed and committed at once, and logs the step times, in wall and CPU time.
 /// - `force-noop <count>`: times the timeline's forced layout with nothing pending, the fixed cost of each correction.
 /// - `split [label]`: logs the window's split views with each item's controller, width and state, and the open timeline's
 ///   chain of hosting, scroll and split views with their addresses; two of these around a change show what it rebuilt.
@@ -118,6 +120,9 @@ import SwiftUI
     private static var observers: [CFRunLoopObserver] = []
     private static var wokeAt: CFTimeInterval = 0
     private static var passes: [Double] = []
+    /// The main thread's CPU time when the pass woke (`cpuTime`), and each pass's.
+    private static var wokeCPU: CFTimeInterval = 0
+    private static var cpuPasses: [Double] = []
     private static var startedAt: CFTimeInterval = 0
     private static var gapTimer: Timer?
     private static var gaps: [Double] = []
@@ -127,6 +132,7 @@ import SwiftUI
         counts = [:]
         times = [:]
         passes = []
+        cpuPasses = []
         gaps = []
         update = nil
         displayed = []
@@ -135,6 +141,7 @@ import SwiftUI
         startedAt = CACurrentMediaTime()
         // The rest of this pass counts, none of what ran before the step in it.
         wokeAt = startedAt
+        wokeCPU = cpuTime()
         lastTick = startedAt
         gapTimer?.invalidate()
         let timer = Timer(timeInterval: 1 / 120.0, repeats: true) { _ in
@@ -148,7 +155,7 @@ import SwiftUI
         gapTimer = timer
         guard observers.isEmpty else { return }
         let wake = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, CFRunLoopActivity.afterWaiting.rawValue, true, Int.min) { _, _ in
-            MainActor.assumeIsolated { wokeAt = CACurrentMediaTime() }
+            MainActor.assumeIsolated { wokeAt = CACurrentMediaTime(); wokeCPU = cpuTime() }
         }
         // After every other observer, Core Animation's commit (order 2,000,000) among them.
         let sleep = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, CFRunLoopActivity.beforeWaiting.rawValue, true, Int.max) { _, _ in
@@ -156,6 +163,7 @@ import SwiftUI
                 displayed.removeAll(keepingCapacity: true)
                 guard active, wokeAt > 0 else { return }
                 passes.append(CACurrentMediaTime() - wokeAt)
+                cpuPasses.append(cpuTime() - wokeCPU)
                 wokeAt = 0
             }
         }
@@ -168,7 +176,7 @@ import SwiftUI
     private static func stop(_ label: String) {
         guard active else { return MacDebugHooks.log("perf stop \(label): no perf start") }
         let stoppedAt = CACurrentMediaTime()
-        if wokeAt > 0 { passes.append(stoppedAt - wokeAt) }
+        if wokeAt > 0 { passes.append(stoppedAt - wokeAt); cpuPasses.append(cpuTime() - wokeCPU) }
         active = false
         gapTimer?.invalidate()
         gapTimer = nil
@@ -182,6 +190,8 @@ import SwiftUI
             + "\(busy.count) passes, \(busy.filter { $0 > 0.0005 }.count) over 0.5 ms; pass p50 \(ms(quantile(busy, 0.5))) p90 \(ms(quantile(busy, 0.9))) "
             + "p99 \(ms(quantile(busy, 0.99))) max \(ms(busy.last ?? 0)) ms; over 8.3 ms \(busy.filter { $0 > 1 / 120.0 }.count), "
             + "over 16.7 ms \(busy.filter { $0 > 1 / 60.0 }.count), over 33 ms \(busy.filter { $0 > 1 / 30.0 }.count)")
+        let cpu = cpuPasses.sorted()
+        MacDebugHooks.log("perf \(label) cpu: busy \(ms(cpu.reduce(0, +))) ms; pass p90 \(ms(quantile(cpu, 0.9))) max \(ms(cpu.last ?? 0)) ms")
         let sortedGaps = gaps.sorted()
         MacDebugHooks.log("perf \(label) timer gaps: \(sortedGaps.count) ticks, over 16.7 ms \(sortedGaps.filter { $0 > 1 / 60.0 }.count), "
             + "over 33 ms \(sortedGaps.filter { $0 > 1 / 30.0 }.count), p95 \(ms(quantile(sortedGaps, 0.95))) ms, max \(ms(sortedGaps.last ?? 0)) ms")
@@ -190,6 +200,9 @@ import SwiftUI
         }
         MacDebugHooks.log("perf \(label) counters: \(counted.joined(separator: ", "))")
     }
+
+    /// The calling thread's CPU time in seconds: unlike the wall clock, it leaves out the time the thread waited for a core.
+    static func cpuTime() -> CFTimeInterval { Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)) / 1e9 }
 
     private static func quantile(_ sorted: [Double], _ q: Double) -> Double {
         sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, Int(Double(sorted.count) * q))]
@@ -506,14 +519,15 @@ import SwiftUI
             return MacDebugHooks.log("perf sidebar-sweep: needs <steps> and a split view with a sidebar")
         }
         let width = first.frame.width
-        var synchronous: [Double] = [], whole: [Double] = []
+        var synchronous: [Double] = [], whole: [Double] = [], cpu: [Double] = []
         for step in 0...(2 * steps) {
-            let started = CACurrentMediaTime()
+            let started = CACurrentMediaTime(), startedCPU = cpuTime()
             split.setPosition(width * abs(1 - Double(step) / Double(steps)), ofDividerAt: 0)
             window.contentView?.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
             CATransaction.flush()
             synchronous.append(CACurrentMediaTime() - started)
+            cpu.append(cpuTime() - startedCPU)
             try? await Task.sleep(for: .milliseconds(8))
             whole.append(CACurrentMediaTime() - started)
         }
@@ -521,7 +535,7 @@ import SwiftUI
             let sorted = values.sorted()
             return "median \(ms(quantile(sorted, 0.5))) ms, p90 \(ms(quantile(sorted, 0.9))) ms, worst \(ms(sorted.last ?? 0)) ms, total \(ms(sorted.reduce(0, +))) ms"
         }
-        MacDebugHooks.log("perf sidebar-sweep \(steps) steps from \(Int(width)) pt: step \(summary(synchronous)); with the next turns \(summary(whole))")
+        MacDebugHooks.log("perf sidebar-sweep \(steps) steps from \(Int(width)) pt: step \(summary(synchronous)); with the next turns \(summary(whole)); step CPU \(summary(cpu))")
     }
 }
 #endif
