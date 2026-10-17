@@ -127,8 +127,9 @@ final class BubbleTextView: NSTextView {
     /// is backed in full, so a long text keeps AppKit's layer, which backs only the part in sight.
     @MainActor static func drawsWhole(_ text: NSAttributedString) -> Bool {
         // A short message passes without being laid out again at a width it is never shown at: 1,000 characters and
-        // 40 line breaks come to about 125 lines in the narrowest bubble, some 2,100 pt.
-        if text.length <= 1_000, text.string.utf16.lazy.filter({ $0 == 10 }).count <= 40 { return true }
+        // 40 line breaks come to about 125 lines in the narrowest bubble, some 2,100 pt. Every kind of line break counts
+        // (CR, U+2028 and the others break a line as LF does), a CRLF twice.
+        if text.length <= 1_000, text.string.unicodeScalars.lazy.filter(CharacterSet.newlines.contains).count <= 40 { return true }
         return MacBubbleText.measure(text, width: narrowestText).height <= 4_000
     }
 
