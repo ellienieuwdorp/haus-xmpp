@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The open chat's timeline: the rows it shows and the scrolling that SwiftUI's own anchors leave undone.
 ///
-/// The scroll view binds the reader's row through `scrollPosition(id:anchor: .top)`, which keeps it through a resize
+/// The scroll view binds the reader's row through `scrollPosition(_:anchor: .top)`, which keeps it through a resize
 /// and through a content change while no scroll gesture runs. Three things it does not do are done here, after each
 /// update and before the next frame is drawn:
 ///
@@ -328,6 +328,7 @@ import SwiftUI
     /// end is in place, at most four passes.
     func scrollToNewest() {
         guard let proxy = layout.proxy else { return }
+        if layout.frame(of: Self.endID) == nil { approach(edge: .bottom) }
         for _ in 0..<4 {
             if let end = layout.frame(of: Self.endID), abs(end.maxY - layout.height) <= 0.5 { break }
             proxy.scrollTo(Self.endID, anchor: .bottom)
@@ -558,8 +559,42 @@ import SwiftUI
 
     private func scrollToOldest() {
         guard let first = loadingEarlier ? TimelineItems.loadingEarlierID : rows.first?.message.id else { return }
+        if layout.frame(of: first) == nil { approach(edge: .top) }
         // Where the content's top margin puts it when scrolled all the way up.
         place(first, top: Self.topMargin)
+    }
+
+    /// Scrolls to where the scroll view's own sizes put the row at `index` with its top edge at `top`, or to an edge of
+    /// the content, through the bound position's offset, and lays out what that lands on. The scroll view builds only
+    /// the rows an offset lands among; a scroll to a row it has not built sizes every row on the way there. A long jump
+    /// comes here first and then scrolls to its row through `place`, which is laid out or near by then.
+    private func approach(row index: Int, top: CGFloat) {
+        guard let geometry = layout.geometry, let width = placedRows().first.flatMap({ layout.frame(of: $0.id)?.width }) else { return }
+        func height(_ id: String) -> CGFloat? { layout.height(of: id, width: width) }
+        let lead = Self.topMargin + (loadingEarlier ? height(TimelineItems.loadingEarlierID) ?? 0 : 0)
+        let tail = Self.topMargin + (typing != nil ? height(TimelineItems.typingID) ?? 0 : 0)
+        let rowTop = TimelineScrollPolicy.contentTop(of: index, heights: rows.map { height($0.message.id) }, contentHeight: geometry.contentSize.height,
+                                                     lead: lead, tail: tail)
+        // The offset counts from above the top inset; a row's frame from the frame's top edge, below it.
+        approach { $0.scrollTo(y: max(0, rowTop - geometry.contentInsets.top - top)) }
+    }
+
+    private func approach(edge: Edge) {
+        approach { $0.scrollTo(edge: edge) }
+    }
+
+    private func approach(_ scroll: (inout ScrollPosition) -> Void) {
+        guard let position = layout.scrollPosition else { return }
+        scroll(&position.wrappedValue)
+        layout.forceLayout()
+        // Cleared once laid out, as a row bound for an update is: a position code set is put back on later passes.
+        position.wrappedValue = ScrollPosition(idType: String.self)
+        #if DEBUG
+        if MacDebugHooks.has("-haus-timeline-trace") {
+            let placed = placedRows()
+            MacDebugHooks.log("approach: offset \(layout.geometry?.contentOffset.y ?? -1), rows \(placed.first?.index ?? -1)...\(placed.last?.index ?? -1) laid out")
+        }
+        #endif
     }
 
     /// Moves the content by `delta` (positive moves it down, towards older messages). Each step goes through the
@@ -595,26 +630,20 @@ import SwiftUI
 
     /// Scrolls to where moving by `delta` lands past the laid-out rows; nil when that is a laid-out row.
     private func land(_ placed: [TimelineScrollPolicy.PlacedRow], by delta: CGFloat) -> Landed? {
-        let width = placed.first.flatMap { layout.frame(of: $0.id)?.width }
-        // The estimate for a row never laid out at this width: the rows that were, less any taller than the frame, which
-        // are rare and would make every row look long.
-        let measured = rows.compactMap { layout.height(of: $0.message.id, width: width) }
-        let usual = measured.filter { $0 < layout.height }
-        let sample = usual.isEmpty ? measured : usual
-        let average = sample.isEmpty ? 0 : sample.reduce(0, +) / CGFloat(sample.count)
-        func height(_ id: String) -> CGFloat { layout.height(of: id, width: width) ?? average }
+        guard let height = estimatedHeight(among: placed) else { return nil }
         let lead = Self.topMargin + (loadingEarlier ? height(TimelineItems.loadingEarlierID) : 0)
         let tail = Self.topMargin + (typing != nil ? height(TimelineItems.typingID) : 0)
-        guard average > 0, let landing = TimelineScrollPolicy.landing(placed, by: delta, frameHeight: layout.height, rowCount: rows.count, lead: lead,
-                                                                      tail: tail, height: { height(self.rows[$0].message.id) }) else { return nil }
+        guard let landing = TimelineScrollPolicy.landing(placed, by: delta, frameHeight: layout.height, rowCount: rows.count, lead: lead,
+                                                         tail: tail, height: { height(self.rows[$0].message.id) }) else { return nil }
         #if DEBUG
         if MacDebugHooks.has("-haus-timeline-trace") {
-            MacDebugHooks.log("land by \(delta): \(landing) from \(placed.count) rows laid out, \(sample.count) measured, estimate \(average)")
+            MacDebugHooks.log("land by \(delta): \(landing) from \(placed.count) rows laid out")
         }
         #endif
         switch landing {
         case .row(let index, let top):
             let id = rows[index].message.id
+            approach(row: index, top: top)
             place(id, top: TimelineScrollPolicy.reachableTop(top, rowHeight: height(id), frameHeight: layout.height), height: height(id))
             guard layout.frame(of: id) == nil else { return .landed }
             let moved = placed.lazy.compactMap { row in self.layout.frame(of: row.id).map { $0.minY - row.top } }.first
@@ -625,6 +654,19 @@ import SwiftUI
             scrollToNewest()
         }
         return .landed
+    }
+
+    /// The height of a row at the laid-out rows' width: the one it last reported at that width, else an estimate from
+    /// the rows that did, less any taller than the frame, which are rare and would make every row look long. Nil while
+    /// no row was measured at that width.
+    private func estimatedHeight(among placed: [TimelineScrollPolicy.PlacedRow]) -> ((String) -> CGFloat)? {
+        let width = placed.first.flatMap { layout.frame(of: $0.id)?.width }
+        let measured = rows.compactMap { layout.height(of: $0.message.id, width: width) }
+        let usual = measured.filter { $0 < layout.height }
+        let sample = usual.isEmpty ? measured : usual
+        let average = sample.isEmpty ? 0 : sample.reduce(0, +) / CGFloat(sample.count)
+        guard average > 0 else { return nil }
+        return { [layout] id in layout.height(of: id, width: width) ?? average }
     }
 
     // MARK: Jumping to a message
@@ -682,8 +724,16 @@ import SwiftUI
             #endif
             return
         }
-        proxy.scrollTo(id, anchor: .center)
-        layout.forceLayout()
+        if layout.frame(of: id) == nil {
+            // Far off, it is approached first (`approach`): a scroll to a row not laid out sizes every row on the way.
+            if let index = indexByID[id], let height = estimatedHeight(among: placedRows()) {
+                approach(row: index, top: max(0, (layout.height - height(id)) / 2))
+            }
+        }
+        if layout.frame(of: id) == nil {
+            proxy.scrollTo(id, anchor: .center)
+            layout.forceLayout()
+        }
         if let frame = layout.frame(of: id) {
             // Centred below the toolbar, or at the top when taller.
             let centred = max(0, (layout.height - frame.height) / 2)
@@ -1035,8 +1085,15 @@ enum MacTimelineItem: Identifiable, Equatable {
     var geometry: ScrollGeometry?
     var size: CGSize = .zero
     var proxy: ScrollViewProxy?
-    /// The scroll view's bound position: the reader's row, at the top edge.
-    var position: Binding<String?>?
+    /// The scroll view's bound position: the reader's row at the top edge, or for a moment an offset a jump scrolls to.
+    var scrollPosition: Binding<ScrollPosition>?
+    /// The bound position's row.
+    var position: Binding<String?>? {
+        scrollPosition.map { bound in
+            Binding(get: { bound.wrappedValue.viewID(type: String.self) },
+                    set: { bound.wrappedValue = $0.map { ScrollPosition(id: $0, anchor: .top) } ?? ScrollPosition(idType: String.self) })
+        }
+    }
     /// A view inside the scroll view's content, for forcing a layout pass.
     weak var anchorView: NSView?
 
