@@ -21,6 +21,9 @@ struct MacRootView: View {
     /// its minimum includes both their widths, and the split view adds the inspector's width once more for the
     /// inspector itself. Asking for nothing there keeps the columns' sum what the window really needs.
     private static let conversationMinWidth = 320.0
+    /// The window's content is never shorter, so a column laid out at half of it is AppKit's minimum-size pass
+    /// (`MacProbeShield`).
+    static let windowMinHeight = 480.0
 
     private var showsInspector: Bool { window.inspectorShown && window.selection != nil }
 
@@ -42,7 +45,11 @@ struct MacRootView: View {
                 KeyRecoveryView(model: model)
             }
         }
-        .frame(minWidth: windowMinWidth, minHeight: 480)
+        // The width by a constraint on the window, not this frame: SwiftUI counts a frame's minimum into the split view's
+        // main column, and in a window near it, opening the inspector widened that column past the window for the whole
+        // animation, then rewrapped the whole timeline at its final width in one long pass.
+        .frame(minHeight: Self.windowMinHeight)
+        .background(MacWindowMinimum(width: windowMinWidth))
         .alert("Something needs attention", isPresented: Binding(
             get: { model.error != nil }, set: { if !$0 { model.error = nil } }
         )) {
@@ -57,10 +64,10 @@ struct MacRootView: View {
 
     private var split: some View {
         NavigationSplitView {
-            MacChatList(model: model, window: window)
+            MacProbeShield { MacChatList(model: model, window: window) }
                 .navigationSplitViewColumnWidth(min: Self.sidebarWidth.min, ideal: Self.sidebarWidth.ideal, max: Self.sidebarWidth.max)
         } detail: {
-            detail
+            MacProbeShield { detail }
         }
         // On the split view, not inside its detail column: a navigation stack in an inspector placed in the detail
         // pushed its pages into the detail column's own navigation, replacing the conversation.
@@ -148,12 +155,18 @@ struct MacRootView: View {
 
     @ViewBuilder private var detail: some View {
         if let chatID = window.selection {
-            MacConversationView(model: model, chatID: chatID) { window.inspectorShown = true }
+            MacConversationView(model: model, chatID: chatID)
                 .id(chatID)
                 // Both bounds, so the frame takes the width it is offered and asks for none: the window's minimum
                 // keeps the conversation readable (`conversationMinWidth`), and a wide banner or tray cannot raise it.
                 .frame(minWidth: 0, maxWidth: .infinity)
+                // Here, outside the chat's identity, so a switch updates these items instead of replacing them.
                 .toolbar {
+                    // The contact's picture before the name, as the iPhone's header shows it; a click opens the details.
+                    ToolbarItem(placement: .navigation) {
+                        MacChatHeaderAvatar(model: model, chatID: chatID) { window.inspectorShown = true }
+                    }
+                    .sharedBackgroundVisibility(.hidden)
                     ToolbarItem(placement: .primaryAction) {
                         Button { window.inspectorShown.toggle() } label: { Label("Chat Details", systemImage: "info.circle") }
                             .help("Show or hide the chat's details (⌥⌘I)")
@@ -179,6 +192,24 @@ struct MacRootView: View {
                 }
             }
         }
+    }
+}
+
+/// The open chat's picture in the toolbar, before its name.
+private struct MacChatHeaderAvatar: View {
+    let model: AppModel
+    let chatID: String
+    let showDetails: () -> Void
+
+    var body: some View {
+        Button(action: showDetails) {
+            ChatAvatar(key: chatID, name: AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title),
+                       image: model.avatars[chatID], isGroup: model.isGroup(chatID), size: 28)
+        }
+        .buttonStyle(.plain)
+        .help("Show the chat's details")
+        .accessibilityLabel("Chat Details")
+        .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
     }
 }
 
@@ -243,6 +274,70 @@ struct MacInspectorPage: ViewModifier {
 
 extension View {
     func macInspectorPage(_ title: String) -> some View { modifier(MacInspectorPage(title: title)) }
+}
+
+/// Holds the window's content at least `width` wide, with a required constraint of its own on the window's content
+/// view. AppKit keeps a window's content at its constraints' minimum, live and programmatic resizes alike, and widens the
+/// window when the minimum grows past it, as it does for the minimum SwiftUI reports from the content.
+struct MacWindowMinimum: NSViewRepresentable {
+    let width: Double
+
+    final class View: NSView {
+        var width: Double = 0 { didSet { if width != oldValue { apply() } } }
+        private var constraint: NSLayoutConstraint?
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            super.viewWillMove(toWindow: newWindow)
+            if newWindow == nil { constraint?.isActive = false; constraint = nil }
+        }
+
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); apply() }
+
+        private func apply() {
+            guard let content = window?.contentView else { return }
+            if constraint?.firstItem !== content {
+                constraint?.isActive = false
+                constraint = content.widthAnchor.constraint(greaterThanOrEqualToConstant: width)
+                constraint?.isActive = true
+            }
+            constraint?.constant = width
+        }
+    }
+
+    func makeNSView(context: Context) -> View { View() }
+
+    func updateNSView(_ view: View, context: Context) { view.width = width }
+}
+
+/// Keeps a split view column's content at its last real size through AppKit's minimum-size passes. With the inspector's
+/// split view in the window, open or not, every change of the window's size first lays the window's main column out at
+/// its minimum (about 320 by 170 points), then at its real size, and SwiftUI lays the sidebar and the conversation out at
+/// that minimum as well: a step of a live resize laid the timeline out three times more, each time rewrapping every
+/// bubble on screen. No real layout is shorter than the window's minimum height, so a much shorter one is such a pass;
+/// the content keeps the size it has, and the real size follows in the same pass before anything is drawn.
+struct MacProbeShield<Content: View>: View {
+    @ViewBuilder let content: Content
+    /// Outside the layout's cache, which SwiftUI rebuilds whenever the content changes.
+    @State private var last = LastSize()
+
+    final class LastSize { var size: CGSize? }
+
+    var body: some View { ShieldLayout(last: last) { content } }
+
+    private struct ShieldLayout: Layout {
+        let last: LastSize
+
+        /// Measuring is unchanged, so the column's minimum, and the window's, stay what the content asks for.
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            subviews.first?.sizeThatFits(proposal) ?? .zero
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            var size = bounds.size
+            if size.height < MacRootView.windowMinHeight / 2, let kept = last.size { size = kept } else { last.size = size }
+            for subview in subviews { subview.place(at: bounds.origin, proposal: ProposedViewSize(size)) }
+        }
+    }
 }
 
 /// Reports whether the column it sits in is on screen. A split view hides a collapsed column only once it has
