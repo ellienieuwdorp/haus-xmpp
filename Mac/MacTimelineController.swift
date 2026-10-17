@@ -9,7 +9,9 @@ import SwiftUI
 ///
 /// - **Holding the reader's row through an older page.** During a gesture, and after a scroll this controller made,
 ///   SwiftUI keeps the absolute offset, so a page landing above the reader pushes their row a page down. The row and its
-///   distance from the top edge are noted before the update, layout is forced after it, and the row is scrolled back.
+///   distance from the top edge are noted before the update; the bound position is set to that row in the same layout
+///   pass as the page, so the stack lays out the reader's rows rather than the page's, and the row is then scrolled
+///   back to its distance.
 /// - **Following the newest message** when the reader was at the bottom or sent the message: a scroll to the end,
 ///   repeated after each layout pass until it holds (rows measured on arrival move the end), at most four times.
 /// - **Paging**: older history is asked for when the reader's own scroll comes within two screens of the oldest loaded
@@ -188,12 +190,28 @@ import SwiftUI
         let reader = TimelineScrollPolicy.readerRow(before, visibleTop: 0, visibleBottom: layout.height)
         applying = true
         defer { applying = false }
+        var bound = false
+        if case .keepAnchor = placement, let reader, let position = layout.position,
+           let index = next.rows.firstIndex(where: { $0.message.id == reader.id }), index != reader.index {
+            // Rows land above the reader. Bound in the same pass, the reader's rows stay laid out: kept at the old offset
+            // alone, the stack would build the new rows that land there and then the reader's again for the hold. A
+            // change of the bound row is what SwiftUI scrolls for, so one that holds this row already is cleared first.
+            let row = holdable(reader, among: before).first ?? reader
+            if position.wrappedValue == row.id {
+                position.wrappedValue = nil
+                layout.forceLayout()
+            }
+            position.wrappedValue = row.id
+            bound = true
+        }
         apply(next)
         #if DEBUG
         MacPerfProbe.mark("apply")
         #endif
         // Lay the new rows out now, so the correction happens before the next frame is drawn.
         layout.forceLayout()
+        // Held by code, the bound row would be put back on every later layout pass and ignore every scroll to a row.
+        if bound { layout.position?.wrappedValue = nil }
         #if DEBUG
         MacPerfProbe.mark("postforce")
         #endif
@@ -237,8 +255,7 @@ import SwiftUI
     /// row that opened the loaded window, and holding that row's top edge would lift its bubble by the header's height.
     @discardableResult
     private func hold(_ reader: TimelineScrollPolicy.PlacedRow, among before: [TimelineScrollPolicy.PlacedRow]) -> TimelineScrollPolicy.PlacedRow {
-        let height = layout.height
-        let candidates = before.filter { $0.index >= reader.index && $0.top >= 0 && $0.bottom <= height }
+        let candidates = holdable(reader, among: before)
         // The first scroll brings the rows back into layout (a page landing mid-gesture pushes them off), so their new
         // heights can be compared.
         let first = candidates.first ?? reader
@@ -249,6 +266,11 @@ import SwiftUI
         guard let unchanged, unchanged != first else { return first }
         place(unchanged.id, top: unchanged.top)
         return unchanged
+    }
+
+    /// The rows from the reader's on that were inside the frame before an update, which a scroll can put back exactly.
+    private func holdable(_ reader: TimelineScrollPolicy.PlacedRow, among before: [TimelineScrollPolicy.PlacedRow]) -> [TimelineScrollPolicy.PlacedRow] {
+        before.filter { $0.index >= reader.index && $0.top >= 0 && $0.bottom <= layout.height }
     }
 
     /// Scrolls so the row's top edge is at `target` (which must keep the row inside the frame, `reachableTop`), through
@@ -918,6 +940,8 @@ enum MacTimelineItem: Identifiable, Equatable {
     var geometry: ScrollGeometry?
     var size: CGSize = .zero
     var proxy: ScrollViewProxy?
+    /// The scroll view's bound position: the reader's row, at the top edge.
+    var position: Binding<String?>?
     /// A view inside the scroll view's content, for forcing a layout pass.
     weak var anchorView: NSView?
 

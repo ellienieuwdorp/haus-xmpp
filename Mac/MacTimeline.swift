@@ -16,8 +16,9 @@ struct MacTimeline<Row: View>: View {
     var contactName: String? = nil
     /// One message's row.
     @ViewBuilder let row: (TimelineRow) -> Row
-    /// The reader's row, written by SwiftUI as the reader scrolls and never by code: a scroll-to-row is ignored while
-    /// the bound position holds a row code set.
+    /// The reader's row, written by SwiftUI as the reader scrolls. Code sets it only for the layout pass that lands a
+    /// page above the reader (`MacTimelineController.update`) and clears it right after: a scroll-to-row is ignored
+    /// while the bound position holds a row code set.
     @State private var topID: String?
     @FocusState private var focused: Bool
     @Namespace private var rotors
@@ -35,7 +36,10 @@ struct MacTimeline<Row: View>: View {
             .onGeometryChange(for: CGSize.self) { $0.size } action: { controller.resized($0) }
             .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: { _, geometry in controller.scrolled(geometry) }
             .onScrollPhaseChange { _, phase in controller.phaseChanged(phase) }
-            .onAppear { controller.layout.proxy = proxy }
+            .onAppear {
+                controller.layout.proxy = proxy
+                controller.layout.position = $topID
+            }
             .focusable()
             .focused($focused)
             // The focused message carries the ring; the scroll view itself would draw one around the whole timeline.
