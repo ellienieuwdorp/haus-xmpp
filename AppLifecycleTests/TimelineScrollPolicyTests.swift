@@ -231,17 +231,6 @@ final class DesktopTimelineScrollPolicyTests: XCTestCase {
         XCTAssertNil(Policy.landing(tall, by: -1000, frameHeight: 600, rowCount: 10, lead: 12, tail: 12) { _ in 50 })
     }
 
-    func testARowNotMeasuredIsWhereTheStackEstimatesIt() {
-        // 100 rows; the newest ten measured at 50 pt, the other 90 sharing 6,312 − 24 − 500 = 5,788 pt.
-        let heights: [CGFloat?] = Array(repeating: nil, count: 90) + Array(repeating: 50, count: 10)
-        func top(_ index: Int) -> CGFloat { Policy.contentTop(of: index, heights: heights, contentHeight: 6_312, lead: 12, tail: 12) }
-        XCTAssertEqual(top(0), 12)
-        XCTAssertEqual(top(45), 12 + 45 * 5_788 / 90, accuracy: 0.001)
-        XCTAssertEqual(top(95), 12 + 5_788 + 250, accuracy: 0.001)
-        // Every row measured: their own heights.
-        XCTAssertEqual(Policy.contentTop(of: 3, heights: [40, 60, 80, 20], contentHeight: 999, lead: 12, tail: 12), 192)
-    }
-
     func testTheDayChipShowsTheDayAboveTheScreenAndIsPushedByTheNext() throws {
         let headers: [Int: String] = [0: "Monday", 40: "Tuesday"]
         func chip(_ rows: [Placed]) -> Policy.DayChip? {

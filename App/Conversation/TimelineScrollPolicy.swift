@@ -227,9 +227,9 @@ extension TimelineScrollPolicy {
 
     /// Where moving the content by `delta` (positive moves it down, towards older messages) puts it, when the row that
     /// lands at the top edge is not laid out: walking on from the laid-out rows by each row's `height`, measured or
-    /// estimated. Stepping through laid-out rows (`scrollStep`) builds every screen on the way; scrolling to the offset
-    /// the stack gives this row (`contentTop`) and then to the row builds only the rows it lands among. Nil when the
-    /// landing row is laid out, where a step is exact.
+    /// estimated. Stepping through laid-out rows (`scrollStep`) builds every screen on the way; scrolling to where the
+    /// stack places this row and then to the row builds only the rows it lands among. Nil when the landing row is laid
+    /// out, where a step is exact.
     /// - Parameters:
     ///   - rows: the rows laid out, top to bottom, at least one.
     ///   - rowCount: how many rows there are; indices run from 0, the oldest.
@@ -275,21 +275,6 @@ extension TimelineScrollPolicy {
         // The rest of the content has to fill the frame below the row.
         let below = (index..<rowCount).reduce(tail) { $0 + height($1) }
         return top + below < frameHeight ? .end : .row(index: index, top: top)
-    }
-
-    /// Where a lazy stack puts the top edge of the row at `index` in its content: below the rows it measured, at
-    /// their `heights`, and those it has not, at the one estimate it gives a row it has not built, which is what is
-    /// left of `contentHeight` shared among them. A scroll to this offset lands among the rows it aims at without
-    /// building those on the way.
-    /// - Parameters:
-    ///   - heights: each row's measured height, nil for a row not measured; indices run from 0, the oldest.
-    ///   - lead: the content above the oldest row.
-    ///   - tail: the content below the newest row.
-    static func contentTop(of index: Int, heights: [CGFloat?], contentHeight: CGFloat, lead: CGFloat, tail: CGFloat) -> CGFloat {
-        let measured = heights.compactMap { $0 }
-        let unmeasured = heights.count - measured.count
-        let estimate = unmeasured == 0 ? 0 : max(0, contentHeight - lead - tail - measured.reduce(0, +)) / CGFloat(unmeasured)
-        return heights.prefix(index).reduce(lead) { $0 + ($1 ?? estimate) }
     }
 
     /// The floating day chip: which day it shows, where its capsule sits and how visible it is.

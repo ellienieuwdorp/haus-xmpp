@@ -564,17 +564,15 @@ import SwiftUI
         place(first, top: Self.topMargin)
     }
 
-    /// Scrolls to where the scroll view's own sizes put the row at `index` with its top edge at `top`, or to an edge of
-    /// the content, through the bound position's offset, and lays out what that lands on. The scroll view builds only
-    /// the rows an offset lands among; a scroll to a row it has not built sizes every row on the way there. A long jump
-    /// comes here first and then scrolls to its row through `place`, which is laid out or near by then.
+    /// Scrolls to where the scroll view puts the row at `index` with its top edge at `top`, or to an edge of the
+    /// content, through the bound position's offset, and lays out what that lands on. The lazy stack places a row it
+    /// has not built at about the average of those it has, as `estimatedHeight` does, and builds only the rows an
+    /// offset lands among; a scroll to a row it has not built sizes every row on the way there. A long jump comes here
+    /// first and then scrolls to its row through `place`, which is laid out or near by then.
     private func approach(row index: Int, top: CGFloat) {
-        guard let geometry = layout.geometry, let width = placedRows().first.flatMap({ layout.frame(of: $0.id)?.width }) else { return }
-        func height(_ id: String) -> CGFloat? { layout.height(of: id, width: width) }
-        let lead = Self.topMargin + (loadingEarlier ? height(TimelineItems.loadingEarlierID) ?? 0 : 0)
-        let tail = Self.topMargin + (typing != nil ? height(TimelineItems.typingID) ?? 0 : 0)
-        let rowTop = TimelineScrollPolicy.contentTop(of: index, heights: rows.map { height($0.message.id) }, contentHeight: geometry.contentSize.height,
-                                                     lead: lead, tail: tail)
+        guard let geometry = layout.geometry, let height = estimatedHeight(among: placedRows()) else { return }
+        let lead = Self.topMargin + (loadingEarlier ? height(TimelineItems.loadingEarlierID) : 0)
+        let rowTop = rows.prefix(index).reduce(lead) { $0 + height($1.message.id) }
         // The offset counts from above the top inset; a row's frame from the frame's top edge, below it.
         approach { $0.scrollTo(y: max(0, rowTop - geometry.contentInsets.top - top)) }
     }
