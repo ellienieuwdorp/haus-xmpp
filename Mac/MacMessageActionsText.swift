@@ -178,6 +178,12 @@ final class BubbleTextView: NSTextView {
         if drawsWhole { redisplayLayer() }
     }
 
+    /// The text view's own invalidation, for a selection change among others.
+    override func setNeedsDisplay(_ rect: NSRect, avoidAdditionalLayout flag: Bool) {
+        super.setNeedsDisplay(rect, avoidAdditionalLayout: flag)
+        if drawsWhole { redisplayLayer() }
+    }
+
     override var needsDisplay: Bool {
         get { super.needsDisplay }
         set {
