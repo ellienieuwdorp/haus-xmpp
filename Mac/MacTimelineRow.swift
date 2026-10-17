@@ -191,11 +191,11 @@ struct MacTimelineRow: View, Equatable {
     /// bubble's top outer corner instead, so it never runs past the window's edge. Once built it stays laid out and only
     /// fades, so a menu opened from it stays attached when the pointer moves into the menu and off the row.
     private var toolbar: some View {
-        let replies = MessageActionMenu.items(for: message).contains { $0.kind == .reply }
         let shown = toolbarShown
         // The guides go on the stack around it: on a view inside a condition they would not reach the overlay.
         return ZStack {
             if toolbarBuilt {
+                let replies = MessageActionMenu.items(for: message).contains { $0.kind == .reply }
                 MacMessageToolbar(message: message, react: { choosingEmoji = true },
                                   reply: replies ? { perform(.reply, link: nil) } : nil) { menu(link: nil) }
                     .transition(.opacity)
