@@ -171,8 +171,15 @@ import SwiftUI
             apply(next)
             return
         }
+        #if DEBUG
+        MacPerfProbe.beginUpdate(from: rows.count, to: next.rows.count)
+        defer { MacPerfProbe.endUpdate() }
+        #endif
         // A scroll since the last layout pass may not have reported its rows yet.
         layout.forceLayout()
+        #if DEBUG
+        MacPerfProbe.mark("preforce")
+        #endif
         let wasNearBottom = followsEnd || layout.distanceFromBottom < TimelineScrollPolicy.nearBottomDistance
         let placement = TimelineScrollPolicy.Update(previousTailID: rows.last?.message.id, rows: next.rows, wasNearBottom: wasNearBottom,
                                                     typingChanged: typing != next.typing, typingLeft: typing != nil && next.typing == nil,
@@ -182,8 +189,14 @@ import SwiftUI
         applying = true
         defer { applying = false }
         apply(next)
+        #if DEBUG
+        MacPerfProbe.mark("apply")
+        #endif
         // Lay the new rows out now, so the correction happens before the next frame is drawn.
         layout.forceLayout()
+        #if DEBUG
+        MacPerfProbe.mark("postforce")
+        #endif
         switch placement {
         case .keepAnchor:
             if let reader {
@@ -296,6 +309,9 @@ import SwiftUI
     /// last said, not the distance after the layout. The size arrives after the change, so the distance before a height
     /// change is the distance now less the change.
     func resized(_ size: CGSize) {
+        #if DEBUG
+        MacPerfProbe.count("ctl.resized")
+        #endif
         let change = size.height - layout.size.height
         let wasNearBottom = followsEnd || change != 0 && layout.size.height > 0 && layout.distanceFromBottom + change < TimelineScrollPolicy.nearBottomDistance
         let changed = size != layout.size
@@ -342,6 +358,10 @@ import SwiftUI
 
     /// Every change of the scroll view's geometry: the jump button, paging and the day chip follow it.
     func scrolled(_ geometry: ScrollGeometry) {
+        #if DEBUG
+        let perfStart = MacPerfProbe.clock()
+        defer { MacPerfProbe.add("ctl.scrolled", since: perfStart) }
+        #endif
         let previous = layout.geometry
         layout.geometry = geometry
         followEnd(from: previous, to: geometry)
@@ -932,6 +952,10 @@ enum MacTimelineItem: Identifiable, Equatable {
 
     /// Runs SwiftUI's pending update and layout now, so the rows' frames are current before anything is corrected.
     func forceLayout() {
+        #if DEBUG
+        let perfStart = MacPerfProbe.clock()
+        defer { MacPerfProbe.add("ctl.force", since: perfStart) }
+        #endif
         var hosts: [NSView] = []
         var view = anchorView?.superview
         while let current = view {

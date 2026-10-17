@@ -31,6 +31,9 @@ struct MacTimelineRow: View {
     private var message: TimelineMessage { row.message }
 
     var body: some View {
+        #if DEBUG
+        let _ = MacPerfProbe.count("row.body")
+        #endif
         VStack(spacing: 2) {
             if let header = row.dateHeader {
                 Text(header)
