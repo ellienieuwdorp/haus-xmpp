@@ -39,7 +39,8 @@ struct MacConversationView: View {
     /// Bumped by Find; the find bar's field takes focus on each change.
     @State private var findRequests = 0
     /// The bubbles' `openURL`, one for the view's life: a new action on each update of this view would change every
-    /// row's environment and run all their bodies again.
+    /// row's environment and run all their bodies again. What it performs is set while the view is shown: it holds this
+    /// view, whose state holds it.
     @State private var linkAction = MacLinkAction()
     #if DEBUG
     @State private var debugToken = UUID()
@@ -92,7 +93,10 @@ struct MacConversationView: View {
             }
             self.timeline = timeline
         }
-        .onDisappear { MacComposer.endEditing(composerIntent, account: model.accountID, chatID: chatID) }
+        .onDisappear {
+            linkAction.perform = { _ in }
+            MacComposer.endEditing(composerIntent, account: model.accountID, chatID: chatID)
+        }
         // Its own view, so only it reads the messages: this view's body never reruns for a new message.
         .overlay { if let timeline { MacEmptyNotice(timeline: timeline, presenter: presenter) } }
         // The Message menu's targets; their own view too, as they change with the messages.
