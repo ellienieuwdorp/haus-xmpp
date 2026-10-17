@@ -49,6 +49,9 @@ struct MacBubbleText: NSViewRepresentable {
         view.tookFocus = row.timeline.map { timeline in { [weak timeline, id = row.id] in timeline?.bubbleTextFocused(id) } }
         let resultClick = context.environment.findResultClick
         view.plainClick = resultClick.isActive ? { resultClick() } : nil
+        #if DEBUG
+        view.debugMessageID = row.id
+        #endif
         if view.textStorage?.isEqual(to: text) != true { view.textStorage?.setAttributedString(text) }
         view.linkTextAttributes = [.foregroundColor: linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue, .cursor: NSCursor.pointingHand]
         if context.coordinator.selectAllRequests != selectAllRequests {
@@ -221,6 +224,26 @@ final class BubbleTextView: NSTextView {
         layer.setNeedsDisplay()
     }
 
+    #if DEBUG
+    /// For the tour's text steps (`MacBubbleTextTour`): the message the text is in, and how often it drew since the last
+    /// report.
+    var debugMessageID = ""
+    var debugDraws = 0
+    var debugDrawsWhole: Bool { drawsWhole }
+
+    override func draw(_ dirtyRect: NSRect) {
+        debugDraws += 1
+        super.draw(dirtyRect)
+    }
+
+    /// What AppKit does when the window moves to a screen of another scale, from a wrong scale: the layer takes the
+    /// window's again and redraws.
+    func debugRescale() {
+        layer?.contentsScale = (window?.backingScaleFactor ?? 2) == 1 ? 2 : 1
+        viewDidChangeBackingProperties()
+    }
+    #endif
+
     override func menu(for event: NSEvent) -> NSMenu? {
         clickIsInSelection(event) ? super.menu(for: event) : messageMenu?(link(at: event))
     }
@@ -316,3 +339,80 @@ final class BubbleTextView: NSTextView {
         return selectedRanges.contains { $0.rangeValue.length > 0 && NSLocationInRange(index, $0.rangeValue) }
     }
 }
+
+#if DEBUG
+/// The tour's bubble text steps (`MacDebugHooks`), for checking that a text drawn whole redraws when what it shows
+/// changes: `appearance automatic|light|dark` and `accent <name>` (as Settings sets them, for this run only),
+/// `text-select <message id> <location> <length>` (selects in that message's text without focusing it), `text-rescale`
+/// (each text drawn whole as after a move to a screen of another scale) and `text-layers <name>`, which logs each text in
+/// sight (how it draws, its layer's scale against the window's, whether it waits to display, how often it drew since
+/// the last report, its selection) and renders the layer of each text drawn whole (`CALayer.render(in:)`, over purple
+/// so a blank layer shows) as `<name>-<message id>.png` into the capture directory.
+@MainActor enum MacBubbleTextTour {
+    static func step(_ name: String, _ argument: String, window: NSWindow?) {
+        let texts = window?.contentView.map(visibleTexts) ?? []
+        switch name {
+        case "appearance":
+            forThisRun(AppearanceView.modeKey) { AppearanceStore.shared.mode = AppearanceStore.modes.contains(argument) ? argument : "automatic" }
+        case "accent":
+            guard let accent = AccentTheme(rawValue: argument) else { return MacDebugHooks.log("tour accent: no accent \(argument)") }
+            forThisRun(AccentTheme.storageKey) { AppearanceStore.shared.accent = accent }
+        case "text-select":
+            let parts = argument.split(separator: " ")
+            guard parts.count == 3, let location = Int(parts[1]), let length = Int(parts[2]),
+                  let text = texts.first(where: { $0.debugMessageID == parts[0] }) else {
+                return MacDebugHooks.log("tour text-select: no text in sight for \(argument)")
+            }
+            text.setSelectedRange(NSRange(location: location, length: length))
+            report([text], name: nil)
+        case "text-rescale":
+            let whole = texts.filter(\.debugDrawsWhole)
+            whole.forEach { $0.debugRescale() }
+            report(whole, name: nil)
+        case "text-layers": report(texts, name: argument)
+        default: break
+        }
+    }
+
+    /// Changes the appearance for this run only: the store saves each change in the app's preferences, which the next
+    /// run (and every other one of this build) would start from.
+    private static func forThisRun(_ key: String, _ change: () -> Void) {
+        let stored = UserDefaults.standard.object(forKey: key)
+        change()
+        UserDefaults.standard.set(stored, forKey: key)
+    }
+
+    private static func visibleTexts(in view: NSView) -> [BubbleTextView] {
+        if let text = view as? BubbleTextView { return text.isHiddenOrHasHiddenAncestor || text.visibleRect.isEmpty ? [] : [text] }
+        return view.subviews.flatMap(visibleTexts)
+    }
+
+    private static func report(_ texts: [BubbleTextView], name: String?) {
+        MacDebugHooks.log("text-layers \(name ?? "now"): \(texts.count) texts in sight")
+        for text in texts {
+            let scale = text.layer?.contentsScale ?? 0, windowScale = text.window?.backingScaleFactor ?? 0
+            MacDebugHooks.log("text \(text.debugMessageID): \(text.debugDrawsWhole ? "whole" : "AppKit's layer") "
+                + "\(text.layer.map { NSStringFromClass(type(of: $0)) } ?? "no layer") scale \(scale)/\(windowScale)\(scale == windowScale ? "" : " MISMATCH") "
+                + "needs display \(text.layer?.needsDisplay() ?? false) drew \(text.debugDraws) selection \(text.selectedRange())")
+            text.debugDraws = 0
+            guard let name, text.debugDrawsWhole, let layer = text.layer, let png = render(layer),
+                  let directory = MacDebugHooks.value(after: "-haus-capture-frames") ?? MacDebugHooks.value(after: "-haus-capture") else { continue }
+            MacDebugHooks.emit(png, directory: directory, file: "\(name)-\(text.debugMessageID).png")
+        }
+    }
+
+    private static func render(_ layer: CALayer) -> Data? {
+        let scale = layer.contentsScale
+        let width = Int(ceil(layer.bounds.width * scale)), height = Int(ceil(layer.bounds.height * scale))
+        guard width > 0, height > 0, let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.setFillColor(NSColor.systemPurple.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        // The view draws flipped; the image reads top down.
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: scale, y: -scale)
+        layer.render(in: context)
+        return context.makeImage().flatMap { NSBitmapImageRep(cgImage: $0).representation(using: .png, properties: [:]) }
+    }
+}
+#endif
