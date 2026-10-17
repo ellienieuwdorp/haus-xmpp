@@ -328,6 +328,7 @@
 		DCCCCA8B4897042F34684899 /* NotificationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 843FF17A13C02A39A0E7F1F1 /* NotificationActions.swift */; };
 		DD23B3F92D405219F65EB0D0 /* XMPPNotificationServiceMac.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = EB9DE78DDB637C851451A0A9 /* XMPPNotificationServiceMac.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DDA862EB7C763729540D3DDA /* MessageActionMenuTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EFCD06FF2B22E21D6446586 /* MessageActionMenuTests.swift */; };
+		DE181BB520CFD9CA40C8B389 /* MacPerfProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0128F3074596997403D4F4C /* MacPerfProbe.swift */; };
 		DE945F171D7F6572525A29B9 /* SharedSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECE35FFDB91D6C5604DB273F /* SharedSession.swift */; };
 		DF8CCB525B41DAB27670D91E /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E70D8DDFCEAC226CF360BB9B /* NotificationService.swift */; };
 		E2AF14F4A57797AFF9B9AFDF /* MacNotificationDebug.swift in Sources */ = {isa = PBXBuildFile; fileRef = 666D7AF2FA3AA8C5FAC3AFAB /* MacNotificationDebug.swift */; };
@@ -660,6 +661,7 @@
 		EC9D516974B02587CFBD9852 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		ECB57CE3D62350BCA14A7C97 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		ECE35FFDB91D6C5604DB273F /* SharedSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedSession.swift; sourceTree = "<group>"; };
+		F0128F3074596997403D4F4C /* MacPerfProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPerfProbe.swift; sourceTree = "<group>"; };
 		F1CBE10482F2CC6B1546794B /* TimelineScrollPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineScrollPolicyTests.swift; sourceTree = "<group>"; };
 		F20D4BA69AE0D06AAEC3C382 /* LastMessageTargetsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LastMessageTargetsTests.swift; sourceTree = "<group>"; };
 		F35C17BF0F9B0B9403E9870E /* LICENSE.protobuf-c */ = {isa = PBXFileReference; path = "LICENSE.protobuf-c"; sourceTree = "<group>"; };
@@ -769,6 +771,7 @@
 				D7810262DA1DC5F6C17EF68F /* MacMessageActionsToolbar.swift */,
 				666D7AF2FA3AA8C5FAC3AFAB /* MacNotificationDebug.swift */,
 				E394A61C835FC6DD904BC77A /* MacNotificationSettings.swift */,
+				F0128F3074596997403D4F4C /* MacPerfProbe.swift */,
 				AC35ADFF191022AC7947AFE8 /* MacPushProbe.swift */,
 				3DC7D740F62B973A8BC6B7E0 /* MacRootView.swift */,
 				E370F3025375AED97F4C8529 /* MacSettingsView.swift */,
@@ -1700,6 +1703,7 @@
 				0F272B2D1FAAB3F7BDF2686F /* MacMessageActionsToolbar.swift in Sources */,
 				E2AF14F4A57797AFF9B9AFDF /* MacNotificationDebug.swift in Sources */,
 				D7337FC454269823397E18FF /* MacNotificationSettings.swift in Sources */,
+				DE181BB520CFD9CA40C8B389 /* MacPerfProbe.swift in Sources */,
 				3EE536B829BCCB54A2F688D4 /* MacPushProbe.swift in Sources */,
 				9553722566FB8DACF9AC6DBD /* MacRootView.swift in Sources */,
 				658DBFA69EBDFC4C303E4C0E /* MacSettingsView.swift in Sources */,

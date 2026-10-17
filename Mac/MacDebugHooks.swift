@@ -58,9 +58,14 @@ import SwiftUI
 ///   its clip view on a 120 Hz timer, and logs how late the main thread ran the ticks and the app's memory footprint
 ///   (`ScrollProbe`); with `paging` the sweep counts as the reader's gesture, so older pages come in near the top. Give
 ///   `-haus-capture-frames` a short time so its renders are done before the sweep. Frames may be `0` seconds for a tour
-///   that only captures by name. Search steps (`MacConversationFindTour`): `find <text>` (opens search with that text),
-///   `find-close`, `find-esc` (as Esc in the timeline), `starred on|off` and `show-result <message id>` (as a click on
-///   that result). Menu bar steps: `menus` (logs what the Message menu's commands target, then the File, Edit, View,
+///   that only captures by name. Performance steps (`MacPerfProbe`, whose header says how to build for them, which tours
+///   make the baseline and what the numbers do not mean): `perf start` and `perf stop <label>` (main-thread time per
+///   run-loop pass, 120 Hz timer gaps and the timeline's counters in between, and each timeline update's phases),
+///   `display-count` (layer displays by class and owner in later `perf stop`s), `layers` (the window's views and
+///   layers), `sidebar` (View › Hide Sidebar's toggle, timed), `sidebar-sweep <steps>` (the sidebar's divider moved
+///   step by step) and `force-noop <count>` (the timeline's forced layout with nothing pending). Search steps
+///   (`MacConversationFindTour`): `find <text>` (opens search with that text), `find-close`, `find-esc` (as Esc in the
+///   timeline), `starred on|off` and `show-result <message id>` (as a click on that result). Menu bar steps: `menus` (logs what the Message menu's commands target, then the File, Edit, View,
 ///   Chat, Message and Window menus: each item, its shortcut and whether it is enabled), `command <menu>/<item>[/<item>]`
 ///   (performs that menu item as a click would, after the menu's validation; a disabled or missing item is logged
 ///   instead), `header` (logs the window's title and subtitle), `badge` (logs the Dock tile's label and where the model
@@ -79,6 +84,8 @@ import SwiftUI
 ///   also in the sample conversations, where previews are otherwise off.
 /// - `-haus-timeline-trace`: logs each timeline update that held the reader's row, with how far the update moved it and
 ///   its drift over the next 30 refreshes, and each scroll the controller placed.
+/// - `-haus-perf-stacks`: `display-count` also logs sampled call stacks that mark a bubble text view's layers as needing
+///   display (`MacPerfProbe`); they stall the main thread, so no timing from such a run counts.
 /// - `-haus-timeline-unbound`: leaves the timeline's position unbound, so SwiftUI keeps the absolute offset through a
 ///   prepend as it does during a scroll gesture, and the controller's hold does all the work (`MacTimelineDebug`).
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
@@ -385,6 +392,7 @@ import SwiftUI
             case "unblock" where model.isDemo: for entry in model.blockEntries(for: argument) { await model.unblock(entry) }
             case "close-window": mainWindow?.performClose(nil)
             case "stalls": MacTimelineDebug.StallProbe.shared.report(argument)
+            case "perf", "display-count", "layers", "sidebar", "sidebar-sweep", "force-noop": await MacPerfProbe.step(words[0], argument, window: mainWindow)
             case "store" where model.isLabAccount:
                 log("store \(argument): \(await model.debugRetentionReport(argument)); \(await model.debugMessageReport(argument))")
             case "chat", "join", "devices", "messages", "device", "review", "own-review", "trust", "verify", "dont-trust", "compare", "remove", "confirm", "close-sheet":

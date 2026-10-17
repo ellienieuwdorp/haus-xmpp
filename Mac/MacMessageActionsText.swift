@@ -27,6 +27,10 @@ struct MacBubbleText: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> BubbleTextView {
+        #if DEBUG
+        let perfStart = MacPerfProbe.clock()
+        defer { MacPerfProbe.add("text.make", since: perfStart) }
+        #endif
         let view = BubbleTextView.make()
         view.delegate = context.coordinator
         context.coordinator.selectAllRequests = selectAllRequests
@@ -34,6 +38,10 @@ struct MacBubbleText: NSViewRepresentable {
     }
 
     func updateNSView(_ view: BubbleTextView, context: Context) {
+        #if DEBUG
+        let perfStart = MacPerfProbe.clock()
+        defer { MacPerfProbe.add("text.update", since: perfStart) }
+        #endif
         context.coordinator.openLink = openLink
         view.messageMenu = menu
         let row = context.environment.timelineRow
@@ -51,7 +59,11 @@ struct MacBubbleText: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: BubbleTextView, context: Context) -> CGSize? {
-        Self.measure(text, width: proposal.width)
+        #if DEBUG
+        let perfStart = MacPerfProbe.clock()
+        defer { MacPerfProbe.add("text.size", since: perfStart) }
+        #endif
+        return Self.measure(text, width: proposal.width)
     }
 
     /// The text's size laid out `width` wide, or on as few lines as its line breaks allow without one; laid out apart
@@ -60,6 +72,9 @@ struct MacBubbleText: NSViewRepresentable {
         let available = width.map { $0.isFinite ? max(1, $0) : .greatestFiniteMagnitude } ?? .greatestFiniteMagnitude
         let key = Measured(text: text, width: available)
         if let size = measured[key] { return size }
+        #if DEBUG
+        MacPerfProbe.count("text.miss")
+        #endif
         measuring.storage.setAttributedString(text)
         measuring.container.size = NSSize(width: available, height: .greatestFiniteMagnitude)
         measuring.layout.ensureLayout(for: measuring.container)
