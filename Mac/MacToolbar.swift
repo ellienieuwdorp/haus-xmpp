@@ -78,8 +78,11 @@ import SwiftUI
             item.action = #selector(newChat)
         case Self.chatPicture:
             // Plain: the picture is the control, as the iPhone's header shows it.
+            // Its fixed size, so the toolbar's tiling on each step of a resize never asks SwiftUI for one.
             let host = NSHostingView(rootView: MacPane { MacChatHeaderAvatar(model: self.model, window: self.state) })
-            host.sizingOptions = [.intrinsicContentSize]
+            host.sizingOptions = []
+            host.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([host.widthAnchor.constraint(equalToConstant: 28), host.heightAnchor.constraint(equalToConstant: 28)])
             item.view = host
             item.label = "Chat Details"
             item.isBordered = false
