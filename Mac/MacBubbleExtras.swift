@@ -97,6 +97,8 @@ struct MacBubbleExtras: View {
 
     var body: some View {
         content
+            // A reused cell hosts another message's: nothing it decoded or held for the last one carries over.
+            .id(content.message.id)
             .frame(width: contentWidth, alignment: .leading)
             .padding(.horizontal, MacTimelineMetrics.bubblePaddingH)
             .padding(.top, MacTimelineMetrics.bubbleTop)
@@ -162,7 +164,8 @@ struct MacMediaPreview: View {
         .contentShape(Rectangle())
         .task(id: attachment.localURL) {
             guard image == nil, let url = attachment.localURL else { return }
-            image = await AttachmentThumbnails.image(for: url, mediaType: attachment.mediaType)
+            let decoded = await AttachmentThumbnails.image(for: url, mediaType: attachment.mediaType)
+            if !Task.isCancelled { image = decoded }
         }
     }
 }
@@ -194,7 +197,8 @@ struct MacQuoteStill: View {
         .accessibilityHidden(true)
         .task(id: attachment.localURL) {
             guard image == nil, let url = attachment.localURL else { return }
-            image = await AttachmentThumbnails.image(for: url, mediaType: attachment.mediaType)
+            let decoded = await AttachmentThumbnails.image(for: url, mediaType: attachment.mediaType)
+            if !Task.isCancelled { image = decoded }
         }
     }
 }
