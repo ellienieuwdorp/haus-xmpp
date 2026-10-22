@@ -286,6 +286,10 @@ final class MacTimelineGeneration: @unchecked Sendable {
     private var followsEnd = true
     /// The timeline is moving itself (an update, a jump, new insets): the scrolls it makes are not the reader's.
     private var adjusting = false
+    /// Away from the newest message, the reader's row and its distance from the frame's top edge where they last left
+    /// it: what a resize keeps, as the window, the sidebar or the composer change the frame under them.
+    private var restingPlace: (id: String, top: CGFloat)?
+    private var clipSize = CGSize.zero
     /// The toolbar's and the bars' heights over the top of the table, and the composer's under it.
     private var bars = NSEdgeInsets()
     private var bannerBar: CGFloat = 0
@@ -408,15 +412,13 @@ final class MacTimelineGeneration: @unchecked Sendable {
         let next = NSEdgeInsets(top: toolbarHeight + bannerBar + findBars, left: 0, bottom: bottomBar, right: 0)
         guard next.top != bars.top || next.bottom != bars.bottom else { return }
         let margin = MacTimelineController.topMargin
-        let distance = distanceFromBottom
         adjusting = true
         bars = next
         scrollView.contentInsets = NSEdgeInsets(top: next.top + margin, left: 0, bottom: next.bottom + margin - 1, right: 0)
         scrollView.scrollerInsets = NSEdgeInsets(top: next.top, left: 0, bottom: next.bottom, right: 0)
         updateFiller()
-        // Not at the newest message, the reader keeps their distance from it: a taller composer covers less of what
-        // they read rather than pushing it up.
-        if followsEnd { scrollToNewest() } else { scroll(toDistanceFromBottom: distance) }
+        // A taller composer or a find bar opening leaves the reader's row where it was, or the newest message above it.
+        keepPlace()
         adjusting = false
         clipBoundsChanged()
     }
@@ -478,7 +480,26 @@ final class MacTimelineGeneration: @unchecked Sendable {
         adjusting = was
         if !was {
             followsEnd = distanceFromBottom < TimelineScrollPolicy.nearBottomDistance
+            noteRestingPlace()
             clipBoundsChanged()
+        }
+    }
+
+    private func noteRestingPlace() {
+        restingPlace = followsEnd ? nil : readerRow().map { ($0.id, $0.top) }
+    }
+
+    /// After the frame changed under the reader: at the newest message when they follow it, else their row where it
+    /// was below the frame's top edge.
+    private func keepPlace() {
+        let was = adjusting
+        adjusting = true
+        defer { adjusting = was }
+        if followsEnd {
+            scroll(toDistanceFromBottom: 0)
+        } else if let rest = restingPlace, let row = indexByID[rest.id] {
+            let height = table.rect(ofRow: row).height
+            place(row: row, top: TimelineScrollPolicy.reachableTop(rest.top, rowHeight: height, frameHeight: frameHeight))
         }
     }
 
@@ -704,6 +725,8 @@ final class MacTimelineGeneration: @unchecked Sendable {
             followsEnd = true
         case .row(let id, let top):
             if let row = indexByID[id] {
+                // Its place depends on the height of every row below it.
+                measureForJump(around: row)
                 place(row: row, top: top)
                 followsEnd = distanceFromBottom < TimelineScrollPolicy.nearBottomDistance
             } else {
@@ -712,6 +735,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
             }
         }
         adjusting = false
+        noteRestingPlace()
         clipBoundsChanged()
         measureRest()
     }
@@ -784,6 +808,11 @@ final class MacTimelineGeneration: @unchecked Sendable {
         }
         reconfigure(indexes)
         updateFiller()
+        #if DEBUG
+        if MacDebugHooks.has("-haus-timeline-trace") {
+            MacDebugHooks.log("timeline trace: heights noted \(Array(indexes.prefix(8))) anchor \(anchor?.id ?? "-") \(anchor?.offset ?? 0) now \(anchor.flatMap { indexByID[$0.id] }.map { table.rect(ofRow: $0).minY - clip.minY } ?? 0)")
+        }
+        #endif
         restore(anchor)
     }
 
@@ -963,6 +992,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
             if let anchor, let row = indexByID[anchor.id] { scroll(toY: table.rect(ofRow: row).minY - anchor.offset) }
         }
         adjusting = false
+        noteRestingPlace()
         clipBoundsChanged()
         #if DEBUG
         if case .keepAnchor = placement, let reader { MacTimelineDebug.held(reader, by: self) }
@@ -1031,6 +1061,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
         }
         reconfigure(keys)
         updateFiller()
+        keepPlace()
         if !view.inLiveResize { scheduleEndPass() }
     }
 
@@ -1058,6 +1089,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
 
     @objc private func liveScrollEnded() {
         isLiveScrolling = false
+        noteRestingPlace()
         timeline?.scrollEnded()
         if !heldNotes.isEmpty {
             let notes = heldNotes
@@ -1086,6 +1118,12 @@ final class MacTimelineGeneration: @unchecked Sendable {
     /// the rows in sight, in constant time.
     @objc private func clipBoundsChanged() {
         #if DEBUG
+        if MacDebugHooks.has("-haus-timeline-trace") {
+            MacDebugHooks.log(String(format: "timeline trace: clip y %.1f height %.1f, follows %d, adjusting %d, live scroll %d, document %.0f",
+                                     clip.minY, clip.height, followsEnd ? 1 : 0, adjusting ? 1 : 0, isLiveScrolling ? 1 : 0, table.bounds.height))
+        }
+        #endif
+        #if DEBUG
         let perfStart = MacPerfProbe.clock()
         defer { MacPerfProbe.add("table.scrolled", since: perfStart) }
         let debugScrolling = debugReaderScrolling
@@ -1095,7 +1133,16 @@ final class MacTimelineGeneration: @unchecked Sendable {
         guard let timeline else { return }
         let distance = distanceFromBottom
         let byReader = !adjusting && (isLiveScrolling || Self.scrollInput || debugScrolling)
-        if byReader { followsEnd = distance < TimelineScrollPolicy.nearBottomDistance }
+        if byReader {
+            followsEnd = distance < TimelineScrollPolicy.nearBottomDistance
+            if !isLiveScrolling { noteRestingPlace() }
+        }
+        // The frame's new size (the window, the sidebar): the reader stays where they were.
+        if clip.size != clipSize {
+            let first = clipSize == .zero
+            clipSize = clip.size
+            if !first, !adjusting { keepPlace() }
+        }
         timeline.setShowsJumpToNewest(!followsEnd && TimelineScrollPolicy.showsJumpToNewest(distanceFromBottom: distance, viewportHeight: frameHeight))
         timeline.scrolled(byReader: byReader, moving: byReader || timeline.readerIsScrolling)
         updateShown()

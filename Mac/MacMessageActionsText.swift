@@ -37,6 +37,10 @@ final class BubbleTextView: NSTextView {
         if showsCursor { super.resetCursorRects() }
     }
 
+    /// The text never scrolls the timeline: a text view resized while it holds a caret or a selection scrolls its
+    /// enclosing scroll view to keep it in sight, and in a reused cell that moved the reader's rows.
+    override func scrollToVisible(_ rect: NSRect) -> Bool { false }
+
     /// TextKit 1 for both the live views and the measuring (`MacRowMeasurer`), so the two lay lines out alike.
     final class TextStack {
         let storage = NSTextStorage()
