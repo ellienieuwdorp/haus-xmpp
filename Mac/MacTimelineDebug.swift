@@ -6,9 +6,8 @@ import SwiftUI
 /// builds only.
 ///
 /// Drift is how far the reader's row moved from where it was before an update, sampled on each of the next 30
-/// refreshes. Scroll events cannot be staged here (the window is off-screen, so AppKit gives them no window), so a page
-/// landing mid-gesture is stood in for by `-haus-timeline-unbound`: without the bound position SwiftUI keeps the
-/// absolute offset through a prepend, as it does during a gesture, and the controller's correction does all the work.
+/// refreshes. Scroll events cannot be staged here (the window is off-screen, so AppKit gives them no window): `drag`
+/// moves the clip view as a gesture would, and marks the move as the reader's.
 @MainActor enum MacTimelineDebug {
     static func step(_ name: String, _ argument: String, window: NSWindow?) async {
         // The window's own cost too, with no chat open.
@@ -40,18 +39,21 @@ import SwiftUI
         case "resize":
             let size = argument.split(separator: "x").compactMap { Double($0) }
             guard size.count == 2, let window else { return }
-            let reader = timeline.readerRow()
+            let reader = timeline.table.readerRow()
             window.setContentSize(NSSize(width: size[0], height: size[1]))
             // Two refreshes for SwiftUI to lay the new width out.
             try? await Task.sleep(for: .milliseconds(50))
-            let after = reader.flatMap { timeline.layout.frame(of: $0.id) }
-            MacDebugHooks.log("timeline resize to \(argument): reader \(reader?.id ?? "none") drift \(format(after.map { $0.minY - (reader?.top ?? 0) }))")
+            let after = reader.flatMap { timeline.table.debugTop(of: $0.id) }
+            MacDebugHooks.log("timeline resize to \(argument): reader \(reader?.id ?? "none") drift \(format(after.map { $0 - (reader?.top ?? 0) }))")
         case "timeline":
             report(timeline, "state")
         case "drag":
             drag(argument, timeline: timeline, window: window)
         case "bind-reader":
-            MacDebugHooks.log("timeline bound \(timeline.debugBindReader() ?? "nothing")")
+            // The table keeps the reader's rows itself; there is no scroll position to bind.
+            MacDebugHooks.log("timeline bound nothing: the table keeps the reader's rows itself")
+        case "mismatch":
+            MacDebugHooks.log("timeline mismatch: \(timeline.table.debugMismatch())")
         case "older":
             await timeline.debugLoadOlder()
         default: break
@@ -120,7 +122,7 @@ import SwiftUI
         /// Keeps itself alive through its timer until the drag ends.
         func start() {
             report(timeline, "drag \(label) start")
-            if phases { timeline.phaseChanged(.interacting) }
+            if phases { timeline.debugReaderScrolling(true) }
             started = CACurrentMediaTime()
             let timer = Timer(timeInterval: 1 / 120.0, repeats: true) { _ in MainActor.assumeIsolated { self.tick() } }
             RunLoop.main.add(timer, forMode: .common)
@@ -132,48 +134,47 @@ import SwiftUI
             let step = CGFloat(points * progress) - moved
             moved += step
             let clip = scrollView.contentView
-            let range = max(0, (scrollView.documentView?.frame.height ?? 0) - clip.bounds.height)
+            let range = MacDebugHooks.ScrollProbe.range(of: scrollView)
             let flipped = scrollView.documentView?.isFlipped ?? true
-            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: min(range, max(0, clip.bounds.minY + (flipped ? -step : step)))))
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: min(range.upperBound, max(range.lowerBound, clip.bounds.minY + (flipped ? -step : step)))))
             scrollView.reflectScrolledClipView(clip)
             guard progress >= 1 else { return }
             timer?.invalidate()
             timer = nil
-            if phases { timeline.phaseChanged(.idle) }
+            if phases { timeline.debugReaderScrolling(false) }
             report(timeline, "drag \(label) end")
         }
     }
 
     private static func report(_ timeline: MacTimelineController, _ what: String) {
-        let reader = timeline.readerRow()
+        let reader = timeline.table.readerRow()
+        let newest = timeline.rows.last.flatMap { timeline.table.debugTop(of: $0.message.id) }
         MacDebugHooks.log("timeline \(what): \(timeline.rows.count) rows from \(timeline.rows.first?.message.id ?? "none"), reader \(reader?.id ?? "none") at "
-            + "\(format(reader?.top)), from bottom \(format(timeline.layout.distanceFromBottom)), height \(format(timeline.layout.height)), "
-            + "top inset \(format(timeline.layout.geometry?.contentInsets.top)), bottom inset \(format(timeline.layout.geometry?.contentInsets.bottom)), "
-            + "container \(format(timeline.layout.geometry?.containerSize.height)), offset \(format(timeline.layout.geometry?.contentOffset.y)), "
-            + "content \(format(timeline.layout.geometry?.contentSize.height)), newest row bottom \(format(timeline.rows.last.flatMap { timeline.layout.frame(of: $0.message.id) }?.maxY)), jump button \(timeline.showsJumpToNewest), day chip \(timeline.dayChip?.text ?? "none")")
+            + "\(format(reader?.top)), \(timeline.table.debugReport), newest row top \(format(newest)), "
+            + "jump button \(timeline.showsJumpToNewest), day chip \(timeline.dayChip?.text ?? "none")")
     }
 
-    /// After an update that held the reader's row: how far the update moved it before the correction, and its drift
-    /// right after the correction and over the next 30 refreshes.
-    static func held(_ reader: TimelineScrollPolicy.PlacedRow, movedByUpdate moved: CGFloat?, by timeline: MacTimelineController) {
+    /// After an update that kept the reader's rows: the reader's row's drift right after the update and over the next
+    /// 30 refreshes.
+    static func held(_ reader: TimelineScrollPolicy.PlacedRow, by table: MacTimelineTableController) {
         guard MacDebugHooks.has("-haus-timeline-trace") else { return }
-        let immediate = timeline.layout.frame(of: reader.id).map { $0.minY - reader.top }
+        let immediate = table.debugTop(of: reader.id).map { $0 - reader.top }
         Task {
             let clock = ContinuousClock(), start = clock.now
-            var worst: CGFloat = 0, missing = 0, changes: [String] = []
+            var worst = abs(immediate ?? 0), missing = 0, changes: [String] = []
             var last = immediate ?? 0
             for sample in 0..<90 {
                 try? await Task.sleep(for: .milliseconds(16))
-                guard let frame = timeline.layout.frame(of: reader.id) else { missing += 1; continue }
-                let drift = frame.minY - reader.top
+                guard let top = table.debugTop(of: reader.id) else { missing += 1; continue }
+                let drift = top - reader.top
                 if sample < 30 { worst = max(worst, abs(drift)) }
                 if abs(drift - last) > 0.5 {
                     changes.append("\(format(drift)) at \((clock.now - start) / .milliseconds(1)) ms")
                     last = drift
                 }
             }
-            MacDebugHooks.log("timeline held \(reader.id): \(timeline.rows.count) rows, the update moved it \(moved.map(format) ?? "off screen") pt, "
-                + "drift \(format(immediate)) pt after the hold, worst \(format(worst)) pt over 30 refreshes, later moves \(changes)"
+            MacDebugHooks.log("timeline held \(reader.id): \(table.timeline?.rows.count ?? 0) rows, "
+                + "drift \(format(immediate)) pt after the update, worst \(format(worst)) pt over 30 refreshes, later moves \(changes)"
                 + "\(missing > 0 ? ", gone in \(missing) samples" : "")")
         }
     }

@@ -13,13 +13,13 @@ import SwiftUI
 ///   the pass p50/p90/p99/max, the passes over 8.3, 16.7 and 33 ms, the timer's gaps over 16.7 and 33 ms with p95 and
 ///   max, the main thread's CPU time in the same passes (total, p90 and max), and the counters, which `start` resets.
 ///   Wall time includes the time the thread waited for a core; on a busy machine its CPU time compares better. Counters
-///   are only bumped between the two: `row.body` (message row bodies), `text.make`, `text.update` and `text.size` (bubble
-///   text views made, updated and asked for a size, with their time), `text.miss` (sizes not in the measurement cache),
-///   `ctl.resized`, `ctl.scrolled` and `ctl.force` (the timeline controller's size and geometry callbacks and its forced
-///   layouts).
-/// - `perf update` lines, logged on their own between `perf start` and `perf stop`: each timeline update that keeps
-///   the reader's place, split into phases (the forced layout before it, applying the rows, the forced layout after it,
-///   and the hold or scroll that follows), with the time, rows built and text views made in each.
+///   are only bumped between the two: `cell.configure` (message cells configured for a row, with their time),
+///   `extras.measure` (quotes, files and cards measured through SwiftUI), `table.scrolled` (the timeline's scroll
+///   callbacks), `table.width` (its width changes, the rows in sight measured again), `table.land` (records measured on
+///   the queue applied) and `table.reload` (whole reloads).
+/// - `perf update` lines, logged on their own between `perf start` and `perf stop`: each timeline update, split into
+///   phases (taking the measured rows, applying them to the table, and placing the reader), with the time, cells
+///   configured and extras measured in each.
 /// - `display-count`: the next `perf stop` also counts the layers that redraw their contents (`-[CALayer display]`
 ///   and every override of it in the window's layer classes) as `display <layer class>/<delegate class>`, a layer with no
 ///   delegate under the nearest ancestor's delegate in brackets; each layer counts once per run-loop pass. That `stop`
@@ -32,7 +32,7 @@ import SwiftUI
 ///   distinct sidebar and timeline width with its time until the animation settles.
 /// - `sidebar-sweep <steps>`: moves the sidebar's divider from its width to zero and back in even steps, one every
 ///   8 ms, each laid out, displayed and committed at once, and logs the step times, in wall and CPU time.
-/// - `force-noop <count>`: times the timeline's forced layout with nothing pending, the fixed cost of each correction.
+/// - `force-noop <count>`: times a layout of the timeline with nothing pending.
 /// - `split [label]`: logs the window's split views with each item's controller, width and state, and the open timeline's
 ///   chain of hosting, scroll and split views with their addresses; two of these around a change show what it rebuilt.
 /// - `split-watch <seconds>`: runs while the next steps play and logs every pass that changes the window's width or
@@ -212,37 +212,36 @@ import SwiftUI
 
     // MARK: Timeline updates
 
-    private static var update: (from: Int, to: Int, started: CFTimeInterval, forces: Int, phases: [(name: String, at: CFTimeInterval, rows: Int, made: Int)])?
+    private static var update: (from: Int, to: Int, started: CFTimeInterval, phases: [(name: String, at: CFTimeInterval, cells: Int, extras: Int)])?
 
     /// The start of a timeline update from `from` rows to `to`; `mark` ends each phase, `endUpdate` the last one.
     static func beginUpdate(from: Int, to: Int) {
         guard active else { return }
         let now = CACurrentMediaTime()
-        update = (from, to, now, counts["ctl.force", default: 0], [("", now, counts["row.body", default: 0], counts["text.make", default: 0])])
+        update = (from, to, now, [("", now, counts["cell.configure", default: 0], counts["extras.measure", default: 0])])
     }
 
     static func mark(_ phase: String) {
         guard active, update != nil else { return }
-        update?.phases.append((phase, CACurrentMediaTime(), counts["row.body", default: 0], counts["text.make", default: 0]))
+        update?.phases.append((phase, CACurrentMediaTime(), counts["cell.configure", default: 0], counts["extras.measure", default: 0]))
     }
 
     static func endUpdate() {
-        mark("hold")
+        mark("place")
         guard active, let update else { return }
         self.update = nil
         let phases = zip(update.phases.dropFirst(), update.phases).map { phase, previous in
-            "\(phase.name) \(ms(phase.at - previous.at)) ms (\(phase.rows - previous.rows) rows, \(phase.made - previous.made) text views)"
+            "\(phase.name) \(ms(phase.at - previous.at)) ms (\(phase.cells - previous.cells) cells, \(phase.extras - previous.extras) extras measured)"
         }
-        MacDebugHooks.log("perf update \(update.from) → \(update.to) rows: \(ms(CACurrentMediaTime() - update.started)) ms, "
-            + "\(counts["ctl.force", default: 0] - update.forces) forced layouts; \(phases.joined(separator: ", "))")
+        MacDebugHooks.log("perf update \(update.from) → \(update.to) rows: \(ms(CACurrentMediaTime() - update.started)) ms; \(phases.joined(separator: ", "))")
     }
 
     private static func forceNoop(_ count: Int) async {
-        guard let layout = MacTimelineController.current?.layout else { return MacDebugHooks.log("perf force-noop: no open timeline") }
+        guard let view = MacTimelineController.current?.table.view else { return MacDebugHooks.log("perf force-noop: no open timeline") }
         var samples: [Double] = []
         for _ in 0..<max(1, count) {
             let started = CACurrentMediaTime()
-            layout.forceLayout()
+            view.layoutSubtreeIfNeeded()
             samples.append(CACurrentMediaTime() - started)
             try? await Task.sleep(for: .milliseconds(20))
         }
@@ -264,13 +263,13 @@ import SwiftUI
             MacDebugHooks.log("split \(label): \(address(split)) \(Int(split.frame.width)) [\(items.joined(separator: "; "))]")
         }
         var chain: [String] = []
-        var view = MacTimelineController.current?.layout.anchorView
+        var view = MacTimelineController.current?.table.view as NSView?
         while let current = view {
             let name = NSStringFromClass(type(of: current))
             if name.contains("Hosting") || current is NSScrollView || current is NSSplitView || name.contains("Split") { chain.append("\(name.prefix(60)) \(address(current))") }
             view = current.superview
         }
-        let size = MacTimelineController.current?.layout.size ?? .zero
+        let size = MacTimelineController.current?.table.view.frame.size ?? .zero
         MacDebugHooks.log("split \(label) window \(Int(window.frame.width)) content min \(Int(window.contentMinSize.width)), timeline \(Int(size.width))x\(Int(size.height)), chain: \(chain.joined(separator: " < "))")
     }
 
@@ -285,7 +284,7 @@ import SwiftUI
             MainActor.assumeIsolated {
                 if activity == .afterWaiting { woke = CACurrentMediaTime(); return }
                 let widths = splits.map { $0.arrangedSubviews.map { "\(Int($0.frame.width))\($0.isHidden ? " hidden" : "")" }.joined(separator: "/") }
-                let timeline = MacTimelineController.current?.layout.size.width ?? 0
+                let timeline = MacTimelineController.current?.table.view.frame.width ?? 0
                 let state = "window \(Int(window.frame.width)), min \(Int(window.contentMinSize.width)), splits \(widths.joined(separator: " | ")), timeline \(Int(timeline))"
                 let pass = woke > 0 ? CACurrentMediaTime() - woke : 0
                 if state != last || pass > 0.008 { MacDebugHooks.log("split-watch \(ms(pass)) ms: \(state)") }
@@ -489,7 +488,7 @@ import SwiftUI
     private static func toggleSidebar(_ window: NSWindow) async {
         guard let (split, controller, item) = sidebarSplit(window) else { return MacDebugHooks.log("perf sidebar: no split view with a sidebar") }
         func sample() -> (sidebar: Double, timeline: Double) {
-            (split.arrangedSubviews.first.map { Double($0.frame.width) } ?? -1, Double(MacTimelineController.current?.layout.size.width ?? -1))
+            (split.arrangedSubviews.first.map { Double($0.frame.width) } ?? -1, Double(MacTimelineController.current?.table.view.frame.width ?? -1))
         }
         var changes: [(t: Double, sidebar: Double, timeline: Double)] = []
         let started = CACurrentMediaTime()

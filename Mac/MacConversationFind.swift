@@ -145,51 +145,6 @@ private struct MacSearchField: NSViewRepresentable {
     }
 }
 
-/// A filtered result: a click on it or its Show in Conversation action closes the filter and scrolls the whole timeline
-/// to it, tinted for a moment. Links and attachments keep their own clicks; in the text, a drag still selects and a
-/// click inside a selection keeps it (`FindResultClick`).
-struct MacFindResult: ViewModifier {
-    let timeline: MacTimelineController
-    let id: String
-    @State private var hovering = false
-
-    func body(content: Content) -> some View {
-        if timeline.isFiltered {
-            content
-                .background {
-                    if hovering {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.quaternary.opacity(0.6)).padding(.horizontal, -8)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onHover { hovering = $0 }
-                .onTapGesture { timeline.scrollTo(messageID: id) }
-                .environment(\.findResultClick, FindResultClick(timeline: timeline, id: id))
-                // The row's VoiceOver actions start with Show in Conversation, from `findResultClick`.
-                .help("Show in Conversation")
-        } else {
-            content
-        }
-    }
-}
-
-/// A filtered result's jump for a plain click on its bubble's text, which takes clicks before the row could see them.
-/// Equal while it targets the same message, so setting it on each update never invalidates the bubble.
-struct FindResultClick: Equatable {
-    weak var timeline: MacTimelineController?
-    var id: String?
-
-    var isActive: Bool { timeline != nil && id != nil }
-
-    @MainActor func callAsFunction() { if let id { timeline?.scrollTo(messageID: id) } }
-
-    static func == (left: Self, right: Self) -> Bool { left.timeline === right.timeline && left.id == right.id }
-}
-
-extension EnvironmentValues {
-    @Entry var findResultClick = FindResultClick()
-}
-
 /// The open chat's search and starred filter, for the menu commands; nil while no chat is shown.
 struct MacConversationFindCommands {
     let find: () -> Void

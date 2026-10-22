@@ -56,9 +56,10 @@ import SwiftUI
 ///   `resize-sweep <width>x<height> <width>x<height> <steps>` (a live resize from one size to the other, timing each
 ///   step; also with no chat open) and `stalls [label]` (main-thread stalls over 50 ms since the last `stalls` step; the
 ///   first starts the probe), `drag <points> <seconds> [phaseless]` (the reader's scroll by that many points, with a
-///   gesture's phases or none, running while the next steps play), `bind-reader` (binds the scroll position to the row
-///   an update would hold, as SwiftUI does where the reader's own scroll stops) and `older` (the next older page, as the
-///   reader reaching the paging lead asks for it).
+///   gesture's phases or none, running while the next steps play), `bind-reader` (kept for older tours: the table
+///   binds nothing and says so), `older` (the next older page, as the
+///   reader reaching the paging lead asks for it) and `mismatch` (each row's cached text height against a live bubble
+///   text view's at the current width).
 ///   `scroll <seconds> [paging]` sweeps the open chat's timeline from the newest loaded message to the oldest and back, moving
 ///   its clip view on a 120 Hz timer, and logs how late the main thread ran the ticks and the app's memory footprint
 ///   (`ScrollProbe`); with `paging` the sweep counts as the reader's gesture, so older pages come in near the top. Give
@@ -90,13 +91,10 @@ import SwiftUI
 ///   `Tour.conversationFind`) instead of as focused scene values.
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
 ///   also in the sample conversations, where previews are otherwise off.
-/// - `-haus-timeline-trace`: logs each timeline update that held the reader's row, with how far the update moved it and
-///   its drift over the next 30 refreshes, the row it bound for the update and what the position held before, and each
-///   scroll the controller placed or landed.
+/// - `-haus-timeline-trace`: logs each timeline update that kept the reader's rows, with the reader's row's drift right
+///   after it and over the next 30 refreshes.
 /// - `-haus-perf-stacks`: `display-count` also logs sampled call stacks that mark a bubble text view's layers as needing
 ///   display (`MacPerfProbe`); they stall the main thread, so no timing from such a run counts.
-/// - `-haus-timeline-unbound`: leaves the timeline's position unbound, so SwiftUI keeps the absolute offset through a
-///   prepend as it does during a scroll gesture, and the controller's hold does all the work (`MacTimelineDebug`).
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-window-size <width>x<height>`: the main window's content size in points, for captures at a set size.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-inspector-page details|encryption`,
@@ -323,31 +321,12 @@ import SwiftUI
         var messageCommands: [(token: UUID, make: () -> MacMessageCommands)] = []
         /// The open chat's Find in Conversation and Starred Messages, likewise.
         var conversationFind: [(token: UUID, make: () -> MacConversationFindCommands?)] = []
-        /// `messageRequest` and `hoveredMessage` as each message's row reads them, one object per message, so a step on one
-        /// message runs only that row's body.
-        @ObservationIgnored private var rows: [String: Row] = [:]
-
-        func row(_ id: String) -> Row {
-            if let row = rows[id] { return row }
-            let row = Row()
-            rows[id] = row
-            return row
-        }
-
         func setMessageRequest(_ request: MessageRequest) {
             messageRequest = request
-            row(request.messageID).request = request
         }
 
         func setHoveredMessage(_ id: String?) {
-            if let hoveredMessage { row(hoveredMessage).hovered = false }
             hoveredMessage = id
-            if let id { row(id).hovered = true }
-        }
-
-        @Observable @MainActor final class Row {
-            var request: MessageRequest?
-            var hovered = false
         }
     }
 
@@ -427,7 +406,7 @@ import SwiftUI
             case "scroll" where Double(argument.split(separator: " ").first ?? "") != nil:
                 let parts = argument.split(separator: " ")
                 if let window = mainWindow { await ScrollProbe.sweep(in: window, seconds: Double(parts[0]) ?? 10, paging: parts.dropFirst().first == "paging") }
-            case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline", "drag", "bind-reader", "older": await MacTimelineDebug.step(words[0], argument, window: mainWindow)
+            case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline", "drag", "bind-reader", "older", "mismatch": await MacTimelineDebug.step(words[0], argument, window: mainWindow)
             case "menus": logMenuBar()
             case "command": performMenuItem(argument)
             case "header": log("header: \(mainWindow.map { "'\($0.title)' / '\($0.subtitle)'" } ?? "no main window")")
@@ -508,12 +487,12 @@ import SwiftUI
             let before = footprint()
             log(String(format: "scroll: start, document %.0f pt, footprint %.1f MB", scrollView.documentView?.frame.height ?? 0, megabytes(before)))
             // With `paging`, as a gesture would, so the timeline pages in older history when the sweep nears the top.
-            if paging { MacTimelineController.current?.phaseChanged(.interacting) }
+            if paging { MacTimelineController.current?.debugReaderScrolling(true) }
             await withCheckedContinuation { continuation in
                 probe.finished = continuation
                 probe.start()
             }
-            if paging { MacTimelineController.current?.phaseChanged(.idle) }
+            if paging { MacTimelineController.current?.debugReaderScrolling(false) }
             let after = footprint()
             let sorted = probe.intervals.sorted()
             let p95 = sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))]
@@ -538,15 +517,24 @@ import SwiftUI
             if intervals.count.isMultiple(of: 60) { peak = max(peak, ScrollProbe.footprint()) }
             let progress = min(1, (now - started) / seconds)
             let clip = scrollView.contentView
-            let range = max(0, (scrollView.documentView?.frame.height ?? 0) - clip.bounds.height)
-            let fromTop = range * abs(1 - 2 * progress)
+            let range = Self.range(of: scrollView)
+            let fromTop = (range.upperBound - range.lowerBound) * abs(1 - 2 * progress)
             let flipped = scrollView.documentView?.isFlipped ?? true
-            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: flipped ? fromTop : range - fromTop))
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: flipped ? range.lowerBound + fromTop : range.upperBound - fromTop))
             scrollView.reflectScrolledClipView(clip)
             guard progress >= 1 else { return }
             timer?.invalidate()
             finished?.resume()
             finished = nil
+        }
+
+        /// The clip view's origins from one end of the content to the other, its insets included.
+        static func range(of scrollView: NSScrollView) -> ClosedRange<CGFloat> {
+            let insets = scrollView.contentInsets
+            let flipped = scrollView.documentView?.isFlipped ?? true
+            let lowest = flipped ? -insets.top : -insets.bottom
+            let highest = (scrollView.documentView?.frame.height ?? 0) - scrollView.contentView.bounds.height + (flipped ? insets.bottom : insets.top)
+            return lowest...max(lowest, highest)
         }
 
         private static func megabytes(_ bytes: UInt64) -> Double { Double(bytes) / 1_048_576 }

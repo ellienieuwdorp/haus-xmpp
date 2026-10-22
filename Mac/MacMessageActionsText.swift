@@ -3,129 +3,8 @@ import SwiftUI
 
 /// The bubble's text as a read-only `NSTextView`, so a right-click knows which link it landed on, Select Text can
 /// select it all, and selection, links and the text's own menu behave as everywhere on the Mac. A right-click inside a
-/// selection shows the system's text menu (Copy, Look Up, Services); anywhere else in the text the message's menu.
-struct MacBubbleText: NSViewRepresentable {
-    let text: NSAttributedString
-    let linkColor: NSColor
-    /// Bumped by Select Text: the text view takes focus and selects everything.
-    let selectAllRequests: Int
-    /// The message's menu for a right-click on `link`, nil away from a link.
-    let menu: (URL?) -> NSMenu
-    let openLink: (URL) -> Void
-
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var openLink: (URL) -> Void = { _ in }
-        var selectAllRequests = 0
-        /// The link colour the view has.
-        var linkColor: NSColor?
-
-        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-            guard let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)) else { return false }
-            openLink(url)
-            return true
-        }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeNSView(context: Context) -> BubbleTextView {
-        #if DEBUG
-        let perfStart = MacPerfProbe.clock()
-        defer { MacPerfProbe.add("text.make", since: perfStart) }
-        #endif
-        let view = BubbleTextView.make(text, drawsWhole: BubbleTextView.drawsWhole(text))
-        view.delegate = context.coordinator
-        context.coordinator.selectAllRequests = selectAllRequests
-        // Here, before the view is in a window, so the first update finds nothing to change: setting the text or the
-        // link attributes on a view in a window marks all of it for display.
-        context.coordinator.linkColor = linkColor
-        view.linkTextAttributes = Self.linkAttributes(linkColor)
-        return view
-    }
-
-    func updateNSView(_ view: BubbleTextView, context: Context) {
-        #if DEBUG
-        let perfStart = MacPerfProbe.clock()
-        defer { MacPerfProbe.add("text.update", since: perfStart) }
-        #endif
-        context.coordinator.openLink = openLink
-        view.messageMenu = menu
-        let row = context.environment.timelineRow
-        view.timelineKey = row.timeline.map { timeline in { [weak timeline, id = row.id] key in timeline?.bubbleTextKey(key, in: id) } }
-        view.tookFocus = row.timeline.map { timeline in { [weak timeline, id = row.id] in timeline?.bubbleTextFocused(id) } }
-        let resultClick = context.environment.findResultClick
-        view.plainClick = resultClick.isActive ? { resultClick() } : nil
-        #if DEBUG
-        view.debugMessageID = row.id
-        #endif
-        if view.textStorage?.isEqual(to: text) != true { view.textStorage?.setAttributedString(text) }
-        if context.coordinator.linkColor != linkColor {
-            context.coordinator.linkColor = linkColor
-            view.linkTextAttributes = Self.linkAttributes(linkColor)
-        }
-        if context.coordinator.selectAllRequests != selectAllRequests {
-            context.coordinator.selectAllRequests = selectAllRequests
-            view.window?.makeFirstResponder(view)
-            view.selectAll(nil)
-        }
-    }
-
-    private static func linkAttributes(_ color: NSColor) -> [NSAttributedString.Key: Any] {
-        [.foregroundColor: color, .underlineStyle: NSUnderlineStyle.single.rawValue, .cursor: NSCursor.pointingHand]
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: BubbleTextView, context: Context) -> CGSize? {
-        #if DEBUG
-        let perfStart = MacPerfProbe.clock()
-        defer { MacPerfProbe.add("text.size", since: perfStart) }
-        #endif
-        return Self.measure(text, width: proposal.width)
-    }
-
-    /// The text's size laid out `width` wide, or on as few lines as its line breaks allow without one; laid out apart
-    /// from the live view so measuring never disturbs what it shows.
-    @MainActor static func measure(_ text: NSAttributedString, width: CGFloat?) -> CGSize {
-        let available = width.map { $0.isFinite ? max(1, $0) : .greatestFiniteMagnitude } ?? .greatestFiniteMagnitude
-        let key = Measured(text: text, width: available)
-        if let size = measured[key] { return size }
-        #if DEBUG
-        MacPerfProbe.count("text.miss")
-        #endif
-        measuring.storage.setAttributedString(text)
-        measuring.container.size = NSSize(width: available, height: .greatestFiniteMagnitude)
-        measuring.layout.ensureLayout(for: measuring.container)
-        let used = measuring.layout.usedRect(for: measuring.container)
-        let size = CGSize(width: min(available, ceil(used.width)), height: ceil(used.height))
-        // Layout asks each bubble several times (its natural width, then the capped one), and again whenever a row
-        // scrolls back in; a bounded cache answers those without laying the text out again.
-        if measured.count >= 2_000 { measured.removeAll(keepingCapacity: true) }
-        // A copy as the key: the caller's string may be mutable.
-        measured[Measured(text: NSAttributedString(attributedString: text), width: available)] = size
-        return size
-    }
-
-    private struct Measured: Hashable {
-        let text: NSAttributedString
-        let width: CGFloat
-    }
-
-    @MainActor private static var measured: [Measured: CGSize] = [:]
-    @MainActor private static let measuring = TextStack()
-
-    /// TextKit 1 for both the live views and the measuring, so the two lay lines out alike.
-    @MainActor final class TextStack {
-        let storage = NSTextStorage()
-        let layout = NSLayoutManager()
-        let container = NSTextContainer()
-
-        init() {
-            container.lineFragmentPadding = 0
-            layout.addTextContainer(container)
-            storage.addLayoutManager(layout)
-        }
-    }
-}
-
+/// selection shows the system's text menu (Copy, Look Up, Services); anywhere else in the text the message's menu. Each
+/// timeline cell reuses one (`MacTimelineMessageCell`), configured from its row's record and never asked for its size.
 final class BubbleTextView: NSTextView {
     var messageMenu: ((URL?) -> NSMenu)?
     /// Takes the keys that belong to the timeline once this text has keyboard focus (`timelineKeys`).
@@ -136,24 +15,43 @@ final class BubbleTextView: NSTextView {
     /// result's jump.
     var plainClick: (() -> Void)?
 
-    /// Whether the text draws all of itself into a plain layer (`makeBackingLayer`); fixed when the view is made.
+    /// Whether the text draws all of itself into a plain layer (`makeBackingLayer`); fixed when the view is made. A
+    /// layer drawn whole is backed in full, so a text taller than 4,000 pt in the narrowest bubble keeps AppKit's layer,
+    /// which backs only the part in sight (`MacRowLayout.drawsWhole`).
     private var drawsWhole = false
 
-    /// Whether `text` is short enough to draw whole: at most 4,000 pt tall in the narrowest bubble. A layer drawn whole
-    /// is backed in full, so a long text keeps AppKit's layer, which backs only the part in sight.
-    @MainActor static func drawsWhole(_ text: NSAttributedString) -> Bool {
-        // A short message passes without being laid out again at a width it is never shown at: 1,000 characters and
-        // 40 line breaks come to about 125 lines in the narrowest bubble, some 2,100 pt. Every kind of line break counts
-        // (CR, U+2028 and the others break a line as LF does), a CRLF twice.
-        if text.length <= 1_000, text.string.unicodeScalars.lazy.filter(CharacterSet.newlines.contains).count <= 40 { return true }
-        return MacBubbleText.measure(text, width: narrowestText).height <= 4_000
+    /// The narrowest a bubble's text is laid out: the narrowest bubble (`MacTimelineMetrics.cap`) less its padding.
+    nonisolated static let narrowestText: CGFloat = 120 - 2 * 12
+
+    /// Whether the text registers its cursor rects: the I-beam, and the pointing hand over its links. Only the bubble
+    /// under the pointer does (the timeline sets it as the pointer moves): every text in sight registering its rects
+    /// again on each scrolled frame cost the main thread a call to the window server per bubble.
+    var showsCursor = false {
+        didSet {
+            guard showsCursor != oldValue else { return }
+            window?.invalidateCursorRects(for: self)
+        }
     }
 
-    /// The narrowest a bubble's text is laid out: the narrowest bubble (`BubbleWidth`) less its padding.
-    private static let narrowestText: CGFloat = 120 - 2 * 12
+    override func resetCursorRects() {
+        if showsCursor { super.resetCursorRects() }
+    }
+
+    /// TextKit 1 for both the live views and the measuring (`MacRowMeasurer`), so the two lay lines out alike.
+    final class TextStack {
+        let storage = NSTextStorage()
+        let layout = NSLayoutManager()
+        let container = NSTextContainer()
+
+        init() {
+            container.lineFragmentPadding = 0
+            layout.addTextContainer(container)
+            storage.addLayoutManager(layout)
+        }
+    }
 
     static func make(_ text: NSAttributedString, drawsWhole: Bool) -> BubbleTextView {
-        let stack = MacBubbleText.TextStack()
+        let stack = TextStack()
         stack.storage.setAttributedString(text)
         stack.container.size = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         stack.container.widthTracksTextView = true
@@ -174,7 +72,7 @@ final class BubbleTextView: NSTextView {
         return view
     }
 
-    private var stack: MacBubbleText.TextStack?
+    private var stack: TextStack?
 
     /// A plain layer that the text draws all of itself into, again only when the text view marks itself as needing
     /// display. AppKit's own backing layer holds only the part of a view in sight and redisplays whenever the view's
@@ -276,9 +174,8 @@ final class BubbleTextView: NSTextView {
     /// A click or Select Text gives the text keyboard focus; Tab never stops here, the timeline around it is the stop.
     override var canBecomeKeyView: Bool { false }
 
-    /// Scrolled out of the lazy stack with keyboard focus (which hides the view, or takes it out of the window): the
-    /// focus stays with the timeline around the text, which SwiftUI hosts, rather than going wherever AppKit and
-    /// SwiftUI would put it next (the sidebar).
+    /// Its cell scrolled out of the table with keyboard focus (which takes it out of the window, or hides it): the focus
+    /// stays with the timeline around the text rather than going wherever AppKit would put it next.
     override func viewDidHide() {
         keepFocusInTimeline()
         super.viewDidHide()
@@ -292,10 +189,8 @@ final class BubbleTextView: NSTextView {
     private func keepFocusInTimeline() {
         guard let window, window.firstResponder === self else { return }
         var host = superview
-        while let view = host, !NSStringFromClass(type(of: view)).contains("NSHostingView") { host = view.superview }
+        while let view = host, !(view is NSTableView) { host = view.superview }
         window.makeFirstResponder(host)
-        // SwiftUI's focus goes to the timeline too, after this change: without it SwiftUI moves to its first stop.
-        if let timelineKey { DispatchQueue.main.async { timelineKey(.refocus) } }
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -306,8 +201,7 @@ final class BubbleTextView: NSTextView {
 
     /// A click into the text gives it keyboard focus, for selecting with the keys; the timeline's keys still work here:
     /// the scrolling keys scroll it, Up and Down (without Shift, which extends the selection) move on to the message
-    /// before or after this one, and Esc goes to the composer. SwiftUI usually takes them first, as the timeline around
-    /// the text has focus too; these are for when it does not.
+    /// before or after this one, and Esc goes to the composer.
     override func doCommand(by selector: Selector) {
         guard let timelineKey, let key = Self.timelineKeys[selector] else { return super.doCommand(by: selector) }
         timelineKey(key)
