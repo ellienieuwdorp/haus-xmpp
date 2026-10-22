@@ -203,8 +203,10 @@ final class MacComposerTextView: NSTextView {
         // After SwiftUI has put the rest of the window's views in place, so nothing it adds later takes focus back.
         DispatchQueue.main.async { [weak self] in
             guard let self, let window else { return }
-            // A chat opened by arrowing through the chat list leaves the keys with the list.
+            // A chat opened by arrowing through the chat list leaves the keys with the list, and one opened with its
+            // window leaves them in a field already given them (Find Chat's search field).
             if window.firstResponder is NSTableView, NSApp.currentEvent?.type == .keyDown { wantsFocus = false; return }
+            if (window.firstResponder as? NSTextView)?.isFieldEditor == true { wantsFocus = false; return }
             focus()
         }
     }

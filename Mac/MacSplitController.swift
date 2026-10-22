@@ -165,10 +165,13 @@ import SwiftUI
 @MainActor final class MacSidebarSearch: NSSplitViewItemAccessoryViewController {
     private let state: MacWindowState
     private let field = NSSearchField()
-    private var searchRequests = 0
+    /// The requests already answered. Those from before the field existed were for an earlier window; one that came as
+    /// the window was made (Find Chat with it closed) waits until the field is in it.
+    private var searchRequests: Int
 
     init(state: MacWindowState) {
         self.state = state
+        searchRequests = state.searchRequests
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -193,15 +196,23 @@ import SwiftUI
         self.view = view
         // The chats scroll under the field and fade, as under a toolbar, with no line between.
         if #available(macOS 26.1, *) { preferredScrollEdgeEffectStyle = .soft }
-        searchRequests = state.searchRequests
         MacObservation.track(self) { search in search.update() }
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        focusIfRequested()
     }
 
     private func update() {
         if field.stringValue != state.chatSearch { field.stringValue = state.chatSearch }
-        guard state.searchRequests != searchRequests else { return }
+        focusIfRequested()
+    }
+
+    private func focusIfRequested() {
+        guard state.searchRequests != searchRequests, let window = view.window else { return }
         searchRequests = state.searchRequests
-        view.window?.makeFirstResponder(field)
+        window.makeFirstResponder(field)
     }
 
     @objc private func searchChanged() { state.chatSearch = field.stringValue }
