@@ -59,7 +59,8 @@ import SwiftUI
 ///   gesture's phases or none, running while the next steps play), `bind-reader` (kept for older tours: the table
 ///   binds nothing and says so), `older` (the next older page, as the
 ///   reader reaching the paging lead asks for it), `arrive [<text>]` (a received message added below the others, as an
-///   arrival is, which the model never has; `settle` applies the model's rows again) and `mismatch` (each row's cached text height against a live bubble
+///   arrival is, which the model never has; `show-row typing|group-typing|loading` the typing bubble or the loading row
+///   likewise; `settle` applies the model's rows again) and `mismatch` (each row's cached text height against a live bubble
 ///   text view's at the current width).
 ///   `scroll <seconds> [paging]` sweeps the open chat's timeline from the newest loaded message to the oldest and back, moving
 ///   its clip view on a 120 Hz timer, and logs how late the main thread ran the ticks and the app's memory footprint
@@ -407,7 +408,7 @@ import SwiftUI
             case "scroll" where Double(argument.split(separator: " ").first ?? "") != nil:
                 let parts = argument.split(separator: " ")
                 if let window = mainWindow { await ScrollProbe.sweep(in: window, seconds: Double(parts[0]) ?? 10, paging: parts.dropFirst().first == "paging") }
-            case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline", "drag", "bind-reader", "older", "mismatch", "arrive", "settle": await MacTimelineDebug.step(words[0], argument, window: mainWindow)
+            case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline", "drag", "bind-reader", "older", "mismatch", "arrive", "settle", "show-row": await MacTimelineDebug.step(words[0], argument, window: mainWindow)
             case "menus": logMenuBar()
             case "command": performMenuItem(argument)
             case "header": log("header: \(mainWindow.map { "'\($0.title)' / '\($0.subtitle)'" } ?? "no main window")")

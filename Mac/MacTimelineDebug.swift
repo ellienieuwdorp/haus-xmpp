@@ -71,6 +71,17 @@ import SwiftUI
             MacDebugHooks.log("timeline arrive heights: \(timeline.table.debugHeights(of: message.id))")
         case "settle":
             timeline.update()
+        case "show-row":
+            // The typing bubble or the loading row, through the update path; `settle` takes it away.
+            var content = timeline.content
+            switch argument {
+            case "typing": content.typing = TimelineTyping(author: nil, colorKey: "alex@preview.local", accessibilityLabel: "Typing")
+            case "group-typing": content.typing = TimelineTyping(author: "Alex", colorKey: "alex@preview.local", accessibilityLabel: "Alex is typing")
+            case "loading": content.loadingEarlier = true
+            default: return MacDebugHooks.log("tour show-row \(argument): typing, group-typing or loading")
+            }
+            timeline.table.update(content)
+            report(timeline, "show-row \(argument)")
         default: break
         }
     }
