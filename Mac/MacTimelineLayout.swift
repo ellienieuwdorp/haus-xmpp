@@ -119,6 +119,21 @@ struct MacRowLayout: @unchecked Sendable {
     let provisional: Bool
 }
 
+extension MacRowLayout {
+    /// This record with its extras `delta` taller than it guessed: the text, the footer and the pills below them moved
+    /// down by as much, laid out as they were.
+    func settled(_ input: MacRowInput, extrasHeight delta: CGFloat) -> MacRowLayout {
+        func moved(_ rect: CGRect?) -> CGRect? { rect?.offsetBy(dx: 0, dy: delta) }
+        var bubble = bubbleFrame
+        bubble.size.height += delta
+        var extras = extrasFrame
+        extras?.size.height += delta
+        return MacRowLayout(key: key, input: input, height: height + delta, header: header, authorFrame: authorFrame, bubbleFrame: bubble,
+                            extrasFrame: extras, textFrame: moved(textFrame), footerFrame: footerFrame.offsetBy(dx: 0, dy: delta),
+                            reactionsFrame: moved(reactionsFrame), pills: pills, drawsWhole: drawsWhole, provisional: false)
+    }
+}
+
 /// One reaction pill: its emoji (nil for the "+N" that stands for the rest), its count and its width.
 struct MacReactionPill: Equatable, Sendable {
     let emoji: String?
@@ -310,14 +325,19 @@ final class MacRowMeasurer: @unchecked Sendable {
         return MacRowLayout.Key(id: input.id, revision: input.revision, contentWidth: contentWidth(for: input, available: available).width)
     }
 
-    /// Lays one row out for a timeline `tableWidth` wide; reuses `previous` when its key still holds and it was not a
-    /// guess this measurer can now do better than.
+    /// Lays one row out for a timeline `tableWidth` wide; reuses `previous` when its key still holds, and on the main
+    /// thread puts the extras' measured height in place of the guess a queue's record made.
     func layout(_ input: MacRowInput, tableWidth: CGFloat, previous: MacRowLayout? = nil) -> MacRowLayout {
         typealias M = MacTimelineMetrics
         let available = max(1, tableWidth - 2 * M.sidePadding)
         let (contentWidth, widthKnown) = self.contentWidth(for: input, available: available)
         let key = MacRowLayout.Key(id: input.id, revision: input.revision, contentWidth: contentWidth)
-        if let previous, previous.key == key, !(previous.provisional && sizer != nil) { return previous }
+        if let previous, previous.key == key {
+            guard previous.provisional, sizer != nil else { return previous }
+            if let frame = previous.extrasFrame, let height = extrasHeight(input, width: contentWidth) {
+                return previous.settled(input, extrasHeight: M.bubbleTop + height - frame.height)
+            }
+        }
         let bubbleWidth = contentWidth + 2 * M.bubblePaddingH
         let footerHeight = max(metrics.caption2Line, M.statusSlot.height, metrics.starSize.height)
 

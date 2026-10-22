@@ -215,8 +215,10 @@ final class MacTimelineGeneration: @unchecked Sendable {
 ///   the same turn. Never during a scroll gesture: a change below the top of the screen waits for the gesture (and its
 ///   momentum) to end.
 /// - **Heights** come only from cached records (`MacRowLayout`), measured on a serial `.utility` queue; the first
-///   screenful, and the rows of a small change, are measured on the main thread so the first frame is right.
-///   `heightOfRow` only looks a height up, or estimates one for a row above the reader not measured yet.
+///   screenful, and the rows of a change that is cheap to measure, are measured on the main thread so the first frame
+///   is right. The queue guesses the height of what SwiftUI draws (quotes, files, cards); the main thread measures
+///   those before they scroll in (`measureAhead`). `heightOfRow` only looks a height up, or estimates one for a row
+///   not measured yet.
 /// - **Resizes.** During a live resize only the rows in sight are measured again at each width; once it ends every row
 ///   is, on the queue, and the heights are applied in one go with the reader's rows kept. Above the bubble's width cap
 ///   nothing changes height.
@@ -270,15 +272,21 @@ final class MacTimelineGeneration: @unchecked Sendable {
     /// Bumped by every width change and reload: a measuring pass for an older one is dropped.
     private let generations = MacTimelineGeneration()
     private var generation = 0
-    /// An update is measured on the queue and not applied yet; a change that arrives meanwhile waits for it.
-    private(set) var isApplying = false
-    private var pendingCommit: (([MacRowLayout]) -> Void)?
+    /// An update whose rows the queue is measuring, not applied yet; a change that arrives meanwhile waits for it.
+    private var pendingUpdate: PendingUpdate?
+    private var updateTokens = 0
+    var isApplying: Bool { pendingUpdate != nil }
     private var updateWaiting = false
     /// A change that would move the rows in sight arrived during a scroll gesture: it waits for the gesture to end.
     private var heldUpdate = false
-    /// Heights that landed during a scroll gesture for rows below the top of the screen.
-    private var heldNotes = IndexSet()
+    /// Rows whose new heights would have moved the rows in sight during a scroll gesture: noted when it ends. Until then
+    /// their cells show the records their heights in the table are from, and the new records wait here.
+    private var heldHeights: Set<String> = []
+    private var heldLayouts: [String: (layout: MacRowLayout, width: CGFloat)] = [:]
     private(set) var isLiveScrolling = false
+    /// `measureAhead` is running (a height it notes scrolls, which asks for it again), or will in a later turn.
+    private var measuringAhead = false
+    private var measureAheadScheduled = false
     /// The reader is at the newest message, or near it: set by every scroll, kept through content changes and resizes,
     /// which move the newest message under a reader who stays where they are.
     private var followsEnd = true
@@ -648,18 +656,21 @@ final class MacTimelineGeneration: @unchecked Sendable {
         return input
     }
 
-    /// Bumps the revision of each message whose row changed since `old`.
-    private func noteChanges(from old: [Entry], to new: [Entry]) -> [String] {
+    /// The messages whose rows changed since `old`.
+    private func changedMessages(from old: [Entry], to new: [Entry]) -> [String] {
         var previous: [String: TimelineRow] = [:]
         for entry in old { if case .message(let row) = entry { previous[row.message.id] = row } }
-        var changed: [String] = []
-        for entry in new {
-            guard case .message(let row) = entry, let before = previous[row.message.id], before != row else { continue }
-            revisionCounter += 1
-            revisions[row.message.id] = revisionCounter
-            changed.append(row.message.id)
+        return new.compactMap { entry in
+            guard case .message(let row) = entry, let before = previous[row.message.id], before != row else { return nil }
+            return row.message.id
         }
-        return changed
+    }
+
+    private func bumpRevisions(_ ids: [String]) {
+        for id in ids {
+            revisionCounter += 1
+            revisions[id] = revisionCounter
+        }
     }
 
     /// A new accent recolours every bubble: each message's input is built again; no height changes.
@@ -679,7 +690,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
     /// removal of rows in order. The rows around where the reader lands are measured here, the rest on the queue.
     func reload(_ content: MacTimelineContent, at place: MacTimelinePlace) {
         let next = entries(content)
-        _ = noteChanges(from: entries, to: next)
+        bumpRevisions(changedMessages(from: entries, to: next))
         isGroup = content.isGroup
         entries = next
         reindex()
@@ -696,7 +707,10 @@ final class MacTimelineGeneration: @unchecked Sendable {
         defer { MacPerfProbe.add("table.reload", since: perfStart) }
         #endif
         generation = generations.bump()
-        isApplying = false
+        // An update measuring now was worked out against the rows replaced here: its records are dropped as they land.
+        pendingUpdate = nil
+        heldHeights = []
+        heldLayouts = [:]
         width = currentWidth
         layouts = layouts.filter { indexByID[$0.key] != nil }
         layoutWidths = layoutWidths.filter { indexByID[$0.key] != nil }
@@ -786,15 +800,15 @@ final class MacTimelineGeneration: @unchecked Sendable {
             if old?.height != layout.height { changed.insert(index) }
         }
         noteHeights(changed)
+        measureAhead()
     }
 
     /// Heights changed: noted in one zero-duration update, the rows in sight kept where they are. During a scroll
-    /// gesture, a change below the top of the screen waits for the gesture to end.
+    /// gesture, a change that would move the rows in sight waits for the gesture to end.
     private func noteHeights(_ indexes: IndexSet) {
         guard !indexes.isEmpty else { return }
-        let top = NSMaxRange(table.rows(in: visibleFrame))
-        if isLiveScrolling, let first = indexes.first, first < top {
-            heldNotes.formUnion(indexes)
+        if isLiveScrolling, let first = indexes.first, first < topRowInSight {
+            heldHeights.formUnion(indexes.compactMap { $0 < entries.count ? entries[$0].id : nil })
             return
         }
         let anchor = captureAnchor()
@@ -806,7 +820,68 @@ final class MacTimelineGeneration: @unchecked Sendable {
             MacDebugHooks.log("timeline trace: heights noted \(Array(indexes.prefix(8))) anchor \(anchor?.id ?? "-") \(anchor?.offset ?? 0) now \(anchor.flatMap { indexByID[$0.id] }.map { table.rect(ofRow: $0).minY - clip.minY } ?? 0)")
         }
         #endif
-        restore(anchor)
+        // A gesture's offset is the reader's; a change landing then moves nothing in sight.
+        if !isLiveScrolling { restore(anchor) }
+    }
+
+    /// The topmost row in the clip view, under the toolbar too. A row's height moves only the rows above it, so a change
+    /// in this row or above moves nothing that shows, and an insertion or a removal above it neither.
+    private var topRowInSight: Int { NSMaxRange(table.rows(in: clip)) - 1 }
+
+    /// The rows near the frame whose records guess their extras' height (the queue cannot size SwiftUI), measured on
+    /// the main thread before they scroll in, so no row shows with a height the table does not have: the rows in the
+    /// clip view without a current record at once, then the guesses out to three frames above and below, a few
+    /// milliseconds' worth at a time, in later turns until none is left. During a gesture only the rows above the top
+    /// of the frame are taken, as their heights move nothing in sight; the rest wait for the gesture to end.
+    private func measureAhead() {
+        // Not while the width settles: the pass at its end measures the rows again.
+        guard isViewLoaded, !measuringAhead, !entries.isEmpty, !view.inLiveResize, endPass == nil, width > 0 else { return }
+        measuringAhead = true
+        defer { measuringAhead = false }
+        let clip = clip
+        let inSight = table.rows(in: clip)
+        let band = table.rows(in: clip.insetBy(dx: 0, dy: -3 * clip.height))
+        let top = topRowInSight
+        let lower = max(0, band.location), upper = min(entries.count, NSMaxRange(band))
+        // In sight first, then outwards, above before below.
+        var order = Array(inSight.location..<min(entries.count, NSMaxRange(inSight)))
+        var above = NSMaxRange(inSight), below = inSight.location - 1
+        while above < upper || below >= lower {
+            if above < upper { order.append(above); above += 1 }
+            if below >= lower { order.append(below); below -= 1 }
+        }
+        let deadline = CACurrentMediaTime() + 0.003
+        var changed = IndexSet()
+        var left = false
+        for index in order {
+            guard case .message(let row) = entries[index] else { continue }
+            let id = row.message.id
+            let shows = NSLocationInRange(index, inSight)
+            if isCurrent(id) {
+                // Made as its cell was and not taken by the table yet: noted now.
+                if shows, let height = layouts[id]?.height, table.rect(ofRow: index).height != height { changed.insert(index) }
+                continue
+            }
+            // Outside the clip view only the guesses: the rows without a record, or with one for another width, are on
+            // the queue.
+            guard shows || layouts[id]?.provisional == true, !isLiveScrolling || index >= top else { continue }
+            guard shows || CACurrentMediaTime() < deadline else {
+                left = true
+                break
+            }
+            let measured = mainMeasurer.layout(input(row), tableWidth: width, previous: layouts[id])
+            store(measured, width: width)
+            if measured.height != table.rect(ofRow: index).height { changed.insert(index) } else { reconfigure(IndexSet(integer: index)) }
+        }
+        noteHeights(changed)
+        guard left, !isLiveScrolling, !measureAheadScheduled else { return }
+        measureAheadScheduled = true
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                self.measureAheadScheduled = false
+                self.measureAhead()
+            }
+        }
     }
 
     /// Notes new heights in a zero-duration update and has the table take them at once.
@@ -858,8 +933,33 @@ final class MacTimelineGeneration: @unchecked Sendable {
 
     // MARK: Updates
 
+    /// An update whose rows the queue is measuring. Only its own records apply it (`token`), only at the generation they
+    /// were measured for, and not while a gesture scrolls over what it changes.
+    private struct PendingUpdate {
+        let token: Int
+        let generation: Int
+        /// The lowest row it changes, in the rows before it.
+        let lowestTouched: Int?
+        /// The rows before and after it, for the perf probe.
+        let counts: (Int, Int)
+        let commit: ([MacRowLayout]) -> Void
+        /// Its records, landed during a gesture over the rows it changes: applied when the gesture ends.
+        var results: [MacRowLayout]?
+    }
+
+    /// The most a change is measured on the main thread, in the turn it arrives in, in `measuringCost`'s characters:
+    /// about 2 ms of layout. A costlier change (an older page, a long message) is measured on the queue.
+    private static let mainThreadBudget = 600
+
+    /// Roughly what laying a row out costs, in characters laid out: its text (up to three times for a long one, all in
+    /// proportion to its length), and its extras, which SwiftUI sizes at a millisecond or so.
+    private static func measuringCost(_ row: TimelineRow) -> Int {
+        row.message.displayedText.utf16.count + (MacBubbleTextBuilder.extras(row.message) == nil ? 20 : 300)
+    }
+
     /// A change of the model's content: rows inserted or removed in order, rows changed in place. The new and changed
-    /// rows are measured first (a few here, more on the queue), then applied in one update with the reader kept.
+    /// rows are measured first (here when that is cheap, else on the queue), then applied in one update with the reader
+    /// kept.
     func update(_ content: MacTimelineContent) {
         guard isViewLoaded, view.window != nil, timeline?.isLoaded == true, content.isLoaded else {
             timeline?.apply(content)
@@ -886,21 +986,15 @@ final class MacTimelineGeneration: @unchecked Sendable {
         }
         var changedTyping = false
         if old.count > 1, new.count > 1, case .typing = old[1], case .typing = new[1], old[1] != new[1] { changedTyping = true }
+        let changedIDs = changedMessages(from: old, to: new)
+        // Rows below the lowest change are the same before and after it, so its index holds in either.
+        let lowestTouched = ([removed.first, inserted.first, changedTyping ? 1 : nil] + changedIDs.map { indexByID[$0] }).compactMap { $0 }.min()
         // A gesture keeps what it scrolls over: a change at or below the top of the screen waits for it to end.
-        if isLiveScrolling {
-            let top = NSMaxRange(table.rows(in: visibleFrame))
-            let newByID = Dictionary(new.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            let changedRows = old.indices.filter { index in
-                guard case .message = old[index], let entry = newByID[old[index].id] else { return false }
-                return entry != old[index]
-            }
-            let touched = (removed.first.map { [$0] } ?? []) + (inserted.first.map { [$0] } ?? []) + changedRows + (changedTyping ? [1] : [])
-            if let lowest = touched.min(), lowest < top {
-                heldUpdate = true
-                return
-            }
+        if isLiveScrolling, let lowestTouched, lowestTouched <= topRowInSight {
+            heldUpdate = true
+            return
         }
-        let changedIDs = noteChanges(from: old, to: new)
+        bumpRevisions(changedIDs)
         let changedSet = Set(changedIDs)
         isGroup = content.isGroup
         let measure = new.enumerated().compactMap { index, entry -> TimelineRow? in
@@ -910,44 +1004,75 @@ final class MacTimelineGeneration: @unchecked Sendable {
         let commit: ([MacRowLayout]) -> Void = { [weak self] results in
             self?.commit(content, entries: new, removed: removed, inserted: inserted, changedIDs: changedIDs, changedTyping: changedTyping, results: results)
         }
-        if measure.count <= 30 {
+        if measure.reduce(0, { $0 + Self.measuringCost($1) }) <= Self.mainThreadBudget {
             #if DEBUG
             MacPerfProbe.beginUpdate(from: old.count, to: new.count)
             #endif
             commit(measure.map { mainMeasurer.layout(input($0), tableWidth: width) })
             return
         }
-        // Many rows (an older page): measured on the queue, and applied when they land.
-        isApplying = true
-        pendingCommit = commit
-        let inputs = measure.map(input)
-        let width = width, measurer = queueMeasurer, generation = generation, generations = generations
-        let counts = (old.count, new.count)
+        // Measured on the queue, inputs and all, and applied when the records land.
+        updateTokens += 1
+        let token = updateTokens
+        pendingUpdate = PendingUpdate(token: token, generation: generation, lowestTouched: lowestTouched, counts: (old.count, new.count), commit: commit)
+        let rows = measure.map { ($0, revisions[$0.message.id] ?? 0) }
+        let isGroup = isGroup, accent = context.accent
+        nonisolated(unsafe) let body = MacTimelineMetrics.shared.body
+        let width = width, measurer = queueMeasurer
         measurer.queue.async {
-            let results = inputs.map { measurer.layout($0, tableWidth: width) }
+            let results = rows.map { row, revision in
+                measurer.layout(MacBubbleTextBuilder.input(row, revision: revision, isGroup: isGroup, accent: accent, body: body), tableWidth: width)
+            }
             DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    let commit = self.pendingCommit
-                    self.pendingCommit = nil
-                    guard generations.current == generation, self.isApplying, let commit else {
-                        self.isApplying = false
-                        self.timeline?.update()
-                        return
-                    }
-                    #if DEBUG
-                    MacPerfProbe.beginUpdate(from: counts.0, to: counts.1)
-                    #endif
-                    commit(results)
-                }
+                MainActor.assumeIsolated { self.land(results, ofUpdate: token) }
             }
         }
+    }
+
+    /// An update's records, back from the queue. Those of an update a reload dropped change nothing; the model's newest
+    /// content is applied again instead, unless a later update is on its way with it.
+    private func land(_ results: [MacRowLayout], ofUpdate token: Int) {
+        guard var pending = pendingUpdate, pending.token == token else {
+            if pendingUpdate == nil { timeline?.update() }
+            return
+        }
+        guard pending.generation == generation else {
+            // Measured for another width: measured again.
+            pendingUpdate = nil
+            timeline?.update()
+            return
+        }
+        // The gesture may have started since the update was asked for.
+        if isLiveScrolling, let lowest = pending.lowestTouched, lowest <= topRowInSight {
+            pending.results = results
+            pendingUpdate = pending
+            return
+        }
+        pendingUpdate = nil
+        #if DEBUG
+        MacPerfProbe.beginUpdate(from: pending.counts.0, to: pending.counts.1)
+        #endif
+        pending.commit(results)
+    }
+
+    /// The update whose records landed during the gesture that just ended.
+    private func applyHeldUpdate() {
+        guard let pending = pendingUpdate, let results = pending.results else { return }
+        pendingUpdate = nil
+        guard pending.generation == generation else {
+            timeline?.update()
+            return
+        }
+        #if DEBUG
+        MacPerfProbe.beginUpdate(from: pending.counts.0, to: pending.counts.1)
+        #endif
+        pending.commit(results)
     }
 
     /// Applies a measured change in one table update, then places the reader: at the newest message when the policy
     /// follows it, else with the rows in sight exactly where they were.
     private func commit(_ content: MacTimelineContent, entries next: [Entry], removed: IndexSet, inserted: IndexSet, changedIDs: [String],
                         changedTyping: Bool, results: [MacRowLayout]) {
-        isApplying = false
         defer {
             #if DEBUG
             MacPerfProbe.endUpdate()
@@ -963,8 +1088,10 @@ final class MacTimelineGeneration: @unchecked Sendable {
         let reader = readerRow()
         #endif
         let anchor = captureAnchor()
-        let measuredWidth = width
-        for layout in results { store(layout, width: measuredWidth) }
+        for layout in results {
+            store(layout, width: width)
+            if inputs[layout.key.id]?.revision != layout.input.revision { inputs[layout.key.id] = layout.input }
+        }
         timeline?.apply(content)
         entries = next
         reindex()
@@ -988,16 +1115,22 @@ final class MacTimelineGeneration: @unchecked Sendable {
         #if DEBUG
         MacPerfProbe.mark("apply")
         #endif
-        switch placement {
-        case .newestAtOnce, .slideToNewest, .followNewest:
-            scroll(toDistanceFromBottom: 0)
-            followsEnd = true
-        case .keepAnchor:
-            // One exact compensation: the lowest row in sight back where it was.
-            if let anchor, let row = indexByID[anchor.id] { scroll(toY: table.rect(ofRow: row).minY - anchor.offset) }
+        // During a gesture only a change that moves nothing in sight lands (`update`, `land`), and the offset is the
+        // reader's: nothing is corrected.
+        if !isLiveScrolling {
+            switch placement {
+            case .newestAtOnce, .slideToNewest, .followNewest:
+                scroll(toDistanceFromBottom: 0)
+                followsEnd = true
+            case .keepAnchor:
+                // One exact compensation: the lowest row in sight back where it was.
+                if let anchor, let row = indexByID[anchor.id] { scroll(toY: table.rect(ofRow: row).minY - anchor.offset) }
+            }
         }
         adjusting = false
         noteRestingPlace()
+        // The rows the change brought into sight are measured there (`measureAhead`), their extras too if the queue
+        // guessed them.
         clipBoundsChanged()
         #if DEBUG
         if case .keepAnchor = placement, let reader { MacTimelineDebug.held(reader, by: self) }
@@ -1076,7 +1209,12 @@ final class MacTimelineGeneration: @unchecked Sendable {
     /// settles.
     private func scheduleEndPass() {
         endPass?.cancel()
-        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.measureRest() } }
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                self?.endPass = nil
+                self?.measureRest()
+            }
+        }
         endPass = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
@@ -1092,16 +1230,27 @@ final class MacTimelineGeneration: @unchecked Sendable {
         isLiveScrolling = false
         noteRestingPlace()
         timeline?.scrollEnded()
-        if !heldNotes.isEmpty {
-            let notes = heldNotes
-            heldNotes = IndexSet()
-            noteHeights(notes)
-        }
+        noteHeldHeights()
+        applyHeldUpdate()
         if heldUpdate {
             heldUpdate = false
             timeline?.update()
         }
+        measureAhead()
         updateHover()
+    }
+
+    /// The heights held during the gesture, with the records their cells waited to show.
+    private func noteHeldHeights() {
+        var indexes = IndexSet()
+        for id in heldHeights {
+            guard let index = indexByID[id] else { continue }
+            if let held = heldLayouts[id], held.width == width, held.layout.key.revision == revisions[id] ?? 0 { store(held.layout, width: width) }
+            indexes.insert(index)
+        }
+        heldHeights = []
+        heldLayouts = [:]
+        noteHeights(indexes)
     }
 
     /// The event being handled moves the scroll view: a scroll wheel, which may report no phase (a mouse's notched
@@ -1145,6 +1294,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
         timeline.scrolled(byReader: byReader, moving: byReader || timeline.readerIsScrolling)
         updateShown()
         if !isLiveScrolling { updateHover() }
+        if !adjusting { measureAhead() }
     }
 
     /// The messages in sight now: those coming in are reported once, as they would appear.
@@ -1327,7 +1477,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
         }
     }
 
-    /// A rough height for a row not measured yet; only rows above the reader are ever unmeasured.
+    /// A rough height for a row not measured yet, until its record lands from the queue.
     private func estimate(_ row: TimelineRow) -> CGFloat {
         let textWidth = max(96, MacTimelineMetrics.cap(contentWidth: max(1, width - 32)) - 24)
         let lines = max(1, ceil(CGFloat(row.message.body.count) * 7 / textWidth)) + CGFloat(row.message.body.filter(\.isNewline).count)
@@ -1370,16 +1520,24 @@ final class MacTimelineGeneration: @unchecked Sendable {
             let input = input(message)
             if !isCurrent(id) {
                 // Unmeasured (or measured at another width, or with a guess for its extras) and about to show: measured
-                // here; its height is noted in the next turn, the rows in sight kept.
-                let measured = mainMeasurer.layout(input, tableWidth: width, previous: layout)
-                let moved = measured.height != (layout?.height ?? estimate(message))
-                store(measured, width: width)
-                layout = measured
-                if moved {
-                    DispatchQueue.main.async {
-                        MainActor.assumeIsolated {
-                            guard let index = self.indexByID[id] else { return }
-                            self.noteHeights(IndexSet(integer: index))
+                // here, and its height noted in the next turn with the rows in sight kept. During a gesture over it, the
+                // cell shows the record its row's height is from until the gesture ends, then the new one with its
+                // height; a row without one shows the new record at once.
+                let held = heldLayouts[id].flatMap { $0.width == width && $0.layout.key.revision == input.revision ? $0.layout : nil }
+                let measured = held ?? mainMeasurer.layout(input, tableWidth: width, previous: layout)
+                let height = layout?.height ?? estimate(message)
+                if measured.height != height, isLiveScrolling, row < topRowInSight, layout != nil {
+                    heldLayouts[id] = (measured, width)
+                    heldHeights.insert(id)
+                } else {
+                    store(measured, width: width)
+                    layout = measured
+                    if measured.height != height {
+                        DispatchQueue.main.async {
+                            MainActor.assumeIsolated {
+                                guard let index = self.indexByID[id] else { return }
+                                self.noteHeights(IndexSet(integer: index))
+                            }
                         }
                     }
                 }
@@ -1425,6 +1583,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
         guard scrolling != isLiveScrolling else { return }
         if scrolling { liveScrollStarted() } else { liveScrollEnded() }
     }
+
     /// The table's state for the tour's reports.
     var debugReport: String {
         String(format: "from bottom %.1f, frame %.1f, top inset %.1f, bottom inset %.1f, clip y %.1f, document %.1f, width %.0f",

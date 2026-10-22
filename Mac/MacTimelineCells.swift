@@ -431,6 +431,9 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
             let host = NSHostingView(rootView: root)
             host.sizingOptions = []
             host.autoresizingMask = []
+            // Inside its frame, always: a record that still guesses their height (shown while a gesture scrolls over
+            // it) crops them rather than letting them run over the text and the next row.
+            host.clipsToBounds = true
             // Under the text, so the text's selection and links keep their clicks.
             addSubview(host, positioned: .below, relativeTo: textView)
             extras = host
