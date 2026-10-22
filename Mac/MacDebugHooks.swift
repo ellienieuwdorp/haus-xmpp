@@ -53,9 +53,9 @@ import SwiftUI
 ///   `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as the reader's scroll, positive
 ///   towards older messages), `scroll-to <message id>` (a stored message by its ID), `quote <reference>` (as a click on
 ///   a quote naming that message does), `resize <width>x<height>`, `timeline` (logs the reader's row and distances),
-///   `resize-sweep <width>x<height> <width>x<height> <steps>` (a live resize from one size to the other, timing each
-///   step; also with no chat open) and `stalls [label]` (main-thread stalls over 50 ms since the last `stalls` step; the
-///   first starts the probe), `drag <points> <seconds> [phaseless]` (the reader's scroll by that many points, with a
+///   `resize-sweep <width>x<height> <width>x<height> <steps> [live]` (a resize from one size to the other, timing each
+///   step, in a live resize with `live`; also with no chat open) and `stalls [label]` (main-thread stalls over 50 ms
+///   since the last `stalls` step; the first starts the probe), `drag <points> <seconds> [phaseless]` (the reader's scroll by that many points, with a
 ///   gesture's phases or none, running while the next steps play), `bind-reader` (kept for older tours: the table
 ///   binds nothing and says so), `older` (the next older page, as the
 ///   reader reaching the paging lead asks for it), `arrive [<text>]` (a received message added below the others, as an
