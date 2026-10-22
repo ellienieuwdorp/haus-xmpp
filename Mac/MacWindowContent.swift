@@ -119,13 +119,14 @@ struct MacDetailPane: View {
     }
 }
 
-/// The inspector's pane: the open chat's details.
+/// The inspector's pane: the open chat's details, while the column is on screen (`MacInspectorController`).
 struct MacInspectorPane: View {
     let model: AppModel
     @Bindable var window: MacWindowState
+    let presence: MacColumnPresence
 
     var body: some View {
-        if let chatID = window.selection {
+        if presence.onScreen, let chatID = window.selection {
             MacChatInspector(model: model, chatID: chatID, path: $window.inspectorPath)
                 .id(chatID)
         }

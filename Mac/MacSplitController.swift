@@ -37,7 +37,7 @@ import SwiftUI
         sidebar.view.frame.size.width = Self.sidebarWidth.ideal
         // The content pane alone gives the window its title and subtitle: the open chat's name and status line.
         let content = Self.host(MacPane { MacDetailPane(model: model, window: state) }, bridging: [.title])
-        let inspector = Self.host(MacPane { MacInspectorPane(model: model, window: state) })
+        let inspector = MacInspectorController(model: model, state: state)
 
         sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
         sidebarItem.minimumThickness = Self.sidebarWidth.min
@@ -107,6 +107,57 @@ import SwiftUI
         guard inspectorItem.isCollapsed, !showsInspector, !state.inspectorPath.isEmpty else { return }
         state.inspectorPath.removeAll()
     }
+}
+
+/// The inspector's pane, in a view that knows whether the column is on screen: a split view hides a collapsed item's
+/// view once it has finished closing, and shows it again as it starts to open. The chat's details are built only
+/// meanwhile; in the closed column they were laid out again on every step of a window resize.
+@MainActor final class MacInspectorController: NSViewController {
+    private let model: AppModel
+    private let state: MacWindowState
+    private let presence = MacColumnPresence()
+
+    init(model: AppModel, state: MacWindowState) {
+        self.model = model
+        self.state = state
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func loadView() {
+        let view = PresenceView()
+        view.changed = { [presence] present in presence.onScreen = present }
+        let model = model, state = state, presence = presence
+        let host = NSHostingView(rootView: MacPane { MacInspectorPane(model: model, window: state, presence: presence) })
+        host.sizingOptions = []
+        host.autoresizingMask = [.width, .height]
+        view.addSubview(host)
+        self.view = view
+    }
+
+    private final class PresenceView: NSView {
+        var changed: (Bool) -> Void = { _ in }
+        private var reported: Bool?
+
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); report() }
+        override func viewDidHide() { super.viewDidHide(); report() }
+        override func viewDidUnhide() { super.viewDidUnhide(); report() }
+
+        private func report() {
+            let present = window != nil && !isHiddenOrHasHiddenAncestor
+            guard present != reported else { return }
+            reported = present
+            // Called from AppKit's layout of the split view: SwiftUI's state changes after it.
+            let changed = changed
+            DispatchQueue.main.async { changed(present) }
+        }
+    }
+}
+
+/// Whether a split view column is on screen, from when it starts to open until it has finished closing.
+@MainActor @Observable final class MacColumnPresence {
+    var onScreen = false
 }
 
 /// The sidebar's search field, above the chats: it filters them by name or address (`MacWindowState.chatSearch`), and
