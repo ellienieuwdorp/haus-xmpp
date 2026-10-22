@@ -117,6 +117,8 @@ struct MacRowLayout: @unchecked Sendable {
     /// Made away from the main thread before SwiftUI had measured the extras: their height is a guess, and the row is
     /// measured again when it shows.
     let provisional: Bool
+    /// Shown in place of a newer record whose height the table cannot take yet (`standIn(height:)`).
+    var isStandIn = false
 }
 
 extension MacRowLayout {
@@ -131,6 +133,14 @@ extension MacRowLayout {
         return MacRowLayout(key: key, input: input, height: height + delta, header: header, authorFrame: authorFrame, bubbleFrame: bubble,
                             extrasFrame: extras, textFrame: moved(textFrame), footerFrame: footerFrame.offsetBy(dx: 0, dy: delta),
                             reactionsFrame: moved(reactionsFrame), pills: pills, drawsWhole: drawsWhole, provisional: false)
+    }
+
+    /// This record cut to `height`, the height its row has in the table, for its cell to show until the table takes the
+    /// record's own: everything at its place, what falls below the row's edge cropped, nothing over the next row.
+    func standIn(height: CGFloat) -> MacRowLayout {
+        MacRowLayout(key: key, input: input, height: height, header: header, authorFrame: authorFrame, bubbleFrame: bubbleFrame,
+                     extrasFrame: extrasFrame, textFrame: textFrame, footerFrame: footerFrame, reactionsFrame: reactionsFrame, pills: pills,
+                     drawsWhole: drawsWhole, provisional: provisional, isStandIn: true)
     }
 }
 
@@ -325,14 +335,15 @@ final class MacRowMeasurer: @unchecked Sendable {
         return MacRowLayout.Key(id: input.id, revision: input.revision, contentWidth: contentWidth(for: input, available: available).width)
     }
 
-    /// Lays one row out for a timeline `tableWidth` wide; reuses `previous` when its key still holds, and on the main
-    /// thread puts the extras' measured height in place of the guess a queue's record made.
+    /// Lays one row out for a timeline `tableWidth` wide; reuses `previous` when its key still holds (unless it is a
+    /// stand-in, cut to another height), and on the main thread puts the extras' measured height in place of the guess
+    /// a queue's record made.
     func layout(_ input: MacRowInput, tableWidth: CGFloat, previous: MacRowLayout? = nil) -> MacRowLayout {
         typealias M = MacTimelineMetrics
         let available = max(1, tableWidth - 2 * M.sidePadding)
         let (contentWidth, widthKnown) = self.contentWidth(for: input, available: available)
         let key = MacRowLayout.Key(id: input.id, revision: input.revision, contentWidth: contentWidth)
-        if let previous, previous.key == key {
+        if let previous, previous.key == key, !previous.isStandIn {
             guard previous.provisional, sizer != nil else { return previous }
             if let frame = previous.extrasFrame, let height = extrasHeight(input, width: contentWidth) {
                 return previous.settled(input, extrasHeight: M.bubbleTop + height - frame.height)

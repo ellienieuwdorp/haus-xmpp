@@ -371,6 +371,8 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         }
         layoutRecord = layout
         self.message = message
+        // A stand-in is cut to its row's height: what falls below it is cropped, never drawn over the next row.
+        clipsToBounds = layout.isStandIn
         let accent = context.accent
 
         header.isHidden = layout.header == nil
