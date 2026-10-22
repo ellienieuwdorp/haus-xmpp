@@ -202,8 +202,12 @@ final class MacReactionsView: MacTimelineDrawnView {
     /// Nil where the message takes no reactions: the pills only show.
     var react: ((String) -> Void)?
 
+    /// A pill takes the click where the user can react; the gaps between pills, the "+N" and a message that takes no
+    /// reactions let it through to the row. Not the drawn view's, which never takes one.
     override func hitTest(_ point: NSPoint) -> NSView? {
-        react == nil ? nil : super.hitTest(point)
+        guard react != nil, !isHidden, let superview else { return nil }
+        let local = convert(point, from: superview)
+        return pillRects().contains { $0.pill.emoji != nil && $0.rect.contains(local) } ? self : nil
     }
 
     private func pillRects() -> [(pill: MacReactionPill, rect: NSRect)] {
