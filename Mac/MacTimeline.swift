@@ -284,6 +284,10 @@ final class MacTimelineGeneration: @unchecked Sendable {
     private var heldHeights: Set<String> = []
     private var heldLayouts: [String: (layout: MacRowLayout, width: CGFloat)] = [:]
     private(set) var isLiveScrolling = false
+    /// The messages whose records guess their extras' height, and those whose records were made as their cells were and
+    /// whose heights the table has not taken yet: what `measureAhead` looks at.
+    private var guesses: Set<String> = []
+    private var unnoted: Set<String> = []
     /// `measureAhead` is running (a height it notes scrolls, which asks for it again), or will in a later turn.
     private var measuringAhead = false
     private var measureAheadScheduled = false
@@ -650,6 +654,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
     private func store(_ layout: MacRowLayout, width: CGFloat) {
         layouts[layout.key.id] = layout
         layoutWidths[layout.key.id] = width
+        if layout.provisional { guesses.insert(layout.key.id) } else { guesses.remove(layout.key.id) }
     }
 
     /// Whether a message's record is the one to show at the current width.
@@ -737,6 +742,8 @@ final class MacTimelineGeneration: @unchecked Sendable {
         width = currentWidth
         layouts = layouts.filter { indexByID[$0.key] != nil }
         layoutWidths = layoutWidths.filter { indexByID[$0.key] != nil }
+        guesses = guesses.filter { layouts[$0] != nil }
+        unnoted = []
         // The first screenful here, from where the reader lands: the first frame shows real heights.
         var start = 0
         if case .row(let id, _) = target, let row = indexByID[id] { start = max(0, row - 20) }
@@ -854,43 +861,42 @@ final class MacTimelineGeneration: @unchecked Sendable {
     private var topRowInSight: Int { NSMaxRange(table.rows(in: clip)) - 1 }
 
     /// The rows near the frame whose records guess their extras' height (the queue cannot size SwiftUI), measured on
-    /// the main thread before they scroll in, so no row shows with a height the table does not have: the rows in the
-    /// clip view without a current record at once, then the guesses out to three frames above and below, a few
-    /// milliseconds' worth at a time, in later turns until none is left. During a gesture only the rows above the top
-    /// of the frame are taken, as their heights move nothing in sight; the rest wait for the gesture to end.
+    /// the main thread before they scroll in, so no row shows with a height the table does not have: those in the clip
+    /// view at once, then out to three frames above and below, nearest first, a few milliseconds' worth at a time, in
+    /// later turns until none is left. During a gesture only the rows from the top of the frame up are taken, as their
+    /// heights move nothing in sight; the rest wait for the gesture to end. Records made as their cells were are noted
+    /// here too, in the turn they were made in. With neither, it costs nothing.
     private func measureAhead() {
         // Not while the width settles: the pass at its end measures the rows again.
-        guard isViewLoaded, !measuringAhead, !entries.isEmpty, !view.inLiveResize, endPass == nil, width > 0 else { return }
+        guard !guesses.isEmpty || !unnoted.isEmpty, isViewLoaded, !measuringAhead, !view.inLiveResize, endPass == nil, width > 0 else { return }
         measuringAhead = true
         defer { measuringAhead = false }
+        var changed = IndexSet()
+        for id in unnoted {
+            if let index = indexByID[id], let height = layouts[id]?.height, table.rect(ofRow: index).height != height { changed.insert(index) }
+        }
+        unnoted = []
         let clip = clip
         let inSight = table.rows(in: clip)
         let band = table.rows(in: clip.insetBy(dx: 0, dy: -3 * clip.height))
         let top = topRowInSight
-        let lower = max(0, band.location), upper = min(entries.count, NSMaxRange(band))
-        // In sight first, then outwards, above before below.
-        var order = Array(inSight.location..<min(entries.count, NSMaxRange(inSight)))
-        var above = NSMaxRange(inSight), below = inSight.location - 1
-        while above < upper || below >= lower {
-            if above < upper { order.append(above); above += 1 }
-            if below >= lower { order.append(below); below -= 1 }
+        func distance(_ index: Int) -> Int {
+            index >= NSMaxRange(inSight) ? 2 * (index - NSMaxRange(inSight)) + 1 : index < inSight.location ? 2 * (inSight.location - index) + 2 : 0
         }
-        let deadline = CACurrentMediaTime() + 0.003
-        var changed = IndexSet()
-        var left = false
-        for index in order {
-            guard case .message(let row) = entries[index] else { continue }
-            let id = row.message.id
-            let shows = NSLocationInRange(index, inSight)
-            if isCurrent(id) {
-                // Made as its cell was and not taken by the table yet: noted now.
-                if shows, let height = layouts[id]?.height, table.rect(ofRow: index).height != height { changed.insert(index) }
+        var near: [(index: Int, id: String)] = []
+        for id in guesses {
+            guard let index = indexByID[id] else {
+                guesses.remove(id)
                 continue
             }
-            // Outside the clip view only the guesses: the rows without a record, or with one for another width, are on
-            // the queue.
-            guard shows || layouts[id]?.provisional == true, !isLiveScrolling || index >= top else { continue }
-            guard shows || CACurrentMediaTime() < deadline else {
+            if NSLocationInRange(index, band), !isLiveScrolling || index >= top { near.append((index, id)) }
+        }
+        near.sort { distance($0.index) < distance($1.index) }
+        let deadline = CACurrentMediaTime() + 0.003
+        var left = false
+        for (index, id) in near {
+            guard case .message(let row) = entries[index] else { continue }
+            guard NSLocationInRange(index, inSight) || CACurrentMediaTime() < deadline else {
                 left = true
                 break
             }
@@ -1558,6 +1564,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
                     store(measured, width: width)
                     layout = measured
                     if measured.height != height {
+                        unnoted.insert(id)
                         DispatchQueue.main.async {
                             MainActor.assumeIsolated {
                                 guard let index = self.indexByID[id] else { return }
@@ -1666,7 +1673,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
             rows += 1
             if delta > 0.5, failures.count < 5 { failures.append("\(row.message.id) \(frame.height) vs \(height)") }
         }
-        var cells = 0, rowsOff: [String] = [], guesses: [String] = [], extrasOff: [String] = []
+        var cells = 0, rowsOff: [String] = [], shownGuesses: [String] = [], extrasOff: [String] = []
         let sizer = NSHostingController(rootView: AnyView(EmptyView()))
         sizer.sizingOptions = []
         table.enumerateAvailableRowViews { rowView, _ in
@@ -1674,7 +1681,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
             cells += 1
             let id = record.key.id
             if abs(record.height - rowView.frame.height) > 0.5 { rowsOff.append("\(id) \(record.height)/\(rowView.frame.height)") }
-            if record.provisional { guesses.append(id) }
+            if record.provisional { shownGuesses.append(id) }
             if cell.debugExtras != nil, let message = cell.message, let frame = record.extrasFrame, !record.provisional {
                 // What SwiftUI fits them in now, sized afresh, past every cache.
                 let width = record.key.contentWidth
@@ -1685,7 +1692,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
         }
         let provisional = layouts.values.filter(\.provisional).count
         return "\(rows) texts, worst \(worst) pt" + (failures.isEmpty ? "" : ", off: " + failures.joined(separator: "; "))
-            + "; \(cells) cells, \(rowsOff.count) off their rows' heights \(rowsOff.prefix(4)), \(guesses.count) showing guesses \(guesses.prefix(4)), "
+            + "; \(cells) cells, \(rowsOff.count) off their rows' heights \(rowsOff.prefix(4)), \(shownGuesses.count) showing guesses \(shownGuesses.prefix(4)), "
             + "extras off \(extrasOff.prefix(4)); \(provisional) guessed records, \(heldHeights.count) held for the gesture, live scroll \(isLiveScrolling ? 1 : 0)"
     }
 
