@@ -254,7 +254,8 @@ final class MacTimelineGeneration: @unchecked Sendable {
     /// Newest first: `entries[0]` is the bottom row.
     private var entries: [Entry] = []
     private var indexByID: [String: Int] = [:]
-    /// Each message's revision, bumped when its row changes; a record holds for one revision.
+    /// Each message's revision, bumped when its row in `entries` changes; a record holds for one revision. An update
+    /// measured on the queue keeps its rows' new revisions to itself until it applies (`commit`).
     private var revisions: [String: Int] = [:]
     private var revisionCounter = 0
     /// The applied record per message, at some width; rows not measured yet have none and an estimated height.
@@ -694,11 +695,18 @@ final class MacTimelineGeneration: @unchecked Sendable {
         }
     }
 
-    private func bumpRevisions(_ ids: [String]) {
+    /// New revisions for `ids`, not yet given to them.
+    private func newRevisions(_ ids: [String]) -> [String: Int] {
+        var next: [String: Int] = [:]
         for id in ids {
             revisionCounter += 1
-            revisions[id] = revisionCounter
+            next[id] = revisionCounter
         }
+        return next
+    }
+
+    private func bumpRevisions(_ ids: [String]) {
+        revisions.merge(newRevisions(ids)) { $1 }
     }
 
     /// A new accent recolours every bubble: each message's input is built again; no height changes.
@@ -1025,29 +1033,36 @@ final class MacTimelineGeneration: @unchecked Sendable {
             heldUpdate = true
             return
         }
-        bumpRevisions(changedIDs + returningMessages(from: old, to: new))
+        // The changed rows' new revisions stay the update's own until it applies: until then the table lists the rows as
+        // they were, and a cell made for one meanwhile builds its input and natural widths under its old revision.
+        let revised = newRevisions(changedIDs + returningMessages(from: old, to: new))
         let changedSet = Set(changedIDs)
-        isGroup = content.isGroup
-        let measure = new.enumerated().compactMap { index, entry -> TimelineRow? in
+        let measure = new.enumerated().compactMap { index, entry -> (row: TimelineRow, revision: Int)? in
             guard case .message(let row) = entry, inserted.contains(index) || changedSet.contains(row.message.id) else { return nil }
-            return row
+            return (row, revised[row.message.id] ?? revisions[row.message.id] ?? 0)
         }
         let commit: ([MacRowLayout]) -> Void = { [weak self] results in
-            self?.commit(content, entries: new, removed: removed, inserted: inserted, changedIDs: changedIDs, changedTyping: changedTyping, results: results)
+            self?.commit(content, entries: new, removed: removed, inserted: inserted, changedIDs: changedIDs, changedTyping: changedTyping,
+                         revisions: revised, results: results)
         }
-        if measure.reduce(0, { $0 + Self.measuringCost($1) }) <= Self.mainThreadBudget {
+        let isGroup = content.isGroup, accent = context.accent
+        if measure.reduce(0, { $0 + Self.measuringCost($1.row) }) <= Self.mainThreadBudget {
             #if DEBUG
             MacPerfProbe.beginUpdate(from: old.count, to: new.count)
             #endif
-            commit(measure.map { mainMeasurer.layout(input($0), tableWidth: width) })
+            let body = MacTimelineMetrics.shared.body
+            commit(measure.map { row, revision in
+                let input = inputs[row.message.id].flatMap { $0.revision == revision ? $0 : nil }
+                    ?? MacBubbleTextBuilder.input(row, revision: revision, isGroup: isGroup, accent: accent, body: body)
+                return mainMeasurer.layout(input, tableWidth: width)
+            })
             return
         }
         // Measured on the queue, inputs and all, and applied when the records land.
         updateTokens += 1
         let token = updateTokens
         pendingUpdate = PendingUpdate(token: token, generation: generation, lowestTouched: lowestTouched, counts: (old.count, new.count), commit: commit)
-        let rows = measure.map { ($0, revisions[$0.message.id] ?? 0) }
-        let isGroup = isGroup, accent = context.accent
+        let rows = measure
         nonisolated(unsafe) let body = MacTimelineMetrics.shared.body
         let width = width, measurer = queueMeasurer
         measurer.queue.async {
@@ -1103,7 +1118,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
     /// Applies a measured change in one table update, then places the reader: at the newest message when the policy
     /// follows it, else with the rows in sight exactly where they were.
     private func commit(_ content: MacTimelineContent, entries next: [Entry], removed: IndexSet, inserted: IndexSet, changedIDs: [String],
-                        changedTyping: Bool, results: [MacRowLayout]) {
+                        changedTyping: Bool, revisions revised: [String: Int], results: [MacRowLayout]) {
         defer {
             #if DEBUG
             MacPerfProbe.endUpdate()
@@ -1119,9 +1134,12 @@ final class MacTimelineGeneration: @unchecked Sendable {
         let reader = readerRow()
         #endif
         let anchor = captureAnchor()
+        // The new content's revisions, inputs and records, published with the rows the table takes in the update below.
+        revisions.merge(revised) { $1 }
+        isGroup = content.isGroup
         for layout in results {
             store(layout, width: width)
-            if inputs[layout.key.id]?.revision != layout.input.revision { inputs[layout.key.id] = layout.input }
+            inputs[layout.key.id] = layout.input
         }
         timeline?.apply(content)
         entries = next
