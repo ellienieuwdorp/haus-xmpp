@@ -62,20 +62,24 @@ private struct MacDayChip: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if let chip = controller.dayChip {
-            Text(chip.text)
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                .padding(.horizontal, 10).padding(.vertical, 4)
-                .frame(height: MacTimelineController.chipHeight)
-                .background(.quaternary, in: Capsule())
-                .background(Color(nsColor: .textBackgroundColor), in: Capsule())
-                .opacity(chip.opacity)
-                // Reduce Motion: it fades where it rests instead of being pushed up.
-                .offset(y: reduceMotion ? MacTimelineController.chipLine : chip.top)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-                .transition(.opacity)
+        ZStack {
+            if let chip = controller.dayChip {
+                Text(chip.text)
+                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .frame(height: MacTimelineController.chipHeight)
+                    .background(.quaternary, in: Capsule())
+                    .background(Color(nsColor: .textBackgroundColor), in: Capsule())
+                    .opacity(chip.opacity)
+                    // Reduce Motion: it fades where it rests instead of being pushed up.
+                    .offset(y: reduceMotion ? MacTimelineController.chipLine : chip.top)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                    .transition(.opacity)
+            }
         }
+        // Only its coming and going; it follows the rows unanimated.
+        .animation(.easeOut(duration: controller.dayChipFade), value: controller.dayChip != nil)
     }
 }
 
@@ -85,16 +89,19 @@ private struct MacJumpToNewest: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if controller.showsJumpToNewest {
-            Button { controller.scroll(.bottom) } label: {
-                Image(systemName: "chevron.down").font(.system(size: 15, weight: .semibold))
+        ZStack {
+            if controller.showsJumpToNewest {
+                Button { controller.scroll(.bottom) } label: {
+                    Image(systemName: "chevron.down").font(.system(size: 15, weight: .semibold))
+                }
+                .buttonStyle(CircularGlassButtonStyle(diameter: 36, tinted: false))
+                .accessibilityLabel("Scroll to Newest Message")
+                .help("Scroll to the newest message")
+                .padding(.trailing, 12).padding(.bottom, 8)
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.8)))
             }
-            .buttonStyle(CircularGlassButtonStyle(diameter: 36, tinted: false))
-            .accessibilityLabel("Scroll to Newest Message")
-            .help("Scroll to the newest message")
-            .padding(.trailing, 12).padding(.bottom, 8)
-            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.8)))
         }
+        .animation(.easeOut(duration: 0.2), value: controller.showsJumpToNewest)
     }
 }
 

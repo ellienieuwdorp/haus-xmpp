@@ -24,11 +24,18 @@ import SwiftUI
     @ObservationIgnored private(set) var loadingEarlier = false
     private(set) var isGroup = false
     /// The reader is far enough above the newest message for the jump button.
+    ///
+    /// This and `dayChip` change from the table's scroll and resize callbacks, so the views that show them animate them
+    /// (`.animation(_:value:)`), never `withAnimation`. A window-wide animated transaction applied together with a
+    /// window resize animated the window's own layout: the split view's columns kept the old width, SwiftUI widened the
+    /// window to fit them again every frame, and AppKit aborted.
     private(set) var showsJumpToNewest = false
     /// A message just scrolled to, tinted for a moment so the eye finds it.
     private(set) var highlightedID: String?
     /// The day of the topmost message while the reader scrolls; nil at rest and at the top of history.
     private(set) var dayChip: TimelineScrollPolicy.DayChip?
+    /// How long the chip's coming or going takes: 0.2 s in, 0.15 s out while the reader scrolls, 0.3 s once at rest.
+    @ObservationIgnored private(set) var dayChipFade = 0.2
     /// Search is open: the timeline lists the messages whose text contains `query`, all of them while it is blank.
     private(set) var searching = false
     /// The search field's text as typed.
@@ -158,7 +165,7 @@ import SwiftUI
 
     func setShowsJumpToNewest(_ shows: Bool) {
         guard shows != showsJumpToNewest else { return }
-        withAnimation(.easeOut(duration: 0.2)) { showsJumpToNewest = shows }
+        showsJumpToNewest = shows
     }
 
     /// The reader's scroll moved the timeline: paging, and the day chip while it moves and for a second after.
@@ -398,11 +405,8 @@ import SwiftUI
         let chip = TimelineScrollPolicy.dayChip(rows: table.placedRows(), dayHeader: { rows[$0].dateHeader },
                                                 line: Self.chipLine, headerTop: Self.headerTop, chipHeight: Self.chipHeight)
         guard chip != dayChip else { return }
-        if (chip == nil) != (dayChip == nil) {
-            withAnimation(.easeOut(duration: chip == nil ? 0.15 : 0.2)) { dayChip = chip }
-        } else {
-            dayChip = chip
-        }
+        if (chip == nil) != (dayChip == nil) { dayChipFade = chip == nil ? 0.15 : 0.2 }
+        dayChip = chip
     }
 
     private func scheduleDayChipIdle() {
@@ -410,7 +414,8 @@ import SwiftUI
         dayChipIdle = Task { [weak self] in
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled, let self, !self.table.isLiveScrolling else { return }
-            withAnimation(.easeOut(duration: 0.3)) { self.dayChip = nil }
+            self.dayChipFade = 0.3
+            self.dayChip = nil
         }
     }
 
