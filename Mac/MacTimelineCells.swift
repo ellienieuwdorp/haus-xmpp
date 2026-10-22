@@ -193,10 +193,12 @@ final class MacFooterView: MacTimelineDrawnView {
 }
 
 /// The reaction pills, hung off the bubble's outer bottom corner. Where the user can react, a click on a pill adds that
-/// emoji as theirs, or takes theirs back; the pills' tooltips say which.
+/// emoji as theirs, or takes theirs back; the pills' tooltips say which, on the row under the pointer only (a tooltip
+/// is a tracking rect, which costs every scrolled frame as a cursor rect does).
 final class MacReactionsView: MacTimelineDrawnView {
     var pills: [MacReactionPill] = [] { didSet { if pills != oldValue { needsDisplay = true; updateToolTips() } } }
     var reactions: [TimelineReaction] = [] { didSet { if reactions != oldValue { updateToolTips() } } }
+    var showsToolTips = false { didSet { if showsToolTips != oldValue { updateToolTips() } } }
     /// Nil where the message takes no reactions: the pills only show.
     var react: ((String) -> Void)?
 
@@ -220,6 +222,7 @@ final class MacReactionsView: MacTimelineDrawnView {
 
     private func updateToolTips() {
         removeAllToolTips()
+        guard showsToolTips else { return }
         for (pill, rect) in pillRects() {
             guard let emoji = pill.emoji else { continue }
             let selected = reactions.first { $0.emoji == emoji }?.isSelected ?? false
@@ -400,7 +403,7 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         reactions.react = message.canReact ? { [weak self] emoji in self?.react(emoji) } : nil
         configureExtras(layout, message: message)
         if toolbar != nil { toolbar?.rootView = toolbarView(message) }
-        toolTip = context.isFiltered ? "Show in Conversation" : nil
+        updateToolTip()
         updateTint()
         updateAccessibility(layout, message: message)
         needsLayout = true
@@ -467,6 +470,8 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
     /// in every step of a resize.
     private func hoverChanged() {
         textView.showsCursor = hovering
+        reactions.showsToolTips = hovering
+        updateToolTip()
         updateTint()
         if hovering, toolbar == nil, let message { buildToolbar(message) }
         updateToolbarVisibility()
@@ -612,6 +617,12 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         guard let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)) else { return false }
         context.openLink(url)
         return true
+    }
+
+    /// A search or starred result says what a click does, under the pointer.
+    private func updateToolTip() {
+        let tip = context.isFiltered && hovering ? "Show in Conversation" : nil
+        if toolTip != tip { toolTip = tip }
     }
 
     // MARK: Tint

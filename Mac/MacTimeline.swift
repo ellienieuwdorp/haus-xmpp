@@ -132,9 +132,10 @@ final class MacTimelineTableView: NSTableView, @preconcurrency NSAccessibilityEl
     private var hoverArea: NSTrackingArea?
 
     /// One tracking area for the whole table: the bubble under the pointer, its hover toolbar and its text's cursor.
+    /// It follows the visible rect by itself, so it is made once; the table asks again on every scrolled frame.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let hoverArea { removeTrackingArea(hoverArea) }
+        guard hoverArea == nil else { return }
         let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self)
         addTrackingArea(area)
         hoverArea = area
