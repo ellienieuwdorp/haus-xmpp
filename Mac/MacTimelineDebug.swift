@@ -56,6 +56,21 @@ import SwiftUI
             MacDebugHooks.log("timeline mismatch: \(timeline.table.debugMismatch())")
         case "older":
             await timeline.debugLoadOlder()
+        case "arrive":
+            // A received message added below the others through the table's update path, as an arrival is; the model
+            // never has it, so the next change of the model's rows takes it away again.
+            var content = timeline.content
+            let message = TimelineMessage(id: "debug-arrival-\(content.rows.count)", body: argument.isEmpty ? "A message arriving while the reader is elsewhere." : argument,
+                                          isOutgoing: false, isStarred: false, sentAt: .now)
+            content.rows.append(TimelineRow(message: message, dateHeader: nil, startsRun: true, endsRun: true))
+            let reader = timeline.table.readerRow()
+            timeline.table.update(content)
+            try? await Task.sleep(for: .milliseconds(100))
+            let after = reader.flatMap { timeline.table.debugTop(of: $0.id) }
+            MacDebugHooks.log("timeline arrive: reader \(reader?.id ?? "none") drift \(format(after.map { $0 - (reader?.top ?? 0) })), \(timeline.table.debugReport)")
+            MacDebugHooks.log("timeline arrive heights: \(timeline.table.debugHeights(of: message.id))")
+        case "settle":
+            timeline.update()
         default: break
         }
     }

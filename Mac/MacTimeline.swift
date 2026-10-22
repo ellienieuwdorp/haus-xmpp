@@ -602,11 +602,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
             if old?.height != layout.height { changed.insert(index) }
         }
         guard !changed.isEmpty else { return }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0
-            context.allowsImplicitAnimation = false
-            table.noteHeightOfRows(withIndexesChanged: changed)
-        }
+        noteHeights(of: changed)
         reconfigure(changed)
     }
 
@@ -801,11 +797,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
             return
         }
         let anchor = captureAnchor()
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0
-            context.allowsImplicitAnimation = false
-            table.noteHeightOfRows(withIndexesChanged: indexes)
-        }
+        noteHeights(of: indexes)
         reconfigure(indexes)
         updateFiller()
         #if DEBUG
@@ -814,6 +806,23 @@ final class MacTimelineGeneration: @unchecked Sendable {
         }
         #endif
         restore(anchor)
+    }
+
+    /// Notes new heights in a zero-duration update and has the table take them at once.
+    private func noteHeights(of indexes: IndexSet) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            table.noteHeightOfRows(withIndexesChanged: indexes)
+        }
+        cacheHeights(of: indexes)
+    }
+
+    /// The table estimates a noted row's height until something asks for that row's rect, and lays every row above
+    /// it out on the estimate: a compensation worked out then would be off by the difference, and the rows would move
+    /// again once the table took the real height.
+    private func cacheHeights(of indexes: IndexSet) {
+        for index in indexes where index < table.numberOfRows { _ = table.rect(ofRow: index) }
     }
 
     private func reconfigure(_ indexes: IndexSet) {
@@ -843,11 +852,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
         }
         guard next != fillerHeight, !entries.isEmpty else { return }
         fillerHeight = next
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0
-            context.allowsImplicitAnimation = false
-            table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: 0))
-        }
+        noteHeights(of: IndexSet(integer: 0))
     }
 
     // MARK: Updates
@@ -973,12 +978,11 @@ final class MacTimelineGeneration: @unchecked Sendable {
             table.beginUpdates()
             if !removed.isEmpty { table.removeRows(at: removed, withAnimation: []) }
             if !inserted.isEmpty { table.insertRows(at: inserted, withAnimation: []) }
-            if !changed.isEmpty {
-                table.noteHeightOfRows(withIndexesChanged: changed)
-                table.reloadData(forRowIndexes: changed, columnIndexes: IndexSet(integer: 0))
-            }
+            if !changed.isEmpty { table.reloadData(forRowIndexes: changed, columnIndexes: IndexSet(integer: 0)) }
             table.endUpdates()
         }
+        // The changed and inserted rows' heights, taken now (`cacheHeights`), before the compensation is worked out.
+        noteHeights(of: changed.union(inserted))
         updateFiller()
         #if DEBUG
         MacPerfProbe.mark("apply")
@@ -1053,11 +1057,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
         }
         if !heights.isEmpty {
             // Bottom-anchored: the lowest row in sight stays, the rows above it move.
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0
-                context.allowsImplicitAnimation = false
-                table.noteHeightOfRows(withIndexesChanged: heights)
-            }
+            noteHeights(of: heights)
         }
         reconfigure(keys)
         updateFiller()
@@ -1431,6 +1431,19 @@ final class MacTimelineGeneration: @unchecked Sendable {
     /// The frame-relative top of a message's row, for the drift checks.
     func debugTop(of id: String) -> CGFloat? {
         indexByID[id].map { frameEdges(ofRow: $0).top }
+    }
+
+    /// A row's record height, its height in the table, and the rows below it.
+    func debugHeights(of id: String) -> String {
+        guard let row = indexByID[id] else { return "\(id) not listed" }
+        // The filler's and the typing bubble's ids end in a NUL, which a log must not carry.
+        let below = (0..<row).map { "\(entries[$0].id.replacingOccurrences(of: "\u{0}", with: "").prefix(14)) \(table.rect(ofRow: $0).height)/\(layouts[entries[$0].id]?.height ?? -1)" }
+        let differing = entries.indices.compactMap { index -> String? in
+            guard case .message(let message) = entries[index], let record = layouts[message.message.id] else { return nil }
+            let height = table.rect(ofRow: index).height
+            return abs(height - record.height) > 0.1 ? "\(message.message.id) \(height)/\(record.height)" : nil
+        }
+        return "\(id) row \(row) record \(layouts[id]?.height ?? -1) table \(table.rect(ofRow: row).height); below: \(below.joined(separator: ", ")); differing: \(differing.joined(separator: ", "))"
     }
 
     /// The tour's row steps (`select-text`, `pick-emoji`) on a message in sight.
