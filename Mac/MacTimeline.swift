@@ -597,18 +597,29 @@ final class MacTimelineGeneration: @unchecked Sendable {
         adjust { place(row: row, top: TimelineScrollPolicy.reachableTop(top, rowHeight: edges.bottom - edges.top, frameHeight: frameHeight)) }
     }
 
-    /// The rows a jump lands among, measured now: a row's place depends on the heights of every row below it, and an
-    /// estimate there would put the target off.
+    /// The rows a jump lands among, measured now, so the target lands where it is put: 30 above it, and below it a
+    /// frame's height of rows, whose heights place it. Rows further down without a current record are on the queue
+    /// (or are guesses `measureAhead` takes), and the rows in sight are kept where they are when those land.
     private func measureForJump(around row: Int) {
+        guard row < entries.count else { return }
         var changed = IndexSet()
-        let upper = min(entries.count - 1, row + 30)
-        guard upper >= 0 else { return }
-        for index in 0...upper {
-            guard case .message(let message) = entries[index], !isCurrent(message.message.id) else { continue }
-            let old = layouts[message.message.id]
-            let layout = mainMeasurer.layout(input(message), tableWidth: width, previous: old)
-            store(layout, width: width)
-            if old?.height != layout.height { changed.insert(index) }
+        func measure(_ index: Int) -> CGFloat {
+            guard case .message(let message) = entries[index] else { return tableView(table, heightOfRow: index) }
+            let id = message.message.id
+            if !isCurrent(id) {
+                let old = layouts[id]
+                let layout = mainMeasurer.layout(input(message), tableWidth: width, previous: old)
+                store(layout, width: width)
+                if old?.height != layout.height { changed.insert(index) }
+            }
+            return layouts[id]?.height ?? 0
+        }
+        for index in row...min(entries.count - 1, row + 30) { _ = measure(index) }
+        var below: CGFloat = 0
+        var index = row - 1
+        while index >= 0, below < frameHeight {
+            below += measure(index)
+            index -= 1
         }
         guard !changed.isEmpty else { return }
         noteHeights(of: changed)
@@ -751,8 +762,9 @@ final class MacTimelineGeneration: @unchecked Sendable {
         measureRest()
     }
 
-    /// Every row without a current record, on the queue, in batches applied as they land.
-    private func measureRest() {
+    /// Every row without a current record, on the queue: in batches applied as they land, or `inOneGo`, as a resize
+    /// ends, in one update with one restore of the reader's rows.
+    private func measureRest(inOneGo: Bool = false) {
         let pending = entries.compactMap { entry -> (row: TimelineRow, revision: Int)? in
             guard case .message(let row) = entry, !isCurrent(row.message.id) else { return nil }
             return (row, revisions[row.message.id] ?? 0)
@@ -762,10 +774,11 @@ final class MacTimelineGeneration: @unchecked Sendable {
         nonisolated(unsafe) let body = MacTimelineMetrics.shared.body
         let generation = generation, generations = generations, width = width, measurer = queueMeasurer
         let previous = layouts
+        let batch = inOneGo ? pending.count : 150
         measurer.queue.async {
             var offset = 0
             while offset < pending.count, generations.current == generation {
-                let slice = pending[offset..<min(pending.count, offset + 150)]
+                let slice = pending[offset..<min(pending.count, offset + batch)]
                 let results = slice.map { item in
                     let input = MacBubbleTextBuilder.input(item.row, revision: item.revision, isGroup: isGroup, accent: accent, body: body)
                     return measurer.layout(input, tableWidth: width, previous: previous[input.id])
@@ -773,7 +786,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated { self.land(results, generation: generation) }
                 }
-                offset += 150
+                offset += batch
             }
         }
     }
@@ -1202,7 +1215,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
     private func liveResizeEnded() {
         endPass?.cancel()
         endPass = nil
-        measureRest()
+        measureRest(inOneGo: true)
     }
 
     /// A width that keeps changing outside a live resize (the sidebar's animation) measures every row once, when it
@@ -1212,7 +1225,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
                 self?.endPass = nil
-                self?.measureRest()
+                self?.measureRest(inOneGo: true)
             }
         }
         endPass = work
