@@ -677,6 +677,18 @@ final class MacTimelineGeneration: @unchecked Sendable {
         }
     }
 
+    /// The messages listed again after leaving the table (behind a filter, or out of the loaded history) whose rows
+    /// changed meanwhile: their input, record and natural widths are kept from before, under the revision they left
+    /// with.
+    private func returningMessages(from old: [Entry], to new: [Entry]) -> [String] {
+        let listed = Set(old.map(\.id))
+        return new.compactMap { entry in
+            guard case .message(let row) = entry, !listed.contains(row.message.id), let input = inputs[row.message.id],
+                  input.message != row.message || input.header != row.dateHeader || input.startsRun != row.startsRun else { return nil }
+            return row.message.id
+        }
+    }
+
     private func bumpRevisions(_ ids: [String]) {
         for id in ids {
             revisionCounter += 1
@@ -701,7 +713,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
     /// removal of rows in order. The rows around where the reader lands are measured here, the rest on the queue.
     func reload(_ content: MacTimelineContent, at place: MacTimelinePlace) {
         let next = entries(content)
-        bumpRevisions(changedMessages(from: entries, to: next))
+        bumpRevisions(changedMessages(from: entries, to: next) + returningMessages(from: entries, to: next))
         isGroup = content.isGroup
         entries = next
         reindex()
@@ -1007,7 +1019,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
             heldUpdate = true
             return
         }
-        bumpRevisions(changedIDs)
+        bumpRevisions(changedIDs + returningMessages(from: old, to: new))
         let changedSet = Set(changedIDs)
         isGroup = content.isGroup
         let measure = new.enumerated().compactMap { index, entry -> TimelineRow? in
