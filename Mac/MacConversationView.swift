@@ -215,7 +215,7 @@ struct MacConversationView: View {
         }
         .onChange(of: MacDebugHooks.tour.hoveredMessage) { _, _ in timeline?.table.debugHoverChanged() }
         #endif
-        // Closed by the root when the selection moves on or the window closes: SwiftUI may build the detail column more
+        // Closed by the window when the selection moves on or the window closes: SwiftUI may build the content pane more
         // than once for one selection, and a late disappearance would close the chat the new view just opened.
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
         .environment(\.openURL, linkAction.action)

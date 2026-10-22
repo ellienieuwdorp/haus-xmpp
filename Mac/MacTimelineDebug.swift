@@ -126,7 +126,7 @@ import SwiftUI
         }
     }
 
-    /// `resize-sweep <width>x<height> <width>x<height> <steps>`: resizes the main window from the first size to the
+    /// `resize-sweep <width>x<height> <width>x<height> <steps> [live]`: resizes the main window from the first size to the
     /// second in even steps, one a frame, as a live resize would, and logs how long each step held the main thread: the
     /// resize with its layout and display, and what ran in the turns after it before the next frame was due; and the
     /// resize's CPU time, which leaves out waiting for a core on a busy machine. With `live` after the steps the window
@@ -135,7 +135,7 @@ import SwiftUI
         let parts = argument.split(separator: " ")
         let sizes = parts.prefix(2).map { $0.split(separator: "x").compactMap { Double($0) } }
         guard let window, sizes.count == 2, sizes.allSatisfy({ $0.count == 2 }), let steps = parts.dropFirst(2).first.flatMap({ Int($0) }), steps > 0 else {
-            return MacDebugHooks.log("tour resize-sweep \(argument): needs <width>x<height> <width>x<height> <steps>")
+            return MacDebugHooks.log("tour resize-sweep \(argument): needs <width>x<height> <width>x<height> <steps> [live]")
         }
         let live = parts.dropFirst(3).first == "live"
         let start = Selector(("_startLiveResize")), end = Selector(("_endLiveResize"))

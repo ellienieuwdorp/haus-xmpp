@@ -1034,18 +1034,16 @@ import SwiftUI
         for subview in view.subviews { dumpViews(subview, depth: depth + 1) }
     }
 
-    /// The window's content minimum and each SwiftUI hosting view's minimum width and height, as the split view's
-    /// columns read them: a column whose minimum follows its own width makes AppKit lay the window out again and again.
+    /// The window's content minimum and each SwiftUI hosting view's minimum width and height. The split view's panes
+    /// report none (`MacSplitController`); a minimum that follows its own view's width makes AppKit lay the window out
+    /// again and again.
     private static func logMinimums(_ window: NSWindow) {
         log("minimums: window content \(window.contentLayoutRect.size), content min \(window.contentMinSize)")
         func walk(_ view: NSView) {
             let minimums = view.constraints.filter { $0.firstItem === view && ($0.identifier ?? "").hasPrefix("NSHostingView.min") }
             if !minimums.isEmpty {
-                let name = String(describing: type(of: view))
-                let kind = name.contains("SidebarStyleContext") ? "sidebar column" : name.contains("ColumnView") ? "detail column"
-                    : name.contains("NavigationPaneModifier") ? "split pane" : "hosting view"
                 let values = minimums.map { "\($0.identifier?.replacingOccurrences(of: "NSHostingView.", with: "") ?? "") \(Int($0.constant))" }
-                log("minimums: \(kind) \(Int(view.frame.width))x\(Int(view.frame.height)) \(values.joined(separator: ", "))")
+                log("minimums: \(type(of: view)) \(Int(view.frame.width))x\(Int(view.frame.height)) \(values.joined(separator: ", "))")
             }
             view.subviews.forEach(walk)
         }

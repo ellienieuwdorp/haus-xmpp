@@ -15,6 +15,8 @@ import SwiftUI
         #endif
         return "Main Window"
     }()
+    /// The content's size until the window has a saved frame.
+    static let defaultContentSize = NSSize(width: 1080, height: 720)
     private let model: AppModel
     private let state: MacWindowState
     private let closed: () -> Void
@@ -23,7 +25,7 @@ import SwiftUI
         self.model = model
         self.state = state
         self.closed = closed
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: Self.defaultContentSize),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: true)
         window.identifier = NSUserInterfaceItemIdentifier(MacAppDelegate.mainWindowID)
@@ -38,7 +40,7 @@ import SwiftUI
         window.contentViewController = MacShellController(model: model, state: state)
         window.contentMinSize = NSSize(width: MacSplitController.windowMinWidth, height: MacSplitController.windowMinHeight)
         // Setting the content view controller sizes the window to its view; the saved frame, else the default size.
-        window.setContentSize(NSSize(width: 1080, height: 720))
+        window.setContentSize(Self.defaultContentSize)
         // A frame saved on a display that is no longer there would open the window off every screen.
         if !window.setFrameUsingName(Self.autosaveName) || !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(window.frame) }) {
             window.center()
@@ -87,7 +89,7 @@ import SwiftUI
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     override func loadView() {
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 1080, height: 720))
+        let view = NSView(frame: NSRect(origin: .zero, size: MacMainWindowController.defaultContentSize))
         let presenter = NSHostingView(rootView: MacPane { MacWindowPresenter(model: self.model, window: self.state) })
         presenter.sizingOptions = []
         presenter.frame = .zero
@@ -107,11 +109,11 @@ import SwiftUI
 
     private func showContent(blocked: Bool) {
         if blocked, blocking == nil {
-            let host = NSHostingController(rootView: MacPane { MacBlockingView(model: self.model) })
-            host.sizingOptions = []
             // The open chat closes with the split view, as it does with the window; it opens again when the split view
             // is back.
             if let chatID = state.selection { model.closeChat(chatID) }
+            let host = NSHostingController(rootView: MacPane { MacBlockingView(model: self.model) })
+            host.sizingOptions = []
             replace(split, with: host)
             split = nil
             blocking = host
