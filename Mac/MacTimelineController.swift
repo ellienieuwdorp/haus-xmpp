@@ -510,10 +510,10 @@ import SwiftUI
         _ = await model.loadOlderMessages()
     }
 
-    /// A sweep standing in for the reader's gesture (`MacDebugHooks.ScrollProbe` with `paging`).
-    func debugReaderScrolling(_ scrolling: Bool) {
-        table.debugReaderScrolling = scrolling
-        if !scrolling { scrollEnded() }
+    /// A gesture's start or end, around a tour's drag or sweep (`drag`, `MacDebugHooks.ScrollProbe` with `paging`): the
+    /// table's live scroll, as the scroll view's notifications drive it.
+    func debugLiveScroll(_ scrolling: Bool) {
+        table.debugLiveScroll(scrolling)
     }
     #endif
 }

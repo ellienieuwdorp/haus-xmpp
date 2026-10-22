@@ -489,12 +489,12 @@ import SwiftUI
             let before = footprint()
             log(String(format: "scroll: start, document %.0f pt, footprint %.1f MB", scrollView.documentView?.frame.height ?? 0, megabytes(before)))
             // With `paging`, as a gesture would, so the timeline pages in older history when the sweep nears the top.
-            if paging { MacTimelineController.current?.debugReaderScrolling(true) }
+            if paging { MacTimelineController.current?.debugLiveScroll(true) }
             await withCheckedContinuation { continuation in
                 probe.finished = continuation
                 probe.start()
             }
-            if paging { MacTimelineController.current?.debugReaderScrolling(false) }
+            if paging { MacTimelineController.current?.debugLiveScroll(false) }
             let after = footprint()
             let sorted = probe.intervals.sorted()
             let p95 = sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))]

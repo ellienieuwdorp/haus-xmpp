@@ -7,7 +7,7 @@ import SwiftUI
 ///
 /// Drift is how far the reader's row moved from where it was before an update, sampled on each of the next 30
 /// refreshes. Scroll events cannot be staged here (the window is off-screen, so AppKit gives them no window): `drag`
-/// moves the clip view as a gesture would, and marks the move as the reader's.
+/// moves the clip view as a gesture would, inside the table's live scroll, as a gesture's phases start and end it.
 @MainActor enum MacTimelineDebug {
     static func step(_ name: String, _ argument: String, window: NSWindow?) async {
         // The window's own cost too, with no chat open.
@@ -148,7 +148,7 @@ import SwiftUI
         /// Keeps itself alive through its timer until the drag ends.
         func start() {
             report(timeline, "drag \(label) start")
-            if phases { timeline.debugReaderScrolling(true) }
+            if phases { timeline.debugLiveScroll(true) }
             started = CACurrentMediaTime()
             let timer = Timer(timeInterval: 1 / 120.0, repeats: true) { _ in MainActor.assumeIsolated { self.tick() } }
             RunLoop.main.add(timer, forMode: .common)
@@ -167,7 +167,7 @@ import SwiftUI
             guard progress >= 1 else { return }
             timer?.invalidate()
             timer = nil
-            if phases { timeline.debugReaderScrolling(false) }
+            if phases { timeline.debugLiveScroll(false) }
             report(timeline, "drag \(label) end")
         }
     }

@@ -279,9 +279,6 @@ final class MacTimelineGeneration: @unchecked Sendable {
     /// Heights that landed during a scroll gesture for rows below the top of the screen.
     private var heldNotes = IndexSet()
     private(set) var isLiveScrolling = false
-    #if DEBUG
-    var debugReaderScrolling = false
-    #endif
     /// The reader is at the newest message, or near it: set by every scroll, kept through content changes and resizes,
     /// which move the newest message under a reader who stays where they are.
     private var followsEnd = true
@@ -1130,13 +1127,10 @@ final class MacTimelineGeneration: @unchecked Sendable {
         #if DEBUG
         let perfStart = MacPerfProbe.clock()
         defer { MacPerfProbe.add("table.scrolled", since: perfStart) }
-        let debugScrolling = debugReaderScrolling
-        #else
-        let debugScrolling = false
         #endif
         guard let timeline else { return }
         let distance = distanceFromBottom
-        let byReader = !adjusting && (isLiveScrolling || Self.scrollInput || debugScrolling)
+        let byReader = !adjusting && (isLiveScrolling || Self.scrollInput)
         if byReader {
             followsEnd = distance < TimelineScrollPolicy.nearBottomDistance
             if !isLiveScrolling { noteRestingPlace() }
@@ -1426,6 +1420,11 @@ final class MacTimelineGeneration: @unchecked Sendable {
     // MARK: Debug
 
     #if DEBUG
+    /// The tour's stand-in for a gesture: what a scroll view's live scroll notifications start and end.
+    func debugLiveScroll(_ scrolling: Bool) {
+        guard scrolling != isLiveScrolling else { return }
+        if scrolling { liveScrollStarted() } else { liveScrollEnded() }
+    }
     /// The table's state for the tour's reports.
     var debugReport: String {
         String(format: "from bottom %.1f, frame %.1f, top inset %.1f, bottom inset %.1f, clip y %.1f, document %.1f, width %.0f",
