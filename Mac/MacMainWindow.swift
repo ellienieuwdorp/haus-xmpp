@@ -7,7 +7,14 @@ import SwiftUI
 /// the window and everything in it; the model, the connection and the window's state (`MacWindowState`) stay with the
 /// delegate, and the next `show` builds it again around them.
 @MainActor final class MacMainWindowController: NSWindowController, NSWindowDelegate {
-    private static let frameName = "Main Window"
+    /// Where the window's frame and the split view's dividers are saved. A check run parks its window far off-screen
+    /// and moves the dividers about, so it keeps both under names of its own.
+    static let autosaveName: String = {
+        #if DEBUG
+        if MacUnobtrusive.isOn { return "Main Window (check runs)" }
+        #endif
+        return "Main Window"
+    }()
     private let model: AppModel
     private let state: MacWindowState
     private let closed: () -> Void
@@ -32,8 +39,11 @@ import SwiftUI
         window.contentMinSize = NSSize(width: MacSplitController.windowMinWidth, height: MacSplitController.windowMinHeight)
         // Setting the content view controller sizes the window to its view; the saved frame, else the default size.
         window.setContentSize(NSSize(width: 1080, height: 720))
-        if !window.setFrameUsingName(Self.frameName) { window.center() }
-        window.setFrameAutosaveName(Self.frameName)
+        // A frame saved on a display that is no longer there would open the window off every screen.
+        if !window.setFrameUsingName(Self.autosaveName) || !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(window.frame) }) {
+            window.center()
+        }
+        window.setFrameAutosaveName(Self.autosaveName)
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }

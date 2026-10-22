@@ -55,7 +55,7 @@ import SwiftUI
         addSplitViewItem(contentItem)
         addSplitViewItem(inspectorItem)
         super.viewDidLoad()
-        splitView.autosaveName = "Main Split"
+        splitView.autosaveName = MacMainWindowController.autosaveName + " Split"
         // Only once the item is in the split view: added before, AppKit installs the accessory's constraints on a view
         // outside its subtree and throws.
         sidebarItem.addTopAlignedAccessoryViewController(MacSidebarSearch(state: state))
