@@ -69,8 +69,10 @@ import SwiftUI
 ///   shows), `extras-cache` (a quote's size measured twice for one message as its quote changes), `update-race` (two
 ///   updates measured on the queue with a reload between them), `gesture-update` (an update whose records land
 ///   during a gesture), `resize-drag [<width>x<height> <points> <seconds>]` (a resize, then at once a gesture over its
-///   end pass, the cells and rows against their records sampled through it) and `edit-race` (the reader's row edited
-///   on the queue, its cell made again before the edit lands, a gesture holding it and a width change after it).
+///   end pass, the cells and rows against their records sampled through it), `edit-race` (the reader's row edited
+///   on the queue, its cell made again before the edit lands, a gesture holding it and a width change after it) and
+///   `overlay-resize [<width>x<height>]` (the jump button and the day chip coming in as the window resizes in the same
+///   turn, the window's width sampled after).
 ///   `scroll <seconds> [paging]` sweeps the open chat's timeline from the newest loaded message to the oldest and back, moving
 ///   its clip view on a 120 Hz timer, and logs how late the main thread ran the ticks and the app's memory footprint
 ///   (`ScrollProbe`); with `paging` the sweep counts as the reader's gesture, so older pages come in near the top. Give
@@ -419,7 +421,7 @@ import SwiftUI
                 if let window = mainWindow { await ScrollProbe.sweep(in: window, seconds: Double(parts[0]) ?? 10, paging: parts.dropFirst().first == "paging") }
             case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline", "drag", "bind-reader", "older", "mismatch", "arrive", "arrive-long",
                  "arrive-extras", "settle", "show-row", "hit-reaction", "reuse-media", "extras-cache", "update-race", "gesture-update",
-                 "resize-drag", "edit-race":
+                 "resize-drag", "edit-race", "overlay-resize":
                 await MacTimelineDebug.step(words[0], argument, window: mainWindow)
             case "menus": logMenuBar()
             case "command": performMenuItem(argument)

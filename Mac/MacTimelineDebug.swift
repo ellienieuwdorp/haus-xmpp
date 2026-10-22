@@ -107,6 +107,8 @@ import SwiftUI
             await resizeDrag(argument.isEmpty ? "760x800 4500 2" : argument, timeline: timeline, window: window)
         case "edit-race":
             await editRace(timeline: timeline, window: window)
+        case "overlay-resize":
+            await overlayResize(argument.isEmpty ? "760x800" : argument, timeline: timeline, window: window)
         case "settle":
             timeline.update()
         case "show-row":
@@ -308,6 +310,29 @@ import SwiftUI
         try? await Task.sleep(for: .milliseconds(500))
         MacDebugHooks.log("timeline edit-race \(reader.id): during the gesture \(during); applied \(applied); narrowed \(narrowing), after its end pass \(narrowed); "
             + "widened again \(timeline.table.debugText(of: reader.id, edited: edited))")
+    }
+
+    /// `overlay-resize [<width>x<height>]`: in one turn, the reader's scroll to the newest message and 2,000 pt up from it,
+    /// which brings in the day chip and the jump button, and the window resized; then the window's width every 100 ms.
+    /// Their animation once covered the window's whole layout: the split view's columns kept the old width, and SwiftUI
+    /// widened the window by the resize again every frame until AppKit aborted.
+    private static func overlayResize(_ argument: String, timeline: MacTimelineController, window: NSWindow?) async {
+        let size = argument.split(separator: "x").compactMap { Double($0) }
+        guard size.count == 2, let window else {
+            return MacDebugHooks.log("tour overlay-resize \(argument): needs <width>x<height> and the main window")
+        }
+        let before = Int(window.contentRect(forFrameRect: window.frame).width)
+        timeline.scroll(.bottom)
+        timeline.debugScroll(by: 2000)
+        let jump = timeline.showsJumpToNewest, chip = timeline.dayChip != nil
+        window.setContentSize(NSSize(width: size[0], height: size[1]))
+        var widths: [Int] = []
+        for _ in 0..<8 {
+            try? await Task.sleep(for: .milliseconds(100))
+            widths.append(Int(window.contentRect(forFrameRect: window.frame).width))
+        }
+        MacDebugHooks.log("timeline overlay-resize \(argument): \(before) wide, asked \(Int(size[0])), then \(widths); "
+            + "jump button \(jump), day chip \(chip) as it resized")
     }
 
     private static func arrival(_ id: String, _ text: String) -> TimelineRow {
