@@ -4,7 +4,8 @@ import SwiftUI
 /// Menu commands of the main window. Settings (⌘,) comes with the Settings scene. The Chat and Message menus act on the
 /// main window while it is the key window: its chats from the model, the open chat's find and message commands from
 /// what the conversation registers (`MacMenuTargets`), or publishes as a focused scene value. They are disabled while
-/// another window is in front or the main window is closed.
+/// another window is in front, the main window is closed, or a transfer, upgrade or key recovery replaces its chats;
+/// New Chat and Find Chat are disabled then too.
 @MainActor struct MacCommands: Commands {
     let model: AppModel
     let window: MacWindowState
@@ -12,8 +13,10 @@ import SwiftUI
     @FocusedValue(\.conversationFind) private var focusedConversation: MacConversationFindCommands?
     @FocusedValue(\.macMessageCommands) private var focusedMessageCommands: MacMessageCommands?
 
-    /// The main window is in front. An unobtrusive run's window is never key, so there it always counts.
+    /// The main window is in front, showing its chats. An unobtrusive run's window is never key, so there it always
+    /// counts.
     private var actsOnMainWindow: Bool {
+        guard !model.showsBlockingScreen else { return false }
         #if DEBUG
         if MacUnobtrusive.isOn { return true }
         #endif
@@ -43,6 +46,7 @@ import SwiftUI
                 window.showingNewChat = true
             }
             .keyboardShortcut("n")
+            .disabled(model.showsBlockingScreen)
         }
         // As in Mail: ⌘F searches what is open, ⌥⌘F the list beside it.
         CommandGroup(after: .textEditing) {
@@ -54,6 +58,7 @@ import SwiftUI
                 window.searchRequests += 1
             }
             .keyboardShortcut("f", modifiers: [.command, .option])
+            .disabled(model.showsBlockingScreen)
         }
         CommandGroup(after: .sidebar) {
             Toggle("Starred Messages", isOn: Binding(get: { conversation?.starredOnly ?? false },

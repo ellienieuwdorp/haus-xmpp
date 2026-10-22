@@ -1,11 +1,12 @@
 import SwiftUI
 
 /// The main window's sheets, alerts and routes, from a zero-sized view of their own in the window
-/// (`MacShellController`): they show over the split view or the screen that replaces it, and following them never
-/// reruns a pane.
+/// (`MacShellController`), so following them never reruns a pane. The error alert shows over the split view or the
+/// screen that replaces it; the chats' own (`MacChatsPresenter`) only with the split view, as they open, choose and
+/// change chats.
 struct MacWindowPresenter: View {
     @Bindable var model: AppModel
-    @Bindable var window: MacWindowState
+    let window: MacWindowState
 
     var body: some View {
         Color.clear
@@ -15,6 +16,23 @@ struct MacWindowPresenter: View {
             )) {
                 Button("OK") { model.error = nil }
             } message: { Text(model.error ?? "") }
+            .background { if !model.showsBlockingScreen { MacChatsPresenter(model: model, window: window) } }
+            #if DEBUG
+            .modifier(MacDebugPresentation(model: model, window: window))
+            .background(MacUnobtrusive.Anchor())
+            #endif
+    }
+}
+
+/// The split view's sheets, confirmations and routes. Gone while the transfer, upgrade or key-recovery screen replaces
+/// it: a sheet open then closes, and a notification's route waits until the chats are back.
+private struct MacChatsPresenter: View {
+    @Bindable var model: AppModel
+    @Bindable var window: MacWindowState
+
+    var body: some View {
+        Color.clear
+            .accessibilityHidden(true)
             // A Block or Report from the sidebar's menu or the Chat menu; here, so it shows with the sidebar collapsed too.
             .blockConfirmation(model: model, request: $window.blockRequest)
             .onChange(of: model.accountID) { _, _ in
@@ -73,10 +91,6 @@ struct MacWindowPresenter: View {
                     .frame(minWidth: 480, idealWidth: 520, minHeight: 520, idealHeight: 640)
                     .themedRoot()
             }
-            #if DEBUG
-            .modifier(MacDebugPresentation(model: model, window: window))
-            .background(MacUnobtrusive.Anchor())
-            #endif
     }
 
     private static func route(_ route: ChatRoute, isFor chatID: String?) -> Bool {

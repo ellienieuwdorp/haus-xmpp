@@ -93,7 +93,7 @@ import SwiftUI
         presenter.frame = .zero
         view.addSubview(presenter)
         self.view = view
-        MacObservation.track(self) { shell in shell.showContent(blocked: shell.isBlocked) }
+        MacObservation.track(self) { shell in shell.showContent(blocked: shell.model.showsBlockingScreen) }
     }
 
     override func viewWillAppear() {
@@ -105,12 +105,13 @@ import SwiftUI
         self.toolbar = toolbar
     }
 
-    private var isBlocked: Bool { model.transferState != .none || model.upgradeState != .none || model.keyRecovery != nil }
-
     private func showContent(blocked: Bool) {
         if blocked, blocking == nil {
             let host = NSHostingController(rootView: MacPane { MacBlockingView(model: self.model) })
             host.sizingOptions = []
+            // The open chat closes with the split view, as it does with the window; it opens again when the split view
+            // is back.
+            if let chatID = state.selection { model.closeChat(chatID) }
             replace(split, with: host)
             split = nil
             blocking = host
@@ -131,6 +132,12 @@ import SwiftUI
         new.view.autoresizingMask = [.width, .height]
         view.addSubview(new.view, positioned: .below, relativeTo: view.subviews.first)
     }
+}
+
+extension AppModel {
+    /// The transfer, upgrade or key-recovery screen replaces the chats until it is settled: nothing chooses, opens or
+    /// changes a chat meanwhile.
+    var showsBlockingScreen: Bool { transferState != .none || upgradeState != .none || keyRecovery != nil }
 }
 
 /// The upgrade, transfer and key-recovery screens, which replace everything until they are settled.
