@@ -1,17 +1,15 @@
 import SwiftUI
 
-/// The sidebar: the account's chats with selection and search, the own-device review card above them, and per-chat
-/// actions in a right-click menu. The iPhone's trailing swipe actions (Read, Pin, Mute) are menu items here; a Mac
-/// list has no swipe actions.
+/// The sidebar: the account's chats with selection, filtered by the search field above them (`MacSidebarSearch`), the
+/// own-device review card above them, and per-chat actions in a right-click menu. The iPhone's trailing swipe actions
+/// (Read, Pin, Mute) are menu items here; a Mac list has no swipe actions.
 struct MacChatList: View {
     @Bindable var model: AppModel
     @Bindable var window: MacWindowState
-    @State private var search = ""
-    @FocusState private var searchFocused: Bool
     /// Own devices the card was put off for with Later; a device not in here brings the card back.
     @State private var ownDevicesLater: Set<String> = []
 
-    private var searchTerm: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var searchTerm: String { window.chatSearch.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     /// The iPhone list's order.
     private var sortedChats: [ChatSummary] { ChatListOrder.sorted(model.chats) }
@@ -23,10 +21,6 @@ struct MacChatList: View {
 
     private var showsOwnDeviceReview: Bool {
         searchTerm.isEmpty && model.ownDeviceReview.contains { !ownDevicesLater.contains($0.id) }
-    }
-
-    private var accountInitial: String {
-        String((model.accountID.split(separator: "@").first ?? "").prefix(1)).uppercased()
     }
 
     /// A quiet line under sample chats (and, in DEBUG, lab chats).
@@ -77,35 +71,6 @@ struct MacChatList: View {
                     .font(.footnote).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
-            }
-        }
-        .searchable(text: $search, placement: .sidebar, prompt: "Search")
-        .searchFocused($searchFocused)
-        .onChange(of: window.searchRequests) { _, _ in searchFocused = true }
-        .navigationTitle("Chats")
-        .toolbar {
-            // In the sidebar's own bar, next to New Chat; `.navigation` would put it in front of the chat's title.
-            ToolbarItem(placement: .primaryAction) {
-                Button { window.showingAccount = true } label: {
-                    ChatAvatar(key: model.accountID, name: accountInitial, image: model.avatars[model.accountID], size: 22)
-                }
-                .help(model.accountID.isEmpty ? "Sign in" : model.accountID)
-                .accessibilityLabel("Account")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                // Connection progress is a quiet spinner that disappears; only a setup failure gets a glyph.
-                if model.isSettlingConnection || model.isCatchingUp {
-                    ProgressView().controlSize(.small).accessibilityLabel(model.isCatchingUp ? "Catching up" : "Connecting")
-                } else if model.connectionNeedsAttention {
-                    SettingsLink { Image(systemName: "exclamationmark.circle").foregroundStyle(.orange) }
-                        .help("Encryption setup needs attention")
-                        .accessibilityLabel("Encryption setup needs attention")
-                }
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button { window.showingNewChat = true } label: { Label("New Chat", systemImage: "square.and.pencil") }
-                    .help("New Chat (⌘N)")
-                    .disabled(model.accountID.isEmpty)
             }
         }
     }

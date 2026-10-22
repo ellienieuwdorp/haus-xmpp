@@ -38,9 +38,8 @@ struct MacConversationView: View {
     /// row's environment and run all their bodies again. What it performs is set while the view is shown: it holds this
     /// view, whose state holds it.
     @State private var linkAction = MacLinkAction()
-    #if DEBUG
-    @State private var debugToken = UUID()
-    #endif
+    /// This view's entry in the menu bar's targets (`MacMenuTargets`).
+    @State private var menuToken = UUID()
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -151,10 +150,8 @@ struct MacConversationView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { timeline?.table.setBars(find: $0) }
         }
         .focusedSceneValue(\.conversationFind, findCommands)
-        #if DEBUG
-        .onAppear { if MacUnobtrusive.isOn { let view = self; MacDebugHooks.tour.conversationFind.append((debugToken, { view.findCommands })) } }
-        .onDisappear { MacDebugHooks.tour.conversationFind.removeAll { $0.token == debugToken } }
-        #endif
+        .onAppear { let view = self; MacMenuTargets.shared.conversationFind.append((menuToken, { view.findCommands })) }
+        .onDisappear { MacMenuTargets.shared.conversationFind.removeAll { $0.token == menuToken } }
         .onChange(of: model.conversationIntent, initial: true) { _, intent in
             // The details' Search and Starred tiles leave what they want opened here, as on the iPhone. Applied in a turn
             // of its own: the timeline scrolls as the filter changes, which it may not do inside a view update.
@@ -410,9 +407,7 @@ private struct MacMessageCommandsSource: View {
     let timeline: MacTimelineController
     let presenter: ConversationPresenter
     let handlers: MacMessageHandlers
-    #if DEBUG
-    @State private var debugToken = UUID()
-    #endif
+    @State private var menuToken = UUID()
 
     private var commands: MacMessageCommands {
         // `items` is the observed list the rows go into, so a change of rows reruns whatever reads this.
@@ -438,11 +433,8 @@ private struct MacMessageCommandsSource: View {
         Color.clear
             .accessibilityHidden(true)
             .focusedSceneValue(\.macMessageCommands, commands)
-            #if DEBUG
-            .onAppear { if MacUnobtrusive.isOn { let source = self; MacDebugHooks.tour.messageCommands.append((debugToken, { source.commands })) } }
-            // SwiftUI may build this view twice and take the copies down in any order; the newest one left counts.
-            .onDisappear { MacDebugHooks.tour.messageCommands.removeAll { $0.token == debugToken } }
-            #endif
+            .onAppear { let source = self; MacMenuTargets.shared.messageCommands.append((menuToken, { source.commands })) }
+            .onDisappear { MacMenuTargets.shared.messageCommands.removeAll { $0.token == menuToken } }
     }
 }
 

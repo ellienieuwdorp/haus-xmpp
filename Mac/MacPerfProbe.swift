@@ -475,7 +475,7 @@ import SwiftUI
 
     // MARK: Sidebar
 
-    /// The split view whose controller has a sidebar item: the `NavigationSplitView`'s.
+    /// The split view whose controller has a sidebar item: the main window's (`MacSplitController`).
     private static func sidebarSplit(_ window: NSWindow) -> (NSSplitView, NSSplitViewController, NSSplitViewItem)? {
         for split in splitViews(in: window.contentView?.superview) {
             if let controller = split.delegate as? NSSplitViewController, let item = controller.splitViewItems.first(where: { $0.behavior == .sidebar }) {

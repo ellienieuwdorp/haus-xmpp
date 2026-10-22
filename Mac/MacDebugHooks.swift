@@ -100,8 +100,7 @@ import SwiftUI
 ///   newest sheet alone as `<name>.png`). `store <chat>` logs what a lab account's store holds for it, as the lifecycle
 ///   step of that name does.
 ///   The window of an unobtrusive run is never key, so the Chat and Message menus, Find in Conversation and Starred
-///   Messages read the main window's targets directly there (`Tour.chatCommands`, `Tour.messageCommands`,
-///   `Tour.conversationFind`) instead of as focused scene values.
+///   Messages act on the main window there as though it were (`MacCommands`).
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
 ///   also in the sample conversations, where previews are otherwise off.
 /// - `-haus-timeline-trace`: logs each timeline update that kept the reader's rows, with the reader's row's drift right
@@ -205,7 +204,6 @@ import SwiftUI
     }
 
     static func start(model: AppModel, window: MacWindowState, lifecycle: MacLifecycle) {
-        if MacUnobtrusive.isOn { tour.chatCommands = { [weak window] in window.map { MacChatCommands(model: model, window: $0) } } }
         // An earlier build wrote relative capture directories into the container; take them out again.
         if sandboxed {
             for flag in ["-haus-capture", "-haus-capture-frames"] {
@@ -260,13 +258,9 @@ import SwiftUI
             }
             await waitUntil(seconds: 15) { model.hasLoadedChats }
             log("chats loaded: \(model.chats.map(\.id))")
-            if NSApp.windows.isEmpty, let open = window.openWindow {
-                log("no window after launch; opening the main window")
-                open(id: MacAppDelegate.mainWindowID)
-                try? await Task.sleep(for: .milliseconds(500))
-                log("windows now: \(NSApp.windows.map { "\($0.identifier?.rawValue ?? "-") visible \($0.isVisible)" })")
-            } else if NSApp.windows.isEmpty {
-                log("no window after launch and no openWindow action")
+            if mainWindow == nil {
+                log("no main window after launch; opening it")
+                window.showMainWindow()
             }
             if let size = value(after: "-haus-window-size")?.split(separator: "x").compactMap({ Double($0) }), size.count == 2, let main = mainWindow {
                 main.setContentSize(NSSize(width: size[0], height: size[1]))
@@ -328,12 +322,6 @@ import SwiftUI
         var hoveredMessage: String?
         /// The chat shows its drop highlight as though files were dragged over it.
         var dropHighlight = false
-        /// The main window's Chat and Message menu targets, for the menu bar of an unobtrusive run: its window is never
-        /// key, so no focused scene value reaches the menus (`MacCommands`).
-        var chatCommands: (() -> MacChatCommands?)?
-        var messageCommands: [(token: UUID, make: () -> MacMessageCommands)] = []
-        /// The open chat's Find in Conversation and Starred Messages, likewise.
-        var conversationFind: [(token: UUID, make: () -> MacConversationFindCommands?)] = []
         func setMessageRequest(_ request: MessageRequest) {
             messageRequest = request
         }
@@ -423,7 +411,7 @@ import SwiftUI
                  "arrive-extras", "settle", "show-row", "hit-reaction", "reuse-media", "extras-cache", "update-race", "gesture-update",
                  "resize-drag", "edit-race", "overlay-resize":
                 await MacTimelineDebug.step(words[0], argument, window: mainWindow)
-            case "menus": logMenuBar()
+            case "menus": logMenuBar(model: model, window: window)
             case "command": performMenuItem(argument)
             case "header": log("header: \(mainWindow.map { "'\($0.title)' / '\($0.subtitle)'" } ?? "no main window")")
             case "badge": log("Dock badge \(NSApp.dockTile.badgeLabel ?? "none"), \(model.debugBadgeReport)")
@@ -587,7 +575,7 @@ import SwiftUI
 
     /// The Chat and Message menus as the menu bar would show them once opened: validated first, so a disabled item is
     /// what a click would find disabled.
-    private static func logMenuBar() {
+    private static func logMenuBar(model: AppModel, window: MacWindowState) {
         func walk(_ menu: NSMenu, path: String) {
             open(menu)
             let items = menu.items.filter { !$0.isSeparatorItem }.map { item -> String in
@@ -596,8 +584,8 @@ import SwiftUI
             }
             log("menu bar \(path): " + items.joined(separator: " | "))
         }
-        let message = tour.messageCommands.last?.make()
-        log("menu bar targets: chat \(tour.chatCommands?()?.selected?.chat.id ?? "none"); last message: reply \(message?.reply?.id ?? "none"), edit "
+        let message = MacMenuTargets.shared.messageCommands.last?.make()
+        log("menu bar targets: chat \(MacChatCommands(model: model, window: window).selected?.chat.id ?? "none"); last message: reply \(message?.reply?.id ?? "none"), edit "
             + "\(message?.edit?.id ?? "none"), react \(message?.react?.id ?? "none"), star \(message?.star?.id ?? "none")")
         for title in ["File", "Edit", "View", "Chat", "Message", "Window"] {
             guard let menu = NSApp.mainMenu?.item(withTitle: title)?.submenu else { log("menu bar \(title): missing"); continue }
@@ -840,11 +828,13 @@ import SwiftUI
     /// something to send) also masks its tint with a layer composited `destIn`, and while that layer is in the tree the
     /// in-process render leaves out the entire hosting view around it: a capture showed the conversation and the
     /// composer blank from the first typed character until the send, though their views and layers were all in place,
-    /// visible and opaque, and nothing was thrown. The disabled Send (0.35 opacity) and the untinted style render. The
-    /// masks are hidden while caching; the glass they belong to is blank in a capture either way.
+    /// visible and opaque, and nothing was thrown. The disabled Send (0.35 opacity) and the untinted style render. A
+    /// scroll edge's fade is such a mask too (a gradient layer over the inspector's top, which left its picture and
+    /// buttons out). The masks are hidden while caching; the glass they belong to is blank in a capture either way, and
+    /// an edge is captured without its fade.
     private static func cacheDisplay(_ view: NSView, to rep: NSBitmapImageRep) {
         let masks = view.layer.map(descendants(of:))?.filter { layer in
-            !layer.isHidden && NSStringFromClass(type(of: layer)).hasSuffix("SDFLayer") && layer.compositingFilter.map { "\($0)" } == "destIn"
+            !layer.isHidden && layer.compositingFilter.map { "\($0)" } == "destIn"
         } ?? []
         CATransaction.begin(); CATransaction.setDisableActions(true)
         masks.forEach { $0.isHidden = true }
@@ -893,6 +883,9 @@ import SwiftUI
             // Where the layer sits in the part's view (a backing layer shares its view's coordinates), then in the
             // captured view.
             var frame = part.convert(root.convert(layer.bounds, from: layer), to: view)
+            // A toolbar button's symbol is in a layer tree of its own, which converts to the window's origin: the
+            // button's cached image has it already.
+            guard frame.intersects(part.convert(part.bounds, to: view)) else { continue }
             if view.isFlipped { frame.origin.y = view.bounds.height - frame.maxY }
             // The matrix tints what lies behind the layer, here the stand-in already drawn there, in the layer's shape.
             let backdrop = pixel(of: context, at: CGPoint(x: frame.minX + 0.5, y: frame.minY + 0.5))
