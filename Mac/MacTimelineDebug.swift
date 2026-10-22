@@ -103,6 +103,10 @@ import SwiftUI
             let after = reader.flatMap { timeline.table.debugTop(of: $0.id) }
             MacDebugHooks.log("timeline gesture-update: during the gesture listed \(listed), clip moved \(format(moved)) pt, held \(held); "
                 + "after it listed \(timeline.table.debugTop(of: "debug-gesture-arrival") != nil), reader \(reader?.id ?? "none") drift \(format(after.map { $0 - (reader?.top ?? 0) }))")
+        case "resize-drag":
+            await resizeDrag(argument.isEmpty ? "760x800 4500 2" : argument, timeline: timeline, window: window)
+        case "edit-race":
+            await editRace(timeline: timeline, window: window)
         case "settle":
             timeline.update()
         case "show-row":
@@ -240,6 +244,70 @@ import SwiftUI
         timeline.table.update(content)
         try? await Task.sleep(for: .milliseconds(300))
         report(timeline, "arrive-extras \(argument)")
+    }
+
+    /// `resize-drag [<width>x<height> <points> <seconds>]` (760x800 4500 2 without them): a resize, then at once a
+    /// gesture, so the records of the resize's end pass land while it scrolls. Every 50 ms through the gesture and
+    /// half a second after it, the cells and the rows against the records they show and have their heights from.
+    private static func resizeDrag(_ argument: String, timeline: MacTimelineController, window: NSWindow?) async {
+        let parts = argument.split(separator: " ").map(String.init)
+        guard parts.count == 3, let seconds = Double(parts[2]) else {
+            return MacDebugHooks.log("tour resize-drag \(argument): needs <width>x<height> <points> <seconds>")
+        }
+        await step("resize", parts[0], window: window)
+        drag("\(parts[1]) \(parts[2])", timeline: timeline, window: window)
+        var samples = 0, cellsOff = 0, rowsOff = 0, standingIn = 0, staged = 0, examples: [String] = []
+        let end = CACurrentMediaTime() + seconds + 0.5
+        while CACurrentMediaTime() < end {
+            try? await Task.sleep(for: .milliseconds(50))
+            let geometry = timeline.table.debugGeometry()
+            samples += 1
+            cellsOff = max(cellsOff, geometry.cellsOff.count)
+            rowsOff = max(rowsOff, geometry.rowsOff.count)
+            standingIn = max(standingIn, geometry.shownStandIns.count)
+            staged = max(staged, geometry.staged)
+            if examples.count < 4 { examples += geometry.cellsOff + geometry.rowsOff }
+        }
+        let after = timeline.table.debugGeometry()
+        MacDebugHooks.log("timeline resize-drag \(argument): \(samples) samples, worst \(cellsOff) cells and \(rowsOff) rows off their records \(examples.prefix(4)), "
+            + "up to \(standingIn) cells standing in, up to \(staged) records staged; after it \(after.cellsOff.count) cells and \(after.rowsOff.count) rows off, "
+            + "\(after.shownStandIns.count) standing in, \(after.staged) staged")
+    }
+
+    /// `edit-race`: the reader's row edited to a text long enough to be measured on the queue, its cell made again for
+    /// the row as it was before the edit lands, a gesture holding the edit, then the window narrowed to 760 pt, which
+    /// lays the row out again from its input at a narrower bubble, and widened back. The edit must not show before it applies, and once applied must
+    /// stay in the record, the input and the cell's text.
+    private static func editRace(timeline: MacTimelineController, window: NSWindow?) async {
+        guard let window, let reader = timeline.table.readerRow(), let index = timeline.content.rows.firstIndex(where: { $0.message.id == reader.id }) else {
+            return MacDebugHooks.log("tour edit-race: needs an open timeline with a reader's row")
+        }
+        var content = timeline.content
+        let old = content.rows[index]
+        let edited = longText(2_000)
+        let message = TimelineMessage(id: old.message.id, body: edited, isOutgoing: old.message.isOutgoing, isStarred: false, sentAt: old.message.sentAt)
+        content.rows[index] = TimelineRow(message: message, dateHeader: old.dateHeader, startsRun: old.startsRun, endsRun: old.endsRun)
+        timeline.table.update(content)
+        // Before the edit lands: the row's cell made again, as scrolling it back into sight would.
+        timeline.table.debugRemake(reader.id)
+        timeline.debugLiveScroll(true)
+        try? await Task.sleep(for: .milliseconds(400))
+        timeline.table.debugRemake(reader.id)
+        let during = timeline.table.debugText(of: reader.id, edited: edited)
+        timeline.debugLiveScroll(false)
+        try? await Task.sleep(for: .milliseconds(100))
+        let applied = timeline.table.debugText(of: reader.id, edited: edited)
+        let size = window.contentRect(forFrameRect: window.frame).size
+        window.setContentSize(NSSize(width: 760, height: size.height))
+        // Laid out again in sight, then past the end of the width's pass.
+        try? await Task.sleep(for: .milliseconds(60))
+        let narrowing = timeline.table.debugText(of: reader.id, edited: edited)
+        try? await Task.sleep(for: .milliseconds(500))
+        let narrowed = timeline.table.debugText(of: reader.id, edited: edited)
+        window.setContentSize(size)
+        try? await Task.sleep(for: .milliseconds(500))
+        MacDebugHooks.log("timeline edit-race \(reader.id): during the gesture \(during); applied \(applied); narrowed \(narrowing), after its end pass \(narrowed); "
+            + "widened again \(timeline.table.debugText(of: reader.id, edited: edited))")
     }
 
     private static func arrival(_ id: String, _ text: String) -> TimelineRow {

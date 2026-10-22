@@ -1779,6 +1779,25 @@ final class MacTimelineGeneration: @unchecked Sendable {
             + "\(geometry.rowsOff.prefix(4)); \(provisional) guessed records, \(geometry.staged) staged, live scroll \(isLiveScrolling ? 1 : 0)"
     }
 
+    /// The tour's `edit-race`: whether a message's published record, its input and its cell's text are `edited`, and
+    /// whether the record is laid out as a measurer with no caches lays the row out now.
+    func debugText(of id: String, edited: String) -> String {
+        func which(_ text: String?) -> String { text.map { $0 == edited ? "edited" : "old" } ?? "none" }
+        guard let index = indexByID[id], case .message(let row) = entries[index], let record = layouts[id] else { return "\(id) not listed" }
+        let cell = table.view(atColumn: 0, row: index, makeIfNecessary: false) as? MacTimelineMessageCell
+        let fresh = MacRowMeasurer(metrics: .shared, sizer: MacExtrasSizer(), natural: MacNaturalWidths())
+            .layout(MacBubbleTextBuilder.input(row, revision: 0, isGroup: isGroup, accent: context.accent, body: MacTimelineMetrics.shared.body), tableWidth: width)
+        let afresh = fresh.key.contentWidth == record.key.contentWidth && fresh.height == record.height
+        return "record \(which(record.input.text.string)) \(afresh ? "as afresh" : "not as afresh (\(record.key.contentWidth) wide, \(record.height) tall, afresh \(fresh.key.contentWidth), \(fresh.height))"), "
+            + "input \(which(inputs[id]?.text.string)), cell \(which(cell?.textView.string))"
+    }
+
+    /// A row's cell made again, as the table makes one for a row that scrolls into sight.
+    func debugRemake(_ id: String) {
+        guard let row = indexByID[id] else { return }
+        table.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0))
+    }
+
     /// The whole table again where the reader is, as a new accent reloads it.
     func debugReload() {
         reloadAll(at: readerPlace())
