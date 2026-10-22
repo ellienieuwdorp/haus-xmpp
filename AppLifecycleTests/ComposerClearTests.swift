@@ -89,8 +89,35 @@ final class ComposerClearTests: XCTestCase {
         settle()
         state.clearDraft()
         settle()
-        state.draft = "see you tomorrow"
+        state.restoreDraft("see you tomorrow")
         settle()
         XCTAssertEqual(field.text, "see you tomorrow")
+    }
+
+    /// A send refused before SwiftUI's next update: `draft` is back where SwiftUI last saw it, so only the field
+    /// itself can show the text again, and typing on must continue it rather than replace it.
+    func testAFailureBeforeTheUpdateStillPutsTheTextBack() {
+        field.insertText("see you tomorrow")
+        settle()
+        state.clearDraft()
+        state.restoreDraft("see you tomorrow")
+        settle()
+        XCTAssertEqual(field.text, "see you tomorrow")
+        field.insertText("!")
+        settle()
+        XCTAssertEqual(state.draft, "see you tomorrow!")
+    }
+
+    /// Text typed while the send was under way stays; the failed text does not overwrite it.
+    func testAFailureLeavesNewTypingAlone() {
+        field.insertText("see you tomorrow")
+        settle()
+        state.clearDraft()
+        field.insertText("and")
+        settle()
+        state.restoreDraft("see you tomorrow")
+        settle()
+        XCTAssertEqual(state.draft, "and")
+        XCTAssertEqual(field.text, "and")
     }
 }

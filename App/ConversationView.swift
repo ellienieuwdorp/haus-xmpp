@@ -34,9 +34,20 @@ import XMPPProtocol
     func clearDraft() {
         // Set from code rather than through the keyboard's edit path, so the keyboard resets too: a capital for
         // the next message and no suggestions left over from the sent one.
-        if let field = fieldAnchor.flatMap(Self.textView(behind:)), field.hasText { field.text = "" }
+        if let field, field.hasText { field.text = "" }
         draft = ""
     }
+
+    /// Puts back the text of a send that failed, unless something was typed since. A failure reported before
+    /// SwiftUI's next update returns `draft` to the value SwiftUI last saw, so SwiftUI finds nothing to hand to the
+    /// field `clearDraft` emptied, and the next keystroke would replace the text.
+    func restoreDraft(_ text: String) {
+        guard draft.isEmpty else { return }
+        if let field, !field.hasText { field.text = text }
+        draft = text
+    }
+
+    private var field: UITextView? { fieldAnchor.flatMap(Self.textView(behind:)) }
 
     /// The text view covering `anchor`, from the nearest ancestor that holds one.
     static func textView(behind anchor: UIView) -> UITextView? {
@@ -163,8 +174,8 @@ struct ConversationView: View {
             Task {
                 if await model.edit(messageID: editing.id, body: text), model.accountID == account {
                     if self.editing?.id == editing.id { self.editing = nil }
-                } else if state.draft.isEmpty, model.accountID == account {
-                    state.draft = text
+                } else if model.accountID == account {
+                    state.restoreDraft(text)
                 }
             }
             return
@@ -188,8 +199,8 @@ struct ConversationView: View {
             guard model.accountID == account else { return }
             if plan.clearsReply(after: sent) {
                 if replyingTo?.id == reply?.id { replyingTo = nil }
-            } else if state.draft.isEmpty {
-                state.draft = text
+            } else {
+                state.restoreDraft(text)
             }
         }
     }
