@@ -77,6 +77,8 @@ struct MacRowInput: @unchecked Sendable {
     let message: TimelineMessage
 
     struct Extras: Sendable {
+        /// What their size follows from, which their measured sizes are kept with (`MacExtrasSizes`).
+        let content: MacExtrasSizes.Content
         /// The content width a photo or video fixes.
         let fixedWidth: CGFloat?
         /// A guess at their height for a record made before SwiftUI measured them.
@@ -124,12 +126,30 @@ struct MacReactionPill: Equatable, Sendable {
     let width: CGFloat
 }
 
-/// The extras' sizes SwiftUI measured, per row revision, readable from the measuring queue.
+/// The extras' sizes SwiftUI measured, readable from the measuring queue. Each message's are kept with the extras they
+/// were measured for and hold only while those stay the same, not for a revision: revisions are a table's own, and the
+/// table of a chat opened again starts them over.
 final class MacExtrasSizes: @unchecked Sendable {
     static let shared = MacExtrasSizes()
 
+    /// What the extras' size follows from: the quote, the file and the card, without the card's image, whose stored
+    /// aspect sizes it.
+    struct Content: Equatable, Sendable {
+        let reply: TimelineReply?
+        let attachment: TimelineAttachment?
+        let linkPreview: TimelineLinkPreview?
+
+        init(_ message: TimelineMessage) {
+            reply = message.reply
+            attachment = message.attachment
+            var preview = message.linkPreview
+            preview?.image = nil
+            linkPreview = preview
+        }
+    }
+
     private struct Entry {
-        var revision: Int
+        var content: Content
         var ideal: CGFloat?
         var heights: [CGFloat: CGFloat]
     }
@@ -137,24 +157,24 @@ final class MacExtrasSizes: @unchecked Sendable {
     private let lock = NSLock()
     private var entries: [String: Entry] = [:]
 
-    func ideal(_ id: String, revision: Int) -> CGFloat? {
-        lock.withLock { entries[id].flatMap { $0.revision == revision ? $0.ideal : nil } }
+    func ideal(_ id: String, content: Content) -> CGFloat? {
+        lock.withLock { entries[id].flatMap { $0.content == content ? $0.ideal : nil } }
     }
 
-    func height(_ id: String, revision: Int, width: CGFloat) -> CGFloat? {
-        lock.withLock { entries[id].flatMap { $0.revision == revision ? $0.heights[width] : nil } }
+    func height(_ id: String, content: Content, width: CGFloat) -> CGFloat? {
+        lock.withLock { entries[id].flatMap { $0.content == content ? $0.heights[width] : nil } }
     }
 
-    func store(_ id: String, revision: Int, ideal: CGFloat) {
+    func store(_ id: String, content: Content, ideal: CGFloat) {
         lock.withLock {
-            if entries[id]?.revision != revision { entries[id] = Entry(revision: revision, ideal: nil, heights: [:]) }
+            if entries[id]?.content != content { entries[id] = Entry(content: content, ideal: nil, heights: [:]) }
             entries[id]?.ideal = ideal
         }
     }
 
-    func store(_ id: String, revision: Int, width: CGFloat, height: CGFloat) {
+    func store(_ id: String, content: Content, width: CGFloat, height: CGFloat) {
         lock.withLock {
-            if entries[id]?.revision != revision { entries[id] = Entry(revision: revision, ideal: nil, heights: [:]) }
+            if entries[id]?.content != content { entries[id] = Entry(content: content, ideal: nil, heights: [:]) }
             entries[id]?.heights[width] = height
         }
     }
@@ -166,23 +186,38 @@ final class MacExtrasSizes: @unchecked Sendable {
 
     init() { host.sizingOptions = [] }
 
-    func ideal(_ message: TimelineMessage, revision: Int) -> CGFloat {
-        if let ideal = MacExtrasSizes.shared.ideal(message.id, revision: revision) { return ideal }
+    func ideal(_ message: TimelineMessage, content: MacExtrasSizes.Content) -> CGFloat {
+        if let ideal = MacExtrasSizes.shared.ideal(message.id, content: content) { return ideal }
         host.rootView = AnyView(MacBubbleExtrasContent.sizing(message).fixedSize())
         let ideal = ceil(host.sizeThatFits(in: CGSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)).width)
-        MacExtrasSizes.shared.store(message.id, revision: revision, ideal: ideal)
+        MacExtrasSizes.shared.store(message.id, content: content, ideal: ideal)
         return ideal
     }
 
-    func height(_ message: TimelineMessage, revision: Int, width: CGFloat) -> CGFloat {
-        if let height = MacExtrasSizes.shared.height(message.id, revision: revision, width: width) { return height }
+    func height(_ message: TimelineMessage, content: MacExtrasSizes.Content, width: CGFloat) -> CGFloat {
+        if let height = MacExtrasSizes.shared.height(message.id, content: content, width: width) { return height }
         #if DEBUG
         MacPerfProbe.count("extras.measure")
         #endif
         host.rootView = AnyView(MacBubbleExtrasContent.sizing(message).frame(width: width))
         let height = ceil(host.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height)
-        MacExtrasSizes.shared.store(message.id, revision: revision, width: width, height: height)
+        MacExtrasSizes.shared.store(message.id, content: content, width: width, height: height)
         return height
+    }
+}
+
+/// Each row's natural (unwrapped) text width and its footer's, per revision: what decides its content width. One per
+/// table, as its revisions are, shared by its two measurers, so the main thread finds what the queue measured.
+final class MacNaturalWidths: @unchecked Sendable {
+    private let lock = NSLock()
+    private var widths: [String: (revision: Int, text: CGFloat, footer: CGFloat)] = [:]
+
+    func widths(_ id: String, revision: Int) -> (text: CGFloat, footer: CGFloat)? {
+        lock.withLock { widths[id].flatMap { $0.revision == revision ? ($0.text, $0.footer) : nil } }
+    }
+
+    func store(_ id: String, revision: Int, text: CGFloat, footer: CGFloat) {
+        lock.withLock { widths[id] = (revision, text, footer) }
     }
 }
 
@@ -196,17 +231,15 @@ final class MacRowMeasurer: @unchecked Sendable {
     let queue = DispatchQueue(label: "haus.timeline.measure", qos: .utility)
     /// The main thread's: measures the extras that have no size yet.
     private let sizer: MacExtrasSizer?
-    /// Each row's natural (unwrapped) text width and its footer's, per revision: what decides its content width.
-    /// Shared by both measurers, so the main thread finds what the queue measured.
-    nonisolated(unsafe) private static var natural: [String: (revision: Int, text: CGFloat, footer: CGFloat)] = [:]
-    private static let lock = NSLock()
+    private let natural: MacNaturalWidths
     private let storage = NSTextStorage()
     private let layoutManager = NSLayoutManager()
     private let container = NSTextContainer()
 
-    init(metrics: MacTimelineMetrics, sizer: MacExtrasSizer?) {
+    init(metrics: MacTimelineMetrics, sizer: MacExtrasSizer?, natural: MacNaturalWidths) {
         self.metrics = metrics
         self.sizer = sizer
+        self.natural = natural
         container.lineFragmentPadding = 0
         layoutManager.addTextContainer(container)
         storage.addLayoutManager(layoutManager)
@@ -237,25 +270,22 @@ final class MacRowMeasurer: @unchecked Sendable {
     }
 
     private func extrasIdeal(_ input: MacRowInput) -> CGFloat? {
-        if let sizer { return MainActor.assumeIsolated { sizer.ideal(input.message, revision: input.revision) } }
-        return MacExtrasSizes.shared.ideal(input.id, revision: input.revision)
+        guard let content = input.extras?.content else { return nil }
+        if let sizer { return MainActor.assumeIsolated { sizer.ideal(input.message, content: content) } }
+        return MacExtrasSizes.shared.ideal(input.id, content: content)
     }
 
     private func extrasHeight(_ input: MacRowInput, width: CGFloat) -> CGFloat? {
-        if let sizer { return MainActor.assumeIsolated { sizer.height(input.message, revision: input.revision, width: width) } }
-        return MacExtrasSizes.shared.height(input.id, revision: input.revision, width: width)
+        guard let content = input.extras?.content else { return nil }
+        if let sizer { return MainActor.assumeIsolated { sizer.height(input.message, content: content, width: width) } }
+        return MacExtrasSizes.shared.height(input.id, content: content, width: width)
     }
 
     private func naturalWidths(_ input: MacRowInput) -> (CGFloat, CGFloat) {
-        Self.lock.lock()
-        let cached = Self.natural[input.id]
-        Self.lock.unlock()
-        if let cached, cached.revision == input.revision { return (cached.text, cached.footer) }
+        if let cached = natural.widths(input.id, revision: input.revision) { return cached }
         let text = input.hasText ? measureText(input.text, width: nil).width : 0
         let footer = footerWidth(input)
-        Self.lock.lock()
-        Self.natural[input.id] = (input.revision, text, footer)
-        Self.lock.unlock()
+        natural.store(input.id, revision: input.revision, text: text, footer: footer)
         return (text, footer)
     }
 
@@ -406,6 +436,6 @@ enum MacBubbleTextBuilder {
         if message.linkPreview != nil { estimate += 72; parts += 1 }
         estimate += CGFloat(max(0, parts - 1)) * MacTimelineMetrics.partSpacing
         let media = message.attachment?.showsPreview == true
-        return MacRowInput.Extras(fixedWidth: media ? MacTimelineMetrics.mediaContentWidth : nil, estimate: estimate)
+        return MacRowInput.Extras(content: MacExtrasSizes.Content(message), fixedWidth: media ? MacTimelineMetrics.mediaContentWidth : nil, estimate: estimate)
     }
 }

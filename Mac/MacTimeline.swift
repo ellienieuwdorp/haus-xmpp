@@ -227,8 +227,8 @@ final class MacTimelineGeneration: @unchecked Sendable {
     let context = MacTimelineCellContext()
     let scrollView = NSScrollView()
     let table = MacTimelineTableView()
-    private let mainMeasurer = MacRowMeasurer(metrics: .shared, sizer: MacExtrasSizer())
-    private let queueMeasurer = MacRowMeasurer(metrics: .shared, sizer: nil)
+    private let mainMeasurer: MacRowMeasurer
+    private let queueMeasurer: MacRowMeasurer
 
     /// One row of the table.
     private enum Entry: Equatable {
@@ -306,6 +306,9 @@ final class MacTimelineGeneration: @unchecked Sendable {
     private var pendingReload: MacTimelinePlace? = .newest
 
     init() {
+        let natural = MacNaturalWidths()
+        mainMeasurer = MacRowMeasurer(metrics: .shared, sizer: MacExtrasSizer(), natural: natural)
+        queueMeasurer = MacRowMeasurer(metrics: .shared, sizer: nil, natural: natural)
         super.init(nibName: nil, bundle: nil)
         hostedSizer.sizingOptions = []
         context.textKey = { [weak self] key, id in self?.timeline?.bubbleTextKey(key, in: id) }
