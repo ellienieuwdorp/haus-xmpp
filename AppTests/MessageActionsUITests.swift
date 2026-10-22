@@ -88,7 +88,7 @@ final class MessageActionsUITests: XCTestCase {
 
         let marker = "A small detail \(UUID().uuidString.prefix(4))"
         let message = app.textViews.containing(NSPredicate(format: "value == %@", marker)).firstMatch
-        XCTContext.runActivity(named: "The send circle keeps its frame from enabled to disabled") { _ in
+        XCTContext.runActivity(named: "Send empties the field, keeps the keyboard, and the send circle keeps its frame") { _ in
             input.tap()
             input.typeText(marker)
             let enabledFrame = send.frame
@@ -99,6 +99,9 @@ final class MessageActionsUITests: XCTestCase {
             XCTAssertTrue(message.waitForExistence(timeout: 5))
             XCTAssertEqual(send.frame, enabledFrame)
             XCTAssertFalse(send.isEnabled)
+            // An empty field reports its prompt as its value.
+            XCTAssertEqual(input.value as? String, "Message")
+            XCTAssertTrue(app.keyboards.firstMatch.exists)
             capture(app, "Centered send disabled after sending")
         }
 
