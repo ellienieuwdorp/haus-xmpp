@@ -142,6 +142,36 @@ final class MacTimelineTableView: NSTableView, @preconcurrency NSAccessibilityEl
 
     override func accessibilityLabel() -> String? { "Messages" }
 
+    /// The rows in reading order, oldest first, as they show (the table holds them newest first), without the filler
+    /// under the newest message.
+    private func readingOrder(_ rows: [Any]?) -> [Any]? {
+        rows.map { rows in
+            rows.filter { Self.rowIndex($0) != 0 }.reversed()
+        }
+    }
+
+    override func accessibilityChildren() -> [Any]? { readingOrder(super.accessibilityChildren()) }
+    override func accessibilityChildrenInNavigationOrder() -> [any NSAccessibilityElementProtocol]? {
+        readingOrder(super.accessibilityChildrenInNavigationOrder())?.compactMap { $0 as? any NSAccessibilityElementProtocol }
+    }
+
+    @objc(accessibilityRows) func readingRows() -> [Any]? {
+        readingOrder(super.accessibilityChildren())?.filter { ($0 as? NSObject)?.accessibilityAttributeValue(.role) as? String == NSAccessibility.Role.row.rawValue }
+    }
+
+    /// A row element's index; the table's row elements answer only the older attribute API.
+    private static func rowIndex(_ row: Any) -> Int? {
+        guard let row = row as? NSObject, row.accessibilityAttributeValue(.role) as? String == NSAccessibility.Role.row.rawValue else { return nil }
+        return row.accessibilityAttributeValue(.index) as? Int
+    }
+
+    @objc(accessibilityVisibleRows) func readingVisibleRows() -> [Any]? {
+        let visible = rows(in: visibleRect)
+        return readingRows()?.filter { row in
+            Self.rowIndex(row).map { NSLocationInRange($0, visible) } ?? false
+        }
+    }
+
     override func accessibilityCustomRotors() -> [NSAccessibilityCustomRotor] { timeline?.rotors ?? [] }
 
     func accessibilityElement(withToken token: any NSAccessibilityLoadingToken) -> (any NSAccessibilityElementProtocol)? {

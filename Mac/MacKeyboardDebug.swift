@@ -227,7 +227,11 @@ import AppKit
     private static func label(_ element: Element) -> String? { ask(element, "accessibilityLabel") }
     private static func title(_ element: Element) -> String? { ask(element, "accessibilityTitle") }
     private static func value(_ element: Element) -> Any? { ask(element, "accessibilityValue") as AnyObject? }
-    private static func children(_ element: Element) -> [Any] { ask(element, "accessibilityChildren") ?? [] }
+    /// A table's rows answer only the older attribute API, as an assistive app reads them.
+    private static func children(_ element: Element) -> [Any] {
+        if let children: [Any] = ask(element, "accessibilityChildren") { return children }
+        return element.accessibilityAttributeValue(.children) as? [Any] ?? []
+    }
     private static func actions(_ element: Element) -> [String] { (ask(element, "accessibilityCustomActions") as [NSAccessibilityCustomAction]?)?.map(\.name) ?? [] }
     private static func rotors(_ element: Element) -> [NSAccessibilityCustomRotor] { ask(element, "accessibilityCustomRotors") ?? [] }
     private static func isFocused(_ element: Element) -> Bool {
