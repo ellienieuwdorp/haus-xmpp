@@ -1603,6 +1603,8 @@ final class MacTimelineGeneration: @unchecked Sendable {
                distanceFromBottom, frameHeight, bars.top, bars.bottom, clip.minY, table.bounds.height, width)
     }
 
+    var debugClipY: CGFloat { clip.minY }
+
     /// The frame-relative top of a message's row, for the drift checks.
     func debugTop(of id: String) -> CGFloat? {
         indexByID[id].map { frameEdges(ofRow: $0).top }
@@ -1635,7 +1637,9 @@ final class MacTimelineGeneration: @unchecked Sendable {
         }
     }
 
-    /// The row records' agreement with what a live bubble text view lays out, at the current width.
+    /// The row records' agreement with what a live bubble text view lays out, at the current width; then each cell in
+    /// the table: the record it shows against its row's height, records that still guess their extras' height, the
+    /// extras' hosting view against what SwiftUI fits in it, and the records held for the gesture's end.
     func debugMismatch() -> String {
         var worst: CGFloat = 0, rows = 0, failures: [String] = []
         for entry in entries {
@@ -1650,7 +1654,107 @@ final class MacTimelineGeneration: @unchecked Sendable {
             rows += 1
             if delta > 0.5, failures.count < 5 { failures.append("\(row.message.id) \(frame.height) vs \(height)") }
         }
+        var cells = 0, rowsOff: [String] = [], guesses: [String] = [], extrasOff: [String] = []
+        let sizer = NSHostingController(rootView: AnyView(EmptyView()))
+        sizer.sizingOptions = []
+        table.enumerateAvailableRowViews { rowView, _ in
+            guard let cell = rowView.view(atColumn: 0) as? MacTimelineMessageCell, let record = cell.layoutRecord else { return }
+            cells += 1
+            let id = record.key.id
+            if abs(record.height - rowView.frame.height) > 0.5 { rowsOff.append("\(id) \(record.height)/\(rowView.frame.height)") }
+            if record.provisional { guesses.append(id) }
+            if cell.debugExtras != nil, let message = cell.message, let frame = record.extrasFrame, !record.provisional {
+                // What SwiftUI fits them in now, sized afresh, past every cache.
+                let width = record.key.contentWidth
+                sizer.rootView = AnyView(MacBubbleExtrasContent.sizing(message).frame(width: width))
+                let fits = MacTimelineMetrics.bubbleTop + ceil(sizer.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height)
+                if abs(fits - frame.height) > 0.5 { extrasOff.append("\(id) \(frame.height)/\(fits)") }
+            }
+        }
+        let provisional = layouts.values.filter(\.provisional).count
         return "\(rows) texts, worst \(worst) pt" + (failures.isEmpty ? "" : ", off: " + failures.joined(separator: "; "))
+            + "; \(cells) cells, \(rowsOff.count) off their rows' heights \(rowsOff.prefix(4)), \(guesses.count) showing guesses \(guesses.prefix(4)), "
+            + "extras off \(extrasOff.prefix(4)); \(provisional) guessed records, \(heldHeights.count) held for the gesture, live scroll \(isLiveScrolling ? 1 : 0)"
+    }
+
+    /// The whole table again where the reader is, as a new accent reloads it.
+    func debugReload() {
+        reloadAll(at: readerPlace())
+    }
+
+    /// The tour's `hit-reaction <id>`: the window's hit test at the message's first pill, then that view's mouse-down
+    /// handed to it in process, as a click on the pill would be.
+    func debugHitReaction(_ id: String) -> String {
+        reveal(id, margin: MacTimelineController.focusMargin)
+        view.window?.contentView?.layoutSubtreeIfNeeded()
+        guard let row = indexByID[id], let cell = table.view(atColumn: 0, row: row, makeIfNecessary: true) as? MacTimelineMessageCell,
+              let pill = cell.debugReactionPill, let window = view.window, let content = window.contentView else { return "\(id) shows no pill" }
+        let hit = content.hitTest(content.superview?.convert(pill.point, from: nil) ?? pill.point)
+        guard let hit, hit === pill.view else { return "the pill's point hits \(hit.map { String(describing: type(of: $0)) } ?? "nothing")" }
+        guard let event = NSEvent.mouseEvent(with: .leftMouseDown, location: pill.point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { return "no event" }
+        hit.mouseDown(with: event)
+        return "the pill's point hits the pills; clicked \(pill.emoji)"
+    }
+
+    /// The tour's `reuse-media`: one cell shows a photo, then is given another message's photo, as a reused cell is.
+    /// Each picture is a flat colour, so the sampled middle says which shows: the second's, or its placeholder while it
+    /// decodes, never the first's.
+    func debugReuseMedia() async -> String {
+        func file(_ color: NSColor, _ name: String) -> URL? {
+            let image = NSImage(size: NSSize(width: 64, height: 48), flipped: false) { rect in
+                color.setFill()
+                rect.fill()
+                return true
+            }
+            guard let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return nil }
+            let url = FileManager.default.temporaryDirectory.appending(path: "\(name)-\(UUID().uuidString).png")
+            return (try? png.write(to: url)) == nil ? nil : url
+        }
+        guard let red = file(.systemRed, "reuse-red"), let blue = file(.systemBlue, "reuse-blue") else { return "no files" }
+        defer { [red, blue].forEach { try? FileManager.default.removeItem(at: $0) } }
+        func row(_ id: String, _ url: URL) -> TimelineRow {
+            let attachment = TimelineAttachment(name: "\(id).png", mediaType: "image/png", size: 100, width: 64, height: 48, localURL: url)
+            return TimelineRow(message: TimelineMessage(id: id, body: "", isOutgoing: false, isStarred: false, attachment: attachment, sentAt: .now),
+                               dateHeader: nil, startsRun: true, endsRun: true)
+        }
+        let first = row("debug-reuse-red", red), second = row("debug-reuse-blue", blue)
+        let cell = MacTimelineMessageCell(drawsWhole: true, context: context)
+        // Behind the opaque scroll view: in the window, so SwiftUI draws it, and never in sight.
+        view.addSubview(cell, positioned: .below, relativeTo: scrollView)
+        defer { cell.removeFromSuperview() }
+        func show(_ row: TimelineRow) async -> String {
+            let layout = mainMeasurer.layout(MacBubbleTextBuilder.input(row, revision: 0, isGroup: false, accent: context.accent, body: MacTimelineMetrics.shared.body),
+                                             tableWidth: max(400, width))
+            cell.frame = NSRect(x: 0, y: 0, width: max(400, width), height: layout.height)
+            cell.configure(layout, message: row.message)
+            cell.layoutSubtreeIfNeeded()
+            try? await Task.sleep(for: .milliseconds(600))
+            guard let frame = layout.extrasFrame, let rep = cell.bitmapImageRepForCachingDisplay(in: cell.bounds) else { return "nothing" }
+            cell.cacheDisplay(in: cell.bounds, to: rep)
+            let scale = CGFloat(rep.pixelsWide) / cell.bounds.width
+            guard let color = rep.colorAt(x: Int(frame.midX * scale), y: Int(frame.midY * scale))?.usingColorSpace(.sRGB) else { return "nothing" }
+            if color.redComponent > 0.6, color.greenComponent < 0.45, color.blueComponent < 0.45 { return "red" }
+            if color.blueComponent > 0.6, color.redComponent < 0.45 { return "blue" }
+            return "placeholder"
+        }
+        let shown = await show(first)
+        let reused = await show(second)
+        return "the first photo shows \(shown), the reused cell's second shows \(reused) (red is the first's: stale)"
+    }
+
+    /// The tour's `extras-cache`: a quote measured, then measured again once it says more, for the same message at the
+    /// same revision, as a chat opened again starts its revisions over.
+    func debugExtrasCache() -> String {
+        func message(_ quote: String) -> TimelineMessage {
+            TimelineMessage(id: "debug-extras-cache-\(generation)", body: "", isOutgoing: false, isStarred: false, sentAt: .now,
+                            reply: TimelineReply(author: "Alex", body: quote))
+        }
+        let short = message("Short"), long = message(String(repeating: "A quote that says a good deal more than the first one did. ", count: 4))
+        let sizer = MacExtrasSizer()
+        let before = sizer.height(short, content: MacExtrasSizes.Content(short), width: 300)
+        let after = sizer.height(long, content: MacExtrasSizes.Content(long), width: 300)
+        return "a short quote \(before) pt, the same message's longer quote \(after) pt (the same height again would be the first's: stale)"
     }
     #endif
 }

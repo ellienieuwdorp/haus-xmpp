@@ -705,6 +705,16 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         default: break
         }
     }
+
+    /// The centre of the first reaction pill with an emoji, in the window's coordinates, and the view the pills are.
+    var debugReactionPill: (point: NSPoint, view: NSView, emoji: String)? {
+        guard let layout = layoutRecord, let frame = layout.reactionsFrame, let pill = layout.pills.first, let emoji = pill.emoji else { return nil }
+        let placed = place(frame)
+        return (convert(NSPoint(x: placed.minX + pill.width / 2, y: placed.midY), to: nil), reactions, emoji)
+    }
+
+    /// The hosting view of the quote, file and card, as the cell placed it.
+    var debugExtras: NSView? { extras?.isHidden == false ? extras : nil }
     #endif
 }
 

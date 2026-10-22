@@ -57,18 +57,52 @@ import SwiftUI
         case "older":
             await timeline.debugLoadOlder()
         case "arrive":
-            // A received message added below the others through the table's update path, as an arrival is; the model
-            // never has it, so the next change of the model's rows takes it away again.
-            var content = timeline.content
-            let message = TimelineMessage(id: "debug-arrival-\(content.rows.count)", body: argument.isEmpty ? "A message arriving while the reader is elsewhere." : argument,
-                                          isOutgoing: false, isStarred: false, sentAt: .now)
-            content.rows.append(TimelineRow(message: message, dateHeader: nil, startsRun: true, endsRun: true))
+            await arrive(argument.isEmpty ? "A message arriving while the reader is elsewhere." : argument, timeline: timeline)
+        case "arrive-long":
+            await arrive(longText(Int(argument) ?? 16_384), timeline: timeline)
+        case "arrive-extras":
+            await arriveExtras(argument, timeline: timeline)
+        case "hit-reaction":
+            func reactions() -> String {
+                (timeline.rows.first { $0.message.id == argument }?.message.reactions ?? []).map { "\($0.emoji)\($0.count)\($0.isSelected ? " yours" : "")" }.joined(separator: " ")
+            }
+            let before = reactions()
+            MacDebugHooks.log("timeline hit-reaction \(argument): \(timeline.table.debugHitReaction(argument))")
+            try? await Task.sleep(for: .milliseconds(500))
+            MacDebugHooks.log("timeline hit-reaction \(argument): reactions [\(before)] then [\(reactions())]")
+        case "reuse-media":
+            MacDebugHooks.log("timeline reuse-media: \(await timeline.table.debugReuseMedia())")
+        case "extras-cache":
+            MacDebugHooks.log("timeline extras-cache: \(timeline.table.debugExtrasCache())")
+        case "update-race":
+            // Two updates measured on the queue with a reload between them, as a new accent makes one: the second applies
+            // its own rows, and the first's records, landing after the reload, nothing.
+            var first = timeline.content
+            first.rows.append(arrival("debug-race-first", longText(2_000)))
+            timeline.table.update(first)
+            timeline.table.debugReload()
+            var second = timeline.content
+            second.rows.append(arrival("debug-race-second", longText(2_000)))
+            timeline.table.update(second)
+            try? await Task.sleep(for: .milliseconds(400))
+            MacDebugHooks.log("timeline update-race: second listed \(timeline.table.debugTop(of: "debug-race-second") != nil), "
+                + "first listed \(timeline.table.debugTop(of: "debug-race-first") != nil), applying \(timeline.table.isApplying), \(timeline.rows.count) rows")
+        case "gesture-update":
+            // An update measured on the queue whose records land once a gesture has begun: held, the offset untouched,
+            // until the gesture ends.
             let reader = timeline.table.readerRow()
+            let start = timeline.table.debugClipY
+            var content = timeline.content
+            content.rows.append(arrival("debug-gesture-arrival", longText(2_000)))
             timeline.table.update(content)
+            timeline.debugLiveScroll(true)
+            try? await Task.sleep(for: .milliseconds(400))
+            let listed = timeline.table.debugTop(of: "debug-gesture-arrival") != nil, moved = timeline.table.debugClipY - start, held = timeline.table.isApplying
+            timeline.debugLiveScroll(false)
             try? await Task.sleep(for: .milliseconds(100))
             let after = reader.flatMap { timeline.table.debugTop(of: $0.id) }
-            MacDebugHooks.log("timeline arrive: reader \(reader?.id ?? "none") drift \(format(after.map { $0 - (reader?.top ?? 0) })), \(timeline.table.debugReport)")
-            MacDebugHooks.log("timeline arrive heights: \(timeline.table.debugHeights(of: message.id))")
+            MacDebugHooks.log("timeline gesture-update: during the gesture listed \(listed), clip moved \(format(moved)) pt, held \(held); "
+                + "after it listed \(timeline.table.debugTop(of: "debug-gesture-arrival") != nil), reader \(reader?.id ?? "none") drift \(format(after.map { $0 - (reader?.top ?? 0) }))")
         case "settle":
             timeline.update()
         case "show-row":
@@ -170,6 +204,51 @@ import SwiftUI
             if phases { timeline.debugLiveScroll(false) }
             report(timeline, "drag \(label) end")
         }
+    }
+
+    /// A received message added below the others through the table's update path, as an arrival is; the model never
+    /// has it, so the next change of the model's rows takes it away again.
+    private static func arrive(_ text: String, timeline: MacTimelineController) async {
+        var content = timeline.content
+        let row = arrival("debug-arrival-\(content.rows.count)", text)
+        content.rows.append(row)
+        let reader = timeline.table.readerRow()
+        timeline.table.update(content)
+        try? await Task.sleep(for: .milliseconds(100))
+        let after = reader.flatMap { timeline.table.debugTop(of: $0.id) }
+        MacDebugHooks.log("timeline arrive: reader \(reader?.id ?? "none") drift \(format(after.map { $0 - (reader?.top ?? 0) })), \(timeline.table.debugReport)")
+        MacDebugHooks.log("timeline arrive heights: \(timeline.table.debugHeights(of: row.message.id))")
+    }
+
+    /// `arrive-extras <count> [older]`: messages with a quote and a large link card, which the queue can only guess the
+    /// height of, added below the others, or above the oldest as an older page. Like `arrive`, the model never has them.
+    private static func arriveExtras(_ argument: String, timeline: MacTimelineController) async {
+        let words = argument.split(separator: " ")
+        let count = words.first.flatMap { Int($0) } ?? 8, older = words.contains("older")
+        var content = timeline.content
+        let rows = (0..<count).map { index in
+            let url = URL(string: "https://example.com/card-\(index)")!
+            let preview = TimelineLinkPreview(url: url, host: "example.com", title: "A card with a large picture, number \(index)",
+                                              summary: "Its summary runs to a second line, so the card is taller than a guess at it.", variant: .large, imageAspectRatio: 1.2)
+            let message = TimelineMessage(id: "debug-extras-\(older ? "older" : "newer")-\(index)", body: "A card and a quote: \(url.absoluteString)",
+                                          // Received below the reader, which a sent message would bring to the newest.
+                                          isOutgoing: older && index.isMultiple(of: 2), isStarred: false, linkPreview: preview, sentAt: .now,
+                                          reply: TimelineReply(author: "Alex", body: "The quoted message, long enough to take both of the quote's lines and then some more."))
+            return TimelineRow(message: message, dateHeader: nil, startsRun: true, endsRun: true)
+        }
+        if older { content.rows.insert(contentsOf: rows, at: 0) } else { content.rows.append(contentsOf: rows) }
+        timeline.table.update(content)
+        try? await Task.sleep(for: .milliseconds(300))
+        report(timeline, "arrive-extras \(argument)")
+    }
+
+    private static func arrival(_ id: String, _ text: String) -> TimelineRow {
+        TimelineRow(message: TimelineMessage(id: id, body: text, isOutgoing: false, isStarred: false, sentAt: .now), dateHeader: nil, startsRun: true, endsRun: true)
+    }
+
+    /// A text of about `count` characters that wraps.
+    private static func longText(_ count: Int) -> String {
+        String(String(repeating: "A long message with wrapping text. ", count: count / 35 + 1).prefix(count))
     }
 
     private static func report(_ timeline: MacTimelineController, _ what: String) {
