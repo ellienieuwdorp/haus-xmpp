@@ -862,7 +862,8 @@ final class MacTimelineGeneration: @unchecked Sendable {
     private func publish(_ records: [MacRowLayout], keepingRows: Bool = true, asViewIsMade: Bool = false) {
         guard !records.isEmpty else { return }
         let top = isLiveScrolling ? topRowInSight : nil
-        let anchor = keepingRows && !asViewIsMade ? captureAnchor() : nil
+        // A gesture's offset is the reader's: nothing is restored then.
+        let anchor = keepingRows && !asViewIsMade && !isLiveScrolling ? captureAnchor() : nil
         var changed = IndexSet(), shown = IndexSet(), publishableNext = false
         for record in records {
             let id = record.key.id
@@ -917,8 +918,13 @@ final class MacTimelineGeneration: @unchecked Sendable {
     /// the top of the clip view or above.
     private func publishStaged() {
         guard !staged.isEmpty else { return }
-        let records = Array(staged.values)
-        staged = [:]
+        var records = Array(staged.values)
+        if isLiveScrolling {
+            let top = topRowInSight
+            records = records.filter { indexByID[$0.key.id].map { $0 >= top } ?? true }
+            guard !records.isEmpty else { return }
+        }
+        for record in records { staged[record.key.id] = nil }
         publish(records)
     }
 
