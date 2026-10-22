@@ -73,6 +73,33 @@ final class ComposerClearTests: XCTestCase {
         assertEmpty()
     }
 
+    /// An autocorrection or prediction the keyboard works out on the old text and delivers after the clear lands on
+    /// the empty field: at worst its own word comes back, never the sent text.
+    func testAnEditAimedAtTheOldTextBringsBackOnlyItsOwnWord() throws {
+        field.insertText("see you tomorow")
+        settle()
+        let start = try XCTUnwrap(field.position(from: field.beginningOfDocument, offset: 8))
+        let word = try XCTUnwrap(field.textRange(from: start, to: field.endOfDocument))
+        state.clearDraft()
+        field.replace(word, withText: "tomorrow")
+        settle()
+        XCTAssertFalse(state.draft.contains("see you"))
+        XCTAssertEqual(field.text, state.draft)
+    }
+
+    /// Emptying the field from code drops its undo history, so a shake or ⌘Z cannot put the sent text back.
+    func testUndoCannotBringTheSentTextBack() throws {
+        field.insertText("see you tomorrow")
+        settle()
+        let undo = try XCTUnwrap(field.undoManager)
+        XCTAssertTrue(undo.canUndo)
+        state.clearDraft()
+        XCTAssertFalse(undo.canUndo)
+        undo.undo()
+        settle()
+        assertEmpty()
+    }
+
     func testTypingAfterTheClearStartsAFreshDraft() {
         field.insertText("first")
         settle()
