@@ -38,8 +38,6 @@ struct MacConversationView: View {
     /// row's environment and run all their bodies again. What it performs is set while the view is shown: it holds this
     /// view, whose state holds it.
     @State private var linkAction = MacLinkAction()
-    /// This view's entry in the menu bar's targets (`MacMenuTargets`).
-    @State private var menuToken = UUID()
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -112,10 +110,11 @@ struct MacConversationView: View {
         }
         // Its own view, so only it reads the messages: this view's body never reruns for a new message.
         .overlay { if let timeline { MacEmptyNotice(timeline: timeline, presenter: presenter) } }
-        // The Message menu's targets; their own view too, as they change with the messages.
+        // The menu bar's targets; their own views too, as they change with the messages and the filters.
         .background {
             if let timeline {
                 MacMessageCommandsSource(model: model, chatID: chatID, timeline: timeline, presenter: presenter, handlers: messageHandlers)
+                MacFindCommandsSource(timeline: timeline, find: find)
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -149,9 +148,6 @@ struct MacConversationView: View {
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { timeline?.table.setBars(find: $0) }
         }
-        .focusedSceneValue(\.conversationFind, findCommands)
-        .onAppear { let view = self; MacMenuTargets.shared.conversationFind.append((menuToken, { view.findCommands })) }
-        .onDisappear { MacMenuTargets.shared.conversationFind.removeAll { $0.token == menuToken } }
         .onChange(of: model.conversationIntent, initial: true) { _, intent in
             // The details' Search and Starred tiles leave what they want opened here, as on the iPhone. Applied in a turn
             // of its own: the timeline scrolls as the filter changes, which it may not do inside a view update.
@@ -306,13 +302,6 @@ struct MacConversationView: View {
         if let url = attachment.localURL { quickLook = url } else if attachment.download.canRequest { model.downloadAttachment(message.id) }
     }
 
-    /// What Find in Conversation and View > Starred Messages act on.
-    private var findCommands: MacConversationFindCommands? {
-        timeline.map { timeline in
-            MacConversationFindCommands(find: find, starredOnly: timeline.starredOnly, setStarredOnly: { timeline.setStarredOnly($0) })
-        }
-    }
-
     /// Opens search, or moves keyboard focus back into its field when it is open.
     private func find() {
         timeline?.setSearching(true)
@@ -435,6 +424,27 @@ private struct MacMessageCommandsSource: View {
             .focusedSceneValue(\.macMessageCommands, commands)
             .onAppear { let source = self; MacMenuTargets.shared.messageCommands.append((menuToken, { source.commands })) }
             .onDisappear { MacMenuTargets.shared.messageCommands.removeAll { $0.token == menuToken } }
+    }
+}
+
+/// Publishes what Find in Conversation and View > Starred Messages act on, once the timeline exists: made with it, so
+/// the menu bar sees the starred filter change.
+private struct MacFindCommandsSource: View {
+    let timeline: MacTimelineController
+    let find: () -> Void
+    @State private var menuToken = UUID()
+
+    private var commands: MacConversationFindCommands {
+        let timeline = timeline
+        return MacConversationFindCommands(find: find, starredOnly: timeline.starredOnly, setStarredOnly: { timeline.setStarredOnly($0) })
+    }
+
+    var body: some View {
+        Color.clear
+            .accessibilityHidden(true)
+            .focusedSceneValue(\.conversationFind, commands)
+            .onAppear { let source = self; MacMenuTargets.shared.conversationFind.append((menuToken, { source.commands })) }
+            .onDisappear { MacMenuTargets.shared.conversationFind.removeAll { $0.token == menuToken } }
     }
 }
 

@@ -133,7 +133,7 @@ extension FocusedValues {
 @Observable @MainActor final class MacMenuTargets {
     static let shared = MacMenuTargets()
 
-    var conversationFind: [(token: UUID, make: () -> MacConversationFindCommands?)] = []
+    var conversationFind: [(token: UUID, make: () -> MacConversationFindCommands)] = []
     var messageCommands: [(token: UUID, make: () -> MacMessageCommands)] = []
 }
 
