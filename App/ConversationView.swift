@@ -32,8 +32,8 @@ import XMPPProtocol
     /// and a keyboard edit landing before then (an autocorrection the tap accepted, a word still being composed)
     /// writes the field's whole text back into the draft.
     func clearDraft() {
-        // Set from code rather than through the keyboard's edit path, so the keyboard resets too: a capital for
-        // the next message and no suggestions left over from the sent one.
+        // Assigning the text also drops the field's marked text and undo history, so neither can bring the sent
+        // text back.
         if let field, field.hasText { field.text = "" }
         draft = ""
     }
