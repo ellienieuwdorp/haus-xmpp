@@ -603,9 +603,10 @@ final class MacTimelineGeneration: @unchecked Sendable {
         adjust { place(row: row, top: TimelineScrollPolicy.reachableTop(top, rowHeight: edges.bottom - edges.top, frameHeight: frameHeight)) }
     }
 
-    /// The rows a jump lands among, measured now, so the target lands where it is put: 30 above it, and below it a
-    /// frame's height of rows, whose heights place it. Rows further down without a current record are on the queue
-    /// (or are guesses `measureAhead` takes), and the rows in sight are kept where they are when those land.
+    /// The rows a jump lands among, measured now, so the target lands where it is put: a frame's height of rows from it
+    /// up, and below it a frame's height of rows, whose heights place it. What that costs is bounded by the text a frame
+    /// shows, not by a count of rows. Rows further away without a current record are on the queue (or are guesses
+    /// `measureAhead` takes), and the rows in sight are kept where they are when those land.
     private func measureForJump(around row: Int) {
         guard row < entries.count else { return }
         var measured: [MacRowLayout] = []
@@ -617,9 +618,14 @@ final class MacTimelineGeneration: @unchecked Sendable {
             measured.append(layout)
             return layout.height
         }
-        for index in row...min(entries.count - 1, row + 30) { _ = height(index) }
+        var above: CGFloat = 0
+        var index = row
+        while index < entries.count, above < frameHeight {
+            above += height(index)
+            index += 1
+        }
         var below: CGFloat = 0
-        var index = row - 1
+        index = row - 1
         while index >= 0, below < frameHeight {
             below += height(index)
             index -= 1
