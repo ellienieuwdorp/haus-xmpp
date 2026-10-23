@@ -96,7 +96,8 @@ import SwiftUI
 ///   (performs that menu item as a click would, after the menu's validation; a disabled or missing item is logged
 ///   instead), `header` (logs the window's title and subtitle), `badge` (logs the Dock tile's label and where the model
 ///   last sent the icon badge), `block <chat>` and `unblock <chat>` (sample conversations only, as `-haus-block`) and
-///   `close-window` (closes the main window, as its close button does). Device trust steps (`MacDeviceReviewTour`): `chat <address>`, `join <room>`, `devices`, `messages [<count>]`,
+///   `close-window` (closes the main window, as its close button does), `hide` and `unhide` (the app, without activating
+///   it on unhide; hidden, the inspector opens and closes without animating). Device trust steps (`MacDeviceReviewTour`): `chat <address>`, `join <room>`, `devices`, `messages [<count>]`,
 ///   `device <id>` (a device row of the inspector's devices or group page, which opens its fingerprint sheet), `review`
 ///   (the conversation banner's Review…), `own-review` (the account's review, as the sidebar card's Review opens it), `trust|verify|dont-trust|compare|remove
 ///   <id>` (that device's button in the open review or fingerprint sheet), `confirm <button>` (a confirmation's button)
@@ -490,6 +491,10 @@ import SwiftUI
             case "block" where model.isDemo: await model.block(argument)
             case "unblock" where model.isDemo: for entry in model.blockEntries(for: argument) { await model.unblock(entry) }
             case "close-window": mainWindow?.performClose(nil)
+            // Hidden, the window changes without animating, as the inspector does: for a screen locked meanwhile, where
+            // animations never end.
+            case "hide": NSApp.hide(nil)
+            case "unhide": NSApp.unhideWithoutActivation()
             case "stalls": MacTimelineDebug.StallProbe.shared.report(argument)
             case "perf", "display-count", "layers", "sidebar", "sidebar-sweep", "force-noop", "split", "split-watch": await MacPerfProbe.step(words[0], argument, window: mainWindow)
             case "appearance", "accent", "text-select", "text-rescale", "text-layers": MacBubbleTextTour.step(words[0], argument, window: mainWindow)
