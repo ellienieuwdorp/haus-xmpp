@@ -23,6 +23,29 @@ import XMPPProtocol
     @ObservationIgnored var finishedEdit: String?
     /// The edit whose text the draft holds, so the composer coming back after search hid it keeps what was typed since.
     @ObservationIgnored var loadedEdit: String?
+
+    /// Ends an input method's composition still open in the field and keeps its text, so a Send takes what the field
+    /// shows: the text view hands marked text to the draft only once it is committed.
+    func commitComposition() {
+        guard let textView, textView.hasMarkedText() else { return }
+        textView.unmarkText()
+        textView.inputContext?.discardMarkedText()
+        draft = textView.string
+    }
+
+    /// Empties the field and the draft in one step. The field takes a new draft only while no input method composes
+    /// (`MacComposerTextField.updateNSView`), so a Send clicked mid-composition would leave the sent text showing over
+    /// an empty draft, with Send disabled, and the composition ending would put all of it back.
+    func clearDraft() {
+        if let textView, !textView.string.isEmpty {
+            textView.inputContext?.discardMarkedText()
+            textView.unmarkText()
+            textView.string = ""
+            // Undo must not reach back across a send into text that is no longer in the field.
+            textView.undoManager?.removeAllActions()
+        }
+        draft = ""
+    }
 }
 
 /// Each chat's composer state while the app runs, so switching chats and coming back finds the draft where it was.
@@ -181,7 +204,7 @@ struct MacComposer: View {
                 if state.loadedEdit != message.id { state.draft = message.body }
             } else if let ended = previous ?? state.loadedEdit, state.finishedEdit != ended {
                 // A cancelled edit leaves an empty field, as on the iPhone.
-                state.draft = ""
+                state.clearDraft()
             }
             state.loadedEdit = intent.editing?.id
             state.finishedEdit = nil
@@ -303,6 +326,7 @@ struct MacComposer: View {
     }
 
     private func send() {
+        state.commitComposition()
         guard canSend else { return }
         let state = state, intent = intent
         let text = state.draft
@@ -311,7 +335,7 @@ struct MacComposer: View {
         // Cleared now, not once the send settles: anything typed meanwhile would otherwise leave the sent text behind.
         // A failure puts the text back if the field is still empty, also when the user has moved to another chat
         // (the state is the chat's, not this view's); a failed edit only while it is still open.
-        state.draft = ""
+        state.clearDraft()
         intent.focusComposer()
         if let editing = intent.editing {
             Task {
