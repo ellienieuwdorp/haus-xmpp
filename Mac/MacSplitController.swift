@@ -268,8 +268,9 @@ import SwiftUI
         guard state.selection == chatID, presence.shownChat != chatID, let view = view as? PresenceView else { return }
         // Out of the window, it waits until the column is in it (`movedToWindow`).
         guard view.window != nil else { return }
-        // A tracking loop (a scroller's or a text selection's drag) takes its events without handing them out: then the
-        // event being handled is one of them.
+        // A button held down (a window's drag) or a tracking loop running (a control's, a resize's, a menu's) is input
+        // now; and in a loop that runs in some other mode, the event being handled may be one it took.
+        if NSEvent.pressedMouseButtons != 0 || RunLoop.current.currentMode == .eventTracking { Self.noteInput() }
         let current = NSApp.currentEvent.flatMap { Self.input.contains(NSEvent.EventTypeMask(type: $0.type)) ? $0.timestamp : nil }
         let quietFor = ProcessInfo.processInfo.systemUptime - max(Self.lastInput, current ?? 0)
         if quietFor < Self.quiet { return schedulePrebuild(for: chatID, after: Self.quiet - quietFor) }
@@ -286,21 +287,33 @@ import SwiftUI
         .rightMouseUp, .rightMouseDragged, .otherMouseDown, .otherMouseUp, .otherMouseDragged, .magnify, .swipe, .rotate,
         .beginGesture, .endGesture, .smartMagnify, .pressure,
     ]
-    /// When the app last handed out one of those events (system uptime, as events' timestamps); a pointer move after it
-    /// leaves it as it was.
+    /// When the app last handed out one of those events, or a tracking loop, a window's move or a menu ended (system
+    /// uptime, as events' timestamps); a pointer move after it leaves it as it was.
     private static var lastInput: TimeInterval = 0
     private static var inputMonitor: Any?
 
     private static func watchInput() {
         guard inputMonitor == nil else { return }
         inputMonitor = NSEvent.addLocalMonitorForEvents(matching: input) { event in
-            MainActor.assumeIsolated { lastInput = ProcessInfo.processInfo.systemUptime }
+            let press = event.type == .leftMouseDown || event.type == .rightMouseDown || event.type == .otherMouseDown
+            MainActor.assumeIsolated {
+                noteInput()
+                // A press can start a tracking loop, which takes the drags and the release without handing them out and
+                // runs in its own mode: this runs as it ends.
+                if press { RunLoop.main.perform(inModes: [.default]) { MainActor.assumeIsolated { noteInput() } } }
+            }
             return event
+        }
+        // A window's drag happens outside the app, and the menu bar's menus track without a press the app hands out.
+        for name in [NSWindow.didMoveNotification, NSWindow.didEndLiveResizeNotification, NSMenu.didEndTrackingNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in MainActor.assumeIsolated { noteInput() } }
         }
     }
 
+    private static func noteInput() { lastInput = ProcessInfo.processInfo.systemUptime }
+
     #if DEBUG
-    /// The chat whose details were last built ahead, and when (`prebuild-quiet`).
+    /// The chat whose details were last built ahead, and when (`prebuild-quiet`, `prebuild-tracking`).
     static var debugBuiltAhead: (chat: String, at: TimeInterval)?
     #endif
 

@@ -24,7 +24,9 @@ import SwiftUI
 ///   hidden and shown again 60 ms apart in a window of that size, then the window widened and, with the inspector
 ///   hidden, narrowed, logging whether each width stuck), `prebuild-quiet <chat>` (chooses a chat other than the open
 ///   one, puts a modifier key's change 0.4 s later and a pointer move 0.45 s later on the app's own event queue, and
-///   logs when the closed inspector built its details ahead), `settings general|appearance|about`, `close-settings`,
+///   logs when the closed inspector built its details ahead), `prebuild-tracking <chat> [<release seconds>]` (the same
+///   with a press 0.05 s after choosing it whose drags and release, by default at 0.45 s, a tracking loop takes, then a
+///   pointer move), `settings general|appearance|about`, `close-settings`,
 ///   `size <width>x<height>` (as `-haus-window-size`, which applies only after a tour), and for the open chat's composer: `type <text>` (inserted at
 ///   the caret as typing would), `key return|shift-return|option-return|command-return|escape|up`, `reply newest` (the
 ///   newest received message), `edit newest` (what Up-arrow would edit), `attach photo|file|scan|<path in the
@@ -418,6 +420,63 @@ import SwiftUI
         log("prebuild-quiet \(chat): \(line), built at \(format(built.at - chosen)) s, \(format(built.at - key)) s after the key: \(verdict)")
     }
 
+    /// A tracking loop (a control's, a resize's) takes the drags and the release after a press without the app handing
+    /// them out, so the input monitor sees only the press. A pointer move after the release once left the build ahead
+    /// with the press alone, and it landed 0.2 s after the release; with the deadline inside a long press, it landed
+    /// during it. The press goes through `NSApplication.sendEvent`, with no window to land in, at 0.05 s; drags at 0.1,
+    /// 0.2 and 0.3 s and the release (at 0.45 s unless given) go on the app's own queue and the step's loop takes them,
+    /// in the tracking mode as a control would; the pointer move follows the release by 10 ms.
+    private static func prebuildTracking(_ argument: String, window: MacWindowState, main: NSWindow?) async {
+        let words = argument.split(separator: " ").map(String.init)
+        let chat = words.first ?? "", release = words.dropFirst().first.flatMap(Double.init) ?? 0.45
+        guard let main, !chat.isEmpty, window.selection != chat, release > 0.3 else {
+            return log("tour prebuild-tracking \(argument): needs the main window, a chat other than the open one and a release after 0.3 s")
+        }
+        let uptime = { ProcessInfo.processInfo.systemUptime }
+        func format(_ seconds: TimeInterval) -> String { String(format: "%.2f", seconds) }
+        let chosen = uptime()
+        window.selection = chat
+        try? await Task.sleep(for: .seconds(max(0, chosen + 0.05 - uptime())))
+        // From the run loop, as an event's handling runs, not from a main-queue job: the main queue, and with it the
+        // build's deadline, runs during the loop only then.
+        let (taken, released) = await withCheckedContinuation { (done: CheckedContinuation<(Int, TimeInterval), Never>) in
+            RunLoop.main.perform(inModes: [.default]) {
+                MainActor.assumeIsolated {
+                    func mouse(_ type: NSEvent.EventType) -> NSEvent? {
+                        NSEvent.mouseEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                           windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)
+                    }
+                    if let press = mouse(.leftMouseDown) { NSApp.sendEvent(press) }
+                    let tracked: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
+                    var taken = 0
+                    for (time, type) in [(0.1, NSEvent.EventType.leftMouseDragged), (0.2, .leftMouseDragged), (0.3, .leftMouseDragged), (release, .leftMouseUp)] {
+                        let wait = chosen + time - ProcessInfo.processInfo.systemUptime
+                        _ = NSApp.nextEvent(matching: tracked, until: Date(timeIntervalSinceNow: max(0, wait)), inMode: .eventTracking, dequeue: true)
+                        guard let event = mouse(type) else { continue }
+                        NSApp.postEvent(event, atStart: false)
+                        if NSApp.nextEvent(matching: tracked, until: .distantFuture, inMode: .eventTracking, dequeue: true) != nil { taken += 1 }
+                    }
+                    done.resume(returning: (taken, ProcessInfo.processInfo.systemUptime))
+                }
+            }
+        }
+        try? await Task.sleep(for: .seconds(max(0, released + 0.01 - uptime())))
+        if let move = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [], timestamp: uptime(), windowNumber: main.windowNumber,
+                                         context: nil, eventNumber: 0, clickCount: 0, pressure: 0) {
+            NSApp.postEvent(move, atStart: false)
+        }
+        let moved = uptime()
+        while uptime() < released + 2, MacInspectorController.debugBuiltAhead.map({ $0.chat != chat || $0.at < chosen }) ?? true {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        let line = "\(taken) of 4 drags and release taken by the loop, released at \(format(released - chosen)) s, pointer move at \(format(moved - chosen)) s"
+        guard let built = MacInspectorController.debugBuiltAhead, built.chat == chat, built.at >= chosen else {
+            return log("prebuild-tracking \(argument): \(line), not built within 2 s of the release")
+        }
+        let verdict = built.at < released ? "DURING the press" : built.at - released < 0.5 ? "EARLY" : "ok"
+        log("prebuild-tracking \(argument): \(line), built at \(format(built.at - chosen)) s, \(format(built.at - released)) s after the release: \(verdict)")
+    }
+
     /// `-haus-tour`: frames from the moment the main window exists, while the steps change what it shows.
     private static func runTour(_ script: String, window: MacWindowState, model: AppModel) async {
         var frames: Task<Void, Never>?
@@ -436,6 +495,7 @@ import SwiftUI
             case "inspector-page": showInspectorPage(argument, window: window, model: model)
             case "inspector-race": await inspectorRace(argument.isEmpty ? "760x800" : argument, window: window, main: mainWindow)
             case "prebuild-quiet": await prebuildQuiet(argument, window: window, main: mainWindow)
+            case "prebuild-tracking": await prebuildTracking(argument, window: window, main: mainWindow)
             case "settings":
                 tour.settingsPane = MacSettingsView.Pane(rawValue: argument) ?? .general
                 if otherWindows.isEmpty { openSettings?() }
