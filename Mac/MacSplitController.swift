@@ -23,6 +23,8 @@ import SwiftUI
     private var collapseObservation: NSKeyValueObservation?
     /// Counts the inspector's animations, so one that another interrupted does not end the hold of the next.
     private var inspectorAnimations = 0
+    /// The inspector is being put in the window (`insertInspector`): its collapse changes nothing in the window's state.
+    private var insertingInspector = false
 
     init(model: AppModel, state: MacWindowState) {
         self.model = model
@@ -80,12 +82,32 @@ import SwiftUI
         #endif
         collapseObservation = inspectorItem.observe(\.isCollapsed) { [weak self] _, _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
+                guard let self, !self.insertingInspector else { return }
                 let collapsed = self.inspectorItem.isCollapsed
                 guard collapsed == self.showsInspector else { return }
                 if collapsed { self.state.inspectorShown = false } else if self.state.selection != nil { self.state.inspectorShown = true }
             }
         }
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        insertInspector()
+    }
+
+    /// A split view leaves an item that starts collapsed out of the window until it first expands, and the closed
+    /// inspector can build a chat's details ahead only in the window (`MacInspectorController`). It expands and collapses
+    /// once, unanimated and before anything is drawn, if the window is wide enough to take it without growing.
+    private func insertInspector() {
+        guard inspectorItem.isCollapsed, inspectorItem.viewController.view.window == nil,
+              splitView.bounds.width >= (sidebarItem.isCollapsed ? 0 : sidebarItem.viewController.view.frame.width)
+                + Self.conversationMinWidth + Self.inspectorWidth else { return }
+        insertingInspector = true
+        defer { insertingInspector = false }
+        inspectorItem.isCollapsed = false
+        splitView.layoutSubtreeIfNeeded()
+        inspectorItem.isCollapsed = true
+        splitView.layoutSubtreeIfNeeded()
     }
 
     private static func host<Content: View>(_ view: Content, bridging: NSHostingSceneBridgingOptions = []) -> NSHostingController<Content> {
@@ -183,13 +205,17 @@ import SwiftUI
 }
 
 /// The inspector's pane, in a view that knows whether the column is on screen: a split view hides a collapsed item's
-/// view once it has finished closing, and shows it again as it starts to open. The chat's details are built when the
-/// column first shows them and kept while that chat stays chosen; the closed column never lays them out, as a resize of
-/// the window would on each of its steps.
+/// view once it has finished closing, and shows it again as it starts to open. The chat's details are built ahead, in
+/// the closed column, once the user has paused for a moment after choosing the chat (or as the column first shows
+/// them), and kept while that chat stays chosen, so opening the column only reveals them. The closed column never lays
+/// them out again, as a resize of the window would on each of its steps.
 @MainActor final class MacInspectorController: NSViewController {
+    /// How long the user has given no input before the details are built ahead.
+    private static let quiet: TimeInterval = 0.5
     private let model: AppModel
     private let state: MacWindowState
     private let presence = MacColumnPresence()
+    private var prebuild: DispatchWorkItem?
 
     init(model: AppModel, state: MacWindowState) {
         self.model = model
@@ -202,6 +228,10 @@ import SwiftUI
     override func loadView() {
         let view = PresenceView()
         view.changed = { [presence] present in presence.onScreen = present }
+        view.movedToWindow = { [weak self] in
+            guard let self else { return }
+            self.schedulePrebuild(for: self.state.selection)
+        }
         let model = model, state = state, presence = presence
         let host = NSHostingView(rootView: MacPane { MacInspectorPane(model: model, window: state, presence: presence) })
         host.sizingOptions = []
@@ -211,12 +241,46 @@ import SwiftUI
         MacObservation.track(self) { inspector in
             if inspector.presence.onScreen { inspector.presence.shownChat = inspector.state.selection }
         }
+        MacObservation.track(self) { inspector in inspector.schedulePrebuild(for: inspector.state.selection) }
     }
+
+    private func schedulePrebuild(for chatID: String?) {
+        prebuild?.cancel()
+        prebuild = nil
+        guard let chatID, presence.shownChat != chatID else { return }
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.prebuildIfQuiet(chatID) }
+        }
+        prebuild = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.quiet, execute: work)
+    }
+
+    /// Builds and lays out the details in the closed column, at the size the column opens to. Not while the user is
+    /// typing, clicking or scrolling: the build is one pass of tens of milliseconds, and waits until it would not land
+    /// among those.
+    private func prebuildIfQuiet(_ chatID: String) {
+        prebuild = nil
+        guard state.selection == chatID, presence.shownChat != chatID, let view = view as? PresenceView else { return }
+        let lastInput = NSApp.currentEvent.flatMap { Self.input.contains($0.type) ? $0.timestamp : nil }
+        // Out of the window, it waits until the column is in it (`movedToWindow`).
+        guard view.window != nil else { return }
+        if lastInput.map({ ProcessInfo.processInfo.systemUptime - $0 < Self.quiet }) == true { return schedulePrebuild(for: chatID) }
+        presence.shownChat = chatID
+        view.layOutHidden()
+    }
+
+    /// The events a build ahead waits after; not the pointer's moves, which lead to Chat Details as often as not.
+    private static let input: Set<NSEvent.EventType> = [
+        .keyDown, .keyUp, .flagsChanged, .scrollWheel, .leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown,
+        .rightMouseUp, .rightMouseDragged, .otherMouseDown, .otherMouseUp, .otherMouseDragged, .magnify, .swipe, .rotate,
+        .beginGesture, .endGesture, .smartMagnify, .pressure,
+    ]
 
     /// The details fill the column while it shows. Hidden, they keep the size they had: a resize of the window does not
     /// lay them out.
     private final class PresenceView: NSView {
         var changed: (Bool) -> Void = { _ in }
+        var movedToWindow: () -> Void = {}
         weak var host: NSView?
         private var reported: Bool?
 
@@ -225,7 +289,20 @@ import SwiftUI
             super.layout()
         }
 
-        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); report() }
+        /// The details built ahead get the column's size now, as it would open, and are laid out at it: the window's
+        /// height and the inspector's width. A closed column is zero wide until it first opens.
+        func layOutHidden() {
+            guard let host, isHiddenOrHasHiddenAncestor, let height = window?.contentView?.bounds.height else { return }
+            let size = NSSize(width: MacSplitController.inspectorWidth, height: height)
+            if host.frame.size != size { host.frame = NSRect(origin: .zero, size: size) }
+            host.layoutSubtreeIfNeeded()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            report()
+            if window != nil { movedToWindow() }
+        }
         override func viewDidHide() { super.viewDidHide(); report() }
         override func viewDidUnhide() { super.viewDidUnhide(); needsLayout = true; report() }
 
