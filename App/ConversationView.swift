@@ -1,4 +1,5 @@
 import MessageStore
+import OSLog
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -25,6 +26,51 @@ import XMPPProtocol
     /// The draft when a finger last landed on Send. A tap outside the field makes UIKit accept a pending
     /// autocorrection, and it does so after touch-down but before the button's action runs.
     @ObservationIgnored var draftAtSendTouch: (text: String, at: Date)?
+    /// Sits behind the field, so the text view SwiftUI made for it can be found after `.id` rebuilt it.
+    @ObservationIgnored weak var fieldAnchor: UIView?
+
+    /// Empties the field and the draft in one step. SwiftUI hands `draft` to the text view only in its next update,
+    /// and a keyboard edit landing before then (an autocorrection the tap accepted, a word still being composed)
+    /// writes the field's whole text back into the draft.
+    func clearDraft() {
+        // Assigning the text also drops the field's marked text and undo history, so neither can bring the sent
+        // text back.
+        if let field {
+            if field.hasText { field.text = "" }
+        } else if !draft.isEmpty {
+            // Only the draft clears, and the field may go on showing the sent text until SwiftUI updates it.
+            Self.log.error("composer text view not found; clearing the draft only")
+        }
+        draft = ""
+    }
+
+    /// Puts back the text of a send that failed, unless something was typed since. A failure reported before
+    /// SwiftUI's next update returns `draft` to the value SwiftUI last saw, so SwiftUI finds nothing to hand to the
+    /// field `clearDraft` emptied, and the next keystroke would replace the text.
+    func restoreDraft(_ text: String) {
+        guard draft.isEmpty else { return }
+        if let field, !field.hasText { field.text = text }
+        draft = text
+    }
+
+    private var field: UITextView? { fieldAnchor.flatMap(Self.textView(behind:)) }
+    private static let log = Logger(subsystem: "haus.xmpp.ios", category: "composer")
+
+    /// The text view covering `anchor`, from the nearest ancestor that holds one.
+    static func textView(behind anchor: UIView) -> UITextView? {
+        guard let window = anchor.window else { return nil }
+        let frame = anchor.convert(anchor.bounds, to: window)
+        func search(_ view: UIView) -> UITextView? {
+            if let text = view as? UITextView, text.convert(text.bounds, to: window).intersects(frame) { return text }
+            return view.subviews.lazy.compactMap(search).first
+        }
+        var ancestor = anchor.superview
+        while let view = ancestor {
+            if let found = search(view) { return found }
+            ancestor = view.superview
+        }
+        return nil
+    }
 
     /// What Send sends: the draft as typed, when all the tap changed was the word being typed. A suggestion the
     /// user never picked stays out of the message.
@@ -117,7 +163,7 @@ struct ConversationView: View {
     }
 
     private func cancelEditing() {
-        if editing != nil { composerState.draft = "" }
+        if editing != nil { composerState.clearDraft() }
         editing = nil
     }
 
@@ -130,13 +176,13 @@ struct ConversationView: View {
         let linkPreview = editing == nil ? state.linkPreview.frozen(for: text, suppressed: !state.tray.isEmpty) : nil
         // Cleared on the tap, not once the send settles: anything typed meanwhile would otherwise leave the sent
         // text behind. A failure puts the text back if the field is still empty.
-        state.draft = ""
+        state.clearDraft()
         if let editing {
             Task {
                 if await model.edit(messageID: editing.id, body: text), model.accountID == account {
                     if self.editing?.id == editing.id { self.editing = nil }
-                } else if state.draft.isEmpty, model.accountID == account {
-                    state.draft = text
+                } else if model.accountID == account {
+                    state.restoreDraft(text)
                 }
             }
             return
@@ -160,8 +206,8 @@ struct ConversationView: View {
             guard model.accountID == account else { return }
             if plan.clearsReply(after: sent) {
                 if replyingTo?.id == reply?.id { replyingTo = nil }
-            } else if state.draft.isEmpty {
-                state.draft = text
+            } else {
+                state.restoreDraft(text)
             }
         }
     }
@@ -628,6 +674,7 @@ struct ConversationComposer: View {
                                 .lineLimit(1...5)
                                 .padding(.leading, 16).padding(.vertical, 11)
                                 .focused($focused)
+                                .background(FieldAnchor { [state] in state.fieldAnchor = $0 })
                                 .accessibilityIdentifier("messageComposer")
                             Button(action: onSend) {
                                 Image(systemName: editing == nil ? "arrow.up" : "checkmark").font(.system(size: 17, weight: .bold))
@@ -820,6 +867,20 @@ struct AttachmentTray: View {
             .accessibilityLabel("Remove \(label)").accessibilityIdentifier("removeAttachment")
         }
     }
+}
+
+/// A bare view behind a SwiftUI control, handed out so UIKit code can find what SwiftUI built around it.
+struct FieldAnchor: UIViewRepresentable {
+    let onPlaced: (UIView) -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        onPlaced(view)
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) { onPlaced(view) }
 }
 
 /// Reports a finger landing on its frame before any control there sees the touch. It watches the window and

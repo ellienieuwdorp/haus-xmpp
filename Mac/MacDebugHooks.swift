@@ -28,7 +28,8 @@ import SwiftUI
 ///   with a press 0.05 s after choosing it whose drags and release, by default at 0.45 s, a tracking loop takes, then a
 ///   pointer move), `settings general|appearance|about`, `close-settings`,
 ///   `size <width>x<height>` (as `-haus-window-size`, which applies only after a tour), and for the open chat's composer: `type <text>` (inserted at
-///   the caret as typing would), `key return|shift-return|option-return|command-return|escape|up`, `reply newest` (the
+///   the caret as typing would), `mark <text>` (an input method's composition, left open), `send` (as the Send
+///   button), `key return|shift-return|option-return|command-return|escape|up`, `reply newest` (the
 ///   newest received message), `edit newest` (what Up-arrow would edit), `attach photo|file|scan|<path in the
 ///   container>` (handed to the composer as a drop would), `drop photo|slow-photo|file|scan` (item providers dropped on
 ///   the chat), `paste photo|file|scan|<text>` and `import photo|scan` (Continuity Camera's handover), both from a
@@ -500,7 +501,7 @@ import SwiftUI
                 tour.settingsPane = MacSettingsView.Pane(rawValue: argument) ?? .general
                 if otherWindows.isEmpty { openSettings?() }
             case "close-settings": otherWindows.forEach { $0.close() }
-            case "type", "key": composerStep(words[0], argument, model: model)
+            case "type", "mark", "send", "key": composerStep(words[0], argument, model: model)
             case "reply" where argument == "newest", "edit" where argument == "newest": composerStep(words[0], argument, model: model)
             case "reply", "edit", "star", "retry", "unsend", "encryption", "report", "select-text", "react", "pick-emoji":
                 let parts = argument.split(separator: " ", maxSplits: 1).map(String.init)
@@ -575,6 +576,13 @@ import SwiftUI
         switch step {
         case "type":
             textView.insertText(argument, replacementRange: textView.selectedRange())
+        case "mark":
+            // An input method's composition, left open.
+            textView.setMarkedText(argument, selectedRange: NSRange(location: (argument as NSString).length, length: 0),
+                                   replacementRange: textView.selectedRange())
+        case "send":
+            // What the Send button does; unlike Return, it does not wait for a composition to end.
+            textView.actions?.send()
         case "key":
             let keys: [String: (Selector, NSEvent.ModifierFlags)] = [
                 "return": (#selector(NSResponder.insertNewline(_:)), []), "shift-return": (#selector(NSResponder.insertNewline(_:)), .shift),
@@ -595,7 +603,8 @@ import SwiftUI
             if let message = presenter.newestEditable { intent.edit(message) } else { log("tour edit newest: nothing to edit") }
         default: break
         }
-        log("composer \(step) \(argument): draft \(textView.string.count) characters, replying \(intent.replyingTo?.id ?? "-"), editing \(intent.editing?.id ?? "-")")
+        let draft = MacComposerDrafts.state(account: model.accountID, chat: model.messagesLoadedFor ?? "").draft
+        log("composer \(step) \(argument): field \(textView.string.count) characters, marked \(textView.hasMarkedText()), draft \(draft.count) characters, replying \(intent.replyingTo?.id ?? "-"), editing \(intent.editing?.id ?? "-")")
     }
 
     /// A scripted scroll through the open timeline, timed on the main thread. The window is off-screen, so no display
