@@ -16,7 +16,9 @@ import SwiftUI
 ///   are only bumped between the two: `cell.configure` (message cells configured for a row, with their time),
 ///   `extras.measure` (quotes, files and cards measured through SwiftUI), `table.scrolled` (the timeline's scroll
 ///   callbacks), `table.width` (its width changes, the rows in sight measured again), `table.land` (records measured on
-///   the queue applied) and `table.reload` (whole reloads).
+///   the queue applied) and `table.reload` (whole reloads); and the shell's `split.resize` (the split view's items resized: a
+///   step of a window resize, or a frame of the sidebar's or inspector's animation) and `content.width` (the
+///   conversation's hosting view given a new width).
 /// - `perf update` lines, logged on their own between `perf start` and `perf stop`: each timeline update, split into
 ///   phases (taking the measured rows, applying them to the table, and placing the reader), with the time, cells
 ///   configured and extras measured in each.

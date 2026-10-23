@@ -19,7 +19,10 @@ import SwiftUI
     private let state: MacWindowState
     private var sidebarItem: NSSplitViewItem!
     private var inspectorItem: NSSplitViewItem!
+    private var content: MacContentController!
     private var collapseObservation: NSKeyValueObservation?
+    /// Counts the inspector's animations, so one that another interrupted does not end the hold of the next.
+    private var inspectorAnimations = 0
 
     init(model: AppModel, state: MacWindowState) {
         self.model = model
@@ -36,7 +39,7 @@ import SwiftUI
         let sidebar = Self.host(MacPane { MacChatList(model: model, window: state).id(model.accountID) })
         sidebar.view.frame.size.width = Self.sidebarWidth.ideal
         // The content pane alone gives the window its title and subtitle: the open chat's name and status line.
-        let content = Self.host(MacPane { MacDetailPane(model: model, window: state) }, bridging: [.title])
+        content = MacContentController(host: Self.host(MacPane { MacDetailPane(model: model, window: state) }, bridging: [.title]))
         let inspector = MacInspectorController(model: model, state: state)
 
         sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
@@ -69,6 +72,12 @@ import SwiftUI
         MacObservation.track(self) { split in
             if split.state.searchRequests > 0, split.sidebarItem.isCollapsed { split.sidebarItem.animator().isCollapsed = false }
         }
+        #if DEBUG
+        // Each of the inspector's animation frames resizes the split view's items.
+        NotificationCenter.default.addObserver(forName: NSSplitView.didResizeSubviewsNotification, object: splitView, queue: nil) { _ in
+            MainActor.assumeIsolated { MacPerfProbe.count("split.resize") }
+        }
+        #endif
         collapseObservation = inspectorItem.observe(\.isCollapsed) { [weak self] _, _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -94,11 +103,27 @@ import SwiftUI
             inspectorSettled()
             return
         }
+        // Opening, the conversation keeps the width it has while the column slides in over its trailing side, and is
+        // laid out at its new width once, as the animation ends, not on each of its frames. Closing, it follows the
+        // column: held wider than its pane then, it kept AppKit from animating the next open.
+        content.heldWidth = shows ? content.view.bounds.width : nil
+        inspectorAnimations += 1
+        let animation = inspectorAnimations
         NSAnimationContext.runAnimationGroup { _ in
             inspectorItem.animator().isCollapsed = !shows
         } completionHandler: { [weak self] in
-            MainActor.assumeIsolated { self?.inspectorSettled() }
+            MainActor.assumeIsolated {
+                guard let self, animation == self.inspectorAnimations else { return }
+                self.content.heldWidth = nil
+                self.inspectorSettled()
+            }
         }
+    }
+
+    /// AppKit's inspector toggle, should anything send it, goes through the window's state, as the toolbar's Chat Details
+    /// does: it gets the same hold, and no empty column shows without a chat.
+    override func toggleInspector(_ sender: Any?) {
+        if inspectorItem.isCollapsed { state.inspectorShown = state.selection != nil } else { state.inspectorShown = false }
     }
 
     /// A pushed page stays in the closed inspector until it has finished closing; then it opens on the chat's details
@@ -106,6 +131,54 @@ import SwiftUI
     private func inspectorSettled() {
         guard inspectorItem.isCollapsed, !showsInspector, !state.inspectorPath.isEmpty else { return }
         state.inspectorPath.removeAll()
+    }
+}
+
+/// The conversation's pane: its hosting controller's view fills it, except while the inspector opens. Then it keeps the
+/// width it had (`heldWidth`), and the pane clips it at the inspector's side; a hosting view laid out at each width of
+/// the animation would run the conversation's layout on every frame.
+@MainActor final class MacContentController: NSViewController {
+    private let host: NSViewController
+    var heldWidth: CGFloat? {
+        didSet { if heldWidth != oldValue { view.needsLayout = true } }
+    }
+
+    init(host: NSViewController) {
+        self.host = host
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func loadView() {
+        let view = PaneView()
+        view.clipsToBounds = true
+        view.controller = self
+        addChild(host)
+        view.addSubview(host.view)
+        self.view = view
+    }
+
+    fileprivate func layoutHost() {
+        let bounds = view.bounds
+        let width = max(bounds.width, heldWidth ?? 0)
+        // Pinned away from the inspector, whose side follows the layout direction.
+        let x = view.userInterfaceLayoutDirection == .rightToLeft ? bounds.maxX - width : bounds.minX
+        let frame = NSRect(x: x, y: bounds.minY, width: width, height: bounds.height)
+        guard host.view.frame != frame else { return }
+        #if DEBUG
+        if frame.width != host.view.frame.width { MacPerfProbe.count("content.width") }
+        #endif
+        host.view.frame = frame
+    }
+
+    private final class PaneView: NSView {
+        weak var controller: MacContentController?
+
+        override func layout() {
+            controller?.layoutHost()
+            super.layout()
+        }
     }
 }
 
