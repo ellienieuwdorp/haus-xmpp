@@ -1,4 +1,5 @@
 import MessageStore
+import OSLog
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -34,7 +35,12 @@ import XMPPProtocol
     func clearDraft() {
         // Assigning the text also drops the field's marked text and undo history, so neither can bring the sent
         // text back.
-        if let field, field.hasText { field.text = "" }
+        if let field {
+            if field.hasText { field.text = "" }
+        } else if !draft.isEmpty {
+            // Only the draft clears, and the field may go on showing the sent text until SwiftUI updates it.
+            Self.log.error("composer text view not found; clearing the draft only")
+        }
         draft = ""
     }
 
@@ -48,6 +54,7 @@ import XMPPProtocol
     }
 
     private var field: UITextView? { fieldAnchor.flatMap(Self.textView(behind:)) }
+    private static let log = Logger(subsystem: "haus.xmpp.ios", category: "composer")
 
     /// The text view covering `anchor`, from the nearest ancestor that holds one.
     static func textView(behind anchor: UIView) -> UITextView? {
