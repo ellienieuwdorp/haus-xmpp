@@ -329,8 +329,11 @@ struct BackgroundTaskID: Equatable {
         content.body = body
         content.categoryIdentifier = NotificationIdentity.noticeCategory
         content.sound = .default
-        try? await UNUserNotificationCenter.current().add(UNNotificationRequest(
-            identifier: NotificationActionCopy.replyRejectedIdentifier, content: content, trigger: nil))
+        let request = UNNotificationRequest(identifier: NotificationActionCopy.replyRejectedIdentifier, content: content, trigger: nil)
+        #if DEBUG && os(macOS)
+        guard MacDebugNotificationLog.shouldPost(notice: request) else { return }
+        #endif
+        try? await UNUserNotificationCenter.current().add(request)
     }
 }
 

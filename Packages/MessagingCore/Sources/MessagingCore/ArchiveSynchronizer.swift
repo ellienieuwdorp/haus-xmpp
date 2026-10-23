@@ -71,6 +71,34 @@ public struct ArchiveSynchronizer: Sendable {
                            operations: productionOperations(account: account, client: client, encryption: encryption, progress: progress))
     }
 
+    /// The archive time of `room`'s newest entry, asked for just before this account joins it, so its first walk can
+    /// tell the history a new member finds from what arrived after the join in the archive's own clock;
+    /// `.distantPast` when the archive is empty. Needs the connection's archive query to be free (no walk or backfill
+    /// running). The entry is not processed: it stays in the archive, and the room's first walk fetches it.
+    public func roomJoinBoundary(room: String, client: XMPPClient) async throws -> Date {
+        try await roomJoinBoundary(
+            fetchNewest: { try await client.fetchArchivePage(.before(nil), limit: 1, room: room) },
+            acknowledge: { tokens in
+                try await client.acknowledgeInbound(tokens)
+                try? await client.requestAcknowledgement()
+            },
+            disconnect: { await client.disconnect() })
+    }
+
+    func roomJoinBoundary(fetchNewest: () async throws -> XMPPArchivePage, acknowledge: ([XMPPInboundToken]) async throws -> Void,
+                          disconnect: () async -> Void) async throws -> Date {
+        // The client closes the stream itself when a query fails after part of a page.
+        let page = try await fetchNewest()
+        do {
+            if !page.handledTokens.isEmpty { try await acknowledge(page.handledTokens) }
+        } catch {
+            // Unacknowledged tokens would leave a permanent gap on a live connection.
+            await disconnect()
+            throw error
+        }
+        return page.messages.map(\.timestamp).max() ?? .distantPast
+    }
+
     /// The one production adapter both walks use, so their processing and acknowledgement cannot drift.
     private func productionOperations(account: String, client: XMPPClient, encryption: OMEMOService,
                                       progress: (@Sendable (ArchiveSyncProgress) async -> Void)?) -> ArchiveSyncOperations {
@@ -287,8 +315,12 @@ public struct ArchiveSynchronizer: Sendable {
             if !page.handledTokens.isEmpty { try await operations.acknowledge(page.handledTokens) }
             pages += 1; messages += page.messages.count
             await operations.progress(ArchiveSyncProgress(archive: room, pages: pages, messages: messages))
-            // An empty archive: nothing to check-point and nothing older to backfill.
-            if page.lastID == nil, newestFirst { return true }
+            // An empty archive: nothing to check-point and nothing older to backfill. On a first walk nothing in it is
+            // history either, so the next connection's first page (what arrived meanwhile) is not taken for history.
+            if page.lastID == nil, newestFirst {
+                if checkpoint == nil { try await store.recordEmptyArchive(accountID: account, archiveID: archive) }
+                return true
+            }
             if page.complete, !newestFirst { return true }
         }
     }

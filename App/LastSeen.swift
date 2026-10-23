@@ -7,6 +7,13 @@ enum LastSeen: Equatable {
     case online
     case lastSeen(Date)
 
+    /// The chat header's subtitle, or nil to leave the name alone: only a 1:1 chat with known activity has one. A
+    /// blocked contact's presence no longer reaches us, so an old answer would go stale in the header.
+    static func headerLabel(_ state: LastSeen?, isGroup: Bool, isBlocked: Bool, now: Date, calendar: Calendar) -> String? {
+        guard !isGroup, !isBlocked, let state else { return nil }
+        return label(state, now: now, calendar: calendar)
+    }
+
     /// The header subtitle, relative to `now` in `calendar` (its locale and time zone format the time and day).
     static func label(_ state: LastSeen, now: Date, calendar: Calendar) -> String {
         guard case .lastSeen(let date) = state else { return "Online" }

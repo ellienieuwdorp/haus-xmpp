@@ -844,8 +844,8 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         let id = asset.localIdentifier
         if selection.contains(id) { keyboard.deselect(id); return }
         guard !loading.contains(id) else { return }
-        guard trayCount + loading.count < ComposerState.trayLimit else {
-            keyboard.refuse("You can attach up to \(ComposerState.trayLimit) files at a time.")
+        guard trayCount + loading.count < ComposerPlan.trayLimit else {
+            keyboard.refuse("You can attach up to \(ComposerPlan.trayLimit) files at a time.")
             return
         }
         loading.insert(id)

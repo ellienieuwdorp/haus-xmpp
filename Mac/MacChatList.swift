@@ -1,28 +1,18 @@
 import SwiftUI
 
-/// The sidebar: the account's chats with selection and search, the own-device review card above them, and per-chat
-/// actions in a right-click menu. The iPhone's trailing swipe actions (Read, Pin, Mute) are menu items here; a Mac
-/// list has no swipe actions.
+/// The sidebar: the account's chats with selection, filtered by the search field above them (`MacSidebarSearch`), the
+/// own-device review card above them, and per-chat actions in a right-click menu. The iPhone's trailing swipe actions
+/// (Read, Pin, Mute) are menu items here; a Mac list has no swipe actions.
 struct MacChatList: View {
     @Bindable var model: AppModel
     @Bindable var window: MacWindowState
-    @State private var search = ""
-    @FocusState private var searchFocused: Bool
     /// Own devices the card was put off for with Later; a device not in here brings the card back.
     @State private var ownDevicesLater: Set<String> = []
-    /// A Block or Report chosen from a chat's menu, waiting for its confirmation.
-    @State private var blockRequest: BlockRequest?
 
-    private var searchTerm: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var searchTerm: String { window.chatSearch.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    /// Pinned first, then newest activity; ties keep the store's order. The iPhone list's order.
-    private var sortedChats: [ChatSummary] {
-        model.chats.enumerated().sorted { a, b in
-            if a.element.isPinned != b.element.isPinned { return a.element.isPinned }
-            let da = a.element.lastMessageAt ?? .distantPast, db = b.element.lastMessageAt ?? .distantPast
-            return da != db ? da > db : a.offset < b.offset
-        }.map(\.element)
-    }
+    /// The iPhone list's order.
+    private var sortedChats: [ChatSummary] { ChatListOrder.sorted(model.chats) }
 
     private var visibleChats: [ChatSummary] {
         guard !searchTerm.isEmpty else { return sortedChats }
@@ -31,10 +21,6 @@ struct MacChatList: View {
 
     private var showsOwnDeviceReview: Bool {
         searchTerm.isEmpty && model.ownDeviceReview.contains { !ownDevicesLater.contains($0.id) }
-    }
-
-    private var accountInitial: String {
-        String((model.accountID.split(separator: "@").first ?? "").prefix(1)).uppercased()
     }
 
     /// A quiet line under sample chats (and, in DEBUG, lab chats).
@@ -65,11 +51,10 @@ struct MacChatList: View {
                     .task(id: "\(chat.id)|\(model.session.isReady)") { await model.loadAvatar(for: chat.id) }
                     .accessibilityValue([chat.isPinned ? "Pinned" : nil, chat.notification.isMuted() ? "Muted" : nil].compactMap { $0 }.joined(separator: ", "))
                     .accessibilityIdentifier("chat.\(chat.id)")
-                    .contextMenu { actions(for: chat) }
+                    .contextMenu { MacChatActionsMenu(actions: MacChatActions(chat: chat, model: model, window: window), placement: .contextMenu) }
             }
         }
         .listStyle(.sidebar)
-        .blockConfirmation(model: model, request: $blockRequest)
         .overlay {
             if model.chats.isEmpty {
                 // As on the iPhone: quiet until storage has been read, so a signed-in launch never flashes "no chats".
@@ -87,78 +72,6 @@ struct MacChatList: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
             }
-        }
-        .searchable(text: $search, placement: .sidebar, prompt: "Search")
-        .searchFocused($searchFocused)
-        .onChange(of: window.searchRequests) { _, _ in searchFocused = true }
-        .navigationTitle("Chats")
-        .toolbar {
-            // In the sidebar's own bar, next to New Chat; `.navigation` would put it in front of the chat's title.
-            ToolbarItem(placement: .primaryAction) {
-                Button { window.showingAccount = true } label: {
-                    ChatAvatar(key: model.accountID, name: accountInitial, image: model.avatars[model.accountID], size: 22)
-                }
-                .help(model.accountID.isEmpty ? "Sign in" : model.accountID)
-                .accessibilityLabel("Account")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                // Connection progress is a quiet spinner that disappears; only a setup failure gets a glyph.
-                if model.isSettlingConnection || model.isCatchingUp {
-                    ProgressView().controlSize(.small).accessibilityLabel(model.isCatchingUp ? "Catching up" : "Connecting")
-                } else if model.connectionNeedsAttention {
-                    SettingsLink { Image(systemName: "exclamationmark.circle").foregroundStyle(.orange) }
-                        .help("Encryption setup needs attention")
-                        .accessibilityLabel("Encryption setup needs attention")
-                }
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button { window.showingNewChat = true } label: { Label("New Chat", systemImage: "square.and.pencil") }
-                    .help("New Chat (⌘N)")
-                    .disabled(model.accountID.isEmpty)
-            }
-        }
-    }
-
-    /// The iPhone's trailing swipe actions, plus the chat's details.
-    @ViewBuilder private func actions(for chat: ChatSummary) -> some View {
-        if chat.unreadCount > 0 {
-            Button("Mark as Read", systemImage: "envelope.open") { Task { await model.markChatRead(chat.id) } }
-        }
-        Button(chat.isPinned ? "Unpin" : "Pin", systemImage: chat.isPinned ? "pin.slash" : "pin") { Task { await model.togglePin(chat) } }
-        if chat.notification.isMuted() {
-            Button("Unmute", systemImage: "bell") { Task { await model.unmuteChat(chat.id) } }
-        } else {
-            // The durations the iPhone offers in its dialog; nothing changes until one is picked.
-            Menu("Mute", systemImage: "bell.slash") {
-                ForEach(MuteDuration.allCases) { duration in
-                    Button(duration.dialogTitle) { Task { await model.muteChat(chat.id, for: duration) } }
-                }
-            }
-        }
-        if !model.isGroup(chat.id) {
-            Divider()
-            blockActions(for: chat)
-        }
-        Divider()
-        Button("Chat Details", systemImage: "info.circle") {
-            window.selection = chat.id
-            window.inspectorShown = true
-        }
-    }
-
-    /// The details' Block, Report and Unblock, as menu items; disabled without a server that blocks.
-    @ViewBuilder private func blockActions(for chat: ChatSummary) -> some View {
-        let available = model.blockingAvailability.isAvailable
-        if model.isBlocked(chat.id) {
-            Button("Unblock", systemImage: "hand.raised.slash") {
-                Task { for entry in model.blockEntries(for: chat.id) { await model.unblock(entry) } }
-            }
-            .disabled(!available)
-        } else {
-            Button("Block…", systemImage: "hand.raised") { blockRequest = BlockRequest(kind: .block, chatID: chat.id, name: chat.displayTitle) }
-                .disabled(!available)
-            Button("Report…", systemImage: "exclamationmark.bubble") { blockRequest = BlockRequest(kind: .report, chatID: chat.id, name: chat.displayTitle) }
-                .disabled(!available)
         }
     }
 }

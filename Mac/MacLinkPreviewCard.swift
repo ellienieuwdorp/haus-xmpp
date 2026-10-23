@@ -5,8 +5,8 @@ import SwiftUI
 /// The link preview card above the text in a Mac bubble: the iPhone's `LinkPreviewCardView` in SwiftUI, drawn from the
 /// same `TimelineLinkPreview`. Large image, small 56 pt thumbnail or text only, as the stored data decides; the large
 /// image's height follows from its stored aspect, so the card is laid out before the image decodes. A click opens the
-/// link through the environment's `openURL`, which the conversation routes. The row's accessibility label already
-/// speaks for it (`TimelineMessage.accessibilityDescription`).
+/// link through the environment's `openURL`, which the conversation routes; the bubble gives it the message's menu with
+/// the link's items first. The row's accessibility label already speaks for it (`TimelineMessage.accessibilityDescription`).
 struct MacLinkPreviewCard: View {
     let preview: TimelineLinkPreview
     /// The reply quote's fill on this bubble.
@@ -30,15 +30,9 @@ struct MacLinkPreviewCard: View {
                 .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
+        // Not a stop of its own in the window's keyboard focus: the keyboard opens the link from the message's menu.
+        .focusable(false)
         .help(preview.url.absoluteString)
-        .contextMenu {
-            Button("Open link") { openURL(preview.url) }
-            Button("Copy link") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(LinkOpening.copyText(for: preview.url), forType: .string)
-            }
-            ShareLink("Share link", item: preview.url)
-        }
         .task(id: preview.image) { image = await Self.decode(preview.image) }
     }
 

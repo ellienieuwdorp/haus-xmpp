@@ -1,3 +1,4 @@
+import MessageStore
 import XCTest
 @testable import HausXMPP
 
@@ -30,5 +31,17 @@ import XCTest
         // The next Send without a fresh touch (VoiceOver, a keyboard) sends what is in the field.
         state.draft = "the"
         XCTAssertEqual(state.draftForSend(), "the")
+    }
+
+    /// Send needs text or files; an edit needs text that changes the message. Whitespace alone never sends.
+    func testSendNeedsSomethingToSend() {
+        let own = StoredMessage(id: "own", accountID: "me@example.org", chatID: "alex@example.org", senderID: "me@example.org",
+                                body: "See you", isOutgoing: true)
+        XCTAssertFalse(ComposerPlan.hasContent(draft: " \n", editing: nil, hasFiles: false))
+        XCTAssertTrue(ComposerPlan.hasContent(draft: " \n", editing: nil, hasFiles: true), "files go without a caption")
+        XCTAssertTrue(ComposerPlan.hasContent(draft: "Hi", editing: nil, hasFiles: false))
+        XCTAssertFalse(ComposerPlan.hasContent(draft: "See you", editing: own, hasFiles: false), "an unchanged edit")
+        XCTAssertFalse(ComposerPlan.hasContent(draft: "  ", editing: own, hasFiles: false), "an edit never empties a message")
+        XCTAssertTrue(ComposerPlan.hasContent(draft: "See you soon", editing: own, hasFiles: false))
     }
 }

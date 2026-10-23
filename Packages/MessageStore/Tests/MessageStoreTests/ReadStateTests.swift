@@ -182,6 +182,51 @@ private func commit(_ store: MessageStore, digest: String, sender: String = peer
     }
 }
 
+/// An archive the first walk found empty has no history: its baseline is the earliest possible and stays, so what a
+/// later connection's first page holds (it arrived meanwhile) is unread and alerts.
+@Test func emptyFirstArchiveKeepsWhatArrivesAfterwardsUnread() async throws {
+    try await withEncryptedStore(account: account) { store, _ in
+        try await store.recordEmptyArchive(accountID: account, archiveID: account)
+        try await commit(store, digest: "d1", message: message("m1", at: 1), archiveStanzaID: "s1")
+        try await commit(store, digest: "d2", message: message("m2", at: 2), archiveStanzaID: "s2")
+        try await store.saveNewestArchivePage(accountID: account, archiveID: account, cursor: "c2", oldestID: "c1", complete: true,
+                                              historyThrough: Date(timeIntervalSince1970: 1_800_000_002))
+        #expect(try await store.unreadCounts(accountID: account) == [peer: 2])
+        #expect(try await store.pendingNotifications(accountID: account).claimed.count == 2)
+    }
+}
+
+/// A room joined during a connection is first walked on the next one. The archive's newest time before the join is its
+/// baseline, so what arrived in between, stored or retained for review, stays unread and alerts once that first page
+/// brings it, while history from before the join stays read. A room that already has a checkpoint keeps its own baseline.
+@Test func joinedRoomCountsWhatArrivesBeforeItsFirstWalk() async throws {
+    try await withEncryptedStore(account: account) { store, _ in
+        let at = { (second: Double) in Date(timeIntervalSince1970: 1_800_000_000 + second) }
+        let member = { (id: String, second: Double) in StoredMessage(id: id, accountID: account, chatID: room, senderID: "member@x", body: "Synthetic group",
+                                                                      sentAt: at(second), encryptionProfile: "modern", wireID: "origin-" + id) }
+        try await store.upsertChat(accountID: account, chatID: room, title: "Room")
+        try await store.recordJoinedRoom(accountID: account, room: room, historyThrough: at(2))
+        // After the join: one message read live, one held for review.
+        try await commit(store, digest: "g3", sender: "member@x", message: member("g3", 3), groupRoom: room, roomStanzaID: "room-3")
+        try await store.retainEncryptedIncoming(accountID: account, sender: "member@x", digest: "p4", wire: Data([4]),
+                                                notification: PendingNotificationContext(chatID: room, sentAt: at(4)))
+        // The next connection's first page also holds history from before the join.
+        try await commit(store, digest: "g1", sender: "member@x", message: member("g1", 1), groupRoom: room, roomStanzaID: "room-1")
+        try await store.saveNewestArchivePage(accountID: account, archiveID: room, cursor: "room-4", oldestID: "room-1", complete: true,
+                                              historyThrough: at(4))
+        #expect(try await store.unreadCounts(accountID: account) == [room: 1])
+        #expect(Set(try await store.pendingNotifications(accountID: account).claimed) == [.message("g3"), .pending(sender: "member@x", digest: "p4")])
+
+        // Joining a room again once it has been walked changes nothing: its unread message stays unread.
+        let other = "other@rooms.x"
+        try await store.saveNewestArchivePage(accountID: account, archiveID: other, cursor: "o1", oldestID: "o1", complete: true)
+        try await commit(store, digest: "o5", sender: "member@x", message: StoredMessage(id: "o5", accountID: account, chatID: other, senderID: "member@x",
+            body: "Synthetic group", sentAt: at(5), encryptionProfile: "modern", wireID: "origin-o5"), groupRoom: other, roomStanzaID: "other-5")
+        try await store.recordJoinedRoom(accountID: account, room: other, historyThrough: at(6))
+        #expect(try await store.unreadCounts(accountID: account)[other] == 1)
+    }
+}
+
 /// Retained ciphertext waiting for trust or keys is held to the same history rule as a message row: what the
 /// first archive page or a later backfill brings from before the baseline never asks for review, and a candidate the
 /// first page retained before its baseline existed goes when the baseline is recorded. Newer ciphertext still alerts.

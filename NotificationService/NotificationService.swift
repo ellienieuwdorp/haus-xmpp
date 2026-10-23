@@ -3,9 +3,10 @@ import UserNotifications
 import MessagingCore
 
 /// Thin shell: every remote request joins the process's run (`NotificationRunCoordinator`) and finishes with its outcome.
-/// A settled run posted one local request per new message, so the remote alert is suppressed with empty content
-/// (the filtering entitlement), or replaced by a quiet stand-in where the extension lacks that entitlement. Anything
-/// else shows the generic fallback; unknown is never suppressed.
+/// A settled run posted one local request per new message, and a handed-off one left the push to the running app,
+/// which answered the liveness handshake; either way the remote alert is suppressed with empty content (the filtering
+/// entitlement), or replaced by a quiet stand-in where the extension lacks that entitlement. Anything else shows the
+/// generic fallback; unknown is never suppressed.
 final class NotificationService: UNNotificationServiceExtension, @unchecked Sendable {
     /// One per process: `didReceive` may arrive concurrently for coalesced pushes, on this or another instance.
     private static let coordinator = NotificationRunCoordinator { progress in await ExtensionRun.run(progress) }
@@ -59,21 +60,26 @@ private final class RemoteDelivery: @unchecked Sendable {
             defer { handler = nil }
             return handler
         }) else { return }
-        if case let .settled(report) = outcome {
-            // The badge is the one field a settled delivery may carry: unread outside muted chats, when the run knew it.
-            let badge = report.badge.map { NSNumber(value: $0) }
-            guard NotificationFiltering.isAvailable else {
-                callback(Self.standIn(for: request, badge: badge))
-                return
-            }
-            // Every local add already completed: empty content suppresses the remote alert (no title, body or sound).
-            let content = UNMutableNotificationContent()
-            content.badge = badge
-            callback(content)
+        let badge: NSNumber?
+        switch outcome {
+        // The badge is the one field a settled delivery may carry: unread outside muted chats, when the run knew it.
+        case let .settled(report): badge = report.badge.map { NSNumber(value: $0) }
+        // The running app presents and sets the badge itself.
+        case .handedOff: badge = nil
+        case .fallback:
+            // Unknown: leave the icon badge as it is.
+            callback(Self.fallback(for: request, badge: nil))
             return
         }
-        // Unknown: leave the icon badge as it is.
-        callback(Self.fallback(for: request, badge: nil))
+        guard NotificationFiltering.isAvailable else {
+            callback(Self.standIn(for: request, badge: badge))
+            return
+        }
+        // Every local add already completed, or the app presents: empty content suppresses the remote alert (no title,
+        // body or sound).
+        let content = UNMutableNotificationContent()
+        content.badge = badge
+        callback(content)
     }
 
     /// Plan D2: generic, no message content, the fallback category, and the identifier the system gave this request
@@ -156,6 +162,10 @@ private enum ExtensionRun {
                                            push: PushRegistrationState.sessionSubscription(
                                                saved: account.push, state: try? PushRegistrationState.load(accountID: accountID)),
                                            leftForeground: SharedSession.leftForeground()),
+                // On the Mac a busy lease asks the running app first: if it answers, it presents and this run hands the
+                // push over.
+                liveness: AppLiveness.isOffered
+                    ? AppLiveness.ExtensionChannel(files: AppLiveness.Files(groupRoot: root.deletingLastPathComponent())) : nil,
                 progress: progress, presentation: { store, stage in
                     // Keep the transport lease through presentation. Preferences cannot change under this lease;
                     // logout authorization is reread before each presentation (direct messages first, then the rest).
@@ -167,9 +177,7 @@ private enum ExtensionRun {
                 })
             outcome = .settled(progress.report)
         } catch {
-            // A committed run already posted and deleted its claims; a failure closing the store afterwards is not a
-            // reason to show the fallback on top of the real notifications.
-            outcome = progress.isCommitted ? .settled(progress.report) : .fallback(NotificationFallbackReason(error))
+            outcome = .ended(by: error, progress: progress)
         }
         #if DEBUG
         // Synthetic staging diagnostics: timestamps, phase and counts only; no account, token, body or key data.

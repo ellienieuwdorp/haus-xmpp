@@ -11,7 +11,19 @@ struct AppearanceView: View {
 
     var body: some View {
         @Bindable var appearance = appearance
-        List {
+        GroupedList {
+            #if os(macOS)
+            // A Mac pane: one row per choice, the accents as a row of swatches as in System Settings.
+            Section {
+                Picker("Theme", selection: $appearance.mode) {
+                    Text("Automatic").tag("automatic")
+                    Text("Light").tag("light")
+                    Text("Dark").tag("dark")
+                }
+                .pickerStyle(.segmented)
+                LabeledContent("Accent") { macAccents }
+            }
+            #else
             Section("Theme") {
                 Picker("Theme", selection: $appearance.mode) {
                     Text("Automatic").tag("automatic")
@@ -49,6 +61,7 @@ struct AppearanceView: View {
                 }
                 .padding(.vertical, 8)
             }
+            #endif
             Section("Preview") {
                 VStack(spacing: 6) {
                     bubble("Coffee tomorrow?", time: "18:02", incoming: true)
@@ -62,6 +75,33 @@ struct AppearanceView: View {
         .inlineNavigationTitle()
         .themedRoot()
     }
+
+    #if os(macOS)
+    /// The accents as System Settings shows them: small swatches in a row, the chosen one ringed and named beside them.
+    private var macAccents: some View {
+        HStack(spacing: 8) {
+            ForEach(AccentTheme.allCases) { theme in
+                let selected = theme == accent
+                Button { appearance.accent = theme } label: {
+                    Circle()
+                        .fill(theme.swatch)
+                        .frame(width: 18, height: 18)
+                        .overlay {
+                            if selected { Circle().stroke(Color(platform: theme.tint), lineWidth: 2).padding(-3) }
+                        }
+                        .frame(width: 24, height: 24)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(theme.title)
+                .accessibilityLabel(theme.title)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+            Text(accent.title).foregroundStyle(.secondary).frame(minWidth: 64, alignment: .leading)
+                .accessibilityHidden(true)
+        }
+    }
+    #endif
 
     /// The real bubble's footer at preview size: caption2 time and the shared read mark, both in the
     /// meta colour, inside the 20 pt bubble with the timeline's 12/10/8 insets.

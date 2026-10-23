@@ -13,6 +13,9 @@ struct TimelineReply: Sendable, Equatable {
     let body: String
     /// The quoted photo or video on disk, shown as a small still at the quote's trailing edge; nil shows the text alone.
     var thumbnail: TimelineAttachment? = nil
+    /// The quoted message as the reply names it, for jumping to it from the quote: its local ID for a reply sent from
+    /// here, the ID its sender saw for a received one. The store resolves either (`AppModel.quotedMessageID`).
+    var messageID: String? = nil
     /// Side of that still, in the bubble and in the composer's reply strip.
     static let thumbnailSide: CGFloat = 36
 }
@@ -135,9 +138,13 @@ struct TimelineMessage: Identifiable, Sendable, Equatable {
     var statusGlyph: MessageStatusGlyph? { isOutgoing ? status.map(MessageStatusGlyph.glyph(for:)) : nil }
 
     /// What VoiceOver reads for the bubble: who, what, then everything the bubble shows around the text.
-    var accessibilityDescription: String {
+    var accessibilityDescription: String { accessibilityDescription(sender: nil) }
+
+    /// As `accessibilityDescription`, with `sender` naming who sent a received message, where the caller knows a name
+    /// for them; without it, the author or "Contact".
+    func accessibilityDescription(sender: String?) -> String {
         let shown = displayedText
-        let speaker = isOutgoing ? "You" : (author ?? "Contact")
+        let speaker = isOutgoing ? "You" : (sender ?? author ?? "Contact")
         var descriptions = [shown.isEmpty ? speaker : "\(speaker): \(shown)"]
         if unreadable != nil { descriptions.append("not readable on this device") }
         if isEdited { descriptions.append("edited") }
