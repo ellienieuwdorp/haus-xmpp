@@ -230,6 +230,7 @@ import SwiftUI
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     override func loadView() {
+        Self.watchInput()
         let view = PresenceView()
         view.changed = { [presence] present in presence.onScreen = present }
         view.movedToWindow = { [weak self] in
@@ -248,7 +249,7 @@ import SwiftUI
         MacObservation.track(self) { inspector in inspector.schedulePrebuild(for: inspector.state.selection) }
     }
 
-    private func schedulePrebuild(for chatID: String?) {
+    private func schedulePrebuild(for chatID: String?, after delay: TimeInterval = quiet) {
         prebuild?.cancel()
         prebuild = nil
         guard let chatID, presence.shownChat != chatID else { return }
@@ -256,7 +257,7 @@ import SwiftUI
             MainActor.assumeIsolated { self?.prebuildIfQuiet(chatID) }
         }
         prebuild = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.quiet, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     /// Builds and lays out the details in the closed column, at the size the column opens to. Not while the user is
@@ -265,20 +266,43 @@ import SwiftUI
     private func prebuildIfQuiet(_ chatID: String) {
         prebuild = nil
         guard state.selection == chatID, presence.shownChat != chatID, let view = view as? PresenceView else { return }
-        let lastInput = NSApp.currentEvent.flatMap { Self.input.contains($0.type) ? $0.timestamp : nil }
         // Out of the window, it waits until the column is in it (`movedToWindow`).
         guard view.window != nil else { return }
-        if lastInput.map({ ProcessInfo.processInfo.systemUptime - $0 < Self.quiet }) == true { return schedulePrebuild(for: chatID) }
+        // A tracking loop (a scroller's or a text selection's drag) takes its events without handing them out: then the
+        // event being handled is one of them.
+        let current = NSApp.currentEvent.flatMap { Self.input.contains(NSEvent.EventTypeMask(type: $0.type)) ? $0.timestamp : nil }
+        let quietFor = ProcessInfo.processInfo.systemUptime - max(Self.lastInput, current ?? 0)
+        if quietFor < Self.quiet { return schedulePrebuild(for: chatID, after: Self.quiet - quietFor) }
         presence.shownChat = chatID
         view.layOutHidden()
+        #if DEBUG
+        Self.debugBuiltAhead = (chatID, ProcessInfo.processInfo.systemUptime)
+        #endif
     }
 
     /// The events a build ahead waits after; not the pointer's moves, which lead to Chat Details as often as not.
-    private static let input: Set<NSEvent.EventType> = [
+    private static let input: NSEvent.EventTypeMask = [
         .keyDown, .keyUp, .flagsChanged, .scrollWheel, .leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown,
         .rightMouseUp, .rightMouseDragged, .otherMouseDown, .otherMouseUp, .otherMouseDragged, .magnify, .swipe, .rotate,
         .beginGesture, .endGesture, .smartMagnify, .pressure,
     ]
+    /// When the app last handed out one of those events (system uptime, as events' timestamps); a pointer move after it
+    /// leaves it as it was.
+    private static var lastInput: TimeInterval = 0
+    private static var inputMonitor: Any?
+
+    private static func watchInput() {
+        guard inputMonitor == nil else { return }
+        inputMonitor = NSEvent.addLocalMonitorForEvents(matching: input) { event in
+            MainActor.assumeIsolated { lastInput = ProcessInfo.processInfo.systemUptime }
+            return event
+        }
+    }
+
+    #if DEBUG
+    /// The chat whose details were last built ahead, and when (`prebuild-quiet`).
+    static var debugBuiltAhead: (chat: String, at: TimeInterval)?
+    #endif
 
     /// The details fill the column while it shows. Hidden, they keep the size they had: a resize of the window does not
     /// lay them out.

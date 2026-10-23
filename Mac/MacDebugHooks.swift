@@ -22,7 +22,9 @@ import SwiftUI
 ///   then and run while the steps play, for a recording. Steps: `wait <seconds>`, `select <chat>`, `deselect`,
 ///   `inspector on|off`, `inspector-page details|encryption`, `inspector-race [<width>x<height>]` (the inspector shown,
 ///   hidden and shown again 60 ms apart in a window of that size, then the window widened and, with the inspector
-///   hidden, narrowed, logging whether each width stuck), `settings general|appearance|about`, `close-settings`,
+///   hidden, narrowed, logging whether each width stuck), `prebuild-quiet <chat>` (chooses a chat other than the open
+///   one, puts a modifier key's change 0.4 s later and a pointer move 0.45 s later on the app's own event queue, and
+///   logs when the closed inspector built its details ahead), `settings general|appearance|about`, `close-settings`,
 ///   `size <width>x<height>` (as `-haus-window-size`, which applies only after a tour), and for the open chat's composer: `type <text>` (inserted at
 ///   the caret as typing would), `key return|shift-return|option-return|command-return|escape|up`, `reply newest` (the
 ///   newest received message), `edit newest` (what Up-arrow would edit), `attach photo|file|scan|<path in the
@@ -382,6 +384,39 @@ import SwiftUI
             + "got \(narrow): \(stuck ? "STUCK" : "ok")")
     }
 
+    /// The build ahead waits for half a second with no key, click or scroll. A pointer move just after a key once
+    /// hid the key from it (`NSApplication.currentEvent` was the move), and the build landed 0.2 s after the key.
+    /// The events go on the app's own queue (`NSApplication.postEvent`), never through the window server, and there is
+    /// no key window to take the modifier's change.
+    private static func prebuildQuiet(_ chat: String, window: MacWindowState, main: NSWindow?) async {
+        guard let main, !chat.isEmpty, window.selection != chat else {
+            return log("tour prebuild-quiet \(chat): needs the main window and a chat other than the open one")
+        }
+        let uptime = { ProcessInfo.processInfo.systemUptime }
+        func format(_ seconds: TimeInterval) -> String { String(format: "%.2f", seconds) }
+        func post(_ event: NSEvent?, at time: TimeInterval) async -> TimeInterval {
+            try? await Task.sleep(for: .seconds(max(0, time - uptime())))
+            if let event { NSApp.postEvent(event, atStart: false) }
+            return uptime()
+        }
+        let chosen = uptime()
+        window.selection = chat
+        let key = await post(NSEvent.keyEvent(with: .flagsChanged, location: .zero, modifierFlags: [], timestamp: uptime(), windowNumber: 0,
+                                              context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 56), at: chosen + 0.4)
+        let moved = await post(NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [], timestamp: uptime(), windowNumber: main.windowNumber,
+                                                  context: nil, eventNumber: 0, clickCount: 0, pressure: 0), at: chosen + 0.45)
+        while uptime() < chosen + 2, MacInspectorController.debugBuiltAhead.map({ $0.chat != chat || $0.at < chosen }) ?? true {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        let line = "key at \(format(key - chosen)) s, pointer move at \(format(moved - chosen)) s"
+        guard let built = MacInspectorController.debugBuiltAhead, built.chat == chat, built.at >= chosen else {
+            // A closed inspector that has not been in the window since launch (one too narrow for it) builds nothing.
+            return log("prebuild-quiet \(chat): \(line), not built within 2 s")
+        }
+        let verdict = built.at < key ? "built before the key: no answer" : built.at - key < 0.5 ? "EARLY" : "ok"
+        log("prebuild-quiet \(chat): \(line), built at \(format(built.at - chosen)) s, \(format(built.at - key)) s after the key: \(verdict)")
+    }
+
     /// `-haus-tour`: frames from the moment the main window exists, while the steps change what it shows.
     private static func runTour(_ script: String, window: MacWindowState, model: AppModel) async {
         var frames: Task<Void, Never>?
@@ -399,6 +434,7 @@ import SwiftUI
             case "inspector": window.inspectorShown = argument != "off"
             case "inspector-page": showInspectorPage(argument, window: window, model: model)
             case "inspector-race": await inspectorRace(argument.isEmpty ? "760x800" : argument, window: window, main: mainWindow)
+            case "prebuild-quiet": await prebuildQuiet(argument, window: window, main: mainWindow)
             case "settings":
                 tour.settingsPane = MacSettingsView.Pane(rawValue: argument) ?? .general
                 if otherWindows.isEmpty { openSettings?() }
