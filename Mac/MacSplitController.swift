@@ -183,8 +183,9 @@ import SwiftUI
 }
 
 /// The inspector's pane, in a view that knows whether the column is on screen: a split view hides a collapsed item's
-/// view once it has finished closing, and shows it again as it starts to open. The chat's details are built only
-/// meanwhile; in the closed column they were laid out again on every step of a window resize.
+/// view once it has finished closing, and shows it again as it starts to open. The chat's details are built when the
+/// column first shows them and kept while that chat stays chosen; the closed column never lays them out, as a resize of
+/// the window would on each of its steps.
 @MainActor final class MacInspectorController: NSViewController {
     private let model: AppModel
     private let state: MacWindowState
@@ -204,18 +205,29 @@ import SwiftUI
         let model = model, state = state, presence = presence
         let host = NSHostingView(rootView: MacPane { MacInspectorPane(model: model, window: state, presence: presence) })
         host.sizingOptions = []
-        host.autoresizingMask = [.width, .height]
         view.addSubview(host)
+        view.host = host
         self.view = view
+        MacObservation.track(self) { inspector in
+            if inspector.presence.onScreen { inspector.presence.shownChat = inspector.state.selection }
+        }
     }
 
+    /// The details fill the column while it shows. Hidden, they keep the size they had: a resize of the window does not
+    /// lay them out.
     private final class PresenceView: NSView {
         var changed: (Bool) -> Void = { _ in }
+        weak var host: NSView?
         private var reported: Bool?
+
+        override func layout() {
+            if let host, !isHiddenOrHasHiddenAncestor, host.frame != bounds { host.frame = bounds }
+            super.layout()
+        }
 
         override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); report() }
         override func viewDidHide() { super.viewDidHide(); report() }
-        override func viewDidUnhide() { super.viewDidUnhide(); report() }
+        override func viewDidUnhide() { super.viewDidUnhide(); needsLayout = true; report() }
 
         private func report() {
             let present = window != nil && !isHiddenOrHasHiddenAncestor
@@ -228,9 +240,11 @@ import SwiftUI
     }
 }
 
-/// Whether a split view column is on screen, from when it starts to open until it has finished closing.
+/// Whether a split view column is on screen, from when it starts to open until it has finished closing, and the chat
+/// it last showed.
 @MainActor @Observable final class MacColumnPresence {
     var onScreen = false
+    var shownChat: String?
 }
 
 /// The sidebar's search field, above the chats: it filters them by name or address (`MacWindowState.chatSearch`), and
