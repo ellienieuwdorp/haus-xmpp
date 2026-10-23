@@ -20,7 +20,9 @@ import SwiftUI
 ///   logged instead.
 /// - `-haus-tour "<step>; …"`: plays the steps once the main window exists; with `-haus-capture-frames`, the frames start
 ///   then and run while the steps play, for a recording. Steps: `wait <seconds>`, `select <chat>`, `deselect`,
-///   `inspector on|off`, `inspector-page details|encryption`, `settings general|appearance|about`, `close-settings`,
+///   `inspector on|off`, `inspector-page details|encryption`, `inspector-race [<width>x<height>]` (the inspector shown,
+///   hidden and shown again 60 ms apart in a window of that size, then the window widened and, with the inspector
+///   hidden, narrowed, logging whether each width stuck), `settings general|appearance|about`, `close-settings`,
 ///   `size <width>x<height>` (as `-haus-window-size`, which applies only after a tour), and for the open chat's composer: `type <text>` (inserted at
 ///   the caret as typing would), `key return|shift-return|option-return|command-return|escape|up`, `reply newest` (the
 ///   newest received message), `edit newest` (what Up-arrow would edit), `attach photo|file|scan|<path in the
@@ -347,6 +349,39 @@ import SwiftUI
         window.inspectorPath = page == "encryption" ? [model.isGroup(chatID) ? .groupDetails(chatID) : .encryption(chatID)] : []
     }
 
+    /// Toggles quicker than the inspector's animations, in a window too narrow for the column, so that opening it widens
+    /// the window and a close that interrupts the open narrows it back. Overlapping, the animations once left the
+    /// conversation's width pinned: the window went back to its old width after every resize.
+    private static func inspectorRace(_ argument: String, window: MacWindowState, main: NSWindow?) async {
+        let size = argument.split(separator: "x").compactMap { Double($0) }
+        guard size.count == 2, let main, window.selection != nil else {
+            return log("tour inspector-race \(argument): needs <width>x<height>, the main window and a chat")
+        }
+        func resize(to width: Double) async -> Int {
+            main.setContentSize(NSSize(width: width, height: size[1]))
+            try? await Task.sleep(for: .seconds(0.5))
+            return Int(main.contentRect(forFrameRect: main.frame).width)
+        }
+        if window.inspectorShown {
+            window.inspectorShown = false
+            try? await Task.sleep(for: .seconds(1))
+        }
+        _ = await resize(to: size[0])
+        for shown in [true, false, true] {
+            window.inspectorShown = shown
+            try? await Task.sleep(for: .milliseconds(60))
+        }
+        try? await Task.sleep(for: .seconds(1))
+        let opened = Int(main.contentRect(forFrameRect: main.frame).width)
+        let wide = await resize(to: size[0] + 440)
+        window.inspectorShown = false
+        try? await Task.sleep(for: .seconds(1))
+        let narrow = await resize(to: size[0] + 140)
+        let stuck = wide != Int(size[0]) + 440 || narrow != Int(size[0]) + 140
+        log("inspector-race \(argument): opened to \(opened), asked \(Int(size[0]) + 440) got \(wide), hidden asked \(Int(size[0]) + 140) "
+            + "got \(narrow): \(stuck ? "STUCK" : "ok")")
+    }
+
     /// `-haus-tour`: frames from the moment the main window exists, while the steps change what it shows.
     private static func runTour(_ script: String, window: MacWindowState, model: AppModel) async {
         var frames: Task<Void, Never>?
@@ -363,6 +398,7 @@ import SwiftUI
             case "deselect": window.selection = nil
             case "inspector": window.inspectorShown = argument != "off"
             case "inspector-page": showInspectorPage(argument, window: window, model: model)
+            case "inspector-race": await inspectorRace(argument.isEmpty ? "760x800" : argument, window: window, main: mainWindow)
             case "settings":
                 tour.settingsPane = MacSettingsView.Pane(rawValue: argument) ?? .general
                 if otherWindows.isEmpty { openSettings?() }

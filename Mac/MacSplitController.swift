@@ -21,8 +21,10 @@ import SwiftUI
     private var inspectorItem: NSSplitViewItem!
     private var content: MacContentController!
     private var collapseObservation: NSKeyValueObservation?
-    /// Counts the inspector's animations, so one that another interrupted does not end the hold of the next.
-    private var inspectorAnimations = 0
+    /// The inspector is opening or closing; a change of the window's state meanwhile waits until it has finished. AppKit's
+    /// collapse animations do not take over from each other: an open that interrupts a close, which shrinks the window
+    /// back, leaves the conversation's width pinned, and the window can no longer be resized.
+    private var animatingInspector = false
     /// The inspector is being put in the window (`insertInspector`): its collapse changes nothing in the window's state.
     private var insertingInspector = false
 
@@ -119,7 +121,7 @@ import SwiftUI
 
     private func applyInspector() {
         let shows = showsInspector
-        guard inspectorItem.isCollapsed == shows else { return }
+        guard !animatingInspector, inspectorItem.isCollapsed == shows else { return }
         guard view.window?.isVisible == true else {
             inspectorItem.isCollapsed = !shows
             inspectorSettled()
@@ -129,15 +131,17 @@ import SwiftUI
         // laid out at its new width once, as the animation ends, not on each of its frames. Closing, it follows the
         // column: held wider than its pane then, it kept AppKit from animating the next open.
         content.heldWidth = shows ? content.view.bounds.width : nil
-        inspectorAnimations += 1
-        let animation = inspectorAnimations
+        animatingInspector = true
         NSAnimationContext.runAnimationGroup { _ in
             inspectorItem.animator().isCollapsed = !shows
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, animation == self.inspectorAnimations else { return }
+                guard let self else { return }
+                self.animatingInspector = false
                 self.content.heldWidth = nil
                 self.inspectorSettled()
+                // Shown or hidden again while it ran: only the latest state is animated to.
+                self.applyInspector()
             }
         }
     }
