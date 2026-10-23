@@ -7,6 +7,8 @@
   --rule: #d2d2d7;
   --badge-background: #000000;
   --badge-text: #ffffff;
+  --badge-edge: #000000;
+  --shadow: rgba(0, 0, 0, 0.16);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -14,10 +16,12 @@
     --text: #f5f5f7;
     --muted: #a1a1a6;
     --link: #4aa3ff;
-    --background: #000000;
+    --background: #161617;
     --rule: #424245;
-    --badge-background: #ffffff;
-    --badge-text: #000000;
+    --badge-background: #000000;
+    --badge-text: #f5f5f7;
+    --badge-edge: #6e6e73;
+    --shadow: rgba(0, 0, 0, 0.6);
   }
 }
 
@@ -36,22 +40,35 @@ a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 /* Landing page
-   Everything scales with the viewport height so the icon, title, both
-   screenshots, badges and links fit on one screen. --chrome is the height
-   of everything except the screenshots; the screenshots get the rest,
-   within a legible minimum and the original 300px maximum. Short or tiny
-   windows scroll instead of shrinking further. */
+   One device scene: the Mac window with the iPhone standing in front of its
+   right edge, both showing the same conversation, one light and one dark.
+   Everything scales with the viewport height so the icon, title, scene,
+   badge and links fit on one screen. --chrome is the height of everything
+   except the scene; the scene gets the rest, within a legible minimum and a
+   maximum width. Short or tiny windows scroll instead of shrinking further.
+   The stage is the scene's coordinate box: --mac and --phone are the images'
+   widths as fractions of it, --mac-x and --phone-x their left edges and
+   --mac-y and --phone-y their top edges, all as fractions of the stage's
+   width; --ratio is the stage's height as a fraction of its width (whichever
+   image reaches lowest), kept in step with them. The Mac capture is
+   1120 by 780, the iPhone's 598 by 1300. */
 
 .home {
   --vh: 1vh;
   --space: clamp(12px, calc(var(--vh) * 3.2), 44px);
   --icon: clamp(52px, calc(var(--vh) * 9), 112px);
   --title: clamp(26px, calc(var(--vh) * 5), 44px);
-  --gap: clamp(12px, 3vw, 32px);
   --badge: 44px;
   --links: 26px;
   --chrome: calc(var(--space) * 4.4 + var(--icon) + var(--title) * 1.15 + var(--badge) + 16px + var(--links) + 4px);
-  --phone: min(300px, max(140px, calc((var(--vh) * 100 - var(--chrome)) * 598 / 1300)));
+  --mac: 86%;
+  --mac-x: 0%;
+  --mac-y: 0%;
+  --phone: 22%;
+  --phone-x: 78%;
+  --phone-y: 18.07%;
+  --ratio: 0.6589;
+  --scene: min(960px, 100%, max(320px, calc((var(--vh) * 100 - var(--chrome)) / var(--ratio))));
   max-width: 1080px;
   min-height: 100vh;
   margin: 0 auto;
@@ -83,38 +100,72 @@ a:hover { text-decoration: underline; }
   letter-spacing: -0.02em;
 }
 
-.shots {
-  display: flex;
-  gap: var(--gap);
-  justify-content: center;
+.scene {
   width: 100%;
+  margin: 0;
+  display: flex;
+  justify-content: center;
 }
 
-.shots .phone {
+.stage {
+  position: relative;
+  width: var(--scene);
+  aspect-ratio: 1 / var(--ratio);
+}
+
+.stage img {
+  position: absolute;
   display: block;
-  width: var(--phone);
-  max-width: calc((100% - var(--gap)) / 2);
   height: auto;
+}
+
+/* The Mac capture is the real window, rounded corners and all; the shadow
+   follows its shape. */
+.stage .mac {
+  left: var(--mac-x);
+  top: calc(var(--mac-y) / var(--ratio));
+  width: var(--mac);
+  filter: drop-shadow(0 18px 40px var(--shadow));
+}
+
+/* The iPhone capture is the bare screen; the corners, a hairline edge and
+   the shadow make it a device. */
+.stage .phone {
+  left: var(--phone-x);
+  top: calc(var(--phone-y) / var(--ratio));
+  width: var(--phone);
   /* 40px corners at the 300px width, scaling with the image. */
   border-radius: 13.33% / 6.15%;
-  box-shadow: 0 0 0 1px var(--rule), 0 20px 50px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 0 0 1px var(--rule), 0 20px 50px var(--shadow);
 }
 
-/* Store-style badges, side by side, with the screenshots' gap. */
-.badges {
-  margin-top: var(--space);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px var(--gap);
-  justify-content: center;
+/* Narrow screens: the same scene with the iPhone larger, so it stays
+   readable. Its top sits the same share of the way down the Mac window as
+   on wider screens (about 30%), so it reaches further below the window. */
+@media (max-width: 640px) {
+  .home {
+    --mac: 84%;
+    --mac-x: 0%;
+    --mac-y: 0%;
+    --phone: 32%;
+    --phone-x: 68%;
+    --phone-y: 17.65%;
+    --ratio: 0.8721;
+  }
+  .stage .mac { filter: drop-shadow(0 10px 24px var(--shadow)); }
+  .stage .phone { box-shadow: 0 0 0 1px var(--rule), 0 14px 36px var(--shadow); }
 }
 
+/* The one call to action: a store-style badge, centred under the scene.
+   In dark mode it stays black with a fine grey edge, as store badges do. */
 .badge {
+  margin-top: var(--space);
   display: inline-flex;
   align-items: center;
   gap: 8px;
   height: var(--badge);
   padding: 0 16px 0 12px;
+  border: 1px solid var(--badge-edge);
   border-radius: 10px;
   background: var(--badge-background);
   color: var(--badge-text);
@@ -129,28 +180,19 @@ a:hover { text-decoration: underline; }
 .badge:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
 .badge svg { flex: none; }
 .badge span { display: flex; flex-direction: column; gap: 2px; }
-.badge small { font-size: 10px; font-weight: 500; letter-spacing: 0.01em; }
+.badge small { font-size: 10px; font-weight: 500; letter-spacing: 0.01em; white-space: nowrap; }
 
+/* Plain links in one centred row. Their labels are about as wide as each
+   other, so the row's centre and the middle link's both fall on the page's
+   centre line. */
 .links {
   margin-top: 16px;
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 24px;
   justify-content: center;
+  gap: clamp(16px, 6vw, 28px);
   line-height: var(--links);
+  white-space: nowrap;
 }
-
-/* Two items in equal columns either side of the centre line, so the
-   space between them sits under the space between the screenshots
-   whatever their widths. */
-.pair {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  width: 100%;
-}
-
-.pair > :nth-child(odd) { justify-self: end; }
-.pair > :nth-child(even) { justify-self: start; }
 
 /* Text pages */
 
