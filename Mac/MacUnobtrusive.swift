@@ -69,7 +69,7 @@ import SwiftUI
     /// Sheets and child windows move with their parent, so only top-level windows are parked themselves.
     private static func isTopLevel(_ window: NSWindow) -> Bool { window.sheetParent == nil && window.parent == nil }
 
-    fileprivate static func hide(_ window: NSWindow) {
+    static func hide(_ window: NSWindow) {
         window.alphaValue = 0
         window.ignoresMouseEvents = true
         window.collectionBehavior.insert([.transient, .ignoresCycle])

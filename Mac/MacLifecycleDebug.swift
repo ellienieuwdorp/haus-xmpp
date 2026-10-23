@@ -98,7 +98,7 @@ import SwiftUI
             case "minimise": mainWindow?.miniaturize(nil)
             case "close": mainWindow?.performClose(nil)
             case "open":
-                window.openWindow?(id: MacAppDelegate.mainWindowID)
+                window.showMainWindow()
                 // An unobtrusive window posts no key or occlusion change when it comes back, so tell the driver.
                 try? await Task.sleep(for: .milliseconds(200))
                 lifecycle.windowsChanged()

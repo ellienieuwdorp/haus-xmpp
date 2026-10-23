@@ -4,8 +4,8 @@ import QuickLook
 import SwiftUI
 
 /// The open chat. The timeline (`MacTimeline`) opens at the newest message in its first frame, follows the bottom while
-/// the reader is there, keeps the reader's row through older pages and resizes, and pages in older history near the top;
-/// the composer (`MacComposer`) sits below it. A bubble's right-click menu, its hover toolbar and its VoiceOver actions
+/// the reader is there, keeps the reader's rows through older pages and resizes, and pages in older history near the
+/// top; the composer (`MacComposer`) sits below it, and the timeline runs under it and under the bars above. A bubble's right-click menu, its hover toolbar and its VoiceOver actions
 /// perform the shared menu's actions (`MacMessageHandlers`), with the iPhone's retry and unsend dialogs. Links in
 /// bubbles open through `LinkOpening`, and preview cards show as on the iPhone. Photos and videos show as framed stills
 /// and files as a line; a click opens one in Quick Look, or asks for its download when it is not on this Mac yet.
@@ -16,10 +16,6 @@ struct MacConversationView: View {
     let chatID: String
     /// The timeline's rows and scroll position; made when the view first appears.
     @State private var timeline: MacTimelineController?
-    /// Rows laid out in the viewport now (LazyVStack's prefetch may add a row just past the edge), so the start of
-    /// reading marks the newest one the user can see. Not observed: rows scrolling in and out must not rebuild the
-    /// whole timeline, and only the `readingStarts` change reads it.
-    @State private var visibleRows = VisibleRows()
     /// A message's Report, waiting for its confirmation.
     @State private var blockRequest: BlockRequest?
     @State private var retryMessageID: String?
@@ -42,9 +38,6 @@ struct MacConversationView: View {
     /// row's environment and run all their bodies again. What it performs is set while the view is shown: it holds this
     /// view, whose state holds it.
     @State private var linkAction = MacLinkAction()
-    #if DEBUG
-    @State private var debugToken = UUID()
-    #endif
 
     private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
@@ -91,6 +84,24 @@ struct MacConversationView: View {
                 guard let timeline else { return }
                 if timeline.isFiltered { timeline.closeFilter() } else { composerIntent.focusComposer() }
             }
+            // Tab goes on to the composer, or where the window's key view loop goes while search or a block hides it.
+            timeline.onTab = { [weak timeline, composerIntent] in
+                guard let timeline else { return }
+                if timeline.searching || model.isBlocked(chatID) {
+                    timeline.table.view.window?.selectNextKeyView(timeline.table.table)
+                } else {
+                    composerIntent.focusComposer()
+                }
+            }
+            timeline.onShown = { message in
+                markIfReading(message.id)
+                // Fetched on display, never at insert, under the model's policy (setting, contact, demo).
+                if message.wantsLinkPreview { model.linkPreviewDisplayed(message.id) }
+                // As on the iPhone: a file not on disk yet is fetched on sight when its chat allows it.
+                if message.attachment?.localURL == nil, message.attachment != nil, !message.showsPlaceholder {
+                    model.attachmentDisplayed(message.id)
+                }
+            }
             self.timeline = timeline
         }
         .onDisappear {
@@ -99,39 +110,44 @@ struct MacConversationView: View {
         }
         // Its own view, so only it reads the messages: this view's body never reruns for a new message.
         .overlay { if let timeline { MacEmptyNotice(timeline: timeline, presenter: presenter) } }
-        // The Message menu's targets; their own view too, as they change with the messages.
+        // The menu bar's targets; their own views too, as they change with the messages and the filters.
         .background {
             if let timeline {
                 MacMessageCommandsSource(model: model, chatID: chatID, timeline: timeline, presenter: presenter, handlers: messageHandlers)
+                MacFindCommandsSource(timeline: timeline, find: find)
             }
         }
-        .safeAreaInset(edge: .top) {
+        .safeAreaInset(edge: .top, spacing: 0) {
             // Sending, or reading, waits on a device nobody decided on (the iPhone shows a card in the chat); the
             // banner's review sheet decides each waiting device by its fingerprint.
-            MacDeviceReviewBanner(model: model, chatID: chatID, title: title)
+            VStack(spacing: 0) {
+                MacDeviceReviewBanner(model: model, chatID: chatID, title: title)
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { timeline?.table.setBars(banner: $0) }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            // A blocked chat says so and offers Unblock in place of the composer. The timeline's frame ends above it,
-            // so the timeline follows the composer's height as it does the window's (`MacTimelineController.resized`).
-            if model.isBlocked(chatID) {
-                BlockedChatBar(model: model, chatID: chatID, name: title)
-                    .padding(.horizontal, 16).padding(.vertical, 10)
-            } else if timeline?.searching != true {
-                MacComposer(model: model, chatID: chatID, intent: composerIntent, focusTimeline: timeline.map { timeline in { timeline.requestKeyboardFocus() } })
+            // A blocked chat says so and offers Unblock in place of the composer. The timeline runs under it, and keeps
+            // the newest message above it as it grows and shrinks.
+            VStack(spacing: 0) {
+                if model.isBlocked(chatID) {
+                    BlockedChatBar(model: model, chatID: chatID, name: title)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                } else if timeline?.searching != true {
+                    MacComposer(model: model, chatID: chatID, intent: composerIntent, focusTimeline: timeline.map { timeline in { timeline.requestKeyboardFocus() } })
+                }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { timeline?.table.setBars(bottom: $0) }
         }
         // Files dropped anywhere in the chat but on the find bars join the composer's tray; a drop during search closes
         // it, as a reply does.
         .onDrop(of: MacAttachmentDrop.types, delegate: MacAttachmentDrop(model: model, chatID: chatID, intent: composerIntent, targeted: $dropTargeted))
         .overlay { if dropTargeted || debugDropHighlight { MacAttachmentDropHighlight() } }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if let timeline { MacConversationFindBars(timeline: timeline, focusRequests: findRequests) }
+            VStack(spacing: 0) {
+                if let timeline { MacConversationFindBars(timeline: timeline, focusRequests: findRequests) }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { timeline?.table.setBars(find: $0) }
         }
-        .focusedSceneValue(\.conversationFind, findCommands)
-        #if DEBUG
-        .onAppear { if MacUnobtrusive.isOn { let view = self; MacDebugHooks.tour.conversationFind.append((debugToken, { view.findCommands })) } }
-        .onDisappear { MacDebugHooks.tour.conversationFind.removeAll { $0.token == debugToken } }
-        #endif
         .onChange(of: model.conversationIntent, initial: true) { _, intent in
             // The details' Search and Starred tiles leave what they want opened here, as on the iPhone. Applied in a turn
             // of its own: the timeline scrolls as the filter changes, which it may not do inside a view update.
@@ -193,11 +209,13 @@ struct MacConversationView: View {
             let kinds: [String: MessageAction.Kind] = ["reply": .reply, "edit": .edit, "star": .star, "retry": .retry, "unsend": .unsend,
                                                        "encryption": .encryptionDetails, "report": .report]
             if request.verb == "react" { messageHandlers.react(request.argument, message) }
+            if request.verb == "select-text" || request.verb == "pick-emoji" { timeline?.table.debugRequest(request.verb, messageID: message.id) }
             if let kind = kinds[request.verb] { perform(kind, on: message, link: nil) }
             MacDebugHooks.log("composer intent: replying to \(composerIntent.replyingTo?.id ?? "none"), editing \(composerIntent.editing?.id ?? "none")")
         }
+        .onChange(of: MacDebugHooks.tour.hoveredMessage) { _, _ in timeline?.table.debugHoverChanged() }
         #endif
-        // Closed by the root when the selection moves on or the window closes: SwiftUI may build the detail column more
+        // Closed by the window when the selection moves on or the window closes: SwiftUI may build the content pane more
         // than once for one selection, and a late disappearance would close the chat the new view just opened.
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
         .environment(\.openURL, linkAction.action)
@@ -284,13 +302,6 @@ struct MacConversationView: View {
         if let url = attachment.localURL { quickLook = url } else if attachment.download.canRequest { model.downloadAttachment(message.id) }
     }
 
-    /// What Find in Conversation and View > Starred Messages act on.
-    private var findCommands: MacConversationFindCommands? {
-        timeline.map { timeline in
-            MacConversationFindCommands(find: find, starredOnly: timeline.starredOnly, setStarredOnly: { timeline.setStarredOnly($0) })
-        }
-    }
-
     /// Opens search, or moves keyboard focus back into its field when it is open.
     private func find() {
         timeline?.setSearching(true)
@@ -308,35 +319,21 @@ struct MacConversationView: View {
     }
 
     private func timeline(_ timeline: MacTimelineController, presenter: ConversationPresenter) -> some View {
-        let contactName = isGroup ? nil : title
-        return MacTimeline(controller: timeline, contactName: contactName) { row in
-            MacTimelineRow(row: row, isGroup: timeline.isGroup, contactName: contactName, handlers: messageHandlers, openAttachment: { openAttachment(of: row.message) })
-                .equatable()
-                .modifier(MacFindResult(timeline: timeline, id: row.message.id))
-                .onAppear {
-                    visibleRows.ids.insert(row.message.id)
-                    markIfReading(row.message.id, presenter: presenter)
-                    // Fetched on display, never at insert, under the model's policy (setting, contact, demo).
-                    if row.message.wantsLinkPreview { model.linkPreviewDisplayed(row.message.id) }
-                    // As on the iPhone: a file not on disk yet is fetched on sight when its chat allows it.
-                    if row.message.attachment?.localURL == nil, row.message.attachment != nil, !row.message.showsPlaceholder {
-                        model.attachmentDisplayed(row.message.id)
-                    }
-                }
-                .onDisappear { visibleRows.ids.remove(row.message.id) }
-        }
+        MacTimeline(controller: timeline, contactName: isGroup ? nil : title, handlers: messageHandlers,
+                    openAttachment: { openAttachment(of: $0) }, openLink: { linkAction.perform($0) })
         // The user started reading this chat (the app active, its window key and visible, the screen unlocked, the user
         // not idle): what was already on screen counts as seen now (critique G3).
         .onChange(of: model.readingStarts) { _, _ in
-            guard let shown = timeline.rows.last(where: { visibleRows.ids.contains($0.message.id) && presenter.marksDisplayed($0.message.id) }) else { return }
-            markIfReading(shown.message.id, presenter: presenter)
+            let shownIDs = timeline.table.visibleMessageIDs
+            guard let shown = timeline.rows.last(where: { shownIDs.contains($0.message.id) && presenter.marksDisplayed($0.message.id) }) else { return }
+            markIfReading(shown.message.id)
         }
     }
 
     /// The newest received message marks the chat read when it shows. The model marks it only while the user reads
     /// this chat (`LifecycleSignals.readsOpenChat`, from `MacLifecycle`), so a row appearing in a window behind other
     /// apps marks nothing; the start of reading marks it then.
-    private func markIfReading(_ id: String, presenter: ConversationPresenter) {
+    private func markIfReading(_ id: String) {
         guard presenter.marksDisplayed(id) else { return }
         Task { await model.markDisplayed(id) }
     }
@@ -399,9 +396,7 @@ private struct MacMessageCommandsSource: View {
     let timeline: MacTimelineController
     let presenter: ConversationPresenter
     let handlers: MacMessageHandlers
-    #if DEBUG
-    @State private var debugToken = UUID()
-    #endif
+    @State private var menuToken = UUID()
 
     private var commands: MacMessageCommands {
         // `items` is the observed list the rows go into, so a change of rows reruns whatever reads this.
@@ -427,11 +422,29 @@ private struct MacMessageCommandsSource: View {
         Color.clear
             .accessibilityHidden(true)
             .focusedSceneValue(\.macMessageCommands, commands)
-            #if DEBUG
-            .onAppear { if MacUnobtrusive.isOn { let source = self; MacDebugHooks.tour.messageCommands.append((debugToken, { source.commands })) } }
-            // SwiftUI may build this view twice and take the copies down in any order; the newest one left counts.
-            .onDisappear { MacDebugHooks.tour.messageCommands.removeAll { $0.token == debugToken } }
-            #endif
+            .onAppear { let source = self; MacMenuTargets.shared.messageCommands.append((menuToken, { source.commands })) }
+            .onDisappear { MacMenuTargets.shared.messageCommands.removeAll { $0.token == menuToken } }
+    }
+}
+
+/// Publishes what Find in Conversation and View > Starred Messages act on, once the timeline exists: made with it, so
+/// the menu bar sees the starred filter change.
+private struct MacFindCommandsSource: View {
+    let timeline: MacTimelineController
+    let find: () -> Void
+    @State private var menuToken = UUID()
+
+    private var commands: MacConversationFindCommands {
+        let timeline = timeline
+        return MacConversationFindCommands(find: find, starredOnly: timeline.starredOnly, setStarredOnly: { timeline.setStarredOnly($0) })
+    }
+
+    var body: some View {
+        Color.clear
+            .accessibilityHidden(true)
+            .focusedSceneValue(\.conversationFind, commands)
+            .onAppear { let source = self; MacMenuTargets.shared.conversationFind.append((menuToken, { source.commands })) }
+            .onDisappear { MacMenuTargets.shared.conversationFind.removeAll { $0.token == menuToken } }
     }
 }
 
@@ -440,11 +453,6 @@ private struct PhoneLink {
     let number: String
     let call: URL
     let message: URL
-}
-
-/// A plain reference holder, so changing it never invalidates the view that owns it.
-@MainActor private final class VisibleRows {
-    var ids: Set<String> = []
 }
 
 /// An `openURL` action that keeps its identity while what it does is set again.

@@ -1,29 +1,42 @@
 import AppKit
 import SwiftUI
 
-/// Menu commands of the main window. Settings (⌘,) comes with the Settings scene. The Chat and Message menus act on
-/// what the main window publishes as focused scene values (`MacChatCommands`, `MacMessageCommands`), so they are
-/// disabled while another window is in front or the main window is closed.
-struct MacCommands: Commands {
+/// Menu commands of the main window. Settings (⌘,) comes with the Settings scene. The Chat and Message menus act on the
+/// main window while it is the key window: its chats from the model, the open chat's find and message commands from
+/// what the conversation registers (`MacMenuTargets`), or publishes as a focused scene value. They are disabled while
+/// another window is in front, the main window is closed, or a transfer, upgrade or key recovery replaces its chats;
+/// New Chat and Find Chat are disabled then too.
+@MainActor struct MacCommands: Commands {
+    let model: AppModel
     let window: MacWindowState
-    @Environment(\.openWindow) private var openWindow
     /// The open chat's search and starred filter; nil while no chat is shown.
-    @FocusedValue(\.conversationFind) private var focusedConversation
-    @FocusedValue(\.macChatCommands) private var chatCommands
-    @FocusedValue(\.macMessageCommands) private var messageCommands
+    @FocusedValue(\.conversationFind) private var focusedConversation: MacConversationFindCommands?
+    @FocusedValue(\.macMessageCommands) private var focusedMessageCommands: MacMessageCommands?
+
+    /// The main window is in front, showing its chats. An unobtrusive run's window is never key, so there it always
+    /// counts.
+    private var actsOnMainWindow: Bool {
+        guard !model.showsBlockingScreen else { return false }
+        #if DEBUG
+        if MacUnobtrusive.isOn { return true }
+        #endif
+        return window.isKey
+    }
 
     private var conversation: MacConversationFindCommands? {
-        #if DEBUG
-        if focusedConversation == nil, let unfocused = MacDebugHooks.tour.conversationFind.last { return unfocused.make() }
-        #endif
-        return focusedConversation
+        focusedConversation ?? (actsOnMainWindow ? MacMenuTargets.shared.conversationFind.last?.make() : nil)
+    }
+
+    private var chatCommands: MacChatCommands? {
+        actsOnMainWindow ? MacChatCommands(model: model, window: window) : nil
+    }
+
+    private var messageCommands: MacMessageCommands? {
+        focusedMessageCommands ?? (actsOnMainWindow ? MacMenuTargets.shared.messageCommands.last?.make() : nil)
     }
 
     var body: some Commands {
         let conversation = conversation
-        // Kept for the Dock icon, which reopens the main window after it was closed (or never shown: a launch in the
-        // background opens no window). Commands are built at launch, before any window exists.
-        let _ = { if window.openWindow == nil { window.openWindow = openWindow } }()
         CommandGroup(replacing: .appInfo) {
             Button("About Haus XMPP") { MacAboutPanel.show() }
         }
@@ -33,6 +46,7 @@ struct MacCommands: Commands {
                 window.showingNewChat = true
             }
             .keyboardShortcut("n")
+            .disabled(model.showsBlockingScreen)
         }
         // As in Mail: ⌘F searches what is open, ⌥⌘F the list beside it.
         CommandGroup(after: .textEditing) {
@@ -44,6 +58,7 @@ struct MacCommands: Commands {
                 window.searchRequests += 1
             }
             .keyboardShortcut("f", modifiers: [.command, .option])
+            .disabled(model.showsBlockingScreen)
         }
         CommandGroup(after: .sidebar) {
             Toggle("Starred Messages", isOn: Binding(get: { conversation?.starredOnly ?? false },
@@ -57,8 +72,8 @@ struct MacCommands: Commands {
             Button("Haus XMPP") { showMainWindow() }
                 .keyboardShortcut("0")
         }
-        CommandMenu("Chat") { MacChatMenu(focused: chatCommands) }
-        CommandMenu("Message") { MacMessageMenuCommands(focused: messageCommands) }
+        CommandMenu("Chat") { MacChatMenu(commands: chatCommands) }
+        CommandMenu("Message") { MacMessageMenuCommands(commands: messageCommands) }
         // The app has no help book; Help offers the support site and mail instead of "Help isn't available".
         CommandGroup(replacing: .help) {
             Button("Haus XMPP Support") { NSWorkspace.shared.open(AppInfo.support) }
@@ -68,7 +83,7 @@ struct MacCommands: Commands {
 
     /// The commands work with the main window closed too: they bring it back first.
     private func showMainWindow() {
-        openWindow(id: MacAppDelegate.mainWindowID)
+        window.showMainWindow()
     }
 }
 
@@ -114,25 +129,26 @@ struct MacMessageCommands {
 }
 
 extension FocusedValues {
-    @Entry var macChatCommands: MacChatCommands?
     @Entry var macMessageCommands: MacMessageCommands?
+}
+
+/// The open chat's menu targets, registered by its views while they are shown. The main window's content is hosted in
+/// AppKit views, where a focused scene value need not reach the menu bar's commands, so the commands read these too.
+/// SwiftUI may build a view twice and take the copies down in any order; the newest one left counts.
+@Observable @MainActor final class MacMenuTargets {
+    static let shared = MacMenuTargets()
+
+    var conversationFind: [(token: UUID, make: () -> MacConversationFindCommands)] = []
+    var messageCommands: [(token: UUID, make: () -> MacMessageCommands)] = []
 }
 
 /// The Chat menu: the selected chat's actions (`MacChatActionsMenu`, as in the sidebar's right-click menu), its details,
 /// then moving between chats: ⌃⇥ and ⌃⇧⇥ step to the next and previous chat as they step through tabs elsewhere on the
 /// Mac, and ⌘1 to ⌘9 go to the sidebar's first nine. Details is ⌥⌘I, as ⌘I is italic wherever text is edited.
 struct MacChatMenu: View {
-    let focused: MacChatCommands?
-
-    private var commands: MacChatCommands? {
-        #if DEBUG
-        if focused == nil, let unfocused = MacDebugHooks.tour.chatCommands { return unfocused() }
-        #endif
-        return focused
-    }
+    let commands: MacChatCommands?
 
     var body: some View {
-        let commands = commands
         MacChatActionsMenu(actions: commands?.selected, placement: .menuBar)
         Divider()
         Button(commands?.detailsShown == true ? "Hide Chat Details" : "Show Chat Details", systemImage: "info.circle") { commands?.toggleDetails() }
@@ -160,17 +176,9 @@ struct MacChatMenu: View {
 /// name the last message only when that is what they act on. ⌘R replies, as Mail's Reply does; ⇧⌘E edits, as plain ⌘E
 /// is Use Selection for Find (Up-arrow in an empty composer edits too).
 struct MacMessageMenuCommands: View {
-    let focused: MacMessageCommands?
-
-    private var commands: MacMessageCommands? {
-        #if DEBUG
-        if focused == nil, let unfocused = MacDebugHooks.tour.messageCommands.last { return unfocused.make() }
-        #endif
-        return focused
-    }
+    let commands: MacMessageCommands?
 
     var body: some View {
-        let commands = commands
         let focused = commands?.isFocused == true
         Button(focused ? "Reply" : "Reply to Last Message", systemImage: "arrowshape.turn.up.left") { act(.reply, on: commands?.reply) }
             .keyboardShortcut("r")

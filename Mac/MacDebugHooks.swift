@@ -20,7 +20,13 @@ import SwiftUI
 ///   logged instead.
 /// - `-haus-tour "<step>; …"`: plays the steps once the main window exists; with `-haus-capture-frames`, the frames start
 ///   then and run while the steps play, for a recording. Steps: `wait <seconds>`, `select <chat>`, `deselect`,
-///   `inspector on|off`, `inspector-page details|encryption`, `settings general|appearance|about`, `close-settings`,
+///   `inspector on|off`, `inspector-page details|encryption`, `inspector-race [<width>x<height>]` (the inspector shown,
+///   hidden and shown again 60 ms apart in a window of that size, then the window widened and, with the inspector
+///   hidden, narrowed, logging whether each width stuck), `prebuild-quiet <chat>` (chooses a chat other than the open
+///   one, puts a modifier key's change 0.4 s later and a pointer move 0.45 s later on the app's own event queue, and
+///   logs when the closed inspector built its details ahead), `prebuild-tracking <chat> [<release seconds>]` (the same
+///   with a press 0.05 s after choosing it whose drags and release, by default at 0.45 s, a tracking loop takes, then a
+///   pointer move), `settings general|appearance|about`, `close-settings`,
 ///   `size <width>x<height>` (as `-haus-window-size`, which applies only after a tour), and for the open chat's composer: `type <text>` (inserted at
 ///   the caret as typing would), `key return|shift-return|option-return|command-return|escape|up`, `reply newest` (the
 ///   newest received message), `edit newest` (what Up-arrow would edit), `attach photo|file|scan|<path in the
@@ -53,12 +59,26 @@ import SwiftUI
 ///   `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as the reader's scroll, positive
 ///   towards older messages), `scroll-to <message id>` (a stored message by its ID), `quote <reference>` (as a click on
 ///   a quote naming that message does), `resize <width>x<height>`, `timeline` (logs the reader's row and distances),
-///   `resize-sweep <width>x<height> <width>x<height> <steps>` (a live resize from one size to the other, timing each
-///   step; also with no chat open) and `stalls [label]` (main-thread stalls over 50 ms since the last `stalls` step; the
-///   first starts the probe), `drag <points> <seconds> [phaseless]` (the reader's scroll by that many points, with a
-///   gesture's phases or none, running while the next steps play), `bind-reader` (binds the scroll position to the row
-///   an update would hold, as SwiftUI does where the reader's own scroll stops) and `older` (the next older page, as the
-///   reader reaching the paging lead asks for it).
+///   `resize-sweep <width>x<height> <width>x<height> <steps> [live]` (a resize from one size to the other, timing each
+///   step, in a live resize with `live`; also with no chat open) and `stalls [label]` (main-thread stalls over 50 ms
+///   since the last `stalls` step; the first starts the probe), `drag <points> <seconds> [phaseless]` (the reader's scroll by that many points, with a
+///   gesture's phases or none, running while the next steps play), `bind-reader` (kept for older tours: the table
+///   binds nothing and says so), `older` (the next older page, as the
+///   reader reaching the paging lead asks for it), `arrive [<text>]` (a received message added below the others, as an
+///   arrival is, which the model never has; `arrive-long [<characters>]` one with a long text; `arrive-extras <count>
+///   [older]` messages with a quote and a large link card, below the others or above the oldest as an older page;
+///   `show-row typing|group-typing|loading` the typing bubble or the loading row likewise; `settle` applies the model's
+///   rows again), `mismatch` (each row's cached text height against a live bubble text view's at the current width,
+///   then each cell's record against its row's height and its extras against SwiftUI's size for them),
+///   `hit-reaction <message id>` (the window's hit test at the message's first reaction pill, and a click handed to
+///   what it hits in process), `reuse-media` (one cell given a photo, then another message's photo, sampling which
+///   shows), `extras-cache` (a quote's size measured twice for one message as its quote changes), `update-race` (two
+///   updates measured on the queue with a reload between them), `gesture-update` (an update whose records land
+///   during a gesture), `resize-drag [<width>x<height> <points> <seconds>]` (a resize, then at once a gesture over its
+///   end pass, the cells and rows against their records sampled through it), `edit-race` (the reader's row edited
+///   on the queue, its cell made again before the edit lands, a gesture holding it and a width change after it) and
+///   `overlay-resize [<width>x<height>]` (the jump button and the day chip coming in as the window resizes in the same
+///   turn, the window's width sampled after).
 ///   `scroll <seconds> [paging]` sweeps the open chat's timeline from the newest loaded message to the oldest and back, moving
 ///   its clip view on a 120 Hz timer, and logs how late the main thread ran the ticks and the app's memory footprint
 ///   (`ScrollProbe`); with `paging` the sweep counts as the reader's gesture, so older pages come in near the top. Give
@@ -78,7 +98,8 @@ import SwiftUI
 ///   (performs that menu item as a click would, after the menu's validation; a disabled or missing item is logged
 ///   instead), `header` (logs the window's title and subtitle), `badge` (logs the Dock tile's label and where the model
 ///   last sent the icon badge), `block <chat>` and `unblock <chat>` (sample conversations only, as `-haus-block`) and
-///   `close-window` (closes the main window, as its close button does). Device trust steps (`MacDeviceReviewTour`): `chat <address>`, `join <room>`, `devices`, `messages [<count>]`,
+///   `close-window` (closes the main window, as its close button does), `hide` and `unhide` (the app, without activating
+///   it on unhide; hidden, the inspector opens and closes without animating). Device trust steps (`MacDeviceReviewTour`): `chat <address>`, `join <room>`, `devices`, `messages [<count>]`,
 ///   `device <id>` (a device row of the inspector's devices or group page, which opens its fingerprint sheet), `review`
 ///   (the conversation banner's Review…), `own-review` (the account's review, as the sidebar card's Review opens it), `trust|verify|dont-trust|compare|remove
 ///   <id>` (that device's button in the open review or fingerprint sheet), `confirm <button>` (a confirmation's button)
@@ -86,17 +107,13 @@ import SwiftUI
 ///   newest sheet alone as `<name>.png`). `store <chat>` logs what a lab account's store holds for it, as the lifecycle
 ///   step of that name does.
 ///   The window of an unobtrusive run is never key, so the Chat and Message menus, Find in Conversation and Starred
-///   Messages read the main window's targets directly there (`Tour.chatCommands`, `Tour.messageCommands`,
-///   `Tour.conversationFind`) instead of as focused scene values.
+///   Messages act on the main window there as though it were (`MacCommands`).
 /// - `-haus-sample-link-preview`: the composer shows a canned link preview for any link it is given, without fetching,
 ///   also in the sample conversations, where previews are otherwise off.
-/// - `-haus-timeline-trace`: logs each timeline update that held the reader's row, with how far the update moved it and
-///   its drift over the next 30 refreshes, the row it bound for the update and what the position held before, and each
-///   scroll the controller placed or landed.
+/// - `-haus-timeline-trace`: logs each timeline update that kept the reader's rows, with the reader's row's drift right
+///   after it and over the next 30 refreshes.
 /// - `-haus-perf-stacks`: `display-count` also logs sampled call stacks that mark a bubble text view's layers as needing
 ///   display (`MacPerfProbe`); they stall the main thread, so no timing from such a run counts.
-/// - `-haus-timeline-unbound`: leaves the timeline's position unbound, so SwiftUI keeps the absolute offset through a
-///   prepend as it does during a scroll gesture, and the controller's hold does all the work (`MacTimelineDebug`).
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
 /// - `-haus-window-size <width>x<height>`: the main window's content size in points, for captures at a set size.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-inspector-page details|encryption`,
@@ -194,7 +211,6 @@ import SwiftUI
     }
 
     static func start(model: AppModel, window: MacWindowState, lifecycle: MacLifecycle) {
-        if MacUnobtrusive.isOn { tour.chatCommands = { [weak window] in window.map { MacChatCommands(model: model, window: $0) } } }
         // An earlier build wrote relative capture directories into the container; take them out again.
         if sandboxed {
             for flag in ["-haus-capture", "-haus-capture-frames"] {
@@ -249,13 +265,9 @@ import SwiftUI
             }
             await waitUntil(seconds: 15) { model.hasLoadedChats }
             log("chats loaded: \(model.chats.map(\.id))")
-            if NSApp.windows.isEmpty, let open = window.openWindow {
-                log("no window after launch; opening the main window")
-                open(id: MacAppDelegate.mainWindowID)
-                try? await Task.sleep(for: .milliseconds(500))
-                log("windows now: \(NSApp.windows.map { "\($0.identifier?.rawValue ?? "-") visible \($0.isVisible)" })")
-            } else if NSApp.windows.isEmpty {
-                log("no window after launch and no openWindow action")
+            if mainWindow == nil {
+                log("no main window after launch; opening it")
+                window.showMainWindow()
             }
             if let size = value(after: "-haus-window-size")?.split(separator: "x").compactMap({ Double($0) }), size.count == 2, let main = mainWindow {
                 main.setContentSize(NSSize(width: size[0], height: size[1]))
@@ -317,37 +329,12 @@ import SwiftUI
         var hoveredMessage: String?
         /// The chat shows its drop highlight as though files were dragged over it.
         var dropHighlight = false
-        /// The main window's Chat and Message menu targets, for the menu bar of an unobtrusive run: its window is never
-        /// key, so no focused scene value reaches the menus (`MacCommands`).
-        var chatCommands: (() -> MacChatCommands?)?
-        var messageCommands: [(token: UUID, make: () -> MacMessageCommands)] = []
-        /// The open chat's Find in Conversation and Starred Messages, likewise.
-        var conversationFind: [(token: UUID, make: () -> MacConversationFindCommands?)] = []
-        /// `messageRequest` and `hoveredMessage` as each message's row reads them, one object per message, so a step on one
-        /// message runs only that row's body.
-        @ObservationIgnored private var rows: [String: Row] = [:]
-
-        func row(_ id: String) -> Row {
-            if let row = rows[id] { return row }
-            let row = Row()
-            rows[id] = row
-            return row
-        }
-
         func setMessageRequest(_ request: MessageRequest) {
             messageRequest = request
-            row(request.messageID).request = request
         }
 
         func setHoveredMessage(_ id: String?) {
-            if let hoveredMessage { row(hoveredMessage).hovered = false }
             hoveredMessage = id
-            if let id { row(id).hovered = true }
-        }
-
-        @Observable @MainActor final class Row {
-            var request: MessageRequest?
-            var hovered = false
         }
     }
 
@@ -367,6 +354,129 @@ import SwiftUI
         window.inspectorPath = page == "encryption" ? [model.isGroup(chatID) ? .groupDetails(chatID) : .encryption(chatID)] : []
     }
 
+    /// Toggles quicker than the inspector's animations, in a window too narrow for the column, so that opening it widens
+    /// the window and a close that interrupts the open narrows it back. Overlapping, the animations once left the
+    /// conversation's width pinned: the window went back to its old width after every resize.
+    private static func inspectorRace(_ argument: String, window: MacWindowState, main: NSWindow?) async {
+        let size = argument.split(separator: "x").compactMap { Double($0) }
+        guard size.count == 2, let main, window.selection != nil else {
+            return log("tour inspector-race \(argument): needs <width>x<height>, the main window and a chat")
+        }
+        func resize(to width: Double) async -> Int {
+            main.setContentSize(NSSize(width: width, height: size[1]))
+            try? await Task.sleep(for: .seconds(0.5))
+            return Int(main.contentRect(forFrameRect: main.frame).width)
+        }
+        if window.inspectorShown {
+            window.inspectorShown = false
+            try? await Task.sleep(for: .seconds(1))
+        }
+        _ = await resize(to: size[0])
+        for shown in [true, false, true] {
+            window.inspectorShown = shown
+            try? await Task.sleep(for: .milliseconds(60))
+        }
+        try? await Task.sleep(for: .seconds(1))
+        let opened = Int(main.contentRect(forFrameRect: main.frame).width)
+        let wide = await resize(to: size[0] + 440)
+        window.inspectorShown = false
+        try? await Task.sleep(for: .seconds(1))
+        let narrow = await resize(to: size[0] + 140)
+        let stuck = wide != Int(size[0]) + 440 || narrow != Int(size[0]) + 140
+        log("inspector-race \(argument): opened to \(opened), asked \(Int(size[0]) + 440) got \(wide), hidden asked \(Int(size[0]) + 140) "
+            + "got \(narrow): \(stuck ? "STUCK" : "ok")")
+    }
+
+    /// The build ahead waits for half a second with no key, click or scroll. A pointer move just after a key once
+    /// hid the key from it (`NSApplication.currentEvent` was the move), and the build landed 0.2 s after the key.
+    /// The events go on the app's own queue (`NSApplication.postEvent`), never through the window server, and there is
+    /// no key window to take the modifier's change.
+    private static func prebuildQuiet(_ chat: String, window: MacWindowState, main: NSWindow?) async {
+        guard let main, !chat.isEmpty, window.selection != chat else {
+            return log("tour prebuild-quiet \(chat): needs the main window and a chat other than the open one")
+        }
+        let uptime = { ProcessInfo.processInfo.systemUptime }
+        func format(_ seconds: TimeInterval) -> String { String(format: "%.2f", seconds) }
+        func post(_ event: NSEvent?, at time: TimeInterval) async -> TimeInterval {
+            try? await Task.sleep(for: .seconds(max(0, time - uptime())))
+            if let event { NSApp.postEvent(event, atStart: false) }
+            return uptime()
+        }
+        let chosen = uptime()
+        window.selection = chat
+        let key = await post(NSEvent.keyEvent(with: .flagsChanged, location: .zero, modifierFlags: [], timestamp: uptime(), windowNumber: 0,
+                                              context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 56), at: chosen + 0.4)
+        let moved = await post(NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [], timestamp: uptime(), windowNumber: main.windowNumber,
+                                                  context: nil, eventNumber: 0, clickCount: 0, pressure: 0), at: chosen + 0.45)
+        while uptime() < chosen + 2, MacInspectorController.debugBuiltAhead.map({ $0.chat != chat || $0.at < chosen }) ?? true {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        let line = "key at \(format(key - chosen)) s, pointer move at \(format(moved - chosen)) s"
+        guard let built = MacInspectorController.debugBuiltAhead, built.chat == chat, built.at >= chosen else {
+            // A closed inspector that has not been in the window since launch (one too narrow for it) builds nothing.
+            return log("prebuild-quiet \(chat): \(line), not built within 2 s")
+        }
+        let verdict = built.at < key ? "built before the key: no answer" : built.at - key < 0.5 ? "EARLY" : "ok"
+        log("prebuild-quiet \(chat): \(line), built at \(format(built.at - chosen)) s, \(format(built.at - key)) s after the key: \(verdict)")
+    }
+
+    /// A tracking loop (a control's, a resize's) takes the drags and the release after a press without the app handing
+    /// them out, so the input monitor sees only the press. A pointer move after the release once left the build ahead
+    /// with the press alone, and it landed 0.2 s after the release; with the deadline inside a long press, it landed
+    /// during it. The press goes through `NSApplication.sendEvent`, with no window to land in, at 0.05 s; drags at 0.1,
+    /// 0.2 and 0.3 s and the release (at 0.45 s unless given) go on the app's own queue and the step's loop takes them,
+    /// in the tracking mode as a control would; the pointer move follows the release by 10 ms.
+    private static func prebuildTracking(_ argument: String, window: MacWindowState, main: NSWindow?) async {
+        let words = argument.split(separator: " ").map(String.init)
+        let chat = words.first ?? "", release = words.dropFirst().first.flatMap(Double.init) ?? 0.45
+        guard let main, !chat.isEmpty, window.selection != chat, release > 0.3 else {
+            return log("tour prebuild-tracking \(argument): needs the main window, a chat other than the open one and a release after 0.3 s")
+        }
+        let uptime = { ProcessInfo.processInfo.systemUptime }
+        func format(_ seconds: TimeInterval) -> String { String(format: "%.2f", seconds) }
+        let chosen = uptime()
+        window.selection = chat
+        try? await Task.sleep(for: .seconds(max(0, chosen + 0.05 - uptime())))
+        // From the run loop, as an event's handling runs, not from a main-queue job: the main queue, and with it the
+        // build's deadline, runs during the loop only then.
+        let (taken, released) = await withCheckedContinuation { (done: CheckedContinuation<(Int, TimeInterval), Never>) in
+            RunLoop.main.perform(inModes: [.default]) {
+                MainActor.assumeIsolated {
+                    func mouse(_ type: NSEvent.EventType) -> NSEvent? {
+                        NSEvent.mouseEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                           windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)
+                    }
+                    if let press = mouse(.leftMouseDown) { NSApp.sendEvent(press) }
+                    let tracked: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
+                    var taken = 0
+                    for (time, type) in [(0.1, NSEvent.EventType.leftMouseDragged), (0.2, .leftMouseDragged), (0.3, .leftMouseDragged), (release, .leftMouseUp)] {
+                        let wait = chosen + time - ProcessInfo.processInfo.systemUptime
+                        _ = NSApp.nextEvent(matching: tracked, until: Date(timeIntervalSinceNow: max(0, wait)), inMode: .eventTracking, dequeue: true)
+                        guard let event = mouse(type) else { continue }
+                        NSApp.postEvent(event, atStart: false)
+                        if NSApp.nextEvent(matching: tracked, until: .distantFuture, inMode: .eventTracking, dequeue: true) != nil { taken += 1 }
+                    }
+                    done.resume(returning: (taken, ProcessInfo.processInfo.systemUptime))
+                }
+            }
+        }
+        try? await Task.sleep(for: .seconds(max(0, released + 0.01 - uptime())))
+        if let move = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [], timestamp: uptime(), windowNumber: main.windowNumber,
+                                         context: nil, eventNumber: 0, clickCount: 0, pressure: 0) {
+            NSApp.postEvent(move, atStart: false)
+        }
+        let moved = uptime()
+        while uptime() < released + 2, MacInspectorController.debugBuiltAhead.map({ $0.chat != chat || $0.at < chosen }) ?? true {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        let line = "\(taken) of 4 drags and release taken by the loop, released at \(format(released - chosen)) s, pointer move at \(format(moved - chosen)) s"
+        guard let built = MacInspectorController.debugBuiltAhead, built.chat == chat, built.at >= chosen else {
+            return log("prebuild-tracking \(argument): \(line), not built within 2 s of the release")
+        }
+        let verdict = built.at < released ? "DURING the press" : built.at - released < 0.5 ? "EARLY" : "ok"
+        log("prebuild-tracking \(argument): \(line), built at \(format(built.at - chosen)) s, \(format(built.at - released)) s after the release: \(verdict)")
+    }
+
     /// `-haus-tour`: frames from the moment the main window exists, while the steps change what it shows.
     private static func runTour(_ script: String, window: MacWindowState, model: AppModel) async {
         var frames: Task<Void, Never>?
@@ -383,6 +493,9 @@ import SwiftUI
             case "deselect": window.selection = nil
             case "inspector": window.inspectorShown = argument != "off"
             case "inspector-page": showInspectorPage(argument, window: window, model: model)
+            case "inspector-race": await inspectorRace(argument.isEmpty ? "760x800" : argument, window: window, main: mainWindow)
+            case "prebuild-quiet": await prebuildQuiet(argument, window: window, main: mainWindow)
+            case "prebuild-tracking": await prebuildTracking(argument, window: window, main: mainWindow)
             case "settings":
                 tour.settingsPane = MacSettingsView.Pane(rawValue: argument) ?? .general
                 if otherWindows.isEmpty { openSettings?() }
@@ -427,14 +540,21 @@ import SwiftUI
             case "scroll" where Double(argument.split(separator: " ").first ?? "") != nil:
                 let parts = argument.split(separator: " ")
                 if let window = mainWindow { await ScrollProbe.sweep(in: window, seconds: Double(parts[0]) ?? 10, paging: parts.dropFirst().first == "paging") }
-            case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline", "drag", "bind-reader", "older": await MacTimelineDebug.step(words[0], argument, window: mainWindow)
-            case "menus": logMenuBar()
+            case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline", "drag", "bind-reader", "older", "mismatch", "arrive", "arrive-long",
+                 "arrive-extras", "settle", "show-row", "hit-reaction", "reuse-media", "extras-cache", "update-race", "gesture-update",
+                 "resize-drag", "edit-race", "overlay-resize":
+                await MacTimelineDebug.step(words[0], argument, window: mainWindow)
+            case "menus": logMenuBar(model: model, window: window)
             case "command": performMenuItem(argument)
             case "header": log("header: \(mainWindow.map { "'\($0.title)' / '\($0.subtitle)'" } ?? "no main window")")
             case "badge": log("Dock badge \(NSApp.dockTile.badgeLabel ?? "none"), \(model.debugBadgeReport)")
             case "block" where model.isDemo: await model.block(argument)
             case "unblock" where model.isDemo: for entry in model.blockEntries(for: argument) { await model.unblock(entry) }
             case "close-window": mainWindow?.performClose(nil)
+            // Hidden, the window changes without animating, as the inspector does: for a screen locked meanwhile, where
+            // animations never end.
+            case "hide": NSApp.hide(nil)
+            case "unhide": NSApp.unhideWithoutActivation()
             case "stalls": MacTimelineDebug.StallProbe.shared.report(argument)
             case "perf", "display-count", "layers", "sidebar", "sidebar-sweep", "force-noop", "split", "split-watch": await MacPerfProbe.step(words[0], argument, window: mainWindow)
             case "appearance", "accent", "text-select", "text-rescale", "text-layers": MacBubbleTextTour.step(words[0], argument, window: mainWindow)
@@ -508,12 +628,12 @@ import SwiftUI
             let before = footprint()
             log(String(format: "scroll: start, document %.0f pt, footprint %.1f MB", scrollView.documentView?.frame.height ?? 0, megabytes(before)))
             // With `paging`, as a gesture would, so the timeline pages in older history when the sweep nears the top.
-            if paging { MacTimelineController.current?.phaseChanged(.interacting) }
+            if paging { MacTimelineController.current?.debugLiveScroll(true) }
             await withCheckedContinuation { continuation in
                 probe.finished = continuation
                 probe.start()
             }
-            if paging { MacTimelineController.current?.phaseChanged(.idle) }
+            if paging { MacTimelineController.current?.debugLiveScroll(false) }
             let after = footprint()
             let sorted = probe.intervals.sorted()
             let p95 = sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))]
@@ -538,15 +658,24 @@ import SwiftUI
             if intervals.count.isMultiple(of: 60) { peak = max(peak, ScrollProbe.footprint()) }
             let progress = min(1, (now - started) / seconds)
             let clip = scrollView.contentView
-            let range = max(0, (scrollView.documentView?.frame.height ?? 0) - clip.bounds.height)
-            let fromTop = range * abs(1 - 2 * progress)
+            let range = Self.range(of: scrollView)
+            let fromTop = (range.upperBound - range.lowerBound) * abs(1 - 2 * progress)
             let flipped = scrollView.documentView?.isFlipped ?? true
-            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: flipped ? fromTop : range - fromTop))
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: flipped ? range.lowerBound + fromTop : range.upperBound - fromTop))
             scrollView.reflectScrolledClipView(clip)
             guard progress >= 1 else { return }
             timer?.invalidate()
             finished?.resume()
             finished = nil
+        }
+
+        /// The clip view's origins from one end of the content to the other, its insets included.
+        static func range(of scrollView: NSScrollView) -> ClosedRange<CGFloat> {
+            let insets = scrollView.contentInsets
+            let flipped = scrollView.documentView?.isFlipped ?? true
+            let lowest = flipped ? -insets.top : -insets.bottom
+            let highest = (scrollView.documentView?.frame.height ?? 0) - scrollView.contentView.bounds.height + (flipped ? insets.bottom : insets.top)
+            return lowest...max(lowest, highest)
         }
 
         private static func megabytes(_ bytes: UInt64) -> Double { Double(bytes) / 1_048_576 }
@@ -583,7 +712,7 @@ import SwiftUI
 
     /// The Chat and Message menus as the menu bar would show them once opened: validated first, so a disabled item is
     /// what a click would find disabled.
-    private static func logMenuBar() {
+    private static func logMenuBar(model: AppModel, window: MacWindowState) {
         func walk(_ menu: NSMenu, path: String) {
             open(menu)
             let items = menu.items.filter { !$0.isSeparatorItem }.map { item -> String in
@@ -592,8 +721,8 @@ import SwiftUI
             }
             log("menu bar \(path): " + items.joined(separator: " | "))
         }
-        let message = tour.messageCommands.last?.make()
-        log("menu bar targets: chat \(tour.chatCommands?()?.selected?.chat.id ?? "none"); last message: reply \(message?.reply?.id ?? "none"), edit "
+        let message = MacMenuTargets.shared.messageCommands.last?.make()
+        log("menu bar targets: chat \(MacChatCommands(model: model, window: window).selected?.chat.id ?? "none"); last message: reply \(message?.reply?.id ?? "none"), edit "
             + "\(message?.edit?.id ?? "none"), react \(message?.react?.id ?? "none"), star \(message?.star?.id ?? "none")")
         for title in ["File", "Edit", "View", "Chat", "Message", "Window"] {
             guard let menu = NSApp.mainMenu?.item(withTitle: title)?.submenu else { log("menu bar \(title): missing"); continue }
@@ -836,11 +965,13 @@ import SwiftUI
     /// something to send) also masks its tint with a layer composited `destIn`, and while that layer is in the tree the
     /// in-process render leaves out the entire hosting view around it: a capture showed the conversation and the
     /// composer blank from the first typed character until the send, though their views and layers were all in place,
-    /// visible and opaque, and nothing was thrown. The disabled Send (0.35 opacity) and the untinted style render. The
-    /// masks are hidden while caching; the glass they belong to is blank in a capture either way.
+    /// visible and opaque, and nothing was thrown. The disabled Send (0.35 opacity) and the untinted style render. A
+    /// scroll edge's fade is such a mask too (a gradient layer over the inspector's top, which left its picture and
+    /// buttons out). The masks are hidden while caching; the glass they belong to is blank in a capture either way, and
+    /// an edge is captured without its fade.
     private static func cacheDisplay(_ view: NSView, to rep: NSBitmapImageRep) {
         let masks = view.layer.map(descendants(of:))?.filter { layer in
-            !layer.isHidden && NSStringFromClass(type(of: layer)).hasSuffix("SDFLayer") && layer.compositingFilter.map { "\($0)" } == "destIn"
+            !layer.isHidden && layer.compositingFilter.map { "\($0)" } == "destIn"
         } ?? []
         CATransaction.begin(); CATransaction.setDisableActions(true)
         masks.forEach { $0.isHidden = true }
@@ -889,6 +1020,9 @@ import SwiftUI
             // Where the layer sits in the part's view (a backing layer shares its view's coordinates), then in the
             // captured view.
             var frame = part.convert(root.convert(layer.bounds, from: layer), to: view)
+            // A toolbar button's symbol is in a layer tree of its own, which converts to the window's origin: the
+            // button's cached image has it already.
+            guard frame.intersects(part.convert(part.bounds, to: view)) else { continue }
             if view.isFlipped { frame.origin.y = view.bounds.height - frame.maxY }
             // The matrix tints what lies behind the layer, here the stand-in already drawn there, in the layer's shape.
             let backdrop = pixel(of: context, at: CGPoint(x: frame.minX + 0.5, y: frame.minY + 0.5))
@@ -1037,18 +1171,16 @@ import SwiftUI
         for subview in view.subviews { dumpViews(subview, depth: depth + 1) }
     }
 
-    /// The window's content minimum and each SwiftUI hosting view's minimum width and height, as the split view's
-    /// columns read them: a column whose minimum follows its own width makes AppKit lay the window out again and again.
+    /// The window's content minimum and each SwiftUI hosting view's minimum width and height. The split view's panes
+    /// report none (`MacSplitController`); a minimum that follows its own view's width makes AppKit lay the window out
+    /// again and again.
     private static func logMinimums(_ window: NSWindow) {
         log("minimums: window content \(window.contentLayoutRect.size), content min \(window.contentMinSize)")
         func walk(_ view: NSView) {
             let minimums = view.constraints.filter { $0.firstItem === view && ($0.identifier ?? "").hasPrefix("NSHostingView.min") }
             if !minimums.isEmpty {
-                let name = String(describing: type(of: view))
-                let kind = name.contains("SidebarStyleContext") ? "sidebar column" : name.contains("ColumnView") ? "detail column"
-                    : name.contains("NavigationPaneModifier") ? "split pane" : "hosting view"
                 let values = minimums.map { "\($0.identifier?.replacingOccurrences(of: "NSHostingView.", with: "") ?? "") \(Int($0.constant))" }
-                log("minimums: \(kind) \(Int(view.frame.width))x\(Int(view.frame.height)) \(values.joined(separator: ", "))")
+                log("minimums: \(type(of: view)) \(Int(view.frame.width))x\(Int(view.frame.height)) \(values.joined(separator: ", "))")
             }
             view.subviews.forEach(walk)
         }
