@@ -64,7 +64,9 @@ public struct UserNotificationPoster: NotificationPosting, @unchecked Sendable {
     /// The bytes of the app's pre-scaled copy of a verified avatar (at most 256 px); nil when there is none. Read, never
     /// decoded here: the extension's memory budget is small.
     private let avatarData: @Sendable (_ hash: String) -> Data?
-    private let donates: Bool
+    /// Read for each request, not once per run: a run that waited for the lease donates by the setting saved when it
+    /// posts, which the app changes only under the lease.
+    private let donates: @Sendable () -> Bool
     /// Donations are slow on a cold Intents service (seconds on the simulator). Each is bounded, and so is their total
     /// per poster (one extension run): once spent, requests post plain rather than risk the extension's time limit.
     private let donationBudget: DonationBudget
@@ -72,13 +74,13 @@ public struct UserNotificationPoster: NotificationPosting, @unchecked Sendable {
     /// The most one donation may take; `preparationAllowance` grants it, so it never eats into the system add's limit.
     public static let donationLimit: Duration = .milliseconds(2500)
 
-    public init(center: UNUserNotificationCenter = .current(), donates: Bool = true, donationBudget: Duration = .seconds(6),
+    public init(center: UNUserNotificationCenter = .current(), donates: @escaping @Sendable () -> Bool = { true }, donationBudget: Duration = .seconds(6),
                 avatarData: @escaping @Sendable (_ hash: String) -> Data? = { _ in nil }) {
         self.center = center; self.avatarData = avatarData; self.donates = donates
         self.donationBudget = DonationBudget(donationBudget)
     }
 
-    public func preparationAllowance(for request: PlannedNotification) -> Duration { Self.allowance(for: request, donates: donates) }
+    public func preparationAllowance(for request: PlannedNotification) -> Duration { Self.allowance(for: request, donates: donates()) }
 
     static func allowance(for request: PlannedNotification, donates: Bool) -> Duration {
         request.communication == nil || !donates ? .zero : donationLimit
@@ -93,7 +95,7 @@ public struct UserNotificationPoster: NotificationPosting, @unchecked Sendable {
         // the run's donation budget is spent, requests are updated without donating.
         if let communication = request.communication {
             let intent = CommunicationNotification.intent(communication, avatar: avatarData)
-            let limit = donates ? donationBudget.next(maximum: Self.donationLimit) : nil
+            let limit = donates() ? donationBudget.next(maximum: Self.donationLimit) : nil
             let donate: CommunicationNotification.Donate? = limit == nil ? nil : CommunicationNotification.systemDonate
             let started = ContinuousClock.now
             let communicated: UNNotificationContent? = await CommunicationNotification.content(

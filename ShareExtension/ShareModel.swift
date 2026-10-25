@@ -57,7 +57,6 @@ import AppKit
     private var encryption: OMEMOService?
     private var account: NotificationAccount?
     private var accountID = ""
-    private var previews = false
     private var blocklist = XMPPBlocklist()
     private var uploadService: XMPPUploadService?
     private var filesAccepted: Bool?
@@ -67,6 +66,7 @@ import AppKit
     private var sendTask: Task<Void, Never>?
     private var session: ShareSession?
     private var sessionTask: Task<[String: ShareItemState], Never>?
+    private var donation: Task<Void, Never>?
     private var closing = false
     private static let log = Logger(subsystem: "haus.xmpp.ios", category: "share")
 
@@ -78,6 +78,8 @@ import AppKit
     static let sendBudget: Duration = .seconds(25)
     /// How long the Mac watches the queued rows for the running app's send.
     static let macWatch: Duration = .seconds(6)
+    /// How long closing waits for the share's donations before the store closes under them (`mayDonate`).
+    static let donationWait: Duration = .seconds(2)
 
     var files: [SharedItem] { items.filter(\.isFile) }
     var hasFiles: Bool { !files.isEmpty }
@@ -134,7 +136,6 @@ import AppKit
             let encryption = OMEMOService(store: store, protection: try StateProtection(key: key))
             self.root = root; self.store = store; self.encryption = encryption; self.account = account
             accountID = account.accountID
-            previews = try await store.notificationPreviewsEnabled(accountID: accountID)
             blocklist = BlockedAddresses.load(accountID: accountID)
             let uploads = UploadServiceMemory(defaults: SharedSession.groupDefaults ?? .standard)
             uploadService = uploads.load(account: accountID)
@@ -358,21 +359,45 @@ import AppKit
         cancelSending()
         await sendTask?.value
         await session?.end()
+        if let donation { await Self.wait(for: donation, upTo: Self.donationWait) }
         try? await store?.close()
         store = nil
         SharedItemIntake.discardAll()
     }
 
     private func donate(to recipients: [ShareRules.Chat]) {
-        guard let root, OutgoingDonation.isAllowed(previews: previews, suggestions: ShareSuggestionSetting.isEnabled(accountID: accountID)) else { return }
-        let account = accountID
+        guard let root, let store else { return }
+        let account = accountID, groupRoot = root.deletingLastPathComponent()
         let titles = Dictionary(chats.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
         let conversations = recipients.map { chat in
             SuggestedConversation.outgoing(accountID: account, chatID: chat.id, title: chat.title, avatarHash: chat.avatarHash,
                                            roomMembers: chat.isGroup ? roomMembers[chat.id] ?? [] : nil, titles: titles)
         }
-        Task.detached {
-            await OutgoingDonation.donate(conversations) { AvatarStore.suggestionImageData(root: root, account: account, hash: $0) }
+        donation = Task.detached {
+            await OutgoingDonation.donate(conversations, avatar: { AvatarStore.suggestionImageData(root: root, account: account, hash: $0) },
+                                          allowed: { await Self.mayDonate($0, store: store, groupRoot: groupRoot) })
+        }
+    }
+
+    /// Whether a donation may stand, read afresh each time `OutgoingDonation.donate` asks: the sheet's account still
+    /// signed in, previews and suggestions on now, the chat not blocked. No lease orders this against the app's
+    /// deletions (the Mac's sheet never takes it), so asking again once the system finished is what keeps a donation
+    /// from outliving one. A store this sheet already closed reads as not allowed, which deletes rather than keeps.
+    private nonisolated static func mayDonate(_ conversation: OutgoingConversation, store: MessageStore, groupRoot: URL) async -> Bool {
+        let account = conversation.accountID
+        guard case .success = ShareAuthorization.check(groupRoot: groupRoot, accountID: account),
+              OutgoingDonation.isAllowed(previews: (try? await store.notificationPreviewsEnabled(accountID: account)) == true,
+                                         suggestions: ShareSuggestionSetting.isEnabled(accountID: account)) else { return false }
+        return conversation.isGroup || !BlockedAddresses.load(accountID: account).blocks(conversation.chatID)
+    }
+
+    /// Waits for `task` at most `limit`, without cancelling it.
+    private static func wait(for task: Task<Void, Never>, upTo limit: Duration) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await task.value }
+            group.addTask { try? await Task.sleep(for: limit) }
+            await group.next()
+            group.cancelAll()
         }
     }
 
@@ -381,8 +406,9 @@ import AppKit
     /// nothing for a connected session. Bounded, and only for the signed-in account.
     private func presentation() -> (@Sendable (MessageStore) async -> Void)? {
         guard let root, let account else { return nil }
-        let accountID = accountID, donates = previews && ShareSuggestionSetting.isEnabled(accountID: accountID)
-        let blocklist = blocklist
+        let accountID = accountID, blocklist = blocklist
+        // Previews come from the store as the presenter plans; the suggestions setting is read as each request posts.
+        let donates: @Sendable () -> Bool = { ShareSuggestionSetting.isEnabled(accountID: accountID) }
         return { store in
             let presenter = NotificationPresenter(posting: UserNotificationPoster(donates: donates, avatarData: { hash in
                 AvatarStore.notificationImageData(root: root, account: accountID, hash: hash)

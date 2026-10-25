@@ -152,8 +152,8 @@ private enum ExtensionRun {
             catch { throw NotificationRunError.protectedDataUnavailable }
             let accountID = account.accountID
             // "Suggest chats in Share Sheet" off: the communication notifications still show who wrote, but nothing is
-            // donated for the system's suggestions.
-            let donates = ShareSuggestionSetting.isEnabled(accountID: accountID)
+            // donated for the system's suggestions. Read as each one posts, under the lease the app changes it under.
+            let donates: @Sendable () -> Bool = { ShareSuggestionSetting.isEnabled(accountID: accountID) }
             let presenter = NotificationPresenter(posting: UserNotificationPoster(donates: donates, avatarData: { hash in
                 // The app's pre-scaled copy of a verified avatar, read as bytes: nothing is decoded in the extension.
                 AvatarStore.notificationImageData(root: root, account: accountID, hash: hash)

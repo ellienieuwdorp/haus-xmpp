@@ -41,13 +41,15 @@ struct OutgoingDonationTests {
 
     @Test func donationAndDeletionFailuresNeverThrowAndDeletionReportsSuccess() async {
         let probe = InteractionLog()
+        let kept = InteractionLog()
         await OutgoingDonation.donate([.direct(accountID: "me@x", chatID: "a@x", displayName: "A", avatarHash: nil),
                                        .direct(accountID: "me@x", chatID: "b@x", displayName: "B", avatarHash: nil)],
-                                      avatar: { _ in nil }, donate: { interaction in
+                                      avatar: { _ in nil }, allowed: { _ in true }, donate: { interaction in
             probe.add(interaction.groupIdentifier ?? "")
             if probe.count == 1 { throw CocoaError(.featureUnsupported) }
-        })
+        }, delete: { kept.add($0) })
         #expect(probe.values == [NotificationIdentity.thread(accountID: "me@x", chatID: "a@x"), NotificationIdentity.thread(accountID: "me@x", chatID: "b@x")])
+        #expect(kept.values.isEmpty, "still allowed: nothing is deleted")
         let deleted = InteractionLog()
         await CommunicationHistory.deleteConversations(["t1", "t2"]) { identifier in
             deleted.add(identifier)
@@ -57,6 +59,52 @@ struct OutgoingDonationTests {
         #expect(await CommunicationHistory.deleteAll { } == true)
         #expect(await CommunicationHistory.deleteAll { throw CocoaError(.featureUnsupported) } == false)
     }
+}
+
+extension OutgoingDonationTests {
+    /// A deletion (sign-out, previews or suggestions off) runs while the system is still donating the first of a share's
+    /// conversations: that one is deleted again once the system finished, and the rest are never donated.
+    @Test func aDonationStillInFlightWhenADeletionRanIsDeletedAgainAndTheRestNeverStart() async {
+        let conversations: [OutgoingConversation] = ["a@x", "b@x", "c@x"].map {
+            .direct(accountID: "me@x", chatID: $0, displayName: $0, avatarHash: nil)
+        }
+        let donated = InteractionLog(), deleted = InteractionLog(), permission = Permission()
+        let started = AsyncStream<Void>.makeStream(), finish = AsyncStream<Void>.makeStream()
+        let run = Task {
+            await OutgoingDonation.donate(conversations, avatar: { _ in nil }, allowed: { _ in permission.value }, donate: { interaction in
+                donated.add(interaction.groupIdentifier ?? "")
+                started.continuation.yield()
+                // The system takes its time.
+                for await _ in finish.stream { break }
+            }, delete: { deleted.add($0) })
+        }
+        var iterator = started.stream.makeAsyncIterator()
+        await iterator.next()
+        permission.revoke()
+        finish.continuation.yield()
+        await run.value
+        let first = NotificationIdentity.thread(accountID: "me@x", chatID: "a@x")
+        #expect(donated.values == [first])
+        #expect(deleted.values == [first])
+    }
+
+    /// Blocking one chat deletes its donations while another chat's is in flight: only the blocked one goes.
+    @Test func aBlockDeletesOnlyThatConversationsDonationAgain() async {
+        let blocked = Permission(), deleted = InteractionLog()
+        await OutgoingDonation.donate([.direct(accountID: "me@x", chatID: "a@x", displayName: "A", avatarHash: nil),
+                                       .direct(accountID: "me@x", chatID: "b@x", displayName: "B", avatarHash: nil)],
+                                      avatar: { _ in nil }, allowed: { $0.chatID != "a@x" || blocked.value }, donate: { interaction in
+            if interaction.groupIdentifier == NotificationIdentity.thread(accountID: "me@x", chatID: "a@x") { blocked.revoke() }
+        }, delete: { deleted.add($0) })
+        #expect(deleted.values == [NotificationIdentity.thread(accountID: "me@x", chatID: "a@x")])
+    }
+}
+
+private final class Permission: @unchecked Sendable {
+    private let lock = NSLock()
+    private var granted = true
+    var value: Bool { lock.withLock { granted } }
+    func revoke() { lock.withLock { granted = false } }
 }
 
 private final class InteractionLog: @unchecked Sendable {

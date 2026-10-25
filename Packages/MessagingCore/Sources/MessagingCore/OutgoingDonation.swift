@@ -8,6 +8,8 @@ import os
 public struct OutgoingConversation: Sendable, Equatable, CustomStringConvertible {
     /// The account that sent.
     public let accountID: String
+    /// The peer's address, or the room's.
+    public let chatID: String
     /// `NotificationIdentity.thread`: the same identifier the chat's communication notifications carry, so the share
     /// sheet, the notifications and a preselected chat name one conversation, and its donations delete together.
     public let conversationIdentifier: String
@@ -17,22 +19,22 @@ public struct OutgoingConversation: Sendable, Equatable, CustomStringConvertible
     public let groupName: String?
     public let groupAvatarHash: String?
 
-    public init(accountID: String, conversationIdentifier: String, recipients: [NotificationCommunication.Person], groupName: String? = nil,
+    public init(accountID: String, chatID: String, recipients: [NotificationCommunication.Person], groupName: String? = nil,
                 groupAvatarHash: String? = nil) {
-        self.accountID = accountID; self.conversationIdentifier = conversationIdentifier; self.recipients = recipients
+        self.accountID = accountID; self.chatID = chatID; self.recipients = recipients
+        conversationIdentifier = NotificationIdentity.thread(accountID: accountID, chatID: chatID)
         self.groupName = groupName; self.groupAvatarHash = groupAvatarHash
     }
 
     /// A direct chat: the chat is the person.
     public static func direct(accountID: String, chatID: String, displayName: String, avatarHash: String?) -> OutgoingConversation {
-        OutgoingConversation(accountID: accountID, conversationIdentifier: NotificationIdentity.thread(accountID: accountID, chatID: chatID),
-                             recipients: [.init(handle: chatID, displayName: displayName, avatarHash: avatarHash)])
+        OutgoingConversation(accountID: accountID, chatID: chatID, recipients: [.init(handle: chatID, displayName: displayName, avatarHash: avatarHash)])
     }
 
     /// A room: its title and up to eight known members other than the account, as the room's notifications list them.
     public static func room(accountID: String, room: String, title: String, avatarHash: String?,
                             members: [NotificationCommunication.Person]) -> OutgoingConversation {
-        OutgoingConversation(accountID: accountID, conversationIdentifier: NotificationIdentity.thread(accountID: accountID, chatID: room),
+        OutgoingConversation(accountID: accountID, chatID: room,
                              recipients: Array(members.filter { $0.handle != accountID && $0.handle != room }.prefix(8)),
                              groupName: title, groupAvatarHash: avatarHash)
     }
@@ -76,15 +78,22 @@ public enum OutgoingDonation {
         return interaction
     }
 
-    /// Donates one interaction per conversation, best effort and bounded: a failure is logged (domain and code only)
-    /// and never holds back the send.
+    /// Donates one interaction per conversation, best effort. `allowed` is asked right before each donation and again
+    /// once the system has finished with it: a donation still in flight while a deletion ran (sign-out, previews or
+    /// suggestions off, a block) would otherwise bring back what that deletion removed, so a conversation no longer
+    /// allowed by then has its donations deleted again (`delete`). Each system call is awaited to its end, however long
+    /// it takes, so callers run this detached. A failure is logged (domain and code only) and never throws.
     public static func donate(_ conversations: [OutgoingConversation], avatar: (String) -> Data?,
+                              allowed: @escaping @Sendable (OutgoingConversation) async -> Bool,
                               donate: @escaping CommunicationNotification.Donate = CommunicationNotification.systemDonate,
-                              timeout: Duration = .milliseconds(1500)) async {
+                              delete: @escaping CommunicationHistory.DeleteConversation = { try await INInteraction.delete(with: $0) }) async {
         for conversation in conversations {
-            let interaction = UncheckedInteraction(value: interaction(for: intent(conversation, avatar: avatar)))
-            do { try await withTimeout(timeout) { try await donate(interaction.value) } }
+            guard await allowed(conversation) else { continue }
+            do { try await donate(interaction(for: intent(conversation, avatar: avatar))) }
             catch { log.notice("outgoing donation failed: \(CommunicationNotification.describe(error), privacy: .public)") }
+            if !(await allowed(conversation)) {
+                await CommunicationHistory.deleteConversations([conversation.conversationIdentifier], delete: delete)
+            }
         }
     }
 }
@@ -104,7 +113,4 @@ extension CommunicationHistory {
 }
 
 private let log = Logger(subsystem: "haus.xmpp.ios", category: "notifications")
-
-/// `INInteraction` is not Sendable; it is created, donated and dropped by one call.
-private struct UncheckedInteraction: @unchecked Sendable { let value: INInteraction }
 #endif
