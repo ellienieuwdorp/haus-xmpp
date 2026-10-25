@@ -243,9 +243,34 @@ public struct NotificationPresenter: Sendable {
     public let posting: any NotificationPosting
     public var addTimeout: Duration
     public var cleanupTimeout: Duration
+    /// Deletes one conversation's donations (`CommunicationHistory.delete`); injectable for tests.
+    public var withdrawDonations: @Sendable (_ conversation: String) async -> Void = { await CommunicationHistory.delete(conversation: $0) }
 
     public init(posting: any NotificationPosting, addTimeout: Duration = .seconds(4), cleanupTimeout: Duration = .seconds(3)) {
         self.posting = posting; self.addTimeout = addTimeout; self.cleanupTimeout = cleanupTimeout
+    }
+
+    /// Posts one request (`add` runs `posting.add` under the caller's limit) with each person it names by a contact
+    /// named as the store links them now, not as the plan read them: a plan made before the user unlinked or relinked
+    /// never donates the old contact. A link that changes while the request is posted, its donation in flight, withdraws
+    /// the conversation's donations afterwards (`CommunicationHistory.withdrawIfRelinked`), also when the add failed.
+    func add(_ planned: PlannedNotification, store: MessageStore, accountID: String,
+             _ add: (PlannedNotification) async throws -> Void) async throws {
+        let request = await planned.linkingContactsAsStored(store: store, accountID: accountID)
+        do { try await add(request) } catch {
+            await withdrawDonationsIfRelinked(request, store: store, accountID: accountID)
+            throw error
+        }
+        await withdrawDonationsIfRelinked(request, store: store, accountID: accountID)
+    }
+
+    private func withdrawDonationsIfRelinked(_ request: PlannedNotification, store: MessageStore, accountID: String) async {
+        guard let communication = request.communication else { return }
+        let withdraw = withdrawDonations, timeout = cleanupTimeout
+        await CommunicationHistory.withdrawIfRelinked([communication.sender] + communication.otherRecipients,
+                                                      conversation: communication.conversationIdentifier, accountID: accountID, store: store) { conversation in
+            _ = try? await withTimeout(timeout) { await withdraw(conversation) }
+        }
     }
 
     /// `authorize` rereads the protected account after the network work; it throws when the user signed out meanwhile.
@@ -270,7 +295,9 @@ public struct NotificationPresenter: Sendable {
             // The system add keeps its whole limit; an intent donation before it has its own allowance.
             if request.playsSound { progress.noteAddingSound() }
             do {
-                try await withTimeout(addTimeout + posting.preparationAllowance(for: request)) { try await posting.add(request) }
+                try await add(request, store: store, accountID: accountID) { request in
+                    try await withTimeout(addTimeout + posting.preparationAllowance(for: request)) { try await posting.add(request) }
+                }
             } catch {
                 // A cancelled or timed-out add keeps running in the system and may still play the sound.
                 if request.playsSound, !(error is CancellationError), error as? NotificationRunError != .postTimedOut {
@@ -399,5 +426,22 @@ private final class TimeoutRace<T: Sendable>: @unchecked Sendable {
         }
         pending.forEach { $0.cancel() }
         waiting?.resume(with: outcome)
+    }
+}
+
+extension PlannedNotification {
+    /// The same request with each person named as the store links them now (`CommunicationHistory.linkedNow`).
+    func linkingContactsAsStored(store: MessageStore, accountID: String) async -> PlannedNotification {
+        guard let communication else { return self }
+        var others: [NotificationCommunication.Person] = []
+        for person in communication.otherRecipients { others.append(await CommunicationHistory.linkedNow(person, accountID: accountID, store: store)) }
+        let sender = await CommunicationHistory.linkedNow(communication.sender, accountID: accountID, store: store)
+        let linked = NotificationCommunication(sender: sender, conversationIdentifier: communication.conversationIdentifier,
+                                               account: communication.account, groupName: communication.groupName,
+                                               groupAvatarHash: communication.groupAvatarHash, otherRecipients: others, body: communication.body)
+        guard linked != communication else { return self }
+        return PlannedNotification(identifier: identifier, threadIdentifier: threadIdentifier, categoryIdentifier: categoryIdentifier, title: title,
+                                   body: body, playsSound: playsSound, destination: destination, communication: linked, reference: reference,
+                                   badge: badge)
     }
 }

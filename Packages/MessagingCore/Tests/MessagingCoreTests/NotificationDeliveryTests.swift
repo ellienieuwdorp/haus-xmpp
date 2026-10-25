@@ -15,18 +15,22 @@ actor FakePosting: NotificationPosting {
     var preparation: Duration = .zero
     var systemAdd: Duration = .zero
     nonisolated let allowance: Duration
+    /// Runs inside each add before it completes: what happens while a donation is in flight.
+    private var during: (@Sendable (PlannedNotification) async -> Void)?
 
     init(delivered: [DeliveredNotification] = [], allowance: Duration = .zero) { self.delivered = delivered; self.allowance = allowance }
     func configure(failAtIndex: Int? = nil, hang: Bool = false, preparation: Duration = .zero, systemAdd: Duration = .zero) {
         self.failAtIndex = failAtIndex; self.hang = hang; self.preparation = preparation; self.systemAdd = systemAdd
     }
     nonisolated func preparationAllowance(for request: PlannedNotification) -> Duration { allowance }
+    func duringAdd(_ hook: @escaping @Sendable (PlannedNotification) async -> Void) { during = hook }
 
     func add(_ request: PlannedNotification) async throws {
         // Like the UNUserNotificationCenter completion-handler bridge: a hung add ignores cancellation.
         if hang { await ignoringCancellation(for: .seconds(10)) }
         if preparation > .zero { await ignoringCancellation(for: preparation) }
         if systemAdd > .zero { await ignoringCancellation(for: systemAdd) }
+        await during?(request)
         if failAtIndex == added.count { throw Failure.rejected }
         added.append(request)
         delivered.removeAll { $0.identifier == request.identifier }
@@ -73,7 +77,43 @@ func receive(_ store: MessageStore, chat: String = "bob@example.org", body: Stri
     return message
 }
 
+/// The conversations whose donations a presenter withdrew.
+actor WithdrawnDonations {
+    private(set) var conversations: [String] = []
+    func add(_ conversation: String) { conversations.append(conversation) }
+}
+
+func linkContact(_ store: MessageStore, chat: String, identifier: String) async throws {
+    try await store.saveContactLink(ContactLink(accountID: account, jid: chat, contactIdentifier: identifier, source: .picker,
+                                                displayName: "Robin Okafor", isReachable: true))
+}
+
 struct NotificationPresenterTests {
+    /// An extension run names the contact linked when each request posts, and a relink while one is posted (its
+    /// donation in flight) withdraws that conversation's donations once it is done, also when the add fails.
+    @Test func aRelinkDuringAnAddWithdrawsTheConversationsDonations() async throws {
+        try await withStore { store in
+            try await linkContact(store, chat: "bob@example.org", identifier: "contact-1")
+            try await receive(store, at: 1)
+            let posting = FakePosting(), withdrawn = WithdrawnDonations()
+            await posting.duringAdd { _ in try? await linkContact(store, chat: "bob@example.org", identifier: "contact-2") }
+            await posting.configure(failAtIndex: 0)
+            var presenter = NotificationPresenter(posting: posting)
+            presenter.withdrawDonations = { await withdrawn.add($0) }
+            await #expect(throws: FakePosting.Failure.self) {
+                try await presenter.present(store: store, accountID: account, progress: NotificationRunProgress())
+            }
+            #expect(await withdrawn.conversations == [NotificationIdentity.thread(accountID: account, chatID: "bob@example.org")])
+
+            // The next run names the new contact, and nothing changes meanwhile: nothing is withdrawn.
+            await posting.configure()
+            await posting.duringAdd { _ in }
+            try await presenter.present(store: store, accountID: account, progress: NotificationRunProgress())
+            #expect(await posting.added.map { $0.communication?.sender.contactIdentifier } == ["contact-2"])
+            #expect(await withdrawn.conversations.count == 1)
+        }
+    }
+
     @Test func postsEveryRequestBeforeDeletingClaimsAndCommitting() async throws {
         try await withStore { store in
             let first = try await receive(store, body: "One", at: 1)

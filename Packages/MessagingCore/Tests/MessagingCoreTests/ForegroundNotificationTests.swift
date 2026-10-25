@@ -53,6 +53,31 @@ struct ForegroundNotificationTests {
         }
     }
 
+    /// A banner batch planned before the user unlinked: a request posted after the unlink names no contact, and the
+    /// one whose donation was in flight has its conversation's donations withdrawn after it.
+    @Test func anUnlinkDuringABatchNeverLeavesTheOldContactDonated() async throws {
+        try await withStore { store in
+            let now = Date()
+            for chat in ["bob@example.org", "carol@example.org"] {
+                try await linkContact(store, chat: chat, identifier: "contact-" + chat)
+                try await receive(store, chat: chat, at: now.addingTimeInterval(-5).timeIntervalSince1970)
+            }
+            let posting = FakePosting(), withdrawn = WithdrawnDonations()
+            // The user unlinks both chats while the first banner is being posted.
+            await posting.duringAdd { _ in
+                for chat in ["bob@example.org", "carol@example.org"] { _ = try? await store.removeContactLink(accountID: account, jid: chat) }
+            }
+            var presenter = NotificationPresenter(posting: posting)
+            presenter.withdrawDonations = { await withdrawn.add($0) }
+            #expect(try await presenter.presentForeground(store: store, accountID: account, readingChatID: nil, presents: true, now: now) == 2)
+            let added = await posting.added
+            #expect(added.count == 2)
+            #expect(added[0].communication?.sender.contactIdentifier != nil, "linked when it was posted")
+            #expect(added[1].communication?.sender.contactIdentifier == nil, "posted after the unlink")
+            #expect(await withdrawn.conversations == [added[0].threadIdentifier])
+        }
+    }
+
     /// Plan D8 in front of the app: another person's reaction to our message banners like the extension would post it,
     /// but not in the open chat and not when it is old; either way it is claimed.
     @Test func reactionsInOtherChatsBannerAsTheExtensionWould() async throws {

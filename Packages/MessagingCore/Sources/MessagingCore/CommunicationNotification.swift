@@ -108,6 +108,29 @@ public enum CommunicationHistory {
         do { try await delete(identifier) }
         catch { log.notice("communication history deletion failed: \(CommunicationNotification.describe(error), privacy: .public)") }
     }
+
+    /// The person as the store links them now, for a donation about to be made: the contact of a link the app can read
+    /// (`ContactLink.usableContactIdentifier`), or none once it is unlinked, relinked or unreadable. A person named by
+    /// no contact stays so.
+    public static func linkedNow(_ person: NotificationCommunication.Person, accountID: String,
+                                 store: MessageStore) async -> NotificationCommunication.Person {
+        guard person.contactIdentifier != nil else { return person }
+        let stored = (try? await store.contactLink(accountID: accountID, jid: person.handle))?.usableContactIdentifier
+        return NotificationCommunication.Person(handle: person.handle, displayName: person.displayName, avatarHash: person.avatarHash,
+                                                contactIdentifier: stored)
+    }
+
+    /// Runs after every donation that named `people`, incoming or outgoing: when one of their links changed while it
+    /// was in flight, deletes the conversation's donations. Unlinking and relinking delete them after their commit and
+    /// this reads after the donation, so whichever runs last deletes the old association, in this process or another.
+    /// (A donation that outlived its own limit can still land after both.)
+    public static func withdrawIfRelinked(_ people: [NotificationCommunication.Person], conversation: String, accountID: String,
+                                          store: MessageStore,
+                                          withdraw: @Sendable (String) async -> Void = { await delete(conversation: $0) }) async {
+        for person in people where person.contactIdentifier != nil {
+            guard await linkedNow(person, accountID: accountID, store: store) == person else { return await withdraw(conversation) }
+        }
+    }
 }
 
 private let log = Logger(subsystem: "haus.xmpp.ios", category: "notifications")
