@@ -123,6 +123,8 @@ import SwiftUI
 ///   what the window shows. The inspector's `encryption` page is Devices & Encryption for a chat, Group details for a
 ///   group.
 /// - `-haus-block <chat>`: blocks a sample conversation (sample data only), for captures of a blocked chat.
+/// - `-haus-contact-link <chat> <name>`: links a sample conversation to a made-up contact by name only (sample data
+///   only), for captures of a linked chat; Contacts is neither asked for nor read.
 /// - `-haus-notification-settings`: Settings shows its Notifications section without a signed-in account, for captures
 ///   with sample data.
 /// - `-haus-self-check`: the App Group container, the store in it, and a data-protection Keychain round trip.
@@ -276,6 +278,12 @@ import SwiftUI
             if let size = value(after: "-haus-window-size")?.split(separator: "x").compactMap({ Double($0) }), size.count == 2, let main = mainWindow {
                 main.setContentSize(NSSize(width: size[0], height: size[1]))
                 log("window content size \(main.contentLayoutRect.size)")
+            }
+            // A sample chat linked by name only, as a link made without Contacts access: Contacts is never read.
+            if let chat = value(after: "-haus-contact-link"), let name = value(after: "-haus-contact-link", offset: 2), model.isDemo {
+                let linked = await model.contactLinks.link(chat, to: ContactCard(id: "sample-" + chat, name: name, thumbnail: nil, jabberAddresses: []),
+                                                           source: .picker)
+                log("contact link \(chat): \(linked ? "saved" : "failed")")
             }
             if let tour = value(after: "-haus-tour") {
                 await runTour(tour, window: window, model: model)
