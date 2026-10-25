@@ -129,7 +129,7 @@ struct ConversationView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var searchTerm: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var title: String { AppModel.displayName(for: chatID, title: model.chats.first(where: { $0.id == chatID })?.title) }
+    private var title: String { model.chatName(for: chatID) }
     private var isGroup: Bool { model.isGroup(chatID) }
     /// Ticks while a relative "Last seen" is shown so "just now" and "today" roll over on their own.
     @State private var lastSeenClock = Date.now
@@ -336,7 +336,7 @@ struct ConversationView: View {
                 NavigationLink(value: ChatRoute.details(chatID)) {
                     // Name only: trust lives in Chat Details and the review card, so the header never flickers.
                     HStack(spacing: 9) {
-                        ChatAvatar(key: chatID, name: title, image: model.avatars[chatID], isGroup: isGroup, size: 36)
+                        ChatAvatar(key: chatID, name: title, image: model.avatar(for: chatID), isGroup: isGroup, size: 36)
                             .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
                         if let lastSeenLabel {
                             // Known activity: a smaller name over the subtitle, centred in the same row so the avatar stays put.
@@ -633,7 +633,7 @@ struct ConversationComposer: View {
 
     var body: some View {
         if model.isBlocked(chatID) {
-            BlockedChatBar(model: model, chatID: chatID, name: AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title))
+            BlockedChatBar(model: model, chatID: chatID, name: model.chatName(for: chatID))
                 .padding(.horizontal, 16).padding(.vertical, 8)
         } else {
             composer

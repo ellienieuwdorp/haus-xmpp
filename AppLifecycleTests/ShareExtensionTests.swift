@@ -1,4 +1,5 @@
 import ImageIO
+import MessageStore
 import MessagingCore
 import UIKit
 import UniformTypeIdentifiers
@@ -98,6 +99,26 @@ final class ShareExtensionTests: XCTestCase {
         XCTAssertEqual(listed.count, 1 + ShareRules.recentChats)
         XCTAssertEqual(ShareRules.listed(chats, search: "c3").map(\.id).sorted(), (["c3@x"] + (30..<40).map { "c\($0)@x" }).sorted(),
                        "a search reaches chats beyond the recent ones")
+    }
+
+    /// The picker names and pictures a chat as the app does: a linked contact's name first, its photo after a verified
+    /// avatar unless the user chose the photo. A name-only link names the chat too; a room is never linked.
+    func testThePickerNamesAndPicturesALinkedChatAsTheAppDoes() {
+        let verified = String(repeating: "a", count: 40), photo = String(repeating: "b", count: 40)
+        var link = ContactLink(accountID: "me@x", jid: "bob@x", contactIdentifier: "C-1", source: .picker, displayName: "Robin Okafor",
+                               imageHash: photo, isReachable: false)
+        func listed(_ link: ContactLink?, id: String = "bob@x", group: Bool = false, avatar: String? = verified) -> ShareRules.Chat {
+            ShareRules.chat(id: id, storedTitle: id, isGroup: group, isPinned: false, verifiedAvatarHash: avatar, lastActivity: nil, link: link)
+        }
+        XCTAssertEqual(listed(nil).displayTitle, "bob")
+        XCTAssertEqual(listed(link).displayTitle, "Robin Okafor")
+        XCTAssertEqual(listed(link).avatarHash, verified)
+        XCTAssertEqual(listed(link, avatar: nil).avatarHash, photo)
+        link.usesContactPhoto = true
+        XCTAssertEqual(listed(link).avatarHash, photo)
+        let room = listed(link, id: "room@muc.x", group: true)
+        XCTAssertEqual(room.title, "room@muc.x")
+        XCTAssertEqual(room.avatarHash, verified)
     }
 
     func testChatsThatCannotTakeTheShareSayWhy() {
@@ -298,15 +319,48 @@ final class ShareExtensionTests: XCTestCase {
     }
 
     func testTheSuggestedConversationNamesTheChatAndRoomMembersLikeTheirChats() {
-        let direct = SuggestedConversation.outgoing(accountID: "me@x", chatID: "bob@x", title: "bob@x", avatarHash: "h", roomMembers: nil, titles: [:])
+        let direct = SuggestedConversation.outgoing(accountID: "me@x", chatID: "bob@x", title: "bob@x", avatarHash: "h", roomMembers: nil,
+                                                    titles: [:], links: [:])
         XCTAssertEqual(direct.recipients.map(\.displayName), ["bob"])
         XCTAssertEqual(direct.recipients.first?.avatarHash, "h")
+        XCTAssertEqual(direct.recipients.first?.contactIdentifier, nil)
         XCTAssertFalse(direct.isGroup)
         let room = SuggestedConversation.outgoing(accountID: "me@x", chatID: "room@muc.x", title: "Book club", avatarHash: nil,
-                                                  roomMembers: ["me@x", "carol@x"], titles: ["carol@x": "Carol"])
+                                                  roomMembers: ["me@x", "carol@x"], titles: ["carol@x": "Carol"], links: [:])
         XCTAssertEqual(room.groupName, "Book club")
         XCTAssertEqual(room.recipients.map(\.displayName), ["Carol"])
         XCTAssertEqual(room.conversationIdentifier, NotificationIdentity.thread(accountID: "me@x", chatID: "room@muc.x"))
+    }
+
+    /// An outgoing donation names a linked person as their notifications do: the contact's name, its photo after a
+    /// verified avatar, and the contact itself only for a link the app can read. Room members carry their own links.
+    func testTheSuggestedConversationCarriesContactLinksAsNotificationsDo() {
+        let verified = String(repeating: "a", count: 40), photo = String(repeating: "b", count: 40)
+        func link(_ jid: String, _ contact: String, reachable: Bool = true) -> ContactLink {
+            ContactLink(accountID: "me@x", jid: jid, contactIdentifier: contact, source: .picker, displayName: "Robin Okafor", imageHash: photo,
+                        isReachable: reachable)
+        }
+        func bob(_ links: [String: ContactLink], avatar: String? = verified) -> NotificationCommunication.Person? {
+            SuggestedConversation.outgoing(accountID: "me@x", chatID: "bob@x", title: "bob@x", avatarHash: avatar, roomMembers: nil, titles: [:],
+                                           links: links).recipients.first
+        }
+        XCTAssertEqual(bob(["bob@x": link("bob@x", "C-1")]),
+                       NotificationCommunication.Person(handle: "bob@x", displayName: "Robin Okafor", avatarHash: verified, contactIdentifier: "C-1"))
+        XCTAssertEqual(bob(["bob@x": link("bob@x", "C-1")], avatar: nil)?.avatarHash, photo)
+        // Made without access, or the contact went: the cached name in Haus, no contact for the system.
+        let nameOnly = bob(["bob@x": link("bob@x", "C-1", reachable: false)])
+        XCTAssertEqual(nameOnly?.displayName, "Robin Okafor")
+        XCTAssertNil(nameOnly?.contactIdentifier)
+        // Another chat's link names nobody here.
+        XCTAssertNil(bob(["carol@x": link("carol@x", "C-2")])?.contactIdentifier)
+
+        let room = SuggestedConversation.outgoing(accountID: "me@x", chatID: "room@muc.x", title: "Book club", avatarHash: nil,
+                                                  roomMembers: ["carol@x", "dave@x"], titles: ["dave@x": "Dave"],
+                                                  links: ["carol@x": link("carol@x", "C-2"), "room@muc.x": link("room@muc.x", "C-3")])
+        XCTAssertEqual(room.groupName, "Book club")
+        XCTAssertEqual(room.recipients.map(\.displayName), ["Robin Okafor", "Dave"])
+        XCTAssertEqual(room.recipients.map(\.contactIdentifier), ["C-2", nil])
+        XCTAssertEqual(room.recipients.map(\.avatarHash), [nil, nil])
     }
 
     // MARK: Fixtures

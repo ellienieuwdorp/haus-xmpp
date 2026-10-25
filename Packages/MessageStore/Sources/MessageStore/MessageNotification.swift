@@ -15,11 +15,15 @@ public enum NotificationCandidateKey: Hashable, Sendable {
 public struct NotificationParticipant: Sendable, Equatable, CustomStringConvertible {
     /// The bare JID.
     public let id: String
-    /// The stored title of their direct chat, when there is one.
+    /// Their linked contact's name, else the stored title of their direct chat, when there is one.
     public let title: String?
-    /// Their direct chat's verified avatar hash, when one is cached.
+    /// The avatar their direct chat shows (a verified avatar or a linked contact's photo), when one is cached.
     public let avatarHash: String?
-    public init(id: String, title: String?, avatarHash: String?) { self.id = id; self.title = title; self.avatarHash = avatarHash }
+    /// Their linked contact, only while the app can read it (`ContactLink.usableContactIdentifier`).
+    public let contactIdentifier: String?
+    public init(id: String, title: String?, avatarHash: String?, contactIdentifier: String? = nil) {
+        self.id = id; self.title = title; self.avatarHash = avatarHash; self.contactIdentifier = contactIdentifier
+    }
     public var description: String { "NotificationParticipant(<redacted>)" }
 }
 
@@ -84,14 +88,17 @@ public struct NotificationCandidate: Sendable, Equatable, CustomStringConvertibl
     public let key: NotificationCandidateKey
     public let accountID: String
     public let chatID: String
+    /// The chat's title as shown: a direct chat's linked contact name first (`ContactLink.title`).
     public let chatTitle: String?
-    /// The chat's verified avatar hash, for the extension to find the cached file.
+    /// The chat's avatar hash (verified, or a linked contact's photo), for the extension to find the cached file.
     public let chatAvatarHash: String?
     public let senderID: String
-    /// The stored title of the sender's own direct chat, when there is one; groups prefix the body with it.
+    /// The title of the sender's own direct chat as shown, when there is one; groups prefix the body with it.
     public let senderTitle: String?
-    /// The sender's direct chat's verified avatar hash; for a direct chat it is the chat's own.
+    /// The sender's direct chat's avatar hash; for a direct chat it is the chat's own.
     public let senderAvatarHash: String?
+    /// The sender's linked contact while the app can read it; for a direct chat it is the chat's link.
+    public let senderContactIdentifier: String?
     /// Other known room members, for a group's communication notification; empty for a direct chat.
     public let groupMembers: [NotificationParticipant]
     /// A room message: the chat is the room and the author is a member.
@@ -103,10 +110,11 @@ public struct NotificationCandidate: Sendable, Equatable, CustomStringConvertibl
     public let earlierCount: Int
 
     public init(key: NotificationCandidateKey, accountID: String, chatID: String, chatTitle: String?, chatAvatarHash: String? = nil,
-                senderID: String, senderTitle: String? = nil, senderAvatarHash: String? = nil, isGroup: Bool, sentAt: Date, content: Content,
-                earlierCount: Int = 0, groupMembers: [NotificationParticipant] = []) {
+                senderID: String, senderTitle: String? = nil, senderAvatarHash: String? = nil, senderContactIdentifier: String? = nil,
+                isGroup: Bool, sentAt: Date, content: Content, earlierCount: Int = 0, groupMembers: [NotificationParticipant] = []) {
         self.key = key; self.accountID = accountID; self.chatID = chatID; self.chatTitle = chatTitle; self.chatAvatarHash = chatAvatarHash
         self.senderID = senderID; self.senderTitle = senderTitle; self.senderAvatarHash = senderAvatarHash ?? (isGroup ? nil : chatAvatarHash)
+        self.senderContactIdentifier = senderContactIdentifier
         self.isGroup = isGroup; self.sentAt = sentAt; self.content = content; self.earlierCount = earlierCount; self.groupMembers = groupMembers
     }
     public var description: String { "NotificationCandidate(<redacted>)" }
@@ -116,7 +124,8 @@ public struct NotificationCandidate: Sendable, Equatable, CustomStringConvertibl
 
     func withEarlierCount(_ count: Int) -> NotificationCandidate {
         NotificationCandidate(key: key, accountID: accountID, chatID: chatID, chatTitle: chatTitle, chatAvatarHash: chatAvatarHash,
-                              senderID: senderID, senderTitle: senderTitle, senderAvatarHash: senderAvatarHash, isGroup: isGroup, sentAt: sentAt,
+                              senderID: senderID, senderTitle: senderTitle, senderAvatarHash: senderAvatarHash,
+                              senderContactIdentifier: senderContactIdentifier, isGroup: isGroup, sentAt: sentAt,
                               content: content, earlierCount: count, groupMembers: groupMembers)
     }
 }

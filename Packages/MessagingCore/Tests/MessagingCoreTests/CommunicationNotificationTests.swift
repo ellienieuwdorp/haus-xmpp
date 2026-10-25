@@ -15,7 +15,9 @@ private let me = NotificationCommunication.Person(handle: "me@example.org", disp
     let intent = CommunicationNotification.intent(communication) { hash in asked.append(hash); return Data([0x89, 0x50, 0x4E, 0x47]) }
     let sender = try #require(intent.sender)
     #expect(sender.personHandle?.value == "peer@example.org" && sender.personHandle?.type == .unknown)
-    #expect(sender.displayName == "Peer" && sender.image != nil && sender.customIdentifier == "peer@example.org")
+    #expect(sender.displayName == "Peer" && sender.image != nil)
+    #expect(sender.customIdentifier == CommunicationPerson.identifier(accountID: "me@example.org", jid: "peer@example.org"))
+    #expect(sender.suggestionType == .instantMessageAddress && !sender.isMe)
     #expect(intent.conversationIdentifier == "thread-1")
     #expect(intent.speakableGroupName == nil && intent.recipients == nil && intent.content == nil)
     #expect(asked == ["abc"])
@@ -31,6 +33,9 @@ private let me = NotificationCommunication.Person(handle: "me@example.org", disp
     #expect(intent.speakableGroupName?.spokenPhrase == "Book club")
     #expect(intent.recipients?.map { $0.personHandle?.value } == ["me@example.org", "carol@x"])
     #expect(intent.recipients?.first?.isMe == true && intent.sender?.displayName == "Bob")
+    // The account is the Me card: never a suggestion, never a contact.
+    #expect(intent.recipients?.first?.suggestionType == INPersonSuggestionType.none)
+    #expect(intent.recipients?.last?.suggestionType == .instantMessageAddress)
     // The room's avatar is the image of the group name parameter. These tests run on macOS, where only the
     // string-named form of the accessor exists.
     #expect(intent.__image(forParameterNamed: "speakableGroupName") != nil)

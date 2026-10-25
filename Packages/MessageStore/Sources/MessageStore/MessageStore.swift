@@ -10,7 +10,7 @@ public actor MessageStore {
     private let transportOwnership: TransportOwnership
 
     /// The schema this build writes.
-    public static let currentSchemaVersion = 26
+    public static let currentSchemaVersion = 27
 
     /// How opening treats a file written by an older build.
     public enum SchemaAccess: Sendable {
@@ -434,7 +434,21 @@ public actor MessageStore {
                     """)
                 try connection.execute("CREATE INDEX IF NOT EXISTS link_preview_cache_age ON link_preview_cache(account_id,fetched_at)")
             }
-            try connection.execute("PRAGMA user_version = \(addressesMigrated ? 26 : 22)")
+            // v27: links from a direct chat's address to a contact in this device's Contacts (`ContactLink`). Device-local:
+            // the contact identifier means nothing elsewhere. IF NOT EXISTS keeps it idempotent in any merge order.
+            // Every link (and relink) gets a new `generation`, never reused (AUTOINCREMENT), so a write prepared for one
+            // link can never land on the link that replaced it.
+            try connection.execute("""
+                CREATE TABLE IF NOT EXISTS contact_links (
+                    generation INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id TEXT NOT NULL, jid TEXT NOT NULL, contact_identifier TEXT NOT NULL,
+                    source TEXT NOT NULL CHECK(source IN ('picker','im_address','created')),
+                    display_name TEXT, image_hash TEXT, use_contact_photo INTEGER NOT NULL DEFAULT 0,
+                    reachable INTEGER NOT NULL DEFAULT 0, linked_at REAL NOT NULL, checked_at REAL,
+                    UNIQUE(account_id, jid)
+                )
+                """)
+            try connection.execute("PRAGMA user_version = \(addressesMigrated ? 27 : 22)")
         }
     }
 
@@ -1741,19 +1755,24 @@ public actor MessageStore {
         case .reaction:
             return nil
         }
-        let chat = try connection.query("SELECT title,avatar_hash FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(chatID)]).first
+        let chat = try participant(accountID: accountID, id: chatID)
         let isGroup = chatID != senderID
         let sender = isGroup ? try participant(accountID: accountID, id: senderID) : nil
-        return NotificationCandidate(key: key, accountID: accountID, chatID: chatID, chatTitle: chat?[0].string, chatAvatarHash: chat?[1].optionalString,
-                                     senderID: senderID, senderTitle: sender?.title, senderAvatarHash: sender?.avatarHash, isGroup: isGroup,
+        return NotificationCandidate(key: key, accountID: accountID, chatID: chatID, chatTitle: chat.title, chatAvatarHash: chat.avatarHash,
+                                     senderID: senderID, senderTitle: sender?.title, senderAvatarHash: sender?.avatarHash,
+                                     senderContactIdentifier: isGroup ? sender?.contactIdentifier : chat.contactIdentifier, isGroup: isGroup,
                                      sentAt: when, content: content, earlierCount: earlierCount,
                                      groupMembers: isGroup ? try groupMembers(accountID: accountID, room: chatID, excluding: senderID) : [])
     }
 
-    /// A person as notifications name them: the title and avatar of their direct chat, when there is one.
+    /// A person (or room) as notifications name them: the title and avatar of their chat, when there is one, with a
+    /// linked contact's name and photo ahead of them (`ContactLink`), and the contact while the app can read it.
     private func participant(accountID: String, id: String) throws -> NotificationParticipant {
         let row = try connection.query("SELECT title,avatar_hash FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(id)]).first
-        return NotificationParticipant(id: id, title: row?[0].string, avatarHash: row?[1].optionalString)
+        let link = try contactLink(accountID: accountID, jid: id)
+        return NotificationParticipant(id: id, title: ContactLink.title(row?[0].string, link: link),
+                                       avatarHash: ContactLink.avatarHash(verified: row?[1].optionalString, link: link),
+                                       contactIdentifier: link?.usableContactIdentifier)
     }
 
     /// Other members a room's recent history shows (never the account itself), newest speakers first, at most eight.
@@ -1837,12 +1856,11 @@ public actor MessageStore {
                   let reactions = try? JSONDecoder().decode([String].self, from: Data(row[4].string.utf8)), !reactions.isEmpty else { continue }
             let target = stored.applying(try events(accountID: accountID, chatID: chatID, messageID: stored.id))
             guard !target.isRetracted else { continue }
-            let chat = try connection.query("SELECT title,avatar_hash FROM chats WHERE account_id=? AND id=?", [.text(accountID), .text(chatID)]).first
+            let chat = try participant(accountID: accountID, id: chatID)
             let isGroup = chatID != actorID
             result.append(ReactionNotificationCandidate(key: .reaction(sequence: row[0].integer), accountID: accountID, chatID: chatID,
-                chatTitle: chat?[0].string, chatAvatarHash: chat?[1].optionalString,
-                actor: isGroup ? try participant(accountID: accountID, id: actorID)
-                               : NotificationParticipant(id: actorID, title: chat?[0].string, avatarHash: chat?[1].optionalString),
+                chatTitle: chat.title, chatAvatarHash: chat.avatarHash,
+                actor: isGroup ? try participant(accountID: accountID, id: actorID) : chat,
                 isGroup: isGroup, target: target, reactions: reactions, reactedAt: Date(timeIntervalSince1970: row[5].double),
                 groupMembers: isGroup ? try groupMembers(accountID: accountID, room: chatID, excluding: actorID) : []))
         }
@@ -2993,6 +3011,13 @@ public struct StoreSnapshotSummary: Codable, Sendable, Equatable {
         }
         rowCounts = counts
     }
+
+    /// The summary of a store copy nobody has open, read again once it was changed (`removeContactLinks(fromSnapshotAt:)`).
+    public init(snapshotAt url: URL) throws {
+        let copy = try Connection(url: url, create: false)
+        defer { try? copy.close() }
+        try self.init(copy)
+    }
 }
 
 // MARK: Link preview cache
@@ -3046,6 +3071,117 @@ extension MessageStore: LinkPreviewCaching {
             let paths = try connection.query("SELECT image_path FROM link_preview_cache WHERE account_id=? AND image_path IS NOT NULL", [.text(accountID)]).map { $0[0].string }
             try connection.execute("DELETE FROM link_preview_cache WHERE account_id=?", [.text(accountID)])
             return paths
+        }
+    }
+}
+
+// MARK: Contact links
+
+extension MessageStore {
+    private static let contactLinkColumns =
+        "account_id,jid,contact_identifier,source,display_name,image_hash,use_contact_photo,reachable,linked_at,checked_at"
+
+    private static func decodeContactLink(_ row: [Value]) -> ContactLink? {
+        guard let source = ContactLink.Source(rawValue: row[3].string) else { return nil }
+        var link = ContactLink(accountID: row[0].string, jid: row[1].string, contactIdentifier: row[2].string, source: source,
+                               displayName: row[4].optionalString, imageHash: row[5].optionalString, usesContactPhoto: row[6].integer != 0,
+                               isReachable: row[7].integer != 0, linkedAt: Date(timeIntervalSince1970: row[8].double),
+                               checkedAt: row[9].optionalDate)
+        link.generation = row[10].integer
+        return link
+    }
+
+    private static func contactLinkValues(_ link: ContactLink) -> [Value] {
+        [.text(link.accountID), .text(link.jid), .text(link.contactIdentifier), .text(link.source.rawValue),
+         link.displayName.map(Value.text) ?? .null, link.imageHash.map(Value.text) ?? .null, .integer(link.usesContactPhoto ? 1 : 0),
+         .integer(link.isReachable ? 1 : 0), .real(link.linkedAt.timeIntervalSince1970), link.checkedAt.map { .real($0.timeIntervalSince1970) } ?? .null]
+    }
+
+    public func contactLinks(accountID: String) throws -> [ContactLink] {
+        try connection.query("SELECT \(Self.contactLinkColumns),generation FROM contact_links WHERE account_id=? ORDER BY jid", [.text(accountID)])
+            .compactMap(Self.decodeContactLink)
+    }
+
+    public func contactLink(accountID: String, jid: String) throws -> ContactLink? {
+        try connection.query("SELECT \(Self.contactLinkColumns),generation FROM contact_links WHERE account_id=? AND jid=?",
+                             [.text(accountID), .text(jid)]).first.flatMap(Self.decodeContactLink)
+    }
+
+    /// Links (or relinks) the address under a new generation, replacing any earlier link of it. Returns the link as
+    /// stored and the one it replaced, whose photo file the caller may remove once nothing refers to it
+    /// (`isAvatarHashInUse`).
+    @discardableResult public func saveContactLink(_ link: ContactLink) throws -> ContactLinkChange {
+        try link.validate()
+        return try connection.transaction {
+            let previous = try contactLink(accountID: link.accountID, jid: link.jid)
+            try connection.execute("INSERT OR REPLACE INTO contact_links(\(Self.contactLinkColumns)) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                                   Self.contactLinkValues(link))
+            guard let saved = try contactLink(accountID: link.accountID, jid: link.jid) else { throw MessageStoreError.invalidTransition }
+            return ContactLinkChange(saved: saved, replaced: previous)
+        }
+    }
+
+    /// A refresh's reading of the contact: its name, photo and reachability and the check's time, written only to the
+    /// link of `link.generation`. A refresh that read the contact before the user unlinked or relinked never touches
+    /// the new link, and the user's own choices (the photo switch) are never written back. Returns the change, or nil
+    /// when that link is gone.
+    @discardableResult public func refreshContactLink(_ link: ContactLink) throws -> ContactLinkChange? {
+        try link.validate()
+        return try connection.transaction {
+            guard let previous = try contactLink(accountID: link.accountID, jid: link.jid), previous.generation == link.generation else { return nil }
+            try connection.execute("""
+                UPDATE contact_links SET display_name=?,image_hash=?,reachable=?,checked_at=? WHERE generation=?
+                """, [link.displayName.map(Value.text) ?? .null, link.imageHash.map(Value.text) ?? .null, .integer(link.isReachable ? 1 : 0),
+                      link.checkedAt.map { .real($0.timeIntervalSince1970) } ?? .null, .integer(link.generation)])
+            guard let saved = try contactLink(accountID: link.accountID, jid: link.jid) else { throw MessageStoreError.invalidTransition }
+            return ContactLinkChange(saved: saved, replaced: previous)
+        }
+    }
+
+    /// The user's "Use Contact Photo" choice for the link of `generation`; nothing else of it changes. Returns the link
+    /// as stored, or nil when that link is gone.
+    public func setContactLinkUsesContactPhoto(_ uses: Bool, accountID: String, jid: String, generation: Int) throws -> ContactLink? {
+        try connection.transaction {
+            try connection.execute("UPDATE contact_links SET use_contact_photo=? WHERE account_id=? AND jid=? AND generation=?",
+                                   [.integer(uses ? 1 : 0), .text(accountID), .text(jid), .integer(generation)])
+            return try contactLink(accountID: accountID, jid: jid).flatMap { $0.generation == generation ? $0 : nil }
+        }
+    }
+
+    /// Unlinks the address; returns the removed link so the caller can drop its photo and donations.
+    @discardableResult public func removeContactLink(accountID: String, jid: String) throws -> ContactLink? {
+        try connection.transaction {
+            let previous = try contactLink(accountID: accountID, jid: jid)
+            try connection.execute("DELETE FROM contact_links WHERE account_id=? AND jid=?", [.text(accountID), .text(jid)])
+            return previous
+        }
+    }
+
+    /// Whether a chat's verified avatar or a link's photo still names this file.
+    public func isAvatarHashInUse(accountID: String, hash: String) throws -> Bool {
+        try !connection.query("""
+            SELECT 1 FROM chats WHERE account_id=?1 AND avatar_hash=?2 UNION ALL SELECT 1 FROM contact_links WHERE account_id=?1 AND image_hash=?2 LIMIT 1
+            """, [.text(accountID), .text(hash)]).isEmpty
+    }
+
+    /// Removes every account's contact links from a store copy nobody has open: an account transfer's, before it is
+    /// packed and again before a restore commits. The identifiers name contacts of the device that made them, and
+    /// names and photos from Contacts are not transferred. Deleted rows are overwritten, not left in free pages.
+    /// Returns the photos no chat's verified avatar still names, whose files the caller leaves out; only well-formed
+    /// hashes, as the copy may come from an archive. A copy from before schema 27 has none.
+    public static func removeContactLinks(fromSnapshotAt url: URL) throws -> [ContactLinkPhoto] {
+        let copy = try Connection(url: url, create: false)
+        defer { try? copy.close() }
+        guard !(try copy.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='contact_links'").isEmpty) else { return [] }
+        try copy.execute("PRAGMA secure_delete = ON")
+        return try copy.transaction {
+            let photos = try copy.query("""
+                SELECT DISTINCT account_id,image_hash FROM contact_links l WHERE image_hash IS NOT NULL
+                AND NOT EXISTS (SELECT 1 FROM chats c WHERE c.account_id=l.account_id AND c.avatar_hash=l.image_hash)
+                ORDER BY account_id,image_hash
+                """).map { ContactLinkPhoto(accountID: $0[0].string, hash: $0[1].string) }.filter { ContactLink.isHash($0.hash) }
+            try copy.execute("DELETE FROM contact_links")
+            return photos
         }
     }
 }

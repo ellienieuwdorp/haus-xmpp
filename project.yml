@@ -61,6 +61,8 @@ targets:
         NSCameraUsageDescription: Take a photo or video to send.
         NSMicrophoneUsageDescription: Record sound with videos you take to send.
         NSPhotoLibraryUsageDescription: Pick recent photos and videos to send.
+        # Asked only when the user links a chat to a contact or adds one; nothing read from Contacts leaves the device.
+        NSContactsUsageDescription: Show the names and photos of contacts you link to chats. Nothing from Contacts leaves this iPhone.
         # The attachment panel shows its own limited-access row with a Select More button instead of the system prompt.
         PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
         # Communication notifications: the app declares the intent it donates through the extension.
@@ -83,6 +85,8 @@ targets:
       - package: MessagingCore
       - package: OMEMO
       - sdk: Intents.framework
+      - sdk: Contacts.framework
+      - sdk: ContactsUI.framework
       - target: XMPPNotificationService
       - target: HausShare
     settings:
@@ -139,6 +143,8 @@ targets:
           - MessageActionsOverlay.swift
           - AttachmentKeyboard.swift
           - NotificationHarness.swift
+          # The iPhone's system contact picker and contact card; the Mac adds contacts through Mac/MacContacts.swift.
+          - ContactSystemViews.swift
           - Info.plist
           - App.entitlements
           # The Mac has its own (Mac/PrivacyInfo.xcprivacy): no keyboard APIs.
@@ -182,11 +188,14 @@ targets:
         NSUserActivityTypes: [INSendMessageIntent]
         # One process per user: a second copy would contend for the store's transport lease.
         LSMultipleInstancesProhibited: true
+        # As on iOS: asked only when the user links a chat to a contact or adds one.
+        NSContactsUsageDescription: Show the names and photos of contacts you link to chats. Nothing from Contacts leaves this Mac.
     dependencies:
       - package: XMPPProtocol
       - package: MessageStore
       - package: MessagingCore
       - package: OMEMO
+      - sdk: Contacts.framework
       - target: XMPPNotificationServiceMac
       - target: HausShareMac
     settings:

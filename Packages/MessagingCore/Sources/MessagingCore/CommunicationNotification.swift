@@ -77,7 +77,8 @@ public enum CommunicationNotification {
 /// Deletes donated interactions (Apple, "INInteraction.deleteAll(completion:)", accessed 2026-09-28). Each donation
 /// holds a contact's address, name and avatar and the conversation identifier; they feed system suggestions. Signing
 /// out, turning previews off and turning share suggestions off delete them all: the app has one account, and previews
-/// off means no name or avatar should stay with the system. Blocking a contact deletes that conversation's.
+/// off means no name or avatar should stay with the system. Blocking, unlinking or relinking a contact deletes that
+/// conversation's.
 public enum CommunicationHistory {
     /// The deletion the app runs, injectable for tests.
     public typealias DeleteAll = @Sendable () async throws -> Void
@@ -95,6 +96,43 @@ public enum CommunicationHistory {
         catch {
             log.notice("communication history deletion failed: \(CommunicationNotification.describe(error), privacy: .public)")
             return false
+        }
+    }
+
+    /// Deletes one conversation's donations, in both directions (`groupIdentifier` is its conversation identifier,
+    /// `NotificationIdentity.thread`).
+    public typealias DeleteConversation = @Sendable (_ conversationIdentifier: String) async throws -> Void
+
+    /// Best effort, like `deleteAll`: blocking a contact, leaving a room or unlinking a contact must not wait on the
+    /// system.
+    public static func deleteConversations(_ conversationIdentifiers: [String],
+                                           delete: @escaping DeleteConversation = { try await INInteraction.delete(with: $0) }) async {
+        for identifier in conversationIdentifiers {
+            do { try await delete(identifier) }
+            catch { log.notice("conversation donation deletion failed: \(CommunicationNotification.describe(error), privacy: .public)") }
+        }
+    }
+
+    /// The person as the store links them now, for a donation about to be made: the contact of a link the app can read
+    /// (`ContactLink.usableContactIdentifier`), or none once it is unlinked, relinked or unreadable. A person named by
+    /// no contact stays so.
+    public static func linkedNow(_ person: NotificationCommunication.Person, accountID: String,
+                                 store: MessageStore) async -> NotificationCommunication.Person {
+        guard person.contactIdentifier != nil else { return person }
+        let stored = (try? await store.contactLink(accountID: accountID, jid: person.handle))?.usableContactIdentifier
+        return NotificationCommunication.Person(handle: person.handle, displayName: person.displayName, avatarHash: person.avatarHash,
+                                                contactIdentifier: stored)
+    }
+
+    /// Runs after every donation that named `people`, incoming or outgoing: when one of their links changed while it
+    /// was in flight, deletes the conversation's donations. Unlinking and relinking delete them after their commit and
+    /// this reads after the donation, so whichever runs last deletes the old association, in this process or another.
+    /// (A donation that outlived its own limit can still land after both.)
+    public static func withdrawIfRelinked(_ people: [NotificationCommunication.Person], conversation: String, accountID: String,
+                                          store: MessageStore,
+                                          withdraw: @Sendable (String) async -> Void = { await deleteConversations([$0]) }) async {
+        for person in people where person.contactIdentifier != nil {
+            guard await linkedNow(person, accountID: accountID, store: store) == person else { return await withdraw(conversation) }
         }
     }
 }

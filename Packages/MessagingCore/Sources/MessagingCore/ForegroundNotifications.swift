@@ -83,7 +83,9 @@ extension NotificationPresenter {
         var posted = 0
         for request in plan.requests {
             // The message is in the app already: a banner that fails to post is not worth keeping the candidate for.
-            if (try? await withTimeout(addTimeout, { try await posting.add(request) })) != nil { posted += 1 }
+            if (try? await add(request, store: store, accountID: accountID, { request in
+                try await withTimeout(addTimeout) { try await posting.add(request) }
+            })) != nil { posted += 1 }
         }
         try await store.removeNotificationCandidates(accountID: accountID, keys: plan.claimed)
         if batch.deferredCount > 0 { try await store.dismissPendingMessageNotifications(accountID: accountID) }

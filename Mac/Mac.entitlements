@@ -4,6 +4,7 @@
 <key>com.apple.security.app-sandbox</key><true/>
 <key>com.apple.security.network.client</key><true/>
 <key>com.apple.security.files.user-selected.read-write</key><true/>
+<key>com.apple.security.personal-information.addressbook</key><true/>
 <key>com.apple.security.application-groups</key><array><string>$(HAUS_APP_GROUP)</string></array>
 <key>keychain-access-groups</key><array><string>$(HAUS_KEYCHAIN_GROUP)</string></array>
 <key>com.apple.developer.aps-environment</key><string>development</string>

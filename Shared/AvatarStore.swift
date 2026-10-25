@@ -19,6 +19,13 @@ enum AvatarStore {
         directory(root: root, account: account).appending(path: hash)
     }
 
+    /// Every file kept for one stored image: the original and its pre-scaled copies. Whatever removes or leaves out an
+    /// image names all of them.
+    static func files(root: URL, account: String, hash: String) -> [URL] {
+        [url(root: root, account: account, hash: hash), notificationImageURL(root: root, account: account, hash: hash),
+         suggestionImageURL(root: root, account: account, hash: hash)]
+    }
+
     static func save(_ data: Data, root: URL, account: String, hash: String) throws {
         let folder = directory(root: root, account: account)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,

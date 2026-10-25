@@ -1,6 +1,7 @@
 #if canImport(Intents)
 import Foundation
 import Intents
+import MessageStore
 import os
 
 /// One conversation the user just sent to, as the system's suggestions learn it (Apple, "Supporting suggestions in your
@@ -13,7 +14,8 @@ public struct OutgoingConversation: Sendable, Equatable, CustomStringConvertible
     /// `NotificationIdentity.thread`: the same identifier the chat's communication notifications carry, so the share
     /// sheet, the notifications and a preselected chat name one conversation, and its donations delete together.
     public let conversationIdentifier: String
-    /// The peer of a direct chat, or the room members this device knows of. Never the account itself.
+    /// The peer of a direct chat, or the room members this device knows of. Never the account itself. A recipient's
+    /// `contactIdentifier` follows the notifications' rule: a link the app can read (`ContactLink.usableContactIdentifier`).
     public let recipients: [NotificationCommunication.Person]
     /// The room's title; nil for a direct chat.
     public let groupName: String?
@@ -27,8 +29,10 @@ public struct OutgoingConversation: Sendable, Equatable, CustomStringConvertible
     }
 
     /// A direct chat: the chat is the person.
-    public static func direct(accountID: String, chatID: String, displayName: String, avatarHash: String?) -> OutgoingConversation {
-        OutgoingConversation(accountID: accountID, chatID: chatID, recipients: [.init(handle: chatID, displayName: displayName, avatarHash: avatarHash)])
+    public static func direct(accountID: String, chatID: String, displayName: String, avatarHash: String?,
+                              contactIdentifier: String? = nil) -> OutgoingConversation {
+        OutgoingConversation(accountID: accountID, chatID: chatID, recipients: [.init(handle: chatID, displayName: displayName, avatarHash: avatarHash,
+                                                                                      contactIdentifier: contactIdentifier)])
     }
 
     /// A room: its title and up to eight known members other than the account, as the room's notifications list them.
@@ -41,6 +45,14 @@ public struct OutgoingConversation: Sendable, Equatable, CustomStringConvertible
 
     public var isGroup: Bool { groupName != nil }
     public var description: String { "OutgoingConversation(<redacted>)" }
+
+    /// The same conversation with each recipient named by a contact as the store links them now, not as the caller
+    /// read them (`CommunicationHistory.linkedNow`).
+    func linkingContactsAsStored(store: MessageStore) async -> OutgoingConversation {
+        var linked: [NotificationCommunication.Person] = []
+        for person in recipients { linked.append(await CommunicationHistory.linkedNow(person, accountID: accountID, store: store)) }
+        return OutgoingConversation(accountID: accountID, chatID: chatID, recipients: linked, groupName: groupName, groupAvatarHash: groupAvatarHash)
+    }
 }
 
 /// Outgoing `INSendMessageIntent` donations: one per user send action (a composer send, a notification Reply, a share),
@@ -81,33 +93,27 @@ public enum OutgoingDonation {
     /// Donates one interaction per conversation, best effort. `allowed` is asked right before each donation and again
     /// once the system has finished with it: a donation still in flight while a deletion ran (sign-out, previews or
     /// suggestions off, a block) would otherwise bring back what that deletion removed, so a conversation no longer
-    /// allowed by then has its donations deleted again (`delete`). Each system call is awaited to its end, however long
-    /// it takes, so callers run this detached. A failure is logged (domain and code only) and never throws.
-    public static func donate(_ conversations: [OutgoingConversation], avatar: (String) -> Data?,
+    /// allowed by then has its donations deleted again (`delete`). Contacts are handled as for notifications: each
+    /// recipient is named by the contact `store` links now, and a link that changed while the donation was in flight
+    /// deletes the conversation's donations afterwards (`CommunicationHistory.withdrawIfRelinked`), so an unlinked
+    /// contact is never left donated. Each system call is awaited to its end, however long it takes, so callers run
+    /// this detached. A failure is logged (domain and code only) and never throws.
+    public static func donate(_ conversations: [OutgoingConversation], store: MessageStore, avatar: (String) -> Data?,
                               allowed: @escaping @Sendable (OutgoingConversation) async -> Bool,
                               donate: @escaping CommunicationNotification.Donate = CommunicationNotification.systemDonate,
                               delete: @escaping CommunicationHistory.DeleteConversation = { try await INInteraction.delete(with: $0) }) async {
-        for conversation in conversations {
-            guard await allowed(conversation) else { continue }
+        let withdraw: @Sendable (String) async -> Void = { await CommunicationHistory.deleteConversations([$0], delete: delete) }
+        for planned in conversations {
+            guard await allowed(planned) else { continue }
+            let conversation = await planned.linkingContactsAsStored(store: store)
             do { try await donate(interaction(for: intent(conversation, avatar: avatar))) }
             catch { log.notice("outgoing donation failed: \(CommunicationNotification.describe(error), privacy: .public)") }
-            if !(await allowed(conversation)) {
-                await CommunicationHistory.deleteConversations([conversation.conversationIdentifier], delete: delete)
+            guard await allowed(conversation) else {
+                await withdraw(conversation.conversationIdentifier)
+                continue
             }
-        }
-    }
-}
-
-extension CommunicationHistory {
-    /// Deletes one conversation's donations, in both directions (`groupIdentifier` is its conversation identifier).
-    public typealias DeleteConversation = @Sendable (_ conversationIdentifier: String) async throws -> Void
-
-    /// Best effort, like `deleteAll`: blocking a contact or leaving a room must not wait on the system.
-    public static func deleteConversations(_ conversationIdentifiers: [String],
-                                           delete: @escaping DeleteConversation = { try await INInteraction.delete(with: $0) }) async {
-        for identifier in conversationIdentifiers {
-            do { try await delete(identifier) }
-            catch { log.notice("conversation donation deletion failed: \(CommunicationNotification.describe(error), privacy: .public)") }
+            await CommunicationHistory.withdrawIfRelinked(conversation.recipients, conversation: conversation.conversationIdentifier,
+                                                          accountID: conversation.accountID, store: store, withdraw: withdraw)
         }
     }
 }

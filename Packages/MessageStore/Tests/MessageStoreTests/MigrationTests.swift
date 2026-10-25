@@ -5,7 +5,7 @@ import Testing
 @testable import MessageStore
 
 /// The schema this build writes. A schema bump changes this one literal.
-private let currentSchemaVersion: Int32 = 26
+private let currentSchemaVersion: Int32 = 27
 
 struct MigrationTests {
     @Test func openingStampsTheCurrentSchemaAndRefusesANewerOne() async throws {
@@ -91,7 +91,7 @@ struct MigrationTests {
             try await store.saveLinkPreviewCacheEntry(LinkPreviewCacheEntry(accountID: "self", url: "https://example.org/", fetchedAt: Date(), status: .failed))
             try await store.close()
         }
-        #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["26"]])
+        #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["\(currentSchemaVersion)"]])
     }
 
     /// A v21 store written by a build that kept typed capitals: the account `Ellie@Example.org`, and chats with

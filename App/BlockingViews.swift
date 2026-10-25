@@ -134,12 +134,12 @@ struct BlockedContactsView: View {
             }
             Section {
                 ForEach(entries, id: \.self) { address in
-                    let title = model.chats.first { $0.id == address }?.title
+                    let name = model.chatName(for: address)
                     HStack(spacing: 12) {
-                        ChatAvatar(key: address, name: AppModel.displayName(for: address, title: title), image: model.avatars[address], size: 36)
+                        ChatAvatar(key: address, name: name, image: model.avatar(for: address), size: 36)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(AppModel.displayName(for: address, title: title)).lineLimit(1)
+                            Text(name).lineLimit(1)
                             Text(address).font(.footnote).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                         }
                         .accessibilityElement(children: .combine)
@@ -148,7 +148,7 @@ struct BlockedContactsView: View {
                             .buttonStyle(.borderless)
                             .frame(minHeight: 44)
                             .disabled(!model.blockingAvailability.isAvailable)
-                            .accessibilityLabel("Unblock \(AppModel.displayName(for: address, title: title))")
+                            .accessibilityLabel("Unblock \(name)")
                     }
                 }
             }

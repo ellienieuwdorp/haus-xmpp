@@ -61,6 +61,8 @@ import AppKit
     private var uploadService: XMPPUploadService?
     private var filesAccepted: Bool?
     private var roomMembers: [String: [String]] = [:]
+    /// The account's contact links by chat address, read once with the chats.
+    private var contactLinks: [String: ContactLink] = [:]
     private var preparedFiles: [UUID: PreparedAttachment] = [:]
     private var preparation: Task<Void, Never>?
     private var sendTask: Task<Void, Never>?
@@ -142,9 +144,11 @@ import AppKit
             filesAccepted = uploads.hasAnswer(account: accountID) ? uploadService != nil : nil
             roomMembers = (try? await encryption.knownGroupRooms(account: accountID)) ?? [:]
             let stored = try await store.chats(accountID: accountID).filter { $0.id != accountID }
+            let links = (try? await store.contactLinks(accountID: accountID)) ?? []
+            contactLinks = Dictionary(links.map { ($0.jid, $0) }, uniquingKeysWith: { first, _ in first })
             chats = stored.map { chat in
-                ShareRules.Chat(id: chat.id, title: chat.title, isGroup: roomMembers[chat.id] != nil, isPinned: chat.isPinned,
-                                avatarHash: chat.avatarHash, lastActivity: chat.lastMessage?.sentAt, encryption: .pending)
+                ShareRules.chat(id: chat.id, storedTitle: chat.title, isGroup: roomMembers[chat.id] != nil, isPinned: chat.isPinned,
+                                verifiedAvatarHash: chat.avatarHash, lastActivity: chat.lastMessage?.sentAt, link: contactLinks[chat.id])
             }
         } catch {
             Self.log.error("share could not open storage: \(String(describing: type(of: error)), privacy: .public)")
@@ -368,13 +372,16 @@ import AppKit
     private func donate(to recipients: [ShareRules.Chat]) {
         guard let root, let store else { return }
         let account = accountID, groupRoot = root.deletingLastPathComponent()
-        let titles = Dictionary(chats.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+        // The picker's titles and avatars already put linked contacts first; the links add who they are, and the
+        // donation reads each link again (`OutgoingDonation`).
+        let titles = Dictionary(chats.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first }), links = contactLinks
         let conversations = recipients.map { chat in
             SuggestedConversation.outgoing(accountID: account, chatID: chat.id, title: chat.title, avatarHash: chat.avatarHash,
-                                           roomMembers: chat.isGroup ? roomMembers[chat.id] ?? [] : nil, titles: titles)
+                                           roomMembers: chat.isGroup ? roomMembers[chat.id] ?? [] : nil, titles: titles, links: links)
         }
         donation = Task.detached {
-            await OutgoingDonation.donate(conversations, avatar: { AvatarStore.suggestionImageData(root: root, account: account, hash: $0) },
+            await OutgoingDonation.donate(conversations, store: store,
+                                          avatar: { AvatarStore.suggestionImageData(root: root, account: account, hash: $0) },
                                           allowed: { await Self.mayDonate($0, store: store, groupRoot: groupRoot) })
         }
     }
