@@ -14,9 +14,7 @@ public enum CommunicationNotification {
     /// avatar hash (the app writes them into the App Group); nothing here decodes an image.
     public static func intent(_ communication: NotificationCommunication, avatar: (String) -> Data?) -> INSendMessageIntent {
         func person(_ value: NotificationCommunication.Person, isMe: Bool = false) -> INPerson {
-            INPerson(personHandle: INPersonHandle(value: value.handle, type: .unknown), nameComponents: nil, displayName: value.displayName,
-                     image: value.avatarHash.flatMap(avatar).map { INImage(imageData: $0) }, contactIdentifier: nil,
-                     customIdentifier: value.handle, isMe: isMe)
+            CommunicationPerson.person(value, avatar: avatar, isMe: isMe)
         }
         // A group names everyone who received it, the account included; a direct chat needs no recipients.
         let recipients = communication.isGroup ? [person(communication.account, isMe: true)] + communication.otherRecipients.map { person($0) } : nil
@@ -78,8 +76,8 @@ public enum CommunicationNotification {
 
 /// Deletes donated interactions (Apple, "INInteraction.deleteAll(completion:)", accessed 2026-09-28). Each donation
 /// holds a contact's address, name and avatar and the conversation identifier; they feed system suggestions. Signing
-/// out and turning previews off both delete them all: the app has one account, and previews off means no name or
-/// avatar should stay with the system.
+/// out, turning previews off and turning share suggestions off delete them all: the app has one account, and previews
+/// off means no name or avatar should stay with the system. Blocking a contact deletes that conversation's.
 public enum CommunicationHistory {
     /// The deletion the app runs, injectable for tests.
     public typealias DeleteAll = @Sendable () async throws -> Void
@@ -89,10 +87,15 @@ public enum CommunicationHistory {
         old.notificationPreviews && !new.notificationPreviews
     }
 
-    /// Best effort: a failure is logged (domain and code only) and never blocks sign-out or the setting.
-    public static func deleteAll(_ delete: DeleteAll = { try await INInteraction.deleteAll() }) async {
-        do { try await delete() }
-        catch { log.notice("communication history deletion failed: \(CommunicationNotification.describe(error), privacy: .public)") }
+    /// Best effort: a failure is logged (domain and code only) and never blocks sign-out or the setting. False when the
+    /// system reported a failure, so turning share suggestions off can stay on until the deletion went through.
+    @discardableResult
+    public static func deleteAll(_ delete: DeleteAll = { try await INInteraction.deleteAll() }) async -> Bool {
+        do { try await delete(); return true }
+        catch {
+            log.notice("communication history deletion failed: \(CommunicationNotification.describe(error), privacy: .public)")
+            return false
+        }
     }
 }
 

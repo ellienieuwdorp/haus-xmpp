@@ -134,6 +134,13 @@ struct SettingsView: View {
                     Label { Text("Last seen") } icon: { SettingsIconTile(systemName: "clock.fill", color: .orange) }
                 }
                 .accessibilityIdentifier("lastSeen")
+                // Off with message previews too: previews off keeps every name and avatar away from the system.
+                Toggle(isOn: Binding(get: { model.shareSuggestionsEnabled && model.notificationPreviewsEnabled },
+                                     set: { on in Task { await model.setShareSuggestions(on) } })) {
+                    Label { Text("Suggest chats in Share Sheet") } icon: { SettingsIconTile(systemName: "square.and.arrow.up.fill", color: .indigo) }
+                }
+                .disabled(!model.notificationPreviewsEnabled)
+                .accessibilityIdentifier("shareSuggestions")
                 if !model.accountID.isEmpty {
                     NavigationLink {
                         BlockedContactsView(model: model)

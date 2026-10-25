@@ -872,6 +872,7 @@ final class AppModel {
         uploads.forget(account: account)
         serverProfiles.forget(account: account)
         BlockedAddresses.forget(accountID: account, defaults: sessionDefaults)
+        ShareSuggestionSetting.forget(accountID: account, defaults: sessionDefaults)
         // The next account starts without the backoff or the alert this one earned.
         reconnection = ReconnectPolicy()
         selectAccount("")
@@ -1964,6 +1965,7 @@ final class AppModel {
         refreshFence = [:]; encryptionAttention = EncryptionAttention(); ownDevices = []
         uploadService = uploads.load(account: account)
         uploads.publish(account: account)
+        shareSuggestionsEnabled = ShareSuggestionSetting.isEnabled(accountID: account, defaults: sessionDefaults)
         resetTyping()
         lastSeenTracker = LastSeenTracker()
         // The previous account's preview fetches stop now, not at the next display.
@@ -2011,6 +2013,7 @@ final class AppModel {
                                            store: store, files: files, encryption: encryption)
             await refresh()
             startUploads()
+            donateSend(to: chatID)
             return true
         } catch {
             if accountID == account { self.error = (error as? LocalizedError)?.errorDescription ?? "Could not save the file." }
@@ -2860,6 +2863,7 @@ final class AppModel {
             } else { try await store.enqueueOutgoing(message) }
             await refresh()
             startOutbox()
+            if !sample { donateSend(to: chatID) }
             return true // Accepted durably, not delivered.
         } catch {
             if accountID == account { self.error = "Could not save the message. Your text is still in the composer." }
@@ -3653,8 +3657,60 @@ final class AppModel {
     }
 
     var notificationPreviewsEnabled = true
+    /// "Suggest chats in Share Sheet" (`ShareSuggestionSetting`); with previews off nothing is donated whatever it says.
+    private(set) var shareSuggestionsEnabled = true
 
     func setNotificationPreviews(_ enabled: Bool) async { await updatePreferences { $0.notificationPreviews = enabled } }
+
+    /// "Suggest chats in Share Sheet". Off deletes every donation, under the lease like previews off, so no notification
+    /// run donates meanwhile; when the system cannot delete them the switch stays on and says so.
+    func setShareSuggestions(_ enabled: Bool) async {
+        guard !accountID.isEmpty, enabled != shareSuggestionsEnabled else { return }
+        let account = accountID
+        guard !enabled else {
+            ShareSuggestionSetting.set(true, accountID: account, defaults: sessionDefaults)
+            shareSuggestionsEnabled = true
+            return
+        }
+        guard transportWanted, !quiescing, let store else { return }
+        let token = generation
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
+        do { if !hasTransportOwnership { try await acquireForegroundOwnership(store, token: token) } }
+        catch { self.error = "Could not save preferences."; return }
+        guard generation == token, accountID == account else { return }
+        // Off first, so an extension that reads it from here on donates nothing that the deletion would miss.
+        ShareSuggestionSetting.set(false, accountID: account, defaults: sessionDefaults)
+        if !isDemo, testSessionID == nil, !(await CommunicationHistory.deleteAll()) {
+            ShareSuggestionSetting.set(true, accountID: account, defaults: sessionDefaults)
+            self.error = "Suggestions could not be removed from the share sheet. Try again."
+            return
+        }
+        guard accountID == account else { return }
+        shareSuggestionsEnabled = false
+    }
+
+    /// After a user's send was durably queued (composer, notification Reply): one outgoing donation for its chat, so the
+    /// share sheet and Siri learn where the user writes. Nothing with previews or suggestions off, for the samples or
+    /// in a test session.
+    private func donateSend(to chatID: String) {
+        guard !isDemo, testSessionID == nil, let storageRoot, notificationPreviewsEnabled, shareSuggestionsEnabled else { return }
+        let account = accountID
+        let chat = chats.first { $0.id == chatID }
+        let titles = Dictionary(chats.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+        let conversation = SuggestedConversation.outgoing(accountID: account, chatID: chatID, title: chat?.title, avatarHash: chat?.avatarHash,
+                                                          roomMembers: groupChats[chatID]?.members, titles: titles)
+        Task.detached {
+            await OutgoingDonation.donate([conversation]) { AvatarStore.suggestionImageData(root: storageRoot, account: account, hash: $0) }
+        }
+    }
+
+    /// Blocked chats leave the share sheet's suggestions (both directions of their donations).
+    private func forgetSuggestions(for chatIDs: [String], account: String) {
+        guard !chatIDs.isEmpty, !isDemo, testSessionID == nil else { return }
+        let identifiers = chatIDs.map { NotificationIdentity.thread(accountID: account, chatID: $0) }
+        Task.detached { await CommunicationHistory.deleteConversations(identifiers) }
+    }
 
     /// Every per-account switch is one row written under the transport lease; the store enforces the receipt switches.
     func updatePreferences(_ change: (inout AccountPreferences) -> Void) async {
@@ -3859,10 +3915,11 @@ final class AppModel {
         BlockedAddresses.save(updated, accountID: account, defaults: sessionDefaults)
         updateAppBadge(chats)
         dropTyping(in: newlyBlocked)
-        // What a newly blocked chat already had on screen goes too.
+        // What a newly blocked chat already had on screen goes too, and so do its share-sheet suggestions.
         for chatID in newlyBlocked {
             Task { await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID) }
         }
+        forgetSuggestions(for: newlyBlocked, account: account)
     }
 
     /// Blocks a direct chat's address, optionally reporting it (XEP-0377) with the reported message's archive ID. The
@@ -4412,6 +4469,7 @@ extension AppModel: NotificationActionEnvironment {
     func enqueueNotificationReply(_ text: String, to message: StoredMessage) async throws -> String {
         let reply = NotificationActionHandler.replyMessage(text, id: UUID().uuidString, to: message)
         try await enqueueReply(reply)
+        donateSend(to: reply.chatID)
         return reply.id
     }
 
@@ -4617,7 +4675,8 @@ extension AppModel: NotificationActionEnvironment {
             guard let root else { return nil }
             return AvatarStore.notificationImageData(root: root, account: account, hash: hash)
         }
-        let poster = UserNotificationPoster(avatarData: avatarData)
+        let poster = UserNotificationPoster(donates: ShareSuggestionSetting.isEnabled(accountID: account, defaults: sessionDefaults),
+                                            avatarData: avatarData)
         #if DEBUG && os(macOS)
         // `-haus-log-notifications` / `-haus-post-notifications`: a lab run logs what it posts (or would post).
         if let logged = MacDebugNotificationLog.poster(posting: poster, avatarData: avatarData) { return logged }
