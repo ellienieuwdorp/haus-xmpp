@@ -71,3 +71,9 @@ public struct ContactLink: Sendable, Equatable, CustomStringConvertible {
         hash.utf8.count == 40 && hash.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 }
+
+/// A link's photo file, named by account and hash (`AvatarStore` in the app).
+public struct ContactLinkPhoto: Sendable, Equatable {
+    public let accountID: String
+    public let hash: String
+}

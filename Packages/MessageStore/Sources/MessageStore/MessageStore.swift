@@ -3008,6 +3008,13 @@ public struct StoreSnapshotSummary: Codable, Sendable, Equatable {
         }
         rowCounts = counts
     }
+
+    /// The summary of a store copy nobody has open, read again once it was changed (`removeContactLinks(fromSnapshotAt:)`).
+    public init(snapshotAt url: URL) throws {
+        let copy = try Connection(url: url, create: false)
+        defer { try? copy.close() }
+        try self.init(copy)
+    }
 }
 
 // MARK: Link preview cache
@@ -3129,20 +3136,31 @@ extension MessageStore {
         }
     }
 
-    /// Removes every link of the account, for data that arrived from another device (an account transfer), where the
-    /// stored identifiers name nothing. Returns the removed links.
-    @discardableResult public func removeContactLinks(accountID: String) throws -> [ContactLink] {
-        try connection.transaction {
-            let links = try contactLinks(accountID: accountID)
-            try connection.execute("DELETE FROM contact_links WHERE account_id=?", [.text(accountID)])
-            return links
-        }
-    }
-
     /// Whether a chat's verified avatar or a link's photo still names this file.
     public func isAvatarHashInUse(accountID: String, hash: String) throws -> Bool {
         try !connection.query("""
             SELECT 1 FROM chats WHERE account_id=?1 AND avatar_hash=?2 UNION ALL SELECT 1 FROM contact_links WHERE account_id=?1 AND image_hash=?2 LIMIT 1
             """, [.text(accountID), .text(hash)]).isEmpty
+    }
+
+    /// Removes every account's contact links from a store copy nobody has open: an account transfer's, before it is
+    /// packed and again before a restore commits. The identifiers name contacts of the device that made them, and
+    /// names and photos from Contacts are not transferred. Deleted rows are overwritten, not left in free pages.
+    /// Returns the photos no chat's verified avatar still names, whose files the caller leaves out; only well-formed
+    /// hashes, as the copy may come from an archive. A copy from before schema 27 has none.
+    public static func removeContactLinks(fromSnapshotAt url: URL) throws -> [ContactLinkPhoto] {
+        let copy = try Connection(url: url, create: false)
+        defer { try? copy.close() }
+        guard !(try copy.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='contact_links'").isEmpty) else { return [] }
+        try copy.execute("PRAGMA secure_delete = ON")
+        return try copy.transaction {
+            let photos = try copy.query("""
+                SELECT DISTINCT account_id,image_hash FROM contact_links l WHERE image_hash IS NOT NULL
+                AND NOT EXISTS (SELECT 1 FROM chats c WHERE c.account_id=l.account_id AND c.avatar_hash=l.image_hash)
+                ORDER BY account_id,image_hash
+                """).map { ContactLinkPhoto(accountID: $0[0].string, hash: $0[1].string) }.filter { ContactLink.isHash($0.hash) }
+            try copy.execute("DELETE FROM contact_links")
+            return photos
+        }
     }
 }

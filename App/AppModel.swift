@@ -1484,8 +1484,6 @@ final class AppModel {
         hasLoadedChats = false
         transferRestored = true
         await openStorage()
-        // The other install's contact links name contacts of its own device; they never apply here.
-        if let restored = self.store { await contactLinks.dropMovedLinks(store: restored, account: accountID, root: storageRoot) }
         return nil
     }
 

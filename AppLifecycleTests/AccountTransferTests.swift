@@ -212,6 +212,93 @@ import XMPPProtocol
         XCTAssertEqual(source.appDefaults.double(forKey: "attachmentKeyboard.height.portrait"), 301)
     }
 
+    /// Contact links are this device's alone. The archive carries no link, in any account, and no photo only a link
+    /// named; a photo that is also a chat's verified avatar travels as that avatar. An archive that does hold links
+    /// (from a build that packed them) loses them, with their photos, before its restore commits.
+    func testContactLinksNeverTravelAndAnArchiveWithLinksLosesThemBeforeTheCommit() async throws {
+        let source = try makeInstall(), target = try makeInstall()
+        let signed = try await signedIn(source)
+        let other = "other@localhost"
+        let shared = String(repeating: "a", count: 40), only = String(repeating: "b", count: 40), otherOnly = String(repeating: "c", count: 40)
+        func link(_ account: String, _ jid: String, photo: String) -> ContactLink {
+            ContactLink(accountID: account, jid: jid, contactIdentifier: "contact-\(jid)", source: .picker, displayName: "Robin Okafor",
+                        imageHash: photo, isReachable: true)
+        }
+        func photoFiles(_ root: URL, _ account: String, _ hash: String) throws -> [URL] {
+            [AvatarStore.url(root: root, account: account, hash: hash), AvatarStore.notificationImageURL(root: root, account: account, hash: hash)]
+        }
+        func writePhotos(_ root: URL, _ photos: [(String, String)]) throws {
+            for (account, hash) in photos {
+                try AvatarStore.save(Data("synthetic \(hash)".utf8), root: root, account: account, hash: hash)
+                try Data("synthetic \(hash)".utf8).write(to: AvatarStore.notificationImageURL(root: root, account: account, hash: hash))
+            }
+        }
+        let messaging = source.locations.install.messaging
+        try await signed.store.setAvatarHash(accountID: account, chatID: peer, hash: shared)
+        for link in [link(account, peer, photo: shared), link(account, "carol@localhost", photo: only), link(other, peer, photo: otherOnly)] {
+            try await signed.store.saveContactLink(link)
+        }
+        try writePhotos(messaging, [(account, shared), (account, only), (other, otherOnly)])
+
+        let code = TransferCode.generate()
+        let archive = source.transfer.archive(of: try await export(source, store: signed.store, code: code))
+        let reader = try TransferArchive.open(archive, code: code, supportedSchema: MessageStore.currentSchemaVersion)
+        let names = Set(reader.manifest.entries.map(\.name))
+        let avatars = "messaging/avatars/" + AccountTransfer.encodedComponent(account)! + "/"
+        XCTAssertTrue(names.contains(avatars + shared) && names.contains(avatars + shared + ".notification.png"), "the verified avatar travels")
+        XCTAssertFalse(names.contains { $0.contains(only) || $0.contains(otherOnly) }, "photos only a link named stay behind")
+        let unpacked = source.root.appending(path: "unpacked", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: unpacked, withIntermediateDirectories: true)
+        var records = try reader.extract(into: unpacked, inMemory: { !$0.name.hasPrefix("messaging/") })
+        let database = unpacked.appending(path: "messaging/messages.sqlite")
+        do {
+            let packed = try MessageStore(url: database)
+            for account in [account, other] {
+                let links = try await packed.contactLinks(accountID: account)
+                XCTAssertEqual(links, [], "no link is packed")
+            }
+            try await packed.close()
+        }
+
+        // The same archive as a build that packed links would have written it, for two accounts.
+        let packed = try MessageStore(url: database)
+        for link in [link(account, peer, photo: shared), link(account, "carol@localhost", photo: only), link(other, peer, photo: otherOnly)] {
+            try await packed.saveContactLink(link)
+        }
+        try await packed.close()
+        try writePhotos(unpacked.appending(path: "messaging"), [(account, only), (other, otherOnly)])
+        records["meta/database.json"] = try JSONEncoder().encode(try StoreSnapshotSummary(snapshotAt: database))
+        var sources = records.mapValues { TransferSource.data($0) }
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: unpacked.appending(path: "messaging"), includingPropertiesForKeys: nil)?.allObjects as? [URL])
+        let prefix = unpacked.standardizedFileURL.path + "/"
+        // The store's side files from opening it here are not part of an archive.
+        for file in files where !file.hasDirectoryPath && !["-wal", "-shm", "-journal", ".transport-lock"].contains(where: file.lastPathComponent.hasSuffix) {
+            sources[String(file.standardizedFileURL.path.dropFirst(prefix.count))] = .file(file)
+        }
+        var manifest = reader.manifest
+        manifest.transferID = UUID().uuidString
+        manifest.entries = try sources.keys.sorted().map { try TransferArchive.describe(name: $0, source: sources[$0]!) }
+        let withLinks = source.root.appending(path: "with-links.\(TransferArchive.fileExtension)")
+        try TransferArchive.write(manifest, sources: sources, to: withLinks, code: code)
+
+        let fresh = try target.openStore()
+        try PreUpgradeSnapshot.keychainSet(service: target.locations.encryptionService, account: target.locations.storageID, data: randomKey())
+        let staged = try target.transfer.stage(archive: withLinks, code: code)
+        for (account, hash) in [(account, only), (other, otherOnly)] {
+            for file in try photoFiles(staged.messaging, account, hash) { XCTAssertFalse(FileManager.default.fileExists(atPath: file.path)) }
+        }
+        try await fresh.acquireTransportOwnership()
+        try await target.transfer.commit(staged, store: fresh, now: now)
+        let restored = try target.openStore()
+        for account in [account, other] {
+            let links = try await restored.contactLinks(accountID: account)
+            XCTAssertEqual(links, [], "no link survives the restore")
+        }
+        for file in try photoFiles(target.locations.install.messaging, account, shared) { XCTAssertTrue(FileManager.default.fileExists(atPath: file.path)) }
+        let bodies = try await restored.messages(accountID: account, chatID: peer).map(\.body)
+        XCTAssertEqual(bodies, signed.messages.map(\.body))
+    }
+
     /// An install that has an identity of its own never takes a restore: nothing in it changes.
     func testARestoreIsRefusedWhenTheTargetHasAnIdentity() async throws {
         let source = try makeInstall(), target = try makeInstall()

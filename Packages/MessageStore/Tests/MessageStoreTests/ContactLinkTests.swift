@@ -107,20 +107,45 @@ struct ContactLinkTests {
         }
     }
 
-    /// Links go with the account's other local rows; data from another device drops them all.
-    @Test func erasingTheAccountOrAMovedStoreRemovesItsLinks() async throws {
+    /// Links go with the account's other local rows.
+    @Test func erasingTheAccountRemovesItsLinks() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "contact-links-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
         try await store.saveContactLink(link())
         try await store.saveContactLink(link(account: "b"))
-        try await store.saveContactLink(link("carol@x", account: "b"))
         try await store.eraseLocalAccount(accountID: "a")
         #expect(try await store.contactLinks(accountID: "a").isEmpty)
-        #expect(try await store.removeContactLinks(accountID: "b").map(\.jid) == ["bob@x", "carol@x"])
-        #expect(try await store.contactLinks(accountID: "b").isEmpty)
+        #expect(try await store.contactLinks(accountID: "b").map(\.jid) == ["bob@x"])
         try await store.close()
+    }
+
+    /// A transfer's copy loses every account's links, and names the photos only they used; a copy from before
+    /// schema 27 has nothing to remove.
+    @Test func aTransferCopyLosesEveryAccountsLinks() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "contact-links-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "messages.sqlite")
+        let other = String(repeating: "d", count: 40)
+        let store = try MessageStore(url: url)
+        try await store.upsertChat(accountID: "a", chatID: "bob@x", title: "bob@x")
+        try await store.upsertChat(accountID: "b", chatID: "bob@x", title: "bob@x")
+        // Account b's link shares its photo with a verified avatar, which stays.
+        try await store.setAvatarHash(accountID: "b", chatID: "bob@x", hash: photo)
+        try await store.saveContactLink(link(imageHash: photo))
+        try await store.saveContactLink(link(account: "b", imageHash: photo))
+        try await store.saveContactLink(link("carol@x", account: "b", identifier: "contact-2", imageHash: other))
+        try await store.close()
+
+        #expect(try MessageStore.removeContactLinks(fromSnapshotAt: url)
+                == [ContactLinkPhoto(accountID: "a", hash: photo), ContactLinkPhoto(accountID: "b", hash: other)])
+        #expect(sqliteRows(url: url, sql: "SELECT count(*) FROM contact_links") == [["0"]])
+        #expect(try StoreSnapshotSummary(snapshotAt: url).rowCounts["contact_links"] == 0)
+        #expect(try MessageStore.removeContactLinks(fromSnapshotAt: url).isEmpty)
+        #expect(sqliteExecute(url: url, sql: "DROP TABLE contact_links; PRAGMA user_version=26"))
+        #expect(try MessageStore.removeContactLinks(fromSnapshotAt: url).isEmpty)
     }
 
     @Test func namePrecedenceAndAvatarPrecedence() {

@@ -237,8 +237,13 @@ struct AccountTransfer: Sendable {
 
         let copy = locations.exportStaging.appending(path: "messages.sqlite")
         let summary: StoreSnapshotSummary
+        let deviceLocalPhotos: [ContactLinkPhoto]
         do {
-            summary = try await store.writeSnapshot(to: copy)
+            _ = try await store.writeSnapshot(to: copy)
+            // Contact links name this device's contacts, and nothing from Contacts is transferred: the copy leaves
+            // without them, and without the photos only they named.
+            deviceLocalPhotos = try MessageStore.removeContactLinks(fromSnapshotAt: copy)
+            summary = try StoreSnapshotSummary(snapshotAt: copy)
             try PreUpgradeSnapshot.protect(copy)
         } catch { try? PreUpgradeSnapshot.removeIfPresent(locations.exportStaging); throw error }
 
@@ -266,7 +271,8 @@ struct AccountTransfer: Sendable {
             throw error
         }
         do {
-            let (manifest, sources) = try contents(snapshot: copy, summary: summary, id: id, accountID: accountID, now: now, progress: progress)
+            let (manifest, sources) = try contents(snapshot: copy, summary: summary, omitting: deviceLocalPhotos, id: id, accountID: accountID,
+                                                   now: now, progress: progress)
             let partial = locations.outgoing.appending(path: moved.fileName + ".partial")
             try PreUpgradeSnapshot.createProtectedDirectory(locations.outgoing)
             let total = max(manifest.totalBytes, 1)
@@ -291,19 +297,20 @@ struct AccountTransfer: Sendable {
         }
     }
 
-    /// Every entry of the archive, described (size and SHA-256), from the store's copy, the held folders, the Keychain
-    /// and the preference domains.
-    private func contents(snapshot: URL, summary: StoreSnapshotSummary, id: String, accountID: String, now: Date,
+    /// Every entry of the archive, described (size and SHA-256), from the store's copy, the held folders (less the
+    /// `omitting` photos), the Keychain and the preference domains.
+    private func contents(snapshot: URL, summary: StoreSnapshotSummary, omitting photos: [ContactLinkPhoto], id: String, accountID: String, now: Date,
                           progress: @escaping @Sendable (Progress) -> Void) throws -> (TransferManifest, [String: TransferSource]) {
         let files = FileManager.default
         var sources: [String: TransferSource] = [Name.database: .file(snapshot), Name.summary: .data(try JSONEncoder().encode(summary))]
+        let omitted = Set(Self.photoFiles(photos, root: locations.held).map(\.standardizedFileURL.path))
         for folder in PreUpgradeSnapshot.folders {
             let root = locations.held.appending(path: folder, directoryHint: .isDirectory)
             guard let items = files.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]) else { continue }
             let prefix = root.standardizedFileURL.path + "/"
             for case let item as URL in items where (try? item.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
                 let path = item.standardizedFileURL.path
-                guard path.hasPrefix(prefix) else { continue }
+                guard path.hasPrefix(prefix), !omitted.contains(path) else { continue }
                 sources[Name.messagingPrefix + folder + "/" + path.dropFirst(prefix.count)] = .file(item)
             }
         }
@@ -426,6 +433,11 @@ struct AccountTransfer: Sendable {
             let summary = try JSONDecoder().decode(StoreSnapshotSummary.self, from: records[Name.summary] ?? Data())
             guard summary.schemaVersion == manifest.schemaVersion else { throw TransferArchiveError.damaged }
             try MessageStore.verifySnapshot(at: database, matches: summary)
+            // Contact links from a build that still packed them name another device's contacts: they go before the
+            // commit, for every account, with the photos only they named.
+            for file in Self.photoFiles(try MessageStore.removeContactLinks(fromSnapshotAt: database), root: messaging) {
+                try PreUpgradeSnapshot.removeIfPresent(file)
+            }
             // As every build keeps its live store; the copy was made in rollback-journal mode.
             try MessageStore.useWriteAheadLog(at: database)
             for suffix in ["-wal", "-shm"] { try PreUpgradeSnapshot.removeIfPresent(URL(filePath: database.path + suffix)) }
@@ -606,6 +618,12 @@ struct AccountTransfer: Sendable {
 
     private func write(_ moved: Moved) throws {
         try JSONEncoder().encode(moved).write(to: locations.marker, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    /// A contact link photo's two files (`ContactPhoto`) under a `Messaging/` folder.
+    static func photoFiles(_ photos: [ContactLinkPhoto], root: URL) -> [URL] {
+        photos.flatMap { [AvatarStore.url(root: root, account: $0.accountID, hash: $0.hash),
+                          AvatarStore.notificationImageURL(root: root, account: $0.accountID, hash: $0.hash)] }
     }
 
     static func describe(_ error: any Error) -> String {

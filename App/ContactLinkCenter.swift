@@ -172,14 +172,6 @@ final class ContactLinkCenter {
         }
     }
 
-    /// Links from another device (an account transfer) name contacts that do not exist here: they go, with their photos.
-    func dropMovedLinks(store: MessageStore, account: String, root: URL?) async {
-        guard let removed = try? await store.removeContactLinks(accountID: account) else { return }
-        self.store = store; self.root = root; self.account = account
-        for link in removed { await removePhoto(of: link, keeping: nil) }
-        if !removed.isEmpty { links = [:]; photos = [:]; onChange?() }
-    }
-
     private func apply(_ stored: [ContactLink]) {
         let next = Dictionary(stored.map { ($0.jid, $0) }, uniquingKeysWith: { first, _ in first })
         guard next != links else { return }
