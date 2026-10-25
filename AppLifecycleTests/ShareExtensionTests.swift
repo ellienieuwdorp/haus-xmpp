@@ -173,6 +173,42 @@ final class ShareExtensionTests: XCTestCase {
         XCTAssertNil(ShareRules.outcome(["a@x": [.sent]], unsaved: []).note)
     }
 
+    // MARK: Authorization
+
+    /// A sheet opened for one account checks again at Send and before connecting: another account, none, a move or a
+    /// restore refuses it, and the record it goes on with is the one saved now.
+    func testASheetLeftOpenRefusesAnAccountThatSignedOutOrWasReplaced() throws {
+        let group = FileManager.default.temporaryDirectory.appending(path: "share-authorization-\(UUID())", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: group, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: group) }
+        func record(_ account: String, password: String = "synthetic") -> NotificationAccount {
+            NotificationAccount(accountID: account, host: "localhost", port: 5223, domain: "localhost", username: String(account.prefix { $0 != "@" }),
+                                password: password, push: nil)
+        }
+        func check(_ saved: NotificationAccount?, opened: String? = "a@localhost") -> Result<NotificationAccount, ShareAuthorization.Refusal> {
+            ShareAuthorization.check(groupRoot: group, accountID: opened) { saved }
+        }
+        XCTAssertEqual(check(nil, opened: nil), .failure(.signedOut), "nobody signed in when the sheet opens")
+        XCTAssertEqual(check(record("a@localhost"), opened: nil), .success(record("a@localhost")))
+        XCTAssertEqual(check(nil), .failure(.signedOutSinceOpening), "signed out while the sheet was open")
+        XCTAssertEqual(check(record("b@localhost")), .failure(.signedOutSinceOpening), "another account signed in meanwhile")
+        XCTAssertEqual(check(record("a@localhost", password: "changed")), .success(record("a@localhost", password: "changed")),
+                       "the same account goes on with the password saved now")
+        XCTAssertEqual(ShareAuthorization.check(groupRoot: group, accountID: "a@localhost") { throw CocoaError(.fileReadNoPermission) },
+                       .failure(.unreadable))
+
+        let moved = TransferHold.directory(groupRoot: group)
+        try FileManager.default.createDirectory(at: moved, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: moved.appending(path: TransferHold.markerName))
+        XCTAssertEqual(check(record("a@localhost")), .failure(.moved))
+        try FileManager.default.removeItem(at: moved)
+
+        let restore = PreUpgradeHold.directory(groupRoot: group)
+        try FileManager.default.createDirectory(at: restore, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: restore.appending(path: PreUpgradeHold.journalName))
+        XCTAssertEqual(check(record("a@localhost")), .failure(.restoring))
+    }
+
     // MARK: Activation rule
 
     /// The rule is a predicate over dictionaries shaped like the system's (Apple's App Extension Programming Guide).

@@ -122,10 +122,11 @@ import AppKit
         SharedItemIntake.discardAll()
         do {
             let root = try await SharedStorage.directory(migrate: false)
-            let group = root.deletingLastPathComponent()
-            guard !PreUpgradeHold.isHeld(groupRoot: group) else { return unavailable("Open Haus XMPP to finish restoring your data, then share again.") }
-            guard !TransferHold.isMoved(groupRoot: group) else { return unavailable("This account moved to another \(ThisDevice.noun). Share from there.") }
-            guard let account = try NotificationAccount.load() else { return unavailable("Sign in to Haus XMPP to share.") }
+            let account: NotificationAccount
+            switch ShareAuthorization.check(groupRoot: root.deletingLastPathComponent()) {
+            case .success(let current): account = current
+            case .failure(let refusal): return unavailable(refusal.message)
+            }
             let store: MessageStore
             do { store = try MessageStore(url: root.appending(path: "messages.sqlite"), schema: .currentOnly) }
             catch MessageStoreError.upgradeRequired { return unavailable("Open Haus XMPP once to finish updating, then share again.") }
@@ -146,7 +147,7 @@ import AppKit
             }
         } catch {
             Self.log.error("share could not open storage: \(String(describing: type(of: error)), privacy: .public)")
-            return unavailable("Haus XMPP's messages can't be opened right now. Unlock your \(ThisDevice.noun) or open the app, then try again.")
+            return unavailable(ShareAuthorization.Refusal.unreadable.message)
         }
         // The providers are read only by the intake from here on; their callbacks arrive on their own queues.
         nonisolated(unsafe) let providers = providers
@@ -167,6 +168,20 @@ import AppKit
     }
 
     private func unavailable(_ message: String) { phase = .unavailable(message) }
+
+    /// The account may still share from this sheet (`ShareAuthorization`); its record is refreshed, so a connection uses
+    /// the password saved now. Otherwise the sheet says why and nothing is written.
+    private func authorize() -> Bool {
+        guard let root else { return false }
+        switch ShareAuthorization.check(groupRoot: root.deletingLastPathComponent(), accountID: accountID) {
+        case .success(let current):
+            account = current
+            return true
+        case .failure(let refusal):
+            unavailable(refusal.message)
+            return false
+        }
+    }
 
     /// Each chat's stored state, read once per sheet. The encryption state is cached by revision, so this decodes it
     /// once, and nothing is fetched from the network.
@@ -232,7 +247,7 @@ import AppKit
     /// Queues everything for every chosen chat, then sends it (iPhone) or hands it to the running app (Mac). `finish` is
     /// called once nothing of this process's is left running and the sheet may close.
     func send() {
-        guard canSend, let store, let encryption, let root else { return }
+        guard canSend, let store, let encryption, let root, authorize() else { return }
         phase = .sending
         let recipients = selectedChats
         let files = readyFiles.compactMap { item in preparedFiles[item.id] }
@@ -284,7 +299,10 @@ import AppKit
         #endif
         let activity = ExpiringActivity { [weak self] in self?.cancelSending() }
         defer { activity.end() }
-        guard await session.acquireLease(waitingUpTo: Self.leaseWait), !closing else {
+        // Signed out, moved or signed in again with other credentials while the lease was awaited: nothing connects, and
+        // the rows wait for that account as the app's own queued messages do.
+        guard await session.acquireLease(waitingUpTo: Self.leaseWait), !closing,
+              (try? ShareAuthorization.check(groupRoot: root.deletingLastPathComponent(), accountID: accountID).get()) == account else {
             await session.end()
             return await session.states(ids)
         }

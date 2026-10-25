@@ -73,6 +73,7 @@
 		1ECC9981CD306392B0B90743 /* AttachmentSendLabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1855DE3A5B4667032083D97 /* AttachmentSendLabUITests.swift */; };
 		1F4BBC2BA3DB5929DA85B868 /* LastSeen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB0B97AF3403EEDD27A52DA9 /* LastSeen.swift */; };
 		1F579E46241650F3955C2FAE /* KeyRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429A77E75FD76C077B26B4D8 /* KeyRecoveryView.swift */; };
+		200247F0195CF6864D57FAAD /* ShareAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23B578D99D1A8B52E7722B12 /* ShareAuthorization.swift */; };
 		204392EC38F286E3301EC4A7 /* Appearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09FA0B70EB5B16DFE6426118 /* Appearance.swift */; };
 		2050809E474A09A05A265982 /* AppModel+LinkPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A1BC7BC0C97AA3012CE6BC9 /* AppModel+LinkPreviews.swift */; };
 		20F3A866D392433A25149C4A /* MacChatActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC97F708041BB1F5644B5077 /* MacChatActions.swift */; };
@@ -85,6 +86,7 @@
 		240E887F4B1845D864D7E75E /* AppModel+LinkPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A1BC7BC0C97AA3012CE6BC9 /* AppModel+LinkPreviews.swift */; };
 		244B55E3805C82E3F33BD4A6 /* AttachmentThumbnails.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C83D6DFC068590E56650891 /* AttachmentThumbnails.swift */; };
 		25322A9E1808973855DE6B10 /* KeyRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 429A77E75FD76C077B26B4D8 /* KeyRecoveryView.swift */; };
+		2582DFDFEDCC07E2E5E7FEA6 /* ShareAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23B578D99D1A8B52E7722B12 /* ShareAuthorization.swift */; };
 		25BEA4A182C4766D0EF19E7A /* LinkPreviewCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52CBA699A4FB8EB8F46F6675 /* LinkPreviewCenter.swift */; };
 		2631DAB2E633338E61F967C6 /* MacAttachButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 453EBE975D6A2E54AA3F09EF /* MacAttachButton.swift */; };
 		266D629DE448E74FD8988383 /* Appearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09FA0B70EB5B16DFE6426118 /* Appearance.swift */; };
@@ -118,6 +120,7 @@
 		35A93984520362F59B1D4F63 /* MacExtensionProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 377EE020496066307F80188A /* MacExtensionProbe.swift */; };
 		364D130D4D94312A5D5DADDE /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 535BE8A1F1E6F1BDCA72435B /* Theme.swift */; };
 		368B235CAACC4D809455591B /* PlatformColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7759CE579417644D58F83DEA /* PlatformColors.swift */; };
+		36F3D035279CEC1C5E018B62 /* ShareAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23B578D99D1A8B52E7722B12 /* ShareAuthorization.swift */; };
 		373F493D6B6C09282C8B286C /* ChatRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A4DB06AECC4926F0E8AB2ED /* ChatRow.swift */; };
 		37D42445AA64631EC1258F5E /* AttachmentDownloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7CA84D23B5006C989C0C253 /* AttachmentDownloads.swift */; };
 		38007AB9C7A5BDF2716F7FAD /* ConversationSearchBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7867D06A08D4C485E2B463D5 /* ConversationSearchBar.swift */; };
@@ -239,6 +242,7 @@
 		77CD710091E8A7B5DA9CC11D /* ChatNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE5082F6FC8DC6C22351DAF /* ChatNotifications.swift */; };
 		785A2E8CE8BBD25DFA5D5E8B /* NotificationAccessGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67FBE70E902253A52534F4CA /* NotificationAccessGate.swift */; };
 		79412CD53719AD576ED91EE6 /* ThisDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08A54D67178B7D4A0E4267AB /* ThisDevice.swift */; };
+		79FEE85DDC7CE64EB60B91B3 /* ShareAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23B578D99D1A8B52E7722B12 /* ShareAuthorization.swift */; };
 		7BB17A60CDD0563A48A8C735 /* DeliveredNotificationCleaner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0947D89080553653EC6040CF /* DeliveredNotificationCleaner.swift */; };
 		7BD24F061B3CB53AB03E3BE5 /* EncryptionKeychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68FF6093D4D7789019FDED79 /* EncryptionKeychain.swift */; };
 		7C604D61E692191480FEDB54 /* ComposerLinkPreviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 984E1C7FB2F6BCDCF3F9DBF7 /* ComposerLinkPreviewTests.swift */; };
@@ -591,6 +595,7 @@
 		219AF3065A8866C0E26F5FFF /* ConnectionSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionSetup.swift; sourceTree = "<group>"; };
 		2232019E106C6E1BF8B39092 /* PushSetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushSetupTests.swift; sourceTree = "<group>"; };
 		2308A07FF5F75965A3B7F077 /* schema-24.sql */ = {isa = PBXFileReference; path = "schema-24.sql"; sourceTree = "<group>"; };
+		23B578D99D1A8B52E7722B12 /* ShareAuthorization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareAuthorization.swift; sourceTree = "<group>"; };
 		24019C584A3AC0496BF09C3D /* AppLivenessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLivenessTests.swift; sourceTree = "<group>"; };
 		2444BE96E62C6A76EDE00EDC /* GroupUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupUITests.swift; sourceTree = "<group>"; };
 		24457939D26275779CFB05C1 /* AttachmentDownloadState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentDownloadState.swift; sourceTree = "<group>"; };
@@ -1123,6 +1128,7 @@
 				0B2806958D2C698E69232C9A /* ContactName.swift */,
 				67D7013E95CC964D45D58A1B /* GroupChatState.swift */,
 				7759CE579417644D58F83DEA /* PlatformColors.swift */,
+				23B578D99D1A8B52E7722B12 /* ShareAuthorization.swift */,
 				0FFCB3D8FD152957C8B28EB7 /* SharedItemIntake.swift */,
 				DDD5C61578047DA45BA42704 /* ShareRules.swift */,
 				8957AEFF4C56C2F0CB0CC95F /* SuggestedConversation.swift */,
@@ -1779,6 +1785,7 @@
 				106C2F5D77A7AD14FAABBDDC /* RootView.swift in Sources */,
 				CDD30092CA9FE2D8C03A894C /* SessionState.swift in Sources */,
 				32F7F88A717F84963107FCAF /* SettingsView.swift in Sources */,
+				36F3D035279CEC1C5E018B62 /* ShareAuthorization.swift in Sources */,
 				CC9BC9F1A6B6A47EED915FEE /* ShareRules.swift in Sources */,
 				9545CA3FD1C94ACE963F33F2 /* ShareSuggestionSetting.swift in Sources */,
 				30EC0685FC846180F743C5B7 /* SharedItemIntake.swift in Sources */,
@@ -1848,6 +1855,7 @@
 				E1F70F46796AD3AF3D8B31FD /* PlatformColors.swift in Sources */,
 				98FB71CCAF76B2D84307427B /* PreUpgradeHold.swift in Sources */,
 				6D662DB7C373F597FA8ECA15 /* PushRegistrationState.swift in Sources */,
+				79FEE85DDC7CE64EB60B91B3 /* ShareAuthorization.swift in Sources */,
 				8D4E4A2C98FDB946155DD865 /* ShareModel.swift in Sources */,
 				BADA94CAD54E9D5962AC11E6 /* ShareRules.swift in Sources */,
 				13836AA38650903A7A818816 /* ShareSuggestionSetting.swift in Sources */,
@@ -1938,6 +1946,7 @@
 				15DAC37ABB71184FE5D5A5A6 /* PlatformColors.swift in Sources */,
 				324B5E82252B49992B8890E6 /* PreUpgradeHold.swift in Sources */,
 				FCCA0FA293EE23C03F63E581 /* PushRegistrationState.swift in Sources */,
+				2582DFDFEDCC07E2E5E7FEA6 /* ShareAuthorization.swift in Sources */,
 				F7E6F9F5A40977BF38792ABC /* ShareModel.swift in Sources */,
 				7DBDD03578B3399DCD41022E /* ShareRules.swift in Sources */,
 				042AF83CA55297CDC307E921 /* ShareSuggestionSetting.swift in Sources */,
@@ -2133,6 +2142,7 @@
 				D8CEC38A762ADEBF805171D0 /* PushService.swift in Sources */,
 				8C6B78163B8DBC0A35918F02 /* SessionState.swift in Sources */,
 				22C964A2DDE8AA3A54B8E693 /* SettingsView.swift in Sources */,
+				200247F0195CF6864D57FAAD /* ShareAuthorization.swift in Sources */,
 				5359CC46B087A3E4D680E23E /* ShareModel.swift in Sources */,
 				AA72736FD91478BEBE7FAA0A /* ShareRules.swift in Sources */,
 				06F59ADD0F7A3F6D7AEC3ACD /* ShareSuggestionSetting.swift in Sources */,
