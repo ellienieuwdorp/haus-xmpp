@@ -1,11 +1,14 @@
 import SwiftUI
 
-/// One chat's actions: the iPhone's trailing swipe actions (Read, Pin, Mute) and its details' Block, Report and Unblock.
+/// One chat's actions: the iPhone's trailing swipe actions (Read, Pin, Mute) and its details' Contact, Block, Report and
+/// Unblock.
 /// The sidebar's right-click menu offers them for any chat and the Chat menu for the selected one, both through
 /// `MacChatActionsMenu`, so the two list the same things in the same order.
 struct MacChatActions {
     enum Action: Hashable {
         case markRead, togglePin, mute(MuteDuration), unmute, block, unblock, report
+        /// The details' Contact row: shows the details and starts there, where the flow and its confirmations live.
+        case contact(ContactRowRequest.Kind)
         /// Selects the chat and shows its details.
         case showDetails
     }
@@ -13,6 +16,9 @@ struct MacChatActions {
     let chat: ChatSummary
     let isGroup: Bool
     let isBlocked: Bool
+    /// A direct chat with someone else: it can be linked to a contact.
+    let canLink: Bool
+    let isLinked: Bool
     /// The server blocks; without it Block, Report and Unblock are disabled.
     let canBlock: Bool
     let perform: (Action) -> Void
@@ -22,6 +28,8 @@ struct MacChatActions {
         self.chat = chat
         isGroup = model.isGroup(chat.id)
         isBlocked = model.isBlocked(chat.id)
+        canLink = !isGroup && chat.id != model.accountID
+        isLinked = model.contactLinks.links[chat.id] != nil
         canBlock = model.blockingAvailability.isAvailable
         perform = { action in
             switch action {
@@ -35,6 +43,10 @@ struct MacChatActions {
             case .showDetails:
                 window.selection = chat.id
                 window.inspectorShown = true
+            case .contact(let kind):
+                window.selection = chat.id
+                window.inspectorShown = true
+                model.contactLinks.request = ContactRowRequest(chatID: chat.id, kind: kind)
             }
         }
     }
@@ -72,6 +84,11 @@ struct MacChatActionsMenu: View {
             }
             .disabled(actions == nil)
         }
+        // A group or the account itself has no contact; the menu bar keeps the items, disabled.
+        if menuBar || actions?.canLink == true {
+            Divider()
+            contactItems
+        }
         // A group has no one to block; the menu bar keeps the items, disabled.
         if menuBar || actions?.isGroup == false {
             Divider()
@@ -80,6 +97,20 @@ struct MacChatActionsMenu: View {
         if !menuBar {
             Divider()
             Button("Chat Details", systemImage: "info.circle") { actions?.perform(.showDetails) }
+        }
+    }
+
+    /// The details' Contact actions, as its row's menu offers them.
+    @ViewBuilder private var contactItems: some View {
+        let available = actions?.canLink ?? false
+        if actions?.isLinked == true {
+            Button("Unlink Contact…", systemImage: "person.crop.circle.badge.minus") { actions?.perform(.contact(.unlink)) }
+                .disabled(!available)
+        } else {
+            Button("Link to Contact…", systemImage: "person.crop.circle.badge.plus") { actions?.perform(.contact(.link)) }
+                .disabled(!available)
+            Button("Add to Contacts…", systemImage: "person.badge.plus") { actions?.perform(.contact(.add)) }
+                .disabled(!available)
         }
     }
 

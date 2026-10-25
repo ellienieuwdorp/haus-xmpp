@@ -38,7 +38,7 @@ struct ChatDetailsView: View {
     @Environment(\.dismiss) private var dismiss
     @ScaledMetric(relativeTo: .title3) private var tileGlyphHeight: CGFloat = 24
 
-    private var title: String { AppModel.displayName(for: chatID, title: model.chats.first(where: { $0.id == chatID })?.title) }
+    private var title: String { model.chatName(for: chatID) }
     private var isGroup: Bool { model.isGroup(chatID) }
 
     var body: some View {
@@ -59,6 +59,10 @@ struct ChatDetailsView: View {
                 }
                 .accessibilityIdentifier("encryptionDetails")
                 ChatNotificationRow(model: model, chatID: chatID)
+                // Rooms and the account itself are never linked to a contact.
+                if !isGroup, chatID != model.accountID {
+                    ChatContactRow(model: model, chatID: chatID)
+                }
             } header: {
                 VStack(spacing: 0) {
                     hero
@@ -84,7 +88,7 @@ struct ChatDetailsView: View {
 
     private var hero: some View {
         VStack(spacing: 6) {
-            ChatAvatar(key: chatID, name: title, image: model.avatars[chatID], isGroup: isGroup, size: DetailsHeroMetrics.avatar)
+            ChatAvatar(key: chatID, name: title, image: model.avatar(for: chatID), isGroup: isGroup, size: DetailsHeroMetrics.avatar)
                 .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
             Text(title).font(DetailsHeroMetrics.title).padding(.top, 6)
             Text(chatID).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)

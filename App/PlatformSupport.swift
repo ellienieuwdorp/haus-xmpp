@@ -204,6 +204,16 @@ extension ToolbarItemPlacement {
         #endif
     }
 
+    /// Where the user lets the app use Contacts: the app's page in iOS Settings, or System Settings > Privacy & Security >
+    /// Contacts on the Mac.
+    static var contactsSettingsURL: URL? {
+        #if os(iOS)
+        URL(string: UIApplication.openSettingsURLString)
+        #else
+        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts")
+        #endif
+    }
+
     /// The unread badge on the app's icon, through the notification centre: the badge a notification's `content.badge`
     /// sets from the extension, shown only where the user allows badges, and kept after the app quits. Where
     /// `dockTileOnly`, the Mac labels its own Dock tile instead, which needs no permission but lasts only while the app

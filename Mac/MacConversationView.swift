@@ -39,7 +39,7 @@ struct MacConversationView: View {
     /// view, whose state holds it.
     @State private var linkAction = MacLinkAction()
 
-    private var title: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
+    private var title: String { model.chatName(for: chatID) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
     private var isGroup: Bool { model.isGroup(chatID) }
     /// Where Encryption details goes: the inspector's page for this chat's devices, or a group's details.
@@ -76,7 +76,7 @@ struct MacConversationView: View {
             let model = model, chatID = chatID
             let timeline = MacTimelineController(model: model, chatID: chatID) {
                 ConversationPresenter(source: model, chatID: chatID,
-                                      title: AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title))
+                                      title: model.chatName(for: chatID))
             }
             // Esc in the timeline, or in a bubble's text: closes the find bar, as Esc in its field does, or else the
             // starred filter; with neither open, keyboard focus goes to the composer.

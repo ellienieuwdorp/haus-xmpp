@@ -44,7 +44,7 @@ struct MacChatList: View {
                     .padding(.vertical, 4)
             }
             ForEach(visibleChats) { chat in
-                ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatars[chat.id], typing: model.typing[chat.id], avatarSize: 40,
+                ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatar(for: chat.id), typing: model.typing[chat.id], avatarSize: 40,
                         isBlocked: model.isBlocked(chat.id))
                     .padding(.vertical, 4)
                     .tag(chat.id)
@@ -121,7 +121,7 @@ struct MacNewChatSheet: View {
                         ForEach(suggestedChats) { chat in
                             Button { open(chat.id) } label: {
                                 HStack(spacing: 10) {
-                                    ChatAvatar(key: chat.id, name: chat.displayTitle, image: model.avatars[chat.id], isGroup: model.isGroup(chat.id), size: 28)
+                                    ChatAvatar(key: chat.id, name: chat.displayTitle, image: model.avatar(for: chat.id), isGroup: model.isGroup(chat.id), size: 28)
                                     VStack(alignment: .leading) {
                                         Text(chat.displayTitle)
                                         Text(chat.id).font(.footnote).foregroundStyle(.secondary)

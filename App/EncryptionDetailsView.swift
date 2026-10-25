@@ -6,7 +6,7 @@ struct EncryptionDetailsView: View {
     @Bindable var model: AppModel
     let chatID: String
     @State private var selectedDevice: EncryptionDevice?
-    private var name: String { AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title) }
+    private var name: String { model.chatName(for: chatID) }
 
     var body: some View {
         GroupedList {

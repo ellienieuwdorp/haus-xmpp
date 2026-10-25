@@ -28,6 +28,8 @@
 	<false/>
 	<key>LSMultipleInstancesProhibited</key>
 	<true/>
+	<key>NSContactsUsageDescription</key>
+	<string>Show the names and photos of contacts you link to chats. Nothing from Contacts leaves this Mac.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Ellie Nieuwdorp and the Haus XMPP contributors</string>
 	<key>NSUserActivityTypes</key>

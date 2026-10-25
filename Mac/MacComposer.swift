@@ -109,7 +109,7 @@ struct MacComposer: View {
 
     /// Built bare, so the bars read only what an author line needs.
     private var presenter: ConversationPresenter {
-        ConversationPresenter(source: model, chatID: chatID, title: AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title))
+        ConversationPresenter(source: model, chatID: chatID, title: model.chatName(for: chatID))
     }
 
     private var tint: Color { Color(platform: appearance.accent.tint) }

@@ -26,8 +26,11 @@ struct ChatSummary: Identifiable {
     var notification = ChatNotificationSetting()
     /// Incoming messages after the chat's read pointer; shown as a count pill in the row.
     var unreadCount = 0
-    /// Title for display: the stored title, or the address local part when the title is just the address.
-    var displayTitle: String { AppModel.displayName(for: id, title: title) }
+    /// The linked contact's name (`ContactLinkCenter`); it comes before the stored title.
+    var contactName: String? = nil
+    /// Title for display: a linked contact's name, the stored title, or the address local part when the title is just
+    /// the address.
+    var displayTitle: String { AppModel.displayName(for: id, title: contactName ?? title) }
 }
 
 @MainActor @Observable
@@ -332,6 +335,8 @@ final class AppModel {
     private var files: AttachmentFiles? { storageDirectory.map { AttachmentFiles(directory: $0, account: accountID) } }
     /// Our own link preview fetches (AppModel+LinkPreviews.swift). Observed: a result fills in its card.
     let linkPreviewCenter = LinkPreviewCenter()
+    /// Direct chats linked to contacts on this device. Observed: a link renames its chat and may give it a photo.
+    let contactLinks = ContactLinkCenter()
     /// Hosts that serve the account's files, which never get a preview: our upload slots' GET hosts and the hosts of
     /// files we received. Read from storage once per account, then extended as slots are taken and timelines load.
     var linkPreviewUploadHosts: Set<String> = []
@@ -386,6 +391,7 @@ final class AppModel {
             guard let self, self.accountID == account else { return }
             for id in messageIDs { self.attachmentFiles[id] = file }
         }
+        contactLinks.onChange = { [weak self] in self?.applyContactNames() }
         downloads.openSecret = { [weak self] job in
             guard let encryption = self?.encryption else { throw OMEMOError.unavailable }
             return try encryption.openAttachmentSecret(account: job.account, secret: job.attachment.secret, sealedAs: job.attachment.sealedAccount)
@@ -1036,6 +1042,8 @@ final class AppModel {
                 }
                 if transition.resumesTransport {
                     self.returnedToForegroundForUpgrade()
+                    // Contacts may have changed while away (the change notification is not delivered to a suspended app).
+                    self.contactLinks.refreshSoon()
                     self.refreshNotificationPermission()
                     self.reconnection.retryNow()
                     self.reconcile()
@@ -1476,6 +1484,8 @@ final class AppModel {
         hasLoadedChats = false
         transferRestored = true
         await openStorage()
+        // The other install's contact links name contacts of its own device; they never apply here.
+        if let restored = self.store { await contactLinks.dropMovedLinks(store: restored, account: accountID, root: storageRoot) }
         return nil
     }
 
@@ -1958,6 +1968,7 @@ final class AppModel {
         reactableGroupMessages = []
         avatars = [:]
         avatarChecked = []
+        contactLinks.reset()
         chats = []
         hasLoadedChats = account.isEmpty // no account has no stored chats to wait for: sign-out shows its empty state at once
         messages = []
@@ -2410,6 +2421,34 @@ final class AppModel {
         } catch {
             // Keep whatever is stored; a failed fetch is not a removed avatar.
         }
+    }
+
+    /// A chat's avatar as shown: the peer's verified avatar, then a linked contact's photo, or the photo first when the
+    /// user chose it for that link (`ContactLink.avatarHash`, the extension's rule too).
+    func avatar(for chatID: String) -> PlatformImage? {
+        guard let photo = contactLinks.photos[chatID] else { return avatars[chatID] }
+        return contactLinks.links[chatID]?.usesContactPhoto == true ? photo : avatars[chatID] ?? photo
+    }
+
+    /// The pre-scaled copy of the peer's verified avatar, for a contact made from the chat ("Add to Contacts").
+    func verifiedAvatarData(for chatID: String) -> Data? {
+        guard let storageRoot, let hash = chats.first(where: { $0.id == chatID })?.avatarHash else { return nil }
+        return AvatarStore.notificationImageData(root: storageRoot, account: accountID, hash: hash)
+    }
+
+    /// A chat's name as shown everywhere in the app, as `ChatSummary.displayTitle`.
+    func chatName(for chatID: String) -> String {
+        chats.first { $0.id == chatID }?.displayTitle ?? AppModel.displayName(for: chatID, title: contactLinks.links[chatID]?.name)
+    }
+
+    /// Links changed: the rows take the contacts' names without reading the store again.
+    private func applyContactNames() {
+        let renamed = chats.map { chat in
+            var chat = chat
+            chat.contactName = contactLinks.links[chat.id]?.name
+            return chat
+        }
+        if renamed.map(\.contactName) != chats.map(\.contactName) { chats = renamed }
     }
 
     /// Thumbnails for stored hashes not yet in memory, e.g. after launch or an account switch.
@@ -3987,7 +4026,7 @@ final class AppModel {
             try await client.block(chatID, report: report)
         } catch {
             guard account == accountID else { return false }
-            self.error = "Couldn’t block \(AppModel.displayName(for: chatID, title: chats.first { $0.id == chatID }?.title)). Try again."
+            self.error = "Couldn’t block \(chatName(for: chatID)). Try again."
             return false
         }
         applyBlocklist(.blocked([chatID]), account: account)
@@ -4210,6 +4249,8 @@ final class AppModel {
         }
         let known = Set(storedChats.map(\.id))
         loadStoredAvatars(storedChats)
+        await contactLinks.load(store: store, account: account, root: storageRoot)
+        guard accountID == account else { return }
         let reviewPreview = "Encrypted message needs attention"
         var summaries = storedChats.map { ChatSummary(id: $0.id, title: $0.title,
             preview: pending[$0.id] != nil ? reviewPreview : ($0.lastMessage.map { last in
@@ -4217,7 +4258,8 @@ final class AppModel {
                     : last.unreadableReason.map(UnreadableCopy.preview) ?? (last.body.isEmpty ? (last.attachment?.kindLabel ?? "") : last.body) } ?? ""),
             isPinned: $0.isPinned, avatarHash: $0.avatarHash,
             lastMessageAt: $0.lastMessage?.sentAt, lastMessageIsOutgoing: $0.lastMessage?.isOutgoing ?? false,
-            lastMessageState: $0.lastMessage?.transportState, lastMessageReceipt: $0.lastMessageReceipt, notification: $0.notification, unreadCount: $0.unreadCount) }
+            lastMessageState: $0.lastMessage?.transportState, lastMessageReceipt: $0.lastMessageReceipt, notification: $0.notification, unreadCount: $0.unreadCount,
+            contactName: contactLinks.links[$0.id]?.name) }
         summaries += pending.keys.filter { !known.contains($0) }.sorted().map {
             ChatSummary(id: $0, title: $0, preview: reviewPreview, isPinned: false)
         }

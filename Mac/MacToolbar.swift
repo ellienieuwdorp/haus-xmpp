@@ -181,8 +181,8 @@ private struct MacChatHeaderAvatar: View {
     var body: some View {
         if let chatID = window.selection {
             Button { window.inspectorShown = true } label: {
-                ChatAvatar(key: chatID, name: AppModel.displayName(for: chatID, title: model.chats.first { $0.id == chatID }?.title),
-                           image: model.avatars[chatID], isGroup: model.isGroup(chatID), size: 28)
+                ChatAvatar(key: chatID, name: model.chatName(for: chatID),
+                           image: model.avatar(for: chatID), isGroup: model.isGroup(chatID), size: 28)
             }
             .buttonStyle(.plain)
             .help("Show the chat's details")
