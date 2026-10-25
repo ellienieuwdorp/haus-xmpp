@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import MessageStore
+import MessagingCore
 import Observation
 import OMEMO
 import os

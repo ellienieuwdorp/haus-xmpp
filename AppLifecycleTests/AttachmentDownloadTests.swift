@@ -1,5 +1,6 @@
 import CryptoKit
 import MessageStore
+import MessagingCore
 import OMEMO
 import XCTest
 @testable import HausXMPP

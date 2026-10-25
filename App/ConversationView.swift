@@ -1,4 +1,5 @@
 import MessageStore
+import MessagingCore
 import OSLog
 import PhotosUI
 import SwiftUI

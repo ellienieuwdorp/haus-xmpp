@@ -150,9 +150,12 @@ struct EncryptionAttention: Equatable {
 }
 
 /// The account's XEP-0363 service as last discovered, kept in the account-keyed preferences so the attach button
-/// is there from the first frame after a relaunch or reconnect. Only a completed discovery changes it.
+/// is there from the first frame after a relaunch or reconnect. Only a completed discovery changes it. The app keeps a
+/// copy in `mirror` (the App Group's defaults), which the share extension reads to offer files and enforce the
+/// server's size limit.
 struct UploadServiceMemory {
     let defaults: UserDefaults
+    var mirror: UserDefaults? = nil
     /// How long a completed discovery stands for a resumed stream (`ConnectionSetup.Memory.uploadsFresh`).
     static let lifetime: TimeInterval = 24 * 60 * 60
 
@@ -176,17 +179,37 @@ struct UploadServiceMemory {
     func settle(account: String, previous: XMPPUploadService?, discovery: Result<XMPPUploadService?, any Error>, now: Date = .now) -> XMPPUploadService? {
         guard case .success(let found) = discovery, !account.isEmpty else { return previous }
         defaults.set(now, forKey: Self.checkedKey(account))
-        if let found {
-            var saved: [String: Any] = ["jid": found.jid]
-            if let limit = found.maximumFileSize { saved["maximumFileSize"] = limit }
-            defaults.set(saved, forKey: Self.key(account))
-        } else { defaults.removeObject(forKey: Self.key(account)) }
+        Self.save(found, account: account, in: defaults)
+        if let mirror { Self.save(found, account: account, in: mirror, keepingNone: true) }
         return found
     }
+
+    /// Copies what `defaults` holds for the account into `mirror`, for a store kept before the mirror existed.
+    func publish(account: String) {
+        guard let mirror, !account.isEmpty else { return }
+        // An account that never completed a discovery has no answer to copy.
+        guard defaults.object(forKey: Self.checkedKey(account)) != nil else { return }
+        Self.save(load(account: account), account: account, in: mirror, keepingNone: true)
+    }
+
+    /// The mirror's reader (the share extension): whether the app copied an answer for the account, "none offered"
+    /// included. Without one the extension cannot tell a server without uploads from an app not opened since updating.
+    func hasAnswer(account: String) -> Bool { !account.isEmpty && defaults.object(forKey: Self.key(account)) != nil }
 
     func forget(account: String) {
         defaults.removeObject(forKey: Self.key(account))
         defaults.removeObject(forKey: Self.checkedKey(account))
+        mirror?.removeObject(forKey: Self.key(account))
+    }
+
+    /// `keepingNone` records "none offered" as an empty service, which `load` reads as nil, rather than removing it.
+    private static func save(_ service: XMPPUploadService?, account: String, in defaults: UserDefaults, keepingNone: Bool = false) {
+        if let service {
+            var saved: [String: Any] = ["jid": service.jid]
+            if let limit = service.maximumFileSize { saved["maximumFileSize"] = limit }
+            defaults.set(saved, forKey: key(account))
+        } else if keepingNone { defaults.set(["jid": ""], forKey: key(account)) }
+        else { defaults.removeObject(forKey: key(account)) }
     }
 }
 
@@ -208,19 +231,5 @@ struct UploadReconciliation {
         guard case .success(let found) = discovery else { return false }
         awaitingAnswer = false
         return ready && (previous == nil || found == nil)
-    }
-}
-
-extension AppModel {
-    /// The one derived value per chat that views read for trust, sending and attaching.
-    func chatCapabilities(_ chatID: String) -> ChatCapabilities {
-        let group = groupChats[chatID]
-        // Review means a stored device is undecided or a send is held for a fingerprint decision. Retained ciphertext
-        // is not a review by itself: a carbon from another own client or a message from a removed device stays
-        // retained with nothing to approve, and blaming a new device for it was wrong (2026-09-25).
-        return ChatCapabilities.derive(isDemo: isDemo, isGroup: group != nil, knowledge: encryptionKnowledge(for: chatID),
-                                       reviewPending: encryptionAttention.heldForTrust.contains(chatID),
-                                       groupJoined: group?.joined == true,
-                                       groupIssue: group?.issue, uploadAvailable: canSendAttachments, sessionReady: session.isReady)
     }
 }

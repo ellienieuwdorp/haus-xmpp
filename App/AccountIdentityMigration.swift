@@ -1,5 +1,6 @@
 import Foundation
 import XMPPProtocol
+import MessagingCore
 
 /// An account signed in before addresses were normalised may be named as typed (`Ellie@Example.org`) outside the
 /// message store too: preference keys, the attachment and avatar folders. Each is moved once to the normal spelling

@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import MessageStore
+import MessagingCore
 
 /// The sample conversations ("Explore sample conversations"): who they are with, what was said and when. They are
 /// stored as received and sent messages would be, with receipts, reactions, a reply, a star, a photo and a carried

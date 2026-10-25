@@ -10,6 +10,8 @@ struct HausXMPPApp: App {
     @State private var appearance = AppearanceStore.shared
 
     init() {
+        // The share extension draws its send button in the accent chosen here.
+        AppearanceStore.shared.mirror = SharedSession.groupDefaults
         let model = AppModel()
         _model = State(initialValue: model)
         _lifecycle = State(initialValue: SceneLifecycle(model: model))

@@ -321,7 +321,9 @@ final class AppModel {
     /// The account's upload service as last discovered; persisted per account so the attach button survives launch
     /// and reconnect. Observed: the composer's attach button follows it.
     private var uploadService: XMPPUploadService?
-    private var uploads: UploadServiceMemory { UploadServiceMemory(defaults: preferences) }
+    private var uploads: UploadServiceMemory {
+        UploadServiceMemory(defaults: preferences, mirror: testSessionID == nil ? SharedSession.groupDefaults : nil)
+    }
     /// True from the start of a connection's setup until its upload discovery settled; false when a resume skipped it.
     @ObservationIgnored private var uploadReconciliation = UploadReconciliation()
     private var serverProfiles: ServerProfileMemory { ServerProfileMemory(defaults: preferences) }
@@ -1961,6 +1963,7 @@ final class AppModel {
         encryptionOverviewChatID = nil; encryptionOverview = nil; encryptionDetailsChatID = nil
         refreshFence = [:]; encryptionAttention = EncryptionAttention(); ownDevices = []
         uploadService = uploads.load(account: account)
+        uploads.publish(account: account)
         resetTyping()
         lastSeenTracker = LastSeenTracker()
         // The previous account's preview fetches stop now, not at the next display.
@@ -2004,16 +2007,8 @@ final class AppModel {
         }
         guard let encryption else { return false }
         do {
-            let sealed = try AttachmentTransfer.seal(prepared.data)
-            let attachment = StoredAttachment(name: prepared.name, mediaType: prepared.mediaType, size: prepared.data.count,
-                                              width: prepared.width, height: prepared.height, hash: Data.sha256(prepared.data).hexString,
-                                              cipherHash: Data.sha256(sealed.ciphertext).hexString,
-                                              secret: try encryption.sealAttachmentSecret(account: account, key: sealed.key, iv: sealed.iv), uploadState: .pending)
-            try files.write(sealed.ciphertext, to: files.stagingURL(messageID: id))
-            try files.write(prepared.data, to: files.cacheURL(attachment, messageID: id))
-            let message = StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: "", isOutgoing: true,
-                                        reply: reply, encryptionProfile: "pending", attachment: attachment)
-            try await store.enqueueOutgoing(message)
+            try await OutgoingEnqueue.file(prepared, id: id, account: account, chatID: chatID, reply: reply, limit: attachmentLimit,
+                                           store: store, files: files, encryption: encryption)
             await refresh()
             startUploads()
             return true
@@ -2850,16 +2845,19 @@ final class AppModel {
         guard sample || isGroup(chatID) || !isLabAccount || chatID.hasSuffix("@" + accountDomain) else { return false }
         if isGroup(chatID), !canSend(to: chatID) { error = "Wait until this account has joined the group before sending."; return false }
         if let source, source.accountID != account || source.chatID != chatID { return false }
-        let message = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chatID,
-                                    senderID: account, body: body, isOutgoing: true, reply: source.map { replySnapshot(of: $0, in: chatID) }, encryptionProfile: sample ? nil : "pending",
-                                    linkPreview: Self.acceptedOwnLinkPreview(linkPreview, body: body, uploadHosts: linkPreviewUploadHosts))
-        if let problem = XMPPClient.messageProblem(to: chatID, body: body, id: message.id, reply: Self.wireReply(message.reply)) {
+        let id = UUID().uuidString, reply = source.map { replySnapshot(of: $0, in: chatID) }
+        if let problem = XMPPClient.messageProblem(to: chatID, body: body, id: id, reply: Self.wireReply(reply)) {
             self.error = Self.sendFailure(problem)
             return false
         }
+        guard var message = try? OutgoingEnqueue.textMessage(body, id: id, account: account, chatID: chatID, reply: reply,
+                                                             linkPreview: Self.acceptedOwnLinkPreview(linkPreview, body: body, uploadHosts: linkPreviewUploadHosts))
+        else { return false }
         do {
-            if sample { try await store.insertMessage(message) }
-            else { try await store.enqueueOutgoing(message) }
+            if sample {
+                message.encryptionProfile = nil
+                try await store.insertMessage(message)
+            } else { try await store.enqueueOutgoing(message) }
             await refresh()
             startOutbox()
             return true // Accepted durably, not delivered.

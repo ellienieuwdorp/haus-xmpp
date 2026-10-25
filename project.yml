@@ -28,6 +28,8 @@ targets:
     sources:
       - App
       - Shared
+      # What the app shares with its share extension.
+      - AppShared
       # The icon artwork as a plain image too, for the About screen: iOS does not load an app icon set by name.
       - path: App/Assets.xcassets/AppIcon.appiconset/AppIcon.png
         buildPhase: resources
@@ -143,6 +145,7 @@ targets:
           # The Mac's icon is the iPhone art in the macOS shape, in Mac/Assets.xcassets.
           - Assets.xcassets
       - Shared
+      - AppShared
       - Mac
       # Debug-only: the app arms and reads the extension's storage probe.
       - NotificationServiceMac/MacExtensionProbe.swift

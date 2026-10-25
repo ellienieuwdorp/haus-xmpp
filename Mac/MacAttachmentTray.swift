@@ -2,6 +2,7 @@ import AppKit
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
+import MessagingCore
 
 /// A file in the composer's tray: being reduced to what will be uploaded, then ready to send.
 struct MacTrayItem: Identifiable {

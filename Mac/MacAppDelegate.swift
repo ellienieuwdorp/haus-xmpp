@@ -51,6 +51,8 @@ import SwiftUI
         MacDebugHooks.prepareLaunch()
         #endif
         PushRegistration.shared.installNotificationDelegate()
+        // The share extension draws its send button in the accent chosen here.
+        AppearanceStore.shared.mirror = SharedSession.groupDefaults
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
