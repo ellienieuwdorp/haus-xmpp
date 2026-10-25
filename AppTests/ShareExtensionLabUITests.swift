@@ -274,7 +274,10 @@ final class ShareExtensionLabUITests: XCTestCase {
     @MainActor private func openShareSheet(in host: XCUIApplication) {
         let share = host.buttons.matching(NSPredicate(format: "label == 'Share' OR identifier == 'ShareButton'")).firstMatch
         if share.waitForExistence(timeout: 3), share.isHittable { share.tap(); return }
-        let menu = host.buttons.matching(NSPredicate(format: "label IN {'More', 'Page Menu', 'Tab Menu'} OR identifier IN {'MoreButton', 'PageMenuButton'}")).firstMatch
+        // "More" holds Share when the toolbar shows both it and the page menu.
+        let more = host.buttons.matching(NSPredicate(format: "label == 'More' OR identifier IN {'MoreButton', 'MoreMenuButton'}")).firstMatch
+        let menu = more.waitForExistence(timeout: 3)
+            ? more : host.buttons.matching(NSPredicate(format: "label IN {'Page Menu', 'Tab Menu'} OR identifier == 'PageMenuButton'")).firstMatch
         if menu.waitForExistence(timeout: 3) { menu.tap() }
         else { host.coordinate(withNormalizedOffset: CGVector(dx: 0.855, dy: 0.933)).tap() }
         if !share.waitForExistence(timeout: 5) { print(host.debugDescription) }
