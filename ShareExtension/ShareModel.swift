@@ -86,9 +86,13 @@ import AppKit
     var selectedChats: [ShareRules.Chat] { selection.compactMap { id in chats.first { $0.id == id } } }
     var isPreparing: Bool { prepared.values.contains(.preparing) }
     var canSend: Bool {
-        phase == .ready && !isPreparing && ShareRules.canSend(files: readyFiles.count, text: text, recipients: selection.count)
+        phase == .ready && !isPreparing
+            && ShareRules.canSend(files: readyFiles.count, unsendableFiles: unsendableFiles.count, text: text, recipients: selection.count)
     }
+    /// A file that could not be prepared stays on the review card until the user removes it.
+    var hasUnsendableFiles: Bool { !unsendableFiles.isEmpty }
     private var readyFiles: [SharedItem] { files.filter { if case .ready = prepared[$0.id] { true } else { false } } }
+    private var unsendableFiles: [SharedItem] { files.filter { if case .failed = prepared[$0.id] { true } else { false } } }
 
     func unavailableReason(_ chat: ShareRules.Chat) -> String? {
         ShareRules.unavailableReason(chat, hasFiles: hasFiles, filesAccepted: filesAccepted, isBlocked: !chat.isGroup && blocklist.blocks(chat.id))
@@ -256,15 +260,11 @@ import AppKit
                 }
             }
             for chat in recipients where queued[chat.id] == nil { deliveries[chat.id] = .failed }
-            guard !queued.isEmpty else {
-                outcomeNote = "Nothing could be saved. Try again from Haus XMPP."
-                phase = .finished
-                return
-            }
+            guard !queued.isEmpty else { return settle(queued, of: recipients, states: [:], unsaved: failed) }
             donate(to: recipients.filter { queued[$0.id] != nil })
             OutboxRing.ring()
             let states = await deliver(queued, rooms: Set(recipients.filter(\.isGroup).map(\.id)))
-            settle(queued, states: states, failed: failed)
+            settle(queued, of: recipients, states: states, unsaved: failed)
         }
     }
 
@@ -313,20 +313,17 @@ import AppKit
     }
 
     private func show(_ states: [String: ShareItemState], of queued: [String: [String]]) {
-        for (chat, ids) in queued where deliveries[chat] != .failed {
+        for (chat, ids) in queued {
             deliveries[chat] = ShareRules.delivery(ids.map { states[$0] ?? .queued }, finished: false)
         }
     }
 
-    private func settle(_ queued: [String: [String]], states: [String: ShareItemState], failed: Set<String>) {
-        for (chat, ids) in queued {
-            let delivery = ShareRules.delivery(ids.map { states[$0] ?? .queued }, finished: true)
-            deliveries[chat] = failed.contains(chat) && delivery == .sent ? .failed : delivery
-        }
-        let values = Array(deliveries.values)
-        if values.contains(.failed) { outcomeNote = "Some of this wasn't sent. Open Haus XMPP to retry it." }
-        else if values.contains(where: { $0 != .sent }) { outcomeNote = "Haus XMPP will finish sending. Open it if a device needs your review." }
-        else { outcomeNote = nil }
+    /// `unsaved`: chats for which an item could not be saved. Its data is gone with the sheet, so the result says to
+    /// share it again rather than letting the rest's state stand for it.
+    private func settle(_ queued: [String: [String]], of recipients: [ShareRules.Chat], states: [String: ShareItemState], unsaved: Set<String>) {
+        let saved = Dictionary(recipients.map { chat in (chat.id, (queued[chat.id] ?? []).map { states[$0] ?? .queued }) },
+                               uniquingKeysWith: { first, _ in first })
+        (deliveries, outcomeNote) = ShareRules.outcome(saved, unsaved: unsaved)
         phase = .finished
     }
 

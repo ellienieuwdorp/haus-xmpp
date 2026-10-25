@@ -210,6 +210,9 @@ struct ShareReviewView: View {
             if model.text.utf8.count > OutgoingEnqueue.maximumTextBytes {
                 Text("This message is too long to send.").font(.footnote).foregroundStyle(.secondary)
             }
+            if model.hasUnsendableFiles {
+                Text("Remove the files that can't be sent to share the rest.").font(.footnote).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -334,7 +337,7 @@ struct ShareResultRow: View {
                 case .sending: ProgressView()
                 case .sent: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                 case .queued: Image(systemName: "clock").foregroundStyle(.secondary)
-                case .failed: Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                case .failed, .incomplete: Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
                 }
             }
             .font(.title3)
@@ -375,6 +378,7 @@ enum ShareCopy {
         case .sent: "Sent"
         case .queued: "Queued"
         case .failed: "Not sent"
+        case .incomplete: "Not all saved"
         }
     }
 

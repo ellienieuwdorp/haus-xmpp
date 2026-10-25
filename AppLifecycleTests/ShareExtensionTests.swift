@@ -127,12 +127,19 @@ final class ShareExtensionTests: XCTestCase {
     }
 
     func testSendNeedsContentAChatAndAtMostFiveChats() {
-        XCTAssertTrue(ShareRules.canSend(files: 1, text: "", recipients: 1))
-        XCTAssertTrue(ShareRules.canSend(files: 0, text: "Hi", recipients: ShareRules.maximumRecipients))
-        XCTAssertFalse(ShareRules.canSend(files: 0, text: " \n", recipients: 1))
-        XCTAssertFalse(ShareRules.canSend(files: 1, text: "", recipients: 0))
-        XCTAssertFalse(ShareRules.canSend(files: 1, text: "", recipients: ShareRules.maximumRecipients + 1))
-        XCTAssertFalse(ShareRules.canSend(files: 0, text: String(repeating: "a", count: OutgoingEnqueue.maximumTextBytes + 1), recipients: 1))
+        XCTAssertTrue(ShareRules.canSend(files: 1, unsendableFiles: 0, text: "", recipients: 1))
+        XCTAssertTrue(ShareRules.canSend(files: 0, unsendableFiles: 0, text: "Hi", recipients: ShareRules.maximumRecipients))
+        XCTAssertFalse(ShareRules.canSend(files: 0, unsendableFiles: 0, text: " \n", recipients: 1))
+        XCTAssertFalse(ShareRules.canSend(files: 1, unsendableFiles: 0, text: "", recipients: 0))
+        XCTAssertFalse(ShareRules.canSend(files: 1, unsendableFiles: 0, text: "", recipients: ShareRules.maximumRecipients + 1))
+        XCTAssertFalse(ShareRules.canSend(files: 0, unsendableFiles: 0, text: String(repeating: "a", count: OutgoingEnqueue.maximumTextBytes + 1),
+                                          recipients: 1))
+    }
+
+    func testAFileThatCouldNotBePreparedHoldsSendUntilRemoved() {
+        XCTAssertFalse(ShareRules.canSend(files: 1, unsendableFiles: 1, text: "", recipients: 1), "a readable PDF beside an oversized one")
+        XCTAssertFalse(ShareRules.canSend(files: 0, unsendableFiles: 1, text: "Caption", recipients: 1), "a caption beside a file that can't go")
+        XCTAssertTrue(ShareRules.canSend(files: 1, unsendableFiles: 0, text: "Caption", recipients: 1), "once it is removed")
     }
 
     func testOneChatsResultIsSentOnlyWhenTheServerAcknowledgedAllOfIt() {
@@ -140,6 +147,30 @@ final class ShareExtensionTests: XCTestCase {
         XCTAssertEqual(ShareRules.delivery([.sent, .sending], finished: true), .queued, "unacknowledged at the end stays with the app")
         XCTAssertEqual(ShareRules.delivery([.sent, .queued], finished: false), .sending)
         XCTAssertEqual(ShareRules.delivery([.sent, .failed], finished: true), .failed)
+    }
+
+    func testAnItemThatCouldNotBeSavedIsReportedWhateverBecameOfTheRest() {
+        let promise = "Haus XMPP will finish sending. Open it if a device needs your review."
+        let missing = "Some of this couldn't be saved. Share what's missing again."
+        // The caption was saved, the photo was not; the caption is queued, sending or sent.
+        for (rest, note) in [(ShareItemState.queued, missing + " " + promise), (.sending, missing + " " + promise), (.sent, missing)] {
+            let outcome = ShareRules.outcome(["a@x": [rest]], unsaved: ["a@x"])
+            XCTAssertEqual(outcome.deliveries, ["a@x": .incomplete], "\(rest)")
+            XCTAssertEqual(outcome.note, note, "never only the promise that the app finishes it")
+        }
+        // Another chat got everything and is told so; the line still names what is missing.
+        let mixed = ShareRules.outcome(["a@x": [.sent], "b@x": [.sent, .sent]], unsaved: ["a@x"])
+        XCTAssertEqual(mixed.deliveries, ["a@x": .incomplete, "b@x": .sent])
+        XCTAssertEqual(mixed.note, missing)
+        // Nothing saved for any chat.
+        let nothing = ShareRules.outcome(["a@x": [], "b@x": []], unsaved: ["a@x", "b@x"])
+        XCTAssertEqual(nothing.deliveries, ["a@x": .failed, "b@x": .failed])
+        XCTAssertEqual(nothing.note, "Nothing could be saved. Share it again.")
+        // Everything saved: a refused row has Retry in the chat, an unacknowledged one is the app's to finish.
+        XCTAssertEqual(ShareRules.outcome(["a@x": [.sent, .failed]], unsaved: []).note, "Some of this wasn't sent. Open Haus XMPP to retry it.")
+        XCTAssertEqual(ShareRules.outcome(["a@x": [.sending]], unsaved: []).deliveries, ["a@x": .queued])
+        XCTAssertEqual(ShareRules.outcome(["a@x": [.sending]], unsaved: []).note, promise)
+        XCTAssertNil(ShareRules.outcome(["a@x": [.sent]], unsaved: []).note)
     }
 
     // MARK: Activation rule
