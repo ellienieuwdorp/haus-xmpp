@@ -10,6 +10,11 @@ private func link(_ jid: String = "bob@x", account: String = "a", identifier: St
                 usesContactPhoto: usesContactPhoto, isReachable: reachable, linkedAt: Date(timeIntervalSince1970: 1_000))
 }
 
+/// A stored link as it was saved, without the generation the store gave it.
+private func unsaved(_ link: ContactLink?) -> ContactLink? {
+    link.map { var link = $0; link.generation = 0; return link }
+}
+
 private func commit(_ store: MessageStore, _ id: String, chat: String, sender: String? = nil, at: TimeInterval, room: String? = nil) async throws {
     if try await store.encryptionStateRevision(accountID: "a") == nil {
         try await store.saveEncryptionState(accountID: "a", expectedRevision: nil, data: Data([1]))
@@ -38,7 +43,7 @@ struct ContactLinkTests {
             let store = try MessageStore(url: url)
             #expect(try await store.chats(accountID: "a").map(\.id) == ["bob@x"])
             try await store.saveContactLink(link())
-            #expect(try await store.contactLink(accountID: "a", jid: "bob@x") == link())
+            #expect(unsaved(try await store.contactLink(accountID: "a", jid: "bob@x")) == link())
             try await store.close()
         }
         #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["27"]])
@@ -62,18 +67,20 @@ struct ContactLinkTests {
 
     @Test func linksArePerAccountAndAddressAndRelinkingReplaces() async throws {
         try await withEncryptedStore(account: "a") { store, _ async throws in
-            #expect(try await store.saveContactLink(link()) == nil)
+            let first = try await store.saveContactLink(link())
+            #expect(first.replaced == nil && unsaved(first.saved) == link() && first.saved.generation > 0)
             // The same address in another account is a separate link.
             try await store.saveContactLink(link(account: "b", identifier: "contact-2", name: "Other Bob"))
             #expect(try await store.contactLink(accountID: "b", jid: "bob@x")?.contactIdentifier == "contact-2")
-            // Relinking hands back the link it replaced, so its photo can go.
+            // Relinking hands back the link it replaced, so its photo can go, and is a new generation.
             let relinked = link(identifier: "contact-3", name: "Robert", imageHash: photo)
-            #expect(try await store.saveContactLink(relinked) == link())
-            #expect(try await store.contactLinks(accountID: "a") == [relinked])
+            let second = try await store.saveContactLink(relinked)
+            #expect(second.replaced == first.saved && second.saved.generation > first.saved.generation)
+            #expect(try await store.contactLinks(accountID: "a") == [second.saved])
             #expect(try await store.isAvatarHashInUse(accountID: "a", hash: photo))
             #expect(try await !store.isAvatarHashInUse(accountID: "b", hash: photo))
             // Unlinking one account leaves the other's.
-            #expect(try await store.removeContactLink(accountID: "a", jid: "bob@x") == relinked)
+            #expect(try await store.removeContactLink(accountID: "a", jid: "bob@x") == second.saved)
             #expect(try await store.contactLink(accountID: "a", jid: "bob@x") == nil)
             #expect(try await !store.isAvatarHashInUse(accountID: "a", hash: photo))
             #expect(try await store.contactLink(accountID: "b", jid: "bob@x") != nil)
@@ -81,19 +88,61 @@ struct ContactLinkTests {
         }
     }
 
-    /// A refresh that read the contact before the user unlinked or relinked must not bring the old link back.
+    /// A refresh that read the contact before the user unlinked or relinked must not touch the new link, even one to
+    /// the same contact.
     @Test func aRefreshOnlyUpdatesTheLinkItRead() async throws {
         try await withEncryptedStore(account: "a") { store, _ async throws in
             var refreshed = link()
             refreshed.displayName = "Bob Renamed"; refreshed.isReachable = false; refreshed.checkedAt = Date(timeIntervalSince1970: 2_000)
-            #expect(try await store.updateContactLink(refreshed) == nil)
+            #expect(try await store.refreshContactLink(refreshed) == nil)
             #expect(try await store.contactLink(accountID: "a", jid: "bob@x") == nil)
-            try await store.saveContactLink(link())
-            #expect(try await store.updateContactLink(refreshed) == link())
+            let saved = try await store.saveContactLink(link()).saved
+            refreshed.generation = saved.generation
+            let change = try #require(try await store.refreshContactLink(refreshed))
+            #expect(change.replaced == saved && change.saved == refreshed)
             #expect(try await store.contactLink(accountID: "a", jid: "bob@x") == refreshed)
+            // Unlinked and linked again to the same contact: a new link, which the earlier reading never reaches.
+            try await store.removeContactLink(accountID: "a", jid: "bob@x")
+            let again = try await store.saveContactLink(link()).saved
+            #expect(again.generation > saved.generation)
+            #expect(try await store.refreshContactLink(refreshed) == nil)
+            #expect(try await store.contactLink(accountID: "a", jid: "bob@x") == again)
             try await store.saveContactLink(link(identifier: "contact-9"))
-            #expect(try await store.updateContactLink(refreshed) == nil)
+            refreshed.generation = again.generation
+            #expect(try await store.refreshContactLink(refreshed) == nil)
             #expect(try await store.contactLink(accountID: "a", jid: "bob@x")?.contactIdentifier == "contact-9")
+        }
+    }
+
+    /// A refresh and the photo switch each write only their own fields, so neither undoes the other whichever read
+    /// the link first.
+    @Test func aRefreshAndThePhotoSwitchNeverUndoEachOther() async throws {
+        try await withEncryptedStore(account: "a") { store, _ async throws in
+            let saved = try await store.saveContactLink(link(imageHash: photo)).saved
+            // The refresh read the link before the user turned the switch on.
+            var refreshed = saved
+            refreshed.displayName = "Bob Renamed"; refreshed.checkedAt = Date(timeIntervalSince1970: 2_000)
+            let switched = try #require(try await store.setContactLinkUsesContactPhoto(true, accountID: "a", jid: "bob@x",
+                                                                                       generation: saved.generation))
+            #expect(switched.usesContactPhoto)
+            let change = try #require(try await store.refreshContactLink(refreshed))
+            #expect(change.saved.usesContactPhoto && change.saved.displayName == "Bob Renamed")
+
+            // The switch's caller held the link from before a refresh found the contact unreadable.
+            var unreadable = change.saved
+            unreadable.isReachable = false
+            try await store.refreshContactLink(unreadable)
+            let off = try #require(try await store.setContactLinkUsesContactPhoto(false, accountID: "a", jid: "bob@x",
+                                                                                  generation: saved.generation))
+            #expect(!off.usesContactPhoto && !off.isReachable && off.usableContactIdentifier == nil && off.displayName == "Bob Renamed")
+
+            // A switch for a link that was replaced changes nothing.
+            let relinked = try await store.saveContactLink(link(identifier: "contact-2")).saved
+            #expect(try await store.setContactLinkUsesContactPhoto(true, accountID: "a", jid: "bob@x", generation: saved.generation) == nil)
+            #expect(try await store.contactLink(accountID: "a", jid: "bob@x") == relinked)
+            try await store.removeContactLink(accountID: "a", jid: "bob@x")
+            #expect(try await store.setContactLinkUsesContactPhoto(true, accountID: "a", jid: "bob@x", generation: relinked.generation) == nil)
+            #expect(try await store.contactLink(accountID: "a", jid: "bob@x") == nil)
         }
     }
 
@@ -175,11 +224,12 @@ struct ContactLinkTests {
             #expect(batch.candidates[0].chatTitle == "Bob Example" && batch.candidates[0].chatAvatarHash == photo)
             #expect(batch.candidates[0].senderAvatarHash == photo && batch.candidates[0].senderContactIdentifier == "contact-1")
 
-            // Unreachable (deleted, or outside the limited set): the cached name stays, the system is not told.
-            var unreachable = link(imageHash: photo); unreachable.isReachable = false
-            try await store.updateContactLink(unreachable)
+            // Unreachable (deleted, or outside the limited set): the cached name and photo and the user's photo choice
+            // stay, the system is not told.
+            var unreachable = try #require(try await store.contactLink(accountID: "a", jid: "bob@x")); unreachable.isReachable = false
+            try await store.refreshContactLink(unreachable)
             batch = try await store.pendingNotifications(accountID: "a")
-            #expect(batch.candidates[0].chatTitle == "Bob Example" && batch.candidates[0].chatAvatarHash == verified)
+            #expect(batch.candidates[0].chatTitle == "Bob Example" && batch.candidates[0].chatAvatarHash == photo)
             #expect(batch.candidates[0].senderContactIdentifier == nil)
 
             // In a room, the member's link names them; the room itself is never linked.

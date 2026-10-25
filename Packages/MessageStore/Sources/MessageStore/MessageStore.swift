@@ -436,13 +436,16 @@ public actor MessageStore {
             }
             // v27: links from a direct chat's address to a contact in this device's Contacts (`ContactLink`). Device-local:
             // the contact identifier means nothing elsewhere. IF NOT EXISTS keeps it idempotent in any merge order.
+            // Every link (and relink) gets a new `generation`, never reused (AUTOINCREMENT), so a write prepared for one
+            // link can never land on the link that replaced it.
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS contact_links (
+                    generation INTEGER PRIMARY KEY AUTOINCREMENT,
                     account_id TEXT NOT NULL, jid TEXT NOT NULL, contact_identifier TEXT NOT NULL,
                     source TEXT NOT NULL CHECK(source IN ('picker','im_address','created')),
                     display_name TEXT, image_hash TEXT, use_contact_photo INTEGER NOT NULL DEFAULT 0,
                     reachable INTEGER NOT NULL DEFAULT 0, linked_at REAL NOT NULL, checked_at REAL,
-                    PRIMARY KEY(account_id, jid)
+                    UNIQUE(account_id, jid)
                 )
                 """)
             try connection.execute("PRAGMA user_version = \(addressesMigrated ? 27 : 22)")
@@ -3080,10 +3083,12 @@ extension MessageStore {
 
     private static func decodeContactLink(_ row: [Value]) -> ContactLink? {
         guard let source = ContactLink.Source(rawValue: row[3].string) else { return nil }
-        return ContactLink(accountID: row[0].string, jid: row[1].string, contactIdentifier: row[2].string, source: source,
-                           displayName: row[4].optionalString, imageHash: row[5].optionalString, usesContactPhoto: row[6].integer != 0,
-                           isReachable: row[7].integer != 0, linkedAt: Date(timeIntervalSince1970: row[8].double),
-                           checkedAt: row[9].optionalDate)
+        var link = ContactLink(accountID: row[0].string, jid: row[1].string, contactIdentifier: row[2].string, source: source,
+                               displayName: row[4].optionalString, imageHash: row[5].optionalString, usesContactPhoto: row[6].integer != 0,
+                               isReachable: row[7].integer != 0, linkedAt: Date(timeIntervalSince1970: row[8].double),
+                               checkedAt: row[9].optionalDate)
+        link.generation = row[10].integer
+        return link
     }
 
     private static func contactLinkValues(_ link: ContactLink) -> [Value] {
@@ -3093,37 +3098,53 @@ extension MessageStore {
     }
 
     public func contactLinks(accountID: String) throws -> [ContactLink] {
-        try connection.query("SELECT \(Self.contactLinkColumns) FROM contact_links WHERE account_id=? ORDER BY jid", [.text(accountID)])
+        try connection.query("SELECT \(Self.contactLinkColumns),generation FROM contact_links WHERE account_id=? ORDER BY jid", [.text(accountID)])
             .compactMap(Self.decodeContactLink)
     }
 
     public func contactLink(accountID: String, jid: String) throws -> ContactLink? {
-        try connection.query("SELECT \(Self.contactLinkColumns) FROM contact_links WHERE account_id=? AND jid=?", [.text(accountID), .text(jid)])
-            .first.flatMap(Self.decodeContactLink)
+        try connection.query("SELECT \(Self.contactLinkColumns),generation FROM contact_links WHERE account_id=? AND jid=?",
+                             [.text(accountID), .text(jid)]).first.flatMap(Self.decodeContactLink)
     }
 
-    /// Links (or relinks) the address, replacing any earlier link of it. Returns the replaced link, whose photo file the
-    /// caller may remove once nothing refers to it (`isAvatarHashInUse`).
-    @discardableResult public func saveContactLink(_ link: ContactLink) throws -> ContactLink? {
+    /// Links (or relinks) the address under a new generation, replacing any earlier link of it. Returns the link as
+    /// stored and the one it replaced, whose photo file the caller may remove once nothing refers to it
+    /// (`isAvatarHashInUse`).
+    @discardableResult public func saveContactLink(_ link: ContactLink) throws -> ContactLinkChange {
         try link.validate()
         return try connection.transaction {
             let previous = try contactLink(accountID: link.accountID, jid: link.jid)
             try connection.execute("INSERT OR REPLACE INTO contact_links(\(Self.contactLinkColumns)) VALUES(?,?,?,?,?,?,?,?,?,?)",
                                    Self.contactLinkValues(link))
-            return previous
+            guard let saved = try contactLink(accountID: link.accountID, jid: link.jid) else { throw MessageStoreError.invalidTransition }
+            return ContactLinkChange(saved: saved, replaced: previous)
         }
     }
 
-    /// A refresh's result: written only while the same contact is still linked, so a refresh that read the contact
-    /// before the user unlinked or relinked never brings the old link back. Returns the link it replaced, or nil.
-    @discardableResult public func updateContactLink(_ link: ContactLink) throws -> ContactLink? {
+    /// A refresh's reading of the contact: its name, photo and reachability and the check's time, written only to the
+    /// link of `link.generation`. A refresh that read the contact before the user unlinked or relinked never touches
+    /// the new link, and the user's own choices (the photo switch) are never written back. Returns the change, or nil
+    /// when that link is gone.
+    @discardableResult public func refreshContactLink(_ link: ContactLink) throws -> ContactLinkChange? {
         try link.validate()
         return try connection.transaction {
-            guard let previous = try contactLink(accountID: link.accountID, jid: link.jid),
-                  previous.contactIdentifier == link.contactIdentifier else { return nil }
-            try connection.execute("INSERT OR REPLACE INTO contact_links(\(Self.contactLinkColumns)) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                                   Self.contactLinkValues(link))
-            return previous
+            guard let previous = try contactLink(accountID: link.accountID, jid: link.jid), previous.generation == link.generation else { return nil }
+            try connection.execute("""
+                UPDATE contact_links SET display_name=?,image_hash=?,reachable=?,checked_at=? WHERE generation=?
+                """, [link.displayName.map(Value.text) ?? .null, link.imageHash.map(Value.text) ?? .null, .integer(link.isReachable ? 1 : 0),
+                      link.checkedAt.map { .real($0.timeIntervalSince1970) } ?? .null, .integer(link.generation)])
+            guard let saved = try contactLink(accountID: link.accountID, jid: link.jid) else { throw MessageStoreError.invalidTransition }
+            return ContactLinkChange(saved: saved, replaced: previous)
+        }
+    }
+
+    /// The user's "Use Contact Photo" choice for the link of `generation`; nothing else of it changes. Returns the link
+    /// as stored, or nil when that link is gone.
+    public func setContactLinkUsesContactPhoto(_ uses: Bool, accountID: String, jid: String, generation: Int) throws -> ContactLink? {
+        try connection.transaction {
+            try connection.execute("UPDATE contact_links SET use_contact_photo=? WHERE account_id=? AND jid=? AND generation=?",
+                                   [.integer(uses ? 1 : 0), .text(accountID), .text(jid), .integer(generation)])
+            return try contactLink(accountID: accountID, jid: jid).flatMap { $0.generation == generation ? $0 : nil }
         }
     }
 

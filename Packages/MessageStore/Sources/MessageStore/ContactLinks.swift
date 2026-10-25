@@ -33,6 +33,9 @@ public struct ContactLink: Sendable, Equatable, CustomStringConvertible {
     public var isReachable: Bool
     public var linkedAt: Date
     public var checkedAt: Date?
+    /// The store's number for this link, new for every link and relink and never reused; 0 until saved. Writes that
+    /// follow a link name it, so they never land on a link made since.
+    public internal(set) var generation = 0
 
     public init(accountID: String, jid: String, contactIdentifier: String, source: Source, displayName: String? = nil, imageHash: String? = nil,
                 usesContactPhoto: Bool = false, isReachable: Bool, linkedAt: Date = Date(), checkedAt: Date? = nil) {
@@ -70,6 +73,12 @@ public struct ContactLink: Sendable, Equatable, CustomStringConvertible {
     static func isHash(_ hash: String) -> Bool {
         hash.utf8.count == 40 && hash.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
+}
+
+/// What saving or refreshing a link wrote: the link as stored now, and the one it replaced.
+public struct ContactLinkChange: Sendable, Equatable {
+    public let saved: ContactLink
+    public let replaced: ContactLink?
 }
 
 /// A link's photo file, named by account and hash (`AvatarStore` in the app).
