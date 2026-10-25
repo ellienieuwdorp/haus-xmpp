@@ -3742,13 +3742,15 @@ final class AppModel {
     /// in a test session, and nothing that a deletion since has revoked (`mayDonate`).
     private func donateSend(to chatID: String) {
         let account = accountID, epoch = donationEpoch
-        guard !isDemo, testSessionID == nil, let storageRoot, mayDonate(to: chatID, account: account, epoch: epoch) else { return }
+        guard !isDemo, testSessionID == nil, let storageRoot, let store, mayDonate(to: chatID, account: account, epoch: epoch) else { return }
         let chat = chats.first { $0.id == chatID }
         let titles = Dictionary(chats.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+        // Linked contacts as the chat's notifications name them; the donation reads each link again (`OutgoingDonation`).
         let conversation = SuggestedConversation.outgoing(accountID: account, chatID: chatID, title: chat?.title, avatarHash: chat?.avatarHash,
-                                                          roomMembers: groupChats[chatID]?.members, titles: titles)
+                                                          roomMembers: groupChats[chatID]?.members, titles: titles, links: contactLinks.links)
         Task.detached {
-            await OutgoingDonation.donate([conversation], avatar: { AvatarStore.suggestionImageData(root: storageRoot, account: account, hash: $0) },
+            await OutgoingDonation.donate([conversation], store: store,
+                                          avatar: { AvatarStore.suggestionImageData(root: storageRoot, account: account, hash: $0) },
                                           allowed: { _ in await self.mayDonate(to: chatID, account: account, epoch: epoch) })
         }
     }
