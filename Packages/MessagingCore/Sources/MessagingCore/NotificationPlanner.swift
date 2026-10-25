@@ -52,10 +52,12 @@ public struct NotificationCommunication: Sendable, Equatable, CustomStringConver
         /// The bare JID: the `INPersonHandle` value (type unknown).
         public let handle: String
         public let displayName: String
-        /// A verified avatar hash; the app writes a pre-scaled copy into the App Group.
+        /// A verified avatar hash, or a linked contact's photo; the app writes a pre-scaled copy into the App Group.
         public let avatarHash: String?
-        public init(handle: String, displayName: String, avatarHash: String?) {
-            self.handle = handle; self.displayName = displayName; self.avatarHash = avatarHash
+        /// The linked contact (`CNContact.identifier`), only while the app can read it.
+        public let contactIdentifier: String?
+        public init(handle: String, displayName: String, avatarHash: String?, contactIdentifier: String? = nil) {
+            self.handle = handle; self.displayName = displayName; self.avatarHash = avatarHash; self.contactIdentifier = contactIdentifier
         }
     }
     public let sender: Person
@@ -162,7 +164,8 @@ public enum NotificationPlanner {
                 title: previews ? chatName : "", body: body, playsSound: false, destination: destination,
                 communication: previews && authenticated ? communication(accountID: candidate.accountID, thread: thread, chatName: chatName, chatAvatarHash: candidate.chatAvatarHash,
                                                         isGroup: candidate.isGroup, sender: NotificationParticipant(id: candidate.senderID, title: candidate.senderTitle,
-                                                                                                                    avatarHash: candidate.senderAvatarHash),
+                                                                                                                    avatarHash: candidate.senderAvatarHash,
+                                                                                                                    contactIdentifier: candidate.senderContactIdentifier),
                                                         members: candidate.groupMembers, body: text + more) : nil,
                 reference: reference, badge: badge)))
         }
@@ -202,11 +205,12 @@ public enum NotificationPlanner {
                                       sender: NotificationParticipant, members: [NotificationParticipant], body: String) -> NotificationCommunication {
         func person(_ participant: NotificationParticipant) -> NotificationCommunication.Person {
             .init(handle: participant.id, displayName: clean(displayName(participant.id, title: participant.title), limit: 40, maximumBytes: 160),
-                  avatarHash: participant.avatarHash)
+                  avatarHash: participant.avatarHash, contactIdentifier: participant.contactIdentifier)
         }
         let me = NotificationCommunication.Person(handle: accountID, displayName: displayName(accountID, title: nil), avatarHash: nil)
         guard isGroup else {
-            return NotificationCommunication(sender: .init(handle: sender.id, displayName: chatName, avatarHash: sender.avatarHash ?? chatAvatarHash),
+            return NotificationCommunication(sender: .init(handle: sender.id, displayName: chatName, avatarHash: sender.avatarHash ?? chatAvatarHash,
+                                                           contactIdentifier: sender.contactIdentifier),
                                              conversationIdentifier: thread, account: me, body: body)
         }
         return NotificationCommunication(sender: person(sender), conversationIdentifier: thread, account: me, groupName: chatName,

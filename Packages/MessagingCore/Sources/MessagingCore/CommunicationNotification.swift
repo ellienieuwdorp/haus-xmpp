@@ -97,6 +97,17 @@ public enum CommunicationHistory {
             return false
         }
     }
+
+    /// Deletes one conversation's donations by their group identifier (`NotificationIdentity.thread`): after unlinking
+    /// a contact, so the system forgets the person it learnt for that chat.
+    public typealias DeleteGroup = @Sendable (String) async throws -> Void
+
+    /// Best effort, like `deleteAll`.
+    public static func delete(conversation identifier: String,
+                              _ delete: DeleteGroup = { try await INInteraction.delete(with: $0) }) async {
+        do { try await delete(identifier) }
+        catch { log.notice("communication history deletion failed: \(CommunicationNotification.describe(error), privacy: .public)") }
+    }
 }
 
 private let log = Logger(subsystem: "haus.xmpp.ios", category: "notifications")
