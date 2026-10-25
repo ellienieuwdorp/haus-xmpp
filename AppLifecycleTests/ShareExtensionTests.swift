@@ -1,4 +1,5 @@
 import ImageIO
+import MessageStore
 import MessagingCore
 import UIKit
 import UniformTypeIdentifiers
@@ -98,6 +99,26 @@ final class ShareExtensionTests: XCTestCase {
         XCTAssertEqual(listed.count, 1 + ShareRules.recentChats)
         XCTAssertEqual(ShareRules.listed(chats, search: "c3").map(\.id).sorted(), (["c3@x"] + (30..<40).map { "c\($0)@x" }).sorted(),
                        "a search reaches chats beyond the recent ones")
+    }
+
+    /// The picker names and pictures a chat as the app does: a linked contact's name first, its photo after a verified
+    /// avatar unless the user chose the photo. A name-only link names the chat too; a room is never linked.
+    func testThePickerNamesAndPicturesALinkedChatAsTheAppDoes() {
+        let verified = String(repeating: "a", count: 40), photo = String(repeating: "b", count: 40)
+        var link = ContactLink(accountID: "me@x", jid: "bob@x", contactIdentifier: "C-1", source: .picker, displayName: "Robin Okafor",
+                               imageHash: photo, isReachable: false)
+        func listed(_ link: ContactLink?, id: String = "bob@x", group: Bool = false, avatar: String? = verified) -> ShareRules.Chat {
+            ShareRules.chat(id: id, storedTitle: id, isGroup: group, isPinned: false, verifiedAvatarHash: avatar, lastActivity: nil, link: link)
+        }
+        XCTAssertEqual(listed(nil).displayTitle, "bob")
+        XCTAssertEqual(listed(link).displayTitle, "Robin Okafor")
+        XCTAssertEqual(listed(link).avatarHash, verified)
+        XCTAssertEqual(listed(link, avatar: nil).avatarHash, photo)
+        link.usesContactPhoto = true
+        XCTAssertEqual(listed(link).avatarHash, photo)
+        let room = listed(link, id: "room@muc.x", group: true)
+        XCTAssertEqual(room.title, "room@muc.x")
+        XCTAssertEqual(room.avatarHash, verified)
     }
 
     func testChatsThatCannotTakeTheShareSayWhy() {

@@ -1,4 +1,5 @@
 import Foundation
+import MessageStore
 import MessagingCore
 
 /// The share screen's decisions, free of views and the store, so tests state them directly.
@@ -19,6 +20,15 @@ enum ShareRules {
         /// The stored encryption state, as the chat's header shows it. `.pending` draws no pill.
         let encryption: ChatCapabilities.Encryption
         var displayTitle: String { ContactName.display(for: id, title: title) }
+    }
+
+    /// A stored chat as the picker lists it, named and pictured as the app and its notifications show it: a linked
+    /// contact's name and photo first (`ContactLink`). Rooms are never linked. The encryption state comes later.
+    static func chat(id: String, storedTitle: String, isGroup: Bool, isPinned: Bool, verifiedAvatarHash: String?, lastActivity: Date?,
+                     link: ContactLink?) -> Chat {
+        let link = isGroup ? nil : link
+        return Chat(id: id, title: link?.name ?? storedTitle, isGroup: isGroup, isPinned: isPinned,
+                    avatarHash: ContactLink.avatarHash(verified: verifiedAvatarHash, link: link), lastActivity: lastActivity, encryption: .pending)
     }
 
     /// Why a chat cannot take this share; nil when it can.

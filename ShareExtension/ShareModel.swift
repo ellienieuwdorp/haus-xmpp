@@ -61,6 +61,8 @@ import AppKit
     private var uploadService: XMPPUploadService?
     private var filesAccepted: Bool?
     private var roomMembers: [String: [String]] = [:]
+    /// The account's contact links by chat address, read once with the chats.
+    private var contactLinks: [String: ContactLink] = [:]
     private var preparedFiles: [UUID: PreparedAttachment] = [:]
     private var preparation: Task<Void, Never>?
     private var sendTask: Task<Void, Never>?
@@ -142,9 +144,11 @@ import AppKit
             filesAccepted = uploads.hasAnswer(account: accountID) ? uploadService != nil : nil
             roomMembers = (try? await encryption.knownGroupRooms(account: accountID)) ?? [:]
             let stored = try await store.chats(accountID: accountID).filter { $0.id != accountID }
+            let links = (try? await store.contactLinks(accountID: accountID)) ?? []
+            contactLinks = Dictionary(links.map { ($0.jid, $0) }, uniquingKeysWith: { first, _ in first })
             chats = stored.map { chat in
-                ShareRules.Chat(id: chat.id, title: chat.title, isGroup: roomMembers[chat.id] != nil, isPinned: chat.isPinned,
-                                avatarHash: chat.avatarHash, lastActivity: chat.lastMessage?.sentAt, encryption: .pending)
+                ShareRules.chat(id: chat.id, storedTitle: chat.title, isGroup: roomMembers[chat.id] != nil, isPinned: chat.isPinned,
+                                verifiedAvatarHash: chat.avatarHash, lastActivity: chat.lastMessage?.sentAt, link: contactLinks[chat.id])
             }
         } catch {
             Self.log.error("share could not open storage: \(String(describing: type(of: error)), privacy: .public)")
