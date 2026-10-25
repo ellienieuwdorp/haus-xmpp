@@ -34,8 +34,8 @@ public enum ShareItemState: Sendable, Equatable {
 /// outbox pass and wait for the server's acknowledgement. `end()` always follows: it closes the stream, joins every
 /// task and gives the lease back, which marks a stanza still in flight as unconfirmed for the archive to reconcile.
 ///
-/// The PUTs run in this process, so ending the session cancels them; the rows stay pending and the app requests new
-/// slots for them on its next connection. Nothing here changes trust or sends plaintext.
+/// The PUTs run in this process, so the deadline or ending the session cancels them; the rows stay pending and the app
+/// requests new slots for them on its next connection. Nothing here changes trust or sends plaintext.
 public actor ShareSession {
     /// Puts the staged ciphertext at the slot; true for a 2xx answer. Injectable for tests.
     public typealias Upload = @Sendable (_ file: URL, _ slot: XMPPUploadSlot, _ size: Int) async throws -> Bool
@@ -71,16 +71,26 @@ public actor ShareSession {
     }
 
     /// Connects, uploads `messageIDs`' files, joins `rooms` and runs one outbox pass, then waits until `deadline` for the
-    /// server to acknowledge every one of them. `progress` hears each message's state as it changes. Cancelling the
-    /// calling task closes the stream, so every step returns promptly. Returns the last states read.
+    /// server to acknowledge every one of them. `progress` hears each message's state as it changes. The deadline, or
+    /// cancelling the calling task, cancels the whole send: the stream closes, and a slot request or a PUT in flight is
+    /// cancelled with it, so this returns promptly and `end()` can give the lease back. Returns the last states read.
     public func send(messageIDs: [String], rooms: Set<String>, until deadline: ContinuousClock.Instant,
                      progress: @escaping @Sendable ([String: ShareItemState]) async -> Void = { _ in }) async -> [String: ShareItemState] {
         guard holdsLease, !ended else { return await states(messageIDs) }
-        let watchdog = Task { [weak self] in
+        let work = Task { await transmit(messageIDs: messageIDs, rooms: rooms, deadline: deadline, progress: progress) }
+        let watchdog = Task {
             try? await Task.sleep(until: deadline, clock: .continuous)
-            await self?.disconnect()
+            work.cancel()
         }
         defer { watchdog.cancel() }
+        await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+        let current = await states(messageIDs)
+        await progress(current)
+        return current
+    }
+
+    private func transmit(messageIDs: [String], rooms: Set<String>, deadline: ContinuousClock.Instant,
+                          progress: @escaping @Sendable ([String: ShareItemState]) async -> Void) async {
         do {
             try await withTaskCancellationHandler {
                 try await connect(rooms: rooms, deadline: deadline)
@@ -88,6 +98,8 @@ public actor ShareSession {
                 try await uploadFiles(inChatsOf: Set(messageIDs))
                 guard let client else { throw CancellationError() }
                 let joined = await joinedRooms(rooms, client: client)
+                // Past the deadline nothing more is sealed.
+                try Task.checkCancellation()
                 _ = try await OutboxDrain(account: account.accountID, client: client, encryption: encryption, store: store,
                                           sender: OutboxSender(store: store), joinedGroups: joined)
                     .run(OutboxDrain.Hooks(didChange: { [weak self] in
@@ -108,8 +120,6 @@ public actor ShareSession {
             try? await Task.sleep(for: .milliseconds(200))
             current = await states(messageIDs)
         }
-        await progress(current)
-        return current
     }
 
     /// Ends the session: closes the stream, joins the consumer and the post-bind duties, runs `presentation` while the
