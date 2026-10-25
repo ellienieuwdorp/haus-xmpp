@@ -1,39 +1,6 @@
 import SwiftUI
 import OMEMO
 
-/// One-line trust state for the details pill, presented from `ChatCapabilities.encryption`.
-struct ConversationTrust {
-    /// `pending`: nothing stored yet. No pill is drawn (its height is kept), so "not known yet" never reads as "off".
-    enum Level { case verified, encrypted, review, pending, other }
-    let level: Level
-    let subtitle: String
-
-    var needsReview: Bool { level == .review }
-    var icon: String {
-        switch level {
-        case .verified, .encrypted, .pending: "lock"
-        case .review: "exclamationmark.shield"
-        case .other: "lock.open"
-        }
-    }
-    var color: Color {
-        switch level {
-        case .verified: .green
-        case .encrypted: .secondary
-        case .review: .orange
-        case .pending, .other: .secondary
-        }
-    }
-    var pill: String {
-        switch level {
-        case .verified: "Encrypted · Verified"
-        case .encrypted: "Encrypted"
-        case .review: "Needs review"
-        case .pending, .other: subtitle
-        }
-    }
-}
-
 extension AppModel {
     /// A stored title, unless it is just the address; then the local part reads as the name (`ContactName`).
     nonisolated static func displayName(for chatID: String, title: String?) -> String {
@@ -45,18 +12,7 @@ extension AppModel {
     func trustSummary(for chatID: String) -> ConversationTrust {
         // The samples read as a verified chat would; the chat list says they are samples.
         if isDemo { return ConversationTrust(level: .verified, subtitle: "Encrypted · Verified") }
-        let group = isGroup(chatID)
-        switch chatCapabilities(chatID).encryption {
-        case .pending:
-            return ConversationTrust(level: .pending, subtitle: "")
-        case .needsReview:
-            return ConversationTrust(level: .review, subtitle: group ? "Devices need review" : "New device needs review")
-        case .unavailable(let reason):
-            return ConversationTrust(level: .other, subtitle: reason)
-        case .encrypted(let verified):
-            if group { return ConversationTrust(level: verified ? .verified : .encrypted, subtitle: "\(groupChats[chatID]?.members.count ?? 0) members · Encrypted") }
-            return ConversationTrust(level: verified ? .verified : .encrypted, subtitle: verified ? "Encrypted · Verified" : "Encrypted")
-        }
+        return ConversationTrust(chatCapabilities(chatID).encryption, isGroup: isGroup(chatID), members: groupChats[chatID]?.members.count ?? 0)
     }
 }
 
@@ -74,25 +30,6 @@ enum DetailsHeroMetrics {
     static let avatar: CGFloat = 64, top: CGFloat = 8, bottom: CGFloat = 12
     static let title = Font.title2.weight(.bold)
     #endif
-}
-
-/// The trust capsule under a details hero; the small symbol keeps it a balanced pill.
-struct TrustPill: View {
-    let text: String
-    let systemImage: String
-    let color: Color
-
-    var body: some View {
-        // Label's default icon gap reads as two separate things at footnote size.
-        HStack(spacing: 3) { Image(systemName: systemImage); Text(text) }
-            .accessibilityElement(children: .combine)
-            .imageScale(.small)
-            .font(.footnote.weight(.semibold))
-            .padding(.horizontal, 10).padding(.vertical, 5)
-            .frame(minHeight: 26)
-            .foregroundStyle(color)
-            .background(color.opacity(0.14), in: Capsule())
-    }
 }
 
 struct ChatDetailsView: View {
@@ -195,5 +132,19 @@ struct ChatDetailsView: View {
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
+    }
+}
+
+extension AppModel {
+    /// The one derived value per chat that views read for trust, sending and attaching.
+    func chatCapabilities(_ chatID: String) -> ChatCapabilities {
+        let group = groupChats[chatID]
+        // Review means a stored device is undecided or a send is held for a fingerprint decision. Retained ciphertext
+        // is not a review by itself: a carbon from another own client or a message from a removed device stays
+        // retained with nothing to approve, and blaming a new device for it was wrong (2026-09-25).
+        return ChatCapabilities.derive(isDemo: isDemo, isGroup: group != nil, knowledge: encryptionKnowledge(for: chatID),
+                                       reviewPending: encryptionAttention.heldForTrust.contains(chatID),
+                                       groupJoined: group?.joined == true,
+                                       groupIssue: group?.issue, uploadAvailable: canSendAttachments, sessionReady: session.isReady)
     }
 }

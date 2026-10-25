@@ -182,6 +182,8 @@ final class AppModel {
     @ObservationIgnored private var hasTransportOwnership = false
     /// Answers the notification extension's liveness handshake (`startLivenessResponder`).
     @ObservationIgnored private var livenessResponder: AppLiveness.Responder?
+    /// Hears the share extension's ring after it queued messages (`OutboxRing`).
+    @ObservationIgnored private var outboxRingListener: OutboxRing.Listener?
     /// Background time begun when a release from the background left the kernel lock held (`releaseLeaseInBackground`):
     /// the app is not suspended holding it. The next release that frees the lock ends it.
     @ObservationIgnored private var unreleasedLease: BackgroundActivity?
@@ -321,7 +323,9 @@ final class AppModel {
     /// The account's upload service as last discovered; persisted per account so the attach button survives launch
     /// and reconnect. Observed: the composer's attach button follows it.
     private var uploadService: XMPPUploadService?
-    private var uploads: UploadServiceMemory { UploadServiceMemory(defaults: preferences) }
+    private var uploads: UploadServiceMemory {
+        UploadServiceMemory(defaults: preferences, mirror: testSessionID == nil ? SharedSession.groupDefaults : nil)
+    }
     /// True from the start of a connection's setup until its upload discovery settled; false when a resume skipped it.
     @ObservationIgnored private var uploadReconciliation = UploadReconciliation()
     private var serverProfiles: ServerProfileMemory { ServerProfileMemory(defaults: preferences) }
@@ -411,6 +415,7 @@ final class AppModel {
                 }
             }
             startLivenessResponder()
+            startOutboxRingListener()
         }
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let usable = path.status == .satisfied
@@ -870,6 +875,7 @@ final class AppModel {
         uploads.forget(account: account)
         serverProfiles.forget(account: account)
         BlockedAddresses.forget(accountID: account, defaults: sessionDefaults)
+        ShareSuggestionSetting.forget(accountID: account, defaults: sessionDefaults)
         // The next account starts without the backoff or the alert this one earned.
         reconnection = ReconnectPolicy()
         selectAccount("")
@@ -906,6 +912,7 @@ final class AppModel {
             appBadge = nil
             setAppBadge(0)
             // Donated communication interactions name this account's contacts, rooms and avatars: they go with it.
+            donationEpoch += 1
             await CommunicationHistory.deleteAll()
         } else if badgeUsesDockTile {
             // A test session's count lives only on the Mac's Dock tile, and goes with the session.
@@ -1401,6 +1408,7 @@ final class AppModel {
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
         appBadge = nil
         setAppBadge(0)
+        donationEpoch += 1
         await CommunicationHistory.deleteAll()
         selectAccount("")
         preferences.removeObject(forKey: "lastAccount")
@@ -1961,6 +1969,8 @@ final class AppModel {
         encryptionOverviewChatID = nil; encryptionOverview = nil; encryptionDetailsChatID = nil
         refreshFence = [:]; encryptionAttention = EncryptionAttention(); ownDevices = []
         uploadService = uploads.load(account: account)
+        uploads.publish(account: account)
+        shareSuggestionsEnabled = ShareSuggestionSetting.isEnabled(accountID: account, defaults: sessionDefaults)
         resetTyping()
         lastSeenTracker = LastSeenTracker()
         // The previous account's preview fetches stop now, not at the next display.
@@ -2004,18 +2014,11 @@ final class AppModel {
         }
         guard let encryption else { return false }
         do {
-            let sealed = try AttachmentTransfer.seal(prepared.data)
-            let attachment = StoredAttachment(name: prepared.name, mediaType: prepared.mediaType, size: prepared.data.count,
-                                              width: prepared.width, height: prepared.height, hash: Data.sha256(prepared.data).hexString,
-                                              cipherHash: Data.sha256(sealed.ciphertext).hexString,
-                                              secret: try encryption.sealAttachmentSecret(account: account, key: sealed.key, iv: sealed.iv), uploadState: .pending)
-            try files.write(sealed.ciphertext, to: files.stagingURL(messageID: id))
-            try files.write(prepared.data, to: files.cacheURL(attachment, messageID: id))
-            let message = StoredMessage(id: id, accountID: account, chatID: chatID, senderID: account, body: "", isOutgoing: true,
-                                        reply: reply, encryptionProfile: "pending", attachment: attachment)
-            try await store.enqueueOutgoing(message)
+            try await OutgoingEnqueue.file(prepared, id: id, account: account, chatID: chatID, reply: reply, limit: attachmentLimit,
+                                           store: store, files: files, encryption: encryption)
             await refresh()
             startUploads()
+            donateSend(to: chatID)
             return true
         } catch {
             if accountID == account { self.error = (error as? LocalizedError)?.errorDescription ?? "Could not save the file." }
@@ -2850,18 +2853,22 @@ final class AppModel {
         guard sample || isGroup(chatID) || !isLabAccount || chatID.hasSuffix("@" + accountDomain) else { return false }
         if isGroup(chatID), !canSend(to: chatID) { error = "Wait until this account has joined the group before sending."; return false }
         if let source, source.accountID != account || source.chatID != chatID { return false }
-        let message = StoredMessage(id: UUID().uuidString, accountID: account, chatID: chatID,
-                                    senderID: account, body: body, isOutgoing: true, reply: source.map { replySnapshot(of: $0, in: chatID) }, encryptionProfile: sample ? nil : "pending",
-                                    linkPreview: Self.acceptedOwnLinkPreview(linkPreview, body: body, uploadHosts: linkPreviewUploadHosts))
-        if let problem = XMPPClient.messageProblem(to: chatID, body: body, id: message.id, reply: Self.wireReply(message.reply)) {
+        let id = UUID().uuidString, reply = source.map { replySnapshot(of: $0, in: chatID) }
+        if let problem = XMPPClient.messageProblem(to: chatID, body: body, id: id, reply: Self.wireReply(reply)) {
             self.error = Self.sendFailure(problem)
             return false
         }
+        guard var message = try? OutgoingEnqueue.textMessage(body, id: id, account: account, chatID: chatID, reply: reply,
+                                                             linkPreview: Self.acceptedOwnLinkPreview(linkPreview, body: body, uploadHosts: linkPreviewUploadHosts))
+        else { return false }
         do {
-            if sample { try await store.insertMessage(message) }
-            else { try await store.enqueueOutgoing(message) }
+            if sample {
+                message.encryptionProfile = nil
+                try await store.insertMessage(message)
+            } else { try await store.enqueueOutgoing(message) }
             await refresh()
             startOutbox()
+            if !sample { donateSend(to: chatID) }
             return true // Accepted durably, not delivered.
         } catch {
             if accountID == account { self.error = "Could not save the message. Your text is still in the composer." }
@@ -3655,8 +3662,89 @@ final class AppModel {
     }
 
     var notificationPreviewsEnabled = true
+    /// "Suggest chats in Share Sheet" (`ShareSuggestionSetting`); with previews off nothing is donated whatever it says.
+    private(set) var shareSuggestionsEnabled = true
+    /// Moves on before every deletion of all donations (sign-out, moved data deleted, previews or suggestions off). An
+    /// outgoing donation begun before it deletes its conversation again once the system finished with it
+    /// (`OutgoingDonation.donate`), so a donation in flight cannot outlive the deletion.
+    @ObservationIgnored private var donationEpoch = 0
 
     func setNotificationPreviews(_ enabled: Bool) async { await updatePreferences { $0.notificationPreviews = enabled } }
+
+    /// "Suggest chats in Share Sheet". Off deletes every donation, under the lease like previews off, so no notification
+    /// run donates meanwhile; when the system cannot delete them the switch stays on and says so.
+    func setShareSuggestions(_ enabled: Bool) async {
+        guard !accountID.isEmpty, enabled != shareSuggestionsEnabled else { return }
+        let account = accountID
+        guard !enabled else {
+            ShareSuggestionSetting.set(true, accountID: account, defaults: sessionDefaults)
+            shareSuggestionsEnabled = true
+            return
+        }
+        guard transportWanted, !quiescing, let store else { return }
+        let token = generation
+        activeEncryptionOperations += 1
+        defer { activeEncryptionOperations -= 1 }
+        do { if !hasTransportOwnership { try await acquireForegroundOwnership(store, token: token) } }
+        catch { self.error = "Could not save preferences."; return }
+        guard generation == token, accountID == account else { return }
+        // Off first, so an extension that reads it from here on donates nothing that the deletion would miss.
+        ShareSuggestionSetting.set(false, accountID: account, defaults: sessionDefaults)
+        donationEpoch += 1
+        if !isDemo, testSessionID == nil, !(await CommunicationHistory.deleteAll()) {
+            ShareSuggestionSetting.set(true, accountID: account, defaults: sessionDefaults)
+            self.error = "Suggestions could not be removed from the share sheet. Try again."
+            return
+        }
+        guard accountID == account else { return }
+        shareSuggestionsEnabled = false
+    }
+
+    /// After a user's send was durably queued (composer, notification Reply): one outgoing donation for its chat, so the
+    /// share sheet and Siri learn where the user writes. Nothing with previews or suggestions off, for the samples or
+    /// in a test session, and nothing that a deletion since has revoked (`mayDonate`).
+    private func donateSend(to chatID: String) {
+        let account = accountID, epoch = donationEpoch
+        guard !isDemo, testSessionID == nil, let storageRoot, mayDonate(to: chatID, account: account, epoch: epoch) else { return }
+        let chat = chats.first { $0.id == chatID }
+        let titles = Dictionary(chats.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+        let conversation = SuggestedConversation.outgoing(accountID: account, chatID: chatID, title: chat?.title, avatarHash: chat?.avatarHash,
+                                                          roomMembers: groupChats[chatID]?.members, titles: titles)
+        Task.detached {
+            await OutgoingDonation.donate([conversation], avatar: { AvatarStore.suggestionImageData(root: storageRoot, account: account, hash: $0) },
+                                          allowed: { _ in await self.mayDonate(to: chatID, account: account, epoch: epoch) })
+        }
+    }
+
+    /// Whether a donation for `chatID` begun at `epoch` may stand: the same account, no deletion of all donations since,
+    /// previews and suggestions on, and the chat not blocked (blocking deletes its donations).
+    private func mayDonate(to chatID: String, account: String, epoch: Int) -> Bool {
+        donationEpoch == epoch && accountID == account && notificationPreviewsEnabled
+            && ShareSuggestionSetting.isEnabled(accountID: account, defaults: sessionDefaults) && !blocklist.blocks(chatID)
+    }
+
+    /// Blocked chats leave the share sheet's suggestions (both directions of their donations).
+    private func forgetSuggestions(for chatIDs: [String], account: String) {
+        guard !chatIDs.isEmpty, !isDemo, testSessionID == nil else { return }
+        let identifiers = chatIDs.map { NotificationIdentity.thread(accountID: account, chatID: $0) }
+        Task.detached { await CommunicationHistory.deleteConversations(identifiers) }
+    }
+
+    /// The share extension queued messages in the shared store: show them, and send them if this process owns the
+    /// transport (the Mac app keeps it while it runs). Without the lease the next connection sends them.
+    private func startOutboxRingListener() {
+        guard outboxRingListener == nil else { return }
+        let listener = OutboxRing.Listener { [weak self] in
+            guard let self, self.store != nil, !self.isDemo else { return }
+            Task {
+                await self.refresh()
+                self.startUploads()
+                self.startOutbox()
+            }
+        }
+        if listener.start() { outboxRingListener = listener }
+        else { Self.syncLog.error("outbox ring could not be observed") }
+    }
 
     /// Every per-account switch is one row written under the transport lease; the store enforces the receipt switches.
     func updatePreferences(_ change: (inout AccountPreferences) -> Void) async {
@@ -3673,7 +3761,10 @@ final class AppModel {
             try await store.setAccountPreferences(accountID: account, updated)
             // Previews off: names and avatars donated while they were on leave the system too. The lease is held, so
             // no extension run is donating meanwhile, and later runs read the new setting.
-            if CommunicationHistory.purgesDonations(from: accountPreferences, to: updated) { await CommunicationHistory.deleteAll() }
+            if CommunicationHistory.purgesDonations(from: accountPreferences, to: updated) {
+                donationEpoch += 1
+                await CommunicationHistory.deleteAll()
+            }
             guard accountID == account else { return }
             let sharedLastSeen = accountPreferences.lastSeen
             accountPreferences = updated; notificationPreviewsEnabled = updated.notificationPreviews
@@ -3861,10 +3952,11 @@ final class AppModel {
         BlockedAddresses.save(updated, accountID: account, defaults: sessionDefaults)
         updateAppBadge(chats)
         dropTyping(in: newlyBlocked)
-        // What a newly blocked chat already had on screen goes too.
+        // What a newly blocked chat already had on screen goes too, and so do its share-sheet suggestions.
         for chatID in newlyBlocked {
             Task { await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID) }
         }
+        forgetSuggestions(for: newlyBlocked, account: account)
     }
 
     /// Blocks a direct chat's address, optionally reporting it (XEP-0377) with the reported message's archive ID. The
@@ -4414,6 +4506,7 @@ extension AppModel: NotificationActionEnvironment {
     func enqueueNotificationReply(_ text: String, to message: StoredMessage) async throws -> String {
         let reply = NotificationActionHandler.replyMessage(text, id: UUID().uuidString, to: message)
         try await enqueueReply(reply)
+        donateSend(to: reply.chatID)
         return reply.id
     }
 
@@ -4619,7 +4712,11 @@ extension AppModel: NotificationActionEnvironment {
             guard let root else { return nil }
             return AvatarStore.notificationImageData(root: root, account: account, hash: hash)
         }
-        let poster = UserNotificationPoster(avatarData: avatarData)
+        // Read as each request posts, so a presentation under way stops donating once the switch is off. UserDefaults is
+        // thread-safe.
+        nonisolated(unsafe) let defaults = sessionDefaults
+        let poster = UserNotificationPoster(donates: { ShareSuggestionSetting.isEnabled(accountID: account, defaults: defaults) },
+                                            avatarData: avatarData)
         #if DEBUG && os(macOS)
         // `-haus-log-notifications` / `-haus-post-notifications`: a lab run logs what it posts (or would post).
         if let logged = MacDebugNotificationLog.poster(posting: poster, avatarData: avatarData) { return logged }

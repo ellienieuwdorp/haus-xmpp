@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct AppearanceView: View {
-    static let modeKey = "appearanceMode"
+    static let modeKey = AppearanceStore.modeKey
 
     @Environment(\.appearance) private var appearance
 

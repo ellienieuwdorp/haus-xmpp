@@ -1,8 +1,8 @@
 import AVFoundation
-import CryptoKit
 import Foundation
 import ImageIO
 import MessageStore
+import MessagingCore
 import OMEMO
 import Photos
 import PhotosUI
@@ -13,65 +13,9 @@ import UIKit
 import UniformTypeIdentifiers
 import XMPPProtocol
 
-/// Where shared files live on disk. Plaintext bytes are keyed by their hash in an account-scoped
-/// cache; ciphertext waiting for a PUT is staged per message. Both are under the shared container
-/// with complete-until-first-unlock protection, never inside SQLite.
-struct AttachmentFiles {
-    let root: URL
-
-    init(directory: URL, account: String) {
-        root = Self.root(directory: directory, account: account)
-        for sub in ["cache", "staging"] {
-            try? FileManager.default.createDirectory(at: root.appending(path: sub), withIntermediateDirectories: true,
-                                                     attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
-        }
-    }
-
-    static func root(directory: URL, account: String) -> URL {
-        let scope = SHA256.hash(data: Data(account.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
-        return directory.appending(path: "attachments/\(scope)", directoryHint: .isDirectory)
-    }
-
-    func cached(_ attachment: StoredAttachment, messageID: String) -> URL? {
-        let url = cacheURL(attachment, messageID: messageID)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
-    }
-
-    /// Legacy links carry no hash, so the message ID keys the cache instead.
-    func cacheURL(_ attachment: StoredAttachment, messageID: String) -> URL {
-        let key = attachment.hash.isEmpty ? "m-" + messageID : attachment.hash
-        let ext = (attachment.name as NSString).pathExtension.lowercased()
-        return root.appending(path: "cache/" + key + (ext.isEmpty ? "" : "." + ext))
-    }
-
-    func stagingURL(messageID: String) -> URL { root.appending(path: "staging/\(messageID).enc") }
-
-    func write(_ data: Data, to url: URL) throws {
-        try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-    }
-}
-
-/// A file chosen for sending, already reduced to what we are willing to upload.
-struct PreparedAttachment: Sendable {
-    let data: Data
-    let name: String
-    let mediaType: String
-    let width: Int?
-    let height: Int?
-}
-
-enum AttachmentPreparer {
-    enum Failure: LocalizedError {
-        case tooLarge(limit: Int), unreadable
-        var errorDescription: String? {
-            switch self {
-            case .tooLarge(let limit): "This file is larger than the \(ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .file)) this server accepts."
-            case .unreadable: "This file could not be read."
-            }
-        }
-    }
-    static let maximumPixels = 2048
-
+/// The app's own pickers: the photo library, recent photos and the camera. Files, shared items and the parts every
+/// source shares are in `AttachmentPreparation.swift`.
+extension AttachmentPreparer {
     /// A library pick: photos go through `prepareImage`, video is copied out as a file first.
     static func prepare(photo item: PhotosPickerItem, limit: Int) async throws -> PreparedAttachment {
         if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
@@ -81,41 +25,6 @@ enum AttachmentPreparer {
         }
         guard let data = try await item.loadTransferable(type: Data.self) else { throw Failure.unreadable }
         return try prepareImage(data, name: "photo", limit: limit)
-    }
-
-    /// Images are re-encoded at ≤ 2048 px, video is exported at 720p, everything else goes as is.
-    static func prepare(fileURL: URL, name: String, type: UTType?, limit: Int) async throws -> PreparedAttachment {
-        let scoped = fileURL.startAccessingSecurityScopedResource()
-        defer { if scoped { fileURL.stopAccessingSecurityScopedResource() } }
-        let type = type ?? UTType(filenameExtension: fileURL.pathExtension) ?? .data
-        if type.conforms(to: .image) {
-            return try prepareImage(try Data(contentsOf: fileURL), name: name, limit: limit)
-        }
-        if type.conforms(to: .movie) {
-            return try await prepareVideo(fileURL, name: name, limit: limit)
-        }
-        let data = try Data(contentsOf: fileURL)
-        guard data.count <= limit else { throw Failure.tooLarge(limit: limit) }
-        return PreparedAttachment(data: data, name: name, mediaType: type.preferredMIMEType ?? "application/octet-stream", width: nil, height: nil)
-    }
-
-    static func prepareImage(_ data: Data, name: String, limit: Int) throws -> PreparedAttachment {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                  kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
-                  kCGImageSourceThumbnailMaxPixelSize: maximumPixels, kCGImageSourceShouldCacheImmediately: true] as CFDictionary),
-              let jpeg = jpegData(image, quality: 0.85) else { throw Failure.unreadable }
-        guard jpeg.count <= limit else { throw Failure.tooLarge(limit: limit) }
-        let base = (name as NSString).deletingPathExtension
-        return PreparedAttachment(data: jpeg, name: (base.isEmpty ? "photo" : base) + ".jpg", mediaType: "image/jpeg", width: image.width, height: image.height)
-    }
-
-    private static func jpegData(_ image: CGImage, quality: CGFloat) -> Data? {
-        #if os(iOS)
-        UIImage(cgImage: image).jpegData(compressionQuality: quality)
-        #else
-        try? MacImageEncoding.jpeg(image, quality: quality)
-        #endif
     }
 
     /// A recent-photos pick from the attachment panel. Originals kept only in iCloud download on demand.
@@ -155,27 +64,6 @@ enum AttachmentPreparer {
         }
     }
     #endif
-
-    static func prepareVideo(_ url: URL, name: String, limit: Int) async throws -> PreparedAttachment {
-        try await prepareVideo(AVURLAsset(url: url), name: name, limit: limit)
-    }
-
-    /// Slow-motion library videos arrive as compositions rather than files, so the export takes any asset.
-    static func prepareVideo(_ asset: AVAsset, name: String, limit: Int) async throws -> PreparedAttachment {
-        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1280x720) else { throw Failure.unreadable }
-        let output = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".mp4")
-        defer { try? FileManager.default.removeItem(at: output) }
-        try await export.export(to: output, as: .mp4)
-        let data = try Data(contentsOf: output)
-        guard data.count <= limit else { throw Failure.tooLarge(limit: limit) }
-        var width: Int?, height: Int?
-        if let track = try? await asset.loadTracks(withMediaType: .video).first, let size = try? await track.load(.naturalSize),
-           let transform = try? await track.load(.preferredTransform) {
-            let bounds = CGRect(origin: .zero, size: size).applying(transform)
-            width = Int(abs(bounds.width)); height = Int(abs(bounds.height))
-        }
-        return PreparedAttachment(data: data, name: (name as NSString).deletingPathExtension + ".mp4", mediaType: "video/mp4", width: width, height: height)
-    }
 }
 
 /// Photos hands the asset over on its own queue; nothing mutates it, and the export only reads it.
@@ -277,50 +165,6 @@ final class AttachmentUploader: NSObject, URLSessionTaskDelegate, @unchecked Sen
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
         let status = (task.response as? HTTPURLResponse)?.statusCode ?? 0
         onFinish(task.taskIdentifier, error == nil && (200...299).contains(status))
-    }
-}
-
-/// Bounded decoding for bubbles: the thumbnail pass never inflates the full image.
-enum AttachmentThumbnails {
-    // NSCache is thread-safe; the annotation only tells the compiler so.
-    nonisolated(unsafe) private static let cache = NSCache<NSString, PlatformImage>()
-
-    /// Synchronous hit, so a reconfigured cell never blanks an image it already showed.
-    static func cached(for url: URL) -> PlatformImage? { cache.object(forKey: url.path as NSString) }
-
-    static func image(for url: URL, mediaType: String, maxPixels: Int = 1024) async -> PlatformImage? {
-        let key = url.path as NSString
-        if let hit = cache.object(forKey: key) { return hit }
-        let image: PlatformImage? = await Task.detached(priority: .userInitiated) {
-            if mediaType.hasPrefix("image/") {
-                guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                      let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                          kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
-                          kCGImageSourceThumbnailMaxPixelSize: maxPixels] as CFDictionary) else { return nil }
-                return PlatformImage(cgImage: cg)
-            }
-            if mediaType.hasPrefix("video/") {
-                let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
-                generator.appliesPreferredTrackTransform = true
-                generator.maximumSize = CGSize(width: maxPixels, height: maxPixels)
-                guard let cg = try? await generator.image(at: .zero).image else { return nil }
-                return PlatformImage(cgImage: cg)
-            }
-            return nil
-        }.value
-        if let image { cache.setObject(image, forKey: key) }
-        return image
-    }
-
-    /// A small still for the composer tray. The decoder reads files, so the bytes pass through a temporary one.
-    static func preview(of prepared: PreparedAttachment) async -> PlatformImage? {
-        guard prepared.mediaType.hasPrefix("image/") || prepared.mediaType.hasPrefix("video/") else { return nil }
-        let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + "." + (prepared.name as NSString).pathExtension)
-        guard (try? prepared.data.write(to: url, options: .completeFileProtection)) != nil else { return nil }
-        defer { try? FileManager.default.removeItem(at: url) }
-        let image = await image(for: url, mediaType: prepared.mediaType, maxPixels: 240)
-        cache.removeObject(forKey: url.path as NSString)
-        return image
     }
 }
 

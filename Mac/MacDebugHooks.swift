@@ -126,6 +126,8 @@ import SwiftUI
 /// - `-haus-notification-settings`: Settings shows its Notifications section without a signed-in account, for captures
 ///   with sample data.
 /// - `-haus-self-check`: the App Group container, the store in it, and a data-protection Keychain round trip.
+/// - `-haus-share-sheet <link>`, `-haus-share-to <chat>`, `-haus-share-send`: the Share extension's screen in a window of
+///   the app (`MacShareDebug`).
 /// - `-haus-lab-sign-in`: signs in with `HAUS_LAB_USERNAME` and `HAUS_LAB_PASSWORD` (a lab account; pass
 ///   `-lab-ui-test` and `HAUS_LAB_CA_DER` for the lab's certificate authority, as the iPhone's lab tests do).
 /// - `-haus-sign-out`: signs the saved account out after launch, to leave a lab run's Mac clean.
@@ -266,6 +268,7 @@ import SwiftUI
             }
             await waitUntil(seconds: 15) { model.hasLoadedChats }
             log("chats loaded: \(model.chats.map(\.id))")
+            if let link = value(after: "-haus-share-sheet") { await MacShareDebug.run(link, model: model) }
             if mainWindow == nil {
                 log("no main window after launch; opening it")
                 window.showMainWindow()
@@ -837,7 +840,7 @@ import SwiftUI
     /// drawn by the window server, so `cacheDisplay` leaves every glass view (the sidebar, toolbar buttons) blank with
     /// its content missing. Each one is painted over with a flat stand-in for its material, and its content is
     /// rendered on top of that; glass therefore reads as a flat fill in captures.
-    private static func render(_ window: NSWindow) -> Data? {
+    static func render(_ window: NSWindow) -> Data? {
         renderRep(window)?.representation(using: .png, properties: [:])
     }
 

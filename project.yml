@@ -28,6 +28,8 @@ targets:
     sources:
       - App
       - Shared
+      # What the app shares with its share extension.
+      - AppShared
       # The icon artwork as a plain image too, for the About screen: iOS does not load an app icon set by name.
       - path: App/Assets.xcassets/AppIcon.appiconset/AppIcon.png
         buildPhase: resources
@@ -82,6 +84,7 @@ targets:
       - package: OMEMO
       - sdk: Intents.framework
       - target: XMPPNotificationService
+      - target: HausShare
     settings:
       base:
         # Identifiers, name and icon come from Config/Base.xcconfig: Debug builds are the separate development app.
@@ -143,7 +146,12 @@ targets:
           # The Mac's icon is the iPhone art in the macOS shape, in Mac/Assets.xcassets.
           - Assets.xcassets
       - Shared
+      - AppShared
       - Mac
+      # The Share extension's model and screen, which the Debug-only `-haus-share-sheet` hook (Mac/MacShareDebug.swift)
+      # hosts in a window of the signed app.
+      - ShareExtension/ShareModel.swift
+      - ShareExtension/ShareViews.swift
       # Debug-only: the app arms and reads the extension's storage probe.
       - NotificationServiceMac/MacExtensionProbe.swift
       # The licence and notice files, bundled as they are in the repository for Settings > About > Licences.
@@ -180,6 +188,7 @@ targets:
       - package: MessagingCore
       - package: OMEMO
       - target: XMPPNotificationServiceMac
+      - target: HausShareMac
     settings:
       base:
         # The menu bar, Dock and Finder name: "Haus Dev.app" for the development app, so both can sit in Applications.
@@ -255,6 +264,62 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(HAUS_BUNDLE_ID_BASE).notifications
         CODE_SIGN_ENTITLEMENTS: NotificationServiceMac/NotificationServiceMac$(HAUS_EXTENSION_ENTITLEMENTS_SUFFIX).entitlements
         INFOPLIST_FILE: NotificationServiceMac/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
+        ARCHS: arm64
+        ENABLE_HARDENED_RUNTIME: YES
+  # The Share extension: queues what is shared through the composer's enqueue into the App Group store, then sends it
+  # while the sheet is up when the transport lease is free. Its own Info.plist (the activation rule, and
+  # `IntentsSupported` for share-sheet suggestions) and the App Group and Keychain entitlements the notification
+  # extension has, nothing more.
+  HausShare:
+    type: app-extension
+    platform: iOS
+    sources: [ShareExtension, Shared, AppShared]
+    dependencies:
+      - package: MessageStore
+      - package: MessagingCore
+      - package: OMEMO
+      - package: XMPPProtocol
+      - sdk: Intents.framework
+    settings:
+      base:
+        PRODUCT_NAME: HausShare
+        PRODUCT_BUNDLE_IDENTIFIER: $(HAUS_BUNDLE_ID_BASE).share
+        CODE_SIGN_ENTITLEMENTS: ShareExtension/ShareExtension.entitlements
+        INFOPLIST_FILE: ShareExtension/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
+        TARGETED_DEVICE_FAMILY: '1'
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+  # The Mac's Share extension: the same code and screen under the same App ID suffix, sandboxed. It only queues and rings
+  # the running app, which owns the transport, so it has no network entitlement.
+  HausShareMac:
+    type: app-extension
+    platform: macOS
+    deploymentTarget: '26.0'
+    sources:
+      - path: ShareExtension
+        # Its PrivacyInfo.xcprivacy is shared with the iOS extension: the same code, the same APIs.
+        excludes:
+          - ShareExtension.entitlements
+          - Info.plist
+      - Shared
+      - AppShared
+      - ShareExtensionMac
+    dependencies:
+      - package: MessageStore
+      - package: MessagingCore
+      - package: OMEMO
+      - package: XMPPProtocol
+      - sdk: Intents.framework
+    settings:
+      base:
+        PRODUCT_NAME: HausShare
+        PRODUCT_MODULE_NAME: HausShare
+        PRODUCT_BUNDLE_IDENTIFIER: $(HAUS_BUNDLE_ID_BASE).share
+        CODE_SIGN_ENTITLEMENTS: ShareExtensionMac/ShareExtensionMac.entitlements
+        INFOPLIST_FILE: ShareExtensionMac/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         APPLICATION_EXTENSION_API_ONLY: YES
         ARCHS: arm64

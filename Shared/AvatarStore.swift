@@ -36,18 +36,47 @@ enum AvatarStore {
     /// At most 256 px PNG: 256 × 256 × 4 bytes plus headers stays well under this.
     static let maximumNotificationImageBytes = 300_000
 
-    /// Writes the pre-scaled copy of a stored avatar once; true when it exists afterwards. Called by the app only.
+    /// The larger pre-scaled PNG an outgoing donation shows in share-sheet suggestions, which Apple asks to be at least
+    /// 360 px. Read by the app and the share extension only, never by the notification extension.
+    static func suggestionImageURL(root: URL, account: String, hash: String) -> URL {
+        directory(root: root, account: account).appending(path: hash + ".suggestion.png")
+    }
+
+    static let suggestionPixels = 384
+    /// At most 384 px PNG: 384 × 384 × 4 bytes plus headers stays under this.
+    static let maximumSuggestionImageBytes = 700_000
+
+    /// Writes the pre-scaled copies of a stored avatar once each; true when the notification copy exists afterwards.
+    /// Called by the app only.
     @discardableResult
     static func saveNotificationImage(root: URL, account: String, hash: String) -> Bool {
         guard isHash(hash) else { return false }
-        let target = notificationImageURL(root: root, account: account, hash: hash)
+        let original = url(root: root, account: account, hash: hash)
+        saveScaledCopy(of: original, to: suggestionImageURL(root: root, account: account, hash: hash), pixels: suggestionPixels,
+                       maximumBytes: maximumSuggestionImageBytes)
+        return saveScaledCopy(of: original, to: notificationImageURL(root: root, account: account, hash: hash), pixels: thumbnailPixels,
+                              maximumBytes: maximumNotificationImageBytes)
+    }
+
+    @discardableResult
+    private static func saveScaledCopy(of original: URL, to target: URL, pixels: Int, maximumBytes: Int) -> Bool {
         if FileManager.default.fileExists(atPath: target.path) { return true }
-        guard let image = image(at: url(root: root, account: account, hash: hash)) else { return false }
+        guard let image = image(at: original, pixels: pixels) else { return false }
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil) else { return false }
         CGImageDestinationAddImage(destination, image, nil)
-        guard CGImageDestinationFinalize(destination), data.length <= maximumNotificationImageBytes else { return false }
+        guard CGImageDestinationFinalize(destination), data.length <= maximumBytes else { return false }
         return (try? (data as Data).write(to: target, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])) != nil
+    }
+
+    /// The suggestion copy's bytes, falling back to the notification copy for an avatar stored before it existed (or
+    /// too large to keep at that size). Bounded and never decoded here.
+    static func suggestionImageData(root: URL, account: String, hash: String) -> Data? {
+        guard isHash(hash) else { return nil }
+        let url = suggestionImageURL(root: root, account: account, hash: hash)
+        if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int,
+           size > 0, size <= maximumSuggestionImageBytes, let data = try? Data(contentsOf: url) { return data }
+        return notificationImageData(root: root, account: account, hash: hash)
     }
 
     /// The pre-scaled copy's bytes for the extension, or nil. Bounded and never decoded here.
@@ -70,14 +99,14 @@ enum AvatarStore {
         image(at: url(root: root, account: account, hash: hash))
     }
 
-    static func image(at url: URL) -> CGImage? {
+    static func image(at url: URL, pixels: Int = thumbnailPixels) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               CGImageSourceGetCount(source) >= 1,
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int,
               width > 0, height > 0, width <= maximumPixels, height <= maximumPixels else { return nil }
         let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
-                                        kCGImageSourceThumbnailMaxPixelSize: thumbnailPixels,
+                                        kCGImageSourceThumbnailMaxPixelSize: pixels,
                                         kCGImageSourceCreateThumbnailWithTransform: true,
                                         kCGImageSourceShouldCacheImmediately: true]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)

@@ -1,15 +1,14 @@
 import Foundation
 import MessageStore
-import MessagingCore
 import OMEMO
 import XMPPProtocol
 
-/// One pass of the outbox on one connection: the composer's path, shared by the foreground session and a
-/// notification Reply. Seals what can be sealed, sends the sealed messages in queue order, then every update
+/// One pass of the outbox on one connection: the composer's path, shared by the foreground session, a notification
+/// Reply and the share extension. Seals what can be sealed, sends the sealed messages in queue order, then every update
 /// (reactions, receipts and markers, retractions, corrections, key transports). A chat that needs a fingerprint
 /// decision or keys is held: its messages stay queued, exactly as saved. Nothing here changes trust or sends
 /// plaintext content.
-struct OutboxDrain: Sendable {
+public struct OutboxDrain: Sendable {
     let account: String
     let client: XMPPClient
     let encryption: OMEMOService
@@ -18,18 +17,33 @@ struct OutboxDrain: Sendable {
     /// Rooms joined on this connection; a group message waits for its room.
     let joinedGroups: Set<String>
 
+    public init(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore, sender: OutboxSender,
+                joinedGroups: Set<String>) {
+        self.account = account; self.client = client; self.encryption = encryption; self.store = store
+        self.sender = sender; self.joinedGroups = joinedGroups
+    }
+
     /// How the caller reflects the pass. `hold` and `groupFailed` return the chats they marked as held for trust.
-    struct Hooks: Sendable {
-        var hold: @MainActor @Sendable (_ blocked: [String: String]) -> Set<String> = { Set($0.keys) }
-        var groupPrepared: @MainActor @Sendable (_ room: String) -> Void = { _ in }
-        var groupFailed: @MainActor @Sendable (_ room: String, _ error: any Error) -> Set<String> = { room, _ in [room] }
+    public struct Hooks: Sendable {
+        public var hold: @MainActor @Sendable (_ blocked: [String: String]) -> Set<String> = { Set($0.keys) }
+        public var groupPrepared: @MainActor @Sendable (_ room: String) -> Void = { _ in }
+        public var groupFailed: @MainActor @Sendable (_ room: String, _ error: any Error) -> Set<String> = { room, _ in [room] }
         /// Files queued as a reply that went without it (their chat fell back to legacy OMEMO before sealing).
-        var repliesDropped: @MainActor @Sendable (_ messageIDs: Set<String>) -> Void = { _ in }
-        var didChange: @Sendable () async -> Void = {}
+        public var repliesDropped: @MainActor @Sendable (_ messageIDs: Set<String>) -> Void = { _ in }
+        public var didChange: @Sendable () async -> Void = {}
+
+        public init(hold: @escaping @MainActor @Sendable (_ blocked: [String: String]) -> Set<String> = { Set($0.keys) },
+                    groupPrepared: @escaping @MainActor @Sendable (_ room: String) -> Void = { _ in },
+                    groupFailed: @escaping @MainActor @Sendable (_ room: String, _ error: any Error) -> Set<String> = { room, _ in [room] },
+                    repliesDropped: @escaping @MainActor @Sendable (_ messageIDs: Set<String>) -> Void = { _ in },
+                    didChange: @escaping @Sendable () async -> Void = {}) {
+            self.hold = hold; self.groupPrepared = groupPrepared; self.groupFailed = groupFailed
+            self.repliesDropped = repliesDropped; self.didChange = didChange
+        }
     }
 
     /// Returns the chats held for a fingerprint decision (or a group problem) on this pass.
-    func run(_ hooks: Hooks = Hooks()) async throws -> Set<String> {
+    public func run(_ hooks: Hooks = Hooks()) async throws -> Set<String> {
         let account = account, client = client, encryption = encryption, joinedGroups = joinedGroups
         let preparation = try await encryption.prepareAvailableMessages(account: account, transport: client)
         // Sends held for a fingerprint decision mark their chat for review; any other reason is a footnote.

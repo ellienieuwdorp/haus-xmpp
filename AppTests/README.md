@@ -73,7 +73,7 @@ Everything else goes in `HausXMPPLifecycleTests` (`AppLifecycleTests/`) or a pac
 
 ## Lab suites
 
-`EncryptionUITests`, `OutboxUITests`, `ReceiptUITests`, `ReactionUITests`, `RevisionUITests`, `GroupUITests`, `AttachmentSendLabUITests`, `LastSeenLabUITests` and `NotificationActionLabUITests` sign in to a test server. They share `LabFixture` (skip unless exported, launch on an isolated store) and the steps in `LabUITestSupport.swift`: `connectToLab`, `startChat(with:)`, `selectModernOMEMO` and `acceptPendingDevices`.
+`EncryptionUITests`, `OutboxUITests`, `ReceiptUITests`, `ReactionUITests`, `RevisionUITests`, `GroupUITests`, `AttachmentSendLabUITests`, `LastSeenLabUITests`, `NotificationActionLabUITests` and `ShareExtensionLabUITests` sign in to a test server. They share `LabFixture` (skip unless exported, launch on an isolated store) and the steps in `LabUITestSupport.swift`: `connectToLab`, `startChat(with:)`, `selectModernOMEMO` and `acceptPendingDevices`.
 
 They need:
 
@@ -93,6 +93,7 @@ Export the variables with a `TEST_RUNNER_` prefix so that Xcode passes them to t
 | `XMPP_ACTION_TARGET`, `XMPP_ACTION_EXPECT` | Its Mark as Read step: the text of two one-shot peer messages that you send from the host, the first while the app shows the chat list, the second after it went to the background |
 | `HAUS_LAB_PORT` | Optional: sign in through a local proxy on this port instead of 5223 |
 | `HAUS_LAB_HOST` | Optional: the server's private LAN address, for runs on a device |
+| `XMPP_SHARE_LAB`, `XMPP_SECOND_PEER` | `ShareExtensionLabUITests`: `1`, and a second echo peer's bare JID |
 
 `AttachmentSendLabUITests` only catches a dropped upload request over a slow link: on loopback the upload slot round trips are too short to show the bug. Put a proxy that adds about 100 ms each way in front of the server and set `HAUS_LAB_PORT`. `AttachmentDispatchTests.testFilesQueuedDuringAPassGetTheNextPass` in the lifecycle suite catches the same bug without a server.
 
@@ -101,7 +102,9 @@ Two more suites need setups that are not described here and skip otherwise:
 - `PushOnboardingLabUITests` (`HAUS_PUSH_LAB=1`, `XMPP_PUSH_SERVICE`): a Prosody with `mod_cloud_notify` and a stand-in push gateway component.
 - `PushUITests` (`XMPP_PUSH_DEVICE_TEST=1`): a physical iPhone, real APNs and a staging server set through `HAUS_STAGING_DOMAIN` (see `Config/Local.xcconfig.example`).
 
-Run lab suites on a simulator you don't otherwise use. `NotificationActionLabUITests` and `PushOnboardingLabUITests` use the app's primary store on purpose.
+Run lab suites on a simulator you don't otherwise use. `NotificationActionLabUITests`, `PushOnboardingLabUITests` and `ShareExtensionLabUITests` use the app's primary store on purpose.
+
+`ShareExtensionLabUITests` drives Safari, Photos and Files into the Share extension. Its steps run in order (`test1…` signs in and trusts both peers, the rest share). The extension has no test CA of its own, so install the lab CA as a trust anchor on that simulator (`xcrun simctl keychain <udid> add-root-cert <ca.crt>`), give the library at least three items whose newest are two photos and a video (`xcrun simctl addmedia`), and put a file named `Synthetic report.pdf` in Files under On My iPhone. `xcodebuild test` does not always reinstall the app the extension is embedded in: after changing the extension, run `xcrun simctl install <udid> <built HausXMPP.app>` and `test-without-building`.
 
 ## Where the time goes
 

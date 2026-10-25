@@ -1415,6 +1415,14 @@ public actor MessageStore {
                                [.text(accountID), .text(messageID)])
     }
 
+    /// A PUT that ran outside the app's background session succeeded: the GET URL and the uploaded state in one write,
+    /// so no task identifier of another session is ever stored on the row.
+    public func recordAttachmentUploaded(accountID: String, messageID: String, url: String) throws {
+        guard !url.isEmpty, url.utf8.count <= 2_048 else { throw MessageStoreError.invalidValue }
+        try connection.execute("UPDATE attachments SET upload_state='uploaded',task_id=NULL,url=? WHERE account_id=? AND message_id=? AND upload_state='pending'",
+                               [.text(url), .text(accountID), .text(messageID)])
+    }
+
     /// The lowercased hosts of every file URL the account has stored: its upload slots' GET URLs and the files it
     /// received. Link previews never fetch from them.
     public func attachmentHosts(accountID: String) throws -> Set<String> {
