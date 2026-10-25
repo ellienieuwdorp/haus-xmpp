@@ -620,10 +620,9 @@ struct AccountTransfer: Sendable {
         try JSONEncoder().encode(moved).write(to: locations.marker, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
-    /// A contact link photo's two files (`ContactPhoto`) under a `Messaging/` folder.
+    /// A contact link photo's files (`ContactPhoto`, `AvatarStore.files`) under a `Messaging/` folder.
     static func photoFiles(_ photos: [ContactLinkPhoto], root: URL) -> [URL] {
-        photos.flatMap { [AvatarStore.url(root: root, account: $0.accountID, hash: $0.hash),
-                          AvatarStore.notificationImageURL(root: root, account: $0.accountID, hash: $0.hash)] }
+        photos.flatMap { AvatarStore.files(root: root, account: $0.accountID, hash: $0.hash) }
     }
 
     static func describe(_ error: any Error) -> String {

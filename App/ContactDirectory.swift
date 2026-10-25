@@ -138,8 +138,7 @@ enum ContactPhoto {
     }
 
     static func remove(_ hash: String, root: URL, account: String) {
-        try? FileManager.default.removeItem(at: AvatarStore.url(root: root, account: account, hash: hash))
-        try? FileManager.default.removeItem(at: AvatarStore.notificationImageURL(root: root, account: account, hash: hash))
+        for file in AvatarStore.files(root: root, account: account, hash: hash) { try? FileManager.default.removeItem(at: file) }
     }
 }
 

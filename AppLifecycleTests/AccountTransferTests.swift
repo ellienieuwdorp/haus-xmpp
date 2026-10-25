@@ -225,12 +225,15 @@ import XMPPProtocol
                         imageHash: photo, isReachable: true)
         }
         func photoFiles(_ root: URL, _ account: String, _ hash: String) throws -> [URL] {
-            [AvatarStore.url(root: root, account: account, hash: hash), AvatarStore.notificationImageURL(root: root, account: account, hash: hash)]
+            AvatarStore.files(root: root, account: account, hash: hash)
         }
+        // The original and both pre-scaled copies, as `ContactPhoto.save` writes them.
         func writePhotos(_ root: URL, _ photos: [(String, String)]) throws {
             for (account, hash) in photos {
                 try AvatarStore.save(Data("synthetic \(hash)".utf8), root: root, account: account, hash: hash)
-                try Data("synthetic \(hash)".utf8).write(to: AvatarStore.notificationImageURL(root: root, account: account, hash: hash))
+                for copy in [AvatarStore.notificationImageURL, AvatarStore.suggestionImageURL] {
+                    try Data("synthetic \(hash)".utf8).write(to: copy(root, account, hash))
+                }
             }
         }
         let messaging = source.locations.install.messaging

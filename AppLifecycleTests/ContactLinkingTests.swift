@@ -57,9 +57,13 @@ import XCTest
         let properties = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(XCTUnwrap(CGImageSourceCreateWithData(bytes as CFData, nil)), 0, nil)
                                        as? [CFString: Any])
         XCTAssertLessThanOrEqual(properties[kCGImagePropertyPixelWidth] as? Int ?? .max, AvatarStore.thumbnailPixels)
+        // Outgoing donations read the share-sheet copy; it goes with the rest.
+        let files = AvatarStore.files(root: root, account: "me@example.org", hash: hash)
+        XCTAssertTrue(files.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
         XCTAssertNil(ContactPhoto.save(Data("not an image".utf8), root: root, account: "me@example.org"))
         ContactPhoto.remove(hash, root: root, account: "me@example.org")
         XCTAssertNil(AvatarStore.notificationImageData(root: root, account: "me@example.org", hash: hash))
+        XCTAssertFalse(files.contains { FileManager.default.fileExists(atPath: $0.path) })
     }
 
     // MARK: ContactLinkCenter
@@ -161,7 +165,7 @@ import XCTest
         contacts["A"] = ContactCard(id: "A", name: "Robin Okafor", thumbnail: photo(.systemOrange), jabberAddresses: [])
         let (center, store, root) = try await center(contacts)
         _ = await center.link(robin, to: try XCTUnwrap(contacts["A"]), source: .picker)
-        XCTAssertEqual(photoFiles(root).count, 2, "the photo and its notification copy")
+        XCTAssertEqual(photoFiles(root).count, 3, "the photo and its notification and suggestion copies")
 
         contacts["A"] = ContactCard(id: "A", name: "Robin Okafor", thumbnail: photo(.systemGreen), jabberAddresses: [])
         let gate = contacts.holdNextRead()
