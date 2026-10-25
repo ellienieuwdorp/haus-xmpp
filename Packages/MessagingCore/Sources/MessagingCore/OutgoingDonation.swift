@@ -98,19 +98,5 @@ public enum OutgoingDonation {
     }
 }
 
-extension CommunicationHistory {
-    /// Deletes one conversation's donations, in both directions (`groupIdentifier` is its conversation identifier).
-    public typealias DeleteConversation = @Sendable (_ conversationIdentifier: String) async throws -> Void
-
-    /// Best effort, like `deleteAll`: blocking a contact or leaving a room must not wait on the system.
-    public static func deleteConversations(_ conversationIdentifiers: [String],
-                                           delete: @escaping DeleteConversation = { try await INInteraction.delete(with: $0) }) async {
-        for identifier in conversationIdentifiers {
-            do { try await delete(identifier) }
-            catch { log.notice("conversation donation deletion failed: \(CommunicationNotification.describe(error), privacy: .public)") }
-        }
-    }
-}
-
 private let log = Logger(subsystem: "haus.xmpp.ios", category: "notifications")
 #endif

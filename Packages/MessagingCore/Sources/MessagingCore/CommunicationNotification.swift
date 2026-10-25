@@ -77,7 +77,8 @@ public enum CommunicationNotification {
 /// Deletes donated interactions (Apple, "INInteraction.deleteAll(completion:)", accessed 2026-09-28). Each donation
 /// holds a contact's address, name and avatar and the conversation identifier; they feed system suggestions. Signing
 /// out, turning previews off and turning share suggestions off delete them all: the app has one account, and previews
-/// off means no name or avatar should stay with the system. Blocking a contact deletes that conversation's.
+/// off means no name or avatar should stay with the system. Blocking, unlinking or relinking a contact deletes that
+/// conversation's.
 public enum CommunicationHistory {
     /// The deletion the app runs, injectable for tests.
     public typealias DeleteAll = @Sendable () async throws -> Void
@@ -98,15 +99,18 @@ public enum CommunicationHistory {
         }
     }
 
-    /// Deletes one conversation's donations by their group identifier (`NotificationIdentity.thread`): after unlinking
-    /// a contact, so the system forgets the person it learnt for that chat.
-    public typealias DeleteGroup = @Sendable (String) async throws -> Void
+    /// Deletes one conversation's donations, in both directions (`groupIdentifier` is its conversation identifier,
+    /// `NotificationIdentity.thread`).
+    public typealias DeleteConversation = @Sendable (_ conversationIdentifier: String) async throws -> Void
 
-    /// Best effort, like `deleteAll`.
-    public static func delete(conversation identifier: String,
-                              _ delete: DeleteGroup = { try await INInteraction.delete(with: $0) }) async {
-        do { try await delete(identifier) }
-        catch { log.notice("communication history deletion failed: \(CommunicationNotification.describe(error), privacy: .public)") }
+    /// Best effort, like `deleteAll`: blocking a contact, leaving a room or unlinking a contact must not wait on the
+    /// system.
+    public static func deleteConversations(_ conversationIdentifiers: [String],
+                                           delete: @escaping DeleteConversation = { try await INInteraction.delete(with: $0) }) async {
+        for identifier in conversationIdentifiers {
+            do { try await delete(identifier) }
+            catch { log.notice("conversation donation deletion failed: \(CommunicationNotification.describe(error), privacy: .public)") }
+        }
     }
 
     /// The person as the store links them now, for a donation about to be made: the contact of a link the app can read
@@ -126,7 +130,7 @@ public enum CommunicationHistory {
     /// (A donation that outlived its own limit can still land after both.)
     public static func withdrawIfRelinked(_ people: [NotificationCommunication.Person], conversation: String, accountID: String,
                                           store: MessageStore,
-                                          withdraw: @Sendable (String) async -> Void = { await delete(conversation: $0) }) async {
+                                          withdraw: @Sendable (String) async -> Void = { await deleteConversations([$0]) }) async {
         for person in people where person.contactIdentifier != nil {
             guard await linkedNow(person, accountID: accountID, store: store) == person else { return await withdraw(conversation) }
         }

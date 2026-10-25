@@ -243,8 +243,8 @@ public struct NotificationPresenter: Sendable {
     public let posting: any NotificationPosting
     public var addTimeout: Duration
     public var cleanupTimeout: Duration
-    /// Deletes one conversation's donations (`CommunicationHistory.delete`); injectable for tests.
-    public var withdrawDonations: @Sendable (_ conversation: String) async -> Void = { await CommunicationHistory.delete(conversation: $0) }
+    /// Deletes one conversation's donations (`CommunicationHistory.deleteConversations`); injectable for tests.
+    public var withdrawDonations: @Sendable (_ conversation: String) async -> Void = { await CommunicationHistory.deleteConversations([$0]) }
 
     public init(posting: any NotificationPosting, addTimeout: Duration = .seconds(4), cleanupTimeout: Duration = .seconds(3)) {
         self.posting = posting; self.addTimeout = addTimeout; self.cleanupTimeout = cleanupTimeout

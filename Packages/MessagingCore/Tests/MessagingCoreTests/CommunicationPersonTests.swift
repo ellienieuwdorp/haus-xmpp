@@ -83,10 +83,10 @@ private func communication(_ candidate: NotificationCandidate, previews: Bool = 
     actor Seen { var groups: [String] = []; func add(_ group: String) { groups.append(group) } }
     let seen = Seen()
     let thread = NotificationIdentity.thread(accountID: account, chatID: "peer@example.org")
-    await CommunicationHistory.delete(conversation: thread) { await seen.add($0) }
+    await CommunicationHistory.deleteConversations([thread]) { await seen.add($0) }
     #expect(await seen.groups == [thread])
     struct Refused: Error {}
     // A failure is logged, never thrown.
-    await CommunicationHistory.delete(conversation: thread) { _ in throw Refused() }
+    await CommunicationHistory.deleteConversations([thread]) { _ in throw Refused() }
 }
 #endif

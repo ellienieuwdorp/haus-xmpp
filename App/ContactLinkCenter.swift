@@ -255,6 +255,6 @@ final class ContactLinkCenter {
     }
 
     private func deleteDonations(_ jid: String, account: String) async {
-        await CommunicationHistory.delete(conversation: NotificationIdentity.thread(accountID: account, chatID: jid))
+        await CommunicationHistory.deleteConversations([NotificationIdentity.thread(accountID: account, chatID: jid)])
     }
 }
