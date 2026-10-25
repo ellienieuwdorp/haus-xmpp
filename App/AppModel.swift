@@ -182,6 +182,8 @@ final class AppModel {
     @ObservationIgnored private var hasTransportOwnership = false
     /// Answers the notification extension's liveness handshake (`startLivenessResponder`).
     @ObservationIgnored private var livenessResponder: AppLiveness.Responder?
+    /// Hears the share extension's ring after it queued messages (`OutboxRing`).
+    @ObservationIgnored private var outboxRingListener: OutboxRing.Listener?
     /// Background time begun when a release from the background left the kernel lock held (`releaseLeaseInBackground`):
     /// the app is not suspended holding it. The next release that frees the lock ends it.
     @ObservationIgnored private var unreleasedLease: BackgroundActivity?
@@ -413,6 +415,7 @@ final class AppModel {
                 }
             }
             startLivenessResponder()
+            startOutboxRingListener()
         }
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let usable = path.status == .satisfied
@@ -3710,6 +3713,22 @@ final class AppModel {
         guard !chatIDs.isEmpty, !isDemo, testSessionID == nil else { return }
         let identifiers = chatIDs.map { NotificationIdentity.thread(accountID: account, chatID: $0) }
         Task.detached { await CommunicationHistory.deleteConversations(identifiers) }
+    }
+
+    /// The share extension queued messages in the shared store: show them, and send them if this process owns the
+    /// transport (the Mac app keeps it while it runs). Without the lease the next connection sends them.
+    private func startOutboxRingListener() {
+        guard outboxRingListener == nil else { return }
+        let listener = OutboxRing.Listener { [weak self] in
+            guard let self, self.store != nil, !self.isDemo else { return }
+            Task {
+                await self.refresh()
+                self.startUploads()
+                self.startOutbox()
+            }
+        }
+        if listener.start() { outboxRingListener = listener }
+        else { Self.syncLog.error("outbox ring could not be observed") }
     }
 
     /// Every per-account switch is one row written under the transport lease; the store enforces the receipt switches.

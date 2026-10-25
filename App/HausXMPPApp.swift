@@ -12,6 +12,10 @@ struct HausXMPPApp: App {
     init() {
         // The share extension draws its send button in the accent chosen here.
         AppearanceStore.shared.mirror = SharedSession.groupDefaults
+        #if DEBUG
+        // Lab runs: the share extension only queues, so the app's own connection must send what it shared.
+        SharedSession.groupDefaults?.set(ProcessInfo.processInfo.arguments.contains("-haus-share-queue-only"), forKey: "debug.shareQueueOnly")
+        #endif
         let model = AppModel()
         _model = State(initialValue: model)
         _lifecycle = State(initialValue: SceneLifecycle(model: model))
