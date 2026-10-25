@@ -14,7 +14,7 @@ public enum CommunicationNotification {
     /// avatar hash (the app writes them into the App Group); nothing here decodes an image.
     public static func intent(_ communication: NotificationCommunication, avatar: (String) -> Data?) -> INSendMessageIntent {
         func person(_ value: NotificationCommunication.Person, isMe: Bool = false) -> INPerson {
-            CommunicationPerson.person(value, avatar: avatar, isMe: isMe)
+            CommunicationPerson.person(value, accountID: communication.account.handle, isMe: isMe, image: value.avatarHash.flatMap(avatar))
         }
         // A group names everyone who received it, the account included; a direct chat needs no recipients.
         let recipients = communication.isGroup ? [person(communication.account, isMe: true)] + communication.otherRecipients.map { person($0) } : nil

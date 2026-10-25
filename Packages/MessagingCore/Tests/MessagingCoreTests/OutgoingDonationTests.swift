@@ -14,7 +14,7 @@ struct OutgoingDonationTests {
         let recipient = try #require(intent.recipients?.first)
         #expect(intent.recipients?.count == 1 && recipient.personHandle?.value == "peer@x" && recipient.personHandle?.type == .unknown)
         // The same person the incoming notification names.
-        let incoming = CommunicationPerson.person(.init(handle: "peer@x", displayName: "Peer", avatarHash: nil), avatar: { _ in nil })
+        let incoming = CommunicationPerson.person(.init(handle: "peer@x", displayName: "Peer", avatarHash: nil), accountID: "me@x", image: nil)
         #expect(recipient.customIdentifier == incoming.customIdentifier && recipient.displayName == "Peer" && recipient.image != nil)
         #expect(intent.sender == nil && intent.content == nil && intent.speakableGroupName == nil)
         #expect(asked == ["abc"])

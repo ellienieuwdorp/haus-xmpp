@@ -6,6 +6,8 @@ import os
 /// One conversation the user just sent to, as the system's suggestions learn it (Apple, "Supporting suggestions in your
 /// app's share extension", accessed 2026-10-25). Local, authenticated state only; never logged.
 public struct OutgoingConversation: Sendable, Equatable, CustomStringConvertible {
+    /// The account that sent.
+    public let accountID: String
     /// `NotificationIdentity.thread`: the same identifier the chat's communication notifications carry, so the share
     /// sheet, the notifications and a preselected chat name one conversation, and its donations delete together.
     public let conversationIdentifier: String
@@ -15,22 +17,22 @@ public struct OutgoingConversation: Sendable, Equatable, CustomStringConvertible
     public let groupName: String?
     public let groupAvatarHash: String?
 
-    public init(conversationIdentifier: String, recipients: [NotificationCommunication.Person], groupName: String? = nil,
+    public init(accountID: String, conversationIdentifier: String, recipients: [NotificationCommunication.Person], groupName: String? = nil,
                 groupAvatarHash: String? = nil) {
-        self.conversationIdentifier = conversationIdentifier; self.recipients = recipients
+        self.accountID = accountID; self.conversationIdentifier = conversationIdentifier; self.recipients = recipients
         self.groupName = groupName; self.groupAvatarHash = groupAvatarHash
     }
 
     /// A direct chat: the chat is the person.
     public static func direct(accountID: String, chatID: String, displayName: String, avatarHash: String?) -> OutgoingConversation {
-        OutgoingConversation(conversationIdentifier: NotificationIdentity.thread(accountID: accountID, chatID: chatID),
+        OutgoingConversation(accountID: accountID, conversationIdentifier: NotificationIdentity.thread(accountID: accountID, chatID: chatID),
                              recipients: [.init(handle: chatID, displayName: displayName, avatarHash: avatarHash)])
     }
 
     /// A room: its title and up to eight known members other than the account, as the room's notifications list them.
     public static func room(accountID: String, room: String, title: String, avatarHash: String?,
                             members: [NotificationCommunication.Person]) -> OutgoingConversation {
-        OutgoingConversation(conversationIdentifier: NotificationIdentity.thread(accountID: accountID, chatID: room),
+        OutgoingConversation(accountID: accountID, conversationIdentifier: NotificationIdentity.thread(accountID: accountID, chatID: room),
                              recipients: Array(members.filter { $0.handle != accountID && $0.handle != room }.prefix(8)),
                              groupName: title, groupAvatarHash: avatarHash)
     }
@@ -49,7 +51,9 @@ public enum OutgoingDonation {
 
     /// Pure mapping from the conversation to the intent. `avatar` returns a pre-scaled image's bytes for a verified hash.
     public static func intent(_ conversation: OutgoingConversation, avatar: (String) -> Data?) -> INSendMessageIntent {
-        let intent = INSendMessageIntent(recipients: conversation.recipients.map { CommunicationPerson.person($0, avatar: avatar) },
+        let intent = INSendMessageIntent(recipients: conversation.recipients.map {
+                                             CommunicationPerson.person($0, accountID: conversation.accountID, image: $0.avatarHash.flatMap(avatar))
+                                         },
                                          outgoingMessageType: .outgoingMessageText, content: nil,
                                          speakableGroupName: conversation.groupName.map { INSpeakableString(spokenPhrase: $0) },
                                          conversationIdentifier: conversation.conversationIdentifier, serviceName: nil,
