@@ -433,7 +433,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         let keyboardFree = chosen?.returnsFocusToComposer ?? true
         defer { restoresKeyboard = false }
         // The attachment panel reopens itself instead when it was up before the menu.
-        if attachmentKeyboard?.menuDismissed(choseAction: !keyboardFree) == true { return true }
+        if attachmentKeyboard?.menuDismissed(composerTaken: !keyboardFree) == true { return true }
         guard restoresKeyboard, keyboardFree else { return false }
         onRestoreComposerFocus()
         return true

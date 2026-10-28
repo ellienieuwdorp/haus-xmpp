@@ -131,8 +131,9 @@ final class AttachmentPanelUITests: XCTestCase {
         XCTAssertFalse(app.buttons["attachPhotos"].exists)
     }
 
-    /// The message menu puts the panel away like the keyboard; closing it without an action that takes the composer
-    /// (a star here) brings the panel back, and the letters do not come up instead.
+    /// The message menu puts the panel away like the keyboard. Closing it without an action, or with one that
+    /// presents nothing (a star), brings the panel back and the letters do not come up instead; Reply takes the
+    /// composer, so the letters come up for it.
     @MainActor func testMessageMenuGivesThePanelBack() throws {
         continueAfterFailure = false
         let app = openAlex()
@@ -144,21 +145,41 @@ final class AttachmentPanelUITests: XCTestCase {
         let keyboardTop = attach.frame.minY
         openPanel(in: app)
         settle()
+        func openMenu() {
+            message.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1)
+            XCTAssertTrue(app.buttons["Reply"].waitForExistence(timeout: 5))
+        }
+        func panelCameBack(file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertTrue(app.buttons["Reply"].waitForNonExistence(timeout: 5), file: file, line: line)
+            XCTAssertTrue(app.buttons["attachPhotos"].waitForExistence(timeout: 5), "The panel came back", file: file, line: line)
+            settle()
+            XCTAssertFalse(lettersUp(in: app), file: file, line: line)
+            XCTAssertEqual(attach.label, "Close attachments", file: file, line: line)
+            XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1, file: file, line: line)
+        }
 
-        message.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1)
-        XCTAssertTrue(app.buttons["Star message"].waitForExistence(timeout: 5))
+        openMenu()
+        app.buttons["Dismiss"].firstMatch.tap()
+        panelCameBack()
+
+        openMenu()
         app.buttons["Star message"].tap()
-        XCTAssertTrue(app.buttons["attachPhotos"].waitForExistence(timeout: 5), "The panel came back")
-        settle()
-        XCTAssertFalse(lettersUp(in: app))
-        XCTAssertEqual(attach.label, "Close attachments")
-        XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
+        panelCameBack()
 
         // The field it came back on still swaps to the letters in place.
         attach.tap()
         waitForLetters(in: app)
         settle()
         XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
+
+        openPanel(in: app)
+        settle()
+        openMenu()
+        app.buttons["Reply"].tap()
+        XCTAssertTrue(app.buttons["cancelReply"].waitForExistence(timeout: 5))
+        waitForLetters(in: app)
+        XCTAssertFalse(app.buttons["attachPhotos"].exists)
+        XCTAssertEqual(attach.label, "Add attachment")
     }
 
     /// The composer is rebuilt for a new appearance; the panel stays up through it, on the new field, in the same
@@ -290,6 +311,83 @@ final class AttachmentPanelUITests: XCTestCase {
             removes.firstMatch.tap()
             removes.firstMatch.tap()
             tray(holds: 0)
+        }
+    }
+
+    /// With limited photo access the panel offers Select More. Its picker takes the field's focus, and the panel comes
+    /// back when it closes; turning the phone under the picker closes the panel for good. Grants limited access through
+    /// the system prompt and resets it afterwards; the next panel asks again (see `allowPhotoAccessIfAsked`).
+    @MainActor func testSelectMoreGivesThePanelBackUnlessItWasClosed() throws {
+        continueAfterFailure = false
+        XCUIApplication().resetAuthorizationStatus(for: .photos)
+        addTeardownBlock { @MainActor in
+            XCUIDevice.shared.orientation = .portrait
+            XCUIApplication().resetAuthorizationStatus(for: .photos)
+        }
+        let app = openAlex()
+        let attach = app.buttons["attachFile"]
+        let selectMore = app.buttons["selectMorePhotos"]
+        // The limited-library picker runs out of process: tap the centres of its elements.
+        let centre = CGVector(dx: 0.5, dy: 0.5)
+        let pickerCancel = app.buttons["Cancel"]
+        app.showKeyboard(tapping: composer(in: app))
+        settle()
+        let keyboardTop = attach.frame.minY
+
+        attach.tap()
+        let limit = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Limit Access…"]
+        guard limit.waitForExistence(timeout: 10) else {
+            throw XCTSkip("The system showed no photo access prompt after the reset, so limited access cannot be granted here")
+        }
+        limit.tap()
+        let grid = app.images.matching(identifier: "PXGGridLayout-Info")
+        XCTAssertTrue(grid.firstMatch.waitForExistence(timeout: 10))
+        grid.firstMatch.coordinate(withNormalizedOffset: centre).tap()
+        app.buttons["Update"].coordinate(withNormalizedOffset: centre).tap()
+        XCTAssertTrue(pickerCancel.waitForNonExistence(timeout: 10))
+        // The prompt's own picker took the field's focus, and the panel with it.
+        if !selectMore.waitForExistence(timeout: 3) { openPanel(in: app) }
+        XCTAssertTrue(selectMore.waitForExistence(timeout: 10), "The panel offers Select More")
+        settle()
+        XCTAssertEqual(attach.label, "Close attachments")
+        capture(app, "Panel with limited access")
+
+        func openPicker(file: StaticString = #filePath, line: UInt = #line) {
+            selectMore.tap()
+            XCTAssertTrue(pickerCancel.waitForExistence(timeout: 10), "The limited-library picker", file: file, line: line)
+            settle()
+        }
+        func panelIsBack(file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertTrue(pickerCancel.waitForNonExistence(timeout: 10), file: file, line: line)
+            XCTAssertTrue(selectMore.waitForExistence(timeout: 5), "The panel came back", file: file, line: line)
+            settle()
+            XCTAssertFalse(lettersUp(in: app), file: file, line: line)
+            XCTAssertEqual(attach.label, "Close attachments", file: file, line: line)
+            XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1, file: file, line: line)
+        }
+
+        XCTContext.runActivity(named: "The panel comes back when the picker closes") { _ in
+            openPicker()
+            pickerCancel.coordinate(withNormalizedOffset: centre).tap()
+            panelIsBack()
+        }
+
+        XCTContext.runActivity(named: "Turning the phone under the picker closes the panel for good") { _ in
+            openPicker()
+            XCUIDevice.shared.orientation = .landscapeLeft
+            settle()
+            XCUIDevice.shared.orientation = .portrait
+            let window = app.windows.firstMatch
+            let upright = NSPredicate { _, _ in window.frame.height > window.frame.width }
+            wait(for: [XCTNSPredicateExpectation(predicate: upright, object: nil)], timeout: 5)
+            settle()
+            pickerCancel.coordinate(withNormalizedOffset: centre).tap()
+            XCTAssertTrue(pickerCancel.waitForNonExistence(timeout: 10))
+            settle()
+            XCTAssertFalse(selectMore.exists, "The panel stays away")
+            XCTAssertFalse(app.buttons["attachPhotos"].exists)
+            XCTAssertEqual(attach.label, "Add attachment")
+            capture(app, "After the picker closed over a rotation")
         }
     }
 }

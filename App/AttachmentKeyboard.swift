@@ -27,7 +27,7 @@ struct AttachmentPanelActions {
     /// The panel went away without the composer asking: a tap on the field brought the letters back, or the field
     /// lost its focus (a drag, the message menu).
     var dismissed: () -> Void
-    /// The message menu closed without an action; the panel was up before it opened.
+    /// The message menu closed without an action that takes the composer's place; the panel was up before it opened.
     var restore: () -> Void
 }
 
@@ -84,9 +84,10 @@ enum KeyboardHeightCache {
     private var movingToNewField = false
     /// `close()` is resigning the field.
     private var closing = false
-    /// The limited-library picker is up over the panel. Presenting it takes the field's focus and UIKit gives it back,
-    /// panel and all, when the picker closes, so the panel stays attached meanwhile.
-    private var pickingMore = false
+    /// The limited-library picker that is up over the panel, one value per presentation. Presenting it takes the
+    /// field's focus and UIKit gives it back, panel and all, when the picker closes, so the panel stays attached
+    /// meanwhile. Detaching forgets it, so a picker that closes after the panel was put away brings nothing back.
+    private var pickingMore: UUID?
     private var restoresAfterMenu = false
     private var rotation: UITraitChangeRegistration?
     private let camera = CameraDelegate()
@@ -128,7 +129,6 @@ enum KeyboardHeightCache {
         close()
         detach()
         movingToNewField = false
-        pickingMore = false
         actions = nil
         if let rotation { host?.view.unregisterForTraitChanges(rotation) }
         rotation = nil
@@ -187,13 +187,22 @@ enum KeyboardHeightCache {
         if reload { field.reloadInputViews() }
     }
 
-    /// Puts the panel away, and the field's focus with it.
+    /// Puts the panel away, and the field's focus with it. A panel that is still the field's input view without the
+    /// focus (Select More's picker is up), on its way to a new field or waiting for the message menu to close is put
+    /// away all the same, so it cannot come back.
     func close() {
+        let moving = movingToNewField
         movingToNewField = false
-        guard isPresented, let field else { return }
-        closing = true
-        _ = field.resignFirstResponder()
-        closing = false
+        restoresAfterMenu = false
+        if isPresented, let field {
+            pickingMore = nil
+            closing = true
+            _ = field.resignFirstResponder()
+            closing = false
+        } else if field != nil || moving {
+            detach()
+            actions?.dismissed()
+        }
     }
 
     private func attach(to field: UITextView) {
@@ -211,6 +220,7 @@ enum KeyboardHeightCache {
     /// Leaves the field as SwiftUI made it. A field that never shows the panel again (a sheet over it, a later focus)
     /// then comes back with the letters.
     private func detach() {
+        pickingMore = nil
         guard let field else { return }
         self.field = nil
         field.removeGestureRecognizer(fieldTap)
@@ -229,7 +239,7 @@ enum KeyboardHeightCache {
     }
 
     @objc private func fieldDidEndEditing(_ note: Notification) {
-        guard let field, note.object as? UITextView === field, !pickingMore else { return }
+        guard let field, note.object as? UITextView === field, pickingMore == nil else { return }
         detach()
         guard !closing else { actions?.dismissed(); return }
         // An appearance change rebuilds the composer (`.id(colorScheme)`): the old field ends editing as it leaves the
@@ -257,10 +267,12 @@ enum KeyboardHeightCache {
     /// Before the message menu puts the keyboard away.
     func menuWillPresent() { restoresAfterMenu = isPresented }
 
-    /// True when the panel comes back, so the composer's own focus restore stays out of it.
-    func menuDismissed(choseAction: Bool) -> Bool {
+    /// True when the panel comes back, so the composer's own focus restore stays out of it. It does unless the chosen
+    /// action takes the composer's place (reply, edit, text selection, a dialog); a plain dismissal, star or copy
+    /// gives it back.
+    func menuDismissed(composerTaken: Bool) -> Bool {
         defer { restoresAfterMenu = false }
-        guard restoresAfterMenu, !choseAction, let actions else { return false }
+        guard restoresAfterMenu, !composerTaken, let actions else { return false }
         actions.restore()
         return true
     }
@@ -316,16 +328,17 @@ enum KeyboardHeightCache {
     /// Select More is part of the panel, so the panel is up again when the picker closes. UIKit gives the field
     /// back its focus itself; the completion covers a dismissal that does not.
     func presentLimitedPicker() {
-        guard let host else { return }
-        pickingMore = isPresented
+        guard let host, host.presentedViewController == nil else { return }
+        let presentation = UUID()
+        pickingMore = isPresented ? presentation : nil
         PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: host) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.limitedPickerClosed() }
+            Task { @MainActor [weak self] in self?.limitedPickerClosed(presentation) }
         }
     }
 
-    private func limitedPickerClosed() {
-        guard pickingMore else { return }
-        pickingMore = false
+    private func limitedPickerClosed(_ presentation: UUID) {
+        guard pickingMore == presentation else { return }
+        pickingMore = nil
         guard let field, !field.isFirstResponder else { return }
         if field.window == nil || !field.becomeFirstResponder() {
             detach()
