@@ -4,9 +4,9 @@ import XCTest
 /// recent-photos rail and the system picker feeding the tray. Sample chats accept files locally (nothing is uploaded),
 /// so no lab is needed; photos are the simulator's stock ones.
 final class AttachmentPanelUITests: XCTestCase {
-    @MainActor private func openAlex() -> XCUIApplication {
+    @MainActor private func openAlex(_ arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-demo"]
+        app.launchArguments = ["-demo"] + arguments
         app.isolateMessageStorage()
         app.launch()
         XCTAssertTrue(app.staticTexts["Alex"].waitForExistence(timeout: 15))
@@ -32,6 +32,14 @@ final class AttachmentPanelUITests: XCTestCase {
         XCTAssertEqual(app.buttons["attachFile"].label, "Close attachments")
     }
 
+    /// The letters, rather than the panel, are the keyboard. The panel has no keys.
+    @MainActor private func lettersUp(in app: XCUIApplication) -> Bool { app.keyboards.keys.count > 10 }
+
+    @MainActor private func waitForLetters(in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let up = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.lettersUp(in: app) }, object: nil)
+        XCTAssertEqual(XCTWaiter().wait(for: [up], timeout: 5), .completed, "The letters are back", file: file, line: line)
+    }
+
     private func settle() { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.8)) }
 
     @MainActor func testPanelSwapsWithTheKeyboardAtTheSameHeight() throws {
@@ -44,30 +52,156 @@ final class AttachmentPanelUITests: XCTestCase {
         app.showKeyboard(tapping: composer(in: app))
         settle()
         let keyboardTop = attach.frame.minY
+        capture(app, "Letters")
 
         openPanel(in: app)
         settle()
-        XCTAssertFalse(app.keyboards.buttons["Next keyboard"].exists, "The panel replaced the letters")
+        XCTAssertFalse(lettersUp(in: app), "The panel replaced the letters")
         // Cached from the keyboard just shown, so the composer stays exactly where the keyboard left it.
         XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
         XCTAssertTrue(photo(0, in: app).waitForExistence(timeout: 5))
         let rail = app.collectionViews["recentPhotos"]
         XCTAssertGreaterThan(rail.frame.minY, attach.frame.maxY, "The panel sits under the composer")
+        capture(app, "Panel in place of the letters", settle: 0.6)
 
-        // Tapping the field brings the letters back in place of the panel.
+        // The × brings the letters back in place of the panel; the field keeps its focus, so nothing moves.
+        attach.tap()
+        XCTAssertTrue(app.buttons["attachPhotos"].waitForNonExistence(timeout: 5))
+        waitForLetters(in: app)
+        XCTAssertEqual(attach.label, "Add attachment")
+        settle()
+        XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
+        capture(app, "Letters after the ×")
+
+        // So does tapping the field while the panel is up.
+        openPanel(in: app)
+        settle()
+        XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
         composer(in: app).tap()
         XCTAssertTrue(app.buttons["attachPhotos"].waitForNonExistence(timeout: 5))
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        waitForLetters(in: app)
         XCTAssertEqual(attach.label, "Add attachment")
         settle()
         XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
 
-        // And "+" swaps once more; its second press closes everything.
+        // The letters type into the field the panel shared.
+        composer(in: app).typeText("Hi")
+        XCTAssertEqual(composer(in: app).value as? String, "Hi")
+    }
+
+    /// From no keyboard at all, "+" brings the panel up with the field focused behind it, and the × leaves the
+    /// letters where the panel was. A drag on the timeline puts either away, and the × turns back into a +.
+    @MainActor func testPanelFromRestAndDragDismissal() throws {
+        continueAfterFailure = false
+        let app = openAlex()
+        let attach = app.buttons["attachFile"]
+        let timeline = app.collectionViews["conversation.timeline"]
+        let rest = attach.frame.minY
+        // The keyboard's height, so the panel opened from rest has one to copy.
+        app.showKeyboard(tapping: composer(in: app))
+        settle()
+        let keyboardTop = attach.frame.minY
+        timeline.swipeDown()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        settle()
+        XCTAssertEqual(attach.frame.minY, rest, accuracy: 1)
+
         openPanel(in: app)
+        settle()
+        XCTAssertFalse(lettersUp(in: app), "The panel, not the letters")
+        XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
         attach.tap()
         XCTAssertTrue(app.buttons["attachPhotos"].waitForNonExistence(timeout: 5))
-        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        waitForLetters(in: app)
+        settle()
+        XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
+
+        // An interactive drag puts the panel away like a keyboard.
+        openPanel(in: app)
+        timeline.swipeDown()
+        XCTAssertTrue(app.buttons["attachPhotos"].waitForNonExistence(timeout: 5))
+        wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in attach.label == "Add attachment" }, object: nil)], timeout: 5)
+        XCTAssertFalse(app.keyboards.firstMatch.exists, "Nothing takes the panel's place")
+        settle()
+        XCTAssertEqual(attach.frame.minY, rest, accuracy: 1)
+
+        // The field, focused again, gets the letters rather than the panel.
+        app.showKeyboard(tapping: composer(in: app))
+        waitForLetters(in: app)
+        XCTAssertFalse(app.buttons["attachPhotos"].exists)
+    }
+
+    /// The message menu puts the panel away like the keyboard; closing it without an action that takes the composer
+    /// (a star here) brings the panel back, and the letters do not come up instead.
+    @MainActor func testMessageMenuGivesThePanelBack() throws {
+        continueAfterFailure = false
+        let app = openAlex()
+        let attach = app.buttons["attachFile"]
+        let message = app.textViews.containing(NSPredicate(format: "value == %@", "See you there!")).firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        app.showKeyboard(tapping: composer(in: app))
+        settle()
+        let keyboardTop = attach.frame.minY
+        openPanel(in: app)
+        settle()
+
+        message.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Star message"].waitForExistence(timeout: 5))
+        app.buttons["Star message"].tap()
+        XCTAssertTrue(app.buttons["attachPhotos"].waitForExistence(timeout: 5), "The panel came back")
+        settle()
+        XCTAssertFalse(lettersUp(in: app))
+        XCTAssertEqual(attach.label, "Close attachments")
+        XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
+
+        // The field it came back on still swaps to the letters in place.
+        attach.tap()
+        waitForLetters(in: app)
+        settle()
+        XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
+    }
+
+    /// The composer is rebuilt for a new appearance; the panel stays up through it, on the new field, in the same
+    /// place, and the × still brings the letters back.
+    @MainActor func testAppearanceChangeKeepsThePanelUp() throws {
+        continueAfterFailure = false
+        XCUIDevice.shared.appearance = .light
+        addTeardownBlock { @MainActor in XCUIDevice.shared.appearance = .light }
+        let app = openAlex(["-appearanceMode", "automatic"])
+        let attach = app.buttons["attachFile"]
+        app.showKeyboard(tapping: composer(in: app))
+        settle()
+        let keyboardTop = attach.frame.minY
+        openPanel(in: app)
+        XCTAssertTrue(photo(0, in: app).waitForExistence(timeout: 5))
+        settle()
+        capture(app, "Panel, light")
+
+        XCUIDevice.shared.appearance = .dark
+        settle()
+        XCTAssertTrue(app.buttons["attachPhotos"].exists, "The panel is still up")
+        XCTAssertFalse(lettersUp(in: app))
+        XCTAssertEqual(attach.label, "Close attachments")
+        XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
+        capture(app, "Panel after the switch to dark")
+
+        attach.tap()
+        XCTAssertTrue(app.buttons["attachPhotos"].waitForNonExistence(timeout: 5))
+        waitForLetters(in: app)
         XCTAssertEqual(attach.label, "Add attachment")
+        settle()
+        XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
+        capture(app, "Letters after the ×, dark")
+
+        // And back, with the letters up this time: they stay up too.
+        XCUIDevice.shared.appearance = .light
+        settle()
+        waitForLetters(in: app)
+        XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
+        capture(app, "Letters after the switch back to light")
+        openPanel(in: app)
+        settle()
+        XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
     }
 
     /// The rail feeds the tray in tap order, the panel closes like a keyboard (drag, rotation, leaving the chat), a
