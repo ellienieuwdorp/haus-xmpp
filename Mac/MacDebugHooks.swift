@@ -67,7 +67,9 @@ import SwiftUI
 ///   `resize-sweep <width>x<height> <width>x<height> <steps> [live]` (a resize from one size to the other, timing each
 ///   step, in a live resize with `live`; also with no chat open) and `stalls [label]` (main-thread stalls over 50 ms
 ///   since the last `stalls` step; the first starts the probe), `drag <points> <seconds> [phaseless]` (the reader's scroll by that many points, with a
-///   gesture's phases or none, running while the next steps play), `bind-reader` (kept for older tours: the table
+///   gesture's phases or none, running while the next steps play), `swipe <message id> <points> [<vertical points>]
+///   [hold|wheel]` (a two-finger gesture over the message handed straight to the timeline's reply swipe, logging what
+///   it did; `hold` leaves it under way for a `capture` and `swipe-end [cancel|resign|elsewhere|reset]` finishes it), `bind-reader` (kept for older tours: the table
 ///   binds nothing and says so), `older` (the next older page, as the
 ///   reader reaching the paging lead asks for it), `arrive [<text>]` (a received message added below the others, as an
 ///   arrival is, which the model never has; `arrive-long [<characters>]` one with a long text; `arrive-extras <count>
@@ -564,7 +566,7 @@ import SwiftUI
             case "scroll" where Double(argument.split(separator: " ").first ?? "") != nil:
                 let parts = argument.split(separator: " ")
                 if let window = mainWindow { await ScrollProbe.sweep(in: window, seconds: Double(parts[0]) ?? 10, paging: parts.dropFirst().first == "paging") }
-            case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline", "knob", "drag", "bind-reader", "older", "mismatch", "arrive", "arrive-long",
+            case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline", "knob", "drag", "swipe", "swipe-end", "bind-reader", "older", "mismatch", "arrive", "arrive-long",
                  "arrive-extras", "settle", "show-row", "hit-reaction", "reuse-media", "extras-cache", "update-race", "gesture-update",
                  "resize-drag", "edit-race", "overlay-resize":
                 await MacTimelineDebug.step(words[0], argument, window: mainWindow)

@@ -354,6 +354,8 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
     private(set) var message: TimelineMessage?
     private var linkColor: NSColor?
     private var emojiPopover: NSPopover?
+    /// The arrow a reply swipe uncovers beside the bubble, made for the first swipe on this cell.
+    private var replyIndicator: NSImageView?
     let element = MacTimelineMessageElement()
     private let headerElement = MacTimelineHeaderElement()
 
@@ -363,6 +365,16 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         get { bubble.showsFocusRing }
         set { bubble.showsFocusRing = newValue }
     }
+    /// How far a reply swipe has moved the bubble right (`MacReplySwipe`): the bubble and what is part of it (its text,
+    /// footer, quote, file, card and pills) travel; the tint, day header and author stay.
+    var swipeOffset: CGFloat = 0 {
+        didSet {
+            guard swipeOffset != oldValue else { return }
+            needsLayout = true
+        }
+    }
+    /// A reply swipe is under way on this cell: no hover toolbar.
+    private(set) var isSwiping = false
 
     init(drawsWhole: Bool, context: MacTimelineCellContext) {
         self.context = context
@@ -396,6 +408,8 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         if layoutRecord?.key.id != input.id {
             closePopover()
             hovering = false
+            // Reused for another message mid-swipe or while settling: whole and in place.
+            endSwipe(animated: false)
         }
         layoutRecord = layout
         self.message = message
@@ -489,16 +503,93 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         }
         if let frame = layout.authorFrame { author.frame = frame }
         let bubbleFrame = place(layout.bubbleFrame)
-        bubble.frame = bubbleFrame
+        bubble.frame = travelled(bubbleFrame)
         if let frame = layout.textFrame {
-            let placed = place(frame)
+            let placed = travelled(place(frame))
             if textView.frame != placed { textView.frame = placed }
         }
-        footer.frame = place(layout.footerFrame)
-        if let frame = layout.reactionsFrame { reactions.frame = place(frame) }
-        if let frame = layout.extrasFrame, let extras { extras.frame = place(frame) }
+        footer.frame = travelled(place(layout.footerFrame))
+        if let frame = layout.reactionsFrame { reactions.frame = travelled(place(frame)) }
+        if let frame = layout.extrasFrame, let extras { extras.frame = travelled(place(frame)) }
+        placeReplyIndicator(bubble: bubbleFrame)
         tint.frame = CGRect(x: MacTimelineMetrics.sidePadding - 8, y: 0, width: bounds.width - 2 * (MacTimelineMetrics.sidePadding - 8), height: bounds.height)
         placeToolbar()
+    }
+
+    // MARK: Reply swipe
+
+    private func travelled(_ rect: CGRect) -> CGRect { rect.offsetBy(dx: swipeOffset, dy: 0) }
+
+    /// The parts that travel with the bubble, for stopping their settling.
+    private var travellers: [NSView] { [bubble, textView, footer, reactions] + [extras, replyIndicator].compactMap { $0 } }
+
+    /// The message offers Reply, as its toolbar decides; a placeholder never does.
+    var takesReplySwipe: Bool {
+        guard let message, !message.showsPlaceholder else { return false }
+        return MessageActionMenu.items(for: message).contains { $0.kind == .reply }
+    }
+
+    /// Where a reply swipe may start on this row: anywhere below its day header, full width, as on the iPhone, on a
+    /// message that offers Reply. `point` is in the cell's coordinates.
+    func ownsReplySwipe(at point: NSPoint) -> Bool {
+        guard takesReplySwipe, bounds.contains(point) else { return false }
+        return header.isHidden || point.y >= header.frame.maxY
+    }
+
+    /// A swipe starts: the toolbar goes, and a bubble still settling from the last one stops where it is.
+    func beginSwipe() {
+        isSwiping = true
+        for view in travellers { view.layer?.removeAllAnimations() }
+        if replyIndicator == nil {
+            let indicator = NSImageView()
+            indicator.image = NSImage(systemSymbolName: "arrowshape.turn.up.left.fill", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 15, weight: .medium))
+            indicator.contentTintColor = .secondaryLabelColor
+            indicator.imageScaling = .scaleProportionallyDown
+            indicator.autoresizingMask = []
+            indicator.alphaValue = 0
+            indicator.setAccessibilityElement(false)
+            // Under the bubble: centred in the room the bubble leaves, it overlaps a received bubble's translucent fill
+            // only for the first points, while still faint.
+            addSubview(indicator, positioned: .below, relativeTo: bubble)
+            replyIndicator = indicator
+        }
+        updateToolbarVisibility()
+    }
+
+    /// The bubble springs back (at once with Reduce Motion, or when the cell is reused or its swipe given up) and the
+    /// toolbar may come back. At once also stops the bubble settling from an earlier swipe, whose offset is already 0:
+    /// a cell reused for another message must not show the last one's movement.
+    func endSwipe(animated: Bool) {
+        let wasSwiping = isSwiping
+        isSwiping = false
+        if animated, swipeOffset != 0, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            swipeOffset = 0
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.3
+                // Close to the iPhone's spring (0.3 s, damping 0.8): quick out, settling softly with no overshoot.
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 1, 0.5, 1)
+                context.allowsImplicitAnimation = true
+                layoutSubtreeIfNeeded()
+            }
+        } else if swipeOffset != 0 || isSettling {
+            swipeOffset = 0
+            for view in travellers { view.layer?.removeAllAnimations() }
+            layoutSubtreeIfNeeded()
+        }
+        if wasSwiping { updateToolbarVisibility() }
+    }
+
+    /// The bubble may still be springing back from a swipe, as its layer's animations tell (a finished one may linger
+    /// there, which is harmless to remove); a bubble never swiped has none, so a reuse costs one look.
+    private var isSettling: Bool { bubble.layer?.animationKeys()?.isEmpty == false }
+
+    /// In the room the bubble leaves at its leading side, centred in it, whole from the threshold on.
+    private func placeReplyIndicator(bubble: CGRect) {
+        guard let replyIndicator else { return }
+        let side: CGFloat = 20
+        replyIndicator.frame = CGRect(x: round(bubble.minX + swipeOffset / 2 - side / 2), y: round(bubble.midY - side / 2), width: side, height: side)
+        replyIndicator.alphaValue = min(1, swipeOffset / MacReplySwipe.threshold)
     }
 
     // MARK: Hover toolbar
@@ -520,7 +611,7 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         #else
         let forced = false
         #endif
-        return hovering || emojiPopover != nil || forced
+        return !isSwiping && (hovering || emojiPopover != nil || forced)
     }
 
     func updateToolbarVisibility() {
@@ -751,6 +842,16 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
     var debugStaleFooter: String? {
         guard footer.debugDrawnSize != footer.bounds.size else { return nil }
         return "\(Int(footer.bounds.width)) drawn at \(footer.debugDrawnSize.map { "\(Int($0.width))" } ?? "none") + \(footer.debugPartialDraws) parts"
+    }
+
+    /// Where the bubble is against where it rests, the reply arrow and the toolbar.
+    var debugSwipeState: String {
+        layoutSubtreeIfNeeded()
+        let rests = bubbleFrame.minX, now = bubble.layer?.presentation()?.frame.minX ?? bubble.frame.minX
+        let indicator = replyIndicator.map { String(format: "arrow alpha %.2f at x %.0f", $0.alphaValue, $0.frame.minX) } ?? "no arrow"
+        return String(format: "offset %.1f, bubble x %.1f (rests at %.1f), text x %.1f, footer x %.1f, %@, toolbar %@, swiping %d, settling %d (%@)",
+                      swipeOffset, now, rests, textView.frame.minX, footer.frame.minX, indicator, toolbarShown ? "shown" : "hidden", isSwiping ? 1 : 0,
+                      isSettling ? 1 : 0, (bubble.layer?.animationKeys() ?? []).joined(separator: ","))
     }
     #endif
 }

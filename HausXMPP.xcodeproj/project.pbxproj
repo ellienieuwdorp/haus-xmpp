@@ -220,6 +220,7 @@
 		695416563CD5595C0650AA21 /* THIRD_PARTY_LICENSES.md in Resources */ = {isa = PBXBuildFile; fileRef = C41C26F1452BF40ADB2AB3B2 /* THIRD_PARTY_LICENSES.md */; };
 		69B6BE764667C20D270F128C /* OwnDeviceReviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55FB7BEAEAE8818F668762F4 /* OwnDeviceReviewTests.swift */; };
 		6B37AE338313B6AF6A3DE7CB /* EmojiCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1CB468485582E56EB551F30 /* EmojiCatalog.swift */; };
+		6BDCD8C803532F7AE7D6975D /* MacReplySwipe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01F4E4DCBD5CC038D275F81C /* MacReplySwipe.swift */; };
 		6C283E3D9F9C31CB4E72A440 /* MacChatList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25E35CC4DCAC6DAF5D90836E /* MacChatList.swift */; };
 		6C45B8758E92AD33331C4D2F /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = CD7168208DE1195D93EFDAC4 /* XMPPProtocol */; };
 		6C5D42DC91587FB6C0195508 /* SharedSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECE35FFDB91D6C5604DB273F /* SharedSession.swift */; };
@@ -576,6 +577,7 @@
 /* Begin PBXFileReference section */
 		00A9EC5780FEE600199477E2 /* DemoSamples.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoSamples.swift; sourceTree = "<group>"; };
 		01CD07EFDE545F6F94C06B4D /* GroupDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupDetailsView.swift; sourceTree = "<group>"; };
+		01F4E4DCBD5CC038D275F81C /* MacReplySwipe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacReplySwipe.swift; sourceTree = "<group>"; };
 		02074F192C97A041BF61815C /* LastMessageTargets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LastMessageTargets.swift; sourceTree = "<group>"; };
 		027F8163CD0996CD1FAA9802 /* NotificationServiceMac-Unfiltered.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "NotificationServiceMac-Unfiltered.entitlements"; sourceTree = "<group>"; };
 		03474B6E9D0B48EE5C4FC942 /* TimelineScrollPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineScrollPolicy.swift; sourceTree = "<group>"; };
@@ -980,6 +982,7 @@
 				E394A61C835FC6DD904BC77A /* MacNotificationSettings.swift */,
 				F0128F3074596997403D4F4C /* MacPerfProbe.swift */,
 				AC35ADFF191022AC7947AFE8 /* MacPushProbe.swift */,
+				01F4E4DCBD5CC038D275F81C /* MacReplySwipe.swift */,
 				E370F3025375AED97F4C8529 /* MacSettingsView.swift */,
 				BA0C15A8FA36DB3678A98DEC /* MacShareDebug.swift */,
 				93E311FAA6823F14FF0DDE15 /* MacSplitController.swift */,
@@ -2155,6 +2158,7 @@
 				D7337FC454269823397E18FF /* MacNotificationSettings.swift in Sources */,
 				DE181BB520CFD9CA40C8B389 /* MacPerfProbe.swift in Sources */,
 				3EE536B829BCCB54A2F688D4 /* MacPushProbe.swift in Sources */,
+				6BDCD8C803532F7AE7D6975D /* MacReplySwipe.swift in Sources */,
 				658DBFA69EBDFC4C303E4C0E /* MacSettingsView.swift in Sources */,
 				0ED8B0122CFEBF5E8CABB6D2 /* MacShareDebug.swift in Sources */,
 				6FFD73F8297D6E9A44BD9206 /* MacSplitController.swift in Sources */,
