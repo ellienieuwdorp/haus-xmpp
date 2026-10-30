@@ -49,6 +49,4 @@ struct MacMessageToolbar<MenuContent: View>: View {
 
 enum MacMessageToolbarSize {
     static let side: CGFloat = 24
-    /// With all three buttons and the capsule's padding, for deciding where it fits.
-    static let maximumWidth: CGFloat = 3 * side + 4
 }
