@@ -43,7 +43,7 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     var onOpenChat: (String) -> Void = { _ in }
     /// An `xmpp:…?join` link was opened: open the group, or its join flow, and return true; false copies the address.
     var onOpenGroup: (String) -> Bool = { _ in false }
-    /// Its hidden responder is installed in the controller's view, so the attachment panel is the keyboard here.
+    /// Installed in the controller, which presents its pickers and closes the panel on rotation and when leaving.
     var attachmentKeyboard: AttachmentKeyboard? = nil
     // Observed so a stored accent change re-renders visible bubbles.
     private var accent: String { AccentTheme.current.rawValue }
@@ -418,7 +418,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     /// away with UIKit's own animation and the composer and insets follow it under the blur. Nothing is laid out
     /// synchronously here; the overlay's snapshot never depended on where the timeline settles.
     private func putKeyboardAwayForActions() {
-        attachmentKeyboard?.menuWillPresent() // attachment panel: remember it was up; endEditing below resigns it too
+        attachmentKeyboard?.menuWillPresent() // attachment panel: remember it was up; endEditing below puts it away too
         restoresKeyboard = view.keyboardLayoutGuide.layoutFrame.height > view.safeAreaInsets.bottom + 100
         guard restoresKeyboard else { return }
         view.endEditing(true)
@@ -433,7 +433,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         let keyboardFree = chosen?.returnsFocusToComposer ?? true
         defer { restoresKeyboard = false }
         // The attachment panel reopens itself instead when it was up before the menu.
-        if attachmentKeyboard?.menuDismissed(choseAction: !keyboardFree) == true { return true }
+        if attachmentKeyboard?.menuDismissed(composerTaken: !keyboardFree) == true { return true }
         guard restoresKeyboard, keyboardFree else { return false }
         onRestoreComposerFocus()
         return true
@@ -475,8 +475,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         attachmentKeyboard?.close()
     }
 
-    /// The attachment panel's responder lives in this view: its input view is the keyboard to UIKit, so the composer
-    /// on the keyboard guide, the insets, interactive dismissal and the message menu all follow the panel unchanged.
+    /// The attachment panel is the composer field's input view, so the composer on the keyboard guide, the insets,
+    /// interactive dismissal and the message menu all follow it as they follow the keyboard.
     var attachmentKeyboard: AttachmentKeyboard? {
         didSet {
             guard oldValue !== attachmentKeyboard else { return }

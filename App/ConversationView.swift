@@ -10,11 +10,12 @@ import XMPPProtocol
 @MainActor @Observable final class ComposerState {
     var draft = ""
     /// Focus requested by the conversation; the composer lives in its own hosting controller, where a parent `@FocusState` cannot reach.
-    /// The text keyboard and the attachment panel take turns: asking for one puts the other away.
-    var focused = false { didSet { if focused { attachmentsOpen = false } } }
-    /// The attachment panel stands in for the keyboard while this is true.
-    var attachmentsOpen = false { didSet { if attachmentsOpen { focused = false } } }
-    /// Presents the panel through a responder the timeline controller hosts; never observed.
+    /// The field keeps its focus while the attachment panel stands in for the letters.
+    var focused = false
+    /// The attachment panel is the field's keyboard in place of the letters. Turning it off brings the letters back in
+    /// place; the panel goes back to false on its own when the field loses its focus.
+    var attachmentsOpen = false
+    /// Puts the panel in and out of the field's input view; never observed.
     @ObservationIgnored let attachmentKeyboard = AttachmentKeyboard()
     /// Picked files waiting for Send. Owned by the open conversation, so leaving the chat drops them.
     var tray: [PendingAttachment] = []
@@ -54,7 +55,21 @@ import XMPPProtocol
         draft = text
     }
 
-    private var field: UITextView? { fieldAnchor.flatMap(Self.textView(behind:)) }
+    /// Focuses the field with the letters, swapping the attachment panel out if it was up: replying and editing type.
+    func showKeyboard() {
+        attachmentsOpen = false
+        focused = true
+    }
+
+    /// Puts the attachment panel away and the field's focus with it, as Send, search and a chat change do; the
+    /// letters stay up when they were the keyboard.
+    func closeAttachments() {
+        guard attachmentsOpen else { return }
+        attachmentKeyboard.close()
+        attachmentsOpen = false
+    }
+
+    var field: UITextView? { fieldAnchor.flatMap(Self.textView(behind:)) }
     private static let log = Logger(subsystem: "haus.xmpp.ios", category: "composer")
 
     /// The text view covering `anchor`, from the nearest ancestor that holds one.
@@ -160,7 +175,7 @@ struct ConversationView: View {
         composerState.draft = message.body
         showingSearch = false
         query = ""
-        composerState.focused = true
+        composerState.showKeyboard()
     }
 
     private func cancelEditing() {
@@ -190,7 +205,7 @@ struct ConversationView: View {
         }
         let chatID = chatID
         let files = state.tray
-        state.attachmentsOpen = false
+        state.closeAttachments()
         state.sends += 1
         state.dispatching = true
         let plan = ComposerPlan.ReplyPlan(caption: text, reply: reply) { model.canReplyWithFilesAlone(to: $0, in: chatID) }
@@ -282,7 +297,7 @@ struct ConversationView: View {
                 replyingTo = message
                 showingSearch = false
                 query = ""
-                composerState.focused = true
+                composerState.showKeyboard()
             }, onReaction: { id, emoji in
                 Task { await model.toggleReaction(emoji, messageID: id) }
             }, onEdit: { id in
@@ -294,7 +309,7 @@ struct ConversationView: View {
             }, onOpenEncryption: { model.requestRoute(encryptionRoute) }, onDisplayed: { id in
                 guard presenter.marksDisplayed(id) else { return }
                 Task { await model.markDisplayed(id) }
-            }, onRestoreComposerFocus: { composerState.focused = true }, onReachTop: { Task { await model.loadOlderMessages() } },
+            }, onRestoreComposerFocus: { composerState.showKeyboard() }, onReachTop: { Task { await model.loadOlderMessages() } },
             onAttachmentDisplayed: { model.attachmentDisplayed($0) }, onDownloadAttachment: { model.downloadAttachment($0) },
             onLinkPreviewDisplayed: { model.linkPreviewDisplayed($0) },
             onOpenChat: { address in
@@ -446,7 +461,7 @@ struct ConversationView: View {
         }
         // Files picked for one chat never follow the view to another.
         .onChange(of: [chatID, model.accountID]) {
-            composerState.attachmentsOpen = false
+            composerState.closeAttachments()
             composerState.tray = []
         }
         // The list's search and compose bar goes with the push instead of lingering over the composer after it.
@@ -594,7 +609,7 @@ struct ConversationComposer: View {
     private var panelActions: AttachmentPanelActions {
         let state = state
         let model = model
-        return AttachmentPanelActions(select: onAttachAsset, deselect: { id in
+        return AttachmentPanelActions(field: { state.field }, select: onAttachAsset, deselect: { id in
             guard !state.dispatching else { return }
             state.tray.removeAll { $0.assetIdentifier == id }
         }, capture: onAttachCapture, photos: onPickPhoto, files: onPickFile, refuse: { model.error = $0 },
@@ -694,21 +709,20 @@ struct ConversationComposer: View {
         }
         // Glass that grew past control size (a tray, a long draft) keeps the light or dark look it had when it grew,
         // and an appearance change does not re-resolve it; only new glass does. The draft lives in `state`, and focus
-        // is handed to the new field below.
+        // is handed to the new field below; the attachment panel moves to the new field by itself.
         .id(colorScheme)
         .padding(.horizontal, 16).padding(.vertical, 8)
-        .onChange(of: colorScheme) { if focused { Task { focused = true } } }
-        // Opening the panel leaves the field alone: the panel's responder takes over from it in one keyboard animation.
-        .onChange(of: state.focused) { _, wanted in if wanted || !state.attachmentsOpen { focused = wanted } }
+        .onChange(of: colorScheme) { if focused, !state.attachmentsOpen { Task { focused = true } } }
+        .onChange(of: state.focused) { _, wanted in focused = wanted }
+        // Opening focuses the field itself, with the panel already its input view, so it comes up in one animation.
         .onChange(of: state.attachmentsOpen) { _, open in
             if open { state.attachmentKeyboard.open(actions: panelActions, selection: selectedAssetIDs, trayCount: state.tray.count) }
-            // A close on the way to the text field is left to the field, which swaps the keyboards in one animation.
-            else if !state.focused { state.attachmentKeyboard.close() }
+            else { state.attachmentKeyboard.showKeyboard() }
         }
         .onChange(of: selectedAssetIDs + [String(state.tray.count)]) {
             state.attachmentKeyboard.update(selection: selectedAssetIDs, trayCount: state.tray.count)
         }
-        .onChange(of: showsAttach) { _, shown in if !shown { state.attachmentsOpen = false } }
+        .onChange(of: showsAttach) { _, shown in if !shown { state.closeAttachments() } }
         .onChange(of: state.draft) { _, draft in model.draftChanged(draft, in: chatID) }
         .onChange(of: linkPreviewInput, initial: true) { _, input in
             state.linkPreview.update(draft: input.draft, enabled: input.enabled, suppressed: input.suppressed, source: model)

@@ -13,6 +13,8 @@ enum CameraCapture {
 /// What the panel hands back to the conversation. The composer builds it on every open, so it always captures the
 /// chat that is on screen.
 struct AttachmentPanelActions {
+    /// The composer's text view, whose input view the panel becomes; looked up on each use, as SwiftUI rebuilds it.
+    var field: () -> UITextView?
     /// Prepares a recent photo into the tray; returns once it landed there or was refused.
     var select: (PHAsset) async -> Void
     /// Takes a recent photo back out of the tray.
@@ -22,9 +24,10 @@ struct AttachmentPanelActions {
     var files: () -> Void
     /// A reason shown to the user: the tray is full, the camera is not allowed.
     var refuse: (String) -> Void
-    /// The panel went away without the composer asking: the text field took over, a drag, the message menu.
+    /// The panel went away without the composer asking: a tap on the field brought the letters back, or the field
+    /// lost its focus (a drag, the message menu).
     var dismissed: () -> Void
-    /// The message menu closed without an action; the panel was up before it opened.
+    /// The message menu closed without an action that takes the composer's place; the panel was up before it opened.
     var restore: () -> Void
 }
 
@@ -57,88 +60,66 @@ enum KeyboardHeightCache {
     }
 }
 
-/// An invisible view whose input view is the attachment panel. UIKit then treats the panel as the keyboard: it
-/// slides with the keyboard curve, the keyboard layout guide follows it, and a drag on the timeline dismisses it.
-final class AttachmentKeyboardResponder: UIView {
-    var panel: UIView?
-    var onResign: () -> Void = {}
-    var onBecome: () -> Void = {}
-    var onStyleChange: () -> Void = {}
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        isAccessibilityElement = false
-        isUserInteractionEnabled = false
-        // Rotating with the panel up leaves the keyboard guide measuring the old size (Signal dismisses here too).
-        registerForTraitChanges([UITraitVerticalSizeClass.self]) { (responder: AttachmentKeyboardResponder, _) in
-            if responder.isFirstResponder { _ = responder.resignFirstResponder() }
-        }
-        // The keyboard backdrop behind a live input view keeps the appearance it was presented in.
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (responder: AttachmentKeyboardResponder, _) in
-            if responder.isFirstResponder { responder.onStyleChange() }
-        }
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override var canBecomeFirstResponder: Bool { true }
-    override var inputView: UIView? { panel }
-
-    /// UIKit also makes the responder first again on its own, when a sheet presented over it goes away (the
-    /// limited-library picker); the composer has to hear about that as much as about a resign.
-    override func becomeFirstResponder() -> Bool {
-        let wasFirst = isFirstResponder
-        let became = super.becomeFirstResponder()
-        if !wasFirst, became { onBecome() }
-        return became
-    }
-
-    override func resignFirstResponder() -> Bool {
-        let wasFirst = isFirstResponder
-        let resigned = super.resignFirstResponder()
-        if wasFirst, resigned { onResign() }
-        return resigned
-    }
-}
-
-/// Opens and closes the attachment panel for one conversation. The timeline controller installs its responder, so
-/// the composer, the message insets and the message menu follow the panel exactly as they follow the keyboard.
+/// Makes the attachment panel the composer field's own keyboard: its `inputView`, swapped with the letters by
+/// `reloadInputViews()` while the field stays first responder. UIKit then treats the panel as the keyboard: it slides
+/// with the keyboard curve, the keyboard layout guide follows it, and a drag on the timeline dismisses it. Swapping in
+/// place, rather than handing first responder to another view, keeps the height still and leaves UIKit only one
+/// responder to restore. The timeline controller installs it, for the presentations and the rotation dismissal.
 @MainActor final class AttachmentKeyboard: NSObject {
-    private let responder = AttachmentKeyboardResponder(frame: .zero)
     private(set) weak var host: UIViewController?
     private var panel: AttachmentKeyboardView?
     private var actions: AttachmentPanelActions?
+    /// The composer's text view while the panel is its input view.
+    private weak var field: UITextView?
+    /// The field's own assistant bar groups, put back when the letters return (they show above the keyboard on iPad).
+    private var assistantGroups: (leading: [UIBarButtonItemGroup], trailing: [UIBarButtonItemGroup])?
+    /// While the panel is up, a tap on the field brings the letters back, as it does in Signal.
+    private lazy var fieldTap: UITapGestureRecognizer = {
+        let tap = UITapGestureRecognizer(target: self, action: #selector(fieldTapped))
+        tap.cancelsTouchesInView = false
+        tap.delegate = self
+        return tap
+    }()
+    /// The field ended editing on its own: the next turn tells a dismissal from SwiftUI replacing the field.
+    private var movingToNewField = false
+    /// `close()` is resigning the field.
+    private var closing = false
+    /// The limited-library picker that is up over the panel, one value per presentation. Presenting it takes the
+    /// field's focus and UIKit gives it back, panel and all, when the picker closes, so the panel stays attached
+    /// meanwhile. Detaching forgets it, so a picker that closes after the panel was put away brings nothing back.
+    private var pickingMore: UUID?
     private var restoresAfterMenu = false
+    private var rotation: UITraitChangeRegistration?
     private let camera = CameraDelegate()
 
-    var isPresented: Bool { responder.isFirstResponder }
+    var isPresented: Bool {
+        guard let field, let panel else { return false }
+        return field.inputView === panel && field.isFirstResponder
+    }
 
     override init() {
         super.init()
-        responder.onResign = { [weak self] in
-            guard let self, !replacing else { return }
-            actions?.dismissed()
-        }
-        // The "+" and the send/search/chat-change closes all read the composer's state, so it must follow the
-        // responder both ways; a resign for a presented picker is otherwise never undone when UIKit restores it.
-        responder.onBecome = { [weak self] in
-            guard let self, !replacing else { return }
-            actions?.restore()
-        }
-        responder.onStyleChange = { [weak self] in self?.representPanel() }
+        NotificationCenter.default.addObserver(self, selector: #selector(fieldDidEndEditing(_:)), name: UITextView.textDidEndEditingNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidChangeFrame(_:)), name: UIResponder.keyboardDidChangeFrameNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
     }
 
-    /// An interactive drag hides the panel but leaves its responder first (measured on iOS 26.5); resigning it
-    /// here is what turns the × back into a +.
+    /// A drag that hides the panel is expected to end the field's editing; should it leave the field first responder
+    /// with nothing on screen, resigning here is what turns the × back into a +. Only a hide that ends below the
+    /// window counts: a swap between the panel and the letters ends on screen.
     @objc private func keyboardWillHide(_ note: Notification) {
-        if isPresented { _ = responder.resignFirstResponder() }
+        guard isPresented, let field, let window = field.window,
+              let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
+              window.convert(frame, from: window.screen.coordinateSpace).minY >= window.bounds.maxY - 1 else { return }
+        _ = field.resignFirstResponder()
     }
 
     func install(in controller: UIViewController) {
         host = controller
-        controller.view.addSubview(responder)
+        // Rotating with the panel up leaves the keyboard guide measuring the old size (Signal dismisses here too).
+        rotation = controller.view.registerForTraitChanges([UITraitVerticalSizeClass.self, UITraitHorizontalSizeClass.self]) { [weak self] (_: UIView, _) in
+            self?.close()
+        }
     }
 
     /// Also drops the composer's actions, which hold the composer that owns this keyboard. `close()` keeps them for
@@ -146,8 +127,11 @@ final class AttachmentKeyboardResponder: UIView {
     /// composer (see `presentCamera`).
     func uninstall() {
         close()
+        detach()
+        movingToNewField = false
         actions = nil
-        responder.removeFromSuperview()
+        if let rotation { host?.view.unregisterForTraitChanges(rotation) }
+        rotation = nil
         host = nil
     }
 
@@ -167,36 +151,113 @@ final class AttachmentKeyboardResponder: UIView {
     private func makePanel(in window: UIWindow) -> AttachmentKeyboardView {
         let panel = self.panel ?? AttachmentKeyboardView(keyboard: self)
         self.panel = panel
-        responder.panel = panel
         panel.prepare(height: KeyboardHeightCache.height(in: window), compact: window.traitCollection.verticalSizeClass == .compact,
                       safeArea: window.safeAreaInsets)
         return panel
     }
 
+    /// Puts the panel in place of the letters, or brings it up with the field when the field had no focus.
     func open(actions: AttachmentPanelActions, selection: [String], trayCount: Int) {
         self.actions = actions
+        movingToNewField = false
         guard !isPresented else { update(selection: selection, trayCount: trayCount); return }
-        guard let window = host?.view.window else { actions.dismissed(); return }
+        guard let field = actions.field(), let window = field.window else { actions.dismissed(); return }
+        // Sized before it becomes the input view, so it is presented at the last keyboard's height.
         _ = makePanel(in: window)
         update(selection: selection, trayCount: trayCount)
-        if !responder.becomeFirstResponder() { actions.dismissed() }
+        present(in: field)
     }
 
-    private var replacing = false
-
-    /// The keyboard host resolves a live input view's backdrop once, when it is presented, so an appearance change
-    /// presents the panel again in place, without animation and without telling the composer it closed.
-    private func representPanel() {
-        replacing = true
-        UIView.performWithoutAnimation {
-            _ = responder.resignFirstResponder()
-            _ = responder.becomeFirstResponder()
+    private func present(in field: UITextView) {
+        attach(to: field)
+        if field.isFirstResponder {
+            field.reloadInputViews()
+        } else if !field.becomeFirstResponder() {
+            detach()
+            actions?.dismissed()
         }
-        replacing = false
     }
 
+    /// The letters again, in place of the panel; the field keeps its focus, so the keyboard keeps its height.
+    func showKeyboard() {
+        movingToNewField = false
+        guard let field, field.inputView != nil else { detach(); return }
+        let reload = field.isFirstResponder
+        detach()
+        if reload { field.reloadInputViews() }
+    }
+
+    /// Puts the panel away, and the field's focus with it. A panel that is still the field's input view without the
+    /// focus (Select More's picker is up), on its way to a new field or waiting for the message menu to close is put
+    /// away all the same, so it cannot come back.
     func close() {
-        if isPresented { _ = responder.resignFirstResponder() }
+        let moving = movingToNewField
+        movingToNewField = false
+        restoresAfterMenu = false
+        if isPresented, let field {
+            pickingMore = nil
+            closing = true
+            _ = field.resignFirstResponder()
+            closing = false
+        } else if field != nil || moving {
+            detach()
+            actions?.dismissed()
+        }
+    }
+
+    private func attach(to field: UITextView) {
+        if self.field !== field { detach() }
+        self.field = field
+        guard let panel, field.inputView !== panel else { return }
+        let assistant = field.inputAssistantItem
+        assistantGroups = (assistant.leadingBarButtonGroups, assistant.trailingBarButtonGroups)
+        assistant.leadingBarButtonGroups = []
+        assistant.trailingBarButtonGroups = []
+        field.inputView = panel
+        field.addGestureRecognizer(fieldTap)
+    }
+
+    /// Leaves the field as SwiftUI made it. A field that never shows the panel again (a sheet over it, a later focus)
+    /// then comes back with the letters.
+    private func detach() {
+        pickingMore = nil
+        guard let field else { return }
+        self.field = nil
+        field.removeGestureRecognizer(fieldTap)
+        if field.inputView === panel { field.inputView = nil }
+        if let assistantGroups {
+            field.inputAssistantItem.leadingBarButtonGroups = assistantGroups.leading
+            field.inputAssistantItem.trailingBarButtonGroups = assistantGroups.trailing
+        }
+        assistantGroups = nil
+    }
+
+    @objc private func fieldTapped() {
+        guard isPresented else { return }
+        showKeyboard()
+        actions?.dismissed()
+    }
+
+    @objc private func fieldDidEndEditing(_ note: Notification) {
+        guard let field, note.object as? UITextView === field, pickingMore == nil else { return }
+        detach()
+        guard !closing else { actions?.dismissed(); return }
+        // An appearance change rebuilds the composer (`.id(colorScheme)`): the old field ends editing as it leaves the
+        // window, which it has not left yet. Presenting the panel again on the new field also resolves the keyboard
+        // backdrop for the new look, which a live input view keeps from when it was presented.
+        movingToNewField = true
+        DispatchQueue.main.async { [weak self, weak field] in
+            guard let self, movingToNewField else { return }
+            movingToNewField = false
+            if field?.window == nil { moveToNewField() } else { actions?.dismissed() }
+        }
+    }
+
+    private func moveToNewField() {
+        guard let actions else { return }
+        host?.view.layoutIfNeeded()
+        guard let next = actions.field(), next.window != nil else { actions.dismissed(); return }
+        UIView.performWithoutAnimation { present(in: next) }
     }
 
     func update(selection: [String], trayCount: Int) {
@@ -206,10 +267,12 @@ final class AttachmentKeyboardResponder: UIView {
     /// Before the message menu puts the keyboard away.
     func menuWillPresent() { restoresAfterMenu = isPresented }
 
-    /// True when the panel comes back, so the composer's own focus restore stays out of it.
-    func menuDismissed(choseAction: Bool) -> Bool {
+    /// True when the panel comes back, so the composer's own focus restore stays out of it. It does unless the chosen
+    /// action takes the composer's place (reply, edit, text selection, a dialog); a plain dismissal, star or copy
+    /// gives it back.
+    func menuDismissed(composerTaken: Bool) -> Bool {
         defer { restoresAfterMenu = false }
-        guard restoresAfterMenu, !choseAction, let actions else { return false }
+        guard restoresAfterMenu, !composerTaken, let actions else { return false }
         actions.restore()
         return true
     }
@@ -220,7 +283,10 @@ final class AttachmentKeyboardResponder: UIView {
     func deselect(_ id: String) { actions?.deselect(id) }
     func refuse(_ reason: String) { actions?.refuse(reason) }
 
-    /// Signal's order: the panel goes first, then the full-screen picker comes up over a settled screen.
+    /// Signal's order: the panel goes first, then the full-screen picker comes up over a settled screen. The field
+    /// gives up its focus with the panel, and the panel is no longer its input view when the picker closes: the chat
+    /// is left as it was before "+", with the picks in the tray, and UIKit's restore of the responder that was first
+    /// when the picker came up has nothing to bring back. The same goes for Files and the camera.
     func pickPhotos() {
         close()
         actions?.photos()
@@ -259,9 +325,25 @@ final class AttachmentKeyboardResponder: UIView {
         host.present(picker, animated: true)
     }
 
+    /// Select More is part of the panel, so the panel is up again when the picker closes. UIKit gives the field
+    /// back its focus itself; the completion covers a dismissal that does not.
     func presentLimitedPicker() {
-        guard let host else { return }
-        PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: host)
+        guard let host, host.presentedViewController == nil else { return }
+        let presentation = UUID()
+        pickingMore = isPresented ? presentation : nil
+        PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: host) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.limitedPickerClosed(presentation) }
+        }
+    }
+
+    private func limitedPickerClosed(_ presentation: UUID) {
+        guard pickingMore == presentation else { return }
+        pickingMore = nil
+        guard let field, !field.isFirstResponder else { return }
+        if field.window == nil || !field.becomeFirstResponder() {
+            detach()
+            actions?.dismissed()
+        }
     }
 
     func openSettings() {
@@ -278,6 +360,11 @@ final class AttachmentKeyboardResponder: UIView {
         guard abs(local.maxY - window.bounds.maxY) <= 1 else { return }
         KeyboardHeightCache.record(local.height, in: window)
     }
+}
+
+extension AttachmentKeyboard: UIGestureRecognizerDelegate {
+    /// The field's own taps still place the caret.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }
 
 private final class CameraDelegate: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
