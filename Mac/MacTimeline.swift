@@ -467,6 +467,9 @@ final class MacTimelineGeneration: @unchecked Sendable {
     private var hovered: MacTimelineMessageCell?
     private var firstResponderObservation: NSKeyValueObservation?
     private var tableHasFocus = false
+    let replySwipe = MacReplySwipe()
+    private var scrollMonitor: Any?
+    private var resignObserver: NSObjectProtocol?
     /// Where a reload asked for before the view was laid out puts the reader once it is.
     private var pendingReload: MacTimelinePlace? = .newest
 
@@ -481,6 +484,9 @@ final class MacTimelineGeneration: @unchecked Sendable {
         context.showResult = { [weak self] id in self?.timeline?.scrollTo(messageID: id) }
         context.openQuote = { [weak self] reference in self?.timeline?.scrollTo(quotedMessage: reference) }
         context.openMenu = { [weak self] id in self?.timeline?.openMenu(for: id) }
+        replySwipe.cellAt = { [weak self] point in self?.replySwipeCell(at: point) }
+        replySwipe.mayStart = { [weak self] in self.map { !$0.isLiveScrolling && NSEvent.pressedMouseButtons == 0 } ?? false }
+        replySwipe.ended = { [weak self] in self?.updateHover() }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -546,11 +552,27 @@ final class MacTimelineGeneration: @unchecked Sendable {
         updateInsets()
         applyWidth()
         if followsEnd { scrollToNewest() }
+        // The reply swipe sees the window's scroll events before the scroll view does: an override of `scrollWheel`
+        // would cost the table its responsive scrolling.
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            // A local monitor runs on the main thread, with the event being sent.
+            nonisolated(unsafe) let scroll = event
+            let keeps = MainActor.assumeIsolated { self?.scrollWheel(scroll) == true }
+            return keeps ? nil : event
+        }
+        resignObserver = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.replySwipe.cancel() }
+        }
     }
 
     override func viewDidDisappear() {
         super.viewDidDisappear()
         firstResponderObservation = nil
+        if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
+        scrollMonitor = nil
+        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
+        resignObserver = nil
+        replySwipe.cancel()
     }
 
     // MARK: Insets
@@ -889,6 +911,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
     /// The whole table again: a chat opening, a filter changing what it lists, or a change that is no insertion or
     /// removal of rows in order. The rows around where the reader lands are measured here, the rest on the queue.
     func reload(_ content: MacTimelineContent, at place: MacTimelinePlace) {
+        replySwipe.cancel()
         let next = entries(content)
         bumpRevisions(changedMessages(from: entries, to: next) + returningMessages(from: entries, to: next))
         isGroup = content.isGroup
@@ -1583,6 +1606,28 @@ final class MacTimelineGeneration: @unchecked Sendable {
 
     var visibleMessageIDs: Set<String> { shownIDs }
 
+    // MARK: Reply swipe
+
+    /// A scroll event of this window, for the reply swipe; true when it keeps it from the scroll view.
+    private func scrollWheel(_ event: NSEvent) -> Bool {
+        guard let window = view.window, event.window === window else { return false }
+        return handleScroll(event, at: table.convert(event.locationInWindow, from: nil)) { window.sendEvent($0) }
+    }
+
+    /// `point` is in the table's coordinates; `pass` hands an event held back to the scroll view.
+    func handleScroll(_ event: NSEvent, at point: NSPoint, pass: (NSEvent) -> Void) -> Bool {
+        replySwipe.handle(event, at: point, pass: pass)
+    }
+
+    /// The message row in sight under `point`, if a swipe there replies to its message.
+    private func replySwipeCell(at point: NSPoint) -> MacTimelineMessageCell? {
+        guard table.visibleRect.contains(point), visibleFrame.contains(point) else { return nil }
+        let row = table.row(at: point)
+        guard row >= 0, let cell = table.view(atColumn: 0, row: row, makeIfNecessary: false) as? MacTimelineMessageCell,
+              cell.ownsReplySwipe(at: table.convert(point, to: cell)) else { return nil }
+        return cell
+    }
+
     // MARK: Hover
 
     /// The bubble under the pointer shows its toolbar and its text's cursor; nothing hovers while a gesture scrolls.
@@ -1863,6 +1908,23 @@ final class MacTimelineGeneration: @unchecked Sendable {
         guard let row = indexByID[messageID] else { return MacDebugHooks.log("tour \(verb): \(messageID) is not listed") }
         reveal(messageID, margin: MacTimelineController.focusMargin)
         (table.view(atColumn: 0, row: row, makeIfNecessary: true) as? MacTimelineMessageCell)?.debugRequest(verb)
+    }
+
+    /// Where the tour's `swipe` puts the pointer for a message, brought into sight: the middle of its bubble, in the
+    /// table's coordinates.
+    func debugSwipePoint(of id: String) -> NSPoint? {
+        guard let row = indexByID[id] else { return nil }
+        reveal(id, margin: MacTimelineController.focusMargin)
+        table.layoutSubtreeIfNeeded()
+        guard let cell = table.view(atColumn: 0, row: row, makeIfNecessary: true) as? MacTimelineMessageCell else { return nil }
+        let bubble = cell.bubbleFrame
+        return table.convert(NSPoint(x: bubble.midX, y: bubble.midY), from: cell)
+    }
+
+    /// The bubble's travel, the reply arrow and the toolbar of a message's cell.
+    func debugSwipeState(of id: String) -> String {
+        guard let row = indexByID[id], let cell = table.view(atColumn: 0, row: row, makeIfNecessary: false) as? MacTimelineMessageCell else { return "\(id) has no cell" }
+        return cell.debugSwipeState
     }
 
     /// The tour's `hover <id>|off`: each cell in sight shows its toolbar as the pointer would.

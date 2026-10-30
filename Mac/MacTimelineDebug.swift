@@ -51,6 +51,10 @@ import SwiftUI
             drag(argument, timeline: timeline, window: window)
         case "knob":
             knob(Double(argument) ?? 0, timeline: timeline)
+        case "swipe":
+            await swipe(argument, timeline: timeline)
+        case "swipe-end":
+            await swipeEnd(argument, timeline: timeline)
         case "bind-reader":
             // The table keeps the reader's rows itself; there is no scroll position to bind.
             MacDebugHooks.log("timeline bound nothing: the table keeps the reader's rows itself")
@@ -243,6 +247,113 @@ import SwiftUI
             if phases { timeline.debugLiveScroll(false) }
             report(timeline, "drag \(label) end")
         }
+    }
+
+    // MARK: Reply swipe
+
+    /// The message and the point of a swipe `swipe … hold` left open, for `swipe-end`.
+    private static var heldSwipe: (id: String, point: NSPoint, fingerX: CGFloat)?
+
+    /// `swipe <message id> <points> [<vertical points>] [hold|wheel]`: a two-finger gesture over the message's bubble,
+    /// handed straight to the table's reply swipe as the window's event monitor would hand it on (no event goes through
+    /// the window server): `mayBegin`, then the fingers moving `points` right (negative: left) and the vertical points
+    /// down in whole-point steps of about 4 pt, 8 ms apart, then `ended` and a short momentum. With `hold` it stops before
+    /// `ended`, so a `capture` can show the swipe under way, and `swipe-end [cancel]` finishes it. `wheel` sends one
+    /// notched mouse wheel event instead. What the swipe does not keep is counted, not sent on: an off-screen window's
+    /// scroll view cannot track a gesture (its responsive scrolling needs a screen). Logs whether the swipe took the
+    /// gesture, how far the bubble went, whether it replied and the composer's reply.
+    private static func swipe(_ argument: String, timeline: MacTimelineController) async {
+        let words = argument.split(separator: " ").map(String.init)
+        let numbers = words.dropFirst().compactMap { Double($0) }.map { CGFloat($0) }
+        guard let id = words.first, let x = numbers.first, let point = timeline.table.debugSwipePoint(of: id) else {
+            return MacDebugHooks.log("tour swipe \(argument): needs a message in the open chat and <points> [<vertical points>] [hold|wheel]")
+        }
+        let y = numbers.dropFirst().first ?? 0
+        timeline.table.replySwipe.debugReleased = 0
+        if words.contains("wheel") {
+            send(scrollEvent(x: x, y: y, phase: nil, momentum: .none, continuous: false), at: point, timeline: timeline)
+            return await logSwipe(id, argument, timeline: timeline)
+        }
+        send(scrollEvent(x: 0, y: 0, phase: .mayBegin, momentum: .none), at: point, timeline: timeline)
+        let steps = max(1, Int((max(abs(x), abs(y)) / 4).rounded(.up)))
+        // Whole points, as a trackpad's events carry them, adding up to the distance.
+        func part(_ total: CGFloat, _ step: Int) -> CGFloat {
+            (total * CGFloat(step + 1) / CGFloat(steps)).rounded() - (total * CGFloat(step) / CGFloat(steps)).rounded()
+        }
+        for step in 0..<steps {
+            try? await Task.sleep(for: .milliseconds(8))
+            send(scrollEvent(x: part(x, step), y: part(y, step), phase: step == 0 ? .began : .changed, momentum: .none), at: point, timeline: timeline)
+        }
+        if words.contains("hold") {
+            heldSwipe = (id, point, (x / CGFloat(steps)).rounded())
+            try? await Task.sleep(for: .milliseconds(50))
+            return MacDebugHooks.log("timeline swipe \(argument) held: \(timeline.table.debugSwipeState(of: id))")
+        }
+        await endGesture((x / CGFloat(steps)).rounded(), cancel: false, at: point, timeline: timeline)
+        await logSwipe(id, argument, timeline: timeline)
+    }
+
+    private static func swipeEnd(_ argument: String, timeline: MacTimelineController) async {
+        guard let held = heldSwipe else { return MacDebugHooks.log("tour swipe-end: no swipe held") }
+        heldSwipe = nil
+        timeline.table.replySwipe.debugReleased = 0
+        await endGesture(held.fingerX, cancel: argument == "cancel", at: held.point, timeline: timeline)
+        await logSwipe(held.id, "end \(argument)", timeline: timeline)
+    }
+
+    /// The fingers lift (or the gesture is cancelled), and the momentum that follows a quick lift runs out.
+    private static func endGesture(_ x: CGFloat, cancel: Bool, at point: NSPoint, timeline: MacTimelineController) async {
+        try? await Task.sleep(for: .milliseconds(8))
+        send(scrollEvent(x: 0, y: 0, phase: cancel ? .cancelled : .ended, momentum: .none), at: point, timeline: timeline)
+        guard !cancel else { return }
+        for (index, momentum) in [CGMomentumScrollPhase.begin, .continuous, .continuous, .end].enumerated() {
+            try? await Task.sleep(for: .milliseconds(8))
+            send(scrollEvent(x: momentum == .end ? 0 : (x / CGFloat(index + 1)).rounded(), y: 0, phase: nil, momentum: momentum), at: point, timeline: timeline)
+        }
+    }
+
+    private static func logSwipe(_ id: String, _ argument: String, timeline: MacTimelineController) async {
+        // The reply reaches the composer through SwiftUI's next update, and the bubble settles in 0.3 s.
+        try? await Task.sleep(for: .milliseconds(400))
+        let record = timeline.table.replySwipe.debugRecord
+        MacDebugHooks.log("timeline swipe \(argument): claimed \(record.claimed), max offset \(format(record.maxOffset)), replied \(record.replied), "
+            + "haptics \(record.haptics), cancelled \(record.cancelled), events kept \(record.consumed) passed \(record.passed), "
+            + "held back then handed on \(timeline.table.replySwipe.debugReleased), "
+            + "after it \(timeline.table.debugSwipeState(of: id)); "
+            + "composer replying to \(MacComposerTour.intent?.replyingTo?.id ?? "none")")
+    }
+
+    /// One event through the table's reply swipe; held events it hands back are counted.
+    private static func send(_ event: NSEvent?, at point: NSPoint, timeline: MacTimelineController) {
+        guard let event else { return MacDebugHooks.log("tour swipe: no scroll event") }
+        if event.phase == .began || event.phase.isEmpty && event.momentumPhase.isEmpty {
+            MacDebugHooks.log(String(format: "timeline swipe event: phase %lu, x %.1f, y %.1f, precise %d, inverted %d", event.phase.rawValue,
+                                     event.scrollingDeltaX, event.scrollingDeltaY, event.hasPreciseScrollingDeltas ? 1 : 0, event.isDirectionInvertedFromDevice ? 1 : 0))
+        }
+        _ = timeline.table.handleScroll(event, at: point) { _ in timeline.table.replySwipe.debugReleased += 1 }
+    }
+
+    /// A trackpad's scroll event (a wheel's, with `continuous` false) for the fingers moving `x` right and `y` down,
+    /// whatever this Mac's scroll-direction setting.
+    private static func scrollEvent(x: CGFloat, y: CGFloat, phase: CGScrollPhase?, momentum: CGMomentumScrollPhase, continuous: Bool = true) -> NSEvent? {
+        func make(_ sign: CGFloat) -> NSEvent? {
+            let dx = x * sign, dy = y * sign
+            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: continuous ? .pixel : .line, wheelCount: 2,
+                                      wheel1: Int32(dy.rounded()), wheel2: Int32(dx.rounded()), wheel3: 0) else { return nil }
+            event.setIntegerValueField(.scrollWheelEventIsContinuous, value: continuous ? 1 : 0)
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase?.rawValue ?? 0))
+            event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: Int64(momentum.rawValue))
+            if continuous {
+                event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: Double(dy))
+                event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: Double(dx))
+                event.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(dy.rounded()))
+                event.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: Int64(dx.rounded()))
+            }
+            return NSEvent(cgEvent: event)
+        }
+        // Natural scrolling reports deltas that follow the fingers; with it off they are the other way round.
+        guard let event = make(1) else { return nil }
+        return event.isDirectionInvertedFromDevice || !continuous ? event : make(-1)
     }
 
     /// A received message added below the others through the table's update path, as an arrival is; the model never
