@@ -61,7 +61,10 @@ struct MacDeviceReviewBanner: View {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
+        // The timeline scrolls under the banner: the tint sits on the timeline's own background, so no message shows
+        // through it.
         .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .padding(.horizontal, 16).padding(.top, 8)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("deviceReview.card")
