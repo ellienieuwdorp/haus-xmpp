@@ -36,7 +36,9 @@ import SwiftUI
 ///   private pasteboard, `remove-attachment <index>`, `copy-image <message id>|newest` (to a private pasteboard, logging
 ///   its types), `save-over` (Save As… over an existing file in the app's temporary directory, logging whether it
 ///   survives a failed copy) (`MacAttachmentTour`), `drop-highlight on|off` (the chat's highlight for files dragged
-///   over it), and `snap <name>`, which captures the main window as `<name>.png` into `-haus-capture`'s directory.
+///   over it), `connecting on|off` (the toolbar's connection progress, as while the account connects or catches up),
+///   `toolbar` (logs each toolbar item's frame in the window and whether it shows), and `snap <name>`, which captures
+///   the main window as `<name>.png` into `-haus-capture`'s directory.
 ///   Message actions by message ID in the open chat, as the bubble's menu performs them:
 ///   `reply|edit|star|retry|unsend|encryption|report|select-text <id>`, `react <id> <emoji>`, `pick-emoji <id>` (the
 ///   emoji picker's popover), `hover <id>|off` (shows that bubble's hover toolbar until `hover off`), and `menu <id>`
@@ -60,6 +62,8 @@ import SwiftUI
 ///   `scroll top|bottom|page-up|page-down` (as the keys do), `scroll by <points>` (as the reader's scroll, positive
 ///   towards older messages), `scroll-to <message id>` (a stored message by its ID), `quote <reference>` (as a click on
 ///   a quote naming that message does), `resize <width>x<height>`, `timeline` (logs the reader's row and distances),
+///   `knob [<seconds>]` (logs the scroller's frame and knob, then on each refresh for that long while the next steps
+///   play),
 ///   `resize-sweep <width>x<height> <width>x<height> <steps> [live]` (a resize from one size to the other, timing each
 ///   step, in a live resize with `live`; also with no chat open) and `stalls [label]` (main-thread stalls over 50 ms
 ///   since the last `stalls` step; the first starts the probe), `drag <points> <seconds> [phaseless]` (the reader's scroll by that many points, with a
@@ -70,7 +74,8 @@ import SwiftUI
 ///   [older]` messages with a quote and a large link card, below the others or above the oldest as an older page;
 ///   `show-row typing|group-typing|loading` the typing bubble or the loading row likewise; `settle` applies the model's
 ///   rows again), `mismatch` (each row's cached text height against a live bubble text view's at the current width,
-///   then each cell's record against its row's height and its extras against SwiftUI's size for them),
+///   then each cell's record against its row's height, its extras against SwiftUI's size for them and its footer
+///   against the size it last drew whole at),
 ///   `hit-reaction <message id>` (the window's hit test at the message's first reaction pill, and a click handed to
 ///   what it hits in process), `reuse-media` (one cell given a photo, then another message's photo, sampling which
 ///   shows), `extras-cache` (a quote's size measured twice for one message as its quote changes), `update-race` (two
@@ -116,6 +121,8 @@ import SwiftUI
 /// - `-haus-perf-stacks`: `display-count` also logs sampled call stacks that mark a bubble text view's layers as needing
 ///   display (`MacPerfProbe`); they stall the main thread, so no timing from such a run counts.
 /// - `-haus-quit-after <seconds>`: quits that long after launch.
+/// - `-haus-connecting`: the toolbar shows connection progress from launch, as a launch that connects does, until a
+///   tour's `connecting off`.
 /// - `-haus-window-size <width>x<height>`: the main window's content size in points, for captures at a set size.
 /// - `-haus-select <chat>`, `-haus-inspector`, `-haus-inspector-page details|encryption`,
 ///   `-haus-sheet account|new-chat|own-devices|fingerprint|backup|group-join`, `-haus-settings general|appearance|about`,
@@ -170,6 +177,7 @@ import SwiftUI
     static func prepareLaunch() {
         MacUnobtrusive.install()
         if has("-haus-fresh-store") { emptyTestStore() }
+        if has("-haus-connecting") { tour.connecting = true }
         if MacDebugNotificationLog.silencesTestSession {
             log("notifications: off in this test session; -haus-log-notifications logs them")
         }
@@ -341,6 +349,8 @@ import SwiftUI
         var hoveredMessage: String?
         /// The chat shows its drop highlight as though files were dragged over it.
         var dropHighlight = false
+        /// The toolbar shows connection progress as though the account were connecting.
+        var connecting = false
         func setMessageRequest(_ request: MessageRequest) {
             messageRequest = request
         }
@@ -535,6 +545,8 @@ import SwiftUI
             case "focus", "press", "ax", "rotors", "focus-timeline", "ax-press", "ax-action": await MacKeyboardDebug.step(words[0], argument, window: mainWindow)
             case "attach", "drop", "paste", "import", "remove-attachment", "copy-image", "save-over": MacAttachmentTour.step(words[0], argument, model: model)
             case "drop-highlight": tour.dropHighlight = argument != "off"
+            case "connecting": tour.connecting = argument != "off"
+            case "toolbar": if let window = mainWindow { logToolbar(window) }
             case "find", "find-close", "find-esc", "starred", "show-result": MacConversationFindTour.step(words[0], argument)
             case "minimums": if let window = mainWindow { logMinimums(window) }
             case "snap":
@@ -552,7 +564,7 @@ import SwiftUI
             case "scroll" where Double(argument.split(separator: " ").first ?? "") != nil:
                 let parts = argument.split(separator: " ")
                 if let window = mainWindow { await ScrollProbe.sweep(in: window, seconds: Double(parts[0]) ?? 10, paging: parts.dropFirst().first == "paging") }
-            case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline", "drag", "bind-reader", "older", "mismatch", "arrive", "arrive-long",
+            case "scroll", "scroll-to", "quote", "resize", "resize-sweep", "timeline", "knob", "drag", "bind-reader", "older", "mismatch", "arrive", "arrive-long",
                  "arrive-extras", "settle", "show-row", "hit-reaction", "reuse-media", "extras-cache", "update-race", "gesture-update",
                  "resize-drag", "edit-race", "overlay-resize":
                 await MacTimelineDebug.step(words[0], argument, window: mainWindow)
@@ -1189,6 +1201,19 @@ import SwiftUI
         let frame = view.convert(view.bounds, to: nil)
         log("view \(String(repeating: " ", count: depth))\(type(of: view)) \(Int(frame.minX)),\(Int(frame.minY)) \(Int(frame.width))x\(Int(frame.height)) layer \(view.layer.map { "\(type(of: $0))" } ?? "-")")
         for subview in view.subviews { dumpViews(subview, depth: depth + 1) }
+    }
+
+    /// Each toolbar item's place in the window, as its own view or the button the toolbar made for it, and whether it
+    /// shows.
+    private static func logToolbar(_ window: NSWindow) {
+        guard let toolbar = window.toolbar, let root = window.contentView?.superview else { return log("toolbar: none") }
+        func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
+        let all = views(root)
+        for item in toolbar.items {
+            let view = item.view ?? all.first { ($0 as? NSButton)?.image != nil && ($0 as? NSButton)?.image === item.image }
+            let frame = view.map { $0.convert($0.bounds, to: nil) }.map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "no view"
+            log("toolbar: \(item.itemIdentifier.rawValue) \(item.isHidden ? "hidden" : item.isVisible ? "shown" : "not shown") \(frame)")
+        }
     }
 
     /// The window's content minimum and each SwiftUI hosting view's minimum width and height. The split view's panes

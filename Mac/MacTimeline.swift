@@ -193,6 +193,143 @@ final class MacTimelineClipView: NSClipView {
     override class var isCompatibleWithResponsiveScrolling: Bool { true }
 }
 
+/// The timeline's scroller, whose knob eases to its new length and place when the content's height changes under it
+/// (an older page coming in above the reader, heights landing from the queue, an arrival) instead of jumping there.
+/// The easing is an offset from where the scroll view puts the knob, fading to nothing over a fraction of a second, so
+/// the reader's own scrolling moves the knob at once, as always, during it too. A change counts when the knob's length
+/// changes: scrolling alone never changes it. A click or drag on the scroller, a live resize, Reduce Motion and a
+/// hidden scroller show the knob where it is at once; the display link runs only while an easing does.
+final class MacTimelineScroller: NSScroller {
+    private static let duration: CFTimeInterval = 0.3
+
+    override class var isCompatibleWithOverlayScrollers: Bool { self == MacTimelineScroller.self }
+
+    /// Where the scroll view puts the knob.
+    private var value: Double = 0
+    private var proportion: CGFloat = 0
+    /// Where the knob showed against that when the easing started.
+    private var valueOffset: Double = 0
+    private var proportionOffset: CGFloat = 0
+    /// Where the knob showed before the scroll view's latest move of it: the scroll view moves it, then sets its length.
+    private var valueBefore: Double = 0
+    private var started: CFTimeInterval = 0
+    /// The easing started in this turn of the run loop.
+    private var starting = false
+    private var link: CADisplayLink?
+    private var tracking = false
+
+    override var doubleValue: Double {
+        get { super.doubleValue }
+        set {
+            valueBefore = super.doubleValue
+            // The timeline putting the reader's row back after the change that started the easing, in the same turn
+            // (an arrival below them, heights changing under them): part of that change, so the knob eases from where
+            // it showed before it rather than jumping by the correction first.
+            if starting { valueOffset = valueBefore - newValue }
+            value = newValue
+            show()
+        }
+    }
+
+    override var knobProportion: CGFloat {
+        get { super.knobProportion }
+        set {
+            let shown = super.knobProportion
+            let changed = proportion > 0 && abs(newValue - proportion) > 0.0001
+            proportion = newValue
+            if changed, eases {
+                valueOffset = valueBefore - value
+                proportionOffset = shown - newValue
+                started = CACurrentMediaTime()
+                if !starting {
+                    starting = true
+                    RunLoop.main.perform(inModes: [.common]) { [weak self] in
+                        MainActor.assumeIsolated { self?.starting = false }
+                    }
+                }
+                if link == nil {
+                    let link = displayLink(target: self, selector: #selector(step))
+                    link.add(to: .main, forMode: .common)
+                    self.link = link
+                }
+            } else if changed {
+                // An easing under way stops too, rather than carrying its offset onto the new geometry.
+                stop()
+            }
+            show()
+        }
+    }
+
+    /// Not off every screen either, nor hidden, where the display link never fires and the knob would wait mid-way.
+    private var eases: Bool {
+        guard !tracking, !isHiddenOrHasHiddenAncestor, let window, window.screen != nil, !window.inLiveResize else { return false }
+        return !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    /// How much of the offset is left: an ease-out over the duration.
+    private var remaining: Double {
+        guard link != nil else { return 0 }
+        let progress = (CACurrentMediaTime() - started) / Self.duration
+        return progress >= 1 ? 0 : pow(1 - progress, 3)
+    }
+
+    private func show() {
+        let remaining = remaining
+        super.doubleValue = min(1, max(0, value + valueOffset * remaining))
+        super.knobProportion = min(1, max(0, proportion + proportionOffset * CGFloat(remaining)))
+    }
+
+    @objc private func step(_ link: CADisplayLink) {
+        if remaining == 0 { settle() } else { show() }
+    }
+
+    /// The knob where the scroll view puts it, at once.
+    private func settle() {
+        stop()
+        show()
+    }
+
+    private func stop() {
+        link?.invalidate()
+        link = nil
+        starting = false
+        valueOffset = 0
+        proportionOffset = 0
+    }
+
+    /// A press is told apart against the knob as it shows, so one on the knob still easing drags it. The drag moves the
+    /// content to where the scroller says, which is where the knob shows only once it is settled: it settles as the
+    /// drag starts, then stays where the pointer puts it until the drag ends. Handed on whole to the scroller's own
+    /// tracking, whose press calls `trackKnob` for the knob.
+    override func mouseDown(with event: NSEvent) {
+        whileTracking { super.mouseDown(with: event) }
+    }
+
+    override func trackKnob(with event: NSEvent) {
+        settle()
+        whileTracking { super.trackKnob(with: event) }
+    }
+
+    private func whileTracking(_ track: () -> Void) {
+        let was = tracking
+        tracking = true
+        defer { tracking = was }
+        track()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil { settle() }
+    }
+
+    /// Hidden (the scroll view hides it once everything fits), it has nothing to show an easing on, and its display
+    /// link, which may not call again until it shows, would be kept.
+    override func viewDidHide() {
+        super.viewDidHide()
+        settle()
+    }
+}
+
 /// The root view, which hears the window's live resize end.
 final class MacTimelineRootView: NSView {
     var endedLiveResize: () -> Void = {}
@@ -342,6 +479,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
         let root = MacTimelineRootView()
         root.endedLiveResize = { [weak self] in self?.liveResizeEnded() }
         scrollView.contentView = MacTimelineClipView()
+        scrollView.verticalScroller = MacTimelineScroller()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
@@ -350,6 +488,10 @@ final class MacTimelineGeneration: @unchecked Sendable {
         scrollView.contentView.drawsBackground = true
         scrollView.contentView.backgroundColor = .textBackgroundColor
         scrollView.automaticallyAdjustsContentInsets = false
+        // The scroller is inset by the content insets and then by these: it runs from the toolbar and the bars under
+        // it down to the composer, the frame's whole height, without the margins kept inside the frame.
+        let margin = MacTimelineController.topMargin
+        scrollView.scrollerInsets = NSEdgeInsets(top: -margin, left: 0, bottom: -(margin - 1), right: 0)
         scrollView.verticalScrollElasticity = .allowed
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("message"))
@@ -437,7 +579,6 @@ final class MacTimelineGeneration: @unchecked Sendable {
         adjusting = true
         bars = next
         scrollView.contentInsets = NSEdgeInsets(top: next.top + margin, left: 0, bottom: next.bottom + margin - 1, right: 0)
-        scrollView.scrollerInsets = NSEdgeInsets(top: next.top, left: 0, bottom: next.bottom, right: 0)
         updateFiller()
         // A taller composer or a find bar opening leaves the reader's row where it was, or the newest message above it.
         keepPlace()
@@ -1769,12 +1910,13 @@ final class MacTimelineGeneration: @unchecked Sendable {
             rows += 1
             if delta > 0.5, failures.count < 5 { failures.append("\(row.message.id) \(frame.height) vs \(height)") }
         }
-        var extrasOff: [String] = []
+        var extrasOff: [String] = [], staleFooters: [String] = []
         let sizer = NSHostingController(rootView: AnyView(EmptyView()))
         sizer.sizingOptions = []
         table.enumerateAvailableRowViews { rowView, _ in
             guard let cell = rowView.view(atColumn: 0) as? MacTimelineMessageCell, let record = cell.layoutRecord else { return }
             let id = record.key.id
+            if let stale = cell.debugStaleFooter { staleFooters.append("\(id) \(stale)") }
             if cell.debugExtras != nil, let message = cell.message, let frame = record.extrasFrame, !record.provisional, !record.isStandIn {
                 // What SwiftUI fits them in now, sized afresh, past every cache.
                 let width = record.key.contentWidth
@@ -1788,7 +1930,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
         return "\(rows) texts, worst \(worst) pt" + (failures.isEmpty ? "" : ", off: " + failures.joined(separator: "; "))
             + "; \(geometry.cells) cells, \(geometry.cellsOff.count) off their rows' heights \(geometry.cellsOff.prefix(4)), "
             + "\(geometry.shownGuesses.count) showing guesses \(geometry.shownGuesses.prefix(4)), \(geometry.shownStandIns.count) standing in "
-            + "\(geometry.shownStandIns.prefix(4)), extras off \(extrasOff.prefix(4)); \(geometry.rowsOff.count) rows off their records "
+            + "\(geometry.shownStandIns.prefix(4)), extras off \(extrasOff.prefix(4)), \(staleFooters.count) footers stale \(staleFooters.prefix(4)); \(geometry.rowsOff.count) rows off their records "
             + "\(geometry.rowsOff.prefix(4)); \(provisional) guessed records, \(geometry.staged) staged, live scroll \(isLiveScrolling ? 1 : 0)"
     }
 

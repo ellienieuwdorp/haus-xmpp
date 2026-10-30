@@ -94,7 +94,7 @@ final class MacBubbleView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// A view that draws itself, once per `needsDisplay`.
+/// A view that draws itself, once per `needsDisplay`, and again at each new size.
 class MacTimelineDrawnView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -104,6 +104,16 @@ class MacTimelineDrawnView: NSView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    /// What it draws is placed in its bounds (the footer against the trailing edge, the author's name truncated to
+    /// them), which the redraw policy leaves alone on a resize: the layer kept the old drawing and AppKit drew only
+    /// the strip a wider frame uncovered, so a bubble widening step by step showed a copy of its time and status mark
+    /// at each earlier width.
+    override func setFrameSize(_ newSize: NSSize) {
+        let changed = newSize != frame.size
+        super.setFrameSize(newSize)
+        if changed { needsDisplay = true }
+    }
+
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -112,6 +122,21 @@ class MacTimelineDrawnView: NSView {
         super.viewDidChangeEffectiveAppearance()
         needsDisplay = true
     }
+
+    #if DEBUG
+    /// The size it last drew its whole bounds at, and the parts of them it drew since, for the tour's `mismatch`.
+    private(set) var debugDrawnSize: CGSize?
+    private(set) var debugPartialDraws = 0
+
+    func debugNoteDraw(_ dirtyRect: NSRect) {
+        if dirtyRect.contains(bounds) {
+            debugDrawnSize = bounds.size
+            debugPartialDraws = 0
+        } else {
+            debugPartialDraws += 1
+        }
+    }
+    #endif
 }
 
 /// The day header: caption semibold in a quaternary capsule.
@@ -152,6 +177,9 @@ final class MacFooterView: MacTimelineDrawnView {
     var content = Content() { didSet { if content != oldValue { needsDisplay = true } } }
 
     override func draw(_ dirtyRect: NSRect) {
+        #if DEBUG
+        debugNoteDraw(dirtyRect)
+        #endif
         let metrics = MacTimelineMetrics.shared
         let color = content.isOutgoing ? content.accent.bubbleText.withAlphaComponent(0.75) : .secondaryLabelColor
         let slot = MacTimelineMetrics.statusSlot
@@ -717,6 +745,12 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
 
     /// The hosting view of the quote, file and card, as the cell placed it.
     var debugExtras: NSView? { extras?.isHidden == false ? extras : nil }
+
+    /// The footer's size, unless it last drew whole at that size.
+    var debugStaleFooter: String? {
+        guard footer.debugDrawnSize != footer.bounds.size else { return nil }
+        return "\(Int(footer.bounds.width)) drawn at \(footer.debugDrawnSize.map { "\(Int($0.width))" } ?? "none") + \(footer.debugPartialDraws) parts"
+    }
     #endif
 }
 
