@@ -558,27 +558,31 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
     }
 
     /// The bubble springs back (at once with Reduce Motion, or when the cell is reused or its swipe given up) and the
-    /// toolbar may come back.
+    /// toolbar may come back. At once also stops the bubble settling from an earlier swipe, whose offset is already 0:
+    /// a cell reused for another message must not show the last one's movement.
     func endSwipe(animated: Bool) {
         let wasSwiping = isSwiping
         isSwiping = false
-        if swipeOffset != 0 {
+        if animated, swipeOffset != 0, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             swipeOffset = 0
-            if animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.3
-                    // Close to the iPhone's spring (0.3 s, damping 0.8): quick out, settling softly with no overshoot.
-                    context.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 1, 0.5, 1)
-                    context.allowsImplicitAnimation = true
-                    layoutSubtreeIfNeeded()
-                }
-            } else {
-                for view in travellers { view.layer?.removeAllAnimations() }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.3
+                // Close to the iPhone's spring (0.3 s, damping 0.8): quick out, settling softly with no overshoot.
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 1, 0.5, 1)
+                context.allowsImplicitAnimation = true
                 layoutSubtreeIfNeeded()
             }
+        } else if swipeOffset != 0 || isSettling {
+            swipeOffset = 0
+            for view in travellers { view.layer?.removeAllAnimations() }
+            layoutSubtreeIfNeeded()
         }
         if wasSwiping { updateToolbarVisibility() }
     }
+
+    /// The bubble may still be springing back from a swipe, as its layer's animations tell (a finished one may linger
+    /// there, which is harmless to remove); a bubble never swiped has none, so a reuse costs one look.
+    private var isSettling: Bool { bubble.layer?.animationKeys()?.isEmpty == false }
 
     /// In the room the bubble leaves at its leading side, centred in it, whole from the threshold on.
     private func placeReplyIndicator(bubble: CGRect) {
@@ -844,8 +848,9 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         layoutSubtreeIfNeeded()
         let rests = bubbleFrame.minX, now = bubble.layer?.presentation()?.frame.minX ?? bubble.frame.minX
         let indicator = replyIndicator.map { String(format: "arrow alpha %.2f at x %.0f", $0.alphaValue, $0.frame.minX) } ?? "no arrow"
-        return String(format: "offset %.1f, bubble x %.1f (rests at %.1f), text x %.1f, footer x %.1f, %@, toolbar %@, swiping %d",
-                      swipeOffset, now, rests, textView.frame.minX, footer.frame.minX, indicator, toolbarShown ? "shown" : "hidden", isSwiping ? 1 : 0)
+        return String(format: "offset %.1f, bubble x %.1f (rests at %.1f), text x %.1f, footer x %.1f, %@, toolbar %@, swiping %d, settling %d (%@)",
+                      swipeOffset, now, rests, textView.frame.minX, footer.frame.minX, indicator, toolbarShown ? "shown" : "hidden", isSwiping ? 1 : 0,
+                      isSettling ? 1 : 0, (bubble.layer?.animationKeys() ?? []).joined(separator: ","))
     }
     #endif
 }

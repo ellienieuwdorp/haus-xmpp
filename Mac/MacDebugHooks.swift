@@ -69,7 +69,7 @@ import SwiftUI
 ///   since the last `stalls` step; the first starts the probe), `drag <points> <seconds> [phaseless]` (the reader's scroll by that many points, with a
 ///   gesture's phases or none, running while the next steps play), `swipe <message id> <points> [<vertical points>]
 ///   [hold|wheel]` (a two-finger gesture over the message handed straight to the timeline's reply swipe, logging what
-///   it did; `hold` leaves it under way for a `capture` and `swipe-end [cancel]` finishes it), `bind-reader` (kept for older tours: the table
+///   it did; `hold` leaves it under way for a `capture` and `swipe-end [cancel|resign|elsewhere|reset]` finishes it), `bind-reader` (kept for older tours: the table
 ///   binds nothing and says so), `older` (the next older page, as the
 ///   reader reaching the paging lead asks for it), `arrive [<text>]` (a received message added below the others, as an
 ///   arrival is, which the model never has; `arrive-long [<characters>]` one with a long text; `arrive-extras <count>

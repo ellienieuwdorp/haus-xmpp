@@ -469,7 +469,7 @@ final class MacTimelineGeneration: @unchecked Sendable {
     private var tableHasFocus = false
     let replySwipe = MacReplySwipe()
     private var scrollMonitor: Any?
-    private var resignObserver: NSObjectProtocol?
+    private var resignObservers: [NSObjectProtocol] = []
     /// Where a reload asked for before the view was laid out puts the reader once it is.
     private var pendingReload: MacTimelinePlace? = .newest
 
@@ -560,9 +560,20 @@ final class MacTimelineGeneration: @unchecked Sendable {
             let keeps = MainActor.assumeIsolated { self?.scrollWheel(scroll) == true }
             return keeps ? nil : event
         }
-        resignObserver = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.replySwipe.cancel() }
-        }
+        // A swipe whose end may never reach the table ends when the app, or the table's window, stops taking input
+        // (Settings opening over it, say). The window is compared when it resigns, as the view may have moved since.
+        resignObservers = [
+            NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.replySwipe.cancel() }
+            },
+            NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: nil, queue: .main) { [weak self] notification in
+                nonisolated(unsafe) let window = notification.object as AnyObject?
+                MainActor.assumeIsolated {
+                    guard let self, let window, window === self.view.window else { return }
+                    self.replySwipe.cancel()
+                }
+            },
+        ]
     }
 
     override func viewDidDisappear() {
@@ -570,8 +581,8 @@ final class MacTimelineGeneration: @unchecked Sendable {
         firstResponderObservation = nil
         if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
         scrollMonitor = nil
-        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
-        resignObserver = nil
+        resignObservers.forEach(NotificationCenter.default.removeObserver)
+        resignObservers = []
         replySwipe.cancel()
     }
 
@@ -1610,8 +1621,20 @@ final class MacTimelineGeneration: @unchecked Sendable {
 
     /// A scroll event of this window, for the reply swipe; true when it keeps it from the scroll view.
     private func scrollWheel(_ event: NSEvent) -> Bool {
-        guard let window = view.window, event.window === window else { return false }
+        guard let window = view.window else { return false }
+        guard event.window === window else {
+            if event.window != nil { scrolledElsewhere(event) }
+            return false
+        }
         return handleScroll(event, at: table.convert(event.locationInWindow, from: nil)) { window.sendEvent($0) }
+    }
+
+    /// A scroll event of another of the app's windows. The pointer stays put while two fingers scroll, so the fingers'
+    /// events go to another window only once a gesture here is over or a window came up under the pointer: either way
+    /// the end of a swipe here would never come, and it ends now. Momentum is left alone: an earlier gesture's may still
+    /// be running down in that window when the fingers touch here.
+    func scrolledElsewhere(_ event: NSEvent) {
+        if !event.phase.isEmpty { replySwipe.cancel() }
     }
 
     /// `point` is in the table's coordinates; `pass` hands an event held back to the scroll view.
@@ -1919,6 +1942,12 @@ final class MacTimelineGeneration: @unchecked Sendable {
         guard let cell = table.view(atColumn: 0, row: row, makeIfNecessary: true) as? MacTimelineMessageCell else { return nil }
         let bubble = cell.bubbleFrame
         return table.convert(NSPoint(x: bubble.midX, y: bubble.midY), from: cell)
+    }
+
+    /// A message's cell put back at once, as its reuse for another message does.
+    func debugResetSwipe(of id: String) {
+        guard let row = indexByID[id], let cell = table.view(atColumn: 0, row: row, makeIfNecessary: false) as? MacTimelineMessageCell else { return }
+        cell.endSwipe(animated: false)
     }
 
     /// The bubble's travel, the reply arrow and the toolbar of a message's cell.

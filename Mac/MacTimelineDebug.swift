@@ -258,7 +258,7 @@ import SwiftUI
     /// handed straight to the table's reply swipe as the window's event monitor would hand it on (no event goes through
     /// the window server): `mayBegin`, then the fingers moving `points` right (negative: left) and the vertical points
     /// down in whole-point steps of about 4 pt, 8 ms apart, then `ended` and a short momentum. With `hold` it stops before
-    /// `ended`, so a `capture` can show the swipe under way, and `swipe-end [cancel]` finishes it. `wheel` sends one
+    /// `ended`, so a `capture` can show the swipe under way, and `swipe-end` finishes it. `wheel` sends one
     /// notched mouse wheel event instead. What the swipe does not keep is counted, not sent on: an off-screen window's
     /// scroll view cannot track a gesture (its responsive scrolling needs a screen). Logs whether the swipe took the
     /// gesture, how far the bubble went, whether it replied and the composer's reply.
@@ -293,11 +293,42 @@ import SwiftUI
         await logSwipe(id, argument, timeline: timeline)
     }
 
+    /// `swipe-end [cancel|resign|elsewhere|reset]`: the fingers of a held swipe lift, or the gesture is cancelled.
+    /// `resign` and `elsewhere` leave the fingers down and the end never comes, as when a window opens under the pointer:
+    /// another window resigns key, then the timeline's, posted as AppKit posts it (no window changes key); or another
+    /// window's momentum, then its fingers' scroll, handed to the table as its event monitor would. The swipe should go on
+    /// after the first of each and end after the second. `reset` lifts the fingers and, while the bubble settles, resets
+    /// the cell at once as its reuse for another message does.
     private static func swipeEnd(_ argument: String, timeline: MacTimelineController) async {
         guard let held = heldSwipe else { return MacDebugHooks.log("tour swipe-end: no swipe held") }
         heldSwipe = nil
-        timeline.table.replySwipe.debugReleased = 0
-        await endGesture(held.fingerX, cancel: argument == "cancel", at: held.point, timeline: timeline)
+        let swipe = timeline.table.replySwipe
+        swipe.debugReleased = 0
+        switch argument {
+        case "resign":
+            let other = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: true)
+            other.isReleasedWhenClosed = false
+            NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: other)
+            let afterOther = swipe.debugIsSwiping
+            guard let window = timeline.table.view.window else { return MacDebugHooks.log("tour swipe-end resign: the timeline has no window") }
+            NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+            MacDebugHooks.log("timeline swipe end resign: swiping after another window resigned \(afterOther), after the timeline's \(swipe.debugIsSwiping)")
+        case "elsewhere":
+            if let event = scrollEvent(x: 4, y: 0, phase: nil, momentum: .continuous) { timeline.table.scrolledElsewhere(event) }
+            let afterMomentum = swipe.debugIsSwiping
+            if let event = scrollEvent(x: 4, y: 0, phase: .changed, momentum: .none) { timeline.table.scrolledElsewhere(event) }
+            MacDebugHooks.log("timeline swipe end elsewhere: swiping after momentum elsewhere \(afterMomentum), after fingers elsewhere \(swipe.debugIsSwiping)")
+        case "reset":
+            await endGesture(held.fingerX, cancel: false, at: held.point, timeline: timeline)
+            MacDebugHooks.log("timeline swipe end reset, settling: \(timeline.table.debugSwipeState(of: held.id))")
+            timeline.table.debugResetSwipe(of: held.id)
+            MacDebugHooks.log("timeline swipe end reset, reset at once: \(timeline.table.debugSwipeState(of: held.id))")
+            // The bubble on screen, which shows the removed settling once the transaction is committed.
+            try? await Task.sleep(for: .milliseconds(50))
+            MacDebugHooks.log("timeline swipe end reset, 50 ms later: \(timeline.table.debugSwipeState(of: held.id))")
+        default:
+            await endGesture(held.fingerX, cancel: argument == "cancel", at: held.point, timeline: timeline)
+        }
         await logSwipe(held.id, "end \(argument)", timeline: timeline)
     }
 
