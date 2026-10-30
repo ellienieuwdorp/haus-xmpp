@@ -528,8 +528,9 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         }
     }
 
-    /// Beside the bubble in the gutter, on its outer side, centred on it; where the gutter is too narrow, over the
-    /// bubble's top outer corner instead, so it never runs past the window's edge.
+    /// Beside the bubble in the gutter, on its outer side, centred on it; where the gutter is too narrow for the buttons
+    /// this message has, over the bubble's top outer corner instead, so it never runs past the window's edge. Either way
+    /// inside the row: the row clips what pokes above it, and a click there would reach the row above.
     private func placeToolbar() {
         guard let toolbar, let layout = layoutRecord else { return }
         let size = toolbar.intrinsicContentSize
@@ -537,10 +538,10 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         let outgoing = layout.input.isOutgoing
         let room = outgoing ? bubble.minX : bounds.width - bubble.maxX
         let origin: CGPoint
-        if room >= MacMessageToolbarSize.maximumWidth + 6 + 4 {
+        if room >= size.width + 6 + 4 {
             origin = CGPoint(x: outgoing ? bubble.minX - 6 - size.width : bubble.maxX + 6, y: bubble.midY - size.height / 2)
         } else {
-            origin = CGPoint(x: outgoing ? bubble.minX + 6 : bubble.maxX - 6 - size.width, y: bubble.minY - size.height / 2)
+            origin = CGPoint(x: outgoing ? bubble.minX + 6 : bubble.maxX - 6 - size.width, y: max(0, bubble.minY - size.height / 2))
         }
         toolbar.frame = CGRect(origin: CGPoint(x: round(origin.x), y: round(origin.y)), size: size)
     }
