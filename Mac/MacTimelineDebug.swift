@@ -49,6 +49,8 @@ import SwiftUI
             report(timeline, "state")
         case "drag":
             drag(argument, timeline: timeline, window: window)
+        case "knob":
+            knob(Double(argument) ?? 0, timeline: timeline)
         case "bind-reader":
             // The table keeps the reader's rows itself; there is no scroll position to bind.
             MacDebugHooks.log("timeline bound nothing: the table keeps the reader's rows itself")
@@ -164,6 +166,31 @@ import SwiftUI
             return String(format: "median %.1f ms, worst %.1f ms, total %.0f ms", sorted[sorted.count / 2] * 1_000, (sorted.last ?? 0) * 1_000, sorted.reduce(0, +) * 1_000)
         }
         MacDebugHooks.log("timeline resize-sweep \(argument): \(steps + 1) steps\(inLiveResize ? " in a live resize" : ""); resize and layout \(summary(synchronous)); step with the next frame \(summary(whole)); setContentSize \(summary(phases[0])), layout \(summary(phases[1])), display \(summary(phases[2])); resize and layout CPU \(summary(cpu))")
+    }
+
+    /// `knob [<seconds>]`: the timeline's scroller against the scroll view and its insets, and its knob, now and then on
+    /// each refresh for `seconds` while the next steps play.
+    private static func knob(_ seconds: Double, timeline: MacTimelineController) {
+        let scrollView = timeline.table.scrollView
+        func sample(_ label: String) {
+            guard let scroller = scrollView.verticalScroller else { return MacDebugHooks.log("timeline knob: no scroller") }
+            let frame = scroller.frame, knob = scroller.rect(for: .knob), insets = scrollView.contentInsets
+            MacDebugHooks.log("timeline knob \(label): scroller \(format(frame.minY))-\(format(frame.maxY)) of \(format(scrollView.bounds.height)) "
+                + "(insets \(format(insets.top)), \(format(insets.bottom))) \(scroller.scrollerStyle == .overlay ? "overlay" : "legacy") "
+                + "(system \(NSScroller.preferredScrollerStyle == .overlay ? "overlay" : "legacy")), "
+                + "knob \(format(knob.minY)) + \(format(knob.height)), value \(String(format: "%.3f", scroller.doubleValue)) "
+                + "proportion \(String(format: "%.3f", scroller.knobProportion))")
+        }
+        sample("now")
+        guard seconds > 0 else { return }
+        Task {
+            let clock = ContinuousClock(), start = clock.now
+            while clock.now - start < .seconds(seconds) {
+                try? await Task.sleep(for: .milliseconds(16))
+                let elapsed = (clock.now - start).components
+                sample(String(format: "%.3f s", Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18))
+            }
+        }
     }
 
     /// `drag <points> <seconds> [phaseless]`: moves the timeline's clip view by `points` (positive towards older messages)
