@@ -317,6 +317,16 @@ final class MacTimelineScroller: NSScroller {
         track()
     }
 
+    /// The slot with round ends, as the knob's: it stops below the toolbar and above the composer, mid-window, where
+    /// square ends looked cut off.
+    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {
+        let radius = slotRect.width / 2
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(roundedRect: slotRect, xRadius: radius, yRadius: radius).addClip()
+        super.drawKnobSlot(in: slotRect, highlight: flag)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
         if newWindow == nil { settle() }
