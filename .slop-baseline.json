@@ -47,9 +47,6 @@
       "/// Preference keys that end in an account address.",
       "/// Renames account-keyed preferences and `lastAccount`; returns the old spellings it found. Their folders are"
     ],
-    "comment.history" : [
-      "/// the rest of the app now uses (the store migrates itself, the saved credentials and push registrations are read in"
-    ],
     "unsafe.discarded-try" : [
       "if ((try? files.contentsOfDirectory(atPath: source.path)) ?? [\"?\"]).isEmpty { try? files.removeItem(at: source) }",
       "try? files.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)",
@@ -464,10 +461,7 @@
       "/// for now)."
     ],
     "comment.history" : [
-      "// XEP-0490 after the walk, so the ids other devices published name messages we now hold.",
-      "/// A room without an archive refuses the query and keeps no archive baseline, as before.",
-      "/// Discovery now ends after `.ready`, so `.ready` reconciles stranded uploads only against a known answer; a later",
-      "/// The store holds a new page of older messages: reload the open chat's window, which now reaches further back."
+      "/// A room without an archive refuses the query and keeps no archive baseline, as before."
     ],
     "comment.mark" : [
       "// MARK: Attachments",
@@ -1404,7 +1398,6 @@
       "// A non-animated apply on the main queue is synchronous; if that ever changes, keep the offset logic synchronous."
     ],
     "comment.history" : [
-      "// The bubble was measured with the keyboard up and the overlay now covers the timeline.",
       "// Under a preview the caption keeps its own inset; under a quote alone the text tucks up as before.",
       "/// TextKit draws a hyphen there even with hyphenation off (measured on iOS 27: neither a paragraph style nor the"
     ]
@@ -1465,7 +1458,6 @@
       "/// `typed` when `current` only rewrites its last word, as an autocorrection does. Added text (dictation"
     ],
     "comment.history" : [
-      "// What the card shows now goes with the text; a fetch still running is not waited for.",
       "/// never takes part in the touch, so the button on top of it behaves as before."
     ],
     "comment.marker" : [
@@ -3051,9 +3043,6 @@
   "AppTests/PushUITests.swift" : {
     "comment.doc-on-non-api" : [
       "/// Explicit physical staging setup, never part of ordinary simulator/UI runs. This uses the"
-    ],
-    "comment.history" : [
-      "// The peer now sends synthetic encrypted traffic, and APNs and notification extension"
     ]
   },
   "AppTests/ReactionUITests.swift" : {
@@ -3319,9 +3308,6 @@
       "/// What the link preview card follows, as on the iPhone: the draft, the setting (never in the sample",
       "/// Where the iPhone shows its attach button: a direct chat on a server that takes uploads (any sample chat).",
       "/// `-haus-sample-link-preview`: the composer shows a canned card for any link, also in the sample conversations,"
-    ],
-    "comment.history" : [
-      "// What the card shows now goes with the text; a fetch still running is not waited for."
     ]
   },
   "Mac/MacComposerIntent.swift" : {
@@ -4029,9 +4015,6 @@
       "/// Publishes new records, each in one step with its row's height in the table, so a cell never shows a record its",
       "/// The timeline as a view-based `NSTableView`, as Telegram's Mac app builds it."
     ],
-    "comment.history" : [
-      "// An update measuring now was worked out against the rows replaced here: its records are dropped as they land."
-    ],
     "comment.mark" : [
       "// MARK: - Table",
       "// MARK: Accessibility",
@@ -4203,9 +4186,6 @@
     ],
     "comment.doc-too-long" : [
       "/// The open chat's timeline: the rows it shows, what the conversation's bars and menus read from it (the jump button,"
-    ],
-    "comment.history" : [
-      "/// Takes the content the table now shows. The table calls this as it commits a change, so what the bars and menus"
     ],
     "comment.mark" : [
       "// MARK: Day chip",
@@ -4432,9 +4412,6 @@
     "comment.doc-too-long" : [
       "/// v23: every stored account, chat, sender, actor, room and archive address in normal form (`JID`), so rows written"
     ],
-    "comment.history" : [
-      "/// by builds that kept typed capitals meet the normalised keys every caller now uses. Stored rows are migrated once"
-    ],
     "unsafe.discarded-try" : [
       "try? connection.execute(\"RELEASE address_migration\")",
       "try? connection.execute(\"ROLLBACK TO address_migration\")"
@@ -4510,9 +4487,6 @@
     "comment.future" : [
       "// Direct chats only for now: us or the peer may claim; the read side keeps only the sender's claim."
     ],
-    "comment.history" : [
-      "/// notification candidates the pointer now covers: a read message never alerts. Runs inside the caller's transaction."
-    ],
     "comment.mark" : [
       "// MARK: Contact links",
       "// MARK: Link preview cache",
@@ -4537,9 +4511,6 @@
     ]
   },
   "Packages/MessageStore/Sources/MessageStore/Models.swift" : {
-    "comment.history" : [
-      "/// The message as its sender now asserts it: unsent, or carrying the latest correction body."
-    ],
     "unsafe.discarded-try" : [
       "private static func correction(_ data: Data) -> Correction? { try? JSONDecoder().decode(Correction.self, from: data) }"
     ]
@@ -4807,9 +4778,6 @@
     "comment.doc-too-long" : [
       "/// The Mac: the transport stays for as long as the app runs and the Mac is awake, closing a window never drops it, and"
     ],
-    "comment.history" : [
-      "// Recorded before the change, so the away presence it sends (or the quiesce's) carries the last input."
-    ],
     "comment.restates-name" : [
       "/// The main (chat) window is the key window."
     ]
@@ -5040,9 +5008,6 @@
       "/// Ciphertext that cannot be decrypted yet (the sender's keys are unreachable offline) is retained for later keys or",
       "/// Only a bounce from the address we sent to fails the send; an error one of the peer's resources wrote does not,",
       "/// The extension's loop hands every event to the shared processor and ends only on disconnect."
-    ],
-    "comment.history" : [
-      "try await store.close() // persistence now fails outright"
     ]
   },
   "Packages/MessagingCore/Tests/MessagingCoreTests/LifecycleTests.swift" : {
@@ -5279,11 +5244,6 @@
       "/// With `removingRetired` (once per connection, from `initialize`), also takes this account's given-up device IDs",
       "/// `expectsBubble` of the arriving stanza, whose outer hints are not otherwise kept. Nil in rows written before it was."
     ],
-    "comment.history" : [
-      "// An edit sends the whole new message: the preview shown now goes along while its link is still in the text and",
-      "/// A row that now fails permanently becomes a placeholder and leaves the table, so it is never retried again; so does",
-      "/// A skipped row now waits only for a trust decision on a device that became known elsewhere (for example a"
-    ],
     "comment.marker" : [
       "// ponytail: direct chats only; rooms need the group envelope path and a real-JID actor rule."
     ],
@@ -5319,9 +5279,6 @@
   "Packages/OMEMO/Sources/OMEMOLab/main.swift" : {
     "comment.doc-on-non-api" : [
       "/// Deliberately narrow integration executable for disposable localhost accounts. The explicit"
-    ],
-    "comment.history" : [
-      "// now correctly use the raw Curve25519 key; that formatting change is not a new key."
     ]
   },
   "Packages/OMEMO/Tests/OMEMOTests/AttachmentServiceTests.swift" : {
@@ -5361,9 +5318,6 @@
       "/// When set, every room read and key lookup is recorded.",
       "/// When set, key lookups fail (recorded first), as when offline.",
       "/// When set, room reads fail (recorded first), as for a room that cannot be read right now."
-    ],
-    "comment.history" : [
-      "// The connection retry skips the row without work, but it now waits for a trust decision."
     ]
   },
   "Packages/OMEMO/Tests/OMEMOTests/KeyRecoveryServiceTests.swift" : {
@@ -5479,11 +5433,7 @@
       "/// What a transport was asked for, in order: lets tests pin exactly which network work a receive performs."
     ],
     "comment.history" : [
-      "// A key transport: bob answers alice's prekey message. Previously never replayable.",
-      "// Alice now sends with OMEMO 2; Bob's chat with her stays on the legacy version.",
-      "// Alice's device ID now answers with a new identity (a reinstall that kept its ID, or an attacker).",
-      "// The owner's device list arrives: the row is refreshed and now waits for trust instead.",
-      "// built in memory must never be served later, even though the row now carries the revision it aimed at."
+      "// A key transport: bob answers alice's prekey message. Previously never replayable."
     ],
     "comment.restates-name" : [
       "/// Stored profiles that disagree on the identity fail closed before any network use and are never repaired."
@@ -5833,7 +5783,6 @@
       "/// nil asks the server to assign a resource."
     ],
     "comment.history" : [
-      "/// The account authenticated with SCRAM before and the server now offers only weaker mechanisms.",
       "/// `<a/>` and goes on as before. Everything else flows, so a liveness probe is answered, but the server sees its"
     ],
     "comment.too-long" : [
@@ -5902,9 +5851,6 @@
       "/// SRV records on this machine only (multicast DNS, never on the network): the real resolver path without a public",
       "/// XEP-0368: the direct TLS ClientHello asks for ALPN `xmpp-client` and names the account domain.",
       "/// `target` \".\" declares the service not offered."
-    ],
-    "comment.history" : [
-      "/// RFC 6120 §3.2: a remembered endpoint that no longer answers is skipped for what SRV now says, and the error is"
     ]
   },
   "Packages/XMPPProtocol/Tests/XMPPProtocolTests/DisplayedSyncTests.swift" : {
@@ -5993,9 +5939,6 @@
       "/// A build that kept the typed capitals saved `Ellie@Example.org` beside the server's `ellie@example.org/r`; that",
       "/// A journaled iq whose socket write never happened (the connection dropped between journal and",
       "/// A saved session that fails validation, or whose replay policy throws, is never resumed; the connect binds fresh"
-    ],
-    "comment.history" : [
-      "// The window now runs from the disconnect, not from enabling (or the last server acknowledgement)."
     ]
   },
   "Packages/XMPPProtocol/Tests/XMPPProtocolTests/ResumeLabTests.swift" : {

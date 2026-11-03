@@ -41,7 +41,7 @@ package struct Baseline: Equatable {
 package struct Comparison {
     package var reported: [Violation] = []
     package var kept: [Violation] = []
-    // Baseline entries of the checked files that no longer occur.
+    // Entries that no longer occur or allow more than they need: in the checked files, or for a deleted file.
     package var fixed = 0
 }
 
@@ -55,6 +55,7 @@ extension Baseline {
                 let allowed = pool.first.flatMap { Int($0) }
                 if let allowed, measure <= allowed {
                     result.kept.append(violation)
+                    if measure < allowed { result.fixed += 1 }
                 } else {
                     result.reported.append(allowed.map { overAllowance(violation, allowed: $0) } ?? violation)
                 }
@@ -67,13 +68,14 @@ extension Baseline {
                 result.reported.append(violation)
             }
         }
-        result.fixed = remaining.filter { checked.contains($0.key) }.values.flatMap(\.values).map(\.count).reduce(0, +)
+        let outdated = remaining.filter { checked.contains($0.key) || !Self.exists($0.key) }
+        result.fixed += outdated.values.flatMap(\.values).map(\.count).reduce(0, +)
         return result
     }
 
-    // Drops what the checked files no longer contain and lowers measures; never adds an entry.
+    // Drops what the checked files no longer contain, and deleted files, and lowers measures; never adds an entry.
     package func shrunk(by comparison: Comparison, checked: Set<String>) -> Baseline {
-        var next = entries.filter { !checked.contains($0.key) }
+        var next = entries.filter { !checked.contains($0.key) && Self.exists($0.key) }
         for (file, rules) in Baseline(recording: comparison.kept).entries {
             next[file] = rules
         }
@@ -83,6 +85,10 @@ extension Baseline {
             }
         }
         return Baseline(entries: next)
+    }
+
+    private static func exists(_ file: String) -> Bool {
+        FileManager.default.fileExists(atPath: file)
     }
 
     private func overAllowance(_ violation: Violation, allowed: Int) -> Violation {

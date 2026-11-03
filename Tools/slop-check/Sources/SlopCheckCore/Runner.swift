@@ -10,15 +10,17 @@ package struct UsageError: Error, CustomStringConvertible {
 
 package struct Options {
     package static let usage = """
-        usage: slop-check [--baseline FILE [--shrink-baseline]] PATH...
+        usage: slop-check [--baseline FILE [--shrink-baseline | --fail-on-fixed]] PATH...
                slop-check --write-baseline FILE PATH...
         PATHs are Swift files or directories. Exit status 1 means violations the baseline does not cover.
         --shrink-baseline drops baseline entries the checked files no longer need; it never adds one.
+        --fail-on-fixed exits 1 while the baseline holds such entries, so an improvement cannot slip back.
         """
 
     var baselinePath: String?
     var writeBaselinePath: String?
     var shrink = false
+    var failOnFixed = false
     var paths: [String] = []
 
     package init(arguments: [String]) throws {
@@ -28,6 +30,7 @@ package struct Options {
             case "--baseline": baselinePath = try Self.value(of: argument, from: &rest)
             case "--write-baseline": writeBaselinePath = try Self.value(of: argument, from: &rest)
             case "--shrink-baseline": shrink = true
+            case "--fail-on-fixed": failOnFixed = true
             case "-h", "--help": throw UsageError(Self.usage)
             default: paths.append(argument)
             }
@@ -58,15 +61,17 @@ package enum Runner {
             let next = baseline.shrunk(by: comparison, checked: checked)
             if next != baseline { try next.save(path) }
         }
-        report(comparison, shrunk: options.shrink)
-        return comparison.reported.isEmpty ? 0 : 1
+        let unlocked = options.shrink ? 0 : comparison.fixed
+        report(comparison, unlocked: unlocked, failOnFixed: options.failOnFixed)
+        return comparison.reported.isEmpty && !(options.failOnFixed && unlocked > 0) ? 0 : 1
     }
 
-    private static func report(_ comparison: Comparison, shrunk: Bool) {
+    private static func report(_ comparison: Comparison, unlocked: Int, failOnFixed: Bool) {
         let sorted = comparison.reported.sorted { ($0.file, $0.line) < ($1.file, $1.line) }
         var out = sorted.map { "\($0.file):\($0.line): error: \($0.message) [\($0.rule)]\n" }.joined()
-        if comparison.fixed > 0 && !shrunk {
-            out += "note: \(comparison.fixed) baseline entries are fixed; lock that in with --shrink-baseline (Tools/check.sh shrink)\n"
+        if unlocked > 0 {
+            let level = failOnFixed ? "error" : "note"
+            out += "\(level): \(unlocked) baseline entries are fixed or stale; run Tools/check.sh shrink and commit\n"
         }
         if !sorted.isEmpty {
             out += "\n\(sorted.count) slop-check violation(s). Each message names the fix. Fix the comment or the code, not the baseline.\n"

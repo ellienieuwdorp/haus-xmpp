@@ -70,6 +70,7 @@ struct BaselineTests {
                                           checked: ["A.swift"])
         #expect(comparison.reported.map(\.fingerprint) == ["// used to"])
         #expect(comparison.kept.count == 2)
+        #expect(comparison.fixed == 1)
     }
 
     @Test func measuresMayOnlyFall() {
@@ -77,6 +78,14 @@ struct BaselineTests {
         let comparison = baseline.compare([violation("", measure: 21)], checked: ["A.swift"])
         #expect(comparison.reported.count == 1)
         #expect(baseline.shrunk(by: comparison, checked: ["A.swift"]) == baseline)
+    }
+
+    @Test func deletedFilesAreDropped() {
+        let gone = Violation(file: "Deleted/Gone.swift", line: 1, rule: Rule.history, message: "m", fingerprint: "// x")
+        let baseline = Baseline(recording: [gone])
+        let comparison = baseline.compare([], checked: [])
+        #expect(comparison.fixed == 1)
+        #expect(baseline.shrunk(by: comparison, checked: []).entries.isEmpty)
     }
 
     @Test func shrinkingNeverAdds() {
