@@ -72,7 +72,8 @@ jobs:
           key: slop-check-${{ runner.os }}-${{ hashFiles('Tools/slop-check/Package.resolved') }}-${{ hashFiles('Tools/slop-check/Package.swift', 'Tools/slop-check/Sources/**', 'Tools/slop-check/Tests/**') }}
           restore-keys: slop-check-${{ runner.os }}-${{ hashFiles('Tools/slop-check/Package.resolved') }}-
       - name: Test slop-check
-        run: swift test --package-path Tools/slop-check
+        # Its own scratch path: a debug build in the release build's directory makes the next release build start over.
+        run: swift test --package-path Tools/slop-check --scratch-path Tools/slop-check/.build/tests
       - name: Check
         run: Tools/check.sh full
       - name: Baselines only shrink
