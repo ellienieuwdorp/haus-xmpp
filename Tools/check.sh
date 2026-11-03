@@ -11,8 +11,8 @@
 # baseline, public hygiene and import boundaries. No formatter is enforced. Every step runs, so one pass reports
 # everything. The vendored C under CLibOMEMO is never checked.
 #
-# A baseline only shrinks: CI fails a pull request whose baselines grew unless a maintainer adds the
-# baseline-growth-approved label. Rewrite them only after rebasing onto a main whose code changed, then review the diff.
+# A baseline only shrinks: CI fails a pull request whose baselines grew, or that changes these checks, unless a
+# maintainer adds the baseline-growth-approved label. Rewrite them only after rebasing onto a main whose code changed.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
@@ -39,16 +39,18 @@ case "$mode" in
   *) usage ;;
 esac
 
+# Paths are printed unquoted, so a file name with non-ASCII characters is not skipped.
 candidates() {
+  local git=(git -c core.quotePath=false)
   if [ "$mode" != changed ]; then
-    git ls-files --cached --others --exclude-standard
+    "${git[@]}" ls-files --cached --others --exclude-standard
   elif [ ${#files[@]} -gt 0 ]; then
     printf '%s\n' "${files[@]}"
   elif [ "$staged" -eq 1 ]; then
-    git diff --cached --name-only --diff-filter=d
+    "${git[@]}" diff --cached --name-only --diff-filter=d
   else
-    git diff --name-only --diff-filter=d HEAD
-    git ls-files --others --exclude-standard
+    "${git[@]}" diff --name-only --diff-filter=d HEAD
+    "${git[@]}" ls-files --others --exclude-standard
   fi
 }
 
@@ -104,9 +106,10 @@ step() {
   fi
 }
 
+# A full run also fails while a baseline holds entries the code no longer needs, so a fix is locked in with it.
 if [ "$mode" = full ]; then
-  step SwiftLint python3 -I Tools/lint-ratchet.py
-  step slop-check "$slop" --baseline .slop-baseline.json "${swift_files[@]}"
+  step SwiftLint python3 -I Tools/lint-ratchet.py --fail-on-fixed
+  step slop-check "$slop" --baseline .slop-baseline.json --fail-on-fixed "${swift_files[@]}"
   step "Import boundaries" python3 -I Tools/import-boundaries.py
 elif [ ${#swift_files[@]} -gt 0 ]; then
   step SwiftLint python3 -I Tools/lint-ratchet.py "${swift_files[@]}"

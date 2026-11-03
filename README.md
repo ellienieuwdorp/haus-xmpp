@@ -98,7 +98,7 @@ git config core.hooksPath Tools/git-hooks
 
 Comments say what the code can't: a constraint, a protocol quirk or a non-obvious reason, in three lines or fewer. `///` documentation is for `public`, `package` and `open` API only.
 
-Violations that predate the checks are listed in `.swiftlint-baseline.json` and `.slop-baseline.json`. New code is held to every rule, and the baselines only shrink: `Tools/check.sh shrink` drops the entries you fixed, and `Tools/check.sh baseline` rewrites both from the current code. CI fails a pull request whose baselines grew unless a maintainer adds the `baseline-growth-approved` label.
+Violations that predate the checks are listed in `.swiftlint-baseline.json` and `.slop-baseline.json`. New code is held to every rule, and the baselines only shrink. When you fix one, `Tools/check.sh full` fails until you run `Tools/check.sh shrink` and commit the smaller baseline; `Tools/check.sh baseline` rewrites both from the current code. CI fails a pull request whose baselines grew, or that changes the checks themselves, unless a maintainer adds the `baseline-growth-approved` label.
 
 ## Project layout
 

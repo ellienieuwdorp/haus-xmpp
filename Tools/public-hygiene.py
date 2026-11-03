@@ -17,13 +17,13 @@ LOCAL_SETTINGS = "Config/Local.xcconfig"
 TEAM_FILES = ("project.yml", "*.xcconfig", "*.pbxproj")
 # `DEVELOPMENT_TEAM = X`, `DEVELOPMENT_TEAM: X` (project.yml) or `DevelopmentTeam = X;` (pbxproj target attributes).
 TEAM = re.compile(r"""^\s*"?(?:DEVELOPMENT_TEAM|DevelopmentTeam)"?\s*[:=](.*)$""")
-# GitHub-hosted runner images: ubuntu-*, macos-*, windows-* and the Xcode images.
-HOSTED = re.compile(r"^(ubuntu|macos|windows)-[\w.-]+$|^xcode-\d+$")
+# Standard GitHub-hosted images only: no self-hosted runners and no paid larger runners.
+HOSTED = re.compile(r"^(ubuntu|macos|windows)-(latest|\d[\d.]*)(-arm)?$|^xcode-\d+$")
 RUNS_ON = re.compile(r"^\s*(?:-\s*)?runs-on:\s*(.*?)\s*(?:#.*)?$")
 
 
 def git(*args):
-    return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout
+    return subprocess.run(["git", "-c", "core.quotePath=false", *args], capture_output=True, text=True, check=True).stdout
 
 
 def agent_files(paths):
@@ -36,7 +36,7 @@ def agent_files(paths):
 
 
 def development_team():
-    out = subprocess.run(["git", "grep", "--cached", "-n", "-I", "-E", "DEVELOPMENT_TEAM|DevelopmentTeam", "--",
+    out = subprocess.run(["git", "-c", "core.quotePath=false", "grep", "--cached", "-n", "-I", "-E", "DEVELOPMENT_TEAM|DevelopmentTeam", "--",
                           *TEAM_FILES], capture_output=True, text=True).stdout
     problems = []
     for hit in out.splitlines():

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SwiftLint with a ratchet baseline.
 
-    python3 -I Tools/lint-ratchet.py [--write | --shrink] [FILE...]
+    python3 -I Tools/lint-ratchet.py [--write | --shrink | --fail-on-fixed] [FILE...]
 
 Runs SwiftLint from the repository root and fails on any violation that .swiftlint-baseline.json does not list.
 A baselined size or complexity violation passes while its number stays at or below the recorded one, so a long
@@ -9,7 +9,8 @@ function may shrink but not grow. (SwiftLint's own --baseline matches the reason
 so it fails a function that got shorter.) Without FILEs it lints the paths .swiftlint.yml includes.
 
 --write records every current violation; run it through `Tools/check.sh baseline`. --shrink drops or lowers the
-entries of the checked files that no longer need them and never adds one.
+entries of the checked files that no longer need them and never adds one. --fail-on-fixed exits 1 while
+the baseline holds such entries, so an improvement cannot slip back.
 """
 import json
 import os
@@ -70,10 +71,14 @@ def save(entries):
         f.write("\n")
 
 
+def version():
+    return swiftlint("version").stdout.strip()
+
+
 def write(violations):
-    version = swiftlint("version").stdout.strip()
-    if version != PINNED_VERSION:
-        sys.exit(f"the baseline must be written by SwiftLint {PINNED_VERSION}, the version CI runs; this is {version}")
+    current = version()
+    if current != PINNED_VERSION:
+        sys.exit(f"the baseline must be written by SwiftLint {PINNED_VERSION}, the version CI runs; this is {current}")
     out = defaultdict(lambda: defaultdict(list))
     for _, path, rule, text, value in keyed(violations):
         out[path][rule].append([text, value])
@@ -83,7 +88,7 @@ def write(violations):
 
 def compare(violations, baseline):
     pool = {p: {r: [list(e) for e in entries] for r, entries in rules.items()} for p, rules in baseline.items()}
-    new, kept = [], defaultdict(lambda: defaultdict(list))
+    new, kept, lowered = [], defaultdict(lambda: defaultdict(list)), 0
     for v, path, rule, text, value in keyed(violations):
         entries = pool.get(path, {}).get(rule, [])
         same = [e for e in entries if e[0] == text]
@@ -91,6 +96,7 @@ def compare(violations, baseline):
         if match:
             entries.remove(match)
             kept[path][rule].append([text, value])
+            lowered += value < match[1]
             continue
         hint = ""
         if same:
@@ -99,13 +105,16 @@ def compare(violations, baseline):
             kept[path][rule].append(same[0])
             hint = f" (the baseline allows {same[0][1]}; get back to {same[0][1]} or lower)"
         new.append(f"{path}:{v.get('line') or 1}:{v.get('character') or 1}: error: {v['reason']}{hint} ({rule})")
-    return new, kept, pool
+    return new, kept, pool, lowered
 
 
 def main():
     args = sys.argv[1:]
     files = [relative(a) for a in args if not a.startswith("--")]
     violations = lint(files)
+    current = version() if "--write" not in args else PINNED_VERSION
+    if current != PINNED_VERSION:
+        print(f"warning: this is SwiftLint {current}; CI and the baseline use {PINNED_VERSION}", file=sys.stderr)
     if "--write" in args:
         write(violations)
         return 0
@@ -114,18 +123,22 @@ def main():
             baseline = json.load(f)
     except FileNotFoundError:
         baseline = {}
-    new, kept, pool = compare(violations, baseline)
+    new, kept, pool, lowered = compare(violations, baseline)
     checked = set(files) if files else set(baseline) | set(kept)
-    fixed = sum(len(e) for p, rules in pool.items() if p in checked for e in rules.values())
+    stale = {p for p in baseline if not os.path.exists(p)}
+    fixed = lowered + sum(len(e) for p, rules in pool.items() if p in checked | stale for e in rules.values())
     if "--shrink" in args:
-        nxt = {p: rules for p, rules in baseline.items() if p not in checked}
+        nxt = {p: rules for p, rules in baseline.items() if p not in checked | stale}
         nxt.update({p: {r: sorted(e) for r, e in rules.items()} for p, rules in kept.items()})
         if nxt != baseline:
             save(nxt)
     elif fixed:
-        print(f"note: {fixed} baselined SwiftLint violations are gone; lock that in with Tools/check.sh shrink")
+        level = "error" if "--fail-on-fixed" in args else "note"
+        print(f"{level}: {fixed} SwiftLint baseline entries are fixed or stale; run Tools/check.sh shrink and commit")
     for line in new:
         print(line)
+    if fixed and "--fail-on-fixed" in args and "--shrink" not in args:
+        return 1
     if new:
         print(f"\n{len(new)} SwiftLint violation(s) the baseline does not cover. Change the code; a disable needs"
               " a reason: // swiftlint:disable:next rule_id - why the rule does not apply")

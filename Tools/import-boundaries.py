@@ -10,7 +10,8 @@ import re
 import subprocess
 import sys
 
-# Mirrors the target dependencies in each Packages/*/Package.swift, executables and test targets included.
+# A hand-kept copy of the target dependencies in each Packages/*/Package.swift, executables and test targets
+# included. A package missing here fails the check.
 PACKAGE_IMPORTS = {
     "XMPPProtocol": {"XMPPProtocol"},
     "MessageStore": {"MessageStore", "XMPPProtocol", "CSQLite"},
@@ -28,16 +29,15 @@ IMPORT = re.compile(r"^\s*(?:@[\w.]+(?:\([^)]*\))?\s+)*(?:(?:public|package|inte
 
 
 def tracked_swift_files():
-    out = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "*.swift"],
+    out = subprocess.run(["git", "-c", "core.quotePath=false", "ls-files", "--cached", "--others", "--exclude-standard",
+                          "*.swift"],
                          capture_output=True, text=True, check=True).stdout
     return out.splitlines()
 
 
-def allowed_repository_imports(path):
+def package_of(path):
     parts = path.split("/")
-    if parts[0] == "Packages" and len(parts) > 2:
-        return PACKAGE_IMPORTS.get(parts[1])
-    return None
+    return parts[1] if parts[0] == "Packages" and len(parts) > 2 else None
 
 
 def check(path, crypto_allowed):
@@ -47,7 +47,11 @@ def check(path, crypto_allowed):
             lines = f.read().splitlines()
     except FileNotFoundError:
         return problems
-    allowed = allowed_repository_imports(path)
+    package = package_of(path)
+    if package is not None and package not in PACKAGE_IMPORTS:
+        return [f"{path}: error: Packages/{package} is not in PACKAGE_IMPORTS in Tools/import-boundaries.py; add it"
+                " with the dependencies its Package.swift declares"]
+    allowed = PACKAGE_IMPORTS.get(package)
     for number, line in enumerate(lines, 1):
         match = IMPORT.match(line)
         if not match:
@@ -55,7 +59,6 @@ def check(path, crypto_allowed):
         module = match.group(1)
         where = f"{path}:{number}: error:"
         if allowed is not None and module in REPOSITORY_MODULES and module not in allowed:
-            package = path.split("/")[1]
             problems.append(f"{where} {package} may not import {module}; it may import {', '.join(sorted(allowed))}."
                             " Move the code to the layer that owns it, or pass what it needs in")
         elif allowed is None and module in APP_FORBIDDEN:
