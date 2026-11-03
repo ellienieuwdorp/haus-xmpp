@@ -4,9 +4,8 @@ import UIKit.UIGestureRecognizerSubclass
 import XCTest
 @testable import HausXMPP
 
-/// What each kind of timeline cell shows and says: the side a bubble sits on, its VoiceOver label and the actions it
-/// offers. The long-press menu and the VoiceOver custom actions read the same action list, so the custom actions
-/// stand for the menu here.
+// The long-press menu and the VoiceOver custom actions read the same action list, so the custom actions stand for
+// the menu here.
 @MainActor
 final class TimelineCellSemanticsTests: XCTestCase {
     private var window: UIWindow!
@@ -41,8 +40,7 @@ final class TimelineCellSemanticsTests: XCTestCase {
         try XCTUnwrap(collectionView.cellForItem(at: path), "item \(path.item) is on screen")
     }
 
-    /// The one element VoiceOver reaches for a message: the visible view carrying its actions (its text, or the file
-    /// when there is no caption).
+    // The visible view carrying the message's actions: its text, or the file when there is no caption.
     private func speaker(_ id: String) throws -> UIView {
         let path = try XCTUnwrap(dataSource?.indexPath(for: id), id)
         let speakers = descendants(of: try cell(at: path).contentView)
@@ -51,7 +49,6 @@ final class TimelineCellSemanticsTests: XCTestCase {
         return try XCTUnwrap(speakers.first, "\(id) can be reached by VoiceOver")
     }
 
-    /// The bubble around the speaking view, in the timeline's coordinates.
     private func bubble(_ id: String) throws -> CGRect {
         let bubble = try XCTUnwrap(try speaker(id).superview)
         return bubble.convert(bubble.bounds, to: collectionView)
@@ -100,8 +97,7 @@ final class TimelineCellSemanticsTests: XCTestCase {
         XCTAssertEqual(unsent.maxX, collectionView.bounds.width - 16, accuracy: 0.5)
     }
 
-    /// VoiceOver gets the menu's actions (`MessageActionMenuTests` owns which), then the file's, then a toggle per quick
-    /// reaction, and each one does what it says.
+    // Which menu actions is `MessageActionMenuTests`' concern.
     func testVoiceOverOffersTheMenuThenTheFileThenReactions() throws {
         var reacted: [String] = []
         controller.update(messages: [TimelineMessage(id: "own", body: "See you there", isOutgoing: true, isStarred: false,
@@ -120,7 +116,7 @@ final class TimelineCellSemanticsTests: XCTestCase {
         XCTAssertTrue(own.accessibilityLabel?.hasPrefix("You: See you there, edited, File plan.pdf, could not be downloaded") == true, own.accessibilityLabel ?? "no label")
     }
 
-    /// Every message reserves the star's slot, so starring neither widens nor shifts the bubble.
+    // Every message reserves the star's slot.
     func testStarringKeepsTheBubbleWhereItWas() throws {
         for isOutgoing in [true, false] {
             let message = { (starred: Bool) in
@@ -136,9 +132,8 @@ final class TimelineCellSemanticsTests: XCTestCase {
         }
     }
 
-    /// A short message with more distinct reactions than the screen is wide (a peer may send twelve): the pills stay
-    /// between the margins, the ones that do not fit fold into one "+N" pill that accounts for every reaction, and the
-    /// bubble keeps the width it has without reactions.
+    // A peer may send a dozen distinct reactions to a short message: the ones that do not fit fold into one "+N" pill
+    // that accounts for every reaction.
     func testManyReactionsStayOnScreenAndNeverWidenTheBubble() throws {
         let emoji = ["❤️", "👍", "😂", "😮", "😢", "🙏", "🎉", "🔥", "👀", "💯", "✨", "🤔"]
         let reactions = emoji.enumerated().map { TimelineReaction(emoji: $1, count: $0 < 3 ? 12 : 1, isSelected: false) }
@@ -165,7 +160,7 @@ final class TimelineCellSemanticsTests: XCTestCase {
         }
     }
 
-    /// A photo sent without a caption hides its text view, so the photo itself speaks for the message, quote included.
+    // A photo without a caption hides its text view, so the photo itself speaks for the message.
     func testACaptionlessPhotoSpeaksForItselfAndItsQuote() throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).jpg")
         show([TimelineMessage(id: "photo", body: "", isOutgoing: true, isStarred: false,
@@ -181,9 +176,8 @@ final class TimelineCellSemanticsTests: XCTestCase {
         XCTAssertTrue(actions(photo).contains("Open photo"))
     }
 
-    /// A link message still has one element speaking for it: the card adds its phrase to that label, every link gets
-    /// an action after the menu's, the Links rotor walks them, and each opens where `LinkOpening` sends it. The card
-    /// takes the media width rule and sits above the text.
+    // The card adds its phrase to the label, every link gets an action after the menu's, the Links rotor walks them,
+    // and the card takes the media width rule above the text.
     func testLinksAndTheCardSpeakThroughTheBubblesOneElement() throws {
         var chats: [String] = []
         controller.onOpenChat = { chats.append($0) }
@@ -232,9 +226,8 @@ final class TimelineCellSemanticsTests: XCTestCase {
         browser.dismiss(animated: false)
     }
 
-    /// The bubble finds the link under a finger itself (its text view takes no touches): a tap on a drawn link or on
-    /// the card opens that link, a tap on plain text is left to the bubble, and a long press on a link still opens the
-    /// bubble's menu. The recognizers are the cell's own; only where the finger lands is chosen here.
+    // The text view takes no touches, so the bubble hit-tests links itself; a long press on a link still opens the menu.
+    // The recognizers are the cell's own; only where the finger lands is chosen here.
     func testATapOnADrawnLinkOrTheCardOpensItAndPlainTextIsLeftAlone() throws {
         var chats: [String] = []
         controller.onOpenChat = { chats.append($0) }
@@ -275,8 +268,7 @@ final class TimelineCellSemanticsTests: XCTestCase {
         PinnedTouch.at = nil
     }
 
-    /// An image too small or too tall for the large layout gets a 56 pt thumbnail at the card's trailing edge, beside
-    /// the text, and the card is tall enough for it.
+    // An image too small or too tall for the large layout gets a 56 pt thumbnail beside the text.
     func testASmallImageCardKeepsItsThumbnailBesideTheText() throws {
         let square = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 120)).pngData { $0.fill(CGRect(x: 0, y: 0, width: 120, height: 120)) }
         let card = TimelineLinkPreview(url: URL(string: "https://example.org/a")!, host: "example.org", title: "Bridge", summary: nil,
@@ -292,8 +284,7 @@ final class TimelineCellSemanticsTests: XCTestCase {
         XCTAssertLessThanOrEqual(title.convert(title.bounds, to: cardView).maxX, thumbnail.frame.minX - 10 + 0.5, "the text stays beside it")
     }
 
-    /// The cell's own recognizer of `type` on `view` (the one whose delegate is `cell`), made to report the touch at
-    /// `PinnedTouch.at` without changing anything else about it.
+    // The cell's own recognizer (whose delegate is `cell`), made to report the touch at `PinnedTouch.at`.
     private func recognizer<R: UIGestureRecognizer>(_ kind: R.Type, on view: UIView, of cell: UIView, pinnedAs pinned: AnyClass) throws -> R {
         let found = try XCTUnwrap(view.gestureRecognizers?.first { type(of: $0) == kind && $0.delegate === cell } as? R, "\(kind) on the bubble")
         object_setClass(found, pinned)
@@ -329,7 +320,6 @@ final class TimelineCellSemanticsTests: XCTestCase {
     }
 }
 
-/// Where the pinned recognizers report their touch: a point in a view's coordinates.
 @MainActor private enum PinnedTouch {
     static var at: (point: CGPoint, view: UIView)?
     static func location(in view: UIView?) -> CGPoint { at.map { $0.view.convert($0.point, to: view) } ?? .zero }

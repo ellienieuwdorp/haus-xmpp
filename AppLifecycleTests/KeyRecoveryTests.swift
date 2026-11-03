@@ -5,8 +5,7 @@ import XMPPProtocol
 import OMEMO
 @testable import HausXMPP
 
-/// Detection and the start-over flow below the key recovery screen (`KeyRecoveryPlan`). Each test uses its own
-/// `lifecycle-key-<uuid>` Keychain item and store and deletes only those; no real Keychain item is touched.
+// Each test uses its own `lifecycle-key-<uuid>` Keychain item and store and deletes only those.
 @MainActor final class KeyRecoveryTests: XCTestCase {
     private let account = "recovery@localhost"
 
@@ -62,7 +61,7 @@ import OMEMO
         XCTAssertEqual(after, sealed)
     }
 
-    /// Any other Keychain failure is not key loss: storage fails to open as before, and no recovery is offered.
+    // Any other Keychain failure is not key loss: storage fails to open and no recovery is offered.
     func testAnUnreadableKeyItemFailsClosedWithoutOfferingRecovery() async throws {
         let (store, _, id) = try makeStore()
         try await store.saveEncryptionState(accountID: account, expectedRevision: nil, data: Data([1]))

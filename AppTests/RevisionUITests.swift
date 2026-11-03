@@ -1,24 +1,19 @@
 import XCTest
 
-/// Edits and unsends against the lab, in both directions. The same actions on sample data are in MessageActionsUITests.
 final class RevisionUITests: XCTestCase {
-    /// The lab echo peer corrects its echo of a "#edit" message and retracts its echo of a "#unsend"
-    /// message, so the inbound half is exercised against real OMEMO traffic.
+    // The echo peer corrects its echo of a "#edit" message and retracts its echo of a "#unsend" message.
     @MainActor func testPeerEditsAndUnsendsApplyToTheOriginalBubble() throws {
         continueAfterFailure = false
         let lab = try LabFixture(orSkip: "Requires the lab echo peer")
         let app = lab.launch()
         app.connectToLab()
         let composer = app.startChat(with: lab.peer)
-        // The keyboard stays down until the devices are reviewed: returning from a pushed page with it
-        // raised can leave the composer behind the keyboard (known layout bug, outside this test).
+        // Returning from a pushed page with the keyboard up can leave the composer behind it.
         app.openEncryptionDetails()
-        // The echo peer speaks OMEMO 2 only.
         app.selectModernOMEMO()
         app.acceptPendingDevices()
         app.closeEncryptionDetails()
 
-        // Peer edit: the echo arrives, then its correction rewrites that same bubble.
         let marker = "Draft \(UUID().uuidString.prefix(4))"
         composer.tap(); composer.typeText(marker + " #edit"); app.buttons["sendMessage"].tap()
         let echo = app.textViews.containing(NSPredicate(format: "value == %@", marker + " #edit")).matching(NSPredicate(format: "NOT (label BEGINSWITH %@)", "You:")).firstMatch
@@ -30,7 +25,6 @@ final class RevisionUITests: XCTestCase {
         XCTAssertEqual(app.textViews.matching(NSPredicate(format: "label CONTAINS %@", marker)).count, 2, "our message and the peer's edited echo")
         capture(app, "Peer edit applied in place")
 
-        // Peer unsend: the echo becomes the placeholder.
         let second = "Gone \(UUID().uuidString.prefix(4))"
         composer.tap(); composer.typeText(second + " #unsend"); app.buttons["sendMessage"].tap()
         let unsentEcho = app.textViews.containing(NSPredicate(format: "value == %@", "Message unsent")).firstMatch

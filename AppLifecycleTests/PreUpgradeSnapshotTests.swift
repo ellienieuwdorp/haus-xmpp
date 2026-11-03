@@ -6,20 +6,13 @@ import MessagingCore
 import XMPPProtocol
 @testable import HausXMPP
 
-/// The pre-upgrade snapshot, its restore and the way back, through `PreUpgradeSnapshot` with isolated locations: a
-/// temporary App Group root, throwaway preference domains and Keychain services of their own. Never the app's real
-/// data. The previous build's store is a real file: schema 21 (`schema-21.sql`, dumped from the 21ba6b0 MessageStore),
-/// schema 23 (`schema-23.sql`, from the 6664869 MessageStore), schema 24
-/// (`schema-24.sql`, that store as main at 58b543a migrates it) or schema 25 (`schema-25.sql`, as main at 7159f37
-/// migrates that).
+// Runs `PreUpgradeSnapshot` against a temporary App Group root, throwaway preference domains and Keychain services,
+// never the app's real data. Previous builds' stores are real schema dumps (`schema-21.sql` … `schema-25.sql`).
 @MainActor final class PreUpgradeSnapshotTests: XCTestCase {
     private let typed = "Ellie@Example.org"
     private let account = "ellie@example.org"
     private let now = Date(timeIntervalSince1970: 1_790_000_000)
 
-    /// Everything a previous build left: a schema-21 store with a row still in its WAL, preferences in both domains,
-    /// the account record and a push registration in the Keychain (both under the address as typed), the logout
-    /// tombstone, and attachment and avatar folders of the typed spelling.
     private final class Installation {
         let root: URL
         let id = UUID().uuidString
@@ -45,7 +38,6 @@ import XMPPProtocol
 
         var snapshots: PreUpgradeSnapshot { PreUpgradeSnapshot(locations: locations) }
 
-        /// Another install of this build over the same data (a reinstall, or this build after the previous one).
         func reinstalled(as installation: String) throws -> Installation {
             try Installation(installation: installation, root: root, keychainID: id,
                              domains: (locations.appDefaults.name, locations.groupDefaults.name))
@@ -79,7 +71,7 @@ import XMPPProtocol
         { AvatarStore.directory(root: $0.locations.messaging, account: self.typed) }
     }
 
-    /// A push registration as saved in the Keychain; sorted keys, so the same record always has the same bytes.
+    // Sorted keys, so the same record always has the same bytes.
     private func pushRecord(_ owner: String, node: String) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
@@ -87,12 +79,10 @@ import XMPPProtocol
                                                        journal: PushRegistrationJournal()))
     }
 
-    /// The spelling a previous build keyed the account by: 21ba6b0 (schema 21) as typed, 6664869 (23) and main at
-    /// 58b543a (24) and 7159f37 (25) in normal form.
+    // Builds up to schema 21 keyed the account as typed; later ones in normal form.
     private func owner(_ schema: Int) -> String { schema < 23 ? typed : account }
 
-    /// The generation whose names a previous build's backup code uses: nil (the unnumbered names) up to 6664869 (23),
-    /// the schema it writes from main at 58b543a (24) on.
+    // Backup names are unnumbered up to schema 23, then numbered by the schema the build writes.
     private func generation(ofBuildAt schema: Int) -> Int? { schema >= PreUpgradeHold.firstNumberedGeneration ? schema : nil }
 
     private func previousBuildData(in installation: Installation, schema: Int = 21) async throws {
@@ -119,12 +109,8 @@ import XMPPProtocol
         try Data("face".utf8).write(to: avatars.appending(path: "avatar.png"))
     }
 
-    /// The backup an older build took of its predecessor's data, in that build's own layout: by default 6664869's
-    /// backup of 21ba6b0's schema-21 data in `PreUpgrade/snapshot/` with Keychain copies under the unnumbered snapshot
-    /// service; with `generation` 24 and `schema` 23, main's (58b543a) backup of 6664869's data in `PreUpgrade-24/`
-    /// under the service of generation 24; with `generation` 25 and `schema` 24, main's (7159f37) backup of that data in
-    /// `PreUpgrade-25/`. Manifest and preference files included, written through the same public
-    /// seams those builds used, from a fixture store in a scratch folder. Returns the copy's ID.
+    // The backup an older build took of its predecessor's data, in that build's own layout and Keychain service,
+    // written through the same public seams from a fixture store. Returns the copy's ID.
     private func olderBuildBackup(in installation: Installation, generation: Int? = nil, of schema: Int = 21) async throws -> String {
         let locations = installation.locations, owner = owner(schema)
         let scratch = installation.root.appending(path: "older-store", directoryHint: .isDirectory)
@@ -152,7 +138,6 @@ import XMPPProtocol
         return id
     }
 
-    /// Every row of every table, for comparing two database files by content.
     private func allRows(_ url: URL, untouched: Bool = false) -> [String] {
         sqliteRows(url, untouched: untouched, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").flatMap { table -> [String] in
             let columns = sqliteRows(url, untouched: untouched, "SELECT name FROM pragma_table_info('\(table)')").map { "quote(\($0))" }.joined(separator: "||'|'||")
@@ -160,7 +145,6 @@ import XMPPProtocol
         }
     }
 
-    /// What the previous build's spellings look like outside the store: untouched, or rewritten by `adopt`.
     private func assertSpellings(_ installation: Installation, rewritten: Bool, file: StaticString = #filePath, line: UInt = #line) throws {
         let locations = installation.locations, files = FileManager.default
         XCTAssertEqual(locations.appDefaults.defaults.string(forKey: "lastAccount"), rewritten ? account : typed, file: file, line: line)
@@ -179,8 +163,6 @@ import XMPPProtocol
         XCTAssertEqual(sqliteRows(installation.locations.database, "PRAGMA user_version"), ["\(MessageStore.currentSchemaVersion)"])
     }
 
-    /// The order the owner relies on: the snapshot holds the previous build's spellings everywhere (database,
-    /// preferences, Keychain, folders), and only after it and the migration are they rewritten.
     func testTheSnapshotIsTakenBeforeAnythingIsMigratedOrRewritten() async throws {
         let installation = try makeInstallation()
         try await previousBuildData(in: installation)
@@ -255,9 +237,8 @@ import XMPPProtocol
         try assertSpellings(installation, rewritten: false)
     }
 
-    /// An older build installed over a newer one (TestFlight lets testers do that) finds a store it cannot read. It
-    /// refuses it with `unsupportedSchema`, which the app shows as its own screen, and changes nothing on the way: no
-    /// snapshot, no migration, no rewritten spellings.
+    // An older build installed over a newer one (TestFlight allows that) must refuse the store without snapshotting,
+    // migrating or rewriting anything.
     func testANewerBuildsStoreIsRefusedAndNothingIsChanged() async throws {
         let installation = try makeInstallation()
         try await previousBuildData(in: installation)
@@ -278,8 +259,6 @@ import XMPPProtocol
         try assertSpellings(installation, rewritten: false)
     }
 
-    /// A launch killed part way through the snapshot left its folder and a Keychain copy: both are discarded and the
-    /// snapshot is taken again from the start before anything migrates.
     func testASnapshotInterruptedByACrashIsDiscardedAndRetaken() async throws {
         let installation = try makeInstallation()
         try await previousBuildData(in: installation)
@@ -297,8 +276,6 @@ import XMPPProtocol
         XCTAssertEqual(sqliteRows(locations.snapshot.appending(path: "messages.sqlite"), "SELECT count(*) FROM messages"), ["4"])
     }
 
-    /// A snapshot whose manifest cannot be read is kept whole, Keychain copies included: an older store is not
-    /// migrated past it, and a current one opens with the backup reported as unreadable.
     func testAnUnreadableManifestNeverDeletesTheBackup() async throws {
         let installation = try makeInstallation()
         try await previousBuildData(in: installation)
@@ -322,7 +299,7 @@ import XMPPProtocol
         XCTAssertEqual(try PreUpgradeSnapshot.keychainAccounts(service: locations.keychain.snapshotService).sorted(), items)
     }
 
-    /// No clock reading deletes the backup: Settings only suggests deleting it once it is two weeks old.
+    // Settings only suggests deleting a backup once it is two weeks old; no clock reading deletes it.
     func testTheBackupIsNeverDeletedOnAClockReading() async throws {
         let installation = try makeInstallation()
         try await previousBuildData(in: installation)
@@ -337,22 +314,16 @@ import XMPPProtocol
         XCTAssertLessThan(manifest.suggestDeletionAfter, later)
     }
 
-    // MARK: The 6664869 build (schema 23) and main at 58b543a (24) and 7159f37 (25) as the previous version
+    // MARK: Schemas 23, 24 and 25 as the previous version
 
-    /// A device still running 6664869 has a store, whose store is at schema 23: it is copied whole, including what is still only
-    /// in its WAL, before the migration to the current schema.
     func testAStoreTheSchema23BuildLeftIsSnapshottedBeforeMigrating() async throws {
         try await assertSnapshottedBeforeMigrating(schema: 23)
     }
 
-    /// A store a build of main between 58b543a and 7159f37 left at schema 24 is copied whole before migrating, so that
-    /// build can be installed again over a restore.
     func testAStoreTheSchema24BuildLeftIsSnapshottedBeforeMigrating() async throws {
         try await assertSnapshottedBeforeMigrating(schema: 24)
     }
 
-    /// A store a build of main since 7159f37 left at schema 25 is at `previousReleaseSchema` (moved with schema 26,
-    /// link previews): it is copied whole before the migration, so that build can be installed again over a restore.
     func testAStoreTheSchema25BuildLeftIsSnapshottedBeforeMigrating() async throws {
         try await assertSnapshottedBeforeMigrating(schema: 25)
     }
@@ -377,20 +348,16 @@ import XMPPProtocol
         XCTAssertEqual(sqliteRows(locations.database, "SELECT count(*) FROM messages"), ["5"], file: file, line: line)
     }
 
-    /// Such a device also holds 6664869's backup of 21ba6b0's data, in 6664869's layout. The backup of the
-    /// schema-23 data replaces it: one backup remains, the old one's Keychain copies are gone with it, and nothing is
-    /// left under the folder and Keychain names 6664869's own backup code acts on.
+    // The older backup's folder and Keychain copies go, so nothing is left under the names the older build's backup
+    // code acts on.
     func testTheOlderBuildsBackupIsRetiredForTheSchema23One() async throws {
         try await assertOlderBackupRetired(schema: 23, olderGeneration: nil, olderSchema: 21)
     }
 
-    /// The same for a build of main since 58b543a, which keeps its backup (of 6664869's schema-23 data) under
-    /// generation 24: the backup of the schema-24 data replaces it, and nothing is left under generation 24's names.
     func testMainsBackupIsRetiredForTheSchema24One() async throws {
         try await assertOlderBackupRetired(schema: 24, olderGeneration: 24, olderSchema: 23)
     }
 
-    /// And for a build of main since 7159f37, which keeps its backup (of schema-24 data) under generation 25.
     func testMainsBackupIsRetiredForTheSchema25One() async throws {
         try await assertOlderBackupRetired(schema: 25, olderGeneration: 25, olderSchema: 24)
     }
@@ -415,22 +382,17 @@ import XMPPProtocol
         XCTAssertFalse(FileManager.default.fileExists(atPath: locations.directory(generation: olderGeneration).path), file: file, line: line)
     }
 
-    /// Restoring schema-23 data, for 6664869 to be installed over it. 6664869 has this backup code too, under the
-    /// unnumbered names: had the restore left its marker and this version's kept copy there, 6664869 would show the
-    /// restored screen as if it were the newer build, and either choice there would hand it data it cannot open or
-    /// delete this version's copy. So the restored data is exactly the backup's, in the write-ahead-log mode 6664869
-    /// keeps its store in, and nothing of this build's backups is under 6664869's names. Then 6664869 runs on it, and
-    /// this build, installed again, returns to its own data with the backup now holding what 6664869 wrote.
+    // The previous build has this backup code too. Had the restore left its marker or this version's kept copy under
+    // that build's names, it would show the restored screen as if it were the newer build, so the restored data is
+    // exactly the backup's, in its WAL mode, and nothing of this build's backups is under the previous build's names.
     func testRestoredSchema23DataIsLeftToThePreviousBuildAndReturnBringsThisVersionBack() async throws {
         try await assertRestoredDataIsLeftToThePreviousBuild(schema: 23)
     }
 
-    /// The same for schema-24 data and a build of main since 58b543a, whose backup code uses generation 24's names.
     func testRestoredSchema24DataIsLeftToThePreviousBuildAndReturnBringsThisVersionBack() async throws {
         try await assertRestoredDataIsLeftToThePreviousBuild(schema: 24)
     }
 
-    /// And for schema-25 data and a build of main since 7159f37, under generation 25's names.
     func testRestoredSchema25DataIsLeftToThePreviousBuildAndReturnBringsThisVersionBack() async throws {
         try await assertRestoredDataIsLeftToThePreviousBuild(schema: 25)
     }
@@ -490,9 +452,6 @@ import XMPPProtocol
                        ["\(backup.id)|account", "\(backup.id)|push|\(account)"], file: file, line: line)
     }
 
-    /// After the new build changed everything in the inventory, restoring keeps the new build's state as its own
-    /// copy and puts back the previous build's database byte for byte, its preferences, Keychain records, tombstone
-    /// and files; the restored state names the chats the previous build will not be able to read.
     func testRestoreKeepsThisVersionsDataAndReturnsThePreviousBuildsStateExactly() async throws {
         let (installation, appBefore, groupBefore) = try await restoredInstallation()
         let locations = installation.locations
@@ -516,8 +475,7 @@ import XMPPProtocol
         XCTAssertEqual(sqliteRows(locations.database, "PRAGMA user_version"), ["21"])
     }
 
-    /// A restore refused before any change (the lease was given up meanwhile, as a background transition does):
-    /// nothing is kept, journaled or replaced, and the store does not hold the lease.
+    // Refused before any change, as after a background transition gave up the lease.
     func testARestoreWithoutTheLeaseChangesNothing() async throws {
         let installation = try makeInstallation()
         try await previousBuildData(in: installation)
@@ -536,7 +494,6 @@ import XMPPProtocol
         try await store.close()
     }
 
-    /// The app was killed right after the restore journal was written (or anywhere after): the next launch finishes it.
     func testARestoreInterruptedByACrashFinishesOnTheNextLaunch() async throws {
         let installation = try makeInstallation()
         try await previousBuildData(in: installation)
@@ -555,8 +512,7 @@ import XMPPProtocol
         XCTAssertFalse(FileManager.default.fileExists(atPath: locations.database.path + ".restoring"))
     }
 
-    /// Reinstalling this build before the previous one ever ran (a TestFlight update, an Xcode run) finds the
-    /// restored data untouched and shows the restored state again, keeping both copies.
+    // A reinstall of this build before the previous one ran (a TestFlight update, an Xcode run).
     func testReinstallingThisBuildKeepsTheRestoredState() async throws {
         let (installation, appBefore, groupBefore) = try await restoredInstallation()
         let locations = installation.locations
@@ -575,9 +531,8 @@ import XMPPProtocol
         XCTAssertEqual(try PreUpgradeSnapshot.keychainAccounts(service: locations.keychain.snapshotService), [])
     }
 
-    /// The previous build ran on the restored data (it switches the store to write-ahead logging and writes), then
-    /// this build again: returning puts this version's data back with its messages and settings, and what the previous
-    /// build left becomes the backup, so nothing on the device is dropped.
+    // The previous build switches the store to WAL and writes; returning makes what it left the backup, so nothing on
+    // the device is dropped.
     func testReturningAfterThePreviousBuildRanPutsThisVersionsDataBack() async throws {
         let (installation, _, _) = try await restoredInstallation()
         let locations = installation.locations
@@ -615,7 +570,6 @@ import XMPPProtocol
         XCTAssertFalse(try PreUpgradeSnapshot.keychainAccounts(service: locations.keychain.snapshotService).contains { $0.hasPrefix(kept.id) })
     }
 
-    /// A return killed after its journal was written finishes on the next launch; the extension stays held until then.
     func testAReturnInterruptedByACrashFinishesOnTheNextLaunch() async throws {
         let (installation, _, _) = try await restoredInstallation()
         let locations = installation.locations
@@ -630,9 +584,8 @@ import XMPPProtocol
         XCTAssertEqual(installation.snapshots.status(.thisVersion), .absent)
     }
 
-    /// The other choice: this version's copy is deleted, and what the previous build left is snapshotted afresh and
-    /// upgraded. The install path is the same as when the first snapshot was taken (iOS need not move the app), so
-    /// only the previous build having run tells that the backup is stale.
+    // iOS need not move the app, so the install path is unchanged: only the previous build having run marks the
+    // backup stale.
     func testUpgradingTheRestoredDataDeletesThisVersionsCopy() async throws {
         let (installation, _, _) = try await restoredInstallation()
         let locations = installation.locations
@@ -659,8 +612,6 @@ import XMPPProtocol
                        ["\(fresh.id)|account", "\(fresh.id)|push|\(typed)"])
     }
 
-    /// This version's kept copy cannot be read: the restored state says so instead of calling it gone, and neither
-    /// upgrading the restored data nor the next launch deletes it; only Delete backup does.
     func testAnUnreadableKeptCopyIsReportedAndOnlyDeleteBackupRemovesIt() async throws {
         let (installation, _, _) = try await restoredInstallation()
         let locations = installation.locations
@@ -684,15 +635,13 @@ import XMPPProtocol
 
     // MARK: Replies saved before the upgrade
 
-    /// A launch killed after queueing the saved replies but before removing their file queues them again on the next
-    /// launch: each goes into the outbox once, including one saved by a build that gave replies no ID. A reply older
-    /// than a day is never queued.
+    // Includes a reply saved without an ID; a reply older than a day is never queued.
     func testASavedReplyIsQueuedOnceWhenTheLaunchIsKilledBeforeItsFileIsRemoved() async throws {
         let installation = try makeInstallation()
         guard case let .ready(store) = try await installation.snapshots.open(upgradeAllowed: true, now: now) else { return XCTFail("not ready") }
         let destination = try await receivedMessage(in: store)
         let payload = try JSONSerialization.data(withJSONObject: [
-            // As the previous feature build saved it: no ID.
+            // Saved without an ID.
             ["destination": destination.payload, "text": "Saved without an ID", "savedAt": now.timeIntervalSinceReferenceDate],
             ["id": UUID().uuidString, "destination": destination.payload, "text": "Saved with an ID", "savedAt": now.timeIntervalSinceReferenceDate + 60],
             ["id": UUID().uuidString, "destination": destination.payload, "text": "Saved two days ago", "savedAt": now.timeIntervalSinceReferenceDate - 2 * 86_400],
@@ -716,8 +665,6 @@ import XMPPProtocol
         try await store.close()
     }
 
-    /// Replies saved before the upgrade never outlive the backup or the account: Delete backup removes them all, and
-    /// signing out removes that account's.
     func testDeleteBackupAndSignOutRemoveSavedReplies() async throws {
         let installation = try makeInstallation()
         let snapshots = installation.snapshots
@@ -734,7 +681,6 @@ import XMPPProtocol
 
     // MARK: Helpers
 
-    /// The outbox itself, noting what reached it.
     @MainActor private final class Enqueued {
         private(set) var bodies: [String] = []
         func enqueue(_ message: StoredMessage, in store: MessageStore) async throws {
@@ -743,7 +689,6 @@ import XMPPProtocol
         }
     }
 
-    /// An incoming encrypted message a notification could name, and that notification's destination.
     private func receivedMessage(in store: MessageStore) async throws -> NotificationDestination {
         let id = UUID().uuidString
         try await store.upsertChat(accountID: account, chatID: "bob@example.org", title: "Bob")
@@ -754,7 +699,6 @@ import XMPPProtocol
 
     private var newAccountRecord: Data { Data("{\"accountID\":\"ellie@example.org\",\"security\":\"directTLS\"}".utf8) }
 
-    /// Previous build's data, snapshotted and upgraded, changed as the new build does, then restored.
     private func restoredInstallation(schema: Int = 21) async throws -> (Installation, NSDictionary, NSDictionary) {
         let installation = try makeInstallation()
         try await previousBuildData(in: installation, schema: schema)
@@ -773,9 +717,6 @@ import XMPPProtocol
         return (installation, appBefore, groupBefore)
     }
 
-    /// What the new build does to the inventory after migrating: new messages (one an encrypted reply), renamed and
-    /// added preferences, a rewritten account record, a push registration under the normal spelling, the tombstone
-    /// lifted, a new file.
     private func changeEverythingAsTheNewBuildDoes(_ store: MessageStore, _ locations: PreUpgradeSnapshot.Locations) async throws {
         try await store.acquireTransportOwnership()
         try await store.insertMessage(StoredMessage(id: "new-1", accountID: account, chatID: "bob@example.org", senderID: "bob@example.org",
@@ -791,9 +732,8 @@ import XMPPProtocol
         try Data("new".utf8).write(to: attachments.appending(path: "two.jpg"))
     }
 
-    /// What a previous build does on its first launch over restored data: 21ba6b0's open switches the store to
-    /// write-ahead logging (6664869 opens a store at its own schema as it is), then it writes (here, an encrypted
-    /// message it sent).
+    // Schema 21's open switches the store to WAL (later builds open a store at their own schema as it is), then it
+    // writes.
     private func runPreviousBuild(on database: URL, schema: Int = 21) {
         let owner = owner(schema), mode = schema < 23 ? "PRAGMA journal_mode=WAL; " : ""
         XCTAssertEqual(sqliteExec(database, mode + "INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing,encryption_profile) VALUES('\(owner)','old-build-again','bob@example.org','\(owner)','later',\(now.timeIntervalSince1970 + 3_600),1,'legacy')"), SQLITE_OK)
@@ -822,8 +762,7 @@ import XMPPProtocol
         XCTAssertTrue(PreUpgradeHold.isHeld(groupRoot: locations.groupRoot), file: file, line: line)
     }
 
-    /// The restored file is the backup's, page for page, put back in write-ahead-log mode with no sidecars: only the
-    /// 100-byte file header differs (the journal mode bytes and the change counter the switch bumps).
+    // Only the 100-byte file header differs: the journal mode bytes and the change counter the switch bumps.
     private func assertSameDatabase(_ restored: URL, _ backup: URL, file: StaticString = #filePath, line: UInt = #line) throws {
         XCTAssertEqual(try Data(contentsOf: restored).dropFirst(100), try Data(contentsOf: backup).dropFirst(100), file: file, line: line)
         for suffix in ["-wal", "-shm", "-journal"] {
@@ -841,8 +780,8 @@ import XMPPProtocol
         return sqlite3_exec(db, sql, nil, nil, nil)
     }
 
-    /// `untouched` reads the main file without opening it as a database (no WAL frames are read and no sidecars are
-    /// left, which a previous build's run is recognised by): for restored data nobody has opened since.
+    // Reads the main file without opening it as a database, so no WAL frames are read and no sidecars are left; a
+    // previous build's run is recognised by those sidecars.
     private func sqliteRows(_ url: URL, untouched: Bool = false, _ sql: String) -> [String] {
         var db: OpaquePointer?, statement: OpaquePointer?
         let opened = untouched ? sqlite3_open_v2("file:\(url.path)?immutable=1", &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil)

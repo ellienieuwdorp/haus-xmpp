@@ -3,14 +3,11 @@ import XCTest
 import XMPPProtocol
 @testable import HausXMPP
 
-/// The composer's link preview: what it fetches while the user types, and what Send freezes into the message without
-/// waiting.
 @MainActor
 final class ComposerLinkPreviewTests: XCTestCase {
     private final class Source: ComposerLinkPreviewSource {
         var linkPreviewUploadHosts: Set<String> = []
         private(set) var asked: [URL] = []
-        /// While set, fetches wait for `release()`.
         var holding = false
         private var held: [CheckedContinuation<Void, Never>] = []
 
@@ -35,8 +32,7 @@ final class ComposerLinkPreviewTests: XCTestCase {
 
     private var readyURL: URL? { if case .ready(let content) = preview.state { content.url } else { nil } }
 
-    /// Typing a link fetches it once, after the typing pauses; only the first previewable link counts, and an http
-    /// link there is never fetched (nor is the https link after it).
+    // Only the first previewable link counts, and an http link there is never fetched (nor is the https link after it).
     func testFetchesTheFirstLinkOnceTypingPauses() async throws {
         for draft in ["Look https://ex", "Look https://example.org/a", "Look https://example.org/a and https://example.net/b"] { type(draft) }
         try await settle()
@@ -49,7 +45,7 @@ final class ComposerLinkPreviewTests: XCTestCase {
         XCTAssertEqual(source.asked.count, 1)
     }
 
-    /// The remove button keeps that link's card away while the draft lasts; a new draft may show it again.
+    // A new draft may show the removed card again.
     func testARemovedCardStaysRemovedUntilTheDraftIsEmptied() async throws {
         type("https://example.org/a")
         try await settle()
@@ -66,7 +62,6 @@ final class ComposerLinkPreviewTests: XCTestCase {
         XCTAssertEqual(readyURL, URL(string: "https://example.org/a"))
     }
 
-    /// Files in the tray, an edit, or the setting off: no fetch and no card.
     func testNoPreviewWithFilesInAnEditOrWithTheSettingOff() async throws {
         type("https://example.org/a", suppressed: true)
         type("https://example.org/a", enabled: false)
@@ -81,8 +76,7 @@ final class ComposerLinkPreviewTests: XCTestCase {
         XCTAssertNil(preview.frozen(for: "https://example.org/a", suppressed: true))
     }
 
-    /// Send stores the ready card as our own preview, only while its link is still the first one in the text, and
-    /// never waits for a fetch that is still running.
+    // Only while its link is still the first one in the text.
     func testSendFreezesOnlyAReadyCardForTheSentLink() async throws {
         source.holding = true
         type("Read https://example.org/a")
@@ -99,9 +93,7 @@ final class ComposerLinkPreviewTests: XCTestCase {
         XCTAssertNil(preview.frozen(for: "https://example.net/b and https://example.org/a", suppressed: false), "No longer the first link")
     }
 
-    /// What `send` stores with the outgoing row, whatever the composer handed it: only our own preview, for the first
-    /// previewable link of the body (never one on a host serving our files), with an image within what we send and
-    /// typed as such.
+    // Whatever the composer handed it: never a preview for a host serving our files, and an image within what we send.
     func testSendStoresOnlyOurPreviewOfTheFirstLinkWithinTheSentBounds() {
         let body = "Read https://example.org/a and https://example.net/b"
         let jpeg = Data(repeating: 0xFF, count: MessageContent.LinkMetadata.maximumSentImageBytes)

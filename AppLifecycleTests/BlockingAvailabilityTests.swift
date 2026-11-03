@@ -1,8 +1,7 @@
 import XCTest
 @testable import HausXMPP
 
-/// Block, Report and Unblock run only against a server that blocks, while connected; otherwise they are shown disabled
-/// with a reason, and the sample conversations block locally.
+// Disabled with a reason unless connected to a server that blocks; the sample conversations block locally.
 final class BlockingAvailabilityTests: XCTestCase {
     func testActionsNeedAConnectedServerThatBlocks() {
         let blocks = BlockingSupport(features: ["urn:xmpp:blocking", "urn:xmpp:mam:2"])

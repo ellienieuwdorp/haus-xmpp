@@ -1,7 +1,6 @@
 import XCTest
 
-/// A direct chat's Contact row in its details, on sample data: what it offers before anything is linked, that Contacts
-/// is asked for only when linking starts, and that declining still offers a link by name. A room has no such row.
+// On sample data. A room has no Contact row.
 final class ContactLinkUITests: XCTestCase {
     @MainActor func testLinkingAsksForContactsOnlyWhenStartedAndOffersANameOnlyLinkWithoutIt() throws {
         continueAfterFailure = false

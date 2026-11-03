@@ -2,11 +2,9 @@ import MessageStore
 import XCTest
 @testable import HausXMPP
 
-/// The shared link preview values both bubbles and the composer read.
 @MainActor
 final class LinkPreviewModelTests: XCTestCase {
-    /// Owner decisions 2026-10-07: our own fetching is on by default and links open in the in-app browser by default;
-    /// a changed choice is what the next launch reads.
+    // A changed choice is what the next launch reads.
     func testLinkSettingsDefaultToFetchingAndTheInAppBrowserAndPersist() throws {
         let suite = "LinkPreviewModelTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -22,7 +20,7 @@ final class LinkPreviewModelTests: XCTestCase {
         XCTAssertTrue(relaunched.openInSafari)
     }
 
-    /// The card's layout follows from the image's pixel size alone, so it is known before first layout.
+    // Known before first layout: the layout follows from the image's pixel size alone.
     func testCardVariantFollowsTheImageSize() {
         let cases: [(width: Int?, height: Int?, variant: TimelineLinkPreview.Variant, line: UInt)] = [
             (1200, 630, .large, #line),
@@ -39,7 +37,7 @@ final class LinkPreviewModelTests: XCTestCase {
         }
     }
 
-    /// Version 1 shows no card on a message with a file, even for a link in its caption, nor on an unsent one.
+    // No card on a message with a file, even for a link in its caption, nor on an unsent one.
     func testOnlyATextMessageHasAPreviewCandidate() {
         var message = StoredMessage(id: "m", accountID: "me@example.org", chatID: "alex@example.org", senderID: "alex@example.org",
                                     body: "> me\n> old https://quoted.example/x\nsee example.org/a and https://news.example/b")

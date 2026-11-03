@@ -5,7 +5,6 @@ import MessageStore
 import MessagingCore
 @testable import HausXMPP
 
-/// Records every step an action takes instead of touching storage, the network or Notification Center.
 @MainActor private final class FakeActionEnvironment: NotificationActionEnvironment {
     enum Failure: Error { case storage }
     var accounts: [String?]
@@ -18,7 +17,7 @@ import MessagingCore
     private(set) var enqueued: [String] = []
     private(set) var reported: [Bool] = []
 
-    /// `accounts` answers successive authorization checks; the last answer repeats.
+    // Successive authorization checks; the last answer repeats.
     init(accounts: [String?], message: StoredMessage?) { self.accounts = accounts; self.message = message }
 
     func authorizedNotificationAccount() -> String? {
@@ -52,7 +51,6 @@ import MessagingCore
 
 @MainActor private final class LeaseState { var held = true; var aborts = 0 }
 
-/// The system's background time as a test controls it: expiry is triggered by hand, and every call is logged.
 @MainActor private final class FakeBackgroundTime: NotificationActionBackgroundTime {
     var remaining: TimeInterval
     private(set) var log: [String] = []
@@ -65,7 +63,7 @@ import MessagingCore
     }
     func end(_ task: UIBackgroundTaskIdentifier) { log.append("task-end") }
     func note(_ step: String) { log.append(step) }
-    /// What UIKit does when the time runs out: call the handler on the main thread.
+    // UIKit calls the expiration handler on the main thread.
     func expire() { log.append("expire"); expiration?() }
 }
 
@@ -89,8 +87,7 @@ import MessagingCore
         XCTAssertTrue(environment.reported.isEmpty)
     }
 
-    /// Every reply outcome but a sent one is reported to the user, and the reply is saved at most once, never re-sent
-    /// another way. The reply reads the chat first and clears a stale failure notice.
+    // The reply is never re-sent another way; it reads the chat first and clears a stale failure notice.
     func testReplyOutcomesAreReportedAndTheReplyIsSavedAtMostOnce() async throws {
         let sent = ["authorize", "resolve", "authorize", "begin", "read", "clear", "authorize", "enqueue", "deliver", "report", "end"]
         let rows: [(String, (FakeActionEnvironment) -> Void, NotificationActionOutcome, enqueued: [String], reported: [Bool], steps: [String])] = [
@@ -194,7 +191,7 @@ import MessagingCore
         XCTAssertLessThanOrEqual(deadline, ContinuousClock.now + .seconds(12))
     }
 
-    /// The lease goes back (the action's `end`) before the background task ends, and the task ends exactly once.
+    // The lease goes back (the action's `end`) before the background task ends.
     func testTheTransportIsReleasedBeforeTheBackgroundTaskEnds() async throws {
         let time = FakeBackgroundTime()
         let center = NotificationActionCenter(time: time, reportRejectedReply: {})
@@ -211,9 +208,8 @@ import MessagingCore
         XCTAssertEqual(time.log.filter { $0 == "task-end" }.count, 1)
     }
 
-    /// Expiry while the action holds the lease: the connection is closed but the task is left to expire, so the
-    /// system terminates the process (which frees the kernel lock) instead of suspending a lease owner. Without the
-    /// lease the task ends at expiry. Either way it ends exactly once.
+    // Holding the lease, the task is left to expire so the system terminates the process (freeing the kernel lock)
+    // instead of suspending a lease owner. Without the lease the task ends at expiry.
     func testExpiryEndsTheTaskOnlyWithoutTheLease() async throws {
         for held in [true, false] {
             let time = FakeBackgroundTime()
@@ -243,9 +239,8 @@ import MessagingCore
 
     // MARK: Rejected replies
 
-    /// Before the first unlock the keychain cannot be read, so the account does not authorize: the reply is rejected,
-    /// nothing is touched, and the content-free notice tells the user it was not sent. The same for a sign-out, another
-    /// account, a message that no longer resolves, or a model that never registered in time.
+    // Before first unlock the Keychain cannot be read, so the account does not authorize. Sign-out, another account, an
+    // unresolvable message or a model that never registered in time are rejected the same way.
     func testARejectedReplyPostsTheContentFreeNoticeAndARejectedReadDoesNot() async throws {
         let time = FakeBackgroundTime()
         var notices = 0
@@ -306,7 +301,7 @@ import MessagingCore
         XCTAssertEqual(categories[NotificationIdentity.fallbackCategory]?.actions.count, 0)
     }
 
-    /// The host app registered the categories at launch: the system, not just the value, has Reply and Mark as Read.
+    // The system, not just the registered value, has Reply and Mark as Read.
     func testTheSystemHasTheMessageCategoryActions() async throws {
         var registered: Set<UNNotificationCategory> = []
         for _ in 0..<20 {

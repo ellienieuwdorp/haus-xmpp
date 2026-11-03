@@ -5,7 +5,6 @@ import XMPPProtocol
 
 @MainActor
 final class ConnectionSetupTests: XCTestCase {
-    /// Parks callers until the test opens it.
     private actor Gate {
         private var isOpen = false
         private var waiting: [CheckedContinuation<Void, Never>] = []
@@ -20,7 +19,6 @@ final class ConnectionSetupTests: XCTestCase {
         }
     }
 
-    /// Events and marks in the order they happened.
     private actor Recorder {
         enum Entry: Equatable { case event(ConnectionSetup.Event), mark(String) }
         private(set) var entries: [Entry] = []
@@ -36,7 +34,7 @@ final class ConnectionSetupTests: XCTestCase {
     private static let start = ConnectionSetup.Event.catchingUp(CatchUpProgress(archive: nil, pages: 0, messages: 0))
     private static let keys = ConnectionSetup.Event.step("publishing this phone’s keys")
 
-    /// Everything succeeds at once unless a test replaces it; each call leaves a mark.
+    // Each call leaves a mark.
     private func operations(_ recorder: Recorder, features: Set<String> = [ConnectionSetup.carbonsFeature, ConnectionSetup.archiveFeature]) -> ConnectionSetup.Operations {
         ConnectionSetup.Operations(
             features: { await recorder.mark("features"); return features },
@@ -53,7 +51,6 @@ final class ConnectionSetupTests: XCTestCase {
         await ConnectionSetup(identityExists: identityExists, resumed: resumed, memory: memory).run(operations: operations) { await recorder.record($0) }
     }
 
-    /// Waits up to five seconds for `event`; false when it never came.
     private func eventually(_ recorder: Recorder, _ event: ConnectionSetup.Event) async -> Bool {
         let deadline = ContinuousClock.now + .seconds(5)
         while ContinuousClock.now < deadline {
@@ -180,7 +177,7 @@ final class ConnectionSetupTests: XCTestCase {
         XCTAssertFalse(marks.contains("walk-start"))
     }
 
-    /// Prosody advertises carbons only on the server domain and MAM only on the account: setup must see both.
+    // Prosody advertises carbons only on the server domain and MAM only on the account: setup must see both.
     func testFeaturesSplitAcrossDomainAndAccountEnableCarbonsAndTheWalk() async {
         let recorder = Recorder()
         var operations = operations(recorder)
@@ -200,8 +197,8 @@ final class ConnectionSetupTests: XCTestCase {
         XCTAssertEqual(events.last, .settled)
     }
 
-    /// A refused or unanswered account disco no longer fails the connection: setup goes on with the features it knew,
-    /// or, knowing none, tries the walk (a refused archive query ends only that archive) without carbons.
+    // A refused or unanswered account disco does not fail the connection: setup goes on with the features it knew, or,
+    // knowing none, tries the walk (a refused archive query ends only that archive) without carbons.
     func testAccountFeatureQueryFailingFallsBackToKnownFeaturesAndServerQueryFailingOnlyDropsCarbons() async throws {
         let refused: @Sendable () async throws -> Set<String> = {
             try await ConnectionSetup.discoverFeatures(server: { [ConnectionSetup.carbonsFeature] },
@@ -237,8 +234,8 @@ final class ConnectionSetupTests: XCTestCase {
         XCTAssertTrue(marks.contains("walk-start"))
     }
 
-    /// A transport failure while publishing keys, or a failed rejoin, used to cancel the walk. The walk now finishes
-    /// (its `.catchingUp(nil)` is published) before the failure, which still ends the connection and is never `.settled`.
+    // The walk finishes (its `.catchingUp(nil)` is published) before the failure, which still ends the connection and is
+    // never `.settled`.
     func testKeysOrRejoinFailureLetsTheWalkFinishFirst() async throws {
         for failing in ["initialize", "rejoin"] {
             let recorder = Recorder(), failed = Gate()
@@ -270,7 +267,7 @@ final class ConnectionSetupTests: XCTestCase {
         }
     }
 
-    /// One silent upload component used to hold `.ready` and the walk for the 15 s IQ deadline on every connect.
+    // A silent upload component must not hold `.ready` and the walk for the 15 s IQ deadline.
     func testUploadDiscoveryDelaysNeitherReadyNorTheWalkAndIsJoinedLast() async {
         let recorder = Recorder(), uploads = Gate()
         var operations = operations(recorder)
@@ -292,8 +289,7 @@ final class ConnectionSetupTests: XCTestCase {
         XCTAssertLessThan(marks.firstIndex(of: "uploads") ?? .max, marks.firstIndex(of: "returned") ?? -1)
     }
 
-    /// A resumed stream skips only what survives it, and only when the memory says so; identity, rejoins and the walk
-    /// always run, and a fresh bind never skips.
+    // Identity, rejoins and the walk always run, and a fresh bind never skips.
     func testResumeSkipsOnlyWhatSurvivesTheStream() async {
         let fresh = ConnectionSetup.Memory(features: [ConnectionSetup.carbonsFeature, ConnectionSetup.archiveFeature],
                                            featuresFresh: true, carbonsOnStream: true, uploadsFresh: true)
@@ -318,7 +314,7 @@ final class ConnectionSetupTests: XCTestCase {
         }
     }
 
-    /// Carbons survive only on the stream they were enabled on: a stream the extension bound in between has another ID.
+    // A stream the extension bound in between has another ID, so carbons are trusted only on their own stream.
     func testServerProfileMemoryTrustsCarbonsOnlyOnTheirStreamAndFeaturesForADay() throws {
         let suite = "haus.xmpp.tests.profile.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -390,7 +386,6 @@ final class ConnectionSetupTests: XCTestCase {
         XCTAssertLessThan(marks.firstIndex(of: "uploads") ?? .max, marks.firstIndex(of: "returned") ?? -1)
     }
 
-    /// A flag set off the main actor and read by a test that is holding the main actor.
     private final class Flag: @unchecked Sendable {
         private let lock = NSLock()
         private var raised = false
@@ -398,7 +393,6 @@ final class ConnectionSetupTests: XCTestCase {
         func raise() { lock.withLock { raised = true } }
     }
 
-    /// What reached the owner, and whether the owner had already cancelled the setup at that point.
     @MainActor private final class Owner {
         var cancelled = false
         private(set) var events: [ConnectionSetup.Event] = []
@@ -409,9 +403,8 @@ final class ConnectionSetupTests: XCTestCase {
         }
     }
 
-    /// `.disconnected` cancels the setup on the main actor without changing the generation. An event the setup
-    /// produced just before (here `.ready`, right after `initialize` returned) and that is still queued for the
-    /// main actor must then be dropped, or it would overwrite the offline state and stop the reconnect.
+    // `.disconnected` cancels the setup on the main actor without changing the generation. An event still queued for
+    // the main actor must then be dropped, or it would overwrite the offline state and stop the reconnect.
     func testAnEventQueuedWhenTheOwnerCancelsIsNotDelivered() async {
         let recorder = Recorder(), owner = Owner()
         let mainHeld = Flag(), initialized = Flag()

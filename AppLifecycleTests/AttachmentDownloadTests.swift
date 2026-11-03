@@ -5,9 +5,8 @@ import OMEMO
 import XCTest
 @testable import HausXMPP
 
-/// Received files through the real downloader and URLSession, with the server replaced by an in-process
-/// URLProtocol. The stub plays the system's part for Low Data Mode and expensive networks: it refuses a request
-/// that opts out of them, the way the loader does on such a path.
+// The in-process URLProtocol stub plays the system's part for Low Data Mode and expensive networks: it refuses a
+// request that opts out of them, as the loader does on such a path.
 final class AttachmentDownloadTests: XCTestCase {
     private var directory: URL!
     private var configuration: URLSessionConfiguration!
@@ -216,7 +215,6 @@ final class AttachmentDownloadTests: XCTestCase {
     private static let account = "me@localhost", peer = "peer@localhost"
     private var files: AttachmentFiles { AttachmentFiles(directory: directory, account: Self.account) }
 
-    /// Files the center reported on disk, by message ID.
     @MainActor private final class Saved { var files: [String: URL] = [:] }
 
     @MainActor private func center() -> (AttachmentDownloadCenter, Saved) {
@@ -226,7 +224,6 @@ final class AttachmentDownloadTests: XCTestCase {
         return (center, saved)
     }
 
-    /// A served, unencrypted file of 256 KiB whose bytes depend on `index`.
     private func file(_ index: Int, declaresSize: Bool = true, pause: useconds_t = 2_000) -> (plain: Data, url: URL, attachment: StoredAttachment) {
         let plain = Data(repeating: UInt8(index), count: 256 * 1024)
         let url = StubServer.serve(.init(body: plain, pause: pause))
@@ -254,8 +251,8 @@ final class AttachmentDownloadTests: XCTestCase {
     private func secret() -> (key: Data, iv: Data) { (Data(repeating: 1, count: 32), Data(repeating: 2, count: 12)) }
 }
 
-/// An HTTPS server inside the test process. Each `serve` returns a fresh URL; the body is sent in 64 KiB chunks
-/// with a pause between them, so a cancelled transfer visibly stops early and concurrent transfers overlap.
+// Each `serve` returns a fresh URL; bodies go out in 64 KiB chunks with pauses, so a cancelled transfer visibly stops
+// early and concurrent transfers overlap.
 private final class StubServer: URLProtocol, @unchecked Sendable {
     enum Network: CustomStringConvertible {
         case unconstrained, constrained, expensive
@@ -267,7 +264,6 @@ private final class StubServer: URLProtocol, @unchecked Sendable {
         var announcesLength = true
         var network = Network.unconstrained
         var headStatus = 200
-        /// Microseconds before each chunk.
         var pause: useconds_t = 2_000
         init(body: Data, announcedLength: Int? = nil, announcesLength: Bool = true, headStatus: Int = 200, network: Network = .unconstrained,
              pause: useconds_t = 2_000) {
@@ -291,7 +287,6 @@ private final class StubServer: URLProtocol, @unchecked Sendable {
     }
     static func delivered(_ url: URL) -> Int { lock.withLock { sent[url.path, default: 0] } }
     static func methods(_ url: URL) -> [String] { lock.withLock { requests[url.path, default: []] } }
-    /// The most bodies that were being sent at once.
     static var peakConcurrentBodies: Int { lock.withLock { peakSending } }
     static func reset() { lock.withLock { routes = [:]; sent = [:]; requests = [:]; sending = 0; peakSending = 0 } }
 

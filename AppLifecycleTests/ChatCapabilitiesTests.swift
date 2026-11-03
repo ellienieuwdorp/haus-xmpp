@@ -3,7 +3,7 @@ import OMEMO
 import XMPPProtocol
 @testable import HausXMPP
 
-/// Chat-level state derives from stored facts only, so launch, disconnect and reconnect cannot flip it.
+// Chat-level state derives from stored facts only, so launch, disconnect and reconnect cannot flip it.
 final class ChatCapabilitiesTests: XCTestCase {
     private func direct(_ knowledge: EncryptionKnowledge, review: Bool = false, uploads: Bool = true, ready: Bool) -> ChatCapabilities {
         ChatCapabilities.derive(isDemo: false, isGroup: false, knowledge: knowledge, reviewPending: review, uploadAvailable: uploads, sessionReady: ready)
@@ -16,7 +16,7 @@ final class ChatCapabilitiesTests: XCTestCase {
 
     private let verified = DeviceTrustFacts(peerTrust: [.verified], needsReview: false, peerKnown: true)
 
-    /// (b) connect → disconnect → reconnect, with the refresh fence moving stored → refreshed → stored → refreshed.
+    // The refresh fence moves stored → refreshed → stored → refreshed.
     func testConnectDisconnectReconnectNeverChangesEncryptionOrAttach() {
         let accepted = DeviceTrustFacts(peerTrust: [.accepted], needsReview: false, peerKnown: true)
         let empty = DeviceTrustFacts(peerTrust: [], needsReview: false, peerKnown: true)
@@ -35,7 +35,7 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(Set(steps.map(\.deviceCount)), [2])
     }
 
-    /// (d) Not yet known is pending, never "not encrypted"; only a completed answer makes it unavailable.
+    // Only a completed answer makes it unavailable.
     func testPendingIsNotUnavailable() {
         XCTAssertEqual(direct(.pending, ready: false).encryption, .pending)
         XCTAssertNil(direct(.pending, ready: false).deviceCount)
@@ -50,7 +50,7 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(group(.stored(verified), joined: true, issue: "Old failure", ready: true).encryption, .encrypted(verified: true))
     }
 
-    /// (e) The attach button follows the last completed discovery only; groups never show it.
+    // Groups never show the attach button.
     func testAttachFollowsRememberedUploadsNotTheSocket() {
         XCTAssertFalse(direct(.stored(verified), uploads: false, ready: true).canAttach)
         XCTAssertTrue(direct(.stored(verified), uploads: true, ready: false).canAttach)
@@ -95,8 +95,8 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertFalse(memory.isFresh(account: account))
     }
 
-    /// Discovery can end after `.ready`. Stranded uploads fail as "no longer offered" only against a known answer, and
-    /// with nothing stored the answer that comes after `.ready` must settle them, or they hold their chats.
+    // Discovery can end after `.ready`. Stranded uploads fail as "no longer offered" only against a known answer, so
+    // with nothing stored the answer that comes after `.ready` must settle them, or they hold their chats.
     func testStrandedUploadsWaitForAKnownAnswerAndAreSettledByIt() {
         let service = XMPPUploadService(jid: "upload.example.org", maximumFileSize: nil)
         let timedOut: Result<XMPPUploadService?, any Error> = .failure(XMPPClientError.timedOut)
@@ -132,14 +132,14 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(direct(.stored(undecided), ready: false).encryption, .needsReview)
     }
 
-    /// A stored group device, decoded because `EncryptionDevice` has no public initializer.
+    // Decoded because `EncryptionDevice` has no public initializer.
     private func device(_ jid: String, _ id: UInt32, _ trust: DeviceTrust, active: Bool = true) throws -> EncryptionDevice {
         let json: [String: Any] = ["jid": jid, "profile": "modern", "deviceID": id, "identityKey": Data(repeating: UInt8(id), count: 32).base64EncodedString(),
                                    "trust": trust.rawValue, "active": active, "identityChanged": false]
         return try JSONDecoder().decode(EncryptionDevice.self, from: JSONSerialization.data(withJSONObject: json))
     }
 
-    /// A member with no active device keeps the group from reading as verified, even when every listed device is.
+    // Even when every listed device is verified.
     func testGroupMemberWithoutDevicesIsNotVerified() throws {
         let me = "me@example.org", bob = "bob@example.org", carol = "carol@example.org"
         let bobVerified = try device(bob, 11, .verified)
@@ -164,8 +164,8 @@ final class ChatCapabilitiesTests: XCTestCase {
                        "accepted is not verified")
     }
 
-    /// The group pill follows `groupRecipients`: a rejected device on the account itself is left out and does not ask
-    /// for review, while an undecided own device and another member's rejected device still hold the group.
+    // The group pill follows `groupRecipients`: an undecided own device and another member's rejected device still hold
+    // the group.
     func testRejectedOwnDeviceDoesNotHoldTheGroup() throws {
         let me = "me@example.org", bob = "bob@example.org"
         let bobAccepted = try device(bob, 11, .accepted)
@@ -181,7 +181,7 @@ final class ChatCapabilitiesTests: XCTestCase {
         XCTAssertEqual(group(.stored(DeviceTrustFacts(room, account: me)), joined: true, ready: true).encryption, .needsReview)
     }
 
-    /// A send held for a fingerprint decision shows the review card for that chat only; other holds are footnotes.
+    // Other holds are footnotes.
     func testTrustHeldSendShowsReviewForThatChatOnly() throws {
         var attention = EncryptionAttention()
         let bob = "bob@example.org", carol = "carol@example.org", dave = "dave@example.org"

@@ -12,8 +12,8 @@ import XMPPProtocol
         XCTAssertEqual(PushService.serviceJID, "push.xmpp.haus")
     }
 
-    /// The development app's tokens belong to its own APNs topic, so its registrations name it; the released app's
-    /// registrations name none and keep the gateway's default.
+    // The development app's tokens belong to its own APNs topic; the released app's registrations keep the gateway's
+    // default.
     func testRegistrationsNameTheAPNsTopicUnlessItIsTheGatewayDefault() {
         XCTAssertEqual(PushService.topic, Bundle.main.bundleIdentifier)
         XCTAssertNotEqual(PushService.topic, PushService.gatewayDefaultTopic)
@@ -29,8 +29,8 @@ import XMPPProtocol
         XCTAssertEqual(PushStatus.gate(for: .denied, interactive: true), .notAllowed)
     }
 
-    /// The Mac registers only while alerts may show: under quiet delivery macOS skips the extension, so a push would
-    /// add the gateway's generic text beside the app's own notification.
+    // Under quiet delivery macOS skips the extension, so a push would add the gateway's generic text beside the app's
+    // own notification.
     func testMacGateNeedsAlerts() {
         XCTAssertNil(PushStatus.gate(for: .authorized, alertStyle: .banner, interactive: false))
         XCTAssertNil(PushStatus.gate(for: .authorized, alertStyle: .alert, interactive: false))
@@ -41,9 +41,8 @@ import XMPPProtocol
         XCTAssertEqual(PushStatus.gate(for: .notDetermined, alertStyle: .none, interactive: false), .off)
     }
 
-    /// A reconnect stopped at Off because nobody had answered the prompt; an answer given from Settings finishes that
-    /// setup, including a no (the setup itself then reports Not Allowed). A switch turned off, a setup that is not
-    /// stopped, a prompt still unanswered and a build without push start nothing.
+    // A reconnect stops at Off while the prompt is unanswered; an answer from Settings, even a no, finishes that setup.
+    // A switch turned off, a setup not stopped, an unanswered prompt or a build without push start nothing.
     func testAnsweredPromptResumesOnlyASetupStoppedForIt() {
         for answer: UNAuthorizationStatus in [.authorized, .provisional, .denied] {
             XCTAssertTrue(PushStatus.resumesSetup(after: answer, status: .off, wanted: true, offered: true), "\(answer.rawValue)")
@@ -69,15 +68,15 @@ import XMPPProtocol
         XCTAssertEqual(PushStatus.on.text, "On")
     }
 
-    /// Turned off, a revocation or disable that failed retries silently: Settings keeps saying "Off" under the Off switch.
+    // Settings keeps saying "Off" while a failed revocation or disable retries silently.
     func testTurnedOffPushReportsOffWhateverTheCleanupHit() {
         XCTAssertEqual(PushStatus.settled(after: XMPPClientError.timedOut, wanted: false), .off)
         XCTAssertEqual(PushStatus.settled(after: XMPPNotificationError.pushUnavailable, wanted: false), .off)
         XCTAssertEqual(PushStatus.settled(after: XMPPClientError.timedOut, wanted: true), .unreachable)
     }
 
-    /// A subscription enabled before the registration journal existed is only in the saved account: turning it off must
-    /// still stage a revocation and a disable, or the switch reads Off while the account server keeps publishing.
+    // A subscription with no journal entry is only in the saved account; without staged cleanup the switch would read
+    // Off while the account server keeps publishing.
     func testTurningOffAnUnjournaledSubscriptionStagesItsCleanup() throws {
         let push = try PushSubscription.generate(serviceJID: PushService.serviceJID)
         let state = try XCTUnwrap(PushRegistrationState.turningOff(accountID: "alice@example.org", saved: nil, enabled: push))
@@ -87,8 +86,7 @@ import XMPPProtocol
         XCTAssertNil(try PushRegistrationState.turningOff(accountID: "alice@example.org", saved: nil, enabled: nil))
     }
 
-    /// The account server's disable is stored apart from the gateway revocation: settling the revocation (acknowledged
-    /// or abandoned) leaves the disable owed, across a save and load.
+    // The disable is stored apart from the gateway revocation and stays owed across a save and load.
     func testSettledRevocationStillOwesTheDisable() throws {
         let push = try PushSubscription.generate(serviceJID: PushService.serviceJID)
         var registered = PushRegistrationState(accountID: "alice@example.org", configuration: push, journal: PushRegistrationJournal())
@@ -102,7 +100,7 @@ import XMPPProtocol
         XCTAssertTrue(reloaded.disablePending)
     }
 
-    /// Items saved by earlier builds have no marker: a staged revocation there still owes its disable, anything else not.
+    // Items saved without the marker owe a disable only with a staged revocation.
     func testEarlierSavedStateOwesADisableOnlyWithAStagedRevocation() throws {
         let push = try PushSubscription.generate(serviceJID: PushService.serviceJID)
         var journal = PushRegistrationJournal()
@@ -116,7 +114,7 @@ import XMPPProtocol
         }
     }
 
-    /// Only an answer that proves nothing is left settles stored cleanup; a dropped connection keeps it for next time.
+    // Only an answer that proves nothing is left settles stored cleanup.
     func testCleanupSettlesOnAnswersNotOnLostConnections() {
         let current = false, retired = true
         XCTAssertTrue(PushCleanup.revocationSettles(XMPPIQError.stanza(condition: "item-not-found"), retired: current))
@@ -135,8 +133,8 @@ import XMPPProtocol
         XCTAssertFalse(PushCleanup.disableSettles(XMPPClientError.timedOut))
     }
 
-    /// A session the app did not set up (the extension, a notification action) re-enables only a subscription whose
-    /// gateway registration is settled: never one still being registered, revoked or disabled, nor another one.
+    // A session the app did not set up (the extension, a notification action) never re-enables a subscription that is
+    // still being registered, revoked or disabled.
     func testOnlyASettledRegistrationIsReenabledAfterAFreshBind() throws {
         let push = try PushSubscription.generate(serviceJID: PushService.serviceJID)
         var settled = PushRegistrationState(accountID: "alice@example.org", configuration: push, journal: PushRegistrationJournal())

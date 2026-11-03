@@ -15,9 +15,8 @@ final class SessionStateTests: XCTestCase {
         }
     }
 
-    /// A server that drops every stream right after login (a kick, a walk that fails the same way each time) used to be
-    /// retried with no delay and alerted on every cycle, because `.ready` reset both. A quiet account settles its setup
-    /// within a second, so a settled setup alone is not enough either.
+    // A server that drops every stream right after login must not be retried at once and alerted on every cycle. A quiet
+    // account settles its setup within a second, so a settled setup alone is not enough either.
     func testOnlyASettledSetupThatStayedUpForgivesEarlierFailures() {
         var policy = ReconnectPolicy()
         let start = ContinuousClock.now

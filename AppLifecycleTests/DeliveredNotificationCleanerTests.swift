@@ -3,8 +3,7 @@ import UserNotifications
 import MessagingCore
 @testable import HausXMPP
 
-/// Which delivered requests go when messages are read: their own identifiers, and older requests that name them,
-/// never another account's or another chat's.
+// Their own identifiers and older requests that name them, never another account's or another chat's.
 final class DeliveredNotificationCleanerTests: XCTestCase {
     private let account = "synthetic@localhost"
 

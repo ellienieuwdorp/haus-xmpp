@@ -5,10 +5,9 @@ import XCTest
 import XMPPProtocol
 @testable import HausXMPP
 
-/// The bounded fetcher and the fetch center through the real URLSession, with web servers replaced by an in-process
-/// URLProtocol and DNS by a fixed table. Nothing leaves the process.
+// Web servers are an in-process URLProtocol and DNS a fixed table; nothing leaves the process.
 final class LinkPreviewFetchTests: XCTestCase {
-    /// Public addresses (never contacted: the stub answers first).
+    // Never contacted: the stub answers first.
     private static let publicV4: [UInt8] = [93, 184, 216, 34]
     private static let publicV6: [UInt8] = [0x26, 0x06, 0x28, 0, 0x02, 0x20, 0, 0x01, 0x02, 0x48, 0x18, 0x93, 0x25, 0xc8, 0x19, 0x46]
 
@@ -21,7 +20,6 @@ final class LinkPreviewFetchTests: XCTestCase {
         configuration.protocolClasses = [PreviewStubServer.self]
     }
 
-    /// Folders of the stores `makeCache` opened, removed after each test.
     private var storeFolders: [URL] = []
 
     override func tearDown() {
@@ -30,7 +28,6 @@ final class LinkPreviewFetchTests: XCTestCase {
         storeFolders = []
     }
 
-    /// The fetch cache the app uses: a message store of its own.
     private func makeCache() throws -> MessageStore {
         let folder = FileManager.default.temporaryDirectory.appending(path: "LinkPreviewFetchTests-store-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -54,7 +51,7 @@ final class LinkPreviewFetchTests: XCTestCase {
 
     // MARK: Reading
 
-    /// The card's text and image come from the page's OpenGraph head, and nothing after the head is downloaded.
+    // Nothing after the head is downloaded.
     func testReadsOpenGraphFromTheHeadAndStopsReadingThere() async throws {
         resolver.set("news.example", Self.publicV4)
         resolver.set("cdn.example", Self.publicV6)
@@ -84,7 +81,6 @@ final class LinkPreviewFetchTests: XCTestCase {
         }
     }
 
-    /// Without OpenGraph, `<title>` and `<meta name=description>` stand in; a page with neither and no image has no card.
     func testFallsBackToTitleAndDescriptionAndRefusesAnEmptyPage() async throws {
         resolver.set("plain.example", Self.publicV4)
         PreviewStubServer.serve("https://plain.example/a", .page(page("""
@@ -103,7 +99,6 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertEqual(empty, .failure(.nothingToShow))
     }
 
-    /// A direct image link gets a card with the downsampled image and its file name as the title.
     func testADirectImageGetsItsFileNameAsTitle() async throws {
         resolver.set("photos.example", Self.publicV4)
         PreviewStubServer.serve("https://photos.example/2026/harbour%20view.png", .image(Self.png(width: 800, height: 600)))
@@ -114,7 +109,6 @@ final class LinkPreviewFetchTests: XCTestCase {
 
     // MARK: Network rules
 
-    /// Plain http and any port but 443 are never requested, whatever the host.
     func testOnlyHTTPSOnPort443IsFetched() async {
         resolver.set("site.example", Self.publicV4)
         for url in ["http://site.example/", "https://site.example:8443/", "https://user@site.example/"] {
@@ -124,8 +118,8 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertEqual(PreviewStubServer.requests(to: "site.example"), 0)
     }
 
-    /// Loopback, private, link-local, CGNAT, metadata and unique-local destinations, by name, by literal and by any
-    /// one resolved address (IPv4, IPv6, IPv4-mapped or NAT64), are refused before a request goes out.
+    // Loopback, private, link-local, CGNAT, metadata and unique-local destinations, by name, literal or any one resolved
+    // address (IPv4, IPv6, IPv4-mapped or NAT64).
     func testPrivateDestinationsAreRefusedBeforeAnyRequest() async {
         let cases: [(url: String, resolves: [[UInt8]]?, line: UInt)] = [
             ("https://localhost/", nil, #line),
@@ -161,10 +155,8 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertEqual(control.map(\.title), .success("Outside"))
     }
 
-    /// The name checked is the one the connection uses. URLSession decodes a percent-escaped host before it connects
-    /// (`in%73ide.example` reaches `inside.example`), so such a host is refused for the page, for its image and for a
-    /// redirect, even where the escaped spelling resolves to a public address. An international name is resolved in the
-    /// IDNA form the request is sent with.
+    // URLSession decodes a percent-escaped host before it connects (`in%73ide.example` reaches `inside.example`), so
+    // such a host is refused for page, image and redirect. International names are resolved in their IDNA form.
     func testTheCheckedHostIsTheOneTheConnectionReaches() async throws {
         resolver.set("in%73ide.example", Self.publicV4)
         resolver.set("inside.example", [[10, 1, 2, 3]])
@@ -190,9 +182,8 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertEqual(international.map(\.title), .success("Bücher"))
     }
 
-    /// After the transfer, the addresses the connections used are checked again (a DNS rebinding between our check
-    /// and the connection): one private address discards the result. The stub server reports none, so the table runs
-    /// on the check itself.
+    // Guards DNS rebinding between our check and the connection. The stub reports no addresses, so the table runs on
+    // the check itself.
     func testAConnectionToAPrivateAddressDiscardsTheResult() {
         let cases: [(addresses: [String?], allowed: Bool, line: UInt)] = [
             ([nil], true, #line),
@@ -209,7 +200,6 @@ final class LinkPreviewFetchTests: XCTestCase {
         }
     }
 
-    /// Every redirect hop is checked like the first request, and a sixth hop is refused.
     func testRedirectsAreCheckedAtEveryHopAndLimitedToFive() async throws {
         resolver.set("short.example", Self.publicV4)
         resolver.set("final.example", Self.publicV4)
@@ -238,7 +228,7 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertEqual(sixHops, .failure(.tooManyRedirects))
     }
 
-    /// Images are capped at 5 MiB (announced or counted) and 40 megapixels; an oversized page image leaves a text card.
+    // 5 MiB (announced or counted) and 40 megapixels; an oversized page image leaves a text card.
     func testImageSizeCaps() async throws {
         resolver.set("img.example", Self.publicV4)
         let big = Data(repeating: 0, count: 5 * 1024 * 1024 + 1)
@@ -260,7 +250,6 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertNil(article.image)
     }
 
-    /// A server that never answers ends the fetch at its deadline.
     func testAStalledServerEndsAtTheDeadline() async {
         resolver.set("slow.example", Self.publicV4)
         PreviewStubServer.serve("https://slow.example/", .stall)
@@ -272,8 +261,7 @@ final class LinkPreviewFetchTests: XCTestCase {
 
     // MARK: Center
 
-    /// Displays of the same link share one request; distinct links run at most two at a time; a result stands for
-    /// later displays (from the cache) without a new request.
+    // Same link: one request; distinct links: at most two at a time; a result serves later displays from the cache.
     @MainActor func testTheCenterCoalescesLinksAndRunsTwoAtATime() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "LinkPreviewFetchTests-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -299,7 +287,7 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertEqual(PreviewStubServer.requests(to: "site1.example"), 1)
     }
 
-    /// A failure stands for a day, a success for a week; an expired entry is fetched again.
+    // A failure stands for a day, a success for a week.
     @MainActor func testCachedResultsExpire() async throws {
         let cache = try makeCache()
         resolver.set("fresh.example", Self.publicV4)
@@ -319,8 +307,7 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertEqual(stale?.title, "New")
     }
 
-    /// A refetch after the entry expired that brings a different image writes it to a new file and removes the old
-    /// one: the cards cache decoded images by file, so reusing the name would keep showing the old picture.
+    // The cards cache decoded images by file, so reusing the name would keep showing the old picture.
     @MainActor func testARefetchedImageNeverReusesTheOldFile() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "LinkPreviewFetchTests-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -350,7 +337,7 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: old.path), "The replaced image is removed")
     }
 
-    /// Away from the foreground nothing is fetched, and a fetch cut short by leaving is not recorded as a failure.
+    // A fetch cut short by leaving the foreground is not recorded as a failure.
     @MainActor func testTheCenterFetchesOnlyInFront() async throws {
         resolver.set("away.example", Self.publicV4)
         PreviewStubServer.serve("https://away.example/", .page(page("<title>Back</title>"), pause: 200_000))
@@ -372,8 +359,7 @@ final class LinkPreviewFetchTests: XCTestCase {
         XCTAssertEqual(again?.title, "Back", "The interrupted fetch left nothing behind")
     }
 
-    /// Only a missing connection is asked again after a return to the foreground. A name that does not resolve while
-    /// the device has a network, or a certificate that is not trusted, stands as a failure and is not requested again.
+    // A name that does not resolve while online, or an untrusted certificate, stands as a failure.
     @MainActor func testOnlyAMissingConnectionIsAskedAgain() async throws {
         let center = LinkPreviewCenter(fetcher: fetcher())
         center.use(account: "me@example.org", folder: nil, cache: try makeCache())
@@ -416,7 +402,7 @@ final class LinkPreviewFetchTests: XCTestCase {
 
     // MARK: Sent thumbnail
 
-    /// What we send: a JPEG within 400 px and 24 KiB, without the source's metadata.
+    // A JPEG within 400 px and 24 KiB, without the source's metadata.
     func testTheSentThumbnailIsASmallJPEGWithoutMetadata() throws {
         let source = Self.noisyJPEG(width: 2_000, height: 1_500, gps: true)
         let thumbnail = try XCTUnwrap(LinkPreviewImaging.sentThumbnail(from: source, maximumBytes: MessageContent.LinkMetadata.maximumSentImageBytes))
@@ -471,7 +457,6 @@ final class LinkPreviewFetchTests: XCTestCase {
     }
 }
 
-/// DNS for the tests: a fixed table; an unknown name does not resolve.
 private final class TableResolver: HostResolving, @unchecked Sendable {
     private let lock = NSLock()
     private var table: [String: [[UInt8]]] = [:]
@@ -483,16 +468,14 @@ private final class TableResolver: HostResolving, @unchecked Sendable {
     }
 }
 
-/// Web servers inside the test process, by URL. Bodies go out in 64 KiB chunks with a pause between them, so a
-/// transfer cut short visibly stops early and concurrent transfers overlap.
+// Bodies go out in 64 KiB chunks with pauses, so a transfer cut short visibly stops early and concurrent transfers
+// overlap.
 private final class PreviewStubServer: URLProtocol, @unchecked Sendable {
     enum Route {
         case page(Data, charset: String = "utf-8", pause: useconds_t = 1_000)
         case image(Data, announcesLength: Bool = true)
         case redirect(String)
-        /// Answers nothing until cancelled.
         case stall
-        /// The transfer fails as URLSession reports it.
         case fail(URLError.Code)
     }
 

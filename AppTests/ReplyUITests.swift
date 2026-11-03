@@ -1,8 +1,8 @@
 import XCTest
 
 final class ReplyUITests: XCTestCase {
-    /// A rightward swipe on a message row replies, from the bubble or the empty gutter beside a short sent message, and
-    /// keeps the keyboard up. A day header is not a message: from there, as from the leading edge, the swipe goes back.
+    // From the bubble or the empty gutter beside a short sent message. A day header is not a message: from there, as
+    // from the leading edge, the swipe goes back.
     @MainActor func testReplySwipesKeepTheKeyboardAndLeaveBackToTheSystem() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

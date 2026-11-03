@@ -3,8 +3,7 @@ import XCTest
 import XMPPProtocol
 @testable import HausXMPP
 
-/// Who our own fetch runs for: contacts with a to, from or both subscription once the roster has loaded, never
-/// anyone else, and there is no option to fetch for non-contacts.
+// Only contacts with a to, from or both subscription, once the roster has loaded; there is no option for others.
 final class LinkPreviewPolicyTests: XCTestCase {
     private static let account = "me@example.org"
 
@@ -22,12 +21,10 @@ final class LinkPreviewPolicyTests: XCTestCase {
         let cases: [(message: StoredMessage, roster: (String) -> LinkPreviewPolicy.RosterEntry, expected: Bool, line: UInt)] = [
             // Our own messages show only the preview they carried, which is what the peer got.
             (message(from: Self.account, outgoing: true), { _ in .item(.both) }, false, #line),
-            // Sent from another of our devices (a carbon or the archive).
             (message(from: Self.account), { _ in .item(.both) }, false, #line),
             (message(from: "to@example.org"), loaded, true, #line),
             (message(from: "from@example.org"), loaded, true, #line),
             (message(from: "Both@Example.org"), loaded, true, #line),
-            // A request we or they have not answered yet.
             (message(from: "pending@example.org"), loaded, false, #line),
             (message(from: "stranger@example.org"), loaded, false, #line),
             // Before this connection's roster arrived nobody is a contact.
@@ -42,7 +39,6 @@ final class LinkPreviewPolicyTests: XCTestCase {
         }
     }
 
-    /// The setting off, or the sample conversations: never, not even for a contact.
     func testTheSettingAndDemoModeStopEveryFetch() {
         let contact = message(from: "both@example.org")
         XCTAssertTrue(LinkPreviewPolicy.mayFetch(for: contact, account: Self.account, fetchesPreviews: true, isDemo: false) { _ in .item(.both) })

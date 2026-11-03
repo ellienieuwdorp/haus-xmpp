@@ -8,7 +8,7 @@ final class ChatMuteSummaryTests: XCTestCase {
         calendar.timeZone = TimeZone(identifier: "Europe/Amsterdam")!
         return calendar
     }()
-    /// 2026-09-28 10:00 in Amsterdam.
+    // 2026-09-28 10:00 in Amsterdam.
     private let now = Date(timeIntervalSince1970: 1_790_582_400)
 
     func testDurationsEndAtTheOfferedInstants() {

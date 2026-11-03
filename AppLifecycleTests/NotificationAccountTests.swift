@@ -23,7 +23,7 @@ import XMPPProtocol
         XCTAssertEqual(explicit.push, new)
     }
 
-    /// Typing the password again must not lift downgrade protection or forget the endpoint that worked.
+    // Typing the password again must not lift downgrade protection or forget the endpoint that worked.
     func testReEnteredCredentialsKeepTheSCRAMPinAndTheWorkingEndpoint() {
         let working = XMPPEndpoint(host: "xmpp.example.net", port: 443, security: .directTLS)
         let previous = account(username: "alice", password: "old", discovers: true)
@@ -42,7 +42,7 @@ import XMPPProtocol
         XCTAssertThrowsError(try account(username: "carol", password: "new", discovers: true).save())
     }
 
-    /// Records saved before this change were direct TLS to one fixed endpoint, authenticated with PLAIN.
+    // A record without endpoint fields is direct TLS to one fixed endpoint, authenticated with PLAIN.
     func testRecordsWithoutEndpointFieldsDecodeAsTheFixedDirectTLSEndpoint() throws {
         let legacy = #"{"accountID":"alice@example.org","host":"example.org","port":5223,"domain":"example.org","username":"alice","password":"synthetic"}"#
         let decoded = try JSONDecoder().decode(NotificationAccount.self, from: Data(legacy.utf8))

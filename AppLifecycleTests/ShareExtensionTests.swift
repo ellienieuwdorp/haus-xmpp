@@ -7,8 +7,6 @@ import XCTest
 import XMPPProtocol
 @testable import HausXMPP
 
-/// The share extension's pure decisions: what a provider is taken as, what the picker lists and offers, what the share
-/// sheet activates for, and the shared copies the app writes for the extension.
 final class ShareExtensionTests: XCTestCase {
     // MARK: Intake
 
@@ -71,8 +69,7 @@ final class ShareExtensionTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: SharedItemIntake.root.path))
     }
 
-    /// ImageIO replaced `UIImage.jpegData` for the composer's photos: the same pixels at the same quality come out the
-    /// same size within a few percent.
+    // The composer's ImageIO JPEG at the same quality stays within a few percent of `UIImage.jpegData`'s size.
     func testImageIOJPEGMatchesUIKitOutput() throws {
         let image = try XCTUnwrap(Self.gradient(width: 1600, height: 1200))
         let imageIO = try XCTUnwrap(AttachmentPreparer.jpegData(image, quality: 0.85))
@@ -101,8 +98,8 @@ final class ShareExtensionTests: XCTestCase {
                        "a search reaches chats beyond the recent ones")
     }
 
-    /// The picker names and pictures a chat as the app does: a linked contact's name first, its photo after a verified
-    /// avatar unless the user chose the photo. A name-only link names the chat too; a room is never linked.
+    // A linked contact's name first, its photo after a verified avatar unless the user chose the photo; a room is never
+    // linked.
     func testThePickerNamesAndPicturesALinkedChatAsTheAppDoes() {
         let verified = String(repeating: "a", count: 40), photo = String(repeating: "b", count: 40)
         var link = ContactLink(accountID: "me@x", jid: "bob@x", contactIdentifier: "C-1", source: .picker, displayName: "Robin Okafor",
@@ -196,8 +193,7 @@ final class ShareExtensionTests: XCTestCase {
 
     // MARK: Authorization
 
-    /// A sheet opened for one account checks again at Send and before connecting: another account, none, a move or a
-    /// restore refuses it, and the record it goes on with is the one saved now.
+    // Another account, none, a move or a restore refuses it, and the record it goes on with is the one saved at Send.
     func testASheetLeftOpenRefusesAnAccountThatSignedOutOrWasReplaced() throws {
         let group = FileManager.default.temporaryDirectory.appending(path: "share-authorization-\(UUID())", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: group, withIntermediateDirectories: true)
@@ -232,7 +228,7 @@ final class ShareExtensionTests: XCTestCase {
 
     // MARK: Activation rule
 
-    /// The rule is a predicate over dictionaries shaped like the system's (Apple's App Extension Programming Guide).
+    // The rule is a predicate over dictionaries shaped like the system's (App Extension Programming Guide).
     private func activates(_ items: [[String]]) -> Bool {
         let input: [String: Any] = ["extensionItems": items.map { types in
             ["attachments": types.map { ["registeredTypeIdentifiers": [$0]] }]
@@ -280,7 +276,7 @@ final class ShareExtensionTests: XCTestCase {
         XCTAssertNil(app.load(account: account))
         app.forget(account: account)
         XCTAssertFalse(reader.hasAnswer(account: account))
-        // A store kept before the mirror existed is copied once the account loads.
+        // A store without the mirror is copied once the account loads.
         let older = UploadServiceMemory(defaults: defaults)
         _ = older.settle(account: account, previous: nil, discovery: .success(service))
         XCTAssertFalse(reader.hasAnswer(account: account))
@@ -332,8 +328,7 @@ final class ShareExtensionTests: XCTestCase {
         XCTAssertEqual(room.conversationIdentifier, NotificationIdentity.thread(accountID: "me@x", chatID: "room@muc.x"))
     }
 
-    /// An outgoing donation names a linked person as their notifications do: the contact's name, its photo after a
-    /// verified avatar, and the contact itself only for a link the app can read. Room members carry their own links.
+    // The contact itself goes to the system only for a link the app can read; room members carry their own links.
     func testTheSuggestedConversationCarriesContactLinksAsNotificationsDo() {
         let verified = String(repeating: "a", count: 40), photo = String(repeating: "b", count: 40)
         func link(_ jid: String, _ contact: String, reachable: Bool = true) -> ContactLink {

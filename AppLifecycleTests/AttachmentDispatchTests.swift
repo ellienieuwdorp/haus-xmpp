@@ -23,8 +23,8 @@ import XCTest
         XCTAssertFalse(result.caption)
     }
 
-    /// Which part of a send carries the composer's reply, in a sample chat, where files alone may reply to an own
-    /// message only: a received photo's reply waits for a caption, an own message's rides on the first file.
+    // In a sample chat files alone may reply only to an own message: a received photo's reply waits for a caption,
+    // an own message's rides on the first file.
     func testTheCaptionCarriesTheReplyAndFilesAloneOnlyWhereTheChatAllows() {
         let account = "me@preview.local", chat = "alex@preview.local"
         let received = StoredMessage(id: "photo", accountID: account, chatID: chat, senderID: chat, body: "", isOutgoing: false)
@@ -72,7 +72,7 @@ import XCTest
         for _ in 1..<UploadFailureBudget.limit { XCTAssertFalse(budget.recordFailure("other")) }
     }
 
-    /// A pass started by another file of the same send must not spend a refused file's next try before its back-off.
+    // A pass started by another file of the same send must not spend a refused file's next try before its back-off.
     func testARefusedFileWaitsOutItsBackOff() {
         var budget = UploadFailureBudget()
         let refused = ContinuousClock.now
@@ -88,8 +88,8 @@ import XCTest
         XCTAssertFalse(budget.isWaiting("photo", at: refused), "A file that used its tries is failed, not waiting")
     }
 
-    /// A pass that parks until the test releases it and takes the files queued when it starts, as an upload pass
-    /// reads the files awaiting a slot once.
+    // Parks until released and takes the files queued when it starts, as an upload pass reads the files awaiting a slot
+    // once.
     @MainActor private final class UploadPassGate {
         var queued: [String] = []
         var taken: [[String]] = []
@@ -105,12 +105,12 @@ import XCTest
             running -= 1
         }
         func release() { if !waiting.isEmpty { waiting.removeFirst().resume() } }
-        /// Yields until `count` passes have started, or gives up so a lost request fails instead of hanging.
+        // Gives up after a bound so a lost request fails instead of hanging.
         func settle(_ count: Int) async { for _ in 0..<1_000 where taken.count < count { await Task.yield() } }
     }
 
-    /// Photos 3 and 4 of a four-photo send are queued while the pass for photos 1 and 2 waits on its slots. Their
-    /// requests must start another pass when that one ends, not wait for the next connection.
+    // Photos 3 and 4 are queued while the pass for photos 1 and 2 waits on its slots; they must start another pass when
+    // that one ends, not wait for the next connection.
     func testFilesQueuedDuringAPassGetTheNextPass() async {
         let gate = UploadPassGate()
         let passes = RerunningPass { { await gate.pass() } }

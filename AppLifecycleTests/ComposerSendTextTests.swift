@@ -2,8 +2,8 @@ import MessageStore
 import XCTest
 @testable import HausXMPP
 
-/// UIKit accepts a pending autocorrection when a finger lands on Send; the simulator never autocorrects, so the
-/// rule that undoes it is checked here and the tap itself on a device.
+// UIKit accepts a pending autocorrection when a finger lands on Send; the simulator never autocorrects, so the rule
+// that undoes it is checked here and the tap itself on a device.
 @MainActor final class ComposerSendTextTests: XCTestCase {
     func testOnlyARewrittenLastWordIsUndone() {
         let cases: [(typed: String, current: String, sent: String?)] = [
@@ -33,7 +33,6 @@ import XCTest
         XCTAssertEqual(state.draftForSend(), "the")
     }
 
-    /// Send needs text or files; an edit needs text that changes the message. Whitespace alone never sends.
     func testSendNeedsSomethingToSend() {
         let own = StoredMessage(id: "own", accountID: "me@example.org", chatID: "alex@example.org", senderID: "me@example.org",
                                 body: "See you", isOutgoing: true)

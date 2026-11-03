@@ -5,7 +5,7 @@ import XCTest
 final class MessageStatusGlyphTests: XCTestCase {
     private typealias Status = TimelineMessage.Status
 
-    /// A socket write is not delivery: nothing short of server acceptance may show a check.
+    // A socket write is not delivery: nothing short of server acceptance may show a check.
     func testEveryStatusMapsToItsMark() {
         let expected: [(Status, MessageStatusGlyph)] = [
             (.queued, .sending(spinning: true)),
@@ -22,7 +22,7 @@ final class MessageStatusGlyphTests: XCTestCase {
         XCTAssertEqual(Status.unconfirmed.accessibilityDescription, "Sending, not yet confirmed")
     }
 
-    /// Failed is a filled disc with the exclamation knocked out, so it reads by shape in the neutral meta colour.
+    // The shape reads in the neutral meta colour.
     func testFailedMarkIsAFilledDiscWithAKnockedOutExclamation() throws {
         let image = MessageStatusArt.image(.failed, scale: 2)
         let alpha = try XCTUnwrap(AlphaSampler(image, designWidth: MessageStatusArt.designWidth(.failed)))
@@ -35,7 +35,6 @@ final class MessageStatusGlyphTests: XCTestCase {
     }
 }
 
-/// Reads alpha at design-size points from a status mark.
 private struct AlphaSampler {
     let width: Int, height: Int, pixelsPerPoint: CGFloat
     let bytes: [UInt8]
@@ -57,7 +56,7 @@ private struct AlphaSampler {
         bytes = buffer
     }
 
-    /// `x`, `y` in design points from the top left.
+    // Design points from the top left.
     func at(x: CGFloat, y: CGFloat) -> CGFloat {
         let px = min(width - 1, Int(x * pixelsPerPoint)), py = min(height - 1, Int(y * pixelsPerPoint))
         return CGFloat(bytes[(py * width + px) * 4 + 3]) / 255

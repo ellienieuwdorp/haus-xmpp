@@ -1,9 +1,7 @@
 import XCTest
 
 extension XCTestCase {
-    /// Keeps a review screenshot of `source` in the result bundle, only when the runner was started with
-    /// `TEST_RUNNER_HAUS_UI_CAPTURES=1`. Routine runs need the assertions, not the pictures, and each screenshot is a
-    /// round trip. `settle` lets an animation finish before the shot, so routine runs skip that wait too.
+    // Only with `TEST_RUNNER_HAUS_UI_CAPTURES=1`: each screenshot is a round trip.
     @MainActor func capture(_ source: some XCUIScreenshotProviding, _ name: String, settle: TimeInterval = 0) {
         guard ProcessInfo.processInfo.environment["HAUS_UI_CAPTURES"] == "1" else { return }
         if settle > 0 { RunLoop.current.run(until: Date(timeIntervalSinceNow: settle)) }
@@ -15,14 +13,10 @@ extension XCTestCase {
 }
 
 extension XCUIApplication {
-    /// Taps `field` and waits until the software keyboard is on screen with the field above it, failing at once when
-    /// it is not. A simulator that has seen a hardware keyboard keeps the software one minimised below the screen: the
-    /// field stays at rest, and the test used to fail much later on a layout measurement (`467.0 is not equal to
-    /// 826.0`) that said nothing about the cause.
+    // A simulator that has seen a hardware keyboard keeps the software one minimised below the screen.
     @MainActor func showKeyboard(tapping field: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         let keyboard = keyboards.firstMatch
         let screen = frame
-        // A minimised keyboard still exists, with its frame below the screen.
         let keyboardUp = { keyboard.exists && keyboard.frame.minY < screen.maxY - 200 }
         field.tap()
         let ready = NSPredicate { _, _ in keyboardUp() && field.frame.maxY <= keyboard.frame.minY + 2 }
@@ -42,20 +36,16 @@ extension XCUIApplication {
 }
 
 extension XCUIApplication {
-    /// The attachment panel asks for the photo library on its first open; the rail needs full access.
     @MainActor func allowPhotoAccessIfAsked() {
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow Full Access"]
-        // The prompt comes once per install; after that the rail's first photo shows instead. Stop at whichever is first:
-        // a fixed wait for a prompt that no longer comes cost every later open its whole timeout. The deadline is generous
-        // because a prompt that shows after it is dismissed by the next tap, which denies the rail for the whole run.
+        // Stop at the prompt or the rail's first photo; a prompt shown after the deadline is dismissed by the next tap,
+        // denying the rail for the whole run.
         let railPhoto = descendants(matching: .any).matching(identifier: "recentPhoto-0").firstMatch
         let deadline = Date().addingTimeInterval(10)
         while Date() < deadline, !allow.exists, !railPhoto.exists { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1)) }
         if allow.exists { allow.tap() }
     }
 
-    /// Picks the first `count` library photos through the system picker, opened from the attachment panel's Photos
-    /// chip, and waits until each has landed in the tray.
     @MainActor func pickPhotos(_ count: Int) {
         let attach = buttons["attachFile"]
         XCTAssertTrue(attach.waitForExistence(timeout: 5))

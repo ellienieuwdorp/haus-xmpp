@@ -5,8 +5,6 @@ import UIKit
 import XCTest
 @testable import HausXMPP
 
-/// What the open conversation derives from the model: the status a sent message may claim, the reaction summary, quotes,
-/// who is shown typing, which message moves the read marker and what an empty chat says.
 @MainActor
 final class ConversationPresenterTests: XCTestCase {
     private static let account = "me@example.org"
@@ -37,7 +35,7 @@ final class ConversationPresenterTests: XCTestCase {
         var blocked: Set<String> = []
         func isBlocked(_ chatID: String) -> Bool { blocked.contains(chatID) }
         func linkPreviewDisplayed(_ messageID: String) {}
-        /// Senders our fetch may run for; the rule itself is `LinkPreviewPolicyTests`'.
+        // The rule itself is `LinkPreviewPolicyTests`'.
         var fetchedFor: Set<String> = [ConversationPresenterTests.peer]
         func mayFetchLinkPreview(for message: StoredMessage) -> Bool { fetchedFor.contains(message.senderID) }
     }
@@ -61,8 +59,8 @@ final class ConversationPresenterTests: XCTestCase {
         try XCTUnwrap((presenter ?? self.presenter()).timelineMessages.first { $0.id == id }, id)
     }
 
-    /// A socket write is not delivery: receipts count only once the server accepted the message, and an own message
-    /// with no outbox row (archive, carbon) is already held by the server.
+    // A socket write is not delivery: receipts count only once the server accepted the message, and an own message with
+    // no outbox row (archive, carbon) is already held by the server.
     func testASentMessageClaimsDeliveryOnlyAfterTheServerAcceptedIt() throws {
         let cases: [(transport: OutgoingTransportState?, receipt: MessageEventKind?, status: TimelineMessage.Status, line: UInt)] = [
             (.queued, .delivered, .queued, #line),
@@ -85,8 +83,7 @@ final class ConversationPresenterTests: XCTestCase {
         XCTAssertNil(try shown("in").status, "a received message shows no status")
     }
 
-    /// One pill per emoji with everyone's count: the quick choices in menu order first, others after them by emoji,
-    /// ringed where the user is among the reactors. An unsent message keeps none.
+    // Quick choices in menu order first, others after them by emoji. An unsent message keeps none.
     func testReactionsSummariseEveryActorInMenuOrder() throws {
         source.reactable = true
         source.messages = [message("m"), message("gone", retracted: true)]
@@ -108,8 +105,8 @@ final class ConversationPresenterTests: XCTestCase {
         XCTAssertFalse(try shown("gone").canReact)
     }
 
-    /// A quote shows its snapshot unless the quoted message was unsent since; a quoted photo keeps its still's slot from
-    /// the snapshot's media type before the photo itself is loaded.
+    // A quote shows its snapshot unless the quoted message was unsent; a quoted photo keeps its still's slot from the
+    // snapshot's media type before the photo loads.
     func testQuotesFollowTheQuotedMessage() throws {
         source.messages = [
             message("unsent", body: "", retracted: true),
@@ -126,7 +123,7 @@ final class ConversationPresenterTests: XCTestCase {
         XCTAssertNil(photo.thumbnail?.localURL, "not loaded, so nothing to show in the slot yet")
     }
 
-    /// Report reports and blocks the sender, so only a received message of a direct chat that is not blocked yet offers it.
+    // Report also blocks the sender, so a blocked sender or a room message offers none.
     func testOnlyAReceivedDirectMessageCanBeReported() throws {
         let room = "team@rooms.example.org"
         source.groups = [room]
@@ -140,9 +137,8 @@ final class ConversationPresenterTests: XCTestCase {
         XCTAssertFalse(try shown("in").canReport)
     }
 
-    /// One card per message: the preview it carries while that link is still in the body (whatever the fetch setting;
-    /// a corrected body that dropped the link drops it), else our fetch for its first previewable link, else none and
-    /// a request for one. Never on a file, an unsent or an unreadable message. The host is always the body link's.
+    // Carried preview while its link is still in the body, else our fetch for the first previewable link, else a
+    // request. Never on a file, an unsent or an unreadable message; the host is always the body link's.
     func testACardShowsTheCarriedPreviewElseOurFetchForTheFirstLink() throws {
         let wide = UIGraphicsImageRenderer(size: CGSize(width: 600, height: 300), format: { let format = UIGraphicsImageRendererFormat(); format.scale = 1; return format }())
             .pngData { $0.fill(CGRect(x: 0, y: 0, width: 600, height: 300)) }
@@ -181,8 +177,8 @@ final class ConversationPresenterTests: XCTestCase {
         }
     }
 
-    /// Our cache only shows where we would fetch: a link another message fetched stays bare on our own message (the
-    /// peer got nothing with it, as when a legacy chat dropped our preview) and on a sender we never fetch for.
+    // A link another message fetched stays bare on our own message (the peer got nothing with it) and on a sender we
+    // never fetch for.
     func testOurFetchShowsOnlyWhereWeWouldFetch() throws {
         source.linkPreviews = ["https://news.example/b": FetchedLinkPreview(title: "Fetched", summary: nil)]
         source.groups = [Self.room]
@@ -197,9 +193,8 @@ final class ConversationPresenterTests: XCTestCase {
         }
     }
 
-    /// A carried image is judged by its header before anything decodes it: a few kilobytes can declare a canvas that
-    /// takes hundreds of megabytes to inflate, so an image over the pixel budget is dropped and the card shows its text.
-    /// A correction keeps the message ID, so one that swaps the image for another of the same byte count is read afresh.
+    // A few kilobytes can declare a canvas that takes hundreds of megabytes to inflate, so the header is judged before
+    // decoding. A correction keeps the message ID, so an image swapped for one of the same byte count is read afresh.
     func testACarriedImageDeclaringAHugeCanvasLeavesATextCard() throws {
         // Two valid blank 1-bit PNGs padded to the same length: 600 x 300 px, and 5,000 x 5,000 px (25 MP) in a few KB.
         var honest = Self.blankPNG(width: 600, height: 300)
@@ -227,8 +222,7 @@ final class ConversationPresenterTests: XCTestCase {
         XCTAssertEqual(card.title, "Bridge")
     }
 
-    /// A blank grayscale 1-bit PNG, written by hand: drawing a canvas this size to encode it would take the memory the
-    /// test is about.
+    // Written by hand: drawing a canvas this size to encode it would take the memory the test is about.
     private static func blankPNG(width: UInt32, height: UInt32) -> Data {
         let row = 1 + (Int(width) + 7) / 8
         let raw = Data(count: row * Int(height))
@@ -243,7 +237,6 @@ final class ConversationPresenterTests: XCTestCase {
         return png
     }
 
-    /// `png` with a text chunk after its header that brings it to `length` bytes.
     private static func padded(_ png: Data, to length: Int) -> Data {
         let filler = [UInt8]("Comment".utf8) + [0] + [UInt8](repeating: 0x20, count: length - png.count - 20)
         return png.prefix(33) + chunk("tEXt", filler) + png.dropFirst(33)
@@ -280,8 +273,8 @@ final class ConversationPresenterTests: XCTestCase {
                        TimelineTyping(author: "maya, sam", colorKey: "maya@example.org", accessibilityLabel: "maya and sam are typing…"))
     }
 
-    /// A marker covers everything before it, so only the newest received message sends one: the newest readable one
-    /// (the peer hears about it) and the newest of any kind (the read pointer goes there).
+    // A marker covers everything before it: the newest readable message tells the peer, the newest of any kind moves
+    // the read pointer.
     func testOnlyTheNewestReceivedMessagesMoveTheReadMarker() {
         source.messages = [message("older"), message("readable"), message("unreadable", body: "", unreadable: .notForThisDevice),
                            message("own", from: Self.account)]
@@ -291,9 +284,7 @@ final class ConversationPresenterTests: XCTestCase {
         XCTAssertFalse(presenter().marksDisplayed("own"))
     }
 
-    /// Opening a chat never flashes "No messages yet" while its first page is on the way.
-    /// Up-arrow edits what the bubble's menu would: the newest own message the chat lets us rewrite, skipping a file
-    /// with no caption (nothing to edit) and one that can no longer be revised.
+    // Skips a file with no caption and a message that can no longer be revised.
     func testUpArrowEditsTheNewestMessageThatOffersEdit() {
         source.messages = [message("older", from: Self.account, body: "First"), message("photo", from: Self.account, body: ""),
                            message("received"), message("locked", from: Self.account, body: "Too late")]

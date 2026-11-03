@@ -27,7 +27,7 @@ final class TypingTests: XCTestCase {
         XCTAssertEqual(tracker.typing, ["room@x": ["maya@x"]])
     }
 
-    /// A stop that came with a message stays until the load that shows the message, or briefly if that never comes.
+    // Or briefly, if that load never comes.
     func testAMessageSettlesTypingUntilItIsShown() {
         var tracker = TypingTracker()
         tracker.apply(.composing, chat: "alex@x", participant: "alex@x", now: start)

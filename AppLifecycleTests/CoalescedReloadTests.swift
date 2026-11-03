@@ -5,7 +5,7 @@ import XCTest
 
 @MainActor
 final class CoalescedReloadTests: XCTestCase {
-    /// A load that parks until the test releases it, so requests can be made "during" a load.
+    // Parks until released, so requests can be made "during" a load.
     @MainActor private final class Gate {
         var scopes: [CoalescedReload.Scope] = []
         private var waiting: [CheckedContinuation<Void, Never>] = []
@@ -14,7 +14,6 @@ final class CoalescedReloadTests: XCTestCase {
             await withCheckedContinuation { waiting.append($0) }
         }
         func release() { waiting.removeFirst().resume() }
-        /// Yields until `count` loads have started.
         func started(_ count: Int) async { while scopes.count < count { await Task.yield() } }
     }
 
@@ -41,7 +40,6 @@ final class CoalescedReloadTests: XCTestCase {
     }
 }
 
-/// The warm page cache behind opening a chat on its newest messages in the first frame.
 @MainActor
 final class TimelinePageCacheTests: XCTestCase {
     private typealias Cache = AppModel.TimelinePageCache
@@ -103,7 +101,7 @@ final class TimelinePageCacheTests: XCTestCase {
     }
 }
 
-/// Offsets are decided inside `update`, so no frame can show a window at the wrong position.
+// Offsets are decided inside `update`, so no frame can show a window at the wrong position.
 @MainActor
 final class TimelineOffsetTests: XCTestCase {
     private var window: UIWindow!

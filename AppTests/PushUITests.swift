@@ -1,8 +1,7 @@
 import XCTest
 
-/// Explicit physical staging setup, never part of ordinary simulator/UI runs. This uses the
-/// primary App Group store because an NSE cannot see the isolated UI-test database. Credentials
-/// and the one-device push subscription must belong to generated disposable staging fixtures.
+// Physical staging device with generated disposable accounts only. Uses the primary App Group store because the
+// notification extension cannot see the isolated UI-test database.
 final class PushUITests: XCTestCase {
     @MainActor func testPrepareNotificationInspectionAndEnterBackground() throws {
         continueAfterFailure = false
@@ -41,7 +40,6 @@ final class PushUITests: XCTestCase {
         guard environment["XMPP_PUSH_DEVICE_TEST"] == "1" else {
             throw XCTSkip("Set XMPP_PUSH_DEVICE_TEST=1 only for a disposable physical staging push run")
         }
-        // The app generates its own node and secret and registers them with push.xmpp.haus after sign-in.
         let required = ["HAUS_LAB_USERNAME", "HAUS_LAB_PASSWORD", "XMPP_OMEMO_PEER"]
         guard required.allSatisfy({ !(environment[$0] ?? "").isEmpty }) else {
             throw XCTSkip("Requires generated staging account environment")
@@ -63,7 +61,6 @@ final class PushUITests: XCTestCase {
         connect.tap()
         allowSystemPermissionIfPresent()
 
-        // Sign-in asks for notification permission and then enables push by itself.
         allowSystemPermissionIfPresent()
         let push = app.switches["pushNotifications"]
         XCTAssertTrue(push.waitForExistence(timeout: 25), "Staging account must connect and dismiss its sheet")
@@ -76,8 +73,7 @@ final class PushUITests: XCTestCase {
         XCUIDevice.shared.press(.home)
         XCTAssertTrue(app.waitForBackground(),
                       "App must enter the background so its scene releases transport ownership")
-        // The peer now sends synthetic encrypted traffic, and APNs and notification extension
-        // output are verified separately. Registration alone is not evidence of notification delivery.
+        // Registration alone is not evidence of notification delivery; APNs and extension output are verified separately.
         #endif
     }
 
@@ -98,8 +94,7 @@ final class PushUITests: XCTestCase {
         XCTAssertTrue(queued.waitForExistence(timeout: 5), "Send must durably enqueue before fingerprint review")
         app.openEncryptionDetails()
         XCTAssertTrue(app.navigationBars["Devices & Encryption"].waitForExistence(timeout: 5))
-        // Approval goes through the displayed fingerprint UI for generated fixture devices.
-        // Already approved devices on a repeat staging run need no second acceptance.
+        // Through the fingerprint UI; devices approved on an earlier run need no second acceptance.
         app.acceptPendingDevices()
         app.closeEncryptionDetails()
         let bubbles = app.textViews.containing(NSPredicate(format: "value == %@", marker))
