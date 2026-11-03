@@ -43,9 +43,6 @@
       "try? secrets.delete(locations.codeService, id)",
       "try? secrets.delete(locations.encryptionService, locations.storageID)",
       "} catch { try? PreUpgradeSnapshot.removeIfPresent(locations.exportStaging); throw error }"
-    ],
-    "unsafe.unchecked-sendable" : [
-      "private final class Throttle: @unchecked Sendable {"
     ]
   },
   "App/AppModel.swift" : {
@@ -183,9 +180,6 @@
       "try? await store.close()",
       "} catch { tidy(); try? await store.close(); throw error }",
       "} catch { try? await store.close(); throw error }"
-    ],
-    "unsafe.unchecked-sendable" : [
-      "struct DefaultsDomain: @unchecked Sendable {"
     ]
   },
   "App/PreviousVersionViews.swift" : {
@@ -267,9 +261,6 @@
   "Mac/MacLifecycle.swift" : {
     "unsafe.discarded-try" : [
       "try? await Task.sleep(for: limit)"
-    ],
-    "unsafe.unchecked-sendable" : [
-      "private final class Once: @unchecked Sendable {"
     ]
   },
   "Mac/MacLifecycleDebug.swift" : {
@@ -346,11 +337,6 @@
       "try? await Task.sleep(for: .milliseconds(8))",
       "try? await Task.sleep(for: .milliseconds(8))",
       "try? await Task.sleep(for: .milliseconds(8))"
-    ]
-  },
-  "NotificationService/NotificationService.swift" : {
-    "unsafe.unchecked-sendable" : [
-      "private final class RemoteDelivery: @unchecked Sendable {"
     ]
   },
   "NotificationServiceMac/MacExtensionProbe.swift" : {
@@ -440,19 +426,9 @@
       "try? await Task.sleep(for: .milliseconds(50))"
     ]
   },
-  "Packages/MessagingCore/Sources/MessagingCore/NotificationDelivery.swift" : {
-    "unsafe.unchecked-sendable" : [
-      "private final class Run: @unchecked Sendable {"
-    ]
-  },
   "Packages/MessagingCore/Sources/MessagingCore/NotificationOutcomeLog.swift" : {
     "unsafe.discarded-try" : [
       "try? url.setResourceValues(values)"
-    ]
-  },
-  "Packages/MessagingCore/Sources/MessagingCore/NotificationPosting.swift" : {
-    "unsafe.unchecked-sendable" : [
-      "final class DonationBudget: @unchecked Sendable {"
     ]
   },
   "Packages/MessagingCore/Sources/MessagingCore/OutboxDrain.swift" : {

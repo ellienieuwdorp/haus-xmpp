@@ -41,6 +41,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     }
 }
 
+// `handler` is taken and cleared under `lock`, so it runs once; `request` is never mutated.
 private final class RemoteDelivery: @unchecked Sendable {
     private let lock = NSLock()
     private let request: UNNotificationRequest

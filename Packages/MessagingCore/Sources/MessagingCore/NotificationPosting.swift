@@ -33,6 +33,7 @@ extension NotificationPosting {
     public func preparationAllowance(for request: PlannedNotification) -> Duration { .zero }
 }
 
+// `remaining` is read and written only under `lock`.
 final class DonationBudget: @unchecked Sendable {
     private let lock = NSLock()
     private var remaining: Duration
