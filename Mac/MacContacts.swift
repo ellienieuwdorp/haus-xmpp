@@ -1,11 +1,9 @@
 import AppKit
 import Contacts
 
-/// "Add to Contacts" on the Mac, which has no system editor for a new or unknown contact: with access, the draft is
-/// saved after the user confirmed exactly what it holds; without, a vCard of it opens in Contacts, which asks before
-/// importing it.
+// The Mac has no system editor for a new contact: with access the confirmed draft is saved; without, a vCard
+// of it opens in Contacts, which asks before importing it.
 enum MacContacts {
-    /// Saves the draft as a new contact and returns it as saved (with its identifier), or nil on failure.
     static func add(_ draft: CNMutableContact, to store: CNContactStore = CNContactStore()) -> CNContact? {
         let request = CNSaveRequest()
         request.add(draft, toContainerWithIdentifier: nil)
@@ -13,7 +11,6 @@ enum MacContacts {
         return draft.copy() as? CNContact
     }
 
-    /// Writes the draft as a vCard in a temporary folder and opens it in Contacts.
     static func open(_ draft: CNMutableContact, named name: String) -> Bool {
         guard let data = try? CNContactVCardSerialization.data(with: [draft]) else { return false }
         let folder = FileManager.default.temporaryDirectory.appending(path: "contact-cards", directoryHint: .isDirectory)

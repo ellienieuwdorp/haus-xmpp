@@ -1,17 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// The main window's toolbar, with the split view's tracking separators: over the sidebar the account (connection
-/// progress inside its picture) and New Chat, then the sidebar button at its edge; over the conversation the chat's
-/// picture before its name (the window's title); over the inspector a pushed page's Refresh; and Chat Details at the
-/// trailing edge.
 @MainActor final class MacToolbar: NSObject, NSToolbarDelegate {
     let toolbar = NSToolbar(identifier: "main")
     private let model: AppModel
     private let state: MacWindowState
     private var items: [NSToolbarItem.Identifier: NSToolbarItem] = [:]
     private weak var accountButton: MacAccountButton?
-    /// What the account picture was drawn from, so it is drawn again only when that changes.
+    // Drawn again only when this changes.
     private var accountPicture: (account: String, image: NSImage?, dimmed: Bool)?
 
     private static let account = NSToolbarItem.Identifier("account")
@@ -50,9 +46,8 @@ import SwiftUI
         item.autovalidates = false
         switch identifier {
         case Self.account:
-            // Connection progress is a quiet spinner inside the picture's circle that disappears; only a setup failure
-            // gets a glyph. A spinner item of its own beside the picture made the toolbar tile the group again each
-            // time it came and went: the glass grew and shrank and the picture moved.
+            // A spinner item of its own beside the picture would make the toolbar tile the group again each time it
+            // came and went, so progress spins inside the picture's circle.
             let button = MacAccountButton(target: self, action: #selector(showAccount))
             item.view = button
             item.label = "Account"
@@ -74,8 +69,7 @@ import SwiftUI
             item.isBordered = true
             item.action = #selector(newChat)
         case Self.chatPicture:
-            // Plain: the picture is the control, as the iPhone's header shows it.
-            // Its fixed size, so the toolbar's tiling on each step of a resize never asks SwiftUI for one.
+            // A fixed size, so the toolbar's tiling on each step of a resize never asks SwiftUI for one.
             let host = NSHostingView(rootView: MacPane { MacChatHeaderAvatar(model: self.model, window: self.state) })
             host.sizingOptions = []
             host.translatesAutoresizingMaskIntoConstraints = false
@@ -102,7 +96,6 @@ import SwiftUI
         return item
     }
 
-    /// The items' state, again whenever what it reads changes.
     private func update() {
         let signedIn = !model.accountID.isEmpty
         var connecting = model.isSettlingConnection || model.isCatchingUp
@@ -147,7 +140,6 @@ import SwiftUI
     @objc private func toggleDetails() { state.inspectorShown.toggle() }
     @objc private func showSettings() { MacSettingsOpening.open() }
 
-    /// The inspector's page asks the server again: its devices, or the group's members and devices.
     @objc private func refresh() {
         let model = model
         switch state.inspectorPath.last {
@@ -161,7 +153,6 @@ import SwiftUI
         String((account.split(separator: "@").first ?? "").prefix(1)).uppercased()
     }
 
-    /// A SwiftUI picture as the item's image, kept in colour.
     private static func render(_ view: some View, label: String) -> NSImage? {
         let renderer = ImageRenderer(content: view)
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
@@ -172,13 +163,10 @@ import SwiftUI
     }
 }
 
-/// The account's picture as a toolbar button, made as the toolbar's own sidebar button is, with connection progress
-/// spinning inside the picture's circle while it lasts. Its size is the picture's alone, the spinner's place in it
-/// fixed, so the toolbar lays it out the same with or without progress.
+// Sized by the picture alone, the spinner's place fixed, so the toolbar lays it out the same with or without progress.
 private final class MacAccountButton: NSButton {
     private let spinner = NSProgressIndicator()
 
-    /// What VoiceOver hears the progress as, while it shows; nil hides it.
     var progress: String? {
         didSet {
             guard progress != oldValue else { return }
@@ -210,14 +198,12 @@ private final class MacAccountButton: NSButton {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// A click on the spinner is the button's.
     override func hitTest(_ point: NSPoint) -> NSView? {
         let hit = super.hitTest(point)
         return hit === spinner ? self : hit
     }
 }
 
-/// The open chat's picture in the toolbar, before its name; a click opens the details.
 private struct MacChatHeaderAvatar: View {
     let model: AppModel
     let window: MacWindowState
@@ -236,7 +222,6 @@ private struct MacChatHeaderAvatar: View {
     }
 }
 
-/// Opens the Settings scene from AppKit, as its menu item does.
 @MainActor enum MacSettingsOpening {
     static func open() {
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)

@@ -1,9 +1,6 @@
 import SwiftUI
 
-/// The Mac app: one main window (a split view of chats, the open chat and its details), a Settings window, and the
-/// menu commands. The process, not the window, owns the model, so closing the window leaves the app running and
-/// connected; the Dock icon brings the window back. The main window is AppKit's, made by the app delegate
-/// (`MacMainWindowController`); Settings is the one scene.
+// The app delegate, not a window, owns the model, so closing the window leaves the app running and connected.
 @main
 struct HausXMPPMacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var delegate

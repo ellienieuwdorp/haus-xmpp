@@ -3,20 +3,14 @@ import CoreGraphics
 import IOKit.pwr_mgt
 import MessagingCore
 
-/// The Mac's lifecycle owner (the rules are in `MacLifecycleDriver`). It reads what AppKit, IOKit
-/// and the input clock report, hands `MacLifecycleDriver` one event at a time and gives the model the driver's updates.
-/// The app delegate owns it, so it observes once per process however many windows there are.
-///
-/// - The transport stays while the app runs: closing the last window changes CSI only. Before sleep it quiesces (the
-///   final `<a/>`, then the lease goes), holding the sleep acknowledgement for at most `sleepDeadline`; past that it
-///   acknowledges anyway and keeps the lease, so the process freezes as its owner, as safe as before, never releasing
-///   it by force. A quit quiesces the same way before `applicationShouldTerminate` is answered.
-/// - Automatic termination is off while the transport is wanted, so macOS never ends a windowless, connected app.
+// The app delegate owns it, so it observes once per process. The transport stays while the app runs (closing the last
+// window changes CSI only); sleep and quit quiesce first, bounded, and a sleep past the deadline keeps the lease rather
+// than releasing it by force. Automatic termination is off while the transport is wanted.
 @MainActor final class MacLifecycle {
-    /// How long sleep waits for the quiesce: well under the 30 s the system allows before sleeping anyway.
+    // Well under the 30 s the system allows before sleeping anyway.
     static let sleepDeadline: Duration = .seconds(5)
-    /// How long a quit waits for the quiesce. Termination without it is safe (the kernel releases the lease and the
-    /// next claim recovers interrupted sends); only the final `<a/>` would be missing.
+    // Termination without the quiesce is safe (the kernel releases the lease and the next claim recovers interrupted
+    // sends); only the final `<a/>` is missing.
     static let quitDeadline: Duration = .seconds(5)
 
     private let model: AppModel
@@ -28,13 +22,11 @@ import MessagingCore
     private var quitting = false
 
     #if DEBUG
-    /// Debug runs keep every window off-screen, where AppKit reports none as key or visible: `MacLifecycleDebug` sets
-    /// this to model the user's focus instead. The window's own state (closed, minimised, the app hidden) stays real.
+    // Off-screen Debug windows never report key or visible, so `MacLifecycleDebug` models focus here; closing,
+    // minimising and hiding stay real.
     var simulatedActive: Bool? { didSet { windowsChanged() } }
-    /// `idle <minutes>`: the input clock reads the time since this moment instead of the real last input, so `idle 0`
-    /// means input just now even while the Mac's user is away; `input` sets it back to nil (the real clock).
+    // Lets `idle 0` mean input just now while the Mac's user is away; nil reads the real clock.
     var simulatedLastInput: Date? { didSet { apply(.idleChecked) } }
-    /// Each applied event and the signals it produced, for the debug log.
     var onApply: ((String, MacLifecycleDriver, [LifecycleUpdate]) -> Void)?
     #endif
 
@@ -42,7 +34,7 @@ import MessagingCore
         self.model = model
     }
 
-    /// From `applicationDidFinishLaunching`, before the model prepares: the launch's signals, then every source.
+    // Before the model prepares.
     func install() {
         apply(.launched(currentWindows()))
         let app = NotificationCenter.default
@@ -69,15 +61,13 @@ import MessagingCore
             self.power = power
             log("power: registered for sleep and wake")
         } else {
-            // Not seen so far; NSWorkspace's notification is not waited for, so sleep may begin mid-quiesce, which
-            // keeps the lease as a missed deadline does.
+            // NSWorkspace's notification is not waited for, so sleep may begin mid-quiesce, keeping the lease as a
+            // missed deadline does.
             log("power: IORegisterForSystemPower failed; using NSWorkspace sleep notifications")
             observe(workspace, NSWorkspace.willSleepNotification) { $0.willSleep(acknowledge: {}) }
             observe(workspace, NSWorkspace.didWakeNotification) { $0.didWake() }
         }
     }
-
-    // MARK: Events
 
     func windowsChanged() {
         let windows = currentWindows()
@@ -87,9 +77,8 @@ import MessagingCore
 
     func screenLocked(_ locked: Bool) { apply(.screenLocked(locked)) }
 
-    /// `kIOMessageSystemWillSleep`, or a debug run's simulation of it. `acknowledge` lets sleep proceed: once the
-    /// quiesce has ended or after `deadline`, whichever comes first. The quiesce is never cut short and the lease never
-    /// released by force; past the deadline the process freezes holding it, and the quiesce finishes after wake.
+    // Acknowledges once the quiesce ends or at `deadline`; the quiesce is never cut short, so past the deadline the
+    // process freezes holding the lease and finishes after wake.
     func willSleep(deadline: Duration = sleepDeadline, acknowledge: @escaping @MainActor () -> Void) {
         let started = ContinuousClock.now
         apply(.willSleep)
@@ -109,7 +98,6 @@ import MessagingCore
 
     func didWake() { apply(.didWake) }
 
-    /// `applicationShouldTerminate`: quiesce first (the final `<a/>`), bounded, then let the app go.
     func shouldTerminate() -> NSApplication.TerminateReply {
         guard !quitting else { return .terminateLater }
         quitting = true
@@ -125,8 +113,6 @@ import MessagingCore
         }
         return .terminateLater
     }
-
-    // MARK: Driver
 
     private func apply(_ change: MacLifecycleDriver.Change) {
         let updates = driver.updates(for: .init(change, now: Date(), secondsSinceInput: secondsSinceInput()))
@@ -152,12 +138,10 @@ import MessagingCore
         }
     }
 
-    /// Seconds since the last keyboard, mouse or trackpad input in this login session. Reading it needs no
-    /// permission.
+    // Reading the input clock needs no permission.
     private func secondsSinceInput() -> TimeInterval {
         var seconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
         #if DEBUG
-        // In place of the real clock, so a check can also mean "input just now" while the Mac's user is away.
         if let simulatedLastInput { seconds = Date().timeIntervalSince(simulatedLastInput) }
         #endif
         return seconds
@@ -182,8 +166,6 @@ import MessagingCore
                      chatWindowKey: main?.isKeyWindow ?? false, chatWindowVisible: chatVisible)
     }
 
-    // MARK: Helpers
-
     private func observe(_ center: NotificationCenter, _ name: Notification.Name, _ handler: @escaping @MainActor (MacLifecycle) -> Void) {
         let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { if let self { handler(self) } }
@@ -191,7 +173,7 @@ import MessagingCore
         observers.append((center, token))
     }
 
-    /// Whether every queued lifecycle transition ran within `limit`. The transitions go on either way.
+    // The transitions go on either way.
     private func settled(within limit: Duration) async -> Bool {
         let once = Once()
         return await withCheckedContinuation { continuation in
@@ -236,23 +218,20 @@ import MessagingCore
     }
 }
 
-/// `IORegisterForSystemPower`: sleep is announced with an acknowledgement the system waits for (up to 30 s), so the
-/// quiesce can finish before the process freezes. `NSWorkspace.willSleepNotification` is not waited for. Used on the
-/// main thread only: it is created there and its run-loop source is on the main run loop.
+// Sleep announced here waits (up to 30 s) for an acknowledgement, unlike `NSWorkspace.willSleepNotification`, so the
+// quiesce can finish. Main thread only: created there, with its run-loop source on the main run loop.
 final class MacSystemPower: @unchecked Sendable {
     // iokit_common_msg(message) is (sys_iokit | sub_iokit_common | message); the macros do not reach Swift.
     private static let canSystemSleep: UInt32 = 0xE000_0270
     private static let systemWillSleep: UInt32 = 0xE000_0280
     private static let systemHasPoweredOn: UInt32 = 0xE000_0300
 
-    /// Called on the main thread; the closure it receives lets sleep proceed.
     var onWillSleep: (@MainActor (@escaping @MainActor () -> Void) -> Void)?
     var onDidWake: (@MainActor () -> Void)?
     private var rootPort: io_connect_t = 0
     private var notifier: io_object_t = 0
     private var port: IONotificationPortRef?
 
-    /// False if the power-management connection could not be opened.
     func start() -> Bool {
         let context = Unmanaged.passUnretained(self).toOpaque()
         rootPort = IORegisterForSystemPower(context, &port, { context, _, message, argument in
@@ -265,7 +244,6 @@ final class MacSystemPower: @unchecked Sendable {
         return true
     }
 
-    /// On the main run loop.
     private func received(_ message: UInt32, argument: UnsafeMutableRawPointer?) {
         let notification = Int(bitPattern: argument)
         let root = rootPort

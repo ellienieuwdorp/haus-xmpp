@@ -1,13 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// Search and the starred filter above the open chat's timeline, as on the iPhone: the find bar (Edit > Find in
-/// Conversation, ⌘F, or the details' Search tile) and the starred bar (View > Starred Messages, or the Starred tile).
-/// The timeline lists what they select (`MacTimelineController.filtered`); Esc or Done closes the find bar, Show All the
-/// starred bar.
 struct MacConversationFindBars: View {
     let timeline: MacTimelineController
-    /// Bumped by Find; the field takes keyboard focus on each change, and when the bar opens.
+    // The field takes keyboard focus on each change, and when the bar opens.
     let focusRequests: Int
 
     var body: some View {
@@ -27,7 +23,6 @@ private struct MacFindBar: View {
     let timeline: MacTimelineController
     let focusRequests: Int
 
-    /// The messages listed now; the stack holds them besides its loading, typing and end items.
     private var count: Int { timeline.items.count(where: { if case .message = $0 { true } else { false } }) }
 
     var body: some View {
@@ -35,7 +30,7 @@ private struct MacFindBar: View {
             MacSearchField(text: Binding(get: { timeline.query }, set: { timeline.setQuery($0) }), prompt: "Search in Conversation",
                            focusRequests: focusRequests, onTab: { timeline.requestKeyboardFocus() }) { timeline.setSearching(false) }
                 .frame(maxWidth: 320)
-            // No minimum width on the field: with the inspector open it made the bar and the split view fight over the
+            // No minimum width on the field: with the inspector open, the bar and the split view would fight over the
             // column's width until the window stopped responding.
             status
             Spacer(minLength: 8)
@@ -45,7 +40,6 @@ private struct MacFindBar: View {
         .padding(.horizontal, 12).padding(.vertical, 6)
     }
 
-    /// The iPhone's count line, or a spinner while the earlier messages search reads are still loading.
     @ViewBuilder private var status: some View {
         if timeline.loadingAll {
             HStack(spacing: 6) {
@@ -83,20 +77,18 @@ private struct MacStarredBar: View {
     }
 }
 
-/// A native search field. Esc closes the find bar (not only clears the field, as a plain search field would) unless
-/// an input method is composing, and Tab moves on to the results; keyboard focus moves into it when it appears and on
-/// each `focusRequests` change.
+// Esc closes the find bar (a plain search field only clears) unless an input method is composing.
 private struct MacSearchField: NSViewRepresentable {
     @Binding var text: String
     let prompt: String
     let focusRequests: Int
-    /// Tab: the window's key view loop would skip the timeline, which SwiftUI makes focusable.
+    // The window's key view loop would skip the timeline, which SwiftUI makes focusable.
     let onTab: () -> Void
     let onCancel: () -> Void
 
     final class Coordinator: NSObject, NSSearchFieldDelegate {
         var parent: MacSearchField
-        /// The request last acted on; none yet, so the field takes focus as it appears.
+        // None yet, so the field takes focus as it appears.
         var focusRequests: Int?
 
         init(_ parent: MacSearchField) { self.parent = parent }
@@ -128,8 +120,8 @@ private struct MacSearchField: NSViewRepresentable {
         return field
     }
 
-    /// As wide as offered, as tall as the field's own line; left to itself, a hosted field's height follows the layout's
-    /// proposal and a narrow column made the bar take the timeline's height.
+    // Left to itself, a hosted field's height follows the proposal, and a narrow column made the bar as tall as the
+    // timeline.
     func sizeThatFits(_ proposal: ProposedViewSize, nsView field: NSSearchField, context: Context) -> CGSize? {
         let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 200
         return CGSize(width: width, height: field.intrinsicContentSize.height)
@@ -145,7 +137,6 @@ private struct MacSearchField: NSViewRepresentable {
     }
 }
 
-/// The open chat's search and starred filter, for the menu commands; nil while no chat is shown.
 struct MacConversationFindCommands {
     let find: () -> Void
     let starredOnly: Bool
@@ -157,9 +148,6 @@ extension FocusedValues {
 }
 
 #if DEBUG
-/// The tour's search steps (`MacDebugHooks`): `find <text>` opens search with that text, `find-close` closes it,
-/// `find-esc` does what Esc in the timeline does, `starred on|off` sets the starred filter, and
-/// `show-result <message id>` does what a click on that result does.
 @MainActor enum MacConversationFindTour {
     static func step(_ name: String, _ argument: String) {
         guard let timeline = MacTimelineController.current else { return MacDebugHooks.log("tour \(name): no open timeline") }

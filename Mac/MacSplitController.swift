@@ -1,16 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// The main window's split view: chats in the sidebar, the open chat as the content, and its details in an inspector.
-/// Each pane is SwiftUI in a hosting controller that reports no sizes of its own (`sizingOptions` empty): the items'
-/// thicknesses below are the only minimums, so a resize of the window lays each pane out once, at its new size, and
-/// nothing SwiftUI measures can move a divider or the window's minimum.
+// Each pane is SwiftUI in a hosting controller that reports no sizes (`sizingOptions` empty): the items' thicknesses
+// are the only minimums, so a window resize lays each pane out once and nothing SwiftUI measures moves a divider.
 @MainActor final class MacSplitController: NSSplitViewController {
-    /// The sidebar's width range; it starts at `sidebarWidth.ideal`, then keeps the width it is given.
     static let sidebarWidth = (min: 260.0, ideal: 320.0, max: 360.0)
-    /// Fixed, as the inspector is on the Mac.
     static let inspectorWidth = 320.0
-    /// The narrowest the conversation gets: the composer, a bubble and its reactions still fit.
     static let conversationMinWidth = 320.0
     static let windowMinWidth = 720.0
     static let windowMinHeight = 480.0
@@ -21,11 +16,9 @@ import SwiftUI
     private var inspectorItem: NSSplitViewItem!
     private var content: MacContentController!
     private var collapseObservation: NSKeyValueObservation?
-    /// The inspector is opening or closing; a change of the window's state meanwhile waits until it has finished. AppKit's
-    /// collapse animations do not take over from each other: an open that interrupts a close, which shrinks the window
-    /// back, leaves the conversation's width pinned, and the window can no longer be resized.
+    // AppKit's collapse animations do not take over from each other: an open interrupting a close leaves the
+    // conversation's width pinned and the window unresizable, so state changes wait until the animation has finished.
     private var animatingInspector = false
-    /// The inspector is being put in the window (`insertInspector`): its collapse changes nothing in the window's state.
     private var insertingInspector = false
 
     init(model: AppModel, state: MacWindowState) {
@@ -42,7 +35,6 @@ import SwiftUI
         let model = model, state = state
         let sidebar = Self.host(MacPane { MacChatList(model: model, window: state).id(model.accountID) })
         sidebar.view.frame.size.width = Self.sidebarWidth.ideal
-        // The content pane alone gives the window its title and subtitle: the open chat's name and status line.
         content = MacContentController(host: Self.host(MacPane { MacDetailPane(model: model, window: state) }, bridging: [.title]))
         let inspector = MacInspectorController(model: model, state: state)
 
@@ -66,13 +58,10 @@ import SwiftUI
         // Only once the item is in the split view: added before, AppKit installs the accessory's constraints on a view
         // outside its subtree and throws.
         sidebarItem.addTopAlignedAccessoryViewController(MacSidebarSearch(state: state))
-        // The autosave restores the inspector as it was saved; whether it shows is the window's state.
         inspectorItem.isCollapsed = !showsInspector
 
-        // The inspector follows the window's state; a collapse that came another way (View > Hide Inspector) goes back
-        // into it.
+        // A collapse that came another way (View > Hide Inspector) goes back into the window's state.
         MacObservation.track(self) { split in split.applyInspector() }
-        // Find Chat brings a folded sidebar back for its search field.
         MacObservation.track(self) { split in
             if split.state.searchRequests > 0, split.sidebarItem.isCollapsed { split.sidebarItem.animator().isCollapsed = false }
         }
@@ -97,9 +86,8 @@ import SwiftUI
         insertInspector()
     }
 
-    /// A split view leaves an item that starts collapsed out of the window until it first expands, and the closed
-    /// inspector can build a chat's details ahead only in the window (`MacInspectorController`). It expands and collapses
-    /// once, unanimated and before anything is drawn, if the window is wide enough to take it without growing.
+    // A split view leaves an item that starts collapsed out of the window until it first expands, and details build
+    // ahead only in the window: expand and collapse once, unanimated, if the window is wide enough without growing.
     private func insertInspector() {
         guard inspectorItem.isCollapsed, inspectorItem.viewController.view.window == nil,
               splitView.bounds.width >= (sidebarItem.isCollapsed ? 0 : sidebarItem.viewController.view.frame.width)
@@ -127,9 +115,8 @@ import SwiftUI
             inspectorSettled()
             return
         }
-        // Opening, the conversation keeps the width it has while the column slides in over its trailing side, and is
-        // laid out at its new width once, as the animation ends, not on each of its frames. Closing, it follows the
-        // column: held wider than its pane then, it kept AppKit from animating the next open.
+        // Opening, the conversation keeps its width while the column slides over it, laid out once at the end.
+        // Closing, it follows the column: held wider than its pane, it would keep AppKit from animating the next open.
         content.heldWidth = shows ? content.view.bounds.width : nil
         animatingInspector = true
         NSAnimationContext.runAnimationGroup { _ in
@@ -140,29 +127,24 @@ import SwiftUI
                 self.animatingInspector = false
                 self.content.heldWidth = nil
                 self.inspectorSettled()
-                // Shown or hidden again while it ran: only the latest state is animated to.
                 self.applyInspector()
             }
         }
     }
 
-    /// AppKit's inspector toggle, should anything send it, goes through the window's state, as the toolbar's Chat Details
-    /// does: it gets the same hold, and no empty column shows without a chat.
+    // Through the window's state, as Chat Details goes, so it gets the same hold and no empty column shows.
     override func toggleInspector(_ sender: Any?) {
         if inspectorItem.isCollapsed { state.inspectorShown = state.selection != nil } else { state.inspectorShown = false }
     }
 
-    /// A pushed page stays in the closed inspector until it has finished closing; then it opens on the chat's details
-    /// again.
     private func inspectorSettled() {
         guard inspectorItem.isCollapsed, !showsInspector, !state.inspectorPath.isEmpty else { return }
         state.inspectorPath.removeAll()
     }
 }
 
-/// The conversation's pane: its hosting controller's view fills it, except while the inspector opens. Then it keeps the
-/// width it had (`heldWidth`), and the pane clips it at the inspector's side; a hosting view laid out at each width of
-/// the animation would run the conversation's layout on every frame.
+// While the inspector opens, the hosting view keeps its width (`heldWidth`) and the pane clips it: laying it out at
+// each width of the animation would run the conversation's layout every frame.
 @MainActor final class MacContentController: NSViewController {
     private let host: NSViewController
     var heldWidth: CGFloat? {
@@ -208,13 +190,9 @@ import SwiftUI
     }
 }
 
-/// The inspector's pane, in a view that knows whether the column is on screen: a split view hides a collapsed item's
-/// view once it has finished closing, and shows it again as it starts to open. The chat's details are built ahead, in
-/// the closed column, once the user has paused for a moment after choosing the chat (or as the column first shows
-/// them), and kept while that chat stays chosen, so opening the column only reveals them. The closed column never lays
-/// them out again, as a resize of the window would on each of its steps.
+// A split view hides a collapsed item's view once closed and shows it as it starts to open. The details build ahead in
+// the closed column after a pause in input, so opening only reveals them, and are not laid out again on window resizes.
 @MainActor final class MacInspectorController: NSViewController {
-    /// How long the user has given no input before the details are built ahead.
     private static let quiet: TimeInterval = 0.5
     private let model: AppModel
     private let state: MacWindowState
@@ -260,13 +238,10 @@ import SwiftUI
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
-    /// Builds and lays out the details in the closed column, at the size the column opens to. Not while the user is
-    /// typing, clicking or scrolling: the build is one pass of tens of milliseconds, and waits until it would not land
-    /// among those.
+    // One pass of tens of milliseconds, so it waits until it would not land among typing, clicks or scrolls.
     private func prebuildIfQuiet(_ chatID: String) {
         prebuild = nil
         guard state.selection == chatID, presence.shownChat != chatID, let view = view as? PresenceView else { return }
-        // Out of the window, it waits until the column is in it (`movedToWindow`).
         guard view.window != nil else { return }
         // A button held down (a window's drag) or a tracking loop running (a control's, a resize's, a menu's) is input
         // now; and in a loop that runs in some other mode, the event being handled may be one it took.
@@ -281,14 +256,12 @@ import SwiftUI
         #endif
     }
 
-    /// The events a build ahead waits after; not the pointer's moves, which lead to Chat Details as often as not.
+    // Not the pointer's moves, which lead to Chat Details as often as not.
     private static let input: NSEvent.EventTypeMask = [
         .keyDown, .keyUp, .flagsChanged, .scrollWheel, .leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown,
         .rightMouseUp, .rightMouseDragged, .otherMouseDown, .otherMouseUp, .otherMouseDragged, .magnify, .swipe, .rotate,
         .beginGesture, .endGesture, .smartMagnify, .pressure,
     ]
-    /// When the app last handed out one of those events, or a tracking loop, a window's move or a menu ended (system
-    /// uptime, as events' timestamps); a pointer move after it leaves it as it was.
     private static var lastInput: TimeInterval = 0
     private static var inputMonitor: Any?
 
@@ -313,12 +286,9 @@ import SwiftUI
     private static func noteInput() { lastInput = ProcessInfo.processInfo.systemUptime }
 
     #if DEBUG
-    /// The chat whose details were last built ahead, and when (`prebuild-quiet`, `prebuild-tracking`).
     static var debugBuiltAhead: (chat: String, at: TimeInterval)?
     #endif
 
-    /// The details fill the column while it shows. Hidden, they keep the size they had: a resize of the window does not
-    /// lay them out.
     private final class PresenceView: NSView {
         var changed: (Bool) -> Void = { _ in }
         var movedToWindow: () -> Void = {}
@@ -330,8 +300,7 @@ import SwiftUI
             super.layout()
         }
 
-        /// The details built ahead get the column's size now, as it would open, and are laid out at it: the window's
-        /// height and the inspector's width. A closed column is zero wide until it first opens.
+        // A closed column is zero wide until it first opens: use the window's height and the inspector's width.
         func layOutHidden() {
             guard let host, isHiddenOrHasHiddenAncestor, let height = window?.contentView?.bounds.height else { return }
             let size = NSSize(width: MacSplitController.inspectorWidth, height: height)
@@ -358,20 +327,15 @@ import SwiftUI
     }
 }
 
-/// Whether a split view column is on screen, from when it starts to open until it has finished closing, and the chat
-/// it last showed.
 @MainActor @Observable final class MacColumnPresence {
     var onScreen = false
     var shownChat: String?
 }
 
-/// The sidebar's search field, above the chats: it filters them by name or address (`MacWindowState.chatSearch`), and
-/// Find Chat (⌥⌘F) puts the cursor in it.
 @MainActor final class MacSidebarSearch: NSSplitViewItemAccessoryViewController {
     private let state: MacWindowState
     private let field = NSSearchField()
-    /// The requests already answered. Those from before the field existed were for an earlier window; one that came as
-    /// the window was made (Find Chat with it closed) waits until the field is in it.
+    // Requests from before the field existed were for an earlier window; one made with the window waits for the field.
     private var searchRequests: Int
 
     init(state: MacWindowState) {
@@ -387,7 +351,6 @@ import SwiftUI
         field.sendsSearchStringImmediately = true
         field.target = self
         field.action = #selector(searchChanged)
-        // The sidebar's own size, as its `.searchable` field had: the floating sidebar already insets its accessory.
         field.controlSize = .large
         field.translatesAutoresizingMaskIntoConstraints = false
         let view = NSView()
@@ -399,7 +362,6 @@ import SwiftUI
             field.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -6),
         ])
         self.view = view
-        // The chats scroll under the field and fade, as under a toolbar, with no line between.
         if #available(macOS 26.1, *) { preferredScrollEdgeEffectStyle = .soft }
         MacObservation.track(self) { search in search.update() }
     }
