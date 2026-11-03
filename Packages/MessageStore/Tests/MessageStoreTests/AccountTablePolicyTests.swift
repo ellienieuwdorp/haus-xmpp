@@ -133,6 +133,20 @@ import Testing
         }
     }
 
+    // Sign-out takes every delivered and pending notification off the system; what still waited to alert goes too, so
+    // signing in later brings back no banner from before. The messages and retained ciphertext stay.
+    @Test func signOutDropsWhatWaitedToAlert() async throws {
+        try await Self.withSeededStore { store, url in
+            try await store.removeRowsAtSignOut(accountID: Self.alice)
+            let after = Self.counts(url, account: Self.alice)
+            for table in [AccountTable.notificationCandidates, .pendingNotificationCandidates, .reactionNotificationCandidates, .reactionNotificationsPosted] {
+                #expect(after[table] == 0, "sign-out leaves `\(table.rawValue)`")
+            }
+            #expect(try await store.pendingNotifications(accountID: Self.alice).claimed.isEmpty)
+            #expect(after[.messages] == 1 && after[.pendingEncryptedInbox] == 1)
+        }
+    }
+
     // An extension run may be writing the rows; without the lease nothing is removed.
     @Test func signOutRefusesWithoutTheLease() async throws {
         try await Self.withSeededStore { store, url in

@@ -47,7 +47,8 @@ public enum AccountTable: String, CaseIterable, Sendable {
         case .accountPreferences:
             Policy(transfer: .copy, signOut: .keep(reason: "the account's own settings"))
         case .notificationCandidates, .pendingNotificationCandidates, .reactionNotificationCandidates, .reactionNotificationsPosted:
-            Policy(transfer: .copy, signOut: .keep(reason: "the foreground owner posts or dismisses what still waits as soon as it connects"))
+            // Sign-out takes every delivered and pending notification off the system; what still waited goes with them.
+            Policy(transfer: .copy, signOut: .delete)
         case .linkPreviewCache:
             Policy(transfer: .copy, signOut: .keep(reason: "the account's own fetches; the images live in its attachment folder"))
         case .contactLinks:
