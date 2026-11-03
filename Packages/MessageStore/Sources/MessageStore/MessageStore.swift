@@ -2953,7 +2953,7 @@ public struct StoreSnapshotSummary: Codable, Sendable, Equatable {
         rowCounts = counts
     }
 
-    /// The summary of a store copy nobody has open, read again once it was changed (`removeContactLinks(fromSnapshotAt:)`).
+    /// The summary of a store copy nobody has open, read again once it was changed (`removeDeviceLocalRows(fromSnapshotAt:)`).
     public init(snapshotAt url: URL) throws {
         let copy = try Connection(url: url, create: false)
         defer { try? copy.close() }
@@ -3101,23 +3101,14 @@ extension MessageStore {
             """, [.text(accountID), .text(hash)]).isEmpty
     }
 
-    /// Removes every account's contact links from a store copy nobody has open (an account transfer, before packing and
-    /// before a restore commits): the identifiers name another device's contacts. Deleted rows are overwritten, not left
-    /// in free pages. Returns the photos no chat's verified avatar still names, whose files the caller leaves out; only
-    /// well-formed hashes, as the copy may come from an archive.
-    public static func removeContactLinks(fromSnapshotAt url: URL) throws -> [ContactLinkPhoto] {
-        let copy = try Connection(url: url, create: false)
-        defer { try? copy.close() }
-        guard !(try copy.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='contact_links'").isEmpty) else { return [] }
-        try copy.execute("PRAGMA secure_delete = ON")
-        return try copy.transaction {
-            let photos = try copy.query("""
-                SELECT DISTINCT account_id,image_hash FROM contact_links l WHERE image_hash IS NOT NULL
-                AND NOT EXISTS (SELECT 1 FROM chats c WHERE c.account_id=l.account_id AND c.avatar_hash=l.image_hash)
-                ORDER BY account_id,image_hash
-                """).map { ContactLinkPhoto(accountID: $0[0].string, hash: $0[1].string) }.filter { ContactLink.isHash($0.hash) }
-            try copy.execute("DELETE FROM contact_links")
-            return photos
+    /// Deletes the account's rows from every table whose sign-out policy (`AccountTable`) is `delete`, in one transaction.
+    public func removeRowsAtSignOut(accountID: String) throws {
+        guard !accountID.isEmpty else { throw MessageStoreError.invalidValue }
+        let tables = AccountTable.allCases.filter { $0.policy.signOut == .delete }
+        guard !tables.isEmpty else { return }
+        try connection.transaction {
+            try connection.execute("PRAGMA defer_foreign_keys = ON")
+            for table in tables { try connection.execute("DELETE FROM \"\(table.rawValue)\" WHERE account_id=?", [.text(accountID)]) }
         }
     }
 }

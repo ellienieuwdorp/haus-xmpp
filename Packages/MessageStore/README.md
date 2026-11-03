@@ -23,6 +23,7 @@ The database holds plaintext messages and serialized OMEMO state under OS file p
 - **Archive page before checkpoint.** Advance a MAM checkpoint only after the whole page is durably handled; revision checks reject stale page completions, and replay after a crash is deduplicated by the message and crypto pipeline.
 - **Reactions.** Authenticated (SCE) reactions resolve only through a wire ID that identifies exactly one message in the conversation; an ambiguous ID resolves to nothing. Each actor's newest `(updatedAt, id)` event is their complete set, an empty set withdraws, and a reused event ID cannot replace its first contents. Events for missing targets are kept until the target arrives. Reaction updates have their own outbox and never create message rows.
 - **Schema.** Opening with `.upgrade` migrates in place; `.currentOnly` refuses an older store before writing; an unknown newer schema is always refused.
+- **Every table is an `AccountTable`.** Each is keyed by `account_id` and declares what a transfer (`removeDeviceLocalRows`) and sign-out (`removeRowsAtSignOut`) do to it; erasing an account and a snapshot cover every table. A migration that adds a table without a case, or without a row in `Fixtures/account-tables.sql`, fails `AccountTablePolicyTests`.
 - **Close before deleting.** Stop and join all work and `try await store.close()` on every connection before deleting or replacing a database, its WAL or SHM. `close` is idempotent; later calls throw `MessageStoreError.closed`.
 
 ## Testing

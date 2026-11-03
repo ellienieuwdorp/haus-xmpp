@@ -1,0 +1,33 @@
+-- One row of {account} in every account table, consistent with the foreign keys. Read by AccountTablePolicyTests
+-- and by the app's transfer round trip, which put an address in place of {account}.
+PRAGMA foreign_keys = ON;
+BEGIN;
+INSERT INTO chats(account_id,id,title) VALUES('{account}','peer@example.org','Peer');
+INSERT INTO messages(account_id,id,chat_id,sender_id,body,sent_at,outgoing,wire_id) VALUES('{account}','m1','peer@example.org','peer@example.org','Hello',1790000000,0,'w1');
+INSERT INTO outbox(account_id,message_id,state) VALUES('{account}','m1','queued');
+INSERT INTO attachments(account_id,message_id,name,media_type,size,hash,secret) VALUES('{account}','m1','a.jpg','image/jpeg',1,'00',X'00');
+INSERT INTO encrypted_outbox(account_id,message_id,wire) VALUES('{account}','m1',X'00');
+INSERT INTO outgoing_updates(account_id,id,kind,chat_id,target_message_id,created_at,state) VALUES('{account}','u1','reaction','peer@example.org','m1',1790000000,'queued');
+INSERT INTO message_events(account_id,actor_id,id,chat_id,target_wire_id,kind,payload_json,updated_at) VALUES('{account}','peer@example.org','e1','peer@example.org','w1','reaction','{}',1790000000);
+INSERT INTO message_link_previews(account_id,message_id,url,source) VALUES('{account}','m1','https://example.org','sender');
+INSERT INTO group_message_references(account_id,room,message_id,stanza_id) VALUES('{account}','room@conference.example.org','m1','s1');
+INSERT INTO group_ciphertext_messages(account_id,sender,digest,message_id) VALUES('{account}','peer@example.org','d1','m1');
+INSERT INTO encryption_state(account_id,revision,snapshot) VALUES('{account}',1,X'00');
+INSERT INTO retired_own_devices(account_id,profile,device_id) VALUES('{account}','legacy',1);
+INSERT INTO encrypted_inbox(account_id,sender,digest) VALUES('{account}','peer@example.org','d1');
+INSERT INTO pending_encrypted_inbox(account_id,sender,digest,wire) VALUES('{account}','peer@example.org','d2',X'00');
+INSERT INTO stream_management(account_id,revision,snapshot) VALUES('{account}',1,X'00');
+INSERT INTO archive_checkpoints(account_id,archive_id,revision,cursor) VALUES('{account}','{account}',1,'c1');
+INSERT INTO archive_backfill(account_id,archive_id,revision,oldest_id) VALUES('{account}','{account}',1,'o1');
+INSERT INTO archive_gaps(account_id,archive_id,cursor,detected_at) VALUES('{account}','{account}','c0',1790000000);
+INSERT INTO archive_rejections(account_id,archive_id,message_id,reason) VALUES('{account}','{account}','x1','unsupported');
+INSERT INTO chat_read_state(account_id,chat_id,read_sent_at,read_message_id) VALUES('{account}','peer@example.org',1790000000,'m1');
+INSERT INTO read_baselines(account_id,archive_id,sent_at) VALUES('{account}','{account}',1790000000);
+INSERT INTO account_preferences(account_id) VALUES('{account}');
+INSERT INTO notification_candidates(account_id,message_id) VALUES('{account}','m1');
+INSERT INTO pending_notification_candidates(account_id,sender,digest,chat_id,sent_at) VALUES('{account}','peer@example.org','d2','peer@example.org',1790000000);
+INSERT INTO reaction_notification_candidates(account_id,chat_id,actor_id,target_message_id,reactions_json,reacted_at) VALUES('{account}','peer@example.org','peer@example.org','m1','[]',1790000000);
+INSERT INTO reaction_notifications_posted(account_id,chat_id,actor_id,target_message_id,reactions_json) VALUES('{account}','peer@example.org','peer@example.org','m1','[]');
+INSERT INTO link_preview_cache(account_id,url,fetched_at,status) VALUES('{account}','https://example.org',1790000000,'failed');
+INSERT INTO contact_links(account_id,jid,contact_identifier,source,linked_at) VALUES('{account}','peer@example.org','contact-1','picker',1790000000);
+COMMIT;
