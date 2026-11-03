@@ -1,20 +1,14 @@
 import Foundation
 import XMPPProtocol
 
-/// The emoji a reaction picker offers, with a name to search by. Built from the Unicode properties of this OS's
-/// character data rather than a bundled list, so it follows the system's emoji as it updates: faces and people first,
-/// then the other pictographs and symbols, the keycaps, then the flags. Skin tones turn up when searching by name.
-/// Sequences joined with zero-width joiners (🏳️‍🌈, 👩‍💻) have no Unicode name to list them by, so the search takes any
-/// emoji typed or pasted into it, from the system's Emoji & Symbols viewer, for example, as itself. Every entry is one
-/// the wire layer accepts as a reaction (`MessageContent.isEmoji`).
+// Built from this OS's Unicode properties, not a bundled list. ZWJ sequences (🏳️‍🌈) have no Unicode name, so search
+// takes emoji typed or pasted into it as themselves.
 enum EmojiCatalog {
     struct Entry: Hashable, Sendable {
         let emoji: String
-        /// Lowercased words to match, from the Unicode name ("grinning face") or, for a flag, "flag" and the region.
         let name: String
     }
 
-    /// Unicode blocks in picker order; within a block, code point order keeps related emoji together.
     private static let blocks: [ClosedRange<UInt32>] = [
         0x1F600...0x1F64F, // Emoticons
         0x1F900...0x1F9FF, // Supplemental Symbols and Pictographs
@@ -46,7 +40,6 @@ enum EmojiCatalog {
             let name = Locale(identifier: "en").localizedString(forRegionCode: code) ?? code
             return Entry(emoji: emoji, name: "flag \(name)".lowercased())
         }
-        // A digit, # or * in a keycap: "keycap digit one".
         let keycaps = "#*0123456789".unicodeScalars.compactMap { scalar -> Entry? in
             let emoji = String(String.UnicodeScalarView([scalar, "\u{FE0F}", "\u{20E3}"]))
             guard MessageContent.isEmoji(emoji), let name = scalar.properties.name else { return nil }
@@ -55,7 +48,6 @@ enum EmojiCatalog {
         return entries + keycaps + flags.sorted { $0.name < $1.name }
     }()
 
-    /// The catalogue with each emoji that takes a skin tone followed by its five toned forms, for searching.
     private static let withTones: [Entry] = all.flatMap { entry -> [Entry] in
         guard let base = entry.emoji.unicodeScalars.first, base.properties.isEmojiModifierBase else { return [entry] }
         let toned = tones.compactMap { modifier, tone -> Entry? in
@@ -70,8 +62,6 @@ enum EmojiCatalog {
         ("\u{1F3FB}", "light"), ("\u{1F3FC}", "medium-light"), ("\u{1F3FD}", "medium"), ("\u{1F3FE}", "medium-dark"), ("\u{1F3FF}", "dark"),
     ]
 
-    /// For an empty query the catalogue. For a query of emoji alone, those emoji, so any sequence the system can type
-    /// is a choice. Otherwise the entries and toned forms whose name contains every word of `query`, in catalogue order.
     static func search(_ query: String) -> [Entry] {
         let words = query.lowercased().split(whereSeparator: \.isWhitespace)
         guard !words.isEmpty else { return all }
@@ -90,8 +80,7 @@ enum EmojiCatalog {
         return withTones.filter { entry in words.allSatisfy { entry.name.contains($0) } }
     }
 
-    /// An emoji-presentation pictograph as it is, a text-presentation one with the emoji selector; nothing for
-    /// components (skin tones, regional indicators, keycap digits) that only mean something in a sequence.
+    // Components (skin tones, regional indicators, keycap digits) only mean something in a sequence.
     private static func entry(for scalar: Unicode.Scalar) -> Entry? {
         let properties = scalar.properties
         guard properties.isEmoji, !properties.isEmojiModifier, !(0x1F1E6...0x1F1FF).contains(scalar.value),

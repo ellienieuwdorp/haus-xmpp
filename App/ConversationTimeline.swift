@@ -7,15 +7,12 @@ import UIKit
 import UIKit.UIGestureRecognizerSubclass
 import XMPPProtocol
 
-/// Native baseline for the first transport milestone. Composer and message state belong to the parent.
 struct ConversationTimeline: UIViewControllerRepresentable {
     let messages: [TimelineMessage]
     var typing: TimelineTyping? = nil
-    /// The server's older history is being fetched for this chat: a quiet cell sits above the oldest message.
     var loadingEarlier = false
-    /// SwiftUI banners floating over the top edge. UIKit only sees the navigation bar as safe area, so this adds theirs.
+    // UIKit only sees the navigation bar as safe area, so this adds the SwiftUI banners' height.
     var topBannerHeight: CGFloat = 0
-    /// Hosted above the keyboard by the controller; nil hides it (search).
     var composer: AnyView? = nil
     var onToggleStar: (String) -> Void
     var onRetryMessage: (String) -> Void = { _ in }
@@ -23,27 +20,17 @@ struct ConversationTimeline: UIViewControllerRepresentable {
     var onReaction: (String, String) -> Void = { _, _ in }
     var onEdit: (String) -> Void = { _ in }
     var onUnsend: (String) -> Void = { _ in }
-    /// A received message's Report; the parent confirms and blocks.
     var onReport: (String) -> Void = { _ in }
-    /// A placeholder's "Encryption details" action; the parent owns navigation.
     var onOpenEncryption: () -> Void = {}
-    /// A received message's cell came on screen; the model decides whether that is a read marker.
     var onDisplayed: (String) -> Void = { _ in }
-    /// The long-press menu put the keyboard away and nothing else claimed focus; bring it back.
     var onRestoreComposerFocus: () -> Void = {}
-    /// The user scrolled to the oldest loaded message.
     var onReachTop: () -> Void = {}
-    /// A bubble whose file is not on disk came on screen.
     var onAttachmentDisplayed: (String) -> Void = { _ in }
-    /// A tap on a file waiting for one, or on a failed one.
     var onDownloadAttachment: (String) -> Void = { _ in }
-    /// A bubble whose first previewable link has no card yet came on screen or is about to; never at insert time.
+    // Fires as a bubble comes on screen or is about to, never at insert time.
     var onLinkPreviewDisplayed: (String) -> Void = { _ in }
-    /// An `xmpp:` link to a person was opened: open or start that chat.
     var onOpenChat: (String) -> Void = { _ in }
-    /// An `xmpp:…?join` link was opened: open the group, or its join flow, and return true; false copies the address.
     var onOpenGroup: (String) -> Bool = { _ in false }
-    /// Installed in the controller, which presents its pickers and closes the panel on rotation and when leaving.
     var attachmentKeyboard: AttachmentKeyboard? = nil
     // Observed so a stored accent change re-renders visible bubbles.
     private var accent: String { AccentTheme.current.rawValue }
@@ -68,14 +55,13 @@ struct ConversationTimeline: UIViewControllerRepresentable {
         controller.attachmentKeyboard = attachmentKeyboard
     }
 
-    /// Uninstalls the attachment panel, which lets go of the composer's actions: they hold the composer state that
-    /// owns the keyboard, so the chat would otherwise never be freed.
+    // Uninstalling the panel lets go of the composer's actions: they hold the composer state that owns the keyboard, so
+    // the chat would otherwise never be freed.
     static func dismantleUIViewController(_ controller: ConversationTimelineController, coordinator: ()) {
         controller.attachmentKeyboard = nil
     }
 }
 
-/// What a bubble asks of a link: open it as a tap does, or one of the long-press menu's link actions.
 enum LinkCommand { case open, call, message, share }
 
 @MainActor
@@ -113,32 +99,26 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     var onLinkPreviewDisplayed: (String) -> Void = { _ in }
     var onOpenChat: (String) -> Void = { _ in }
     var onOpenGroup: (String) -> Bool = { _ in false }
-    /// While the long-press menu is up the timeline holds still: its snapshot sits at the bubble's captured frame.
+    // While the long-press menu is up the timeline holds still: the snapshot sits at the bubble's captured frame.
     private var actionsVisible = false
     private var heldUpdate: (() -> Void)?
     private var restoresKeyboard = false
     private var sliding = false
-    /// The update whose slide is playing; a later slide replaces it and settles the offset itself.
+    // A later slide replaces the playing one and settles the offset itself.
     private var slideRevision = 0
     private var bottomInset: CGFloat = 0
     private var composerHeight: NSLayoutConstraint!
-    /// Content position at the visible bottom edge, so an inset change can put the same messages back above the composer.
     private var bottomEdgeY: CGFloat = 0
     private var knownSafeBottom: CGFloat = 0
     private var knownAdjustedTop: CGFloat = 0
-    /// The day under the top edge while the reader scrolls history (Signal's sticky date). It stands in for that day's
-    /// inline header, whose text is covered while the chip shows, so the same date never appears twice.
+    // Stands in for the inline day header under the top edge, whose text is covered while the chip shows.
     private let dateChip = DateChipView()
-    /// The previous day's chip dissolving in place while the next one takes over.
     private let leavingDateChip = DateChipView()
-    /// Between the reader's first drag and a second after the list comes to rest; programmatic scrolls never start it.
+    // From the reader's first drag until a second after the list rests; programmatic scrolls never start it.
     private var dateChipActive = false
     private var dateChipIdle: DispatchWorkItem?
-    /// The idle second came due under a resting finger; it starts over when the finger lifts.
     private var dateChipWaitsForLift = false
-    /// The offset of the last deceleration step large enough to see.
     private var dateChipMovingY: CGFloat = 0
-    /// The message whose inline day header the chip currently covers.
     private var coveredHeaderID: String?
 
     override func loadView() {
@@ -152,8 +132,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         section.interGroupSpacing = 2
         section.contentInsets = .init(top: 8, leading: 0, bottom: 12, trailing: 0)
         collectionView = ConversationCollectionView(frame: .zero, collectionViewLayout: UICollectionViewCompositionalLayout(section: section))
-        // Clear over the container, which paints the chat background once; the collection view runs under the bars,
-        // where the scroll-edge effect (below) dissolves the messages that scroll beneath.
+        // Clear: the container paints the chat background once.
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .interactive
@@ -170,9 +149,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         collectionView.frame = container.bounds
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         container.addSubview(collectionView)
-        // The navigation bar's soft scroll-edge effect dissolves messages under the bar (Signal's iOS 26 look: no
-        // material strip, no hairline). SwiftUI's banner bar is invisible to UIKit, so this clear, touch-transparent
-        // container spans bar plus banners (the safe area includes the banner inset) and extends the effect below them.
+        // SwiftUI's banner bar is invisible to UIKit, so this clear, touch-transparent container spans bar plus banners
+        // and extends the navigation bar's scroll-edge effect below them.
         let topEdge = UIView()
         topEdge.isUserInteractionEnabled = false
         topEdge.translatesAutoresizingMaskIntoConstraints = false
@@ -241,7 +219,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         }
     }
 
-    /// Photos get the swipe-to-dismiss viewer with Save; Quick Look plays video and shows documents.
     private let previewSource = PreviewSource()
     private func preview(_ url: URL, title: String?, isImage: Bool) {
         guard presentedViewController == nil else { return }
@@ -256,9 +233,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         present(viewer, animated: true)
     }
 
-    /// Opens a link from a bubble: where it goes is `LinkOpening`'s decision, shared with the Mac; this performs
-    /// it. A tap on a phone number asks first, as Call, Send Message or Copy; the menu's Call calls directly.
-    /// `source` and `rect` (in its coordinates) are what a share sheet or the phone number's choices point at.
+    // A tap on a phone number asks first (Call, Send Message, Copy); the menu's Call calls directly.
     func handleLink(_ url: URL, _ command: LinkCommand, from source: UIView, at rect: CGRect) {
         guard presentedViewController == nil else { return }
         let destination = LinkOpening.destination(for: url, inAppBrowser: !LinkSettings.shared.openInSafari)
@@ -302,7 +277,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         }
     }
 
-    /// A link that could not be opened was copied instead; the dialog says so and why.
     private func copied(_ text: String, because reason: String) {
         UIPasteboard.general.string = text
         guard presentedViewController == nil else { return }
@@ -351,8 +325,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         let currentRevision = revision
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
-        // The loading cell sits above the oldest message; the anchor below skips it, so it comes and goes without
-        // moving the reader.
+        // The anchor below skips the loading cell, so it comes and goes without moving the reader.
         snapshot.appendItems(TimelineItems.identifiers(rows: uniqueRows, loadingEarlier: loadingEarlier, typing: typing != nil))
         snapshot.reconfigureItems(TimelineItems.reconfigured(rows: uniqueRows, previous: previous, accentChanged: accentChanged,
                                                              typingChangedInPlace: typing != nil && !typingArrived && typingChanged))
@@ -362,7 +335,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         // Every offset decision happens in this call, before the next frame: waiting for an apply's completion let a
         // frame show a first load at the top of its window, or a prepend at the old offset.
         if plan.placement == .newestAtOnce {
-            // Nothing on screen to diff against: load the cells in place and land on the newest message at once.
             dataSource.applySnapshotUsingReloadData(snapshot)
             collectionView.layoutIfNeeded()
             scrollToBottom()
@@ -371,7 +343,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         }
         dataSource.apply(snapshot, animatingDifferences: false)
         if dataSource.snapshot().itemIdentifiers != snapshot.itemIdentifiers {
-            // A non-animated apply on the main queue is synchronous; if that ever changes, keep the offset logic synchronous.
+            // A non-animated apply on the main queue is synchronous; the offset logic depends on it.
             assertionFailure("A non-animated diffable apply did not land synchronously")
             dataSource.applySnapshotUsingReloadData(snapshot)
         }
@@ -404,7 +376,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         recordBottomEdge()
     }
 
-    /// The typing bubble leaves as a fading copy; the cell itself goes with the apply.
     private func fadeOutTypingCell() {
         guard let path = dataSource.indexPath(for: TimelineItems.typingID), let cell = collectionView.cellForItem(at: path),
               let ghost = cell.snapshotView(afterScreenUpdates: false) else { return }
@@ -414,9 +385,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseOut]) { ghost.alpha = 0 } completion: { _ in ghost.removeFromSuperview() }
     }
 
-    /// Right after the overlay is presented over the captured bubble: the keyboard would cover the menu, so it slides
-    /// away with UIKit's own animation and the composer and insets follow it under the blur. Nothing is laid out
-    /// synchronously here; the overlay's snapshot never depended on where the timeline settles.
+    // The keyboard would cover the menu, so it slides away with UIKit's own animation under the blur. Nothing is laid
+    // out synchronously: the overlay's snapshot never depended on where the timeline settles.
     private func putKeyboardAwayForActions() {
         attachmentKeyboard?.menuWillPresent() // attachment panel: remember it was up; endEditing below puts it away too
         restoresKeyboard = view.keyboardLayoutGuide.layoutFrame.height > view.safeAreaInsets.bottom + 100
@@ -424,11 +394,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         view.endEditing(true)
     }
 
-    /// As the menu starts to close. The keyboard comes back only when nothing takes its place: reply and edit focus
-    /// the composer themselves, text selection and the unsend dialog must keep it away. A plain dismissal, reaction,
-    /// copy, star or retry presents nothing, so the keyboard (or the attachment panel, when that was up) starts back
-    /// now, under the fading blur, and the timeline rides up with it while the snapshot returns to where the press
-    /// found the bubble. Returns true in that case: the live bubble lands there again, not where it is this moment.
+    // The keyboard comes back only when nothing takes its place (reply and edit focus the composer; selection and the
+    // unsend dialog keep it away). It then starts back under the fading blur, and true tells the overlay that the live
+    // bubble lands where the press found it.
     private func actionsWillDismiss(chosen: MessageAction.Kind?) -> Bool {
         let keyboardFree = chosen?.returnsFocusToComposer ?? true
         defer { restoresKeyboard = false }
@@ -445,9 +413,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         heldUpdate = nil
     }
 
-    /// A rightward swipe that starts on a message row is a reply; at the leading edge, on a day header or where there is
-    /// no message it is the system's swipe back. The system recognizer takes no failure requirement from ours (each ends
-    /// up waiting for the other), so it is switched off for the length of a touch that starts where a reply can.
+    // The system pop recognizer takes no failure requirement from ours (each ends up waiting for the other), so it is
+    // switched off for a touch that starts where a reply swipe can.
     private weak var reservedPopGesture: UIGestureRecognizer?
 
     private func reserveSwipe(at point: CGPoint) {
@@ -463,7 +430,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         reservedPopGesture = nil
     }
 
-    /// After the push settles, so the first "+" finds the panel built (see `AttachmentKeyboard.warmUp`).
+    // After the push settles, so the first "+" finds the panel built.
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         attachmentKeyboard?.warmUp()
@@ -475,8 +442,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         attachmentKeyboard?.close()
     }
 
-    /// The attachment panel is the composer field's input view, so the composer on the keyboard guide, the insets,
-    /// interactive dismissal and the message menu all follow it as they follow the keyboard.
+    // The panel is the field's input view, so everything that follows the keyboard follows it.
     var attachmentKeyboard: AttachmentKeyboard? {
         didSet {
             guard oldValue !== attachmentKeyboard else { return }
@@ -488,7 +454,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 
     func setComposer(_ composer: AnyView?) {
         loadViewIfNeeded()
-        // Search hides the composer; the panel belongs to it and goes too.
         if composer == nil { attachmentKeyboard?.close() }
         composerHost.view.isHidden = composer == nil
         // The composer reports the height it wants at this width; the host's intrinsic size is measured without a
@@ -515,8 +480,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         updateBottomInset()
     }
 
-    /// Messages end above the composer, or above the keyboard while the composer is hidden. This runs inside the
-    /// keyboard's animation, so the inset and offset move with it.
+    // Runs inside the keyboard's animation, so the inset and offset move with it.
     private func updateBottomInset() {
         let top = composerHost.view.isHidden ? view.keyboardLayoutGuide.layoutFrame.minY : composerHost.view.frame.minY
         let inset = max(0, view.bounds.maxY - top)
@@ -536,7 +500,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         // A finger on the list owns the offset, as during an interactive keyboard dismissal.
         if !collectionView.isTracking {
             if followsBottom { followBottom() }
-            // Reading history: keep the same messages above the composer instead of letting it cover them.
             else { collectionView.contentOffset.y = TimelineScrollPolicy.offsetKeepingBottomEdge(bottomEdgeY, bottomInset: inset, in: viewport) }
         }
         recordBottomEdge()
@@ -544,17 +507,14 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 
     private func recordBottomEdge() { bottomEdgeY = collectionView.contentOffset.y + collectionView.bounds.height - bottomInset }
 
-    /// The composer arrives as bottom safe area after the first apply; keyboard changes come the same way.
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
         if followsBottom { followBottom() }
         view.setNeedsLayout()
     }
 
-    /// A banner appearing, growing or closing changes the top inset. The collection view only takes it in the next
-    /// layout pass (after `viewSafeAreaInsetsDidChange`), and UIKit then keeps the message at the top edge in place,
-    /// which pushes the newest message behind the composer. While following the bottom, re-clamp to it here, where the
-    /// new inset is already in place. Bottom changes stay with `updateBottomInset`.
+    // The collection view takes a new top inset only in the next layout pass and then keeps the top message in place,
+    // pushing the newest behind the composer; while following the bottom, re-clamp here where the inset is in place.
     func scrollViewDidChangeAdjustedContentInset(_ scrollView: UIScrollView) {
         let top = scrollView.adjustedContentInset.top
         guard abs(top - knownAdjustedTop) > 0.5 else { return }
@@ -585,9 +545,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        // Layout changes during a keyboard transition are not a user's scroll intent.
-        // Every move counts, including the nudges self-sizing cells cause, except the shift UIKit makes for a safe-area
-        // change this controller has not laid out for yet: that one is undone from the recorded edge.
+        // Every move counts, including self-sizing nudges, except UIKit's shift for a safe-area change not laid out yet:
+        // that one is undone from the recorded edge.
         if abs(collectionView.safeAreaInsets.bottom - knownSafeBottom) < 0.5 { recordBottomEdge() }
         // Before the guard: page loads and inset changes move a chip that is already up, without ever raising it.
         updateDateChip()
@@ -613,9 +572,8 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         scheduleDateChipIdle()
     }
 
-    /// The chip leaves a second after the list visibly comes to rest; a new drag cancels that, a held finger keeps it.
-    /// A touch that never becomes a drag (a hold, a long press on a bubble) sends no end-of-drag callback, so while a
-    /// finger is down the timer checks again shortly and restarts its full second once the finger lifts.
+    // A touch that never becomes a drag (a hold, a long press) sends no end-of-drag callback, so while a finger is down
+    // the timer checks again shortly and restarts its full second once the finger lifts.
     private func scheduleDateChipIdle(after delay: TimeInterval = 1.0) {
         dateChipIdle?.cancel()
         let idle = DispatchWorkItem { [weak self] in
@@ -635,21 +593,15 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: idle)
     }
 
-    /// Where the chip's text sits below the bars and banners; the inline header text it replaces sticks at this line.
     private static let dateChipLine: CGFloat = 12
-    /// Gap kept between the chip and the next day's header as that header pushes it up.
     private static let dateChipPushGap: CGFloat = 6
 
-    /// Signal's rule: the last day header whose text has passed the line under the bars sticks, the next one pushes it
-    /// up and away, and a header coming back down to the line takes its date back from the chip. The chip's text sits
-    /// exactly where the inline text would, so the two swap in place.
+    // The chip's text sits exactly where the inline text would, so the two swap in place.
     private func updateDateChip(fade: TimeInterval = 0.15) {
         let line = collectionView.contentOffset.y + collectionView.adjustedContentInset.top + Self.dateChipLine
         let stuck = dateChipActive ? stuckDayHeader(line: line) : nil
         let wasShown = dateChip.alpha > 0
         let previous = coveredHeaderID
-        // One day's chip handing over to another: the old capsule dissolves where it was, over the header taking its
-        // text back, while the new one fades in over the header it covers.
         let handover = wasShown && stuck != nil && previous != nil && previous != stuck?.id
         if handover, dateChip.pushFade > 0.01 {
             UIView.performWithoutAnimation {
@@ -666,7 +618,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         // keeps moving under the fixed chip, so any fade shows the date twice, a few points apart.
         let swap = !handover && (stuck.map { !wasShown && headerTextNearLine($0.id, line: line) }
             ?? (wasShown && dateChipActive && previous.map { headerTextNearLine($0, line: line) } == true))
-        // Otherwise text and capsule change together: the fade of whichever chip is arriving or leaving.
         let crossfade = handover ? 0.15 : swap ? 0 : (alpha != dateChip.alpha ? (alpha > 0 ? 0.2 : fade) : 0)
         if stuck?.id != previous {
             if let previous { dateHeaderCell(for: previous)?.coverDateHeader(false, fade: crossfade) }
@@ -704,11 +655,9 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         }
     }
 
-    /// The stuck header's message ID and text, and where the next day's header text is when it is on screen.
     private func stuckDayHeader(line: CGFloat) -> (id: String, text: String, nextTextTop: CGFloat?)? {
         let visible = collectionView.indexPathsForVisibleItems.sorted()
         guard let last = visible.last else { return nil }
-        // The first item reaching below the line: its day, or the day of the header before it, is under the chip.
         let current = visible.first { (collectionView.layoutAttributesForItem(at: $0)?.frame.maxY ?? 0) > line } ?? last
         func header(_ item: Int) -> (id: String, text: String)? {
             guard item >= 0, let id = dataSource.itemIdentifier(for: IndexPath(item: item, section: 0)),
@@ -743,7 +692,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         return (stuck.id, stuck.text, nextTextTop)
     }
 
-    /// Whether this header's text is within a chip's reach of the line, where the chip's text would sit over it.
     private func headerTextNearLine(_ id: String, line: CGFloat) -> Bool {
         guard let path = dataSource.indexPath(for: id), let frame = collectionView.layoutAttributesForItem(at: path)?.frame else { return false }
         return abs(frame.minY + MessageBubbleCell.dateHeaderTop - line) < 40
@@ -762,7 +710,6 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 
     private var isNearBottom: Bool { viewport.isNearBottom }
 
-    /// The first visible message. Never the loading-earlier cell: anchored on it, its removal would drop the reader.
     private func visibleAnchor() -> Anchor? {
         let visible = collectionView.indexPathsForVisibleItems.sorted()
         guard let path = visible.first(where: { TimelineScrollPolicy.canAnchor(on: dataSource.itemIdentifier(for: $0)) }),
@@ -771,7 +718,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
         return Anchor(id: id, distanceFromTop: attributes.frame.minY - collectionView.contentOffset.y)
     }
 
-    /// A status tick landing mid-slide must not cut it short; the slide settles at the bottom itself.
+    // A status tick landing mid-slide must not cut it short; the slide settles at the bottom itself.
     private func followBottom() { if !sliding { scrollToBottom() } }
 
     private func scrollToBottom() {
@@ -794,15 +741,14 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
 
 @MainActor
 private final class PreviewSource: NSObject, QLPreviewControllerDataSource, @preconcurrency QLPreviewControllerDelegate {
-    /// Immutable so Quick Look may read it from any thread. The title is the sender's file
-    /// name; the cache file itself is named after its hash.
+    // Immutable so Quick Look may read it from any thread.
     final class Item: NSObject, QLPreviewItem, Sendable {
         let previewItemURL: URL?
         let previewItemTitle: String?
         init(url: URL, title: String?) { previewItemURL = url; previewItemTitle = title }
     }
     var item: Item?
-    /// A delivered file is not a draft: no Markup.
+    // A delivered file is not a draft: no Markup.
     func previewController(_ controller: QLPreviewController, editingModeFor previewItem: any QLPreviewItem) -> QLPreviewItemEditingMode { .disabled }
     func numberOfPreviewItems(in controller: QLPreviewController) -> Int { item == nil ? 0 : 1 }
     func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> any QLPreviewItem { item ?? Item(url: URL(fileURLWithPath: "/"), title: nil) }
@@ -810,30 +756,25 @@ private final class PreviewSource: NSObject, QLPreviewControllerDataSource, @pre
 
 @MainActor
 private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizerDelegate {
-    /// The time, star and status row sits this far above the bubble's bottom edge, whatever the bubble holds.
     private static let footerInset: CGFloat = 8
     static let pillHeight: CGFloat = 24
-    /// How far a reaction pill reaches up into the bubble: into the footer's bottom padding only, leaving 4pt
-    /// between the pill and the time and status row, so it never covers them at any text size.
+    // Reaches into the footer's bottom padding only, so the pill never covers the time row at any text size.
     private static let pillHang: CGFloat = 4
     private var row: TimelineRow?
     private var message: TimelineMessage? { row?.message }
     private var openAttachment: (URL) -> Void = { _ in }
     private var download: () -> Void = {}
     private var handleLink: (URL, LinkCommand, UIView, CGRect) -> Void = { _, _, _, _ in }
-    /// The card above the text, inside the attachment slot (no message has both in version 1).
     private let linkCard = LinkPreviewCardView()
     private var linkCardConstraints: [NSLayoutConstraint] = []
     private var linkCardTop: NSLayoutConstraint!
-    /// The links drawn in the text, as configured.
     private var links: [DetectedLink] = []
-    /// Opens the link under a tap, in the text or on the card; it never begins elsewhere, so it blocks nothing.
+    // It never begins elsewhere, so it blocks nothing.
     private let linkTap = UITapGestureRecognizer()
     private var attachmentTap: UITapGestureRecognizer!
     private let attachmentArea = UIView()
     private let media = UIImageView()
     private let mediaSpinner = UIActivityIndicatorView(style: .medium)
-    /// A preview whose file is not on disk: what a tap does, and the size or why not.
     private let mediaStatusIcon = UIImageView()
     private let mediaStatusLabel = UILabel()
     private lazy var mediaStatus = UIStackView(arrangedSubviews: [mediaStatusIcon, mediaStatusLabel])
@@ -844,13 +785,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private var plainAttachmentTop: NSLayoutConstraint!
     private var replyAttachmentTop: NSLayoutConstraint!
     private var textHeight: NSLayoutConstraint!
-    /// The time row sits under the caption, or directly under a photo that has none.
     private var footerAfterText: NSLayoutConstraint!
     private var footerAfterMedia: NSLayoutConstraint!
-    /// The bubble-coloured frame around a photo or video preview, equal on all four sides.
     private static let mediaInset: CGFloat = 3
-    /// Space between a caption-less preview's frame and its time row; with the frame it puts the time ink
-    /// as far below the photo as it sits above the bubble's bottom edge.
     private static let mediaFooterGap: CGFloat = 5
     private var toggleStar: () -> Void = {}
     private var retry: () -> Void = {}
@@ -860,28 +797,22 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     private var unsendAction: () -> Void = {}
     private var reportAction: () -> Void = {}
     private var openEncryptionAction: () -> Void = {}
-    /// Returns whether the menu opened; when it did not, the cell puts its squeezed bubble back.
     private var presentActions: (MessageActionsContext) -> Bool = { _ in false }
     private let pressFeedback = UIImpactFeedbackGenerator(style: .medium)
-    /// Bumped by every press start and end, so a squeeze that completes after the finger lifted presents nothing.
+    // Bumped by every press start and end, so a squeeze that completes after the finger lifted presents nothing.
     private var pressGeneration = 0
-    /// Recognition after 0.2 s (Signal's), then a 0.2 s squeeze to 0.95; the menu opens when the squeeze completes
-    /// under a held finger.
     private static let pressDelay: TimeInterval = 0.2
     private static let squeezeDuration: TimeInterval = 0.2
     private static let squeezedScale: CGFloat = 0.95
     private var swipeReplyAction: (() -> Void)?
     private let press = UILongPressGestureRecognizer()
     private let replyPan = UIPanGestureRecognizer()
-    /// Where the reply pan's touch went down, in the cell's coordinates: the row region and the edge are judged from
-    /// there, not from where the finger is once the pan has moved far enough to begin.
+    // The row region and the edge are judged from where the touch went down, not where the pan begins.
     private var replyTouchStart: CGPoint?
-    /// The leading strip left to the system's edge swipe back.
     private static let backEdgeWidth: CGFloat = 24
     private var crossedReplyThreshold = false
     private let replyFeedback = UIImpactFeedbackGenerator(style: .light)
     private let dateLabel = UILabel()
-    /// Space above a day header's text; the floating date chip sticks that text at the same distance under the bars.
     static let dateHeaderTop: CGFloat = 12
     private var dateTop: NSLayoutConstraint!
     private var dateHeight: NSLayoutConstraint!
@@ -1015,14 +946,12 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             quoteLabelsTrailing,
             quoteThumbnail.trailingAnchor.constraint(equalTo: quote.trailingAnchor, constant: -6),
             quoteThumbnail.centerYAnchor.constraint(equalTo: quote.centerYAnchor),
-            // Square, 36 pt, shrinking rather than growing the quote when small text makes the labels shorter.
             quoteThumbnail.widthAnchor.constraint(equalTo: quoteThumbnail.heightAnchor),
             quoteThumbnail.heightAnchor.constraint(lessThanOrEqualTo: quote.heightAnchor, constant: -8),
             { let side = quoteThumbnail.heightAnchor.constraint(equalToConstant: TimelineReply.thumbnailSide); side.priority = .required - 1; return side }(),
             quoteLabels.topAnchor.constraint(equalTo: quote.topAnchor, constant: 6),
             quoteLabels.bottomAnchor.constraint(equalTo: quote.bottomAnchor, constant: -6)
         ])
-        // Media and file cards sit above the text; the bubble's own corners clip them.
         attachmentArea.translatesAutoresizingMaskIntoConstraints = false
         attachmentArea.clipsToBounds = true
         attachmentArea.isAccessibilityElement = false
@@ -1120,8 +1049,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         star.contentMode = .scaleAspectFit
         star.isAccessibilityElement = false
         star.setContentCompressionResistancePriority(.required, for: .horizontal)
-        // One slot width for every state (MessageStatusView), so a bubble never resizes as its message
-        // is accepted, delivered and read.
+        // One slot width for every state, so a bubble never resizes as its message is accepted, delivered and read.
         time.font = .preferredFont(forTextStyle: .caption2)
         time.adjustsFontForContentSizeCategory = true
         time.isAccessibilityElement = false
@@ -1129,7 +1057,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         footer.addArrangedSubview(star)
         footer.addArrangedSubview(time)
         footer.addArrangedSubview(status)
-        // Pills hang off the bubble's bottom corner; the message accessibility label already reads them.
+        // The message's accessibility label already reads the pills.
         reactionRow.translatesAutoresizingMaskIntoConstraints = false
         reactionRow.axis = .horizontal
         reactionRow.spacing = 3
@@ -1144,7 +1072,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         replyAttachmentTop = attachmentArea.topAnchor.constraint(equalTo: quote.bottomAnchor, constant: 8)
         plainAttachmentTop.isActive = true
         attachmentHeight = attachmentArea.heightAnchor.constraint(equalToConstant: 0)
-        // With no attachment the area is zero-height and the text keeps its original top.
         plainTextTop = textView.topAnchor.constraint(equalTo: attachmentArea.bottomAnchor)
         replyTextTop = textView.topAnchor.constraint(equalTo: attachmentArea.bottomAnchor, constant: -12)
         plainTextTop.isActive = true
@@ -1170,13 +1097,11 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// 20pt corners; the last bubble of a run gets a 6pt tail on its outer bottom corner.
     private var corners: (bottomLeft: CGFloat, bottomRight: CGFloat) {
         guard let row, row.endsRun else { return (20, 20) }
         return row.message.isOutgoing ? (20, 6) : (6, 20)
     }
 
-    /// Hit-testing twin of the continuous-corner configuration the bubble draws with.
     private func bubblePath(in rect: CGRect) -> UIBezierPath {
         let radius = min(20, rect.height / 2)
         let (bottomLeft, bottomRight) = (min(corners.bottomLeft, radius), min(corners.bottomRight, radius))
@@ -1209,7 +1134,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             let limit = min(230, maximumTextWidth - 21)
             let bodyWidth = (reply.body as NSString).size(withAttributes: [.font: quoteBody.font!]).width
             let authorWidth = (reply.author as NSString).size(withAttributes: [.font: quoteAuthor.font!]).width
-            // A still widens the quote by its own slot only; the bubble's other width rules are unchanged.
             let still: CGFloat = reply.thumbnail == nil ? 0 : TimelineReply.thumbnailSide + 4
             // Rounded up: a label given exactly its fractional text width truncates ("Pho…") when the quote is the widest part.
             quoteWidth = ceil(min(limit, max(bodyWidth, authorWidth))) + 45 + still
@@ -1219,7 +1143,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             if attachment.showsPreview {
                 // A fixed preview width per chat; height follows the photo, bounded so one tall shot never fills the screen.
                 width = min(maximumTextWidth + 24, 280)
-                // The photo keeps its own aspect inside the frame; the frame is added around it, not cropped from it.
                 let frame = 2 * Self.mediaInset
                 attachmentHeight.constant = frame + min(340 - frame, max(120 - frame, ((width - frame) / attachment.aspectRatio).rounded()))
             } else {
@@ -1237,8 +1160,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         return super.preferredLayoutAttributesFitting(layoutAttributes)
     }
 
-    /// The pills run from 8pt inside the bubble's outer edge towards the far margin, never past it. When they do not
-    /// all fit, the last ones fold into a single "+N" pill, so the row stays one line and every pill on it can be reached.
+    // Pills that do not fit fold into one "+N" pill, so the row stays one line and every pill on it can be reached.
     private func fitReactions(cellWidth: CGFloat) {
         for case let pill as ReactionPill in reactionRow.arrangedSubviews {
             if pill.isOverflow { pill.removeFromSuperview() } else { pill.isHidden = false }
@@ -1259,12 +1181,10 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         reactionRow.addArrangedSubview(overflow)
     }
 
-    /// The link at `point` (bubble coordinates): the card's, or the one drawn under the point in the text.
     private func link(at point: CGPoint) -> URL? { linkTarget(at: point)?.url }
 
-    /// The link at `point` and where it is drawn (bubble coordinates), for a sheet to point at. Hit-tested through
-    /// UITextInput, which works with either TextKit (never the layout manager, which would switch the view to
-    /// TextKit 1); a few points of slop around each line of a link make small links easy to hit.
+    // Hit-tested through UITextInput, never the layout manager, which would switch the view to TextKit 1. A few points
+    // of slop around each line make small links easy to hit.
     private func linkTarget(at point: CGPoint) -> (url: URL, rect: CGRect)? {
         guard message != nil else { return nil }
         if !linkCard.isHidden, let url = linkCard.preview?.url {
@@ -1347,9 +1267,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         }
     }
 
-    /// The slot is kept whenever the quote is of a photo or video, so the bubble's width never changes as its file
-    /// downloads, an earlier page loads or the still decodes. Until the still shows (or if it never does) the slot
-    /// holds the kind's symbol on a quiet fill, like the attachment preview itself.
+    // The slot stays for any photo or video quote, so the width never changes as its file downloads or the still decodes.
     private func configureQuoteThumbnail(_ still: TimelineAttachment?) {
         quoteThumbnail.isHidden = still == nil
         quoteLabelsTrailing.isActive = still == nil
@@ -1373,8 +1291,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         }
     }
 
-    /// The card sits in the attachment slot, which then takes the card's height instead of a fixed one: 8 pt below the
-    /// bubble's top like the quote, or right in the slot's place 8 pt under a quote.
     private func configureLinkCard(_ preview: TimelineLinkPreview?, belowQuote: Bool, fill: UIColor, textColor: UIColor, metaColor: UIColor) {
         linkCard.isHidden = preview == nil
         guard let preview else {
@@ -1389,14 +1305,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         linkCard.configure(preview, fill: fill, textColor: textColor, metaColor: metaColor)
     }
 
-    /// Links are underlined, in the accent on received bubbles and in the text colour on the accent-filled sent ones.
-    /// Only colour, underline and language change: the font, and so the measured width, stays the body's.
-    ///
-    /// A link never gets a hyphen. At large Dynamic Type sizes a URL longer than the line breaks inside a word, and
-    /// TextKit draws a hyphen there even with hyphenation off (measured on iOS 27: neither a paragraph style nor the
-    /// layout manager's switch removes it), which then reads as part of the address. Marking the link's run as having
-    /// no linguistic content (`zxx`) leaves nothing to hyphenate with, so it breaks at a character without a hyphen;
-    /// the prose around it keeps its usual breaks.
+    // Only colour, underline and language change, so the measured width stays the body's. TextKit hyphenates a URL broken
+    // inside a word even with hyphenation off; marking the link's run as no linguistic content (`zxx`) avoids that.
     private func drawLinks(base: UIColor, link color: UIColor) {
         let storage = textView.textStorage
         let whole = NSRange(location: 0, length: storage.length)
@@ -1412,7 +1322,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
 
     private static let language = NSAttributedString.Key(kCTLanguageAttributeName as String)
 
-    /// VoiceOver's Links rotor walks the links in the text; activating the text then opens the one it moved to.
     private func linkRotor() -> UIAccessibilityCustomRotor {
         UIAccessibilityCustomRotor(systemType: .link) { [weak self] predicate in
             guard let self else { return nil }
@@ -1434,7 +1343,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         }
     }
 
-    /// The one action list (`MessageActionMenu`); the overlay menu and VoiceOver custom actions both read it.
     private func actions(link: URL? = nil) -> [MessageAction] {
         guard let message else { return [] }
         return MessageActionMenu.items(for: message, link: link).map { item in
@@ -1457,7 +1365,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         }
     }
 
-    /// The menu's first item: Call for a phone number (a tap asks first), what a tap does otherwise.
     private func openFromMenu(_ url: URL) {
         let command: LinkCommand = if case .phone = LinkOpening.destination(for: url, inAppBrowser: false) { .call } else { .open }
         handleLink(url, command, bubble, bubble.bounds)
@@ -1473,11 +1380,9 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             if bubble.transform.tx != 0 { resetReplySwipe(animated: false) }
             pressGeneration += 1
             let generation = pressGeneration
-            // Pressed on a link or the card: its actions go on top of the message's.
             let link = link(at: press.location(in: bubble))
             if UIAccessibility.isReduceMotionEnabled { presentMenu(actionsContext(link: link)); return }
-            // The snapshot and frames are taken before the squeeze (a snapshot ignores the transform anyway); the
-            // prepared overlay draws its source at the squeeze's end scale, which it will have when it is shown.
+            // The prepared overlay draws its source at the squeeze's end scale, which it will have when it is shown.
             var context = actionsContext(link: link)
             context?.sourceScale = Self.squeezedScale
             UIView.animate(withDuration: Self.squeezeDuration, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction]) {
@@ -1494,8 +1399,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
             }
         case .ended, .cancelled, .failed:
             pressGeneration += 1
-            // Released before the menu opened: the bubble springs back and the prepared overlay goes.
-            // After it opened the live bubble is hidden and already unsqueezed.
             MessageActionsOverlay.discardPrepared()
             releaseSqueeze()
         default:
@@ -1503,7 +1406,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         }
     }
 
-    /// Scales the bubble about its centre and keeps the reaction pills hanging off it by scaling them about the same point.
     private func squeeze(_ scale: CGFloat) {
         bubble.transform = CGAffineTransform(scaleX: scale, y: scale)
         let offset = CGPoint(x: (1 - scale) * (bubble.center.x - reactionRow.center.x), y: (1 - scale) * (bubble.center.y - reactionRow.center.y))
@@ -1515,14 +1417,12 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         UIView.animate(springDuration: 0.25, bounce: 0.2, options: [.beginFromCurrentState, .allowUserInteraction]) { self.squeeze(1) }
     }
 
-    /// The window frame a view has without its squeeze transform.
     private func unsqueezedFrame(_ view: UIView) -> CGRect {
         let centre = contentView.convert(view.center, to: nil)
         return CGRect(x: centre.x - view.bounds.width / 2, y: centre.y - view.bounds.height / 2, width: view.bounds.width, height: view.bounds.height)
     }
 
-    /// Haptic, then the overlay over the squeezed bubble with the snapshot and frames taken as the press began
-    /// (keyboard still up). The timeline moves the keyboard only after the overlay covers it.
+    // The timeline moves the keyboard only after the overlay covers it.
     private func presentMenu(_ context: MessageActionsContext?) {
         guard var context, window != nil, messageID == context.message.id else {
             MessageActionsOverlay.discardPrepared()
@@ -1534,7 +1434,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         if !presentActions(context) { releaseSqueeze() }
     }
 
-    /// The snapshot and frames exactly as the screen shows them, and what the menu will offer. Frames ignore the squeeze.
     private func actionsContext(link: URL? = nil) -> MessageActionsContext? {
         guard let message, window != nil, let bubbleSnapshot = bubble.snapshotView(afterScreenUpdates: false) else { return nil }
         let reactions = message.reactions.isEmpty ? nil : reactionRow.snapshotView(afterScreenUpdates: false)
@@ -1556,11 +1455,8 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
                                              })
     }
 
-    /// `point` is in the cell's coordinates.
     func bubbleContains(_ point: CGPoint) -> Bool { messageID != nil && bubblePath(in: bubble.bounds).contains(convert(point, to: bubble)) }
 
-    /// Whether a touch going down at `point` (cell coordinates) belongs to this message's reply swipe: anywhere on the
-    /// row, full width, below its day header and clear of the leading edge.
     func ownsReplySwipe(at point: CGPoint) -> Bool {
         guard messageID != nil, bounds.contains(point), convert(point, to: nil).x > Self.backEdgeWidth else { return false }
         return dateLabel.isHidden || point.y >= contentView.convert(dateLabel.frame, to: self).maxY
@@ -1657,8 +1553,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         row = nil
     }
 
-    /// The floating date chip draws this day header's text while it stands in for it. The text is only made clear,
-    /// never hidden, so VoiceOver keeps the inline header.
+    // Made clear, never hidden, so VoiceOver keeps the inline header.
     func coverDateHeader(_ covered: Bool, fade: TimeInterval) {
         let color: UIColor = covered ? .clear : .secondaryLabel
         guard dateLabel.textColor != color else { return }
@@ -1715,7 +1610,7 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         configureQuoteThumbnail(message.reply?.thumbnail)
         NSLayoutConstraint.deactivate([plainTextTop, replyTextTop, plainAttachmentTop, replyAttachmentTop])
         (message.reply == nil ? plainAttachmentTop : replyAttachmentTop)?.isActive = true
-        // Under a preview the caption keeps its own inset; under a quote alone the text tucks up as before.
+        // Under a preview the caption keeps its own inset.
         let card = message.showsPlaceholder || message.attachment != nil ? nil : message.linkPreview
         (message.reply == nil || message.attachment != nil || card != nil ? plainTextTop : replyTextTop)?.isActive = true
         textHeight.isActive = message.body.isEmpty && message.attachment != nil
@@ -1743,7 +1638,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
         time.textColor = meta
         star.tintColor = meta
         replyIndicator.tintColor = theme.tint
-        // An unsent or unreadable message keeps its bubble and time; the text becomes a quiet italic placeholder.
         let shown = message.displayedText
         if textView.text != shown { textView.text = shown }
         let bodyDescriptor = UIFontDescriptor.preferredFontDescriptor(withTextStyle: .body)
@@ -1767,7 +1661,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
                 return true
             })
         }
-        // One action per link, after the menu's and the file's, before the reactions.
         for link in links {
             customActions.append(UIAccessibilityCustomAction(name: MessageActionMenu.linkAccessibilityTitle(for: link)) { [weak self] _ in
                 guard let self else { return false }
@@ -1799,7 +1692,6 @@ private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizer
     }
 }
 
-/// Shown above the oldest message while older history is fetched: a small spinner and one quiet line, nothing to tap.
 final class LoadingEarlierCell: UICollectionViewCell {
     static let label = "Loading earlier messages"
     private let spinner = UIActivityIndicatorView(style: .medium)
@@ -1846,7 +1738,6 @@ final class LoadingEarlierCell: UICollectionViewCell {
     }
 }
 
-/// Three dots in a received bubble, bouncing in turn; with Reduce Motion they only fade.
 @MainActor
 private final class TypingIndicatorCell: UICollectionViewCell {
     private let author = UILabel()
@@ -1865,7 +1756,6 @@ private final class TypingIndicatorCell: UICollectionViewCell {
         contentView.addSubview(author)
         bubble.translatesAutoresizingMaskIntoConstraints = false
         bubble.backgroundColor = MessageBubbleCell.incomingBubble
-        // Shaped like the last bubble of a received run: 20pt corners and the 6pt tail.
         bubble.cornerConfiguration = .corners(topLeftRadius: .fixed(20), topRightRadius: .fixed(20), bottomLeftRadius: .fixed(6), bottomRightRadius: .fixed(20))
         bubble.isAccessibilityElement = true
         bubble.accessibilityIdentifier = "typingIndicator"
@@ -1883,7 +1773,6 @@ private final class TypingIndicatorCell: UICollectionViewCell {
         authorHeight = author.heightAnchor.constraint(equalToConstant: 0)
         bubbleTop = bubble.topAnchor.constraint(equalTo: author.bottomAnchor)
         NSLayoutConstraint.activate([
-            // A run of its own: the same 6pt a run's first message adds.
             author.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 6),
             author.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 13),
             author.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -16),
@@ -1913,7 +1802,6 @@ private final class TypingIndicatorCell: UICollectionViewCell {
         if window != nil { startDots() }
     }
 
-    /// A 1.2 s wave: each dot brightens (and lifts 3pt) a beat after the one before it.
     func startDots() {
         let now = CACurrentMediaTime()
         for (index, dot) in dots.enumerated() {
@@ -1940,7 +1828,6 @@ private final class TypingIndicatorCell: UICollectionViewCell {
         }
     }
 
-    /// Grows out of its tail corner; with Reduce Motion it only fades in.
     func animateIn() {
         let views = [bubble, author]
         views.forEach { $0.alpha = 0 }
@@ -1961,9 +1848,7 @@ private final class TypingIndicatorCell: UICollectionViewCell {
     }
 }
 
-/// One reaction chip: emoji plus count. The user's own reaction looks like anyone else's; the message's VoiceOver
-/// label says "including you", and the long-press reaction row marks it. An overflow chip says how many more emoji
-/// the row has no room for; the message's VoiceOver label still reads them all.
+// The user's own reaction looks like anyone else's; the message's VoiceOver label says "including you".
 @MainActor
 private final class ReactionPill: UIView {
     private let onTap: (() -> Void)?
@@ -2025,10 +1910,8 @@ private final class ReactionPill: UIView {
     }
 }
 
-/// Returning to ordinary reading restores the bubble's single context-menu interaction.
 @MainActor
 private final class MessageTextView: UITextView {
-    /// Opens the link the Links rotor last moved to; activating the text runs it.
     var rotorLink: (() -> Void)?
 
     override func accessibilityActivate() -> Bool {
@@ -2066,7 +1949,7 @@ private final class MessageTextView: UITextView {
     }
 }
 
-/// Reports where a touch lands and when it is over. It never recognizes, so it blocks nothing.
+// It never recognizes, so it blocks nothing.
 private final class TouchGate: UIGestureRecognizer {
     private let down: (CGPoint) -> Void
     private let up: () -> Void
@@ -2090,7 +1973,7 @@ private final class TouchGate: UIGestureRecognizer {
     override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
 }
 
-/// A horizontal message action must not start vertical scrolling or keyboard dismissal.
+// A horizontal message action must not start vertical scrolling or keyboard dismissal.
 @MainActor
 private final class ConversationCollectionView: UICollectionView {
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {

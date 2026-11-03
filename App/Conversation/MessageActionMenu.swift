@@ -1,17 +1,13 @@
 import Foundation
 import XMPPProtocol
 
-/// One thing a message can do, with what doing it means on this platform.
 struct MessageAction: Identifiable {
     enum Kind: String {
         case reply, copy, selectText, star, retry, edit, unsend, encryptionDetails, report
-        /// The pressed link's actions, above the message's own: open it (call, for a phone number), message the
-        /// number, copy it, share it.
         case openLink, messageNumber, copyLink, shareLink
 
-        /// Choosing it presents nothing and focuses nothing, so the composer may take back the focus it had before the
-        /// menu. Reply and edit focus the composer themselves; text selection and the unsend dialog must keep it away,
-        /// and so must anything that opens a link or a share sheet.
+        // Reply and edit focus the composer themselves; text selection, the unsend dialog, links and share sheets must
+        // keep it away.
         var returnsFocusToComposer: Bool {
             switch self {
             case .copy, .star, .retry, .copyLink: true
@@ -37,24 +33,19 @@ struct MessageAction: Identifiable {
     }
 }
 
-/// Which actions a message offers and in which order. The long-press menu and VoiceOver read the same list, and a
-/// Mac context menu reads it too; each platform only attaches what performing an action does.
 enum MessageActionMenu {
     struct Item: Equatable, Sendable {
         let kind: MessageAction.Kind
         let title: String
-        /// An SF Symbol name.
         let symbol: String
     }
 
-    /// `link` is the link a long press landed on (in the text or on the preview card); its actions come first.
     static func items(for message: TimelineMessage, link: URL? = nil) -> [Item] {
         let own = messageItems(for: message)
         guard let link, !message.showsPlaceholder else { return own }
         return linkItems(for: link) + own
     }
 
-    /// What a long press on `url` adds at the top of the message menu.
     static func linkItems(for url: URL) -> [Item] {
         switch LinkOpening.destination(for: url, inAppBrowser: false) {
         case .phone:
@@ -82,7 +73,6 @@ enum MessageActionMenu {
         }
     }
 
-    /// The VoiceOver action that opens one link in the text, named after what it does and the link as written.
     static func linkAccessibilityTitle(for link: DetectedLink) -> String {
         switch link.kind {
         case .web: "Open link \(link.text)"
@@ -112,13 +102,11 @@ enum MessageActionMenu {
         }
         if message.canEdit { items.append(Item(kind: .edit, title: "Edit", symbol: "pencil")) }
         if message.canUnsend { items.append(Item(kind: .unsend, title: "Unsend", symbol: "trash")) }
-        // Last, after the everyday actions: it opens the report dialog, which also blocks the sender.
+        // Last: it opens the report dialog, which also blocks the sender.
         if message.canReport { items.append(Item(kind: .report, title: "Report", symbol: "exclamationmark.bubble")) }
         return items
     }
 
-    /// What a tap on the message's file does, when anything: open it once it is on disk, or fetch it when it waits for
-    /// a tap or failed.
     enum AttachmentAction: Equatable {
         case open(URL)
         case download
@@ -131,7 +119,6 @@ enum MessageActionMenu {
         return ("Download \(attachment.kindLabel.lowercased())", .download)
     }
 
-    /// One toggle per quick reaction, for assistive technologies; the visible menu shows them as a row of emoji.
     static func reactionToggles(for message: TimelineMessage) -> [(emoji: String, title: String)] {
         guard message.canReact else { return [] }
         let selected = Set(message.reactions.filter(\.isSelected).map(\.emoji))

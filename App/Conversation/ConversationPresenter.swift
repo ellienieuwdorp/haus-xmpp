@@ -3,23 +3,18 @@ import MessageStore
 import OMEMO
 import XMPPProtocol
 
-/// What a conversation reads from the app model. `AppModel` provides it; the presenter only reads, so a view built
-/// on it keeps observing exactly the model properties it touches.
+// The presenter only reads, so a view built on it observes exactly the model properties it touches.
 @MainActor
 protocol ConversationSource: AnyObject {
     var accountID: String { get }
     var isDemo: Bool { get }
-    /// The open chat's loaded window, oldest first.
     var messages: [ChatMessage] { get }
-    /// The chat `messages` belongs to; nil while a load is pending.
     var messagesLoadedFor: String? { get }
     var messageReactions: [String: [AuthenticatedReaction]] { get }
     var messageReceipts: [String: MessageEventKind] { get }
     var attachmentFiles: [String: URL] { get }
     var attachmentDownloads: [String: AttachmentDownloadState] { get }
-    /// Our own link preview fetches, keyed by `LinkDetection.cacheKey`.
     var linkPreviews: [String: FetchedLinkPreview] { get }
-    /// GET hosts of our upload slots, which never get a preview (`StoredMessage.linkPreviewCandidate`).
     var linkPreviewUploadHosts: Set<String> { get }
     var encryptionOverview: EncryptionOverview? { get }
     var openChatTyping: [String]? { get }
@@ -29,15 +24,12 @@ protocol ConversationSource: AnyObject {
     func canRevise(_ message: StoredMessage) -> Bool
     func isBackfilling(chat: String) -> Bool
     func isBlocked(_ chatID: String) -> Bool
-    /// A message is on screen: fetch its link preview if policy allows. Never called at insert time.
+    // Fetches start when a message is displayed, never at insert time.
     func linkPreviewDisplayed(_ messageID: String)
-    /// Whether our own fetch may run for `message`, and so whether its cached result may show on it (`LinkPreviewPolicy`).
     func mayFetchLinkPreview(for message: StoredMessage) -> Bool
 }
 
-/// Everything the open conversation shows that is derived from the model: which messages are listed under the current
-/// search or starred filter, the timeline rows built from them, who is typing, and what an empty chat says. A value
-/// rebuilt with each view update, so nothing here is cached or can go stale.
+// Rebuilt with each view update, so nothing here is cached or can go stale.
 @MainActor
 struct ConversationPresenter {
     let source: any ConversationSource
@@ -47,8 +39,7 @@ struct ConversationPresenter {
     var starredOnly: Bool
     var showingSearch: Bool
 
-    /// `title` is read only where a line needs it, so a view that asks for an author line does not start observing the
-    /// chat list.
+    // `title` is an autoclosure so a view that never shows an author line does not observe the chat list.
     init(source: any ConversationSource, chatID: String, title: @escaping @autoclosure () -> String,
          searchTerm: String = "", starredOnly: Bool = false, showingSearch: Bool = false) {
         self.source = source
@@ -59,24 +50,20 @@ struct ConversationPresenter {
         self.showingSearch = showingSearch
     }
 
-    /// The chat's display name, for quotes of the peer and the typing line of a direct chat.
     var title: String { currentTitle() }
 
     var isGroup: Bool { source.isGroup(chatID) }
 
-    /// The loaded messages the timeline lists: all of them, or those matching the search or the starred filter.
     var messages: [ChatMessage] {
         source.messages.filter { message in
             (!starredOnly || message.isStarred) && (searchTerm.isEmpty || message.body.localizedCaseInsensitiveContains(searchTerm))
         }
     }
 
-    /// The quote's author line: "you" for own messages, the sender in a group, the chat's name otherwise.
     func authorName(_ sender: String) -> String {
         sender == source.accountID ? "you" : (isGroup ? sender : title)
     }
 
-    /// What Up-arrow in an empty composer edits: the newest loaded message whose menu offers Edit.
     var newestEditable: ChatMessage? {
         source.messages.last { $0.chatID == chatID && !$0.body.isEmpty && source.canRevise($0) }
     }
@@ -85,8 +72,7 @@ struct ConversationPresenter {
         Self.emptyNotice(isEmpty: messages.isEmpty, loadedFor: source.messagesLoadedFor, chatID: chatID, searchTerm: searchTerm, starredOnly: starredOnly)
     }
 
-    /// What an empty timeline says, or nil to leave it blank. Only an actual empty chat says so: while this chat's
-    /// first page is pending, or the loaded page is still another chat's, the timeline stays blank.
+    // Blank, not empty, while this chat's first page is pending or the loaded page is still another chat's.
     static func emptyNotice(isEmpty: Bool, loadedFor: String?, chatID: String, searchTerm: String,
                             starredOnly: Bool) -> (title: String, systemImage: String)? {
         guard isEmpty, loadedFor == chatID else { return nil }
@@ -94,15 +80,12 @@ struct ConversationPresenter {
         return starredOnly ? ("No starred messages", "star") : ("No messages yet", "bubble.left")
     }
 
-    /// The server's older history is being fetched for this chat. Search and the starred filter show a slice of
-    /// history, so they show no loading cell.
+    // Search and the starred filter show a slice of history, so they show no loading cell.
     var loadingEarlier: Bool { !showingSearch && !starredOnly && source.isBackfilling(chat: chatID) }
 
     var timelineMessages: [TimelineMessage] {
         let messages = messages
-        // One set per pass keeps the quoted-unsent lookup linear.
         let retracted = Set(source.messages.lazy.filter(\.isRetracted).map(\.id))
-        // Quoted messages that are loaded: their kind and, once on disk, their file, for the quote's still.
         let quoted = Set(messages.lazy.compactMap { $0.reply?.messageID })
         var sources: [String: ChatMessage] = [:]
         if !quoted.isEmpty {
@@ -111,9 +94,8 @@ struct ConversationPresenter {
         return messages.map { timelineMessage($0, retracted: retracted, sources: sources) }
     }
 
-    /// The quote's still for a photo or video: its slot is kept from the reply snapshot's media type (or the loaded
-    /// source's), so the bubble does not widen when the file downloads or an earlier page loads; the image itself
-    /// shows once the source is loaded and on disk. Anything else quotes text alone.
+    // The still's slot comes from the reply snapshot's media type, so the bubble does not widen when the file
+    // downloads or an earlier page loads.
     private func quoteStill(of reply: MessageReply, sources: [String: ChatMessage]) -> TimelineAttachment? {
         let source = sources[reply.messageID]
         guard let mediaType = reply.mediaType ?? source?.attachment?.mediaType,
@@ -140,8 +122,8 @@ struct ConversationPresenter {
         // A quote keeps its snapshot text unless the quoted message has since been unsent.
         let quotedUnsent = message.reply.map { retracted.contains($0.messageID) } ?? false
         if let unreadable = message.unreadableReason {
-            // A notice, not content: no quote, no reactions, no edits. An own send from another device keeps its
-            // server-held check (receipts cannot project onto it); an incoming one shows no status.
+            // An own send from another device keeps its server-held check (receipts cannot project onto it); an
+            // incoming one shows no status.
             return TimelineMessage(id: message.id, body: "", isOutgoing: message.isOutgoing, isStarred: message.isStarred,
                                    sentAt: message.sentAt, status: status(message), author: isGroup && !message.isOutgoing ? message.senderID : nil,
                                    unreadable: unreadable)
@@ -166,11 +148,8 @@ struct ConversationPresenter {
         return shown
     }
 
-    /// The message's card: the preview it carries (the sender's, or ours frozen when it was sent) while that link is
-    /// still in the body, else our fetch for its first previewable link where we would fetch for this message. A
-    /// carried preview shows whatever the fetch setting says; it brings its own image or none. Our cache never shows on
-    /// our own messages (the peer got only what they carried), a non-contact's, or with the setting off, even when
-    /// another message fetched the link. `wanted` is true when the first previewable link may still get our card.
+    // A carried preview shows while its link is still in the body. Our cache never shows on our own messages (the peer
+    // got only what they carried), a non-contact's, or with the setting off, even when another message fetched it.
     private func linkPreview(for message: ChatMessage) -> (preview: TimelineLinkPreview?, wanted: Bool) {
         guard message.attachment == nil, !message.isRetracted, message.unreadableReason == nil else { return (nil, false) }
         let links = LinkScan.previewableURLs(in: message.body, uploadHosts: source.linkPreviewUploadHosts)
@@ -195,17 +174,14 @@ struct ConversationPresenter {
                                     variant: variant, imageAspectRatio: variant == .text ? nil : size.map { Double($0.0) / Double($0.1) }), false)
     }
 
-    /// Search and the starred filter show a slice of history, so nobody is shown typing at its end.
     var typing: TimelineTyping? {
         guard !showingSearch, !starredOnly, let names = source.openChatTyping, let first = names.first else { return nil }
         return TimelineTyping(author: isGroup ? names.map { ContactName.display(for: $0, title: nil) }.joined(separator: ", ") : nil, colorKey: first,
                               accessibilityLabel: TypingTracker.description(isGroup ? names : [title]))
     }
 
-    /// A dashed ring while the outbox works, one ringed check once the server holds it, two rings once the
-    /// peer confirmed delivery, filled once read (the glyphs stay the footer's neutral colour). Own messages
-    /// from the archive or a carbon have no outbox row: the server already holds them, so they start at the
-    /// single check.
+    // Own messages from the archive or a carbon have no outbox row: the server already holds them, so they start at
+    // the single check.
     private func status(_ message: ChatMessage) -> TimelineMessage.Status? {
         guard message.isOutgoing else { return nil }
         let transport = message.transportState ?? .serverAccepted
@@ -217,7 +193,6 @@ struct ConversationPresenter {
         }
     }
 
-    /// One line under the disabled reaction row; mirrors the checks in `AppModel.canReact`.
     private func reactionUnavailableReason(_ message: ChatMessage) -> String? {
         guard !source.canReact(to: message) else { return nil }
         if source.isDemo { return "Sample messages can't be reacted to" }
@@ -228,10 +203,8 @@ struct ConversationPresenter {
         return message.wireID == nil ? "This message has no identity to react to" : "Reactions aren't available for this message"
     }
 
-    /// Whether a received message coming on screen moves the read marker. Only the newest received message is marked;
-    /// XEP-0333 makes a marker cover everything before it. A placeholder carries no wire ID, so the newest readable
-    /// received message is the one the peer hears about; the newest received message of any kind is where this chat's
-    /// read pointer goes.
+    // XEP-0333 makes a marker cover everything before it. A placeholder has no wire ID, so the peer hears about the
+    // newest readable received message, while the read pointer goes to the newest received message of any kind.
     func marksDisplayed(_ id: String) -> Bool {
         id == source.messages.last(where: { !$0.isOutgoing && $0.unreadableReason == nil })?.id
             || id == source.messages.last(where: { !$0.isOutgoing })?.id
