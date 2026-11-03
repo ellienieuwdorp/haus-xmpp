@@ -3,29 +3,18 @@ import OMEMO
 import XMPPProtocol
 
 struct CatchUpProgress: Equatable, Sendable {
-    /// nil for the direct archive, the room JID otherwise.
     var archive: String?
     var pages: Int
     var messages: Int
 }
 
-/// One connection's setup after `.online`: discovery, identity publication and the archive walk.
-/// Sequencing only; AppModel supplies the operations and applies the events to its state.
-///
-/// Order: features, then carbons; then, concurrently, the archive walk and identity publication followed by the room
-/// rejoins. Upload discovery runs alongside all of it and is joined last, so a slow or silent upload component never
-/// delays `.ready` or the walk. `.ready` is published only after `initialize` returned, so an identity mismatch still
-/// fails closed before anything can be sent.
-///
-/// Steps are independent: a failed account disco falls back to known features, and a keys or rejoin failure never
-/// cancels the walk; it is published once the walk has ended. Only an encryption-state failure (`OMEMOError`) or a
-/// walk failure ends the setup at once. Every child is structured: cancelling `run` cancels and joins all of them,
-/// so a caller that joins the task running `run` has joined every crypto operation it started.
+// Upload discovery runs alongside and is joined last, so a slow upload component never delays `.ready` or the walk.
+// `.ready` follows `initialize`, so an identity mismatch fails closed first. Every child is structured: joining the
+// task running `run` joins every crypto operation it started.
 struct ConnectionSetup: Sendable {
     struct Operations: Sendable {
         var features: @Sendable () async throws -> Set<String>
         var enableCarbons: @Sendable () async throws -> Void
-        /// Never throws: AppModel settles a thrown discovery itself (`uploads.settle`).
         var discoverUploads: @Sendable () async -> Void
         var initializeEncryption: @Sendable () async throws -> Void
         var rejoinGroups: @Sendable () async throws -> Void
@@ -34,31 +23,20 @@ struct ConnectionSetup: Sendable {
     }
 
     enum Event: Equatable, Sendable {
-        /// `session = .connected(settingUp: step)`.
         case step(String)
         case ready
-        /// `nil` when the walk finished.
         case catchingUp(CatchUpProgress?)
-        /// An optional step failed and setup went on without its answer. Logged only.
         case degraded(step: String, detail: String)
         case failed(step: String, detail: String)
-        /// Every step finished and none failed. With a minute of uptime, what makes a session count as healthy
-        /// (`ReconnectPolicy`): `.ready` comes before the walk and the rejoins.
         case settled
     }
 
-    /// What earlier connections left behind for this account (`ServerProfileMemory`, `UploadServiceMemory`). A fresh
-    /// bind uses only `features`, as the fallback for a failed discovery; a resumed stream may skip work with it.
     struct Memory: Equatable, Sendable {
-        /// The features of the account's last completed discovery; nil when there was none.
         var features: Set<String>?
-        /// `features` is recent enough for a resumed stream to use instead of asking again.
         var featuresFresh = false
-        /// Carbons were enabled on the very stream that was resumed (same stream ID). XEP-0280 state belongs to the
-        /// server session, so it survives a resume; a session another process bound (the extension never enables
-        /// carbons) has a different ID.
+        // XEP-0280 state belongs to the server session, so it survives a resume; a stream another process bound has a
+        // different ID.
         var carbonsOnStream = false
-        /// An upload discovery completed recently; the stored service (or its absence) stands.
         var uploadsFresh = false
     }
 
@@ -70,16 +48,11 @@ struct ConnectionSetup: Sendable {
     static let rejoinStep = "rejoining groups"
     static let archiveStep = "archive catch-up"
 
-    /// What setup assumes when the account's features could not be read and none are known: try the walk, whose
-    /// refused query ends only that archive (`ArchiveSynchronizer`), and leave carbons off rather than fail on them.
+    // A refused archive query ends only that archive, and carbons stay off rather than fail.
     static let assumedFeatures: Set<String> = [archiveFeature]
 
-    /// The feature set setup decides on: the server domain's disco#info union the account's. Servers advertise
-    /// XEP-0280 on the domain (Prosody lists `urn:xmpp:carbons:2` only there) and XEP-0313 for the user's own
-    /// archive on the account's bare JID, so neither query alone sees both. Both run concurrently.
-    /// The account query decides the step (it advertises the archive); the server-domain query only adds
-    /// optional features such as carbons, so a server that refuses it degrades to "no carbons" instead of
-    /// failing the connection. `complete` is false then, and such a partial answer is not worth remembering.
+    // Prosody advertises XEP-0280 only on the domain and XEP-0313 on the bare JID, so both are asked. Only the account
+    // query decides; a refused domain query degrades to no carbons, and such a partial answer is not remembered.
     static func discoverFeatures(server: @escaping @Sendable () async throws -> Set<String>,
                                  account: @escaping @Sendable () async throws -> Set<String>) async throws -> (features: Set<String>, complete: Bool) {
         async let domain: Set<String>? = { try? await server() }()
@@ -89,21 +62,12 @@ struct ConnectionSetup: Sendable {
         return (found.union(shared), true)
     }
 
-    /// False when the `.online` handler already ran `initialize` inline (first connection of a new account).
     let identityExists: Bool
-    /// The stream was resumed (XEP-0198), not freshly bound.
     var resumed = false
     var memory = Memory()
 
-    /// Which steps a resumed stream may skip, and why each is safe:
-    /// - features: they change only when the operator reconfigures the server, so an answer under a day old is reused.
-    ///   A wrong guess costs at most one connection's carbons, and a refused walk ends only its own archive.
-    /// - carbons: enabled on this very stream, and XEP-0280 state belongs to the stream.
-    /// - uploads: a discovery under a day old stands; the attach button already follows the stored service.
-    /// A fresh bind skips nothing.
-    /// Identity publication, the rejoins and the walk always run: the identity check is the fail-closed guard against
-    /// another device publishing under our device ID, and the walk catches what a resumed extension run acknowledged
-    /// without storing (live room messages) and what the server dropped from the hibernated queue.
+    // Identity publication, rejoins and the walk always run: the identity check is the fail-closed guard against
+    // another device using our device ID, and the walk catches what a resumed extension run acked without storing.
     var skipsFeatures: Bool { resumed && memory.featuresFresh && memory.features != nil }
     var skipsCarbons: Bool { resumed && memory.carbonsOnStream }
     var skipsUploads: Bool { resumed && memory.uploadsFresh }
@@ -113,14 +77,8 @@ struct ConnectionSetup: Sendable {
         let error: any Error
     }
 
-    /// Returns after every child has finished, including after cancellation or a failure.
-    /// Emits at most one `.failed` and never `.ready` or `.settled` after it. A walk that started ends with exactly one
-    /// of `.catchingUp(nil)` or `.failed` (a keys or rejoin failure follows a finished walk's `.catchingUp(nil)`), unless
-    /// `run` was cancelled: cancellation publishes nothing further.
-    ///
-    /// Nothing is delivered once the calling task is cancelled. The check runs on the main actor right before
-    /// the owner applies the event, so a teardown that cancels the setup on the main actor (a `.disconnected`
-    /// that arrived between an operation's return and its event) always wins over an event already in flight.
+    // Emits at most one `.failed` and nothing after it. The cancellation check runs on the main actor right before the
+    // owner applies an event, so a teardown that cancels setup there always wins over an event in flight.
     func run(operations: Operations, sink deliver: @escaping @MainActor @Sendable (Event) async -> Void) async {
         let sink: @MainActor @Sendable (Event) async -> Void = { event in
             guard !Task.isCancelled else { return }
@@ -232,18 +190,14 @@ struct ConnectionSetup: Sendable {
     }
 }
 
-/// The account's server features and the stream carbons were last enabled on, in the account-keyed preferences, so a
-/// resumed stream can skip asking again (`ConnectionSetup.Memory`). Only completed answers are kept.
-/// Unchecked: `UserDefaults` is documented as thread-safe, and setup operations write it off the main actor.
+// Unchecked: `UserDefaults` is thread-safe, and setup operations write it off the main actor.
 struct ServerProfileMemory: @unchecked Sendable {
     let defaults: UserDefaults
-    /// How long a feature discovery stands for a resumed stream. A fresh bind always asks again.
     static let featuresLifetime: TimeInterval = 24 * 60 * 60
 
     private static func featuresKey(_ account: String) -> String { "serverFeatures.\(account)" }
     private static func carbonsKey(_ account: String) -> String { "carbonsStream.\(account)" }
 
-    /// `stream` is the resumed stream's ID; nil after a fresh bind.
     func memory(account: String, stream: String?, uploadsFresh: Bool, now: Date = .now) -> ConnectionSetup.Memory {
         guard !account.isEmpty else { return ConnectionSetup.Memory() }
         var memory = ConnectionSetup.Memory(uploadsFresh: uploadsFresh)
@@ -261,7 +215,6 @@ struct ServerProfileMemory: @unchecked Sendable {
         defaults.set(["features": features.sorted(), "at": now], forKey: Self.featuresKey(account))
     }
 
-    /// Carbons were enabled on `stream`; nil (a stream that cannot be resumed) forgets any earlier one.
     func carbonsEnabled(account: String, stream: String?) {
         guard !account.isEmpty else { return }
         if let stream, !stream.isEmpty { defaults.set(stream, forKey: Self.carbonsKey(account)) }

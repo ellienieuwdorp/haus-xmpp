@@ -2,32 +2,26 @@ import SwiftUI
 import OMEMO
 import XMPPProtocol
 
-/// One of the account's other devices as the account-level review shows it: its undecided records with one identity,
-/// at most one per OMEMO version, decided together. Each record is fingerprint-scoped, so a stale review can never
-/// decide a key that replaced this one.
+// Records are fingerprint-scoped, so a stale review can never decide a key that replaced this one.
 struct OwnDeviceCandidate: Identifiable, Equatable {
     let deviceID: UInt32
     let fingerprint: String
-    /// Legacy first, then OMEMO 2.
     let records: [EncryptionDevice]
 
     var id: String { "\(deviceID)|\(fingerprint)" }
-    /// The device had another key before: the review must say so, never present it as merely new.
+    // A changed device must never be presented as merely new.
     var identityChanged: Bool { records.contains(where: \.identityChanged) }
     var versions: String { records.count > 1 ? "Both encryption versions" : records.first?.profile.label ?? "" }
 }
 
-/// What became of a device the review asked about.
 enum OwnDeviceOutcome: Equatable {
     case decided(DeviceTrust)
-    /// No longer advertised by the account: Remove from Account took it off the device lists.
     case removed
 }
 
-/// What the account-level review shows, derived from the stored own devices so tests can state it directly.
 enum OwnDeviceReview {
-    /// Active, undecided own devices grouped by device ID and fingerprint, in device ID order. A device ID that publishes
-    /// different identities in the two versions stays two entries: only the same fingerprint is decided together.
+    // A device ID publishing different identities in the two versions stays two entries: only one fingerprint is
+    // decided together.
     static func candidates(_ devices: [EncryptionDevice]) -> [OwnDeviceCandidate] {
         var groups: [String: [EncryptionDevice]] = [:]
         for device in devices where device.active && device.trust == .undecided {
@@ -39,9 +33,7 @@ enum OwnDeviceReview {
         }.sorted { ($0.deviceID, $0.fingerprint) < ($1.deviceID, $1.fingerprint) }
     }
 
-    /// What the stored records of `candidate` say: removed once none of them is advertised, otherwise their decision once
-    /// they agree and are no longer undecided; nil while the review still has to ask (or a record is gone, which the
-    /// next decision reports as a changed device).
+    // Nil while the review still has to ask, or a record is gone (the next decision reports a changed device).
     static func outcome(of candidate: OwnDeviceCandidate, in devices: [EncryptionDevice]) -> OwnDeviceOutcome? {
         let current = candidate.records.map { record in devices.first { $0.id == record.id } }
         guard !current.isEmpty, current.allSatisfy({ $0 != nil }) else { return nil }
@@ -50,11 +42,8 @@ enum OwnDeviceReview {
         return .decided(trust)
     }
 
-    /// Remove from Account is for a device the user does not recognise: offered while it is undecided or not trusted,
-    /// never once it is trusted or removed.
     static func offersRemoval(after outcome: OwnDeviceOutcome?) -> Bool { outcome == nil || outcome == .decided(.rejected) }
 
-    /// A changed identity is named even when several devices wait, so it never reads as just another new device.
     static func headline(_ candidates: [OwnDeviceCandidate]) -> String {
         guard candidates.count == 1 else {
             let several = "\(candidates.count) devices on your account need review"
@@ -67,16 +56,13 @@ enum OwnDeviceReview {
         return candidates[0].identityChanged ? "A device on your account changed its identity" : "New device on your account"
     }
 
-    /// The Don't trust confirmation: what stops and what keeps working. Chats and groups both leave the device out.
     static let rejectionMessage = "New messages in your chats and groups won’t be encrypted for it, and nothing it sends will be opened. Your trusted devices are unaffected."
 
-    /// The Remove from Account confirmation: what removal does, and that it is not a remote sign-out.
     static let removalMessage = "It stops receiving your encrypted messages, and nothing it sends will be opened. If it’s still signed in, it may add itself back; it stays untrusted unless you trust it."
 }
 
 extension OwnDeviceReview {
-    /// Two identities in both encodings (legacy and OMEMO 2), public keys only, generated once for sample data and
-    /// tests. Each pair has one fingerprint.
+    // Public keys only, generated once for sample data and tests; each pair shares one fingerprint.
     static let sampleIdentities: [(legacy: Data, modern: Data)] = [
         (Data(hex: "05c508ef09624c2963740a4968ae0e9049aeb36e44d66c119d6897e0cac655e757")!,
          Data(hex: "3c039deaaf7f4c8ab11a133ee9f4917133a8b8e609823cdfd4192a30ee8bdb40")!),
@@ -84,7 +70,6 @@ extension OwnDeviceReview {
          Data(hex: "95e3685f6102f7b06536192b6f877c174291d8dc474028ab6a3713dd37a39b09")!)
     ]
 
-    /// `-demo-own-device`: a newly signed-in device in both versions, and a known one whose OMEMO 2 identity changed.
     static func sampleDevices(account: String) -> [EncryptionDevice] {
         let new = sampleIdentities[0], changed = sampleIdentities[1]
         return [
@@ -95,11 +80,8 @@ extension OwnDeviceReview {
     }
 
     #if DEBUG
-    /// `-demo-group`: the sample group's address.
     static let sampleRoom = "trail@rooms.preview.local"
 
-    /// `-demo-group`: the sample group's devices, one in each state a member's device can be in, and another device of
-    /// the account.
     static func sampleGroupDevices(account: String) -> [EncryptionDevice] {
         let first = sampleIdentities[0], second = sampleIdentities[1]
         return [
@@ -112,13 +94,11 @@ extension OwnDeviceReview {
     #endif
 }
 
-/// The chat list's account-level prompt, shaped like a chat's trust review card.
 struct OwnDeviceReviewCard: View {
     let candidates: [OwnDeviceCandidate]
     let review: () -> Void
     let later: () -> Void
 
-    // The iPhone's thumb-sized card; regular Mac push buttons in a card that fits a sidebar row.
     #if os(iOS)
     private static let buttonPadding: CGFloat = 4, padding: CGFloat = 14, cornerRadius: CGFloat = 26
     #else
@@ -138,7 +118,6 @@ struct OwnDeviceReviewCard: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 #if os(macOS)
-                // A sidebar row's text is one line unless it asks for more; the card's text wraps in full.
                 .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
                 #endif
@@ -159,13 +138,10 @@ struct OwnDeviceReviewCard: View {
     }
 }
 
-/// Every undecided device of the account at once, each with its fingerprint, Trust and Don't trust, the fingerprint
-/// comparison that can verify it, and Remove from Account for one the user does not recognise. A decision applies to
-/// every chat.
 struct OwnDeviceReviewSheet: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    /// Every device shown since the sheet opened, so a decided one stays with its outcome until the sheet closes.
+    // Keeps decided devices with their outcome until the sheet closes.
     @State private var shown: [OwnDeviceCandidate] = []
     @State private var rejecting: OwnDeviceCandidate?
     @State private var comparing: OwnDeviceCandidate?
@@ -207,11 +183,10 @@ struct OwnDeviceReviewSheet: View {
         }
         .onAppear { shown = model.ownDeviceReview }
         .onChange(of: model.ownDeviceReview) { _, current in
-            // A shown device whose other version arrived meanwhile takes the fuller entry, so one decision covers both.
             shown = shown.map { old in current.first { $0.id == old.id } ?? old }
                 + current.filter { candidate in !shown.contains { $0.id == candidate.id } }
         }
-        // The root's alert cannot show over this sheet; a failed decision is reported here.
+        // The root's alert cannot show over this sheet.
         .alert("Something needs attention", isPresented: Binding(
             get: { model.error != nil }, set: { if !$0 { model.error = nil } }
         )) {
@@ -232,7 +207,7 @@ struct OwnDeviceReviewSheet: View {
                     if let outcome { OutcomeLabel(outcome: outcome) }
                 }
                 if candidate.identityChanged && outcome == nil {
-                    // A plain HStack, not a Label: in a List row a Label pads its icon column to body metrics.
+                    // Not a Label: in a List row a Label pads its icon column to body metrics.
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Image(systemName: "exclamationmark.shield")
                         Text("Its identity changed since you last reviewed it")
@@ -242,12 +217,12 @@ struct OwnDeviceReviewSheet: View {
                 FingerprintGrid(value: candidate.fingerprint, font: .system(.footnote, design: .monospaced))
                     .padding(.vertical, 4)
                 if outcome == nil {
-                    // Styled buttons take their own taps, so both can share the device's row.
+                    // Styled buttons take their own taps, so both can share the row.
                     HStack(spacing: 10) {
                         Button(role: .destructive) { rejecting = candidate } label: { Text("Don’t Trust").frame(maxWidth: .infinity) }
                             .secondaryActionStyle().foregroundStyle(.red)
                             .accessibilityIdentifier("ownDevice.reject.\(candidate.deviceID)")
-                            // Anchored to its button, so the dialog's popover points at the device it decides.
+                            // Anchored to its button, so the popover points at the device it decides.
                             .confirmationDialog("Don’t trust device \(String(candidate.deviceID))?",
                                                 isPresented: Binding(get: { rejecting?.id == candidate.id }, set: { if !$0 { rejecting = nil } }),
                                                 titleVisibility: .visible) {
@@ -281,7 +256,6 @@ struct OwnDeviceReviewSheet: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                // The removal rewrites the account's device lists on the server.
                 .disabled(!(model.isDemo || model.session.isReady))
                 .accessibilityIdentifier("ownDevice.remove.\(candidate.deviceID)")
                 .confirmationDialog("Remove device \(String(candidate.deviceID)) from your account?",
@@ -294,7 +268,6 @@ struct OwnDeviceReviewSheet: View {
     }
 }
 
-/// What became of a device, in the words the Devices page uses.
 struct OutcomeLabel: View {
     let outcome: OwnDeviceOutcome
 

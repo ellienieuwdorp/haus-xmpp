@@ -71,7 +71,6 @@ struct EncryptionDetailsView: View {
         }
     }
 
-    /// Which devices will not receive messages in the selected version because they publish keys only in the other one.
     private func otherVersionNotice(_ overview: EncryptionOverview) -> String {
         func count(_ owner: String, _ label: String) -> String? {
             let value = overview.otherVersionOnlyDevices[owner] ?? 0
@@ -82,7 +81,6 @@ struct EncryptionDetailsView: View {
         return "\(subject) only support the other encryption version and won’t receive these messages. Messages still go to the devices listed here; switch the version below to reach the others instead."
     }
 
-    /// Why a contact has nothing to review: keys missing on the server, or a list their server does not show us.
     private func emptyExplanation(for owner: String) -> String {
         let missing = model.encryptionOverview(for: chatID)?.unavailableDevices[owner] ?? 0
         if missing > 0 {
@@ -92,7 +90,6 @@ struct EncryptionDetailsView: View {
         return "No encryption devices are published for this address in this version. Try the other encryption version below, or ask them to open their app so it publishes keys. Nothing is ever sent unencrypted."
     }
 
-    /// `identifier` prefixes each row's accessibility identifier; a device ID can appear once per version.
     @ViewBuilder private func devices(_ devices: [EncryptionDevice], owner: String, identifier: String = "encryptionDevice") -> some View {
         if devices.isEmpty { Text(emptyExplanation(for: owner)).foregroundStyle(.secondary) }
         ForEach(devices) { device in
@@ -103,10 +100,7 @@ struct EncryptionDetailsView: View {
     }
 }
 
-// MARK: - Shared device presentation (also used by GroupDetailsView)
-
 extension XMPPOMEMOProfile {
-    /// The version's name wherever a person chooses or reads it.
     var label: String { self == .legacy ? "OMEMO · compatible" : "OMEMO 2" }
 }
 
@@ -117,7 +111,7 @@ struct DeviceBadge {
 }
 
 extension EncryptionDevice {
-    /// Secondary row text. Tests read "Review required" and "Accepted · not verified" verbatim.
+    // Tests read "Review required" and "Accepted · not verified".
     var reviewStatus: String {
         if !active { return "No longer advertised" }
         if identityChanged && trust == .undecided { return "Identity changed · review required" }
@@ -128,13 +122,10 @@ extension EncryptionDevice {
         case .rejected: return "Blocked"
         }
     }
-    /// Trailing coloured status label; doubles as the fingerprint sheet's hero glyph.
     var badge: DeviceBadge { trust.badge }
 
-    /// A device of the account or a contact. Nothing published says what kind of device it is (an OMEMO device is an
-    /// ID and a key), so it is drawn as any device, never as a phone or a computer.
+    // An OMEMO device is only an ID and a key, so it is never drawn as a phone or a computer.
     static let symbol = "laptopcomputer.and.iphone"
-    /// A device that is no longer advertised, or one being removed from the account.
     static let removedSymbol = "minus.circle"
 }
 
@@ -193,7 +184,6 @@ struct DeviceRow: View {
     }
 }
 
-/// Fingerprint as 8-character monospace groups in four columns.
 struct FingerprintGrid: View {
     let value: String
     var font: Font = .system(size: 15, design: .monospaced)
@@ -214,13 +204,9 @@ struct DeviceFingerprintSheet: View {
     @Bindable var model: AppModel
     let chatID: String
     let device: EncryptionDevice
-    /// Who to compare with; nil for one of your own devices.
     let name: String?
-    /// Repair / remove rows, offered on 1:1 chats only.
     var allowsMaintenance = false
-    /// The versions the decision applies to, when it covers more than `device` (the account-level review).
     var versions: String? = nil
-    /// When set, Block asks first with this explanation, as the account-level review's Don't Trust does.
     var rejectionMessage: String? = nil
     let review: (DeviceTrust) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -319,8 +305,6 @@ struct DeviceFingerprintSheet: View {
         .macSheetSize(width: 460, height: 620)
     }
 
-    /// What blocking does: a 1:1 chat and the account's own devices leave a blocked device out, while another member's
-    /// blocked device holds a group's sends (`ChatDeviceReview.holds`).
     private var blockingFooter: String {
         if model.isGroup(chatID) && device.jid != model.accountID {
             return "Blocking another member’s device pauses sending to the whole group, and nothing it sends is opened."

@@ -1,7 +1,6 @@
 import Foundation
 
-/// One load at a time. Requests made while a load runs are unioned into a single follow-up load,
-/// so a burst of N requests costs at most two loads.
+// Requests made while a load runs are unioned into one follow-up load, so a burst costs at most two loads.
 @MainActor final class CoalescedReload {
     struct Scope: OptionSet, Sendable {
         let rawValue: Int
@@ -17,7 +16,6 @@ import Foundation
 
     init(load: @escaping @MainActor (Scope) async -> Void) { self.load = load }
 
-    /// Returns once the first load that started after this request has finished, not when the whole burst has drained.
     func request(_ scope: Scope = .all) async {
         dirty.formUnion(scope)
         let next = started + 1

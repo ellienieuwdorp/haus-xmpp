@@ -2,16 +2,13 @@
 import ImageIO
 import UIKit
 
-/// The link preview card inside an iPhone bubble, above the text. Styled like the reply-quote panel, drawn from stored
-/// data only: the variant and the large image's height follow from the stored pixel size, so the card's layout is
-/// settled before the image decodes and never changes on screen. Its bubble handles taps and long presses, and its text
-/// speaks for it, so nothing here is an accessibility element.
+// Layout follows from the stored pixel size, so it is settled before the image decodes. Its bubble handles taps and
+// long presses and its text speaks for it, so nothing here is an accessibility element.
 @MainActor
 final class LinkPreviewCardView: UIView {
     static let cornerRadius: CGFloat = 12
     static let thumbnailSide: CGFloat = 56
     static let largeImageHeights: ClosedRange<CGFloat> = 120...220
-    /// Inside a bubble the card keeps the quote's 8 pt from the bubble's edges.
     static let bubbleInset: CGFloat = 8
 
     private let image = UIImageView()
@@ -88,7 +85,6 @@ final class LinkPreviewCardView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// `fill` is the quote panel's; `textColor` and `metaColor` the bubble's text and footer colours.
     func configure(_ preview: TimelineLinkPreview, fill: UIColor, textColor: UIColor, metaColor: UIColor) {
         let previous = self.preview
         self.preview = preview
@@ -110,7 +106,6 @@ final class LinkPreviewCardView: UIView {
         showImage(preview.image)
     }
 
-    /// The card is `width` points wide: the large image takes the full width at its own aspect, between 120 and 220 pt.
     func fit(width: CGFloat) {
         guard let preview, preview.variant == .large else { return }
         let aspect = max(0.1, preview.imageAspectRatio ?? 1.91)
@@ -140,9 +135,8 @@ final class LinkPreviewCardView: UIView {
 
     private static func cached(_ source: TimelineLinkPreview.Image) -> UIImage? { decoded.object(forKey: key(source)) }
 
-    /// Bounded decoding: an embedded image is at most 64 KiB and a fetched one is already downsampled, but neither is
-    /// ever inflated beyond what a 280 pt card can show, and one whose header declares more pixels than
-    /// `LinkScan.imagePixelBudget` is never decoded at all.
+    // Never inflated beyond what a 280 pt card can show; an image whose header declares more than `imagePixelBudget` is
+    // never decoded.
     private static func decode(_ source: TimelineLinkPreview.Image) async -> UIImage? {
         await Task.detached(priority: .userInitiated) {
             let options = [kCGImageSourceShouldCache: false] as CFDictionary

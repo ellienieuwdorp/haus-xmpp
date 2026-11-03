@@ -4,35 +4,26 @@ import PhotosUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// A photo or a video just taken with the Camera chip.
 enum CameraCapture {
     case image(Data)
     case movie(URL)
 }
 
-/// What the panel hands back to the conversation. The composer builds it on every open, so it always captures the
-/// chat that is on screen.
+// Built by the composer on every open, so it always targets the chat on screen.
 struct AttachmentPanelActions {
-    /// The composer's text view, whose input view the panel becomes; looked up on each use, as SwiftUI rebuilds it.
+    // Looked up on each use: SwiftUI rebuilds the text view.
     var field: () -> UITextView?
-    /// Prepares a recent photo into the tray; returns once it landed there or was refused.
     var select: (PHAsset) async -> Void
-    /// Takes a recent photo back out of the tray.
     var deselect: (String) -> Void
     var capture: (CameraCapture) -> Void
     var photos: () -> Void
     var files: () -> Void
-    /// A reason shown to the user: the tray is full, the camera is not allowed.
     var refuse: (String) -> Void
-    /// The panel went away without the composer asking: a tap on the field brought the letters back, or the field
-    /// lost its focus (a drag, the message menu).
     var dismissed: () -> Void
-    /// The message menu closed without an action that takes the composer's place; the panel was up before it opened.
     var restore: () -> Void
 }
 
-/// The last docked system keyboard height per window size and orientation, so the panel replaces the keyboard
-/// without a jump. Floating and hardware keyboards report small heights and are ignored.
+// Floating and hardware keyboards report small heights and are not cached.
 enum KeyboardHeightCache {
     private static let prefix = "attachmentKeyboard.height."
 
@@ -46,7 +37,6 @@ enum KeyboardHeightCache {
         UserDefaults.standard.set(Double(height), forKey: key(for: window))
     }
 
-    /// Fallbacks measured on iOS 26 with the predictive bar; the frame includes the home indicator area.
     @MainActor static func height(in window: UIWindow) -> CGFloat {
         let stored = UserDefaults.standard.double(forKey: key(for: window))
         if stored > 170 { return stored }
@@ -60,33 +50,26 @@ enum KeyboardHeightCache {
     }
 }
 
-/// Makes the attachment panel the composer field's own keyboard: its `inputView`, swapped with the letters by
-/// `reloadInputViews()` while the field stays first responder. UIKit then treats the panel as the keyboard: it slides
-/// with the keyboard curve, the keyboard layout guide follows it, and a drag on the timeline dismisses it. Swapping in
-/// place, rather than handing first responder to another view, keeps the height still and leaves UIKit only one
-/// responder to restore. The timeline controller installs it, for the presentations and the rotation dismissal.
+// The panel is the field's `inputView`, swapped with the letters by `reloadInputViews()` while the field stays
+// first responder, so UIKit animates, tracks and dismisses it as the keyboard with one responder to restore.
 @MainActor final class AttachmentKeyboard: NSObject {
     private(set) weak var host: UIViewController?
     private var panel: AttachmentKeyboardView?
     private var actions: AttachmentPanelActions?
-    /// The composer's text view while the panel is its input view.
     private weak var field: UITextView?
-    /// The field's own assistant bar groups, put back when the letters return (they show above the keyboard on iPad).
+    // Put back when the letters return; they show above the keyboard on iPad.
     private var assistantGroups: (leading: [UIBarButtonItemGroup], trailing: [UIBarButtonItemGroup])?
-    /// While the panel is up, a tap on the field brings the letters back, as it does in Signal.
     private lazy var fieldTap: UITapGestureRecognizer = {
         let tap = UITapGestureRecognizer(target: self, action: #selector(fieldTapped))
         tap.cancelsTouchesInView = false
         tap.delegate = self
         return tap
     }()
-    /// The field ended editing on its own: the next turn tells a dismissal from SwiftUI replacing the field.
+    // Set when the field ends editing on its own; the next turn tells a dismissal from SwiftUI replacing the field.
     private var movingToNewField = false
-    /// `close()` is resigning the field.
     private var closing = false
-    /// The limited-library picker that is up over the panel, one value per presentation. Presenting it takes the
-    /// field's focus and UIKit gives it back, panel and all, when the picker closes, so the panel stays attached
-    /// meanwhile. Detaching forgets it, so a picker that closes after the panel was put away brings nothing back.
+    // Presenting the picker takes the field's focus and UIKit returns it with the panel on close, so the panel stays
+    // attached meanwhile. Detaching clears this, so a picker closing after the panel was put away restores nothing.
     private var pickingMore: UUID?
     private var restoresAfterMenu = false
     private var rotation: UITraitChangeRegistration?
@@ -104,9 +87,8 @@ enum KeyboardHeightCache {
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
     }
 
-    /// A drag that hides the panel is expected to end the field's editing; should it leave the field first responder
-    /// with nothing on screen, resigning here is what turns the × back into a +. Only a hide that ends below the
-    /// window counts: a swap between the panel and the letters ends on screen.
+    // A drag-hide that leaves the field first responder with nothing on screen resigns it here. Only a hide ending
+    // below the window counts: a panel/letters swap ends on screen.
     @objc private func keyboardWillHide(_ note: Notification) {
         guard isPresented, let field, let window = field.window,
               let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
@@ -116,15 +98,13 @@ enum KeyboardHeightCache {
 
     func install(in controller: UIViewController) {
         host = controller
-        // Rotating with the panel up leaves the keyboard guide measuring the old size (Signal dismisses here too).
+        // Rotating with the panel up leaves the keyboard guide measuring the old size.
         rotation = controller.view.registerForTraitChanges([UITraitVerticalSizeClass.self, UITraitHorizontalSizeClass.self]) { [weak self] (_: UIView, _) in
             self?.close()
         }
     }
 
-    /// Also drops the composer's actions, which hold the composer that owns this keyboard. `close()` keeps them for
-    /// the picker chips, which call them after closing the panel. A camera still up keeps its own route to the
-    /// composer (see `presentCamera`).
+    // Drops the composer's actions too; `close()` keeps them because the picker chips call them after closing.
     func uninstall() {
         close()
         detach()
@@ -135,11 +115,7 @@ enum KeyboardHeightCache {
         host = nil
     }
 
-    /// Builds and lays out the panel once the chat is on screen, so the first "+" only presents it. Building the
-    /// glass chips and the rail, and their first layout, measured 60-100 ms of main-thread time in a Debug build
-    /// when they ran between the tap and the start of the keyboard animation. Once a panel has asked for photo
-    /// access (in any earlier run), the first chat after launch also reads the recent photos ahead, off the main
-    /// thread, when the user allowed it.
+    // Warmed up off the tap: building and laying out the chips and rail otherwise delays the keyboard animation.
     func warmUp() {
         guard panel == nil, let window = host?.view.window else { return }
         RecentPhotosLibrary.shared.prepare()
@@ -156,7 +132,6 @@ enum KeyboardHeightCache {
         return panel
     }
 
-    /// Puts the panel in place of the letters, or brings it up with the field when the field had no focus.
     func open(actions: AttachmentPanelActions, selection: [String], trayCount: Int) {
         self.actions = actions
         movingToNewField = false
@@ -178,7 +153,6 @@ enum KeyboardHeightCache {
         }
     }
 
-    /// The letters again, in place of the panel; the field keeps its focus, so the keyboard keeps its height.
     func showKeyboard() {
         movingToNewField = false
         guard let field, field.inputView != nil else { detach(); return }
@@ -187,9 +161,8 @@ enum KeyboardHeightCache {
         if reload { field.reloadInputViews() }
     }
 
-    /// Puts the panel away, and the field's focus with it. A panel that is still the field's input view without the
-    /// focus (Select More's picker is up), on its way to a new field or waiting for the message menu to close is put
-    /// away all the same, so it cannot come back.
+    // Also puts away a panel still installed without focus (Select More is up, moving fields, waiting on the
+    // message menu), so it cannot come back.
     func close() {
         let moving = movingToNewField
         movingToNewField = false
@@ -217,8 +190,6 @@ enum KeyboardHeightCache {
         field.addGestureRecognizer(fieldTap)
     }
 
-    /// Leaves the field as SwiftUI made it. A field that never shows the panel again (a sheet over it, a later focus)
-    /// then comes back with the letters.
     private func detach() {
         pickingMore = nil
         guard let field else { return }
@@ -242,9 +213,8 @@ enum KeyboardHeightCache {
         guard let field, note.object as? UITextView === field, pickingMore == nil else { return }
         detach()
         guard !closing else { actions?.dismissed(); return }
-        // An appearance change rebuilds the composer (`.id(colorScheme)`): the old field ends editing as it leaves the
-        // window, which it has not left yet. Presenting the panel again on the new field also resolves the keyboard
-        // backdrop for the new look, which a live input view keeps from when it was presented.
+        // An appearance change rebuilds the composer (`.id(colorScheme)`); presenting again on the new field also
+        // resolves the keyboard backdrop, which a live input view keeps from its presentation.
         movingToNewField = true
         DispatchQueue.main.async { [weak self, weak field] in
             guard let self, movingToNewField else { return }
@@ -264,12 +234,9 @@ enum KeyboardHeightCache {
         panel?.update(selection: selection, trayCount: trayCount)
     }
 
-    /// Before the message menu puts the keyboard away.
     func menuWillPresent() { restoresAfterMenu = isPresented }
 
-    /// True when the panel comes back, so the composer's own focus restore stays out of it. It does unless the chosen
-    /// action takes the composer's place (reply, edit, text selection, a dialog); a plain dismissal, star or copy
-    /// gives it back.
+    // Returns true when the panel comes back, which it does unless the action takes the composer's place.
     func menuDismissed(composerTaken: Bool) -> Bool {
         defer { restoresAfterMenu = false }
         guard restoresAfterMenu, !composerTaken, let actions else { return false }
@@ -277,16 +244,12 @@ enum KeyboardHeightCache {
         return true
     }
 
-    // MARK: Panel callbacks
-
     func select(_ asset: PHAsset) async { await actions?.select(asset) }
     func deselect(_ id: String) { actions?.deselect(id) }
     func refuse(_ reason: String) { actions?.refuse(reason) }
 
-    /// Signal's order: the panel goes first, then the full-screen picker comes up over a settled screen. The field
-    /// gives up its focus with the panel, and the panel is no longer its input view when the picker closes: the chat
-    /// is left as it was before "+", with the picks in the tray, and UIKit's restore of the responder that was first
-    /// when the picker came up has nothing to bring back. The same goes for Files and the camera.
+    // The panel and focus go first, then the picker comes up: the panel is no longer the input view when the
+    // picker closes, so UIKit's responder restore has nothing to bring back. Files and the camera do the same.
     func pickPhotos() {
         close()
         actions?.photos()
@@ -311,9 +274,8 @@ enum KeyboardHeightCache {
         }
     }
 
-    /// The camera holds the composer's capture action itself, not the panel's actions: the chat can stop offering
-    /// uploads while the camera is up, which uninstalls the panel, and the photo must still land. It lets go of the
-    /// action when the camera closes, so the composer is not kept alive past the capture.
+    // Holds the capture action itself: the chat can uninstall the panel while the camera is up and the photo must
+    // still land. Released when the camera closes so the composer is not retained.
     private func presentCamera() {
         guard let host, let actions, host.presentedViewController == nil, UIImagePickerController.isSourceTypeAvailable(.camera) else { return }
         let picker = UIImagePickerController()
@@ -325,8 +287,7 @@ enum KeyboardHeightCache {
         host.present(picker, animated: true)
     }
 
-    /// Select More is part of the panel, so the panel is up again when the picker closes. UIKit gives the field
-    /// back its focus itself; the completion covers a dismissal that does not.
+    // The panel stays up behind Select More; the completion covers a dismissal where UIKit does not refocus the field.
     func presentLimitedPicker() {
         guard let host, host.presentedViewController == nil else { return }
         let presentation = UUID()
@@ -363,12 +324,10 @@ enum KeyboardHeightCache {
 }
 
 extension AttachmentKeyboard: UIGestureRecognizerDelegate {
-    /// The field's own taps still place the caret.
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }
 
 private final class CameraDelegate: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
-    /// Set for one presentation and cleared when it ends.
     var onCapture: ((CameraCapture) -> Void)?
 
     func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
@@ -390,9 +349,6 @@ private final class CameraDelegate: NSObject, UIImagePickerControllerDelegate, U
     }
 }
 
-// MARK: - Panel
-
-/// Replaces the software keyboard: an optional limited-access row, the recent photos rail and the format chips.
 final class AttachmentKeyboardView: UIInputView {
     private let limitedRow = LimitedAccessRow()
     private let rail: RecentPhotosRail
@@ -401,7 +357,7 @@ final class AttachmentKeyboardView: UIInputView {
     private var top: NSLayoutConstraint!
     private var afterBanner: NSLayoutConstraint!
     private var chipHeight: NSLayoutConstraint!
-    /// The parts' side and bottom insets: the safe area, never the view's layout margins (see `followSafeArea`).
+    // Constraint constants, not layout margins (see `followSafeArea`).
     private var insetConstraints: [(NSLayoutConstraint, (UIEdgeInsets) -> CGFloat)] = []
     private var insets: UIEdgeInsets?
     private var compact = false
@@ -427,8 +383,7 @@ final class AttachmentKeyboardView: UIInputView {
         chipHeight = chips.heightAnchor.constraint(equalToConstant: 122)
         limitedRow.isHidden = true
         limitedRow.collapsed = true
-        // The safe area is physical (left, right), so the sides pin to left and right; the parts lay out their own
-        // content in the reading direction.
+        // Safe area insets are physical, so the sides pin to left and right.
         insetConstraints = [
             (limitedRow.leftAnchor.constraint(equalTo: leftAnchor), { $0.left + 16 }),
             (rightAnchor.constraint(equalTo: limitedRow.rightAnchor), { $0.right + 16 }),
@@ -448,7 +403,6 @@ final class AttachmentKeyboardView: UIInputView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// `safeArea` is the window's; a presented panel follows its own safe area instead.
     func prepare(height value: CGFloat, compact: Bool, safeArea: UIEdgeInsets) {
         if window == nil { followSafeArea(safeArea) }
         height.constant = value
@@ -473,11 +427,8 @@ final class AttachmentKeyboardView: UIInputView {
         if window != nil { followSafeArea(safeAreaInsets) }
     }
 
-    /// The parts sit inside the safe area through constraint constants, which `prepare` can set from the window's
-    /// safe area before the panel has one of its own: a warm-up laid out without the home indicator inset made the
-    /// rail 34 pt taller than it is once presented, so the tiles were sized and drawn again on the tap. Layout
-    /// margins cannot carry this: once presented, the panel's side margins read 20 pt whatever was set (iOS 26.5),
-    /// which pulled the rail in from the screen edges.
+    // Constraint constants let `prepare` apply the window's safe area before the panel has one; once presented,
+    // the panel's side layout margins read 20 pt whatever was set (iOS 26.5).
     private func followSafeArea(_ safeArea: UIEdgeInsets) {
         let value = UIEdgeInsets(top: 0, left: safeArea.left, bottom: safeArea.bottom, right: safeArea.right)
         guard value != insets else { return }
@@ -494,8 +445,6 @@ final class AttachmentKeyboardView: UIInputView {
         applyMetrics()
     }
 
-    /// Signal's iOS 26 measurements: 36pt above the rail (20 landscape), 17 above the limited-access row with 16
-    /// after it, and a chip row of 122pt that gives up 22pt to the row.
     private func applyMetrics() {
         let banner = !limitedRow.isHidden
         top.constant = banner ? 17 : (compact ? 20 : 36)
@@ -514,7 +463,6 @@ final class AttachmentKeyboardView: UIInputView {
     }
 }
 
-/// "You've given access to a selection of photos" plus a Select More button.
 private final class LimitedAccessRow: UIView {
     var onSelectMore: () -> Void = {}
     var onSettings: () -> Void = {}
@@ -522,8 +470,7 @@ private final class LimitedAccessRow: UIView {
     private weak var selectMore: UIButton?
     var collapsed = false { didSet { collapse.isActive = collapsed } }
 
-    /// The button stays a small capsule beside one line of footnote text, but takes touches 44pt tall: the row, and
-    /// the button through it, answer 8pt above and below their drawn bounds (the rail starts 16pt below).
+    // Drawn as a small capsule but hit-testable 44 pt tall: the row extends 8 pt above and below its bounds.
     private static let reach: CGFloat = 8
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
@@ -584,28 +531,22 @@ private final class LimitedAccessRow: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 
-// MARK: - Recent photos
-
-/// Reads the library off the main thread. The first PhotoKit call in a process connects to photolibraryd
-/// (measured 60 ms in the simulator, more with a large library and its sorted fetch); on the main thread that ran
-/// between the tap and the start of the keyboard animation.
+// Reads the library off the main thread: the first PhotoKit call connects to photolibraryd and can take tens of ms.
 private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, @unchecked Sendable {
-    /// `PHFetchResult` is documented thread-safe; the box carries it back to the main actor.
+    // `PHFetchResult` is documented thread-safe.
     struct Batch: @unchecked Sendable { let assets: PHFetchResult<PHAsset> }
     private let queue = DispatchQueue(label: "haus.xmpp.ios.recentPhotos", qos: .userInitiated)
     private let lock = NSLock()
     private var generation = 0
-    /// Touched only on `queue`, and in deinit, which cannot run while a queued block still holds `self`.
+    // Touched only on `queue` and in deinit, which cannot run while a queued block still holds `self`.
     private var observing = false
-    /// The library changed; called on the main actor.
     @MainActor var onChange: () -> Void = {}
 
     deinit { if observing { PHPhotoLibrary.shared().unregisterChangeObserver(self) } }
 
-    /// Outcomes of fetches started before this call are dropped.
     func invalidate() { lock.withLock { generation += 1 } }
 
-    /// The photo access the user gave, read on the queue: it is a PhotoKit call too, and never prompts.
+    // A PhotoKit call too, so it runs on the queue; it never prompts.
     func status(_ completion: @escaping @MainActor (PHAuthorizationStatus) -> Void) {
         queue.async {
             let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -613,7 +554,7 @@ private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, 
         }
     }
 
-    /// The newest `limit` photos and videos of the user library; the change observer is registered on first use.
+    // Registers the change observer on first use.
     func fetch(limit: Int, completion: @escaping @MainActor (Batch) -> Void) {
         let mine = lock.withLock { generation += 1; return generation }
         queue.async { [self] in
@@ -644,21 +585,15 @@ private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, 
     }
 }
 
-/// The recent photos every chat's panel shows, read once per process. Each chat used to build its own source, so
-/// every chat paid the PhotoKit connection, the observer registration and the first fetch again on its first "+".
-/// The fetch result stays current through the change observer; a panel opening under a different access (limited
-/// to full, or a new grant) reads again. The panel asks for access on its first open; until a panel has opened
-/// once on this install, nothing here touches PhotoKit, so a warm-up before that does no photo work at all.
+// Shared across chats, so the PhotoKit connection, observer and first fetch happen once per process. Nothing
+// touches PhotoKit until a panel has opened once on this install, where access is asked.
 @MainActor private final class RecentPhotosLibrary {
     static let shared = RecentPhotosLibrary()
     static let limit = 96
-    /// Shared, so a chat opened later does not start with an empty image cache. Made with the first tile.
     lazy var imageManager = PHCachingImageManager()
     private let source = RecentPhotosSource()
-    /// The last read and the access it was made under; `nil` until the first read lands, or after a denial.
     private(set) var assets: PHFetchResult<PHAsset>?
     private var readUnder: PHAuthorizationStatus?
-    /// The read on hand was made under limited access.
     var isLimited: Bool { assets != nil && readUnder == .limited }
     private let rails = NSHashTable<RecentPhotosRail>.weakObjects()
 
@@ -668,15 +603,13 @@ private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, 
 
     func attach(_ rail: RecentPhotosRail) { rails.add(rail) }
 
-    /// Set when a panel first opens, which is where access is asked; kept across launches with the install.
     private static let askedKey = "attachmentKeyboard.photosAsked"
 
     static func panelOpened() {
         if !UserDefaults.standard.bool(forKey: askedKey) { UserDefaults.standard.set(true, forKey: askedKey) }
     }
 
-    /// After a chat appears: reads ahead when access was given earlier, so the first "+" finds the tiles. It
-    /// never asks, does nothing before a panel has asked, and a panel that opened meanwhile has the last word.
+    // Never asks for access; a panel that opened meanwhile has the last word.
     func prepare() {
         guard readUnder == nil, UserDefaults.standard.bool(forKey: Self.askedKey) else { return }
         source.status { [weak self] status in
@@ -685,15 +618,13 @@ private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, 
         }
     }
 
-    /// A panel is opening, or a warm-up learned the access. A read under the same access is kept (the observer
-    /// keeps it current) or still on its way; otherwise the library is read again.
+    // A read under the same access is kept current by the observer; otherwise the library is read again.
     func refresh(_ status: PHAuthorizationStatus) {
         guard status == .authorized || status == .limited else { revoke(); return }
         guard status != readUnder else { return }
         read(under: status)
     }
 
-    /// Access is gone: drop the read and any read still on its way.
     func revoke() {
         source.invalidate()
         assets = nil
@@ -721,11 +652,8 @@ private final class RecentPhotosSource: NSObject, PHPhotoLibraryChangeObserver, 
     }
 }
 
-/// Up to 96 of the newest photos and videos, square tiles in one sideways row. Tapping adds to the tray in tap
-/// order; tapping a selected tile takes it back out.
 private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UICollectionViewDelegate {
-    /// Weak, like every reference back from the panel: UIKit keeps the last panel it showed after the chat that
-    /// owned the keyboard has gone, and a chip's action runs a turn after its tap.
+    // Weak: UIKit keeps the last panel it showed after its chat is gone, and chip actions run a turn after the tap.
     private weak var keyboard: AttachmentKeyboard?
     private let layout = UICollectionViewFlowLayout()
     private let collection: UICollectionView
@@ -744,7 +672,6 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         layout.minimumInteritemSpacing = 12
         collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
         super.init(frame: .zero)
-        // A library read by an earlier chat fills the rail during the warm-up's layout, not on the tap.
         assets = library.assets
         library.attach(self)
         collection.backgroundColor = .clear
@@ -773,14 +700,12 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
             layout.sectionInset = UIEdgeInsets(top: 0, left: inset, bottom: 0, right: inset)
             layout.invalidateLayout()
         }
-        // The tiles take their size before the collection takes the rail's: the other way round (autoresizing), a
-        // rail shortened by the limited-access row briefly held tiles taller than itself and UIKit logged an
-        // invalid flow layout size.
+        // Tiles are sized before the collection frame changes; the other order briefly makes tiles taller than a rail
+        // shortened by the limited row, and UIKit logs an invalid flow layout size.
         if collection.frame != bounds { collection.frame = bounds }
         if resized { collection.reloadData() }
     }
 
-    /// Asked for on first open only, never at launch.
     func present() {
         RecentPhotosLibrary.panelOpened()
         alpha = 0
@@ -804,7 +729,6 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
             return
         }
         library.refresh(status)
-        // A read this rail has not shown yet goes up now; with none yet, the rail stays blank until one lands.
         if let latest = library.assets, latest !== assets {
             show(latest, limited: status == .limited)
         } else {
@@ -812,16 +736,13 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         }
     }
 
-    /// A read landed (this panel's, another chat's, or a library change).
     func show(_ latest: PHFetchResult<PHAsset>, limited: Bool) {
         onAccessChanged(limited)
         assets = latest
         collection.reloadData()
         collection.backgroundView = emptyMessage()
-        // A panel that is not up makes its first cells now, not when "+" presents it. The read can turn the
-        // limited-access row on, which shortens the rail, so the whole panel lays out again first and the cells are
-        // made at the size they are presented at, not sized and reloaded again on the tap. Outside a window the
-        // row's constraint changes do not mark the panel for layout, so it is marked here.
+        // Lays out the whole panel before making cells, so they are made at their presented size; outside a window,
+        // row constraint changes do not mark the panel for layout.
         if window == nil {
             superview?.setNeedsLayout()
             superview?.layoutIfNeeded()
@@ -829,7 +750,6 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         }
     }
 
-    /// Access was denied or taken away.
     func accessChanged() {
         onAccessChanged(false)
         assets = nil
@@ -845,7 +765,6 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         let changed = selection != self.selection
         self.selection = selection
         self.trayCount = trayCount
-        // Landed picks stop spinning; the badges renumber from the tray order.
         loading.subtract(selection)
         if changed { refreshVisibleCells() }
     }
@@ -899,14 +818,12 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         return container
     }
 
-    /// `object(at:)` raises for an index past the end. Until the next layout pass after a reload, the visible cells
-    /// keep their old index paths, which a smaller read no longer has.
+    // Until the next layout pass after a reload, visible cells can hold index paths past a smaller read, and
+    // `object(at:)` raises for those.
     private func asset(at item: Int) -> PHAsset? {
         guard let assets, item < assets.count else { return nil }
         return assets.object(at: item)
     }
-
-    // MARK: Data source
 
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int { assets?.count ?? 0 }
 
@@ -968,7 +885,6 @@ private final class RecentPhotoCell: UICollectionViewCell {
         imageView.frame = contentView.bounds
         imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         contentView.addSubview(imageView)
-        // A dark corner under the duration keeps white text readable on any photo.
         scrim.type = .radial
         scrim.colors = [UIColor.black.withAlphaComponent(0.4).cgColor, UIColor.black.withAlphaComponent(0).cgColor]
         scrim.startPoint = CGPoint(x: 1, y: 1)
@@ -1000,7 +916,6 @@ private final class RecentPhotoCell: UICollectionViewCell {
             spinner.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             badge.widthAnchor.constraint(equalToConstant: 24),
             badge.heightAnchor.constraint(equalToConstant: 24),
-            // Inset from the curve rather than the square corner, so the badge sits inside the rounded tile.
             badge.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
             badge.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
         ])
@@ -1030,10 +945,8 @@ private final class RecentPhotoCell: UICollectionViewCell {
         options.isNetworkAccessAllowed = true
         let id = asset.localIdentifier
         let target = CGSize(width: max(side, 1) * scale, height: max(side, 1) * scale)
-        // Sendable, so the handler is not main-actor code. Written here it otherwise would be, and Swift checks that
-        // on entry, which would trap if PhotoKit answered on a queue of its own. PhotoKit documents the main thread
-        // only as the typical case, so this is defensive. An answer on the main thread, such as the quick first one,
-        // is shown at once.
+        // `@Sendable` so the handler is not main-actor-isolated: Swift would trap on entry if PhotoKit answered on its
+        // own queue, which its docs allow.
         request = manager.requestImage(for: asset, targetSize: target, contentMode: .aspectFill, options: options) { @Sendable [weak self] image, _ in
             let apply = { @MainActor in
                 guard let self, self.assetID == id else { return }
@@ -1068,9 +981,6 @@ private final class RecentPhotoCell: UICollectionViewCell {
     }
 }
 
-// MARK: - Format chips
-
-/// Camera, Photos and File as 76×50 glass capsules with a label underneath, springing in on every open.
 private final class FormatChipRow: UIView {
     private let stack = UIStackView()
     private var items: [UIView] = []
@@ -1105,12 +1015,11 @@ private final class FormatChipRow: UIView {
     private func item(title: String, symbol: String, identifier: String, action: @escaping () -> Void) -> UIView {
         var configuration = UIButton.Configuration.glass()
         configuration.cornerStyle = .capsule
-        // Signal's "28" is a 28 pt asset canvas with about 22-24 pt of ink. A 22 pt regular symbol at medium
-        // scale draws that ink; set on the configuration, because glass buttons otherwise apply `.large` scale.
+        // Set on the configuration because glass buttons otherwise apply `.large` symbol scale.
         configuration.image = UIImage(systemName: symbol)
         configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 22, weight: .regular, scale: .medium)
         let button = UIButton(configuration: configuration, primaryAction: UIAction { _ in
-            // One run loop later, so the pressed glass shows before the panel goes.
+            // Next run loop, so the pressed glass shows before the panel goes.
             DispatchQueue.main.async { action() }
         })
         button.tintColor = .label
@@ -1134,10 +1043,7 @@ private final class FormatChipRow: UIView {
         return column
     }
 
-    /// Each chip springs from half size, a third of the duration after the one before it. The chips hide at once,
-    /// so the panel never shows them at full size, but the spring starts on the next turn of the run loop: started
-    /// while UIKit presents the panel, it put about 7 ms (Release, simulator) between the "+" and the start of the
-    /// panel's slide, on every open.
+    // The spring starts on the next run loop: starting it while UIKit presents the panel delays the panel's slide.
     func animateIn() {
         let reduceMotion = UIAccessibility.isReduceMotionEnabled
         for item in items {

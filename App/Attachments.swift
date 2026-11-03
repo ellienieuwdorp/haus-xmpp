@@ -13,10 +13,7 @@ import UIKit
 import UniformTypeIdentifiers
 import XMPPProtocol
 
-/// The app's own pickers: the photo library, recent photos and the camera. Files, shared items and the parts every
-/// source shares are in `AttachmentPreparation.swift`.
 extension AttachmentPreparer {
-    /// A library pick: photos go through `prepareImage`, video is copied out as a file first.
     static func prepare(photo item: PhotosPickerItem, limit: Int) async throws -> PreparedAttachment {
         if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
             guard let movie = try await item.loadTransferable(type: PickedMovie.self) else { throw Failure.unreadable }
@@ -27,7 +24,7 @@ extension AttachmentPreparer {
         return try prepareImage(data, name: "photo", limit: limit)
     }
 
-    /// A recent-photos pick from the attachment panel. Originals kept only in iCloud download on demand.
+    // Originals kept only in iCloud download on demand.
     static func prepare(asset: PHAsset, limit: Int) async throws -> PreparedAttachment {
         if asset.mediaType == .video {
             let options = PHVideoRequestOptions()
@@ -54,7 +51,6 @@ extension AttachmentPreparer {
     }
 
     #if os(iOS)
-    /// A camera capture from the attachment panel.
     static func prepare(capture: CameraCapture, limit: Int) async throws -> PreparedAttachment {
         switch capture {
         case .image(let data): return try prepareImage(data, name: "photo", limit: limit)
@@ -66,10 +62,10 @@ extension AttachmentPreparer {
     #endif
 }
 
-/// Photos hands the asset over on its own queue; nothing mutates it, and the export only reads it.
+// Photos hands the asset over on its own queue; nothing mutates it, and the export only reads it.
 private struct LibraryVideo: @unchecked Sendable { let asset: AVAsset }
 
-/// A picked video comes across as a file so a large clip never sits in memory twice.
+// A file, so a large clip never sits in memory twice.
 private struct PickedMovie: Transferable {
     let url: URL
     static var transferRepresentation: some TransferRepresentation {
@@ -81,17 +77,15 @@ private struct PickedMovie: Transferable {
     }
 }
 
-/// Refused slot requests and PUTs per queued file. A file that uses up its tries is failed, so a server that keeps
-/// refusing it (quota, size, an expired service) cannot hold back the messages queued after it in its chat.
-// ponytail: counts live in memory, so each launch gives a stuck file `limit` fresh tries; persist them if that matters.
+// A file that uses up its tries is failed, so a server that keeps refusing it cannot hold back later messages in its
+// chat. Counts live in memory: each launch gives a stuck file fresh tries.
 struct UploadFailureBudget {
     static let limit = 3
-    /// How long a refused file waits before its next try, so a pass that runs meanwhile does not use the tries up.
+    // Lets a pass that runs meanwhile skip the file instead of using its tries up.
     static let backOff: Duration = .seconds(5)
     private var failures: [String: Int] = [:]
     private var waitUntil: [String: ContinuousClock.Instant] = [:]
 
-    /// True when this failure used the file's last try.
     mutating func recordFailure(_ messageID: String, at now: ContinuousClock.Instant = .now) -> Bool {
         let count = failures[messageID, default: 0] + 1
         failures[messageID] = count < Self.limit ? count : nil
@@ -99,7 +93,6 @@ struct UploadFailureBudget {
         return count >= Self.limit
     }
 
-    /// True while a refused file is inside its back-off.
     func isWaiting(_ messageID: String, at now: ContinuousClock.Instant = .now) -> Bool {
         waitUntil[messageID].map { now < $0 } ?? false
     }
@@ -107,13 +100,10 @@ struct UploadFailureBudget {
     mutating func reset(_ messageID: String) { failures[messageID] = nil; waitUntil[messageID] = nil }
 }
 
-/// One pass at a time over work that each pass reads once when it starts. A request made while a pass runs is kept
-/// and another pass starts when it ends, so work queued meanwhile (the next file of a multi-file send) is not left
-/// waiting for some later event to start a pass.
+// A request made while a pass runs starts another pass when it ends, so work queued meanwhile is not left waiting.
 @MainActor final class RerunningPass {
     private var requested = false
     private var running = false
-    /// Returns the pass to run, or nil when it cannot run now; the request is then kept until the next one.
     private let makePass: @MainActor () -> (@MainActor () async -> Void)?
 
     init(_ makePass: @escaping @MainActor () -> (@MainActor () async -> Void)?) { self.makePass = makePass }
@@ -132,8 +122,8 @@ struct UploadFailureBudget {
     }
 }
 
-/// Background PUTs: the ciphertext file is handed to the system so a suspended app still finishes.
-/// Task identifiers are persisted on the attachment row; a relaunch asks which are still running.
+// The system finishes PUTs for a suspended app; task identifiers persist on the attachment row for reattaching at
+// relaunch.
 final class AttachmentUploader: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.background(withIdentifier: "haus.xmpp.ios.uploads." + scope)
@@ -142,7 +132,7 @@ final class AttachmentUploader: NSObject, URLSessionTaskDelegate, @unchecked Sen
         return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
     }()
     private let scope: String
-    /// Called off the main thread when any task ends, including ones reattached after relaunch.
+    // Called off the main thread, including for tasks reattached after relaunch.
     var onFinish: @Sendable (_ taskID: Int, _ succeeded: Bool) -> Void = { _, _ in }
 
     init(scope: String) { self.scope = scope }
@@ -169,7 +159,6 @@ final class AttachmentUploader: NSObject, URLSessionTaskDelegate, @unchecked Sen
 }
 
 #if os(iOS)
-/// A sent or received photo, full screen: pinch to zoom, drag down to dismiss, share, save.
 final class ImageViewer: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     private let url: URL
     private let scroll = UIScrollView()
@@ -240,7 +229,6 @@ final class ImageViewer: UIViewController, UIScrollViewDelegate, UIGestureRecogn
 
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
 
-    /// Only a mostly-downward drag on an unzoomed photo dismisses; zoomed panning stays with the scroll view.
     func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
         guard let pan = gesture as? UIPanGestureRecognizer, scroll.zoomScale == scroll.minimumZoomScale else { return false }
         let velocity = pan.velocity(in: view)

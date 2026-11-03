@@ -3,15 +3,12 @@ import Foundation
 import MessageStore
 import UniformTypeIdentifiers
 
-/// The sample chat with links and link previews: a received preview with a large image, an own sent preview with a
-/// small thumbnail, a text-only preview, and a phone number, an email address and an `xmpp:` link. Every preview is
-/// carried with its message, as a sender's XEP-0511 metadata or our frozen own preview, and every image is drawn here,
-/// so the sample needs no network and no asset ships (the demo never fetches, `LinkPreviewPolicy`).
+// Every preview is carried with its message and every image is drawn here, so the sample needs no network and ships no
+// asset.
 enum DemoLinkSamples {
     static let chatID = "sam@preview.local"
     static let title = "Sam"
 
-    /// From `start` a minute apart; the caller dates it before the other sample chats, so it lists last.
     static func messages(account: String, start: Date) -> [StoredMessage] {
         func message(_ index: Int, outgoing: Bool, _ body: String, preview: StoredLinkPreview? = nil) -> StoredMessage {
             let id = "sample-links-\(index)"
@@ -38,7 +35,6 @@ enum DemoLinkSamples {
         ]
     }
 
-    /// 600 × 315 px (1.9:1): a large card. A building's lit windows against an evening sky.
     private static func libraryImage() -> Data? {
         draw(width: 600, height: 315) { context, width, height in
             gradient(context, [(0.98, 0.62, 0.38), (0.55, 0.36, 0.72)], from: CGPoint(x: 0, y: height), to: CGPoint(x: 0, y: 0))
@@ -56,7 +52,7 @@ enum DemoLinkSamples {
         }
     }
 
-    /// 240 × 240 px: below the large card's 300 px, so a small thumbnail. A ridge with a dotted path.
+    // 240 px is below the large card's 300 px, so this shows as a small thumbnail.
     private static func trailImage() -> Data? {
         draw(width: 240, height: 240) { context, width, height in
             gradient(context, [(0.62, 0.84, 0.95), (0.86, 0.94, 0.88)], from: CGPoint(x: 0, y: height), to: CGPoint(x: 0, y: 0))
@@ -81,7 +77,7 @@ enum DemoLinkSamples {
         context.drawLinearGradient(gradient, start: start, end: end, options: [])
     }
 
-    /// A JPEG of what `body` draws into a y-up sRGB bitmap; within the 64 KiB a carried preview image may have.
+    // Within the 64 KiB a carried preview image may have.
     private static func draw(width: Int, height: Int, _ body: (CGContext, Int, Int) -> Void) -> Data? {
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space,

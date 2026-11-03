@@ -3,14 +3,12 @@ import MessageStore
 import MessagingCore
 import UserNotifications
 
-/// Opt-in, synthetic inspection of a run on the staging server (`DevelopmentEndpoint.stagingDomain`) through the
-/// containing app's regular data container.
-/// The caller must return from prepare before starting any foreground network synchronization.
+// The caller must return from prepare before starting any foreground network synchronization.
 enum NotificationDiagnostics {
     enum Failure: Error { case invalidFixture, invalidMarker }
 
-    /// False means no diagnostic request. A requested failure throws; it must never silently
-    /// fall through into a foreground connection that could manufacture the expected result.
+    // A requested failure throws: it must never fall through into a foreground connection that could manufacture the
+    // result.
     static func exportIfRequested(store: MessageStore, directory: URL) async throws -> Bool {
         #if DEBUG
         let process = ProcessInfo.processInfo
@@ -18,11 +16,8 @@ enum NotificationDiagnostics {
         let documents = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask,
                                                     appropriateFor: nil, create: true)
         var output = documents.appending(path: "notification-inspection.json")
-        // A rejected inspection must not leave an earlier successful result masquerading as
-        // this run's evidence. No real conversation or identity data is deleted here.
+        // A rejected inspection must not leave an earlier result posing as this run's evidence.
         if FileManager.default.fileExists(atPath: output.path) { try FileManager.default.removeItem(at: output) }
-        // Only the `alice` fixture account on the configured staging domain. Without a staging domain, every request
-        // fails here.
         guard let staging = DevelopmentEndpoint.stagingDomain,
               let account = try NotificationAccount.load(),
               account.accountID == "alice@\(staging)", account.username == "alice",

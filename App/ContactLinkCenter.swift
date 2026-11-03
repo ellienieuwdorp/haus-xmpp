@@ -5,44 +5,33 @@ import MessagingCore
 import Observation
 import os
 
-/// The signed-in account's links between direct chats and contacts (`ContactLink`), for the chat list, the details and
-/// the Contacts flows. Owns the photo files it writes and keeps the stored rows current with Contacts: on load, when the
-/// app returns to the foreground and when Contacts changes. A link is only ever made or removed by the user.
+// Keeps stored rows current with Contacts on load, on return to the foreground and when Contacts changes; a link is
+// only ever made or removed by the user.
 @MainActor @Observable
 final class ContactLinkCenter {
-    /// How a link stands for its row in chat details.
     enum Status: Equatable {
-        /// The contact is readable: the system is told who the person is.
         case linked
-        /// Made, or kept, without Contacts access: the name names the chat in Haus only.
+        // Made or kept without Contacts access: the name names the chat in Haus only.
         case nameOnly
-        /// Access is there but the contact is not: deleted, its identifier changed, or left out of the limited set.
+        // Deleted, its identifier changed, or left out of the limited set.
         case missing
     }
 
-    /// By chat address.
     private(set) var links: [String: ContactLink] = [:]
-    /// Linked contacts' photos by chat address, decoded from the pre-scaled files.
     private(set) var photos: [String: PlatformImage] = [:]
     private(set) var access: ContactAccess
-    /// A Contact row action asked for from elsewhere (the Mac's chat menus); the chat's row starts it and clears it.
     var request: ContactRowRequest?
-    /// Called after links change, so the chat list can rename its rows.
     @ObservationIgnored var onChange: (@MainActor () -> Void)?
 
     @ObservationIgnored private(set) var account = ""
     @ObservationIgnored private var store: MessageStore?
     @ObservationIgnored private var root: URL?
     @ObservationIgnored private var refreshedAccount: String?
-    /// The pending or running `refreshSoon` pass.
     @ObservationIgnored private(set) var refreshing: Task<Void, Never>?
-    /// The last change asked for (`serially`).
     @ObservationIgnored private var queue: Task<Void, Never>?
     @ObservationIgnored private var observer: (any NSObjectProtocol)?
     private static let log = Logger(subsystem: "haus.xmpp.ios", category: "contacts")
 
-    /// How the center reads Contacts: the access it has and one contact by identifier (`ContactDirectory`). Tests read
-    /// synthetic cards instead.
     struct Reader: Sendable {
         var access: @Sendable () -> ContactAccess = { ContactDirectory.access }
         var card: @Sendable (_ identifier: String) -> ContactCard? = { ContactDirectory().card(identifier: $0) }
@@ -63,7 +52,6 @@ final class ContactLinkCenter {
         return access.readsContacts ? .missing : .nameOnly
     }
 
-    /// Reads the account's links (each chat-list load); the first load for an account also checks them against Contacts.
     func load(store: MessageStore, account: String, root: URL?) async {
         if account != self.account { links = [:]; photos = [:]; refreshedAccount = nil }
         self.store = store; self.account = account; self.root = root
@@ -75,7 +63,6 @@ final class ContactLinkCenter {
         if refreshedAccount != account { refreshedAccount = account; refreshSoon() }
     }
 
-    /// Signed out, or the store closed: nothing is shown or written for the old account.
     func reset() {
         refreshing?.cancel(); refreshing = nil
         store = nil; account = ""; root = nil; refreshedAccount = nil
@@ -87,7 +74,6 @@ final class ContactLinkCenter {
         return access
     }
 
-    /// The unique readable contact whose Jabber address is the chat's, unless it is already the linked one.
     func suggestion(for jid: String) async -> ContactCard? {
         access = reader.access()
         guard access.readsContacts else { return nil }
@@ -100,8 +86,6 @@ final class ContactLinkCenter {
         return await Task.detached { ContactDirectory().cards() }.value
     }
 
-    /// Links the chat to a contact the user chose. `card` may come from a picker without access: then it names the chat
-    /// in Haus only, until access covers it.
     func link(_ jid: String, to card: ContactCard, source: ContactLink.Source) async -> Bool {
         guard store != nil, !account.isEmpty, jid != account else { return false }
         let account = account, reader = reader
@@ -129,7 +113,6 @@ final class ContactLinkCenter {
         }
     }
 
-    /// Unlinks the chat, removes the contact's photo, and deletes the donations that told the system about the person.
     func unlink(_ jid: String) async {
         await serially { [self] in
             guard let store, !account.isEmpty else { return }
@@ -154,7 +137,6 @@ final class ContactLinkCenter {
         }
     }
 
-    /// Checks every link against Contacts soon, once: repeated change notifications collapse into one pass.
     func refreshSoon() {
         guard refreshing == nil, store != nil, !account.isEmpty else { return }
         refreshing = Task { [weak self] in
@@ -164,9 +146,8 @@ final class ContactLinkCenter {
         }
     }
 
-    /// Reads each linked contact again: a changed name or photo is cached, a contact that cannot be read keeps its
-    /// cached name and is no longer offered to the system. Never links or unlinks anything. Contacts is read outside
-    /// the queue of changes; each result is written to the link it was read for only (`refreshContactLink`).
+    // Never links or unlinks. Contacts is read outside the queue of changes, and each result is written only to the
+    // link it was read for.
     func refresh() async {
         guard store != nil, !account.isEmpty else { return }
         let account = account, reader = reader
@@ -207,9 +188,8 @@ final class ContactLinkCenter {
         }
     }
 
-    /// Runs one change of the links after those asked for before it, in order: linking, unlinking, the photo switch,
-    /// a refresh's write and a load never interleave, so each publishes what it committed and no photo file is
-    /// removed while another change is about to name it.
+    // Linking, unlinking, photo switches, refresh writes and loads never interleave, so no photo file is removed while
+    // another change is about to name it.
     private func serially<T: Sendable>(_ change: @escaping @MainActor () async -> T) async -> T {
         let previous = queue
         let task = Task { @MainActor in
@@ -246,8 +226,6 @@ final class ContactLinkCenter {
         return ContactPhoto.save(thumbnail, root: root, account: account)
     }
 
-    /// Removes a photo file once nothing names it any more: a replaced link's, or one written for a change that did not
-    /// commit.
     private func removePhoto(_ hash: String?, account: String, keeping kept: String? = nil) async {
         guard let hash, hash != kept, let store, let root,
               (try? await store.isAvatarHashInUse(accountID: account, hash: hash)) == false else { return }

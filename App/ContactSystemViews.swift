@@ -2,15 +2,13 @@ import Contacts
 import ContactsUI
 import UIKit
 
-/// The iPhone's system Contacts screens for linking, presented by UIKit from the frontmost view controller: both refuse
-/// to work as children of a SwiftUI sheet. The Mac has neither (`ChatContactRow`).
+// Presented by UIKit from the frontmost view controller: both refuse to work as children of a SwiftUI sheet.
 @MainActor
 enum ContactSystemViews {
-    /// The out-of-process picker: it needs no Contacts access and shows the whole address book; the app receives only
-    /// the contact the user picks. `onPick` is not called when the user cancels.
+    // Out of process: needs no Contacts access, and the app receives only the picked contact.
     static func pickContact(onPick: @escaping @MainActor (CNContact) -> Void) {
         let picker = CNContactPickerViewController()
-        // Only what a link reads, so the contact card never offers to open an address or number.
+        // Only what a link reads, so the card never offers to open an address or number.
         picker.displayedPropertyKeys = [CNContactInstantMessageAddressesKey]
         let delegate = PickerDelegate(onPick: onPick)
         picker.delegate = delegate
@@ -18,8 +16,6 @@ enum ContactSystemViews {
         present(picker)
     }
 
-    /// The system's card for a contact that is not in Contacts yet, with Create New Contact and Add to Existing Contact.
-    /// `onSave` receives the saved contact; it is not called when the user closes the card.
     static func addToContacts(_ draft: CNMutableContact, onSave: @escaping @MainActor (CNContact) -> Void) {
         let card = CNContactViewController(forUnknownContact: draft)
         card.contactStore = CNContactStore()

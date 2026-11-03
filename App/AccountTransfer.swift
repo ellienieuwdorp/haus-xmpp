@@ -3,34 +3,14 @@ import MessageStore
 import MessagingCore
 import os
 
-/// Moves everything this install keeps for its accounts to another install of the app (another build, another
-/// iPhone, the Mac) as one encrypted file, and restores such a file into an install that has none of its own.
-///
-/// It is a move, never a copy: two installs must not both use one OMEMO device identity, or contacts' sessions break.
-/// So an export ends in the "moved" state. The store goes out of reach (`held/`), the marker holds this app and its
-/// extension off it, and only the user ends that state: by deleting this install's copy once the other install shows
-/// the chats, or by taking it back here, which is safe only if the file was never restored anywhere.
-///
-/// What an install's data is, as the previous-version backup knows it (`PreUpgradeSnapshot`): the store (one
-/// consistent copy, WAL included), its attachment and avatar folders, the preferences of both domains, and the
-/// Keychain items (the account record, the encryption state's wrapping key, push registrations). Everything goes into
-/// the archive under logical names; the target writes each into its own App Group, preference domains and Keychain
-/// group, so nothing install-specific travels. What belongs to the install rather than the account stays behind: the
-/// XMPP resource, keyboard measurements, the stream that last enabled carbons. Push is set up again for the target:
-/// the account record arrives without its subscription, and each registration arrives turned off, so the first
-/// connection retires the old device's registration before registering the new one.
-///
-/// Layout, in the App Group container beside `Messaging/`, in `Transfer/` (`TransferHold`): `moved.json` (the marker,
-/// from just before the store moves until the user settles it), `held/` (the store while moved), `outgoing/` (the
-/// archive), `export.partial/`; `incoming.partial/` while a restore is read, `import-journal.json` and
-/// `import-previous/` while it is put in place, and `imported.json`, the transfers restored here.
+// Moves an install's accounts to another install as one encrypted file. A move, never a copy: two installs sharing
+// an OMEMO device identity break contacts' sessions, so export ends "moved" (store in `held/`, marker keeps app and
+// extension off) until the user deletes this copy or takes it back. Push registrations arrive turned off.
 struct AccountTransfer: Sendable {
     struct Locations: Sendable {
         let install: PreUpgradeSnapshot.Locations
-        /// The wrapping key's Keychain item (`EncryptionKeychain`).
         let encryptionService: String
         let storageID: String
-        /// The Keychain service that keeps a moved install's code, one item per transfer ID.
         let codeService: String
 
         var directory: URL { TransferHold.directory(groupRoot: install.groupRoot) }
@@ -48,8 +28,8 @@ struct AccountTransfer: Sendable {
                 .map { Locations(install: $0, encryptionService: EncryptionKeychain.service, storageID: "primary", codeService: "haus.xmpp.transfer-code") }
         }
 
-        /// A UI test session's own store, preferences and Keychain items (DEBUG builds only set one), beside the
-        /// session's store folder: a transfer there never reaches the app's real data.
+        // DEBUG UI test sessions get their own store, preferences and Keychain items, so a transfer never
+        // reaches real data.
         static func testSession(_ id: String, preferences: UserDefaults) -> Locations? {
             guard let support = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true),
                   let group = UserDefaults(suiteName: "haus.xmpp.uitest.\(id).group") else { return nil }
@@ -68,7 +48,7 @@ struct AccountTransfer: Sendable {
         }
     }
 
-    /// The Keychain as this type uses it: raw bytes, never decoded on the way through.
+    // Raw bytes, never decoded on the way through.
     struct Secrets: Sendable {
         var read: @Sendable (_ service: String, _ account: String) throws -> Data?
         var accounts: @Sendable (_ service: String) throws -> [String]
@@ -79,13 +59,11 @@ struct AccountTransfer: Sendable {
                                       set: PreUpgradeSnapshot.keychainSet, delete: PreUpgradeSnapshot.keychainDelete)
     }
 
-    /// The marker: the transfer this install's data went into.
     struct Moved: Codable, Sendable, Equatable {
         enum Stage: String, Codable, Sendable {
-            /// The store has moved out of reach and the archive is being written. A launch that finds this undoes it:
-            /// no archive was ever offered.
+            // A launch that finds this undoes it: no archive was ever offered.
             case exporting
-            /// The archive is complete and checked. Only the user ends this.
+            // Only the user ends this.
             case moved
         }
 
@@ -100,28 +78,20 @@ struct AccountTransfer: Sendable {
     struct Progress: Sendable, Equatable {
         enum Step: Int, Sendable { case copying, encrypting, checking, restoring }
         let step: Step
-        /// Of this step, 0 to 1.
         let fraction: Double
     }
 
     enum Failure: Error, Equatable {
         case insufficientSpace(needed: Int64, available: Int64)
-        /// This install's data went into a transfer; it cannot be packed again or receive another.
         case alreadyMoved
-        /// The store holds an encryption identity: a restore would replace it.
         case identityExists
-        /// The store holds another account's chats.
         case accountExists
-        /// A previous-version backup is here; its copy is sealed with this install's wrapping key.
+        // Its copy is sealed with this install's wrapping key.
         case backupExists
-        /// This transfer was restored into this install before.
         case alreadyRestored
-        /// The archive holds something this build does not know where to put.
         case unrecognised(String)
-        /// The moved data is not where the marker says, or a store appeared where it would go back.
         case heldDataMissing
-        /// The marker is there but cannot be read (before the first unlock, or damaged): the data may be moved, so
-        /// nothing may open or create a store until it can be.
+        // Unreadable before first unlock or when damaged: the data may be moved, so no store may open until it reads.
         case markerUnreadable
         case keychain
     }
@@ -129,7 +99,6 @@ struct AccountTransfer: Sendable {
     let locations: Locations
     var secrets = Secrets.keychain
     private static let log = Logger(subsystem: "haus.xmpp.ios", category: "transfer")
-    /// Free space required beyond the copies themselves.
     static let spaceMargin: Int64 = 32 << 20
 
     private enum Name {
@@ -143,10 +112,7 @@ struct AccountTransfer: Sendable {
         static let messagingPrefix = "messaging/"
     }
 
-    /// Preference keys that describe this install or this device rather than the account: the XMPP resource (a new
-    /// install binds its own), the last time the app left the foreground, keyboard measurements and whether the photo
-    /// prompt was shown, and which stream last enabled carbons. Keys the system writes (they start with a capital, as
-    /// `AppleLanguages`) stay behind too.
+    // Install- or device-specific keys stay behind; system keys (capitalised, e.g. `AppleLanguages`) stay too.
     static let installOnlyPrefixes = ["xmppResource.", "leftForeground", "attachmentKeyboard.", "carbonsStream."]
 
     static func isTransferable(preference key: String) -> Bool {
@@ -154,23 +120,17 @@ struct AccountTransfer: Sendable {
         return !installOnlyPrefixes.contains { key.hasPrefix($0) }
     }
 
-    // MARK: State at launch
-
-    /// What a launch finds, after finishing what a crash interrupted: an export that never completed is undone (the
-    /// store goes back, nothing was offered), a restore that never reached its commit point is rolled back. Returns
-    /// the marker while the data is moved.
+    // Undoes an export that never completed and rolls back a restore that never reached its commit point.
     func recover() throws -> Moved? {
         let files = FileManager.default
         if files.fileExists(atPath: locations.importJournal.path) {
             Self.log.error("a restore stopped part way; rolling it back")
             try rollBackInterruptedImport()
         } else if files.fileExists(atPath: locations.importPrevious.path) {
-            // The restore committed; only its leftovers were not removed.
             try PreUpgradeSnapshot.removeIfPresent(locations.importPrevious)
         }
         try PreUpgradeSnapshot.removeIfPresent(locations.incoming)
         guard let moved = try readMarker() else {
-            // An export that failed before its marker leaves only its staging copy.
             try PreUpgradeSnapshot.removeIfPresent(locations.exportStaging)
             return nil
         }
@@ -184,7 +144,7 @@ struct AccountTransfer: Sendable {
 
     func marker() -> Moved? { try? readMarker() }
 
-    /// Nil only when there is no marker; one that is there but does not read throws instead of counting as absent.
+    // A marker that exists but does not read throws rather than counting as absent.
     private func readMarker() throws -> Moved? {
         guard FileManager.default.fileExists(atPath: locations.marker.path) else { return nil }
         do { return try JSONDecoder().decode(Moved.self, from: Data(contentsOf: locations.marker)) }
@@ -194,28 +154,20 @@ struct AccountTransfer: Sendable {
         }
     }
 
-    /// The code that opens the archive, while moved, so the moved screen can show it again after a relaunch. It lives
-    /// in the Keychain, never beside the archive: the archive carries the Keychain's own secrets (the account's
-    /// password, the encryption state's wrapping key), so a code kept in a file would let anyone who can read this
-    /// install's files read those too.
+    // Kept in the Keychain, never beside the archive: the archive carries Keychain secrets, so a code in a file would
+    // expose them to anyone who can read this install's files.
     func code(of moved: Moved) -> TransferCode? {
         (try? secrets.read(locations.codeService, moved.transferID)).flatMap { $0 }.flatMap { String(data: $0, encoding: .utf8) }.flatMap(TransferCode.init)
     }
 
-    /// Every stored code goes: only the transfer in progress or moved ever has one.
     private func deleteCodes() throws {
         for transfer in try secrets.accounts(locations.codeService) { try secrets.delete(locations.codeService, transfer) }
     }
 
-    /// The archive, while moved.
     func archive(of moved: Moved) -> URL { locations.outgoing.appending(path: moved.fileName) }
 
-    // MARK: Export
-
-    /// Packs this install's data into a new archive under `code` and leaves the install moved. The caller has stopped
-    /// and joined all transport, sender and crypto work and holds `store`'s lease. Before the marker is written a
-    /// failure leaves the store open and untouched; after it, the store is closed (under the lease) and moved out of
-    /// reach, and a failure puts it back. Either way a caller whose call threw opens storage again.
+    // Caller has joined all transport, sender and crypto work and holds `store`'s lease. Before the marker a failure
+    // leaves the store untouched; after it the store is closed under the lease and moved, and a failure puts it back.
     func export(store: MessageStore, accountID: String, code: TransferCode, now: Date,
                 progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> Moved {
         let files = FileManager.default
@@ -225,7 +177,6 @@ struct AccountTransfer: Sendable {
         try PreUpgradeSnapshot.createProtectedDirectory(locations.directory)
         try PreUpgradeSnapshot.createProtectedDirectory(locations.exportStaging)
 
-        // The archive, and the store's copy it is made from, beside the data itself.
         let folders = PreUpgradeSnapshot.folders.map { locations.install.messaging.appending(path: $0) }
         let database = Self.bytes(at: locations.install.database) + Self.bytes(at: URL(filePath: locations.install.database.path + "-wal"))
         let needed = database * 2 + folders.reduce(0) { $0 + Self.bytes(at: $1) } + Self.spaceMargin
@@ -240,8 +191,7 @@ struct AccountTransfer: Sendable {
         let deviceLocalPhotos: [ContactLinkPhoto]
         do {
             _ = try await store.writeSnapshot(to: copy)
-            // Contact links name this device's contacts, and nothing from Contacts is transferred: the copy leaves
-            // without them, and without the photos only they named.
+            // Contact links name this device's contacts and are not transferred, nor the photos only they named.
             deviceLocalPhotos = try MessageStore.removeContactLinks(fromSnapshotAt: copy)
             summary = try StoreSnapshotSummary(snapshotAt: copy)
             try PreUpgradeSnapshot.protect(copy)
@@ -297,8 +247,6 @@ struct AccountTransfer: Sendable {
         }
     }
 
-    /// Every entry of the archive, described (size and SHA-256), from the store's copy, the held folders (less the
-    /// `omitting` photos), the Keychain and the preference domains.
     private func contents(snapshot: URL, summary: StoreSnapshotSummary, omitting photos: [ContactLinkPhoto], id: String, accountID: String, now: Date,
                           progress: @escaping @Sendable (Progress) -> Void) throws -> (TransferManifest, [String: TransferSource]) {
         let files = FileManager.default
@@ -347,15 +295,13 @@ struct AccountTransfer: Sendable {
         return (manifest, sources)
     }
 
-    /// The moved state's "Use Here Again", and the undoing of an export that did not finish: the store goes back where
-    /// it was, the archive and the marker go. A store found in its place (which nothing should have created) is never
-    /// overwritten.
+    // A store found where the held one would go back is never overwritten.
     func rollBackExport() throws {
         let files = FileManager.default, messaging = locations.install.messaging
         if files.fileExists(atPath: locations.held.path) {
             if files.fileExists(atPath: messaging.path) {
                 guard !files.fileExists(atPath: locations.install.database.path) else { throw Failure.heldDataMissing }
-                // Only folders something recreated after the move (an attachment cache), never a store.
+                // Only folders recreated after the move (an attachment cache), never a store.
                 try PreUpgradeSnapshot.removeIfPresent(messaging)
             }
             try files.moveItem(at: locations.held, to: messaging)
@@ -368,9 +314,8 @@ struct AccountTransfer: Sendable {
         try PreUpgradeSnapshot.removeIfPresent(locations.marker)
     }
 
-    /// The moved state's "Delete Data": this install's copy of everything the archive carried goes, with the
-    /// previous-version backup (it holds an older copy of the same identity) and the archive. The marker goes last, so
-    /// an interrupted deletion is still offered on the next launch.
+    // The previous-version backup goes too (it holds the same identity). The marker goes last, so an interrupted
+    // deletion is offered again on the next launch.
     func deleteMovedData() throws {
         guard marker()?.stage == .moved else { throw Failure.heldDataMissing }
         try PreUpgradeSnapshot.removeIfPresent(locations.held)
@@ -391,20 +336,14 @@ struct AccountTransfer: Sendable {
         Self.log.notice("deleted this install's copy of a transferred account")
     }
 
-    // MARK: Import
-
-    /// A transfer read and checked into `incoming.partial/`, ready to be put in place.
     struct Staged: Sendable {
         let manifest: TransferManifest
-        /// The store and its folders, as `Messaging/` will hold them.
         let messaging: URL
-        /// The Keychain records and preferences, by entry name.
         let records: [String: Data]
     }
 
-    /// Reads `archive` with `code` and extracts it into the staging folder, checking everything: the code, the
-    /// manifest (a newer format or schema is refused), every entry's size and SHA-256, the database against its
-    /// summary, and that each record is what its name says. Changes nothing outside the staging folder.
+    // Verifies code, manifest version, every entry's size and SHA-256, the database summary and record types;
+    // changes nothing outside the staging folder.
     func stage(archive: URL, code: TransferCode, progress: @escaping @Sendable (Progress) -> Void = { _ in }) throws -> Staged {
         let reader = try TransferArchive.open(archive, code: code, supportedSchema: MessageStore.currentSchemaVersion)
         let manifest = reader.manifest
@@ -433,12 +372,11 @@ struct AccountTransfer: Sendable {
             let summary = try JSONDecoder().decode(StoreSnapshotSummary.self, from: records[Name.summary] ?? Data())
             guard summary.schemaVersion == manifest.schemaVersion else { throw TransferArchiveError.damaged }
             try MessageStore.verifySnapshot(at: database, matches: summary)
-            // Contact links from a build that still packed them name another device's contacts: they go before the
-            // commit, for every account, with the photos only they named.
+            // Older builds packed contact links naming another device's contacts; they go before the commit.
             for file in Self.photoFiles(try MessageStore.removeContactLinks(fromSnapshotAt: database), root: messaging) {
                 try PreUpgradeSnapshot.removeIfPresent(file)
             }
-            // As every build keeps its live store; the copy was made in rollback-journal mode.
+            // The snapshot copy is in rollback-journal mode.
             try MessageStore.useWriteAheadLog(at: database)
             for suffix in ["-wal", "-shm"] { try PreUpgradeSnapshot.removeIfPresent(URL(filePath: database.path + suffix)) }
             try PreUpgradeSnapshot.protectTree(messaging)
@@ -458,8 +396,6 @@ struct AccountTransfer: Sendable {
         }
     }
 
-    /// Why this install cannot take a restore, or nil: it must hold no encryption identity and no account's data but
-    /// the sample conversations, no previous-version backup, and must not have moved its own data away.
     func importBlocker(store: MessageStore) async throws -> Failure? {
         if marker() != nil { return .alreadyMoved }
         if try await store.hasAnyEncryptionState() { return .identityExists }
@@ -471,7 +407,6 @@ struct AccountTransfer: Sendable {
         return nil
     }
 
-    /// What a restore replaces, read before it does: put back exactly if it fails.
     private struct Previous {
         var secrets: [(service: String, account: String, data: Data?)] = []
         var appDefaults: [String: Any] = [:]
@@ -485,18 +420,14 @@ struct AccountTransfer: Sendable {
         let pushAccounts: [String]
     }
 
-    /// Puts a staged transfer in place of this install's (empty) data, all or nothing. The caller holds `store`'s
-    /// lease with nothing running on it; the store is closed here, under the lease, before any file moves, and the
-    /// caller opens storage again afterwards whatever the outcome (an older schema then migrates the usual way,
-    /// backup first). Refuses, changing nothing, when `importBlocker` names a reason. Until the journal is removed
-    /// every step is undone on failure, here or, after a crash, by `recover`.
+    // All or nothing. The caller holds `store`'s lease with nothing running; the store closes under it before any file
+    // moves. Until the journal is removed every step is undone on failure, here or by `recover` after a crash.
     func commit(_ staged: Staged, store: MessageStore, now: Date) async throws {
         let files = FileManager.default
         guard await store.holdsTransportOwnership else { throw MessageStoreError.transportOwnershipRequired }
         if let blocker = try await importBlocker(store: store) { throw blocker }
         let keychain = locations.install.keychain
 
-        // Everything decoded and rewritten for this install before anything changes.
         var writes: [(service: String, account: String, data: Data)] = []
         if let record = staged.records[Name.account] {
             // Without its push subscription: this install registers its own.
@@ -506,8 +437,7 @@ struct AccountTransfer: Sendable {
         var pushAccounts: [String] = []
         for (name, data) in staged.records.sorted(by: { $0.key < $1.key }) where name.hasPrefix(Name.pushPrefix) {
             let saved = try JSONDecoder().decode(PushRegistrationState.self, from: data)
-            // The registration the other install made: revoked at the gateway and disabled at the account server on
-            // this install's first connection, before it registers its own device.
+            // Revoked at the gateway and disabled at the server on first connection, before this install registers.
             guard let off = try PushRegistrationState.turningOff(accountID: saved.accountID, saved: saved, enabled: nil) else { continue }
             writes.append((keychain.pushService, saved.accountID, try JSONEncoder().encode(off)))
             pushAccounts.append(saved.accountID)
@@ -558,8 +488,7 @@ struct AccountTransfer: Sendable {
         Self.log.notice("restored transfer \(staged.manifest.transferID, privacy: .public): schema \(staged.manifest.schemaVersion, privacy: .public), \(staged.manifest.entries.count, privacy: .public) entries")
     }
 
-    /// Undoes a restore that failed in this process, from what it read before: every step is tried, so one that fails
-    /// does not leave the others undone.
+    // Every step is tried, so one failure does not leave the others undone.
     private func rollBackImport(_ previous: Previous) {
         restorePreviousMessaging()
         for item in previous.secrets {
@@ -576,9 +505,7 @@ struct AccountTransfer: Sendable {
         try? PreUpgradeSnapshot.removeIfPresent(locations.incoming)
     }
 
-    /// Undoes a restore a crash interrupted. The files and preferences come back from `import-previous/`. The Keychain
-    /// items it may have written are deleted: the install it replaced held no identity and no signed-in account, so
-    /// none of them was in use.
+    // The Keychain items it wrote are deleted: the replaced install held no identity or signed-in account.
     private func rollBackInterruptedImport() throws {
         let journal = try? JSONDecoder().decode(Journal.self, from: Data(contentsOf: locations.importJournal))
         restorePreviousMessaging()
@@ -614,13 +541,10 @@ struct AccountTransfer: Sendable {
         try JSONEncoder().encode(restored).write(to: locations.imported, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
-    // MARK: Helpers
-
     private func write(_ moved: Moved) throws {
         try JSONEncoder().encode(moved).write(to: locations.marker, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
-    /// A contact link photo's files (`ContactPhoto`, `AvatarStore.files`) under a `Messaging/` folder.
     static func photoFiles(_ photos: [ContactLinkPhoto], root: URL) -> [URL] {
         photos.flatMap { AvatarStore.files(root: root, account: $0.accountID, hash: $0.hash) }
     }
@@ -664,12 +588,10 @@ struct AccountTransfer: Sendable {
         return contents.filter { isTransferable(preference: $0.key) }
     }
 
-    /// This install's own keys stay; every transferable one is the archive's.
     static func merging(_ imported: [String: Any], into current: [String: Any]) -> [String: Any] {
         current.filter { !isTransferable(preference: $0.key) }.merging(imported) { _, new in new }
     }
 
-    /// An account address as one name component.
     static func encodedComponent(_ value: String) -> String? { value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) }
 
     static func bytes(at url: URL) -> Int64 {
@@ -690,7 +612,6 @@ struct AccountTransfer: Sendable {
     }
 }
 
-/// Passes on a byte count only once it moved by a mebibyte or more, so the screen is not redrawn for every frame.
 private final class Throttle: @unchecked Sendable {
     private let sink: (Int64) -> Void
     private var last: Int64 = -1

@@ -10,15 +10,13 @@ struct ChatListView: View {
     @State private var showingNewChat = false
     @State private var showingRestore = false
     @State private var newChatDetent: PresentationDetent = .medium
-    /// The chat whose Mute swipe action asked for a duration.
     @State private var muting: String?
     @State private var reviewingOwnDevices = false
-    /// Own devices the card was put off for with Later; a device not in here brings the card back.
+    // A device not in here brings the card back.
     @State private var ownDevicesLater: Set<String> = []
 
     private var searchTerm: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    /// Pinned first, then newest activity; ties keep the store's order.
     private var sortedChats: [ChatSummary] { ChatListOrder.sorted(model.chats) }
 
     private var visibleChats: [ChatSummary] {
@@ -35,7 +33,6 @@ struct ChatListView: View {
         searchTerm.isEmpty && model.ownDeviceReview.contains { !ownDevicesLater.contains($0.id) }
     }
 
-    /// A quiet line above sample chats (and, in DEBUG, lab chats).
     private var listCaption: String? {
         if model.isDemo { return "Sample conversations · stored on this device" }
         #if DEBUG
@@ -53,8 +50,8 @@ struct ChatListView: View {
     }
 
     var body: some View {
-        // The list is always the content, with the empty states as overlays: swapping the content view would
-        // crossfade the title bar and toolbar along with it whenever the first rows arrive.
+        // The empty states are overlays: swapping the content view would crossfade the title bar and toolbar when the
+        // first rows arrive.
         List {
             if let listCaption, !model.chats.isEmpty {
                 Text(listCaption)
@@ -62,7 +59,6 @@ struct ChatListView: View {
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 4, trailing: 16))
             }
-            // Account-level, so it sits above every chat: one decision here reaches all of them.
             if showsOwnDeviceReview {
                 OwnDeviceReviewCard(candidates: model.ownDeviceReview,
                                     review: { reviewingOwnDevices = true },
@@ -71,9 +67,8 @@ struct ChatListView: View {
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
             }
-            // The row identity includes the pin state, so a pin change is a delete + insert (Signal's
-            // same-section rule): List animates that as a fade in place, whereas a real move to the top
-            // starts the row from below the last cell and slides it under its siblings (iOS 26.5 and 27).
+            // Identity includes the pin state, so List animates a pin as delete + insert (a fade in place); a real move
+            // slides the row from below the last cell under its siblings (iOS 26.5, 27).
             ForEach(visibleChats, id: \.listIdentity) { chat in
                 Button { path.append(.chat(chat.id)) } label: { ChatRow(chat: chat, isGroup: model.isGroup(chat.id), avatar: model.avatar(for: chat.id), typing: model.typing[chat.id], isBlocked: model.isBlocked(chat.id)) }
                     .buttonStyle(.plain)
@@ -90,8 +85,7 @@ struct ChatListView: View {
                         }
                         Button(chat.isPinned ? "Unpin" : "Pin", systemImage: chat.isPinned ? "pin.slash" : "pin") {
                             Task {
-                                // Let the swipe action close first (~0.30 s on 26.5 plus the highlight
-                                // fade); changing the list in the same turn animates the still-open cell.
+                                // Changing the list while the swipe action closes animates the still-open cell.
                                 try? await Task.sleep(for: pinCommitDelay)
                                 await model.togglePin(chat)
                             }
@@ -105,7 +99,6 @@ struct ChatListView: View {
                                 }
                             }.tint(Color(.systemGray))
                         } else {
-                            // The durations are a choice, so they follow in a dialog; nothing changes until one is picked.
                             Button("Mute", systemImage: "bell.slash") { muting = chat.id }.tint(Color(.systemGray))
                         }
                     }
@@ -114,8 +107,7 @@ struct ChatListView: View {
         .listStyle(.plain)
         .overlay {
             if model.chats.isEmpty {
-                // Until storage has been read (a cold start) the list stays quiet: a signed-in launch must not
-                // flash "no conversations" a moment before its rows arrive.
+                // Quiet until storage is read: a signed-in cold start must not flash "no conversations".
                 if model.hasLoadedChats {
                     ContentUnavailableView {
                         Label("No conversations yet", systemImage: "bubble.left.and.bubble.right")
@@ -146,7 +138,6 @@ struct ChatListView: View {
                 }
                 .accessibilityLabel("Account")
             }
-            // Connection progress is a quiet spinner that disappears; only a setup failure gets a glyph.
             if model.isSettlingConnection || model.isCatchingUp {
                 ToolbarItem(placement: .topBarTrailing) {
                     ProgressView().controlSize(.small).accessibilityLabel(model.isCatchingUp ? "Catching up" : "Connecting")
@@ -165,10 +156,9 @@ struct ChatListView: View {
             DefaultToolbarItem(kind: .search, placement: .bottomBar)
             ToolbarSpacer(.flexible, placement: .bottomBar)
             ToolbarItem(placement: .bottomBar) {
-                // Our own fixed glass circle: the bar's automatic shape came out as a capsule on iOS 27.
+                // A fixed glass circle: the bar's automatic shape is a capsule on iOS 27.
                 Button { newChatDetent = .medium; showingNewChat = true } label: {
-                    // The pencil tip extends the glyph's box upward, so mathematical centring reads low.
-                    // Nudge so the square, the visual anchor, sits on the circle's centre.
+                    // The pencil tip extends the glyph's box upward; the offset centres the square on the circle.
                     Image(systemName: "square.and.pencil").font(.title3.weight(.medium)).offset(x: 0.5, y: -1.5)
                 }
                 .buttonStyle(CircularGlassButtonStyle(diameter: 50, tinted: false))
@@ -198,7 +188,6 @@ struct ChatListView: View {
         return sortedChats.filter { $0.title.localizedCaseInsensitiveContains(recipientTerm) || $0.id.localizedCaseInsensitiveContains(recipientTerm) }
     }
 
-    /// A typed address that is not already a chat gets a "Start chat" row; createChat validates it.
     private var offersNewAddress: Bool {
         recipientTerm.contains("@") && !sortedChats.contains { $0.id.caseInsensitiveCompare(recipientTerm) == .orderedSame }
     }
@@ -229,7 +218,6 @@ struct ChatListView: View {
     private var newChatSheet: some View {
         NavigationStack {
             List {
-                // An input row, not a search field: it filters Suggested and, given an address, starts a chat right below.
                 Section {
                     HStack(spacing: 10) {
                         Image(systemName: "at").foregroundStyle(.secondary)
@@ -289,11 +277,9 @@ struct ChatListView: View {
     }
 }
 
-/// Delay between the Pin/Unpin tap and the model change, so the swipe action finishes closing before the row moves.
-/// Measured close: ~0.30 s on iOS 26.5, ~0.23 s on 27.0, plus the highlight fade; do not go below 300 ms.
+// Must outlast the swipe action's close (~0.30 s on iOS 26.5 plus the highlight fade); not below 300 ms.
 private let pinCommitDelay: Duration = .milliseconds(350)
 
 private extension ChatSummary {
-    /// Changes with the pin state so that List animates a pin as a delete + insert rather than a move.
     var listIdentity: String { "\(id)|\(isPinned ? 1 : 0)" }
 }

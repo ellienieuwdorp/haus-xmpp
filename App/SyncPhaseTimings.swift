@@ -2,9 +2,8 @@ import Foundation
 import os
 import XMPPProtocol
 
-/// Where one connection's time goes, for the `sync` log: durations and counts only, never addresses or content.
-/// A new instance starts at `.online`. Setup steps report from their own tasks, reloads and foreground notification
-/// work from the main actor; `ArchiveWalkTimings` in MessagingCore splits each archive's walk further.
+// Durations and counts only, never addresses or content. Steps report from their own tasks, reloads and notification
+// work from the main actor.
 final class SyncPhaseTimings: Sendable {
     enum Phase: String {
         case features, carbons, uploads, keys, rejoin, walk, retry, reload, notify
@@ -23,7 +22,6 @@ final class SyncPhaseTimings: Sendable {
         return try await body()
     }
 
-    /// `features_ms=12 keys_ms=40 …` for the given phases that ran; `reloads=<n>` when `.reload` is asked for.
     func summary(_ phases: [Phase]) -> String {
         let t = totals.withLock { $0 }
         var fields = phases.compactMap { phase in t.durations[phase].map { "\(phase.rawValue)_ms=\(Self.ms($0))" } }
@@ -33,8 +31,6 @@ final class SyncPhaseTimings: Sendable {
 
     static func ms(_ duration: Duration) -> Int { Int(duration / .milliseconds(1)) }
 
-    /// connect: socket, TLS and stream features (`.connecting` to `.authenticating`); auth: SASL, and for a resumed
-    /// session the resume too (to `.binding`, or to `.online`); bind: bind, stream management and initial presence.
     struct ConnectPhases {
         private var connecting, authenticating, binding: ContinuousClock.Instant?
 
@@ -47,7 +43,6 @@ final class SyncPhaseTimings: Sendable {
             }
         }
 
-        /// Empty unless this connection's phases were all seen.
         func summary(online: ContinuousClock.Instant) -> String {
             guard let connecting, let authenticating else { return "" }
             var text = " connect_ms=\(SyncPhaseTimings.ms(authenticating - connecting)) auth_ms=\(SyncPhaseTimings.ms((binding ?? online) - authenticating))"
@@ -58,7 +53,6 @@ final class SyncPhaseTimings: Sendable {
 }
 
 extension ConnectionSetup.Operations {
-    /// The same operations, each step timed into `timings`.
     func timed(by timings: SyncPhaseTimings) -> Self {
         var timed = self
         let base = self

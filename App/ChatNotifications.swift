@@ -1,7 +1,6 @@
 import SwiftUI
 import MessageStore
 
-/// The mute lengths the chat list and chat details offer.
 enum MuteDuration: CaseIterable, Identifiable {
     case oneHour, eightHours, oneWeek, always
 
@@ -14,7 +13,6 @@ enum MuteDuration: CaseIterable, Identifiable {
         case .always: "Always"
         }
     }
-    /// The dialog's button: "For 1 hour" … "Always".
     var dialogTitle: String { self == .always ? title : "For \(title)" }
 
     func until(from now: Date) -> Date {
@@ -28,7 +26,6 @@ enum MuteDuration: CaseIterable, Identifiable {
 }
 
 extension ChatNotificationSetting {
-    /// The details row's value: "All messages", "Mentions only", "Muted until 14:30" or "Muted".
     func summary(isGroup: Bool, now: Date = .now, calendar: Calendar = .current) -> String {
         if let until = mutedUntil, isMuted(at: now) {
             if isMutedAlways { return "Muted" }
@@ -37,7 +34,6 @@ extension ChatNotificationSetting {
         return level == .mentions && isGroup ? "Mentions only" : "All messages"
     }
 
-    /// Today's end is a time; within a week, the weekday and time; further out, the date.
     static func untilText(_ date: Date, now: Date, calendar: Calendar) -> String {
         let time = date.formatted(.dateTime.hour().minute())
         if calendar.isDate(date, inSameDayAs: now) { return time }
@@ -47,12 +43,10 @@ extension ChatNotificationSetting {
     }
 }
 
-/// The confirmation dialog that follows the chat list's Mute swipe action. Attached to the row, so on iOS 26 its
-/// popover points at the chat being muted rather than at the middle of the list.
+// Attached to the row, so on iOS 26 its popover points at the chat being muted.
 struct MuteDialog: ViewModifier {
     @Bindable var model: AppModel
     let chat: ChatSummary
-    /// The chat whose Mute action is waiting for a duration; shared by every row.
     @Binding var muting: String?
 
     func body(content: Content) -> some View {
@@ -69,7 +63,7 @@ struct MuteDialog: ViewModifier {
     }
 }
 
-/// Chat and group details: what alerts from this chat. Choosing a level also ends a mute.
+// Choosing a level also ends a mute.
 struct ChatNotificationRow: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -100,7 +94,7 @@ struct ChatNotificationRow: View {
                 }
             }
         } label: {
-            // Accessibility sizes stack the value under the title: side by side, both were cut short.
+            // Accessibility sizes stack the value under the title; side by side, both are cut short.
             let large = dynamicTypeSize.isAccessibilitySize
             HStack {
                 Label {
@@ -123,14 +117,13 @@ struct ChatNotificationRow: View {
         .accessibilityIdentifier("chatNotifications")
     }
 
-    /// A checkmarked menu item: a Toggle is how a menu draws the leading checkmark.
+    // A Toggle is how a menu draws the leading checkmark.
     private func choice(_ title: String, selected: Bool, action: @escaping @MainActor () async -> Void) -> some View {
         Toggle(title, isOn: Binding(get: { selected }, set: { _ in Task { await action() } }))
     }
 }
 
-/// The details screens' tinted tile, the size of `SettingsIconTile`. The glyph keeps the body size of the default text
-/// setting: a glyph that followed Dynamic Type drew outside the fixed tile at accessibility sizes.
+// The glyph keeps the default body size: one that follows Dynamic Type draws outside the fixed tile.
 struct DetailsIconTile: View {
     let systemName: String
 

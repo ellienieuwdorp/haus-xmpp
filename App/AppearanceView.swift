@@ -6,14 +6,12 @@ struct AppearanceView: View {
     @Environment(\.appearance) private var appearance
 
     private var accent: AccentTheme { appearance.accent }
-    /// Dynamic Type factor for the status mark, as `MessageStatusView` scales it with caption2.
     @ScaledMetric(relativeTo: .caption2) private var statusScale: CGFloat = 1
 
     var body: some View {
         @Bindable var appearance = appearance
         GroupedList {
             #if os(macOS)
-            // A Mac pane: one row per choice, the accents as a row of swatches as in System Settings.
             Section {
                 Picker("Theme", selection: $appearance.mode) {
                     Text("Automatic").tag("automatic")
@@ -77,7 +75,6 @@ struct AppearanceView: View {
     }
 
     #if os(macOS)
-    /// The accents as System Settings shows them: small swatches in a row, the chosen one ringed and named beside them.
     private var macAccents: some View {
         HStack(spacing: 8) {
             ForEach(AccentTheme.allCases) { theme in
@@ -103,8 +100,7 @@ struct AppearanceView: View {
     }
     #endif
 
-    /// The real bubble's footer at preview size: caption2 time and the shared read mark, both in the
-    /// meta colour, inside the 20 pt bubble with the timeline's 12/10/8 insets.
+    // Matches the real bubble footer: caption2 time and read mark in the meta colour, 20 pt bubble, 12/10/8 insets.
     private func bubble(_ text: String, time: String, incoming: Bool) -> some View {
         let textColor = incoming ? Color.primary : Color(platform: accent.bubbleText)
         let meta = incoming ? Color.secondaryLabel : Color(platform: accent.bubbleText.withAlphaComponent(0.75))

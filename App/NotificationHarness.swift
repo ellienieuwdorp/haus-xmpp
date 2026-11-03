@@ -5,11 +5,8 @@ import UserNotifications
 import MessageStore
 import MessagingCore
 
-/// DEBUG only, `-notification-harness`: once the app goes to the background, posts synthetic sample notifications
-/// through the extension's own path (`NotificationPlanner` → `UserNotificationPoster`, including the communication
-/// intent and the pre-scaled App Group avatars), so the simulator shows what a filtered run would post. The samples
-/// are invented; nothing is read from, or written to, the message store. `-notification-harness-hidden` posts them
-/// with previews off.
+// Posts invented samples through the extension's own planner and poster, so the simulator shows what a filtered run
+// would post; the message store is never read or written.
 @MainActor enum NotificationHarness {
     static var isRequested: Bool { ProcessInfo.processInfo.arguments.contains("-notification-harness") }
     private nonisolated static let account = "me@preview.local"
@@ -73,7 +70,6 @@ import MessagingCore
         }
     }
 
-    /// A drawn sample avatar stored like a verified one, with its pre-scaled notification copy. Returns its hash.
     private static func avatar(_ letter: String, color: UIColor, root: URL) -> String? {
         let size = CGSize(width: 512, height: 512)
         let data = UIGraphicsImageRenderer(size: size).pngData { context in

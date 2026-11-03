@@ -1,49 +1,37 @@
 import Foundation
 import XMPPProtocol
 
-// Our own bounded OpenGraph fetcher. App only: neither notification extension compiles it, so a push never fetches.
-// LinkPresentation is not used: measured, it reaches loopback and private hosts, follows redirects without a hook,
-// downloads whole direct files and ignores its own timeout.
+// App only: neither notification extension compiles it, so a push never fetches. LinkPresentation is not used: it
+// reaches loopback and private hosts, follows redirects without a hook, downloads whole files and ignores its timeout.
 
-/// What a fetch found: card text already cleaned and shortened to what we may send, and the page's image
-/// downsampled. Has a title or an image.
 struct LinkPreviewPage: Sendable, Equatable {
     var title: String?
-    /// `og:description`, else `<meta name=description>`.
     var summary: String?
-    /// `og:image:alt`; nil without an image.
     var imageAlt: String?
     var image: LinkPreviewImage?
 }
 
 enum LinkPreviewFetchFailure: Error, Equatable {
-    /// Not https on port 443, or a user name in it (`LinkDetection.isFetchable`).
     case notFetchable
-    /// The host, or an address it resolved or connected to, is one a preview never reaches.
     case refusedDestination
     case tooManyRedirects
-    /// Not a 2xx answer, or a body that is neither a page nor an image.
     case badResponse
     case tooLarge
     case timedOut
-    /// The page had no title and no usable image.
     case nothingToShow
     case cancelled
-    /// No connection: offline, the connection lost, cellular data not allowed. Worth asking again later.
+    // Worth asking again later.
     case network
-    /// The name did not resolve: a dead domain, or no network to ask (the caller knows which).
     case unresolved
-    /// The server could not be reached or not trusted: a refused connection, a TLS or certificate failure.
     case connectionFailed
 }
 
-/// Resolves a host name to the addresses a connection could use. The fetcher checks every one before it connects.
 protocol HostResolving: Sendable {
-    /// Every address of `host`, IPv4 as 4 bytes and IPv6 as 16. Empty or throwing refuses the fetch.
+    // Empty or throwing refuses the fetch.
     func addresses(of host: String) async throws -> [[UInt8]]
 }
 
-/// `getaddrinfo`, run off the caller's thread. The fetcher's own deadline bounds a slow resolver.
+// The fetcher's own deadline bounds a slow resolver.
 struct SystemHostResolver: HostResolving {
     func addresses(of host: String) async throws -> [[UInt8]] {
         try await withCheckedThrowingContinuation { continuation in
@@ -82,7 +70,7 @@ struct SystemHostResolver: HostResolving {
 }
 
 extension LinkPreviewFetchFailure {
-    /// A transfer's error: only a missing connection is `network`; DNS and TLS failures are not.
+    // Only a missing connection is `network`; DNS and TLS failures are not.
     init(transportError error: any Error) {
         switch (error as? URLError)?.code {
         case .timedOut?: self = .timedOut
@@ -94,19 +82,15 @@ extension LinkPreviewFetchFailure {
     }
 }
 
-/// Which hosts and addresses a preview fetch may reach: public unicast only.
 enum LinkPreviewDestination {
-    /// The addresses a request's connections actually used (`URLSessionTaskTransactionMetrics.remoteAddress`), checked
-    /// after the transfer: a name that resolved to public addresses for our check but connected elsewhere (a DNS
-    /// rebinding) went out, but nothing it returned is used. No address (a proxy, an in-process loader) passes.
+    // Checked after the transfer against DNS rebinding: a name that passed the resolve check but connected elsewhere
+    // went out, but nothing it returned is used. No address (a proxy, an in-process loader) passes.
     static func allowsConnections(to remoteAddresses: [String?]) -> Bool {
         remoteAddresses.allSatisfy { address in address.map { literal($0).map(isAllowed) ?? false } ?? true }
     }
 
-    /// The host a connection to `url` goes to, as the resolver must see it: the host of the URL as it is sent
-    /// (`absoluteString`, where an international name is already in its IDNA ASCII form), lowercased. Nil for a host
-    /// with percent-escapes or one that is not ASCII: URLSession decodes escapes before it connects, so a checked
-    /// `10%2E0%2E0%2E1` or `in%73ide.example` would not be the name it reaches.
+    // Nil for percent-escaped or non-ASCII hosts: URLSession decodes escapes before connecting, so a checked
+    // `10%2E0%2E0%2E1` would not be the name it reaches. IDNA names are already ASCII in `absoluteString`.
     static func connectionHost(of url: URL) -> String? {
         guard let sent = URL(string: url.absoluteString), let encoded = sent.host(percentEncoded: true),
               let decoded = sent.host(percentEncoded: false), !encoded.isEmpty, !encoded.contains("%"), encoded == decoded,
@@ -114,8 +98,6 @@ enum LinkPreviewDestination {
         return decoded.lowercased()
     }
 
-    /// Names refused before resolving: `localhost`, `.localhost`, `.local`, `.home.arpa` and single-label names.
-    /// `host` is without brackets and may end in a dot.
     static func isAllowedName(_ host: String) -> Bool {
         var name = host.lowercased()
         if name.hasSuffix(".") { name.removeLast() }
@@ -123,7 +105,6 @@ enum LinkPreviewDestination {
         return ![".localhost", ".local", ".home.arpa"].contains { name.hasSuffix($0) }
     }
 
-    /// The bytes of an IPv4 or IPv6 literal (`192.0.2.1`, `::1`, `[::1]`, `fe80::1%en0`); nil for a name.
     static func literal(_ text: String) -> [UInt8]? {
         var text = text
         if text.hasPrefix("["), text.hasSuffix("]") { text = String(text.dropFirst().dropLast()) }
@@ -135,9 +116,7 @@ enum LinkPreviewDestination {
         return nil
     }
 
-    /// False for loopback, private, link-local, CGNAT, multicast, broadcast, unspecified, reserved, documentation and
-    /// benchmarking addresses (cloud metadata at 169.254.169.254 among them), and for IPv6 forms that carry such an
-    /// IPv4 address: IPv4-mapped, IPv4-compatible, NAT64 (`64:ff9b::/96`) and 6to4.
+    // Also refuses IPv6 forms that carry an IPv4 address: IPv4-mapped, IPv4-compatible, NAT64 and 6to4.
     static func isAllowed(_ address: [UInt8]) -> Bool {
         switch address.count {
         case 4: isAllowedV4(address)
@@ -164,13 +143,10 @@ enum LinkPreviewDestination {
 
     private static func isAllowedV6(_ a: [UInt8]) -> Bool {
         let prefix = a[0..<12]
-        // ::/96: unspecified, loopback and the deprecated IPv4-compatible form.
         if prefix.allSatisfy({ $0 == 0 }) { return false }
-        // ::ffff:0:0/96 IPv4-mapped and 64:ff9b::/96 NAT64: as reachable as the IPv4 address they carry.
         if prefix.elementsEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff]) || prefix.elementsEqual([0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0]) {
             return isAllowedV4(Array(a[12..<16]))
         }
-        // 2002::/16 6to4 carries its IPv4 address in bytes 2-5.
         if a[0] == 0x20, a[1] == 0x02 { return isAllowedV4(Array(a[2..<6])) }
         if a[0] & 0xfe == 0xfc { return false } // fc00::/7 unique local
         if a[0] == 0xfe, a[1] & 0xc0 == 0x80 { return false } // fe80::/10 link-local
@@ -181,21 +157,19 @@ enum LinkPreviewDestination {
     }
 }
 
-/// Fetches a page's OpenGraph head, or a direct image, under fixed bounds: https on 443 only, every hop's host
-/// resolved and checked before it is requested, at most 5 redirects, a page read only to `</head>`, `<body` or
-/// 512 KiB, an image at most 5 MiB and 40 megapixels, 10 seconds in all. No cookies, cache or credentials.
+// Bounds: https on 443, every hop's addresses checked before it is requested, 5 redirects, a page read to
+// `</head>`, `<body` or 512 KiB, an image ≤5 MiB and 40 MP, 10 s in all. No cookies, cache or credentials.
 final class LinkPreviewFetcher: Sendable {
     struct Limits: Sendable {
         var pageBytes = 512 * 1024
         var imageBytes = 5 * 1024 * 1024
         var imagePixels = 40_000_000
-        /// The longest side of the image kept on disk.
         var imageSide = 1024
         var redirects = 5
         var total: Duration = .seconds(10)
     }
 
-    /// Names no product and no version, so a page cannot tell which app (or which build) asked.
+    // Names no product or version, so a page cannot tell which app asked.
     static let userAgent = "Mozilla/5.0 (compatible; link preview)"
 
     private let session: URLSession
@@ -218,7 +192,6 @@ final class LinkPreviewFetcher: Sendable {
         self.limits = limits
     }
 
-    /// The preview of `url`, a link exactly as `LinkDetection` reports it.
     func fetch(_ url: URL) async throws(LinkPreviewFetchFailure) -> LinkPreviewPage {
         let deadline = ContinuousClock.now + limits.total
         guard LinkDetection.isFetchable(url) else { throw .notFetchable }
@@ -232,7 +205,6 @@ final class LinkPreviewFetcher: Sendable {
             let head = LinkPreviewHead.parse(first.body, charset: first.charset)
             page = LinkPreviewPage(title: head.title.flatMap { Self.shorten($0, to: MessageContent.LinkMetadata.maximumSentTitle) },
                                    summary: head.description.flatMap { Self.shorten($0, to: MessageContent.LinkMetadata.maximumSentDescription) })
-            // A missing, oversized or refused image leaves a text card.
             if let source = head.image, let imageURL = URL(string: source, relativeTo: first.finalURL)?.absoluteURL,
                LinkDetection.isFetchable(imageURL) {
                 do {
@@ -248,8 +220,6 @@ final class LinkPreviewFetcher: Sendable {
         return page
     }
 
-    // MARK: Loading
-
     struct Loaded: Sendable {
         enum Kind: Sendable { case page, image }
         let kind: Kind
@@ -258,7 +228,6 @@ final class LinkPreviewFetcher: Sendable {
         let finalURL: URL
     }
 
-    /// One GET under the destination rules, following checked redirects. `imageOnly` accepts only an image answer.
     private func load(_ url: URL, imageOnly: Bool, deadline: ContinuousClock.Instant) async throws(LinkPreviewFetchFailure) -> Loaded {
         try await checkDestination(url, deadline: deadline)
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
@@ -283,8 +252,7 @@ final class LinkPreviewFetcher: Sendable {
         }
     }
 
-    /// The scheme, port and name rules, then every resolved address of the host the connection will use. Runs before
-    /// the first request, the page's image and every redirect.
+    // Runs before the first request, the page's image and every redirect.
     fileprivate func checkDestination(_ url: URL, deadline: ContinuousClock.Instant) async throws(LinkPreviewFetchFailure) {
         guard LinkDetection.isFetchable(url) else { throw .notFetchable }
         guard let host = LinkPreviewDestination.connectionHost(of: url) else { throw .refusedDestination }
@@ -315,10 +283,6 @@ final class LinkPreviewFetcher: Sendable {
 
     fileprivate func cap(image: Bool) -> Int { image ? limits.imageBytes : limits.pageBytes }
 
-    // MARK: Text
-
-    /// Plain text (`LinkMetadata.plainText`) within `cap` (characters and UTF-8 bytes, one of the send bounds), cut at
-    /// a character with an ellipsis.
     static func shorten(_ text: String, to cap: (characters: Int, bytes: Int)) -> String? {
         let (characters, bytes) = cap
         guard let text = MessageContent.LinkMetadata.plainText(text) else { return nil }
@@ -335,7 +299,6 @@ final class LinkPreviewFetcher: Sendable {
         return result.trimmingCharacters(in: .whitespaces) + "…"
     }
 
-    /// A direct image's card title: the last path component, percent-decoded.
     static func fileTitle(of url: URL) -> String? {
         let name = url.lastPathComponent
         guard !name.isEmpty, name != "/" else { return nil }
@@ -343,9 +306,7 @@ final class LinkPreviewFetcher: Sendable {
     }
 }
 
-/// One request's delegate: checks each redirect hop, streams the body against its cap (a page stops at `</head>`
-/// or `<body`), checks the addresses the connections actually used, and enforces the fetch's deadline by
-/// cancelling. The session's serial delegate queue runs the callbacks one at a time; the outcome is under the lock.
+// The session's serial delegate queue runs the callbacks one at a time; the outcome is under the lock.
 private final class BoundedLoad: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let fetcher: LinkPreviewFetcher
     private let imageOnly: Bool
@@ -355,13 +316,12 @@ private final class BoundedLoad: NSObject, URLSessionDataDelegate, @unchecked Se
     private var outcome: Result<LinkPreviewFetcher.Loaded, LinkPreviewFetchFailure>?
     private var task: URLSessionDataTask?
     private var timer: Task<Void, Never>?
-    // Delegate queue only.
     private var redirects = 0
     private var kind = LinkPreviewFetcher.Loaded.Kind.page
     private var charset: String?
     private var finalURL: URL?
     private var body = Data()
-    /// Set once a page's head is in; the cancellation that follows is not a failure.
+    // The cancellation after a page's head is in is not a failure.
     private var complete = false
     private var failure: LinkPreviewFetchFailure?
     private var refusedAddress = false
@@ -394,7 +354,6 @@ private final class BoundedLoad: NSObject, URLSessionDataDelegate, @unchecked Se
         task.resume()
     }
 
-    /// Resumes the caller once; cancels the transfer and the timer.
     func finish(_ result: Result<LinkPreviewFetcher.Loaded, LinkPreviewFetchFailure>) {
         let (continuation, task, timer) = lock.withLock {
             () -> (CheckedContinuation<LinkPreviewFetcher.Loaded, any Error>?, URLSessionDataTask?, Task<Void, Never>?) in
@@ -447,7 +406,6 @@ private final class BoundedLoad: NSObject, URLSessionDataDelegate, @unchecked Se
             completionHandler(.cancel)
             return
         }
-        // An image announced above its cap is refused before its body; a page is read only to its cap anyway.
         if kind == .image, http.expectedContentLength > fetcher.cap(image: true) {
             failure = .tooLarge
             completionHandler(.cancel)
@@ -492,7 +450,7 @@ private final class BoundedLoad: NSObject, URLSessionDataDelegate, @unchecked Se
         settleIfDone()
     }
 
-    /// Both the completion and the metrics are in (their order is not documented); the deadline covers a missing one.
+    // Completion and metrics arrive in undocumented order; the deadline covers a missing one.
     private func settleIfDone() {
         guard taskEnded, metricsArrived else { return }
         if refusedAddress { finish(.failure(.refusedDestination)); return }

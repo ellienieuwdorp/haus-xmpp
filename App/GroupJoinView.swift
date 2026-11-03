@@ -7,7 +7,6 @@ struct GroupJoinView: View {
     @State private var nickname = ""
     @State private var joining = false
 
-    /// `room` prefills the address, as when an `xmpp:…?join` link in a message opens this.
     init(model: AppModel, room: String = "", joined: @escaping (String) -> Void) {
         self.model = model
         self.joined = joined
@@ -18,8 +17,7 @@ struct GroupJoinView: View {
         Form {
             Section {
                 #if os(macOS)
-                // A Mac form row is the field's own label and the field; LabeledContent around a field shows its
-                // title as a second label.
+                // LabeledContent around a Mac form field shows its title as a second label.
                 TextField("Address", text: $room, prompt: Text("group@rooms.server"))
                     .autocorrectionDisabled()
                     .accessibilityLabel("Group address").accessibilityIdentifier("groupAddress")

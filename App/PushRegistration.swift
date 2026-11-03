@@ -4,23 +4,18 @@ import UIKit
 import UserNotifications
 import MessagingCore
 
-/// The notification center's delegate on both platforms, and the APNs token's destination: on iOS it is the application
-/// delegate that receives tokens, on the Mac `MacAppDelegate` forwards them.
 @MainActor
 final class PushRegistration: NSObject, UNUserNotificationCenterDelegate {
     static let shared = PushRegistration()
-    // One primary AppModel consumes this stream. A token received before subscription
-    // remains buffered; newer unsolicited callbacks supersede older buffered values.
+    // A token received before the model subscribes stays buffered; newer unsolicited callbacks supersede it.
     private let unsolicited = AsyncStream<Data>.makeStream(bufferingPolicy: .bufferingNewest(1))
     // Ordering guard only. Never return this cached value instead of requesting APNs.
     private var latestCallbackToken: Data?
     private var waiters: [UUID: CheckedContinuation<Data, any Error>] = [:]
     enum Failure: Error { case unavailable, denied }
 
-    /// Becomes the notification center's delegate. Called once at launch by the platform's application delegate.
     func installNotificationDelegate() {
         UNUserNotificationCenter.current().delegate = self
-        // `message` offers Reply and Mark as Read; `notice`, `reaction` and the extension's `fallback` have none.
         UNUserNotificationCenter.current().setNotificationCategories(NotificationCategories.all)
         #if DEBUG && os(iOS)
         NotificationHarness.install()
@@ -62,7 +57,6 @@ final class PushRegistration: NSObject, UNUserNotificationCenterDelegate {
     static func unsolicitedTokens() -> AsyncStream<Data> { shared.unsolicited.stream }
     static func isLatestToken(_ token: Data) -> Bool { shared.latestCallbackToken == token }
 
-    /// The platform's token callback.
     func received(_ deviceToken: Data) {
         Self.shared.latestCallbackToken = deviceToken
         let pending = Self.shared.waiters
@@ -75,10 +69,7 @@ final class PushRegistration: NSObject, UNUserNotificationCenterDelegate {
         Self.shared.waiters.removeAll()
         for waiter in pending.values { waiter.resume(throwing: Failure.unavailable) }
     }
-    /// In front of the app only the local requests for another chat's messages show (the app posts them; see
-    /// `NotificationPresenter.presentForeground`). The open chat, remote requests and fallbacks stay hidden.
-    /// Completion-handler form: UIKit requires the handler on the main thread, which the async form does not
-    /// guarantee (a response handled in the background crashed with an assertion when it returned off main).
+    // Completion-handler form: UIKit requires the handler on the main thread, which the async form does not guarantee.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         let request = ForegroundPresentation.request(notification)
@@ -89,8 +80,7 @@ final class PushRegistration: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    /// May run with the app launched into the background. The handler is called on the main thread once an action's
-    /// work settled (bounded by the model's action budget).
+    // May run with the app launched into the background; the handler is called once the action's work settled.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
         let content = response.notification.request.content
@@ -140,7 +130,7 @@ extension PushRegistration: UIApplicationDelegate {
 }
 #endif
 
-/// Carries a system completion handler to the main actor, where it is called exactly as UIKit requires.
+// Unchecked: the handler is only called on the main actor, as UIKit requires.
 private struct MainThreadCompletion<Value>: @unchecked Sendable {
     private let handler: (Value) -> Void
     init(_ handler: @escaping (Value) -> Void) { self.handler = handler }

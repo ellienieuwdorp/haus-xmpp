@@ -1,13 +1,10 @@
 import Foundation
 
-/// The OpenGraph fields of a page's head, read by a tolerant tokenizer over at most the bytes the fetcher kept. No
-/// WebKit, no `NSAttributedString(html:)` and no `XMLParser`, none of which suit untrusted, often invalid HTML.
-/// Reads `og:title`, `og:description`, `og:image` and `og:image:alt`, falling back to `<title>` and
-/// `<meta name=description>`; stops at `</head>` or `<body`. Values are as written, entities decoded.
+// A tolerant tokenizer over the bytes the fetcher kept: WebKit, `NSAttributedString(html:)` and `XMLParser` do not
+// suit untrusted, often invalid HTML. Stops at `</head>` or `<body`.
 struct LinkPreviewHead: Equatable {
     var title: String?
     var description: String?
-    /// The image reference as written, relative or absolute.
     var image: String?
     var imageAlt: String?
 
@@ -47,7 +44,6 @@ struct LinkPreviewHead: Equatable {
                                image: value(og["og:image"]), imageAlt: value(og["og:image:alt"]))
     }
 
-    /// Whether `data` from `from` on holds `</head` or `<body`, where a page's metadata has ended.
     static func endsHead(_ data: Data, from: Int) -> Bool {
         let markers: [[UInt8]] = [Array("</head".utf8), Array("<body".utf8)]
         let bytes = data.count
@@ -74,10 +70,7 @@ struct LinkPreviewHead: Equatable {
 
     private static func lowered(_ byte: UInt8) -> UInt8 { (65...90).contains(byte) ? byte + 32 : byte }
 
-    // MARK: Charset
-
-    /// The `Content-Type` charset, else a `<meta charset>` or `http-equiv` one near the start, else UTF-8. Invalid
-    /// UTF-8 (a page cut at its cap mid-character, or mislabelled) decodes with replacement characters.
+    // Invalid UTF-8 (a page cut mid-character at its cap, or mislabelled) decodes with replacement characters.
     static func decode(_ data: Data, charset: String?) -> String {
         let label = charset ?? declaredCharset(in: data.prefix(2_048))
         if let label, let encoding = encoding(named: label), encoding != .utf8, let text = String(data: data, encoding: encoding) {
@@ -101,9 +94,7 @@ struct LinkPreviewHead: Equatable {
         return name.isEmpty ? nil : String(name)
     }
 
-    // MARK: Entities
-
-    /// The Latin-1 names (U+00A0 to U+00FF, in order) and the punctuation pages use most.
+    // The Latin-1 names (U+00A0 to U+00FF, in order) and the punctuation pages use most.
     private static let named: [String: String] = {
         let latin1 = """
             nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute micro \
@@ -119,7 +110,6 @@ struct LinkPreviewHead: Equatable {
         return table
     }()
 
-    /// Numeric references and the common named ones; anything else stays as written.
     static func decodeEntities(_ text: String) -> String {
         guard text.contains("&") else { return text }
         var result = ""
@@ -152,8 +142,6 @@ struct LinkPreviewHead: Equatable {
         return result + rest
     }
 
-    // MARK: Tokenizer
-
     enum Tag: Equatable {
         case start(String, [String: String])
         case end(String)
@@ -165,7 +153,6 @@ struct LinkPreviewHead: Equatable {
 
         init(_ text: [Unicode.Scalar]) { self.text = text }
 
-        /// The next start or end tag; comments, doctypes and processing instructions are skipped.
         mutating func nextTag() -> Tag? {
             while index < text.count {
                 guard text[index] == "<" else { index += 1; continue }
@@ -193,7 +180,6 @@ struct LinkPreviewHead: Equatable {
             return nil
         }
 
-        /// The text up to `</name`, which is consumed with its tag.
         mutating func rawText(until name: String) -> String {
             let start = index
             while index < text.count {
@@ -207,7 +193,7 @@ struct LinkPreviewHead: Equatable {
             return String(String.UnicodeScalarView(text[start..<text.count]))
         }
 
-        /// Attributes up to the tag's `>`, names lowercased, values entity-decoded. A repeated name keeps its first value.
+        // A repeated name keeps its first value.
         private mutating func attributes() -> [String: String] {
             var result: [String: String] = [:]
             while index < text.count {

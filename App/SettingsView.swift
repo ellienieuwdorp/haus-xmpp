@@ -26,8 +26,6 @@ struct SettingsView: View {
         }
     }
 
-    /// Every signed-in account (the sample conversations have none); in DEBUG, the iPhone's notification harness and the
-    /// Mac's `-haus-notification-settings` show it signed out too, for captures.
     private var showsNotificationSettings: Bool {
         #if DEBUG && os(iOS)
         if NotificationHarness.isRequested { return true }
@@ -39,7 +37,6 @@ struct SettingsView: View {
 
     var body: some View {
         if model.transferState != .none {
-            // The Mac's Settings window, while the main window shows the transfer.
             ContentUnavailableView("Moving to another install", systemImage: "shippingbox",
                                    description: Text("Finish the transfer in the main window."))
         } else {
@@ -50,7 +47,6 @@ struct SettingsView: View {
     private var settings: some View {
         GroupedList {
             #if os(macOS)
-            // A Mac settings pane: who is signed in, with the account's actions as push buttons beside it.
             Section {
                 LabeledContent {
                     HStack {
@@ -77,7 +73,6 @@ struct SettingsView: View {
             if showsNotificationSettings {
                 Section {
                     #if os(iOS)
-                    // On while push is on or being set up; a status that reads "Off" shows it off.
                     Toggle(isOn: Binding(get: { model.pushWanted && ![.off, .notAllowed].contains(model.pushStatus) },
                         set: { on in Task { if on { await model.enableNotifications() } else { await model.disableNotifications() } } })) {
                         Label {
@@ -105,8 +100,7 @@ struct SettingsView: View {
                         }
                     }
                     #else
-                    // A Mac build without push (`PushService.isOffered`) shows only the permission, which its own
-                    // banners need.
+                    // A Mac build without push still shows the permission, which its own banners need.
                     if PushService.isOffered { MacPushNotificationRows(model: model) } else { MacNotificationPermissionRow(model: model) }
                     #endif
                     Toggle("Message previews", isOn: Binding(get: { model.notificationPreviewsEnabled },
@@ -134,7 +128,7 @@ struct SettingsView: View {
                     Label { Text("Last seen") } icon: { SettingsIconTile(systemName: "clock.fill", color: .orange) }
                 }
                 .accessibilityIdentifier("lastSeen")
-                // Off with message previews too: previews off keeps every name and avatar away from the system.
+                // Previews off keeps every name and avatar away from the system, so suggestions read off too.
                 Toggle(isOn: Binding(get: { model.shareSuggestionsEnabled && model.notificationPreviewsEnabled },
                                      set: { on in Task { await model.setShareSuggestions(on) } })) {
                     Label { Text("Suggest chats in Share Sheet") } icon: { SettingsIconTile(systemName: "square.and.arrow.up.fill", color: .indigo) }
@@ -153,7 +147,6 @@ struct SettingsView: View {
                     }
                     .accessibilityIdentifier("blockedContacts")
                 }
-                // Per device (LinkSettings): what this app fetches, not something contacts see.
                 Toggle(isOn: Binding(get: { LinkSettings.shared.fetchPreviews }, set: { LinkSettings.shared.fetchPreviews = $0 })) {
                     Label { Text("Link previews") } icon: { SettingsIconTile(systemName: "link", color: .teal) }
                 }
@@ -166,7 +159,6 @@ struct SettingsView: View {
             #if os(macOS)
             MacLoginItemSection()
             #endif
-            // The Mac's Settings window has Appearance as a pane of its own.
             #if os(iOS)
             Section {
                 NavigationLink {
@@ -179,7 +171,6 @@ struct SettingsView: View {
                     }
                 }
                 .accessibilityIdentifier("appearanceRow")
-                // Off opens web links in the in-app browser; the Mac always uses the default browser.
                 Toggle(isOn: Binding(get: { LinkSettings.shared.openInSafari }, set: { LinkSettings.shared.openInSafari = $0 })) {
                     Label { Text("Open links in Safari") } icon: { SettingsIconTile(systemName: "safari.fill", color: .blue) }
                 }
@@ -187,7 +178,7 @@ struct SettingsView: View {
             }
             #endif
             Section {
-                // Showing the samples signs the account out, so a signed-in account confirms first.
+                // Showing the samples signs the account out.
                 Button {
                     if model.accountID.isEmpty || model.isDemo { Task { await model.loadDemo() } } else { confirmingSamples = true }
                 } label: {
@@ -271,7 +262,6 @@ struct SettingsView: View {
                 }
             }
             Section {
-                // The Mac's Settings window has About as a pane of its own.
                 #if os(iOS)
                 NavigationLink {
                     AboutView()
@@ -304,7 +294,6 @@ struct SettingsView: View {
                 Button("Sign Out", role: .destructive) { confirmingSignOut = true }
                     .disabled(model.accountID.isEmpty)
                     #if os(macOS)
-                    // A Mac form's closing action sits at its trailing edge.
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     #endif
             }
@@ -364,7 +353,6 @@ struct SettingsView: View {
     }
 }
 
-/// Rounded colour tile with a white glyph, like the rows of iOS Settings (30 pt) and System Settings on the Mac (22 pt).
 struct SettingsIconTile: View {
     let systemName: String
     let color: Color
@@ -378,7 +366,6 @@ struct SettingsIconTile: View {
     }
 }
 
-/// The profile card's avatar: the iPhone's large card, and a Mac pane's account row.
 private enum ProfileCardMetrics {
     #if os(iOS)
     static let avatar: CGFloat = 60
@@ -387,7 +374,6 @@ private enum ProfileCardMetrics {
     #endif
 }
 
-/// The settings and details rows' icon tiles: iOS Settings' size on the iPhone, System Settings' on the Mac.
 enum IconTileMetrics {
     #if os(iOS)
     static let side: CGFloat = 30, radius: CGFloat = 8, glyph: CGFloat = 15

@@ -5,8 +5,8 @@ import UIKit
 import AppKit
 #endif
 
-/// Applies the store's tint and light/dark choice. Used on the window root and again on each sheet
-/// root, so a presentation's own bars, glass buttons and rows re-render with the choice made inside it.
+// Applied again on each sheet root, so a presentation's own bars, glass buttons and rows follow a choice made inside
+// it.
 private struct ThemedRoot: ViewModifier {
     @Environment(\.appearance) private var appearance
 
@@ -18,10 +18,9 @@ private struct ThemedRoot: ViewModifier {
 }
 
 #if os(iOS)
-/// Light/dark is the window's trait override rather than `preferredColorScheme`: going from Dark back
-/// to Automatic through the SwiftUI preference leaves an open sheet dark until it is dismissed
-/// (iOS 26.5), while every presentation in the window follows the window's override. Set as the view
-/// joins the window, so a stored Dark choice is in place before the first frame.
+// The window's trait override, not `preferredColorScheme`: going from Dark back to Automatic through the preference
+// leaves an open sheet dark until dismissed (iOS 26.5). Set as the view joins the window, so Dark is in place before
+// the first frame.
 private struct WindowInterfaceStyle: UIViewRepresentable {
     let style: UIUserInterfaceStyle
 
@@ -47,8 +46,8 @@ private struct WindowInterfaceStyle: UIViewRepresentable {
     func updateUIView(_ anchor: Anchor, context: Context) { anchor.style = style }
 }
 #else
-/// On the Mac the choice is the application's appearance, so every window (main, Settings, sheets) and the menus follow
-/// it together. Set as the view joins a window, so a stored Dark choice is in place before the first frame.
+// The application's appearance, so every window and the menus follow it; set as the view joins a window, before the
+// first frame.
 private struct WindowInterfaceStyle: NSViewRepresentable {
     let style: NSAppearance?
 
@@ -78,20 +77,15 @@ extension View {
     func themedRoot() -> some View { modifier(ThemedRoot()) }
 }
 
-/// Message status marks, drawn rather than composed from SF Symbols so the double rings keep their
-/// knock-out gap. Geometry is in points at the 12 pt design size: one ring is 12 across with a 1.1 pt
-/// stroke; the double marks are 18 wide, the right ring at x 6 hiding the left one behind a 0.6 pt gap.
-/// Read is told by fill, not colour. Every mark is a template image tinted by its surroundings.
-/// Failed is a filled disc with the exclamation knocked out, tinted the same meta colour as the others
-/// (Signal's rule: failure is told by shape and the retry action, not red). System red measured 1.3–2.3:1
-/// on the sent-bubble fills; the meta colour is at least 3.2:1 on all of them.
+// Drawn, not SF Symbols, so double rings keep their knock-out gap; geometry is in points at the 12 pt design size.
+// Failure is told by shape and the retry action, not red: system red is 1.3–2.3:1 on sent-bubble fills, the meta colour
+// at least 3.2:1.
 enum MessageStatusArt {
     static let designHeight: CGFloat = 12
     static let slotWidth: CGFloat = 18
     private static let line: CGFloat = 1.1
     private static let gap: CGFloat = 0.6
 
-    /// The mark's width at the design size; the double rings fill the whole slot.
     static func designWidth(_ glyph: MessageStatusGlyph) -> CGFloat {
         switch glyph {
         case .delivered, .read: slotWidth
@@ -154,7 +148,6 @@ enum MessageStatusArt {
         cg.fillEllipse(in: circle(centreX: centreX, radius: 6))
     }
 
-    /// Twelve dashes and twelve equal gaps around the ring.
     private static func dashedRing(_ cg: CGContext) {
         let radius = 6 - line / 2
         let segment = 2 * .pi * radius / 24
@@ -163,7 +156,6 @@ enum MessageStatusArt {
         cg.strokeEllipse(in: circle(centreX: 6, radius: radius))
     }
 
-    /// A 1.4 pt round-capped bar over a dot, centred in the 12 pt disc.
     private static func exclamation(_ cg: CGContext) {
         cg.setLineWidth(1.4)
         cg.move(to: CGPoint(x: 6, y: 3.0))
@@ -179,7 +171,6 @@ enum MessageStatusArt {
         cg.strokePath()
     }
 
-    /// Draws the left mark only outside the right disc grown by the gap, so the two never touch.
     private static func hidingRightDisc(_ cg: CGContext, _ draw: () -> Void) {
         cg.saveGState()
         let path = CGMutablePath()
@@ -193,9 +184,8 @@ enum MessageStatusArt {
 }
 
 #if os(iOS)
-/// The bubble footer's status slot: a fixed 18 pt wide box (scaled with Dynamic Type like caption2)
-/// that right-aligns the mark, so the footer never reflows between states. Sending marks spin unless
-/// Reduce Motion is on or the send is only unconfirmed.
+// Fixed width (scaled like caption2) so the footer never reflows between states. Sending marks spin unless Reduce
+// Motion is on or the send is only unconfirmed.
 @MainActor
 final class MessageStatusView: UIView {
     private let mark = UIImageView()
@@ -231,7 +221,6 @@ final class MessageStatusView: UIView {
         redraw()
     }
 
-    /// Called from cell reuse: no animation survives into another message.
     func stopSpinning() { mark.layer.removeAnimation(forKey: Self.spinKey) }
 
     private func redraw() {
