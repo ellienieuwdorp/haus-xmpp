@@ -724,6 +724,7 @@ final class AppModel {
         case XMPPClientError.unexpectedProtocol: "The server sent a reply this app cannot accept."
         case XMPPClientError.timedOut: "The server did not respond."
         case MessageStoreError.transportOwnedElsewhere: "Another process is still using this account’s storage. Try again in a moment."
+        case is SignOutCleanup.Owed: "Couldn’t finish signing out this account. Try again."
         case is CancellationError: "Connection cancelled."
         case XMPPIdentityError.boundAccountMismatch: "The server signed in a different account than the one entered."
         default: "Could not reach the server."
@@ -1439,7 +1440,7 @@ final class AppModel {
             do {
                 try await store.acquireTransportOwnership()
                 // An account whose sign-out rows are still owed never gets a session.
-                guard await SignOutCleanup(defaults: preferences).settle(store: store) else { await releaseLeaseInBackground(store); throw SignOutCleanup.Owed() }
+                guard await SignOutCleanup(defaults: preferences).settle(store: store, connecting: accountID) else { await releaseLeaseInBackground(store); throw SignOutCleanup.Owed() }
                 guard transportWanted, !quiescing, generation == token else { throw CancellationError() }
                 hasTransportOwnership = true
                 return

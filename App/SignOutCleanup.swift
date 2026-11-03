@@ -19,9 +19,9 @@ import os
         defaults.set(owed + [account], forKey: Self.key)
     }
 
-    // Needs `store`'s lease. True once nothing is owed.
+    // Needs `store`'s lease. True once nothing is owed or, given `connecting`, once that account is not.
     @discardableResult
-    func settle(store: MessageStore) async -> Bool {
+    func settle(store: MessageStore, connecting: String? = nil) async -> Bool {
         var settled = Set<String>()
         for account in owed {
             do {
@@ -33,7 +33,7 @@ import os
         }
         let left = owed.filter { !settled.contains($0) }
         if left.isEmpty { defaults.removeObject(forKey: Self.key) } else { defaults.set(left, forKey: Self.key) }
-        return left.isEmpty
+        return connecting.map { !left.contains($0) } ?? left.isEmpty
     }
 
     static func reason(_ error: any Error) -> String {

@@ -85,6 +85,33 @@ import MessageStore
         }
     }
 
+    // One account's delete keeps failing: it stays owed and is refused a session, while another account connects.
+    func testAnotherAccountsFailingDeleteNeverBlocksThisOne() async throws {
+        let (store, url, cleanup) = try seededStore()
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, """
+            CREATE TRIGGER keep_alice BEFORE DELETE ON notification_candidates WHEN old.account_id='\(alice)' BEGIN SELECT RAISE(ABORT,'kept'); END;
+            """, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(db)
+        try await store.acquireTransportOwnership()
+        cleanup.owe(alice)
+        cleanup.owe(bob)
+
+        let bobConnects = await cleanup.settle(store: store, connecting: bob)
+        XCTAssertTrue(bobConnects, "alice's failure does not block bob")
+        XCTAssertEqual(cleanup.owed, [alice])
+        for table in deleted {
+            XCTAssertEqual(try count(url, table, bob), 0, table.rawValue)
+            XCTAssertEqual(try count(url, table, alice), 1, "\(table.rawValue): alice's delete rolled back")
+        }
+        let aliceConnects = await cleanup.settle(store: store, connecting: alice)
+        XCTAssertFalse(aliceConnects, "alice is still owed, so she gets no session")
+        let unrelated = await cleanup.settle(store: store, connecting: "carol@example.org")
+        XCTAssertTrue(unrelated)
+        XCTAssertEqual(AppModel.failureMessage(for: SignOutCleanup.Owed()), "Couldn’t finish signing out this account. Try again.")
+    }
+
     // What the next session writes after the owed rows went is its own: later settles leave it.
     func testRowsWrittenAfterASettleSurviveLaterSettles() async throws {
         let (store, url, cleanup) = try seededStore()
