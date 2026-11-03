@@ -85,6 +85,30 @@ import MessageStore
         }
     }
 
+    // What the next session writes after the owed rows went is its own: later settles leave it.
+    func testRowsWrittenAfterASettleSurviveLaterSettles() async throws {
+        let (store, url, cleanup) = try seededStore()
+        try await store.acquireTransportOwnership()
+        cleanup.owe(alice)
+        let settled = await cleanup.settle(store: store)
+        XCTAssertTrue(settled)
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, """
+            INSERT INTO notification_candidates(account_id,message_id) VALUES('\(alice)','m1');
+            INSERT INTO reaction_notification_candidates(account_id,chat_id,actor_id,target_message_id,reactions_json,reacted_at)
+            VALUES('\(alice)','peer@example.org','peer@example.org','m1','[]',1790000100);
+            """, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(db)
+        for _ in 0..<2 {
+            let again = await cleanup.settle(store: store)
+            XCTAssertTrue(again)
+        }
+        XCTAssertEqual(try count(url, .notificationCandidates, alice), 1)
+        XCTAssertEqual(try count(url, .reactionNotificationCandidates, alice), 1)
+    }
+
+    // A failed settle is what makes the next connection refuse the owed account a session.
     func testAClosedStoreKeepsTheRowsOwedAndSaysWhy() async throws {
         let (store, url, cleanup) = try seededStore()
         cleanup.owe(alice)

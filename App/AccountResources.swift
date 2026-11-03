@@ -41,7 +41,8 @@ enum AccountResource: CaseIterable {
         case .lastAccount: Policy(location: .preference([.app], key: { _ in "lastAccount" }), signOut: .delete, transfer: .copy)
         case .signOutRowsOwed:
             Policy(location: .preference([.app], key: { _ in SignOutCleanup.key }),
-                   signOut: .keep(reason: "names the accounts whose rows sign-out still owes the store"), transfer: .copy)
+                   signOut: .keep(reason: "accounts whose sign-out rows are still owed, none of which gets a session"),
+                   transfer: .copy)
         case .pushOff:
             Policy(location: .preference([.app], key: { "pushOff." + $0 }), signOut: .keep(reason: "the user's choice for the account"), transfer: .copy)
         case .ownAvatar:

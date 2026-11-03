@@ -6,6 +6,8 @@ import os
 // The rows sign-out deletes (`AccountTable`), owed from the moment it starts until a lease holder deleted them, so a
 // sign-out cut short by a background transition or a busy lease finishes at this process's next lease.
 @MainActor struct SignOutCleanup {
+    struct Owed: Error {}
+
     nonisolated static let key = "signOutRowsOwed"
     static let log = Logger(subsystem: "haus.xmpp.ios", category: "sync")
     let defaults: UserDefaults
@@ -45,17 +47,23 @@ import os
 }
 
 extension AppModel {
-    // A background transition joins `acquiringOwnership` and connect stops while `quiescing`, as for a transfer.
+    // Under the lease. An extension run that held it may have posted since sign-out cleared the notifications.
     func settleSignOut(_ store: MessageStore) async {
-        let background = BackgroundActivity("Sign out")
-        defer { background.end() }
-        quiescing = true
-        acquiringOwnership = true
-        defer { quiescing = false; acquiringOwnership = false }
-        guard await takeLease(store) else { return SignOutCleanup.log.error("sign-out rows stay until the next lease: none was taken") }
-        guard await SignOutCleanup(defaults: preferences).settle(store: store), testSessionID == nil else { return }
-        // An extension run that held the lease may have posted since sign-out cleared them.
+        await SignOutCleanup(defaults: preferences).settle(store: store)
+        guard testSessionID == nil else { return }
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+    }
+
+    // Re-entering credentials keeps an existing server subscription and the SCRAM pin (a server that drops SCRAM must
+    // not get PLAIN by making the user retype the password); only signing out lifts them. Nothing crosses accounts.
+    static func retainingSavedState(previous: NotificationAccount?, replacement: NotificationAccount) -> NotificationAccount {
+        guard let previous, previous.accountID == replacement.accountID, previous.domain == replacement.domain,
+              previous.username == replacement.username else { return replacement }
+        let keepEndpoint = replacement.discoversEndpoint && previous.discoversEndpoint && !previous.host.isEmpty
+        let endpoint = keepEndpoint ? previous : replacement
+        return NotificationAccount(accountID: replacement.accountID, host: endpoint.host, port: endpoint.port, security: endpoint.security,
+            discoversEndpoint: replacement.discoversEndpoint, requiresSCRAM: previous.requiresSCRAM || replacement.requiresSCRAM,
+            domain: replacement.domain, username: replacement.username, password: replacement.password, push: replacement.push ?? previous.push)
     }
 }
