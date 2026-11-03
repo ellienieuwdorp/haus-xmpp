@@ -764,13 +764,13 @@ final class AppModel {
         await forgetAccount()
         // Replies saved before the upgrade for this account are not sent after it signed out.
         if !account.isEmpty { try? snapshots?.removeSavedReplies(of: account) }
-        uploads.forget(account: account)
-        serverProfiles.forget(account: account)
-        BlockedAddresses.forget(accountID: account, defaults: sessionDefaults)
-        ShareSuggestionSetting.forget(accountID: account, defaults: sessionDefaults)
+        if !account.isEmpty, let store {
+            do { try await store.removeRowsAtSignOut(accountID: account) }
+            catch { Self.syncLog.error("sign-out left rows of the account: \(String(describing: error), privacy: .public)") }
+        }
         reconnection = ReconnectPolicy()
         selectAccount("")
-        preferences.removeObject(forKey: "lastAccount")
+        AccountResource.forgetPreferencesAtSignOut(of: account, app: preferences, group: sessionDefaults)
     }
 
     func disconnect() async {

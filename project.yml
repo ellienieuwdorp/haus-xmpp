@@ -351,6 +351,9 @@ targets:
         buildPhase: resources
       - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/schema-27.sql
         buildPhase: resources
+      # One row in every account table, for the transfer round trip.
+      - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/account-tables.sql
+        buildPhase: resources
     dependencies:
       - target: HausXMPP
       - package: MessageStore
