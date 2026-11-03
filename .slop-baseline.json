@@ -455,10 +455,6 @@
     ]
   },
   "Packages/MessagingCore/Sources/MessagingCore/NotificationDelivery.swift" : {
-    "unsafe.discarded-try" : [
-      "_ = try? await withTimeout(timeout) { await withdraw(conversation) }",
-      "timer: Task { try? await Task.sleep(for: limit); race.finish(.failure(NotificationRunError.postTimedOut)) })"
-    ],
     "unsafe.unchecked-sendable" : [
       "private final class Run: @unchecked Sendable {"
     ]

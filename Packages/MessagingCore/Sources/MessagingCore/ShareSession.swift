@@ -52,9 +52,9 @@ public actor ShareSession {
     }
 
     /// False when another process kept the lease or the session ended.
-    public func acquireLease(waitingUpTo wait: Duration = .seconds(3)) async -> Bool {
+    public func acquireLease(waitingUpTo wait: Duration = .seconds(3), clock: some Clock<Duration> = ContinuousClock()) async -> Bool {
         guard !ended, !holdsLease else { return holdsLease }
-        do { _ = try await acquireTransportOwnership(store, waitingUpTo: wait) }
+        do { _ = try await acquireTransportOwnership(store, waitingUpTo: wait, clock: clock) }
         catch { return false }
         // `end()` may have run during the wait and could not release this lease.
         if ended { try? await store.releaseTransportOwnership(); return false }

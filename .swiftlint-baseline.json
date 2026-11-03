@@ -2311,109 +2311,7 @@
    ]
   ]
  },
- "Packages/MessagingCore/Tests/MessagingCoreTests/BackgroundSynchronizerTests.swift": {
-  "async_without_await": [
-   [
-    "func deliveredNotifications() async -> [DeliveredNotification] { [] }",
-    0
-   ],
-   [
-    "func removeDelivered(identifiers: [String]) async {}",
-    0
-   ]
-  ],
-  "no_empty_block": [
-   [
-    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
-    0
-   ],
-   [
-    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
-    0
-   ],
-   [
-    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
-    0
-   ]
-  ],
-  "no_wall_clock_in_tests": [
-   [
-    "#expect(clock.now - start < .seconds(3))",
-    0
-   ],
-   [
-    "await withCheckedContinuation { done in DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { done.resume() } }",
-    0
-   ],
-   [
-    "case .stalls: try await Task.sleep(for: .seconds(60))",
-    0
-   ],
-   [
-    "consume: { try await Task.sleep(for: .seconds(60)) },",
-    0
-   ],
-   [
-    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
-    0
-   ],
-   [
-    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
-    0
-   ],
-   [
-    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
-    0
-   ],
-   [
-    "let clock = ContinuousClock(), start = clock.now",
-    0
-   ],
-   [
-    "let now = ContinuousClock.now",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(50))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .seconds(20))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .seconds(20))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .seconds(20))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .seconds(20))   // a slow pull, cut short by the ended connection",
-    0
-   ],
-   [
-    "while await run.posting.added.count < 2 { try await Task.sleep(for: .milliseconds(20)) }",
-    0
-   ],
-   [
-    "while await run.posting.added.isEmpty { try await Task.sleep(for: .milliseconds(10)) }",
-    0
-   ]
-  ]
- },
  "Packages/MessagingCore/Tests/MessagingCoreTests/CommunicationNotificationTests.swift": {
-  "no_wall_clock_in_tests": [
-   [
-    "#expect(clock.now - start < .seconds(5))",
-    0
-   ],
-   [
-    "let clock = ContinuousClock(), start = clock.now",
-    0
-   ]
-  ],
   "unneeded_throws_rethrows": [
    [
     "@Test func groupIntentNamesTheRoomAndEveryKnownRecipientIncludingTheAccount() throws {",
@@ -2422,28 +2320,6 @@
   ]
  },
  "Packages/MessagingCore/Tests/MessagingCoreTests/LivenessHandshakeTests.swift": {
-  "no_wall_clock_in_tests": [
-   [
-    "#expect(clock.now - start < .seconds(1))",
-    0
-   ],
-   [
-    "#expect(clock.now - start >= .milliseconds(1_750))",
-    0
-   ],
-   [
-    "let clock = ContinuousClock(), start = clock.now",
-    0
-   ],
-   [
-    "let clock = ContinuousClock(), start = clock.now",
-    0
-   ],
-   [
-    "try? await Task.sleep(for: delay)",
-    0
-   ]
-  ],
   "unneeded_throws_rethrows": [
    [
     "func ask(_ request: LivenessRequest) throws {",
@@ -2459,76 +2335,6 @@
    ],
    [
     "func removeDelivered(identifiers: [String]) async {",
-    0
-   ]
-  ],
-  "file_length": [
-   [
-    "",
-    508
-   ]
-  ],
-  "no_wall_clock_in_tests": [
-   [
-    "#expect(clock.now - start < .seconds(5))",
-    0
-   ],
-   [
-    "#expect(clock.now - start < .seconds(5))",
-    0
-   ],
-   [
-    "DispatchQueue.global().asyncAfter(deadline: .now() + delay) { continuation.resume() }",
-    0
-   ],
-   [
-    "do { try await Task.sleep(for: .seconds(30)) } catch { await cancelled.release() }",
-    0
-   ],
-   [
-    "for _ in 0..<200 { if await condition() { return }; try await Task.sleep(for: .milliseconds(5)) }",
-    0
-   ],
-   [
-    "let clock = ContinuousClock(), start = clock.now",
-    0
-   ],
-   [
-    "let clock = ContinuousClock(), start = clock.now",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(100))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(20))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(20))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(20))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(20))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(50))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(50))",
-    0
-   ]
-  ],
-  "unneeded_throws_rethrows": [
-   [
-    "@Test func expiryBeforeCommitFallsBackAndCancelsAnAbandonedRun() async throws {",
     0
    ]
   ]
@@ -2589,22 +2395,6 @@
    ],
    [
     "let took = ContinuousClock.now - start",
-    0
-   ]
-  ]
- },
- "Packages/MessagingCore/Tests/MessagingCoreTests/ShareSessionTests.swift": {
-  "no_wall_clock_in_tests": [
-   [
-    "let release = Task { try await Task.sleep(for: .milliseconds(300)); try await owner.releaseTransportOwnership() }",
-    0
-   ],
-   [
-    "let started = ContinuousClock.now",
-    0
-   ],
-   [
-    "let waited = ContinuousClock.now - started",
     0
    ]
   ]

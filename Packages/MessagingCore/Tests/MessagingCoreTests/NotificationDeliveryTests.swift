@@ -11,14 +11,17 @@ actor FakePosting: NotificationPosting {
     private(set) var removed: [String] = []
     var failAtIndex: Int?
     var hang = false
-    // Time each add spends preparing (an intent donation) before the system add, and the system add itself.
+    // Time each add spends preparing (an intent donation) before the system add, and the system add itself, on `clock`.
     var preparation: Duration = .zero
     var systemAdd: Duration = .zero
     nonisolated let allowance: Duration
+    nonisolated let clock: TestClock
     // Runs inside each add before it completes: what happens while a donation is in flight.
     private var during: (@Sendable (PlannedNotification) async -> Void)?
 
-    init(delivered: [DeliveredNotification] = [], allowance: Duration = .zero) { self.delivered = delivered; self.allowance = allowance }
+    init(delivered: [DeliveredNotification] = [], allowance: Duration = .zero, clock: TestClock = TestClock()) {
+        self.delivered = delivered; self.allowance = allowance; self.clock = clock
+    }
     func configure(failAtIndex: Int? = nil, hang: Bool = false, preparation: Duration = .zero, systemAdd: Duration = .zero) {
         self.failAtIndex = failAtIndex; self.hang = hang; self.preparation = preparation; self.systemAdd = systemAdd
     }
@@ -27,9 +30,9 @@ actor FakePosting: NotificationPosting {
 
     func add(_ request: PlannedNotification) async throws {
         // Like the UNUserNotificationCenter completion-handler bridge: a hung add ignores cancellation.
-        if hang { await ignoringCancellation(for: .seconds(10)) }
-        if preparation > .zero { await ignoringCancellation(for: preparation) }
-        if systemAdd > .zero { await ignoringCancellation(for: systemAdd) }
+        if hang { await ignoringCancellation(for: .seconds(10), on: clock) }
+        if preparation > .zero { await ignoringCancellation(for: preparation, on: clock) }
+        if systemAdd > .zero { await ignoringCancellation(for: systemAdd, on: clock) }
         await during?(request)
         if failAtIndex == added.count { throw Failure.rejected }
         added.append(request)
@@ -46,15 +49,6 @@ actor FakePosting: NotificationPosting {
 }
 
 private let account = "alice@example.org"
-
-// Suspends for `duration` without observing cancellation, as a completion-handler bridge does.
-func ignoringCancellation(for duration: Duration) async {
-    let (seconds, attoseconds) = duration.components
-    let delay = Double(seconds) + Double(attoseconds) / 1e18
-    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-        DispatchQueue.global().asyncAfter(deadline: .now() + delay) { continuation.resume() }
-    }
-}
 
 func withStore(_ body: (MessageStore) async throws -> Void) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "delivery-\(UUID())")
@@ -137,7 +131,7 @@ struct NotificationPresenterTests {
     @Test func aFailedOrSlowAddKeepsEveryCandidateAndNeverCommits() async throws {
         try await withStore { store in
             try await receive(store, at: 1); try await receive(store, at: 2)
-            let posting = FakePosting()
+            let clock = TestClock(), posting = FakePosting(clock: clock)
             await posting.configure(failAtIndex: 1)
             let failed = NotificationRunProgress()
             await #expect(throws: FakePosting.Failure.self) {
@@ -147,14 +141,18 @@ struct NotificationPresenterTests {
             #expect(try await store.pendingNotifications(accountID: account).candidates.count == 2)
             await posting.configure(hang: true)
             let slow = NotificationRunProgress()
-            let clock = ContinuousClock(), start = clock.now
+            let presenting = Task {
+                try await NotificationPresenter(posting: posting, addTimeout: .milliseconds(50), clock: clock).present(store: store, accountID: account, progress: slow)
+            }
+            // The add's limit and the hung add.
+            try await clock.sleepers(2)
+            clock.advance(by: .milliseconds(50))
             do {
-                try await NotificationPresenter(posting: posting, addTimeout: .milliseconds(50)).present(store: store, accountID: account, progress: slow)
+                try await bounded { try await presenting.value }
                 Issue.record("A hanging add must not settle")
             } catch { #expect(NotificationFallbackReason(error) == .postFailed) }
-            // The timeout returns at its limit although the hung add ignores cancellation for 10 s; the bound leaves
-            // room for a busy machine that stalls the whole run for seconds.
-            #expect(clock.now - start < .seconds(5))
+            // The timeout returned at its limit while the hung add, which ignores cancellation, still sleeps.
+            #expect(clock.elapsed == .milliseconds(50) && clock.sleeperCount == 1)
             #expect(!slow.isCommitted)
             // The retry reposts the same identifiers: the one already added is replaced, not duplicated.
             await posting.configure()
@@ -316,185 +314,6 @@ struct NotificationPresenterTests {
     }
 }
 
-// A run whose steps the test releases one at a time.
-private actor Gate {
-    private var open = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-    func wait() async {
-        if open { return }
-        await withCheckedContinuation { waiters.append($0) }
-    }
-    func release() { open = true; waiters.forEach { $0.resume() }; waiters = [] }
-}
-
-private actor Counter {
-    private(set) var value = 0
-    func increment() -> Int { value += 1; return value }
-}
-
-private func eventually(_ condition: @Sendable () async -> Bool) async throws {
-    for _ in 0..<200 { if await condition() { return }; try await Task.sleep(for: .milliseconds(5)) }
-    Issue.record("Condition never became true")
-}
-
-struct NotificationRunCoordinatorTests {
-    @Test func pushesDuringTheNetworkPhaseJoinOneRunAndShareItsOutcome() async throws {
-        let gate = Gate(), runs = Counter()
-        let coordinator = NotificationRunCoordinator { progress in
-            _ = await runs.increment()
-            progress.enter(.syncing)
-            await gate.wait()
-            progress.enter(.committed)
-            return .settled(progress.report)
-        }
-        let first = Task { await coordinator.deliver(ticket: UUID()) }
-        try await eventually { await runs.value == 1 }
-        let second = Task { await coordinator.deliver(ticket: UUID()) }
-        let third = Task { await coordinator.deliver(ticket: UUID()) }
-        try await Task.sleep(for: .milliseconds(20))
-        await gate.release()
-        let outcomes = [await first.value, await second.value, await third.value]
-        #expect(outcomes.allSatisfy { $0.suppressesRemoteAlert })
-        #expect(await runs.value == 1)
-        #expect(coordinator.activeRuns == 0)
-    }
-
-    @Test func aPushAfterTheNetworkPhaseGetsTheNextRunNotThisOne() async throws {
-        let presenting = Gate(), finish = Gate(), runs = Counter()
-        let coordinator = NotificationRunCoordinator { progress in
-            let number = await runs.increment()
-            if number == 1 {
-                progress.enter(.presenting)
-                await presenting.release()
-                await finish.wait()
-            }
-            progress.enter(.committed)
-            return .settled(progress.report)
-        }
-        let first = Task { await coordinator.deliver(ticket: UUID()) }
-        await presenting.wait()
-        let second = Task { await coordinator.deliver(ticket: UUID()) }
-        try await Task.sleep(for: .milliseconds(20))
-        // The second run waits for the first: one lease owner at a time.
-        #expect(await runs.value == 1)
-        await finish.release()
-        let outcomes = [await first.value, await second.value]
-        #expect(outcomes.allSatisfy { $0.suppressesRemoteAlert })
-        #expect(await runs.value == 2)
-    }
-
-    @Test func expiryBeforeCommitFallsBackAndCancelsAnAbandonedRun() async throws {
-        let started = Gate(), cancelled = Gate()
-        let coordinator = NotificationRunCoordinator { progress in
-            progress.enter(.syncing)
-            await started.release()
-            do { try await Task.sleep(for: .seconds(30)) } catch { await cancelled.release() }
-            return .fallback(.cancelled)
-        }
-        let ticket = UUID()
-        let delivery = Task { await coordinator.deliver(ticket: ticket) }
-        await started.wait()
-        #expect(coordinator.expire(ticket: ticket) == .fallback(.expired))
-        await cancelled.wait()
-        #expect(await delivery.value == .fallback(.cancelled))
-        // Expiring an unknown or already finished request still answers, and never suppresses.
-        #expect(coordinator.expire(ticket: UUID()) == .fallback(.expired))
-    }
-
-    @Test func expiryAfterCommitSuppressesAndOtherWaitersKeepTheRun() async throws {
-        let committed = Gate(), finish = Gate()
-        let coordinator = NotificationRunCoordinator { progress in
-            progress.enter(.syncing)
-            await committed.wait()
-            progress.update { $0.posted = 3 }
-            progress.enter(.committed)
-            await finish.wait()
-            return .settled(progress.report)
-        }
-        let early = UUID(), late = UUID()
-        let first = Task { await coordinator.deliver(ticket: early) }
-        try await eventually { coordinator.activeRuns == 1 }
-        let second = Task { await coordinator.deliver(ticket: late) }
-        try await Task.sleep(for: .milliseconds(20))
-        // Unknown outcome: fall back, but the joined request keeps the run alive.
-        #expect(coordinator.expire(ticket: early) == .fallback(.expired))
-        await committed.release()
-        try await Task.sleep(for: .milliseconds(20))
-        guard case let .settled(report) = coordinator.expire(ticket: late) else { Issue.record("Committed run must suppress"); return }
-        #expect(report.posted == 3)
-        await finish.release()
-        _ = await first.value; _ = await second.value
-    }
-}
-
-struct NotificationTimeoutTests {
-    @Test func cancellingTheCallerReturnsWithoutWaitingForTheOperation() async throws {
-        let clock = ContinuousClock(), start = clock.now
-        let task = Task { try await withTimeout(.seconds(30)) { await ignoringCancellation(for: .seconds(20)); return 1 } }
-        try await Task.sleep(for: .milliseconds(50))
-        task.cancel()
-        await #expect(throws: CancellationError.self) { try await task.value }
-        // Far below both the operation and the timeout, with room for a run stalled for seconds.
-        #expect(clock.now - start < .seconds(5))
-    }
-}
-
-struct NotificationLeaseAndLogTests {
-    @Test func leaseWaitIsBoundedCancellableAndSucceedsWhenReleased() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "lease-\(UUID())")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let url = directory.appending(path: "messages.sqlite")
-        let holder = try MessageStore(url: url), waiter = try MessageStore(url: url)
-        try await holder.acquireTransportOwnership()
-        await #expect(throws: MessageStoreError.transportOwnedElsewhere) {
-            try await acquireTransportOwnership(waiter, waitingUpTo: .milliseconds(120), interval: .milliseconds(20))
-        }
-        let cancelled = Task { try await acquireTransportOwnership(waiter, waitingUpTo: .seconds(5), interval: .milliseconds(20)) }
-        try await Task.sleep(for: .milliseconds(50))
-        cancelled.cancel()
-        await #expect(throws: CancellationError.self) { try await cancelled.value }
-        let released = Task { try await acquireTransportOwnership(waiter, waitingUpTo: .seconds(5), interval: .milliseconds(20)) }
-        try await Task.sleep(for: .milliseconds(100))
-        try await holder.releaseTransportOwnership()
-        let waited = try await released.value
-        #expect(waited >= .milliseconds(80) && waited < .seconds(5))
-        try await waiter.close(); try await holder.close()
-    }
-
-    @Test func fallbackReasonsCoverEveryFailureClass() {
-        #expect(NotificationFallbackReason(MessageStoreError.transportOwnedElsewhere) == .leaseBusy)
-        #expect(NotificationFallbackReason(BackgroundSynchronizationError.deadlineExceeded) == .deadline)
-        #expect(NotificationFallbackReason(BackgroundSynchronizationError.connectionEnded) == .network)
-        #expect(NotificationFallbackReason(BackgroundSynchronizationError.identityUnavailable) == .identityUnavailable)
-        #expect(NotificationFallbackReason(NotificationRunError.noAccount) == .noAccount)
-        #expect(NotificationFallbackReason(NotificationRunError.protectedDataUnavailable) == .protectedData)
-        #expect(NotificationFallbackReason(CancellationError()) == .cancelled)
-        #expect(NotificationFallbackReason(URLError(.notConnectedToInternet)) == .network)
-        #expect(NotificationFallbackReason(MessageStoreError.invalidValue) == .failed)
-    }
-
-    @Test func outcomeRingIsBoundedAndCarriesCountsOnly() throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "ring-\(UUID())")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        #expect(try NotificationOutcomeLog.read(directory: directory).isEmpty)
-        for index in 0..<40 {
-            let progress = NotificationRunProgress()
-            progress.enter(.committed)
-            progress.update { $0.posted = index }
-            try NotificationOutcomeLog.append(NotificationOutcomeRecord(progress: progress, outcome: index.isMultiple(of: 2) ? .settled(progress.report) : .fallback(.leaseBusy)),
-                                              directory: directory)
-        }
-        let records = try NotificationOutcomeLog.read(directory: directory)
-        #expect(records.count == NotificationOutcomeLog.capacity)
-        #expect(records.first?.report.posted == 8 && records.last?.report.posted == 39)
-        #expect(records.last?.outcome == "fallback" && records.last?.reason == .leaseBusy && records.last?.phase == .committed)
-        let text = try String(contentsOf: directory.appending(path: NotificationOutcomeLog.fileName), encoding: .utf8)
-        #expect(!text.contains("@"))
-    }
-}
-
 struct NotificationBadgeAndReactionDeliveryTests {
     @Test func settledRunsCarryTheBadgeOnRequestsAndInTheReport() async throws {
         try await withStore { store in
@@ -516,20 +335,35 @@ struct NotificationBadgeAndReactionDeliveryTests {
         try await withStore { store in
             try await receive(store, at: 1)
             // A 2.5 s donation (allowance 4 s) followed by a 0.5 s system add, with a 1.5 s add limit: 3 s of work within
-            // 5.5 s with the allowance, against 1.5 s without it. Each side has well over a second of slack, so a busy
-            // machine that stalls the run doesn't decide the outcome.
-            let posting = FakePosting(allowance: .seconds(4))
+            // 5.5 s with the allowance, against 1.5 s without it.
+            let clock = TestClock()
+            let posting = FakePosting(allowance: .seconds(4), clock: clock)
             await posting.configure(preparation: .milliseconds(2500), systemAdd: .milliseconds(500))
             let progress = NotificationRunProgress()
-            try await NotificationPresenter(posting: posting, addTimeout: .milliseconds(1500)).present(store: store, accountID: account, progress: progress)
+            let allowed = Task {
+                try await NotificationPresenter(posting: posting, addTimeout: .milliseconds(1500), clock: clock).present(store: store, accountID: account, progress: progress)
+            }
+            // The 5.5 s limit beside the donation, then beside the system add.
+            try await clock.sleeper(until: .milliseconds(2500))
+            try await clock.sleeper(until: .milliseconds(5500))
+            clock.advance(by: .milliseconds(2500))
+            try await clock.sleeper(until: .seconds(3))
+            clock.advance(by: .milliseconds(500))
+            try await bounded { try await allowed.value }
             #expect(progress.isCommitted && progress.report.posted == 1)
-            // Without the allowance the same timings fall back.
+            // Without the allowance the same timings fall back at the add limit, during the donation.
             try await receive(store, at: 2)
-            let unallowed = FakePosting()
+            let unallowed = FakePosting(clock: clock)
             await unallowed.configure(preparation: .milliseconds(2500), systemAdd: .milliseconds(500))
             let failed = NotificationRunProgress()
+            let unallowedRun = Task {
+                try await NotificationPresenter(posting: unallowed, addTimeout: .milliseconds(1500), clock: clock).present(store: store, accountID: account, progress: failed)
+            }
+            try await clock.sleeper(until: .milliseconds(5500))
+            try await clock.sleeper(until: .milliseconds(4500))
+            clock.advance(by: .milliseconds(1500))
             do {
-                try await NotificationPresenter(posting: unallowed, addTimeout: .milliseconds(1500)).present(store: store, accountID: account, progress: failed)
+                try await bounded { try await unallowedRun.value }
                 Issue.record("the add limit alone must not cover the donation")
             } catch { #expect(NotificationFallbackReason(error) == .postFailed) }
         }

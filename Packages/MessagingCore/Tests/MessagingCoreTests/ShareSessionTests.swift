@@ -24,16 +24,20 @@ struct ShareSessionTests {
         let encryption = OMEMOService(store: store, protection: try StateProtection(key: Data(repeating: 7, count: 32)))
         let session = ShareSession(store: store, encryption: encryption, files: AttachmentFiles(directory: directory, account: account.accountID),
                                    account: account, uploadService: nil)
-        let started = ContinuousClock.now
-        #expect(await session.acquireLease(waitingUpTo: .milliseconds(600)) == false)
-        let waited = ContinuousClock.now - started
-        #expect(waited >= .milliseconds(250) && waited < .seconds(2))
+        let clock = TestClock()
+        #expect(try await clock.run { await session.acquireLease(waitingUpTo: .milliseconds(600), clock: clock) } == false)
+        // Rounds at 0 and 250 ms; a third would end past the limit.
+        #expect(clock.elapsed == .milliseconds(500))
         // The owner still holds it: nothing was stolen or expired.
         await #expect(throws: MessageStoreError.transportOwnedElsewhere) { try await store.acquireTransportOwnership() }
         // Freed during the wait, it is taken.
-        let release = Task { try await Task.sleep(for: .milliseconds(300)); try await owner.releaseTransportOwnership() }
-        #expect(await session.acquireLease(waitingUpTo: .seconds(3)))
-        try await release.value
+        let freed = Task { await session.acquireLease(waitingUpTo: .seconds(3), clock: clock) }
+        try await clock.sleepers(1)
+        clock.advance(by: .milliseconds(250))
+        try await clock.sleepers(1)
+        try await owner.releaseTransportOwnership()
+        clock.advance(by: .milliseconds(250))
+        #expect(try await bounded { await freed.value })
         await #expect(throws: MessageStoreError.transportOwnedElsewhere) { try await owner.acquireTransportOwnership() }
         // Ending without a connection releases it, and a second end changes nothing.
         await session.end()

@@ -53,12 +53,12 @@ public enum CommunicationNotification {
     /// fails or times out (a cold Intents service) is logged and the communication style is still applied.
     public static func content(_ content: UNNotificationContent, intent: INSendMessageIntent,
                                donate: Donate? = systemDonate,
-                               donationTimeout: Duration = .milliseconds(1500),
+                               donationTimeout: Duration = .milliseconds(1500), clock: some Clock<Duration> = ContinuousClock(),
                                update: (UNNotificationContent, INSendMessageIntent) throws -> UNNotificationContent = { try $0.updating(from: $1) })
     async -> UNNotificationContent? {
         if let donate {
             let interaction = Unchecked(interaction(for: intent))
-            do { try await withTimeout(donationTimeout) { try await donate(interaction.value) } }
+            do { try await withTimeout(donationTimeout, clock: clock) { try await donate(interaction.value) } }
             catch { log.notice("communication donation failed: \(Self.describe(error), privacy: .public)") }
         }
         do { return try update(content, intent) }
