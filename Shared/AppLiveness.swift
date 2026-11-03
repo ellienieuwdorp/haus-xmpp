@@ -2,19 +2,13 @@ import Foundation
 import notify
 import MessagingCore
 
-/// The liveness handshake's I/O (`LivenessHandshake` in MessagingCore). The notification extension saves its request in
-/// the App Group and rings the app with a payload-free Darwin notification; the app reads the request and writes its
-/// answer next to it, which the extension's lease wait reads. A Darwin notification carries no data and any process may
-/// post one, so the ring only makes the app look: the request and the answer are in files only this build's app and
-/// extensions can write, and the answer echoes the request's random nonce.
-///
-/// Everything is scoped by this build's App Group: the development and the released app each have their own container,
-/// and the ring's name starts with the group, so neither ever rings or answers the other.
+// The extension saves its request in the App Group and rings with a payload-free Darwin notification. Any process may
+// post one, so the ring only makes the app look: the answer goes to a file only this build can write and echoes the
+// request's random nonce. The ring's name starts with the App Group, so development and released builds never mix.
 enum AppLiveness {
     static var ringName: String { SharedStorage.group + ".liveness.request" }
 
-    /// Only the Mac takes part (`LivenessConditions.presentsCatchUp`): the iPhone app never answers, so its extension
-    /// never asks and push stays the iPhone's delivery path.
+    // Only the Mac answers, so the iPhone's extension never asks and push stays the iPhone's delivery path.
     static var isOffered: Bool {
         #if os(macOS)
         true
@@ -23,13 +17,10 @@ enum AppLiveness {
         #endif
     }
 
-    /// The request and answer files in `directory` (`Liveness/` in the App Group container).
     struct Files: Sendable {
         let directory: URL
-        /// Larger than this is not ours to parse.
         static let maximumBytes = 4 * 1024
 
-        /// `Liveness/` in the App Group container `groupRoot`.
         init(groupRoot: URL) { directory = groupRoot.appending(path: "Liveness", directoryHint: .isDirectory) }
 
         func saveRequest(_ request: LivenessRequest) throws { try save(request, as: "request.json") }
@@ -56,7 +47,6 @@ enum AppLiveness {
         }
     }
 
-    /// The extension's side: saves the request, then rings.
     struct ExtensionChannel: LivenessChannel {
         let files: Files
 
@@ -68,22 +58,18 @@ enum AppLiveness {
         func latestAnswer() -> LivenessAnswer? { files.answer() }
     }
 
-    /// The app's side, on the main queue for the life of the process. Each ring reads the request and answers it only
-    /// when `conditions` say the app can keep the promise (`LivenessHandshake.answer`); `answered` then runs, and the
-    /// app makes sure it presents (its socket may be stale: the server pushed because an acknowledgement was overdue).
+    // Answers only when the app can keep the promise and then presents: its socket may be stale, as the server pushed.
     @MainActor final class Responder {
         private let files: Files
         private let conditions: @MainActor () -> LivenessConditions
         private let answered: @MainActor () -> Void
         private var token: Int32 = NOTIFY_TOKEN_INVALID
-        /// The last request answered: another ring for it (anyone may ring) changes nothing.
         private var answeredNonce: String?
 
         init(files: Files, conditions: @escaping @MainActor () -> LivenessConditions, answered: @escaping @MainActor () -> Void) {
             self.files = files; self.conditions = conditions; self.answered = answered
         }
 
-        /// Starts listening. False when the ring cannot be observed; the extension then falls back, as without it.
         func start() -> Bool {
             guard token == NOTIFY_TOKEN_INVALID else { return true }
             let status = notify_register_dispatch(AppLiveness.ringName, &token, DispatchQueue.main) { [weak self] _ in
@@ -93,7 +79,6 @@ enum AppLiveness {
             return true
         }
 
-        /// One ring: the answer written, or nil when the app stays silent.
         @discardableResult
         func ring(now: Date = Date()) -> LivenessAnswer? {
             guard let request = files.request(), request.nonce != answeredNonce,

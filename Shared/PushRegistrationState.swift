@@ -3,20 +3,16 @@ import Security
 import MessagingCore
 import XMPPProtocol
 
-/// Durable registration intent contains no account password. A revocation tombstone can
-/// survive sign-out and retry only after the same account authenticates again.
+// Holds no password. A revocation tombstone survives sign-out and retries only after the same account signs in again.
 struct PushRegistrationState: Codable, Sendable, Equatable {
     let accountID: String
     let configuration: XMPPPushConfiguration
     var journal: PushRegistrationJournal
-    /// The account server may still hold an XEP-0357 registration for `configuration` that must go: set when push is
-    /// turned off or the account signs out, cleared only once the server confirmed the disable (or holds none). Kept
-    /// apart from the gateway revocation, so a settled revocation can never drop a disable that still has to happen.
+    // Cleared only once the server confirmed the XEP-0357 disable. Separate from the gateway revocation, so a settled
+    // revocation never drops a disable that is still owed.
     var disablePending = false
 
-    /// Push turned off (in Settings or by signing out): revoke at the gateway and disable at the account server, both
-    /// retried on every connection until confirmed. A subscription enabled before the registration journal existed
-    /// lives only in the saved account (`enabled`); it gets a journal here so it is turned off the same way.
+    // Revocation and disable both retry on every connection until confirmed; an unjournaled subscription gets one here.
     static func turningOff(accountID: String, saved: Self?, enabled: XMPPPushConfiguration?) throws -> Self? {
         guard var state = saved ?? enabled.map({ Self(accountID: accountID, configuration: $0, journal: PushRegistrationJournal()) })
         else { return nil }
@@ -25,17 +21,14 @@ struct PushRegistrationState: Codable, Sendable, Equatable {
         return state
     }
 
-    /// The subscription a session the app did not set up (the extension, a notification action) re-enables after a
-    /// fresh bind: the saved account's, and only while this journal is settled on it. A registration or revocation
-    /// still pending, a disable still owed or a subscription the journal does not know is left to the app, which
-    /// registers with the gateway before it enables.
+    // Only the app registers with the gateway, so another session re-enables only a subscription this journal has
+    // settled.
     static func sessionSubscription(saved push: XMPPPushConfiguration?, state: Self?) -> XMPPPushConfiguration? {
         guard let push, let state, state.configuration == push, !state.disablePending,
               state.journal.pending == nil, state.journal.acknowledgedRevision > 0 else { return nil }
         return push
     }
 
-    /// The Keychain service registrations live under.
     static let service = "haus.xmpp.push-registration"
 
     static func load(accountID: String, service: String = service) throws -> Self? {
@@ -62,9 +55,7 @@ struct PushRegistrationState: Codable, Sendable, Equatable {
         } else if status != errSecSuccess { throw NotificationAccount.Failure.unavailable }
     }
 
-    /// Registrations saved before addresses were normalised are keyed by the account as typed (`Ellie@Example.org`),
-    /// so a lookup by the normal spelling would miss a pending revocation or disable. Each moves to the normal key once;
-    /// one already saved there wins.
+    // Moves registrations keyed by the account as typed to the normal key once; one already saved there wins.
     static func normalizeSavedAccounts(service: String = service) {
         var all = KeychainQuery.genericPassword(service: service, account: nil)
         all[kSecMatchLimit as String] = kSecMatchLimitAll
@@ -91,8 +82,7 @@ struct PushRegistrationState: Codable, Sendable, Equatable {
 extension PushRegistrationState {
     private enum CodingKeys: String, CodingKey { case accountID, configuration, journal, disablePending }
 
-    /// Items saved before `disablePending` existed disabled right after their revocation, so a staged revocation
-    /// still owes that disable.
+    // Items without `disablePending` disabled right after revocation, so a staged revocation still owes that disable.
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         accountID = try values.decode(String.self, forKey: .accountID)

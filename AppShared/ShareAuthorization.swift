@@ -1,9 +1,7 @@
 import Foundation
 
-/// Whether a share sheet may write for its account, checked when it opens, again at Send and again before it connects:
-/// a sheet left open (the Mac's popover, an iPhone sheet behind an app switch) must not queue or connect for an account
-/// that signed out, was replaced by another, moved to another install or is being restored meanwhile. The holds are
-/// the ones that keep the notification extension off the store.
+// Checked at open, at Send and before connecting: a sheet left open must not queue or connect for an account that
+// signed out, was replaced, moved to another install or is being restored.
 enum ShareAuthorization {
     enum Refusal: Error, Equatable {
         case restoring, moved, signedOut, signedOutSinceOpening, unreadable
@@ -19,8 +17,6 @@ enum ShareAuthorization {
         }
     }
 
-    /// The signed-in account as saved now. `accountID` is the account the sheet opened for, nil while it opens; another
-    /// account, or none, refuses. The fresh record carries the password saved now, for the connection.
     static func check(groupRoot: URL, accountID: String? = nil,
                       load: () throws -> NotificationAccount? = NotificationAccount.load) -> Result<NotificationAccount, Refusal> {
         if PreUpgradeHold.isHeld(groupRoot: groupRoot) { return .failure(.restoring) }

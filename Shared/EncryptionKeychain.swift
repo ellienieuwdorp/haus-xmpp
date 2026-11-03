@@ -4,16 +4,14 @@ import Security
 enum EncryptionKeychain {
     enum Failure: Error {
         case unavailable
-        /// The item does not exist and creation was not allowed: the database holds state sealed with a key that is
-        /// gone. Only this case may lead to the recovery screen (`KeyRecovery`); every other failure fails closed.
+        // Only this case may lead to the recovery screen; every other failure fails closed.
         case missing
     }
 
-    /// The Keychain service the wrapping keys live under, one item per storage ID.
     static let service = "haus.xmpp.encryption-state"
 
-    /// Only absence permits creation, and only while the database has no encrypted identity or after the user chose to
-    /// set up encryption again (`KeyRecovery.startOver`). Locked/inaccessible/deleted keys never cause identity regeneration.
+    // Only absence permits creation, and only with no encrypted identity stored or after the user chose to start over.
+    // Locked, inaccessible or deleted keys never regenerate the identity.
     static func load(storageID: String, allowCreation: Bool) throws -> Data {
         let query = KeychainQuery.genericPassword(service: service, account: storageID)
         var lookup = query

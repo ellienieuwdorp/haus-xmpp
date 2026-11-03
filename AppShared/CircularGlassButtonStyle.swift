@@ -1,10 +1,8 @@
 import SwiftUI
 
-/// A fixed circle keeps symbol layout independent of button state and text baselines.
-/// The hit target is always at least 44pt, even for a smaller visible circle.
+// A fixed circle keeps the symbol's layout independent of button state; the hit target is at least 44 pt.
 struct CircularGlassButtonStyle: ButtonStyle {
     let diameter: CGFloat
-    /// Accent-filled circle with bubble text; `false` gives a clear glass circle with an accent glyph.
     var tinted = true
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.appearance) private var appearance

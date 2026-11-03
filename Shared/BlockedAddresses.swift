@@ -1,10 +1,7 @@
 import Foundation
 import XMPPProtocol
 
-/// The account's XEP-0191 block list as its server last reported it, kept in the App Group. The server is the source of
-/// truth and drops what blocked addresses send; this copy lets the notification extension, which never fetches the list,
-/// leave out anything that still reaches the store, and lets the app show blocked chats before it connects. The app
-/// replaces it on every fetch and push.
+// The server's list, copied for the notification extension, which never fetches it, and for blocked chats offline.
 enum BlockedAddresses {
     private static func key(_ accountID: String) -> String { "blocklist." + accountID }
 

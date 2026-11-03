@@ -5,21 +5,14 @@ import Security
 import UserNotifications
 import MessagingCore
 
-/// Debug-only check that the signed Mac app and its signed notification extension share their storage, run inside the
-/// extension process for a real remote notification. Compiled into the Mac app and the
-/// Mac extension only; nothing here ships.
-///
-/// The app arms it (`-haus-arm-extension-probe suppress|pass|liveness`): it saves a random nonce as a data-protection Keychain
-/// item and writes the same nonce, with the mode, to `Debug/extension-probe.json` in the App Group container. The
-/// extension takes the arm file on the next remote request (it is used once) and records what it can reach (the App
-/// Group container, the store, the access gate, the wrapping key, the notification account and the app's nonce item) as
-/// one line in `Debug/extension-probe-results.jsonl`. An armed `suppress` request is then delivered with empty content
-/// and nothing else runs, so the filtering entitlement can be seen to hide it; in `pass` mode the request continues to
-/// the normal extension run. `liveness` also rings the app as the lease wait does (`AppLiveness`) and records whether
-/// an answer to its nonce came back within the handshake's window, then continues like `pass`: the round trip between
-/// the two sandboxed processes, which the app answers when started with `-haus-liveness-answer`. Without an arm file
-/// nothing is recorded. Records hold paths, statuses and counts, never an
-/// address, password, key or token.
+// Debug-only check, run in the Mac notification extension for a real remote notification, that the signed app and
+// extension share their storage. The app arms it (`-haus-arm-extension-probe suppress|pass|liveness`) with a random
+// nonce saved as a data-protection Keychain item and in `Debug/extension-probe.json` in the App Group container. The
+// next remote request takes the arm file once and appends what it can reach to `Debug/extension-probe-results.jsonl`.
+// `suppress` then delivers empty content so the filtering entitlement can be seen to hide it; `pass` continues to the
+// normal run; `liveness` also rings the app (`AppLiveness`, answered under `-haus-liveness-answer`) and records whether
+// the nonce came back in time, then continues like `pass`. Records hold paths, statuses and counts, never an address,
+// password, key or token.
 enum MacExtensionProbe {
     enum Mode: String, Codable { case suppress, pass, liveness }
 
@@ -39,9 +32,6 @@ enum MacExtensionProbe {
 
     private static var nonceQuery: [String: Any] { KeychainQuery.genericPassword(service: keychainService, account: "nonce") }
 
-    // MARK: App side
-
-    /// Saves a new nonce item and the arm file. Returns the Keychain status of the add.
     static func arm(_ mode: Mode) throws -> OSStatus {
         let nonce = UUID().uuidString
         SecItemDelete(nonceQuery as CFDictionary)
@@ -54,21 +44,16 @@ enum MacExtensionProbe {
         return status
     }
 
-    /// The recorded lines, oldest first, and whether the arm file is still waiting for a request.
     static func results() throws -> (lines: [String], stillArmed: Bool) {
         let text = (try? String(contentsOf: resultsFile, encoding: .utf8)) ?? ""
         return (text.split(separator: "\n").map(String.init), FileManager.default.fileExists(atPath: try armFile.path))
     }
 
-    /// Removes the results, the arm file and the nonce item.
     static func clear() throws {
         for file in [try resultsFile, try armFile] { try? FileManager.default.removeItem(at: file) }
         SecItemDelete(nonceQuery as CFDictionary)
     }
 
-    // MARK: Extension side
-
-    /// Takes the arm file, if the app left one: nil means this request is not probed.
     static func takeArm() -> Arm? {
         guard let file = try? armFile, let data = try? Data(contentsOf: file) else { return nil }
         try? FileManager.default.removeItem(at: file)
@@ -76,7 +61,6 @@ enum MacExtensionProbe {
         return try? decoder.decode(Arm.self, from: data)
     }
 
-    /// Records what this process can reach for an armed request and returns the armed mode.
     static func record(_ request: UNNotificationRequest, arm: Arm) async -> Mode {
         var fields: [String: String] = [
             "at": ISO8601DateFormatter().string(from: Date()),
@@ -147,7 +131,7 @@ enum MacExtensionProbe {
         return arm.mode
     }
 
-    /// Rings the app and waits for an answer to this nonce, as `acquireTransportOwnership` does while the lease is busy.
+    // Waits for an answer to this nonce, as `acquireTransportOwnership` does while the lease is busy.
     private static func livenessRoundTrip() async -> String {
         guard let container = try? SharedStorage.groupContainer() else { return "FAILED no group container" }
         let channel = AppLiveness.ExtensionChannel(files: AppLiveness.Files(groupRoot: container))

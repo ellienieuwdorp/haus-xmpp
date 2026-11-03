@@ -2,16 +2,12 @@ import Foundation
 import OMEMO
 import XMPPProtocol
 
-/// The stored facts about one chat's devices that decide its trust, reduced so tests can state them directly.
 struct DeviceTrustFacts: Equatable {
-    /// Trust of each active device on the other side: the peer's in a 1:1 chat, the other members' in a group.
     var peerTrust: [DeviceTrust]
-    /// An active device (own devices included) waits for a fingerprint decision.
     var needsReview: Bool
-    /// A refresh for this peer completed at some point, so an empty list is a stored answer, not "not fetched".
+    // True once a refresh completed, so an empty list is a stored answer rather than "not fetched".
     var peerKnown: Bool
-    /// Every other participant has at least one active device. Always true for a 1:1 chat, whose one peer is
-    /// covered by `peerTrust`; a group member without devices keeps the group from reading as verified.
+    // A group member without devices keeps the group from reading as verified.
     var everyPeerHasDevice: Bool
 
     init(peerTrust: [DeviceTrust], needsReview: Bool, peerKnown: Bool, everyPeerHasDevice: Bool = true) {
@@ -20,13 +16,12 @@ struct DeviceTrustFacts: Equatable {
     }
 
     init(_ overview: EncryptionOverview, peer: String) {
-        // Only the sending version's devices decide the pill; a device held for reading in the other one is reviewed
-        // from its own card, and never makes the chat read as encrypted to a peer it cannot send to.
+        // Only the sending profile's devices decide the pill; a device held for reading in the other profile never
+        // makes the chat read as encrypted to a peer it cannot send to.
         self.init(peerTrust: overview.devices.filter { $0.jid == peer && $0.active && $0.profile == overview.profile }.map(\.trust), needsReview: overview.needsTrust,
                   peerKnown: overview.isPeerKnown)
     }
 
-    /// A known room was refreshed when it was joined, so its cached device list is always a stored answer.
     init(_ group: GroupChatState, account: String) {
         let active = group.devices.filter { $0.jid != account && $0.active }
         let owners = Set(active.map(\.jid))
@@ -35,13 +30,9 @@ struct DeviceTrustFacts: Equatable {
     }
 }
 
-/// How much the app knows about a chat's devices. "Not yet known" is its own case, so it never renders as "off".
 enum EncryptionKnowledge: Equatable {
-    /// The store has not answered for this chat yet.
     case pending
-    /// Read from the store; not yet re-fetched on this connection.
     case stored(DeviceTrustFacts)
-    /// Re-fetched from the server on the current connection.
     case refreshed(DeviceTrustFacts)
 
     var facts: DeviceTrustFacts? {
@@ -52,33 +43,20 @@ enum EncryptionKnowledge: Equatable {
     }
 }
 
-/// What a chat can do and show, derived from persisted facts. Connection state enters only through a group's
-/// `canSend`, so connecting, disconnecting and reconnecting never change the pill or the attach button.
+// Connection state enters only through a group's `canSend`, so reconnecting never changes the pill or attach button.
 struct ChatCapabilities: Equatable {
     enum Encryption: Equatable {
-        /// Nothing stored for this chat yet: neutral, never drawn as "not encrypted".
         case pending
-        /// At least one usable device on the other side; verified only when every active one is `.verified` and, in a
-        /// group, every other member has one.
         case encrypted(verified: Bool)
-        /// An undecided device, a changed identity, or retained ciphertext for this chat.
         case needsReview
-        /// A definitive answer: no usable device after a completed refresh, or a failed join. A device published only
-        /// in the other OMEMO version is a Devices-screen notice, never a reason to hold the chat.
         case unavailable(String)
     }
 
     var encryption: Encryption
-    /// The composer's attach button reads this and nothing else.
     var canAttach: Bool
     var canSend: Bool
-    /// Active devices on the other side; nil while nothing is stored.
     var deviceCount: Int?
 
-    /// Pure, so tests drive launch and reconnect sequences without an AppModel.
-    /// - Parameters:
-    ///   - uploadAvailable: the account's server offered XEP-0363 on its last completed discovery.
-    ///   - groupJoined, groupIssue: transport facts of a group; ignored for a 1:1 chat.
     static func derive(isDemo: Bool, isGroup: Bool, knowledge: EncryptionKnowledge, reviewPending: Bool,
                        groupJoined: Bool = false, groupIssue: String? = nil, uploadAvailable: Bool, sessionReady: Bool) -> ChatCapabilities {
         let canAttach = !isGroup && (isDemo || uploadAvailable)
@@ -104,26 +82,19 @@ struct ChatCapabilities: Equatable {
     }
 }
 
-/// Where encryption problems are written. Decryption, blocked plaintext, storage and refresh problems are words for
-/// the Devices footer (and, for a group, under its Group Details pill); only a queued send that waits for a fingerprint
-/// decision marks its chat for review. Nothing here changes stored trust, so a transient problem never moves the pill.
+// Nothing here changes stored trust, so a transient problem never moves the pill.
 struct EncryptionAttention: Equatable {
-    /// The Devices screen footer: the last refresh summary or the last problem.
     private(set) var diagnostics = ""
-    /// Chats whose queued sends the outbox holds for a fingerprint decision (an undecided or changed device).
     private(set) var heldForTrust: Set<String> = []
-    /// The last failed device read or refresh per group, until a refresh succeeds.
     private(set) var groupProblems: [String: String] = [:]
 
-    /// The outbox reports held chats as their user-facing reason, so a trust hold is recognised by that text.
+    // The outbox reports holds as user-facing text, so a trust hold is recognised by that text.
     static func needsTrustDecision(issue: String) -> Bool {
         [OMEMOError.trustRequired, .identityChanged].contains { $0.errorDescription == issue }
     }
 
     mutating func note(_ text: String) { diagnostics = text }
 
-    /// One outbox preparation step's held chats (chat ID to reason). Trust holds mark their chat for review at once;
-    /// the reason for `shownChat` (the chat on screen) goes to the footer. Returns the chats held for trust.
     @discardableResult
     mutating func hold(_ blocked: [String: String], shownChat: String?) -> Set<String> {
         let trust = Set(blocked.filter { Self.needsTrustDecision(issue: $0.value) }.keys)
@@ -132,37 +103,28 @@ struct EncryptionAttention: Equatable {
         return trust
     }
 
-    /// A completed outbox pass: only the chats it held for trust stay marked.
     mutating func settlePass(heldForTrust held: Set<String>) { heldForTrust = held }
 
-    /// The user decided on a device in this chat; the next pass marks it again if a send is still held.
     mutating func trustDecided(in chatID: String) { heldForTrust.remove(chatID) }
 
-    /// The user decided on one of the account's own devices, which every chat sends to; the next pass marks the chats
-    /// that are still held.
     mutating func trustDecidedForAccount() { heldForTrust.removeAll() }
 
-    /// A group's device read or refresh failed (`problem`) or succeeded (nil).
     mutating func groupDevices(_ room: String, problem: String?) {
         groupProblems[room] = problem
         if let problem { diagnostics = problem }
     }
 }
 
-/// The account's XEP-0363 service as last discovered, kept in the account-keyed preferences so the attach button
-/// is there from the first frame after a relaunch or reconnect. Only a completed discovery changes it. The app keeps a
-/// copy in `mirror` (the App Group's defaults), which the share extension reads to offer files and enforce the
-/// server's size limit.
+// Kept per account so the attach button shows from the first frame after a relaunch. `mirror` is the App Group's
+// defaults, which the share extension reads to offer files and enforce the server's size limit.
 struct UploadServiceMemory {
     let defaults: UserDefaults
     var mirror: UserDefaults? = nil
-    /// How long a completed discovery stands for a resumed stream (`ConnectionSetup.Memory.uploadsFresh`).
     static let lifetime: TimeInterval = 24 * 60 * 60
 
     private static func key(_ account: String) -> String { "uploadService.\(account)" }
     private static func checkedKey(_ account: String) -> String { "uploadServiceCheckedAt.\(account)" }
 
-    /// A discovery completed within `lifetime`, whatever it found.
     func isFresh(account: String, now: Date = .now) -> Bool {
         guard !account.isEmpty, let at = defaults.object(forKey: Self.checkedKey(account)) as? Date else { return false }
         return at <= now && now.timeIntervalSince(at) < Self.lifetime
@@ -174,8 +136,7 @@ struct UploadServiceMemory {
         return XMPPUploadService(jid: jid, maximumFileSize: saved["maximumFileSize"] as? Int)
     }
 
-    /// A thrown discovery (a dropped stream, a timeout) keeps what was known. A completed one replaces it,
-    /// including a completed "none offered", which stands until the next completed answer.
+    // A thrown discovery keeps what was known; a completed one, "none offered" included, replaces it.
     func settle(account: String, previous: XMPPUploadService?, discovery: Result<XMPPUploadService?, any Error>, now: Date = .now) -> XMPPUploadService? {
         guard case .success(let found) = discovery, !account.isEmpty else { return previous }
         defaults.set(now, forKey: Self.checkedKey(account))
@@ -184,16 +145,13 @@ struct UploadServiceMemory {
         return found
     }
 
-    /// Copies what `defaults` holds for the account into `mirror`, for a store kept before the mirror existed.
     func publish(account: String) {
         guard let mirror, !account.isEmpty else { return }
-        // An account that never completed a discovery has no answer to copy.
         guard defaults.object(forKey: Self.checkedKey(account)) != nil else { return }
         Self.save(load(account: account), account: account, in: mirror, keepingNone: true)
     }
 
-    /// The mirror's reader (the share extension): whether the app copied an answer for the account, "none offered"
-    /// included. Without one the extension cannot tell a server without uploads from an app not opened since updating.
+    // Without the app's copied answer the extension cannot tell a server without uploads from an app not yet updated.
     func hasAnswer(account: String) -> Bool { !account.isEmpty && defaults.object(forKey: Self.key(account)) != nil }
 
     func forget(account: String) {
@@ -202,7 +160,6 @@ struct UploadServiceMemory {
         mirror?.removeObject(forKey: Self.key(account))
     }
 
-    /// `keepingNone` records "none offered" as an empty service, which `load` reads as nil, rather than removing it.
     private static func save(_ service: XMPPUploadService?, account: String, in defaults: UserDefaults, keepingNone: Bool = false) {
         if let service {
             var saved: [String: Any] = ["jid": service.jid]
@@ -213,20 +170,15 @@ struct UploadServiceMemory {
     }
 }
 
-/// When a connection may reconcile stranded uploads. Discovery can end after `.ready`, and failing them as "no longer
-/// offered" needs a known answer: a stored service, or a discovery of this connection that completed. A thrown
-/// discovery (a timeout, a dropped stream) knows nothing, so it leaves them for a later answer.
+// Failing stranded uploads as "no longer offered" needs a known answer: a stored service or a discovery completed on
+// this connection. A thrown discovery knows nothing and leaves them for a later answer.
 struct UploadReconciliation {
     private var awaitingAnswer = false
 
-    /// A connection's setup starts; `discovers` is false when a resume trusts the fresh stored answer.
     mutating func setupStarted(discovers: Bool) { awaitingAnswer = discovers }
 
-    /// Whether `.ready` reconciles them against `stored`.
     func reconcilesAtReady(stored: XMPPUploadService?) -> Bool { stored != nil || !awaitingAnswer }
 
-    /// This connection's discovery settled. True when a ready session reconciles now: with nothing stored `.ready`
-    /// left them to this answer, and an answer that withdraws the stored service fails them.
     mutating func discoverySettled(_ discovery: Result<XMPPUploadService?, any Error>, previous: XMPPUploadService?, ready: Bool) -> Bool {
         guard case .success(let found) = discovery else { return false }
         awaitingAnswer = false

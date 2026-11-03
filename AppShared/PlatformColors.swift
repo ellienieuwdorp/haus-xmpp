@@ -5,8 +5,8 @@ import UIKit
 import AppKit
 #endif
 
-// The colour and image seams shared by the apps and their share extensions (`PlatformSupport.swift` holds the rest,
-// which only an app may call). Each one is the iOS call it replaced, unchanged, on iOS.
+// Colour and image seams shared by the apps and their share extensions; the app-only seams are in
+// `PlatformSupport.swift`. On iOS each is the plain iOS call.
 
 #if os(iOS)
 typealias PlatformColor = UIColor
@@ -37,7 +37,6 @@ extension Image {
 }
 
 extension PlatformColor {
-    /// One colour per appearance, resolved by the view or layer that draws it.
     static func dynamic(light: PlatformColor, dark: PlatformColor) -> PlatformColor {
         #if os(iOS)
         UIColor { $0.userInterfaceStyle == .dark ? dark : light }
@@ -49,16 +48,13 @@ extension PlatformColor {
 
 #if os(macOS)
 extension NSImage {
-    /// `UIImage(cgImage:)`: the image at its pixel size, one point per pixel.
     convenience init(cgImage: CGImage) {
         self.init(cgImage: cgImage, size: .zero)
     }
 }
 #endif
 
-/// The system colours the shared screens name, with the Mac's nearest equivalent where macOS has no such colour.
 extension Color {
-    /// iOS `systemGroupedBackground`: the page behind grouped lists and sheets.
     static var groupedBackground: Color {
         #if os(iOS)
         Color(.systemGroupedBackground)
@@ -67,7 +63,6 @@ extension Color {
         #endif
     }
 
-    /// iOS `secondarySystemGroupedBackground`: a card or tile on the grouped background.
     static var secondaryGroupedBackground: Color {
         #if os(iOS)
         Color(.secondarySystemGroupedBackground)
@@ -76,7 +71,6 @@ extension Color {
         #endif
     }
 
-    /// iOS `tertiarySystemFill`: the received bubble's fill.
     static var tertiaryFill: Color {
         #if os(iOS)
         Color(uiColor: .tertiarySystemFill)
@@ -85,7 +79,6 @@ extension Color {
         #endif
     }
 
-    /// iOS `systemGray3`: an avatar circle with no address to colour it by.
     static var placeholderGray: Color {
         #if os(iOS)
         Color(.systemGray3)
@@ -96,7 +89,6 @@ extension Color {
 }
 
 extension Color {
-    /// iOS `secondaryLabel`.
     static var secondaryLabel: Color {
         #if os(iOS)
         Color(uiColor: .secondaryLabel)

@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// One-line trust state for the details pill, presented from `ChatCapabilities.encryption`.
 struct ConversationTrust {
-    /// `pending`: nothing stored yet. No pill is drawn (its height is kept), so "not known yet" never reads as "off".
+    // No pill is drawn for `pending` (its height is kept), so "not known yet" never reads as "off".
     enum Level { case verified, encrypted, review, pending, other }
     let level: Level
     let subtitle: String
@@ -34,8 +33,6 @@ struct ConversationTrust {
 }
 
 extension ConversationTrust {
-    /// The pill for a chat's stored encryption state, as the details screens and the share sheet show it. `members`
-    /// counts a group's members for its subtitle.
     init(_ encryption: ChatCapabilities.Encryption, isGroup: Bool, members: Int) {
         switch encryption {
         case .pending:
@@ -51,7 +48,6 @@ extension ConversationTrust {
     }
 }
 
-/// The trust capsule under a details hero; the small symbol keeps it a balanced pill.
 struct TrustPill: View {
     let text: String
     let systemImage: String

@@ -8,12 +8,12 @@ import UIKit
 import AppKit
 #endif
 
-/// Bounded decoding for bubbles: the thumbnail pass never inflates the full image.
+// Bounded decoding: the thumbnail pass never inflates the full image.
 enum AttachmentThumbnails {
     // NSCache is thread-safe; the annotation only tells the compiler so.
     nonisolated(unsafe) private static let cache = NSCache<NSString, PlatformImage>()
 
-    /// Synchronous hit, so a reconfigured cell never blanks an image it already showed.
+    // Synchronous, so a reconfigured cell never blanks an image it already showed.
     static func cached(for url: URL) -> PlatformImage? { cache.object(forKey: url.path as NSString) }
 
     static func image(for url: URL, mediaType: String, maxPixels: Int = 1024) async -> PlatformImage? {
@@ -40,7 +40,7 @@ enum AttachmentThumbnails {
         return image
     }
 
-    /// A small still for the composer tray. The decoder reads files, so the bytes pass through a temporary one.
+    // The decoder reads files, so the bytes pass through a temporary one.
     static func preview(of prepared: PreparedAttachment) async -> PlatformImage? {
         guard prepared.mediaType.hasPrefix("image/") || prepared.mediaType.hasPrefix("video/") else { return nil }
         let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + "." + (prepared.name as NSString).pathExtension)

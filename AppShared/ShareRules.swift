@@ -2,14 +2,11 @@ import Foundation
 import MessageStore
 import MessagingCore
 
-/// The share screen's decisions, free of views and the store, so tests state them directly.
 enum ShareRules {
-    /// Chats one share may go to. WhatsApp forwards to five at most; more than that is a broadcast, not a share.
+    // More than five is a broadcast, not a share (WhatsApp forwards to five at most).
     static let maximumRecipients = 5
-    /// Recent chats the picker lists before a search; pinned ones come first and always show.
     static let recentChats = 30
 
-    /// One chat as the picker shows it.
     struct Chat: Identifiable, Equatable, Sendable {
         let id: String
         let title: String
@@ -17,13 +14,11 @@ enum ShareRules {
         let isPinned: Bool
         let avatarHash: String?
         let lastActivity: Date?
-        /// The stored encryption state, as the chat's header shows it. `.pending` draws no pill.
         let encryption: ChatCapabilities.Encryption
         var displayTitle: String { ContactName.display(for: id, title: title) }
     }
 
-    /// A stored chat as the picker lists it, named and pictured as the app and its notifications show it: a linked
-    /// contact's name and photo first (`ContactLink`). Rooms are never linked. The encryption state comes later.
+    // A linked contact's name and photo come first (`ContactLink`); rooms are never linked.
     static func chat(id: String, storedTitle: String, isGroup: Bool, isPinned: Bool, verifiedAvatarHash: String?, lastActivity: Date?,
                      link: ContactLink?) -> Chat {
         let link = isGroup ? nil : link
@@ -31,7 +26,6 @@ enum ShareRules {
                     avatarHash: ContactLink.avatarHash(verified: verifiedAvatarHash, link: link), lastActivity: lastActivity, encryption: .pending)
     }
 
-    /// Why a chat cannot take this share; nil when it can.
     static func unavailableReason(_ chat: Chat, hasFiles: Bool, filesAccepted: Bool?, isBlocked: Bool) -> String? {
         if isBlocked { return "Blocked" }
         if case .unavailable(let reason) = chat.encryption { return reason }
@@ -45,8 +39,7 @@ enum ShareRules {
         }
     }
 
-    /// The picker's order: pinned chats, then by last activity, newest first. A search matches the name or address and
-    /// lists every chat; without one, only pinned chats and the most recent show.
+    // Without a search only pinned and the most recent chats show; a search lists every chat.
     static func listed(_ chats: [Chat], search: String) -> [Chat] {
         let ordered = chats.sorted {
             if $0.isPinned != $1.isPinned { return $0.isPinned }
@@ -60,14 +53,12 @@ enum ShareRules {
         return pinned + ordered.filter { !$0.isPinned }.prefix(recentChats)
     }
 
-    /// The chat a share-sheet suggestion names, by its conversation identifier (`NotificationIdentity.thread`). The
-    /// identifier is scoped to the account, so another account's suggestion matches nothing and shows the picker.
+    // The identifier is account-scoped, so another account's suggestion matches nothing and shows the picker.
     static func suggestedChat(conversationIdentifier: String?, accountID: String, chats: [Chat]) -> Chat? {
         guard let conversationIdentifier, !conversationIdentifier.isEmpty else { return nil }
         return chats.first { NotificationIdentity.thread(accountID: accountID, chatID: $0.id) == conversationIdentifier }
     }
 
-    /// The message text the screen starts with: the shared links and text, each once, in share order.
     static func initialText(from items: [SharedItem]) -> String {
         var seen: Set<String> = []
         var parts: [String] = []
@@ -78,30 +69,24 @@ enum ShareRules {
         return parts.joined(separator: "\n")
     }
 
-    /// Whether Send can go: something to send, at least one chat, text within the composer's limit, and no file left on
-    /// the review card that could not be prepared. The user removes such a file first, so nothing they still see is
-    /// left out of the share without their say.
+    // A file that could not be prepared blocks Send until the user removes it, so nothing they still see is left out.
     static func canSend(files: Int, unsendableFiles: Int, text: String, recipients: Int) -> Bool {
         let hasText = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return recipients > 0 && recipients <= maximumRecipients && unsendableFiles == 0 && (files > 0 || hasText)
             && text.utf8.count <= OutgoingEnqueue.maximumTextBytes
     }
 
-    /// How one chat's part of a share ended up. `incomplete`: some of it could not be saved, whatever became of the rest.
     enum Delivery: Equatable, Sendable { case queued, sending, sent, failed, incomplete }
 
-    /// One chat's part of the share: sent only when the server acknowledged every message of it. Still unacknowledged
-    /// when the share ends, it is queued: the app's next connection sends it, or reconciles it from the archive.
+    // Sent only once the server acknowledged every message; otherwise it stays queued for the app's next connection.
     static func delivery(_ states: [ShareItemState], finished: Bool) -> Delivery {
         if states.contains(.failed) { return .failed }
         if !states.isEmpty, states.allSatisfy({ $0 == .sent }) { return .sent }
         return finished ? .queued : .sending
     }
 
-    /// Each chat's result and the line under the results once the share ended. `states` lists, for every chosen chat,
-    /// the states of the messages saved for it; `unsaved` holds the chats for which an item could not be saved. Such an
-    /// item has no row anywhere, so the app can neither send nor retry it: the line says so whatever happened to the
-    /// rest, and never promises that the app finishes it.
+    // An unsaved item has no row anywhere, so the app can neither send nor retry it: the note says so whatever happened
+    // to the rest.
     static func outcome(_ states: [String: [ShareItemState]], unsaved: Set<String>) -> (deliveries: [String: Delivery], note: String?) {
         var deliveries: [String: Delivery] = [:]
         for (chat, values) in states {
@@ -117,9 +102,7 @@ enum ShareRules {
         return (deliveries, notes.isEmpty ? nil : notes.joined(separator: " "))
     }
 
-    /// What the share sheet offers Haus XMPP for, as the extensions' Info.plist states it (`NSExtensionActivationRule`):
-    /// one or two extension items (Safari sends the page and its preview), at most `SharedItemIntake.maximumFiles`
-    /// attachments in each, and at least one attachment of a kind the screen can send.
+    // Mirrors the extensions' `NSExtensionActivationRule`; Safari sends the page and its preview as two items.
     static let activationRule = """
         SUBQUERY(extensionItems, $item, $item.attachments.@count <= 10 AND SUBQUERY($item.attachments, $attachment, \
         ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.image" OR \
