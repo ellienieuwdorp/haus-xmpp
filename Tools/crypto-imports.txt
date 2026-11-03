@@ -1,0 +1,30 @@
+# Swift files that may import CryptoKit or CommonCrypto (checked by Tools/import-boundaries.py).
+# Encryption belongs in Packages/OMEMOCrypto; new users elsewhere need a maintainer's review, and Tools/baseline-guard.py fails a pull request that adds a line.
+App/AttachmentDownloads.swift
+App/ContactDirectory.swift
+App/Conversation/LinkScan.swift
+App/DemoSamples.swift
+App/LinkPreviewCenter.swift
+App/NotificationHarness.swift
+App/PreUpgradeSnapshot.swift
+AppLifecycleTests/AttachmentDownloadTests.swift
+AppLifecycleTests/AvatarNotificationImageTests.swift
+AppLifecycleTests/ContactLinkingTests.swift
+Mac/MacPushProbe.swift
+Packages/MessageStore/Sources/MessageStore/Models.swift
+Packages/MessagingCore/Sources/MessagingCore/CommunicationPerson.swift
+Packages/MessagingCore/Sources/MessagingCore/NotificationDestination.swift
+Packages/MessagingCore/Sources/MessagingCore/NotificationIdentity.swift
+Packages/MessagingCore/Sources/MessagingCore/OutgoingEnqueue.swift
+Packages/MessagingCore/Sources/MessagingCore/TransferArchive.swift
+Packages/OMEMO/Sources/OMEMO/AttachmentTransfer.swift
+Packages/OMEMO/Sources/OMEMO/GroupEncryption.swift
+Packages/OMEMO/Sources/OMEMO/OMEMOService.swift
+Packages/OMEMO/Sources/OMEMO/StateProtection.swift
+Packages/OMEMO/Sources/OMEMOLab/main.swift
+Packages/OMEMOCrypto/Sources/OMEMOCrypto/AttachmentCrypto.swift
+Packages/OMEMOCrypto/Sources/OMEMOCrypto/PayloadCrypto.swift
+Packages/XMPPProtocol/Sources/XMPPProtocol/AvatarWire.swift
+Packages/XMPPProtocol/Sources/XMPPProtocol/EntityCapabilities.swift
+Packages/XMPPProtocol/Sources/XMPPProtocol/FileSharing.swift
+Packages/XMPPProtocol/Sources/XMPPProtocol/SASL.swift

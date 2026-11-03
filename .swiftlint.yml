@@ -1,0 +1,110 @@
+# Size, complexity and escape-hatch rules; formatting is not linted. Run through Tools/check.sh, which holds new code
+# to every rule and lets the violations recorded in .swiftlint-baseline.json only shrink.
+included:
+  - App
+  - AppShared
+  - AppTests
+  - AppLifecycleTests
+  - Mac
+  - NotificationService
+  - NotificationServiceMac
+  - ShareExtension
+  - ShareExtensionMac
+  - Shared
+  - Packages
+  - Tools/slop-check
+excluded:
+  - Packages/*/.build
+  - Packages/OMEMOCrypto/Sources/CLibOMEMO
+  - Tools/slop-check/.build
+
+only_rules:
+  # Size and complexity
+  - file_length
+  - type_body_length
+  - function_body_length
+  - closure_body_length
+  - cyclomatic_complexity
+  - function_parameter_count
+  - nesting
+  # Escape hatches. A disable needs a reason, which slop-check enforces: `// swiftlint:disable:next force_try - why`
+  - force_try
+  - force_cast
+  - force_unwrapping
+  - implicitly_unwrapped_optional
+  - fatal_error_message
+  - blanket_disable_command
+  - superfluous_disable_command
+  - invalid_swiftlint_command
+  # Swallowed errors, dead async, empty handlers
+  - unhandled_throwing_task
+  - async_without_await
+  - unneeded_throws_rethrows
+  - no_empty_block
+  - redundant_nil_coalescing
+  - discarded_notification_center_observer
+  # Cheap correctness checks with no current hits
+  - identical_operands
+  - duplicate_conditions
+  - unowned_variable_capture
+  - private_swiftui_state
+  # Tests
+  - empty_xctest_method
+  - xctfail_message
+  - custom_rules
+
+file_length:
+  warning: 400
+  error: 400
+  ignore_comment_only_lines: true
+type_body_length:
+  warning: 350
+  error: 350
+function_body_length:
+  warning: 60
+  error: 60
+closure_body_length:
+  warning: 50
+  error: 50
+cyclomatic_complexity:
+  warning: 12
+  error: 12
+  ignores_case_statements: true
+function_parameter_count:
+  warning: 5
+  error: 5
+  ignores_default_parameters: true
+nesting:
+  type_level: 2
+  function_level: 3
+no_empty_block:
+  # Empty closures and functions are often required by an API; an empty `catch {}` or `if … {}` never is.
+  disabled_block_types: [function_bodies, initializer_bodies, closure_blocks]
+  severity: error
+force_try: error
+force_cast: error
+force_unwrapping: error
+implicitly_unwrapped_optional: error
+fatal_error_message: error
+blanket_disable_command: error
+superfluous_disable_command: error
+unhandled_throwing_task: error
+async_without_await: error
+unneeded_throws_rethrows: error
+redundant_nil_coalescing: error
+discarded_notification_center_observer: error
+
+custom_rules:
+  no_print:
+    name: "No print"
+    regex: '(?<![\w.])(print|debugPrint|dump|NSLog)\s*\('
+    match_kinds: [identifier]
+    message: "Use os.Logger with a category and privacy annotations; print output is invisible in release diagnostics"
+    severity: error
+  no_wall_clock_in_tests:
+    name: "No wall-clock waits in tests"
+    included: '.*Tests/.*\.swift$'
+    regex: '\b(Task\.sleep|Thread\.sleep|usleep|sleep)\s*\('
+    match_kinds: [identifier]
+    message: "Tests must not wait on the clock; await the event, inject a clock, or use confirmation() / fulfillment(of:)"
+    severity: error

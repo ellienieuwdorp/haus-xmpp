@@ -1,0 +1,3218 @@
+{
+ "App/AboutView.swift": {
+  "force_unwrapping": [
+   [
+    "return components.url!",
+    0
+   ]
+  ]
+ },
+ "App/AccountTransfer.swift": {
+  "cyclomatic_complexity": [
+   [
+    "func commit(_ staged: Staged, store: MessageStore, now: Date) async throws {",
+    15
+   ],
+   [
+    "func stage(archive: URL, code: TransferCode, progress: @escaping @Sendable (Progress) -> Void = { _ in }) throws -> Staged {",
+    14
+   ]
+  ],
+  "file_length": [
+   [
+    "",
+    537
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "_ = try Self.preferences(records[name]!)",
+    0
+   ],
+   [
+    "if case .file = sources[name]! { described += entry.size }",
+    0
+   ],
+   [
+    "let entry = try TransferArchive.describe(name: name, source: sources[name]!)",
+    0
+   ]
+  ],
+  "function_body_length": [
+   [
+    "func export(store: MessageStore, accountID: String, code: TransferCode, now: Date,",
+    69
+   ]
+  ],
+  "function_parameter_count": [
+   [
+    "private func contents(snapshot: URL, summary: StoreSnapshotSummary, omitting photos: [ContactLinkPhoto], id: String, accountID: String, now: Date,",
+    7
+   ]
+  ],
+  "type_body_length": [
+   [
+    "struct AccountTransfer: Sendable {",
+    518
+   ]
+  ]
+ },
+ "App/AppModel.swift": {
+  "cyclomatic_complexity": [
+   [
+    "func beginNotificationAction(account: String, chatID: String, budget: NotificationActionBudget) async -> Bool {",
+    15
+   ],
+   [
+    "func connect(username address: String, password: String, server: XMPPEndpoint? = nil, savedEndpoint: NotificationAccount? = nil) async -> Bool {",
+    22
+   ],
+   [
+    "func loadAvatar(for chatID: String) async {",
+    14
+   ],
+   [
+    "func loadDemo() async {",
+    19
+   ],
+   [
+    "func loadEncryptionDetails(for chatID: String, refreshFromServer: Bool = true, profile: XMPPOMEMOProfile? = nil, force: Bool = false) async {",
+    15
+   ],
+   [
+    "private func handle(_ event: XMPPEvent, token: UUID) async {",
+    46
+   ],
+   [
+    "private func openStorageOnce(withoutSnapshot: Bool) async {",
+    16
+   ],
+   [
+    "private func reconcilePush(client: XMPPClient, session: NotificationAccount, token: UUID, interactive: Bool) async {",
+    22
+   ]
+  ],
+  "file_length": [
+   [
+    "",
+    3884
+   ]
+  ],
+  "function_body_length": [
+   [
+    "func beginNotificationAction(account: String, chatID: String, budget: NotificationActionBudget) async -> Bool {",
+    64
+   ],
+   [
+    "func connect(username address: String, password: String, server: XMPPEndpoint? = nil, savedEndpoint: NotificationAccount? = nil) async -> Bool {",
+    97
+   ],
+   [
+    "func loadDemo() async {",
+    89
+   ],
+   [
+    "func loadEncryptionDetails(for chatID: String, refreshFromServer: Bool = true, profile: XMPPOMEMOProfile? = nil, force: Bool = false) async {",
+    61
+   ],
+   [
+    "private func handle(_ event: XMPPEvent, token: UUID) async {",
+    162
+   ],
+   [
+    "private func openStorageOnce(withoutSnapshot: Bool) async {",
+    95
+   ],
+   [
+    "private func reconcilePush(client: XMPPClient, session: NotificationAccount, token: UUID, interactive: Bool) async {",
+    72
+   ]
+  ],
+  "function_parameter_count": [
+   [
+    "nonisolated static func filesAloneCanReply(to source: ChatMessage, accountID: String, chatID: String, isGroup: Bool,",
+    6
+   ],
+   [
+    "private func runConnectionSetup(account: String, client: XMPPClient, encryption: OMEMOService, store: MessageStore,",
+    7
+   ]
+  ],
+  "no_empty_block": [
+   [
+    "catch where PushCleanup.disableSettles(error) { }",
+    0
+   ],
+   [
+    "catch where PushCleanup.disableSettles(error) { }",
+    0
+   ],
+   [
+    "if case .needsAttention = session {} else { session = .offline(reason: reason) }",
+    0
+   ],
+   [
+    "lifecycleTask = Task { await previous?.value; for await _ in gate {} }",
+    0
+   ],
+   [
+    "} catch MessageStoreError.transportOwnershipRequired {",
+    0
+   ],
+   [
+    "} catch {}",
+    0
+   ]
+  ],
+  "redundant_nil_coalescing": [
+   [
+    "let queued = (try? await encryption.queueReceipt(account: account, chatID: message.chatID, messageID: messageID, kind: .marker)) ?? nil",
+    0
+   ]
+  ],
+  "type_body_length": [
+   [
+    "final class AppModel {",
+    3389
+   ]
+  ]
+ },
+ "App/AppearanceView.swift": {
+  "closure_body_length": [
+   [
+    "GroupedList {",
+    57
+   ]
+  ]
+ },
+ "App/AttachmentKeyboard.swift": {
+  "file_length": [
+   [
+    "",
+    893
+   ]
+  ],
+  "force_cast": [
+   [
+    "let cell = collectionView.dequeueReusableCell(withReuseIdentifier: \"photo\", for: indexPath) as! RecentPhotoCell",
+    0
+   ]
+  ],
+  "implicitly_unwrapped_optional": [
+   [
+    "private var afterBanner: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var chipHeight: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var collapse: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var height: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var top: NSLayoutConstraint!",
+    0
+   ]
+  ]
+ },
+ "App/ChatListView.swift": {
+  "closure_body_length": [
+   [
+    "NavigationStack {",
+    52
+   ]
+  ]
+ },
+ "App/ConnectionSetup.swift": {
+  "cyclomatic_complexity": [
+   [
+    "func run(operations: Operations, sink deliver: @escaping @MainActor @Sendable (Event) async -> Void) async {",
+    20
+   ]
+  ],
+  "function_body_length": [
+   [
+    "func run(operations: Operations, sink deliver: @escaping @MainActor @Sendable (Event) async -> Void) async {",
+    89
+   ]
+  ]
+ },
+ "App/Conversation/ConversationPresenter.swift": {
+  "force_unwrapping": [
+   [
+    "reactions: message.isRetracted ? [] : emoji.map { TimelineReaction(emoji: $0, count: counts[$0]!, isSelected: selected.contains($0)) },",
+    0
+   ]
+  ]
+ },
+ "App/Conversation/TimelineScrollPolicy.swift": {
+  "function_parameter_count": [
+   [
+    "static func landing(_ rows: [PlacedRow], by delta: CGFloat, frameHeight: CGFloat, rowCount: Int, lead: CGFloat, tail: CGFloat,",
+    7
+   ]
+  ]
+ },
+ "App/ConversationTimeline.swift": {
+  "file_length": [
+   [
+    "",
+    1760
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "let authorWidth = (reply.author as NSString).size(withAttributes: [.font: quoteAuthor.font!]).width",
+    0
+   ],
+   [
+    "let bodyWidth = (reply.body as NSString).size(withAttributes: [.font: quoteBody.font!]).width",
+    0
+   ]
+  ],
+  "function_body_length": [
+   [
+    "func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,",
+    118
+   ],
+   [
+    "func update(messages incoming: [TimelineMessage], typing: TimelineTyping? = nil, loadingEarlier: Bool = false, accent: String = \"\", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in },",
+    79
+   ],
+   [
+    "override func loadView() {",
+    86
+   ],
+   [
+    "override init(frame: CGRect) {",
+    234
+   ]
+  ],
+  "function_parameter_count": [
+   [
+    "func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,",
+    6
+   ]
+  ],
+  "implicitly_unwrapped_optional": [
+   [
+    "private var attachmentHeight: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var attachmentTap: UITapGestureRecognizer!",
+    0
+   ],
+   [
+    "private var authorHeight: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var authorHeight: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var authorTop: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var bubbleBottom: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var bubbleTop: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var bubbleTop: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var bubbleWidth: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var collectionView: UICollectionView!",
+    0
+   ],
+   [
+    "private var composerHeight: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var dataSource: UICollectionViewDiffableDataSource<Int, String>!",
+    0
+   ],
+   [
+    "private var dateHeight: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var dateTop: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var footerAfterMedia: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var footerAfterText: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var leading: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var linkCardTop: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var plainAttachmentTop: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var plainTextTop: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var quoteLabelsBeforeThumbnail: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var quoteLabelsTrailing: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var reactionLeading: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var reactionTrailing: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var replyAttachmentTop: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var replyIndicatorLeading: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var replyTextTop: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var textHeight: NSLayoutConstraint!",
+    0
+   ],
+   [
+    "private var trailing: NSLayoutConstraint!",
+    0
+   ]
+  ],
+  "type_body_length": [
+   [
+    "final class ConversationTimelineController: UIViewController, UICollectionViewDelegate, UICollectionViewDataSourcePrefetching {",
+    574
+   ],
+   [
+    "private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizerDelegate {",
+    858
+   ]
+  ]
+ },
+ "App/ConversationView.swift": {
+  "file_length": [
+   [
+    "",
+    780
+   ]
+  ],
+  "type_body_length": [
+   [
+    "struct ConversationView: View {",
+    382
+   ]
+  ]
+ },
+ "App/DemoArt.swift": {
+  "closure_body_length": [
+   [
+    "jpeg(width: 1200, height: 600, quality: 0.85) { c in",
+    77
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "let parts = color.converted(to: CGColorSpace(name: CGColorSpace.sRGB)!, intent: .defaultIntent, options: nil)?.components ?? [0, 0, 0, 1]",
+    0
+   ]
+  ],
+  "function_body_length": [
+   [
+    "static func lakePhotoJPEG() -> Data? {",
+    79
+   ]
+  ],
+  "function_parameter_count": [
+   [
+    "private static func portrait(_ c: CGContext, background: [CGColor], skin: CGColor, hair: CGColor, sweater: CGColor, curls: Bool) {",
+    6
+   ]
+  ]
+ },
+ "App/DemoSamples.swift": {
+  "function_body_length": [
+   [
+    "static func write(to store: MessageStore, files: AttachmentFiles?, avatarRoot: URL?, morning: Date) async throws -> String? {",
+    63
+   ]
+  ]
+ },
+ "App/EncryptionDetailsView.swift": {
+  "closure_body_length": [
+   [
+    "GroupedList {",
+    64
+   ],
+   [
+    "NavigationStack {",
+    82
+   ]
+  ]
+ },
+ "App/GroupDetailsView.swift": {
+  "closure_body_length": [
+   [
+    "GroupedList {",
+    56
+   ]
+  ]
+ },
+ "App/LinkPreviewCardView.swift": {
+  "implicitly_unwrapped_optional": [
+   [
+    "private var imageHeight: NSLayoutConstraint!",
+    0
+   ]
+  ]
+ },
+ "App/LinkPreviewFetcher.swift": {
+  "file_length": [
+   [
+    "",
+    412
+   ]
+  ],
+  "force_cast": [
+   [
+    "let configuration = configuration.copy() as! URLSessionConfiguration",
+    0
+   ]
+  ]
+ },
+ "App/MessageActionsOverlay.swift": {
+  "file_length": [
+   [
+    "",
+    438
+   ]
+  ]
+ },
+ "App/NotificationDiagnostics.swift": {
+  "function_body_length": [
+   [
+    "static func exportIfRequested(store: MessageStore, directory: URL) async throws -> Bool {",
+    66
+   ]
+  ]
+ },
+ "App/NotificationHarness.swift": {
+  "no_print": [
+   [
+    "do { try await poster.add(request) } catch { print(\"notification harness: add failed \\(error)\") }",
+    0
+   ]
+  ]
+ },
+ "App/OwnDeviceReview.swift": {
+  "closure_body_length": [
+   [
+    "Section {",
+    64
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "(Data(hex: \"05533def5f7fecd4ba5cb52010938322ee1f4232c6bd99626d014e53b53e68a14a\")!,",
+    0
+   ],
+   [
+    "(Data(hex: \"05c508ef09624c2963740a4968ae0e9049aeb36e44d66c119d6897e0cac655e757\")!,",
+    0
+   ],
+   [
+    "Data(hex: \"3c039deaaf7f4c8ab11a133ee9f4917133a8b8e609823cdfd4192a30ee8bdb40\")!),",
+    0
+   ],
+   [
+    "Data(hex: \"95e3685f6102f7b06536192b6f877c174291d8dc474028ab6a3713dd37a39b09\")!)",
+    0
+   ]
+  ],
+  "function_body_length": [
+   [
+    "@ViewBuilder private func device(_ candidate: OwnDeviceCandidate) -> some View {",
+    67
+   ]
+  ]
+ },
+ "App/PreUpgradeSnapshot.swift": {
+  "cyclomatic_complexity": [
+   [
+    "private func putBack(_ manifest: Manifest, _ captured: Captured, from copy: Copy) throws {",
+    14
+   ]
+  ],
+  "file_length": [
+   [
+    "",
+    634
+   ]
+  ],
+  "no_empty_block": [
+   [
+    "do { try FileManager.default.removeItem(at: url) } catch CocoaError.fileNoSuchFile {}",
+    0
+   ]
+  ],
+  "type_body_length": [
+   [
+    "struct PreUpgradeSnapshot: Sendable {",
+    626
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "private static func databaseBytes(_ database: URL) throws -> Int64 {",
+    0
+   ]
+  ]
+ },
+ "App/SettingsView.swift": {
+  "closure_body_length": [
+   [
+    "GroupedList {",
+    247
+   ]
+  ]
+ },
+ "App/SignInView.swift": {
+  "closure_body_length": [
+   [
+    "Form {",
+    59
+   ],
+   [
+    "List {",
+    82
+   ],
+   [
+    "NavigationStack {",
+    74
+   ],
+   [
+    "NavigationStack {",
+    88
+   ]
+  ]
+ },
+ "App/TransferViews.swift": {
+  "closure_body_length": [
+   [
+    "Form {",
+    90
+   ],
+   [
+    "NavigationStack {",
+    104
+   ]
+  ]
+ },
+ "AppLifecycleTests/AccountTransferTests.swift": {
+  "force_unwrapping": [
+   [
+    "appDefaults: .init(defaults: UserDefaults(suiteName: app)!, name: app),",
+    0
+   ],
+   [
+    "groupDefaults: .init(defaults: UserDefaults(suiteName: group)!, name: group),",
+    0
+   ],
+   [
+    "let avatars = \"messaging/avatars/\" + AccountTransfer.encodedComponent(account)! + \"/\"",
+    0
+   ],
+   [
+    "manifest.entries = try sources.keys.sorted().map { try TransferArchive.describe(name: $0, source: sources[$0]!) }",
+    0
+   ]
+  ],
+  "function_body_length": [
+   [
+    "func testContactLinksNeverTravelAndAnArchiveWithLinksLosesThemBeforeTheCommit() async throws {",
+    78
+   ]
+  ],
+  "type_body_length": [
+   [
+    "@MainActor final class AccountTransferTests: XCTestCase {",
+    371
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "func photoFiles(_ root: URL, _ account: String, _ hash: String) throws -> [URL] {",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/AppearanceStoreTests.swift": {
+  "implicitly_unwrapped_optional": [
+   [
+    "private var defaults: UserDefaults!",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/AttachmentDownloadTests.swift": {
+  "force_unwrapping": [
+   [
+    "let path = request.url!.path",
+    0
+   ],
+   [
+    "let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: \"HTTP/1.1\", headerFields: headers)!",
+    0
+   ],
+   [
+    "let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: \"HTTP/1.1\", headerFields: headers)!",
+    0
+   ],
+   [
+    "return URL(string: \"https://files.test\" + path)!",
+    0
+   ]
+  ],
+  "implicitly_unwrapped_optional": [
+   [
+    "private var configuration: URLSessionConfiguration!",
+    0
+   ],
+   [
+    "private var directory: URL!",
+    0
+   ],
+   [
+    "private var downloader: AttachmentDownloader!",
+    0
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "try await Task.sleep(for: .milliseconds(20))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .milliseconds(200))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .milliseconds(200))",
+    0
+   ],
+   [
+    "usleep(route.pause)",
+    0
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "func testABodyLongerThanTheDeclaredSizeIsCancelledAndNotOfferedAgain() async throws {",
+    0
+   ],
+   [
+    "func testAnAnnouncedLengthAboveTheHardLimitIsRefusedBeforeTheBody() async throws {",
+    0
+   ],
+   [
+    "override func tearDownWithError() throws {",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/ChatMuteSummaryTests.swift": {
+  "force_unwrapping": [
+   [
+    "calendar.timeZone = TimeZone(identifier: \"Europe/Amsterdam\")!",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/CoalescedReloadTests.swift": {
+  "force_unwrapping": [
+   [
+    "private var collectionView: UICollectionView { controller.view.subviews.compactMap { $0 as? UICollectionView }.first! }",
+    0
+   ]
+  ],
+  "implicitly_unwrapped_optional": [
+   [
+    "private var controller: ConversationTimelineController!",
+    0
+   ],
+   [
+    "private var window: UIWindow!",
+    0
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "override func setUp() async throws {",
+    0
+   ],
+   [
+    "override func tearDown() async throws {",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/ComposerClearTests.swift": {
+  "implicitly_unwrapped_optional": [
+   [
+    "private var field: UITextView!",
+    0
+   ],
+   [
+    "private var state: ComposerState!",
+    0
+   ],
+   [
+    "private var window: UIWindow!",
+    0
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "override func tearDown() async throws {",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/ComposerLinkPreviewTests.swift": {
+  "no_wall_clock_in_tests": [
+   [
+    "private func settle() async throws { try await Task.sleep(for: .milliseconds(150)) }",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/ConnectionSetupTests.swift": {
+  "force_unwrapping": [
+   [
+    "XCTAssertTrue(events.contains(.failed(step: \"publishing this phone\u2019s keys\", detail: OMEMOError.identityChanged.errorDescription!)))",
+    0
+   ]
+  ],
+  "no_empty_block": [
+   [
+    "while !initialized.value {}",
+    0
+   ],
+   [
+    "while ContinuousClock.now < held {}",
+    0
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "operations.catchUp = { _ in try await Task.sleep(for: .seconds(60)) }",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .milliseconds(20))",
+    0
+   ],
+   [
+    "try? await Task.sleep(for: .milliseconds(5))",
+    0
+   ],
+   [
+    "try? await Task.sleep(for: .milliseconds(50))",
+    0
+   ],
+   [
+    "while !mainHeld.value { try await Task.sleep(for: .milliseconds(1)) }",
+    0
+   ]
+  ],
+  "type_body_length": [
+   [
+    "final class ConnectionSetupTests: XCTestCase {",
+    382
+   ]
+  ]
+ },
+ "AppLifecycleTests/ContactLinkingTests.swift": {
+  "force_unwrapping": [
+   [
+    "let relink = Task { await center.link(robin, to: contacts[\"B\"]!, source: .picker) }",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/ConversationPresenterTests.swift": {
+  "force_try": [
+   [
+    "zlib.append(try! (raw as NSData).compressed(using: .zlib) as Data)",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/DeliveredNotificationCleanerTests.swift": {
+  "unneeded_throws_rethrows": [
+   [
+    "func testAReactionsOwnTargetNeverCountsAsAReadMessage() throws {",
+    0
+   ],
+   [
+    "func testAReadPlaceholderIsRemovedByItsReference() throws {",
+    0
+   ],
+   [
+    "func testReadMessagesRemoveTheirOwnAndNamingRequestsOnly() throws {",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/EncryptionLifecycleTests.swift": {
+  "no_print": [
+   [
+    "print(text)",
+    0
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "try await Task.sleep(for: .milliseconds(250))",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/LastSeenTests.swift": {
+  "force_unwrapping": [
+   [
+    "calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute, second: second))!",
+    0
+   ],
+   [
+    "calendar.timeZone = TimeZone(identifier: \"Europe/Amsterdam\")!",
+    0
+   ],
+   [
+    "components.timeZone = TimeZone(identifier: \"UTC\")!",
+    0
+   ],
+   [
+    "let seen = Calendar(identifier: .gregorian).date(from: components)!",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/LinkOpeningTests.swift": {
+  "force_unwrapping": [
+   [
+    "private func url(_ string: String) -> URL { URL(string: string)! }",
+    0
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "func testWrittenLinksOpenAsTheirKind() throws {",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/LinkPreviewFetchTests.swift": {
+  "async_without_await": [
+   [
+    "func addresses(of host: String) async throws -> [[UInt8]] {",
+    0
+   ]
+  ],
+  "file_length": [
+   [
+    "",
+    465
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "bitmapInfo: CGImageAlphaInfo.none.rawValue)!",
+    0
+   ],
+   [
+    "bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!",
+    0
+   ],
+   [
+    "client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: URL(string: location)!), redirectResponse: response)",
+    0
+   ],
+   [
+    "do { return .success(try await (fetcher ?? self.fetcher()).fetch(URL(string: url)!)) } catch { return .failure(error) }",
+    0
+   ],
+   [
+    "for index in 1..<5 { center.request(URL(string: \"https://site\\(index).example/\")!) }",
+    0
+   ],
+   [
+    "let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,",
+    0
+   ],
+   [
+    "let destination = CGImageDestinationCreateWithData(output as CFMutableData, type.identifier as CFString, 1, nil)!",
+    0
+   ],
+   [
+    "let host = URL(string: url)!.host()!",
+    0
+   ],
+   [
+    "let host = URL(string: url)!.host()!",
+    0
+   ],
+   [
+    "let host = url.host()!",
+    0
+   ],
+   [
+    "let links = [\"offline\", \"untrusted\", \"dead\"].map { URL(string: \"https://\\($0).example/\")! }",
+    0
+   ],
+   [
+    "let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: \"HTTP/1.1\", headerFields: headers)!",
+    0
+   ],
+   [
+    "let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: \"HTTP/1.1\", headerFields: headers)!",
+    0
+   ],
+   [
+    "let response = HTTPURLResponse(url: url, statusCode: 302, httpVersion: \"HTTP/1.1\", headerFields: [\"Location\": location])!",
+    0
+   ],
+   [
+    "let url = request.url!",
+    0
+   ],
+   [
+    "resolver.set(url.host()!, Self.publicV4)",
+    0
+   ],
+   [
+    "return Self.routes[served.string!]",
+    0
+   ],
+   [
+    "return encode(context.makeImage()!, type: .jpeg, properties: metadata)",
+    0
+   ],
+   [
+    "return encode(context.makeImage()!, type: .png, properties: [:])",
+    0
+   ],
+   [
+    "var served = URLComponents(url: url, resolvingAgainstBaseURL: false)!",
+    0
+   ]
+  ],
+  "implicitly_unwrapped_optional": [
+   [
+    "private var configuration: URLSessionConfiguration!",
+    0
+   ],
+   [
+    "private var resolver: TableResolver!",
+    0
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "try await Task.sleep(for: .milliseconds(10))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .milliseconds(100))",
+    0
+   ],
+   [
+    "usleep(pause)",
+    0
+   ]
+  ],
+  "type_body_length": [
+   [
+    "final class LinkPreviewFetchTests: XCTestCase {",
+    376
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "func testRedirectsAreCheckedAtEveryHopAndLimitedToFive() async throws {",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/MessageActionMenuTests.swift": {
+  "force_unwrapping": [
+   [
+    "XCTAssertEqual(MessageActionMenu.items(for: message, link: URL(string: item.link)!).map(\\.title), item.actions + reading, item.link, line: item.line)",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/NotificationActionTests.swift": {
+  "async_without_await": [
+   [
+    "func beginNotificationAction(account: String, chatID: String, budget: NotificationActionBudget) async -> Bool {",
+    0
+   ],
+   [
+    "func clearReadNotifications(for message: StoredMessage) async { steps.append(\"clear\") }",
+    0
+   ],
+   [
+    "func deliverNotificationReply(_ messageID: String, account: String) async -> ReplyDelivery { steps.append(\"deliver\"); return delivery }",
+    0
+   ],
+   [
+    "func endNotificationAction() async { steps.append(\"end\") }",
+    0
+   ],
+   [
+    "func enqueueNotificationReply(_ text: String, to message: StoredMessage) async throws -> String {",
+    0
+   ],
+   [
+    "func flushNotificationAction(account: String) async { steps.append(\"flush\") }",
+    0
+   ],
+   [
+    "func markNotificationMessageRead(_ message: StoredMessage) async throws {",
+    0
+   ],
+   [
+    "func reportNotificationReply(failed: Bool, for message: StoredMessage) async { steps.append(\"report\"); reported.append(failed) }",
+    0
+   ],
+   [
+    "func resolveNotificationMessage(_ destination: NotificationDestination, account: String) async -> StoredMessage? {",
+    0
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "try await Task.sleep(for: .milliseconds(100))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .milliseconds(50))",
+    0
+   ]
+  ],
+  "redundant_nil_coalescing": [
+   [
+    "return accounts.count > 1 ? accounts.removeFirst() : accounts.first ?? nil",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/PreUpgradeSnapshotTests.swift": {
+  "async_without_await": [
+   [
+    "func testDeleteBackupAndSignOutRemoveSavedReplies() async throws {",
+    0
+   ],
+   [
+    "private func previousBuildData(in installation: Installation, schema: Int = 21) async throws {",
+    0
+   ]
+  ],
+  "file_length": [
+   [
+    "",
+    687
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "appDefaults: .init(defaults: UserDefaults(suiteName: names.0)!, name: names.0),",
+    0
+   ],
+   [
+    "groupDefaults: .init(defaults: UserDefaults(suiteName: names.1)!, name: names.1),",
+    0
+   ]
+  ],
+  "no_empty_block": [
+   [
+    "do { _ = try await installation.snapshots.restore(store: store, now: now); XCTFail(\"restored without the lease\") } catch {}",
+    0
+   ],
+   [
+    "do { _ = try await store.messages(accountID: account, chatID: \"bob@example.org\"); XCTFail(\"the handed-over store is still open\") } catch {}",
+    0
+   ]
+  ],
+  "type_body_length": [
+   [
+    "@MainActor final class PreUpgradeSnapshotTests: XCTestCase {",
+    678
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "private func keychainAdd(_ service: String, _ key: String, _ data: Data) throws {",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/ShareExtensionTests.swift": {
+  "force_unwrapping": [
+   [
+    "var providers = (0..<(SharedItemIntake.maximumFiles + 1)).map { _ in NSItemProvider(contentsOf: photo)! }",
+    0
+   ]
+  ],
+  "no_empty_block": [
+   [
+    "} catch AttachmentPreparer.Failure.tooLarge {}",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/TimelineCellSemanticsTests.swift": {
+  "force_unwrapping": [
+   [
+    "XCTAssertEqual(pills.count + (Int(overflow.text!.dropFirst()) ?? 0), emoji.count)",
+    0
+   ],
+   [
+    "XCTAssertGreaterThanOrEqual(frame.minX, 16, \"\\(label.text!) \\(isOutgoing ? \"own\" : \"received\")\")",
+    0
+   ],
+   [
+    "XCTAssertLessThanOrEqual(frame.maxX, collectionView.bounds.width - 16, \"\\(label.text!) \\(isOutgoing ? \"own\" : \"received\")\")",
+    0
+   ],
+   [
+    "let overflow = try XCTUnwrap(labels.first { $0.text!.hasPrefix(\"+\") }, \"an overflow pill\")",
+    0
+   ],
+   [
+    "let pills = labels.filter { emoji.contains($0.text!) }",
+    0
+   ],
+   [
+    "private var collectionView: UICollectionView { controller.view.subviews.compactMap { $0 as? UICollectionView }.first! }",
+    0
+   ]
+  ],
+  "implicitly_unwrapped_optional": [
+   [
+    "private var controller: ConversationTimelineController!",
+    0
+   ],
+   [
+    "private var window: UIWindow!",
+    0
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "override func setUp() async throws {",
+    0
+   ],
+   [
+    "override func tearDown() async throws {",
+    0
+   ]
+  ]
+ },
+ "AppLifecycleTests/TimelinePositionTests.swift": {
+  "force_unwrapping": [
+   [
+    "private var collectionView: UICollectionView { controller.view.subviews.compactMap { $0 as? UICollectionView }.first! }",
+    0
+   ]
+  ],
+  "implicitly_unwrapped_optional": [
+   [
+    "private var controller: ConversationTimelineController!",
+    0
+   ],
+   [
+    "private var window: UIWindow!",
+    0
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "func testOnlyTheReadersScrollNearTheTopAsksForOlderMessages() throws {",
+    0
+   ],
+   [
+    "override func setUp() async throws {",
+    0
+   ],
+   [
+    "override func tearDown() async throws {",
+    0
+   ]
+  ]
+ },
+ "AppShared/ChatCapabilities.swift": {
+  "function_parameter_count": [
+   [
+    "static func derive(isDemo: Bool, isGroup: Bool, knowledge: EncryptionKnowledge, reviewPending: Bool,",
+    6
+   ]
+  ]
+ },
+ "AppShared/ShareRules.swift": {
+  "function_parameter_count": [
+   [
+    "static func chat(id: String, storedTitle: String, isGroup: Bool, isPinned: Bool, verifiedAvatarHash: String?, lastActivity: Date?,",
+    7
+   ]
+  ]
+ },
+ "AppShared/SharedItemIntake.swift": {
+  "async_without_await": [
+   [
+    "private static func copiedFile(at url: URL, suggestedName: String?) async -> SharedItem? {",
+    0
+   ]
+  ]
+ },
+ "AppShared/SuggestedConversation.swift": {
+  "function_parameter_count": [
+   [
+    "static func outgoing(accountID: String, chatID: String, title: String?, avatarHash: String?, roomMembers: [String]?,",
+    7
+   ]
+  ]
+ },
+ "AppTests/AppearanceUITests.swift": {
+  "force_unwrapping": [
+   [
+    "let cg = image.cgImage!",
+    0
+   ],
+   [
+    "space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!",
+    0
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "@MainActor func testAccentAndSchemeChangeRepaintTheOpenSheet() throws {",
+    0
+   ]
+  ]
+ },
+ "AppTests/AttachmentPanelUITests.swift": {
+  "function_body_length": [
+   [
+    "@MainActor func testRailPickerAndPanelLifecycle() throws {",
+    70
+   ],
+   [
+    "@MainActor func testSelectMoreGivesThePanelBackUnlessItWasClosed() throws {",
+    65
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "@MainActor func testAppearanceChangeKeepsThePanelUp() throws {",
+    0
+   ],
+   [
+    "@MainActor func testMessageMenuGivesThePanelBack() throws {",
+    0
+   ],
+   [
+    "@MainActor func testPanelFromRestAndDragDismissal() throws {",
+    0
+   ],
+   [
+    "@MainActor func testPanelSwapsWithTheKeyboardAtTheSameHeight() throws {",
+    0
+   ],
+   [
+    "@MainActor func testRailPickerAndPanelLifecycle() throws {",
+    0
+   ]
+  ]
+ },
+ "AppTests/ChatListSwipeUITests.swift": {
+  "unneeded_throws_rethrows": [
+   [
+    "@MainActor func testSwipePinAndMuteThenUnmuteFromDetails() throws {",
+    0
+   ]
+  ]
+ },
+ "AppTests/ContactLinkUITests.swift": {
+  "unneeded_throws_rethrows": [
+   [
+    "@MainActor func testLinkingAsksForContactsOnlyWhenStartedAndOffersANameOnlyLinkWithoutIt() throws {",
+    0
+   ]
+  ]
+ },
+ "AppTests/ConversationUITests.swift": {
+  "function_body_length": [
+   [
+    "@MainActor func testKeyboardKeepsTheHistoryAnchorThenPagesAndSearches() throws {",
+    67
+   ]
+  ]
+ },
+ "AppTests/GroupUITests.swift": {
+  "force_unwrapping": [
+   [
+    "let room = lab[\"XMPP_GROUP_ROOM\"]!",
+    0
+   ]
+  ]
+ },
+ "AppTests/LastSeenLabUITests.swift": {
+  "no_wall_clock_in_tests": [
+   [
+    "Thread.sleep(forTimeInterval: 4)",
+    0
+   ]
+  ]
+ },
+ "AppTests/MessageActionsUITests.swift": {
+  "function_body_length": [
+   [
+    "@MainActor func testComposeEditUnsendStarFilterAndSelectText() throws {",
+    125
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "@MainActor func testComposeEditUnsendStarFilterAndSelectText() throws {",
+    0
+   ]
+  ]
+ },
+ "AppTests/PushUITests.swift": {
+  "force_unwrapping": [
+   [
+    "app.launchEnvironment = Dictionary(uniqueKeysWithValues: required.map { ($0, environment[$0]!) })",
+    0
+   ],
+   [
+    "establishEncryptedRoundTrip(app, peer: environment[\"XMPP_OMEMO_PEER\"]!)",
+    0
+   ]
+  ]
+ },
+ "AppTests/ReplyUITests.swift": {
+  "function_body_length": [
+   [
+    "@MainActor func testReplySwipesKeepTheKeyboardAndLeaveBackToTheSystem() throws {",
+    91
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "@MainActor func testReplySwipesKeepTheKeyboardAndLeaveBackToTheSystem() throws {",
+    0
+   ]
+  ]
+ },
+ "AppTests/ShareExtensionLabUITests.swift": {
+  "force_unwrapping": [
+   [
+    "safari.open(URL(string: marker)!)",
+    0
+   ]
+  ],
+  "no_print": [
+   [
+    "if !share.waitForExistence(timeout: 5) { print(host.debugDescription) }",
+    0
+   ]
+  ]
+ },
+ "Mac/MacAttachmentTray.swift": {
+  "function_body_length": [
+   [
+    "static func step(_ step: String, _ argument: String, model: AppModel) {",
+    67
+   ]
+  ]
+ },
+ "Mac/MacBubbleExtras.swift": {
+  "closure_body_length": [
+   [
+    "VStack(alignment: .leading, spacing: MacTimelineMetrics.partSpacing) {",
+    51
+   ]
+  ]
+ },
+ "Mac/MacComposer.swift": {
+  "async_without_await": [
+   [
+    "func composerLinkPreview(for url: URL) async -> ComposerLinkPreview.Content? {",
+    0
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue),",
+    0
+   ]
+  ]
+ },
+ "Mac/MacDebugHooks.swift": {
+  "async_without_await": [
+   [
+    "private static func selfCheck(_ model: AppModel) async {",
+    0
+   ]
+  ],
+  "closure_body_length": [
+   [
+    "Task {",
+    83
+   ]
+  ],
+  "cyclomatic_complexity": [
+   [
+    "private static func runTour(_ script: String, window: MacWindowState, model: AppModel) async {",
+    13
+   ],
+   [
+    "static func start(model: AppModel, window: MacWindowState, lifecycle: MacLifecycle) {",
+    26
+   ]
+  ],
+  "file_length": [
+   [
+    "",
+    981
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "context: nil, characters: \"\\r\", charactersIgnoringModifiers: \"\\r\", isARepeat: false, keyCode: 36)!)",
+    0
+   ],
+   [
+    "matrix.withUnsafeMutableBytes { value.getValue($0.baseAddress!, size: $0.count) }",
+    0
+   ],
+   [
+    "space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { continue }",
+    0
+   ]
+  ],
+  "function_body_length": [
+   [
+    "private static func runTour(_ script: String, window: MacWindowState, model: AppModel) async {",
+    87
+   ],
+   [
+    "static func start(model: AppModel, window: MacWindowState, lifecycle: MacLifecycle) {",
+    105
+   ]
+  ],
+  "type_body_length": [
+   [
+    "@MainActor enum MacDebugHooks {",
+    926
+   ]
+  ]
+ },
+ "Mac/MacDeviceReview.swift": {
+  "closure_body_length": [
+   [
+    "Section {",
+    55
+   ]
+  ],
+  "function_body_length": [
+   [
+    "@ViewBuilder private func section(for listed: EncryptionDevice) -> some View {",
+    61
+   ]
+  ]
+ },
+ "Mac/MacKeyboardDebug.swift": {
+  "no_print": [
+   [
+    "dump(window, matching: argument)",
+    0
+   ],
+   [
+    "private static func dump(_ window: NSWindow, matching filter: String) {",
+    0
+   ]
+  ]
+ },
+ "Mac/MacLifecycle.swift": {
+  "force_unwrapping": [
+   [
+    "var seconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)",
+    0
+   ]
+  ]
+ },
+ "Mac/MacLifecycleDebug.swift": {
+  "force_unwrapping": [
+   [
+    "scenePhases.isEmpty ? \"none\" : scenePhases.keys.sorted().map { \"\\($0)=\\(name(scenePhases[$0]!))\" }.joined(separator: \" \")",
+    0
+   ]
+  ]
+ },
+ "Mac/MacPerfProbe.swift": {
+  "file_length": [
+   [
+    "",
+    401
+   ]
+  ],
+  "type_body_length": [
+   [
+    "@MainActor enum MacPerfProbe {",
+    394
+   ]
+  ]
+ },
+ "Mac/MacPushProbe.swift": {
+  "cyclomatic_complexity": [
+   [
+    "static func start() {",
+    17
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {",
+    0
+   ],
+   [
+    "space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }",
+    0
+   ]
+  ]
+ },
+ "Mac/MacReplySwipe.swift": {
+  "function_body_length": [
+   [
+    "private func route(_ event: NSEvent, at point: NSPoint, pass: (NSEvent) -> Void) -> Bool {",
+    67
+   ]
+  ]
+ },
+ "Mac/MacSplitController.swift": {
+  "discarded_notification_center_observer": [
+   [
+    "NotificationCenter.default.addObserver(forName: NSSplitView.didResizeSubviewsNotification, object: splitView, queue: nil) { _ in",
+    0
+   ],
+   [
+    "NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in MainActor.assumeIsolated { noteInput() } }",
+    0
+   ]
+  ],
+  "implicitly_unwrapped_optional": [
+   [
+    "private var content: MacContentController!",
+    0
+   ],
+   [
+    "private var inspectorItem: NSSplitViewItem!",
+    0
+   ],
+   [
+    "private var sidebarItem: NSSplitViewItem!",
+    0
+   ]
+  ]
+ },
+ "Mac/MacTimeline.swift": {
+  "file_length": [
+   [
+    "",
+    1640
+   ]
+  ],
+  "function_body_length": [
+   [
+    "func update(_ content: MacTimelineContent) {",
+    67
+   ]
+  ],
+  "function_parameter_count": [
+   [
+    "private func commit(_ content: MacTimelineContent, entries next: [Entry], removed: IndexSet, inserted: IndexSet, changedIDs: [String],",
+    8
+   ]
+  ],
+  "type_body_length": [
+   [
+    "@MainActor final class MacTimelineTableController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, @preconcurrency NSAccessibilityCustomRotorItemSearchDelegate {",
+    1368
+   ]
+  ]
+ },
+ "Mac/MacTimelineCells.swift": {
+  "file_length": [
+   [
+    "",
+    733
+   ]
+  ],
+  "type_body_length": [
+   [
+    "final class MacTimelineMessageCell: NSView, NSTextViewDelegate {",
+    406
+   ]
+  ]
+ },
+ "Mac/MacTimelineController.swift": {
+  "type_body_length": [
+   [
+    "@MainActor @Observable final class MacTimelineController {",
+    353
+   ]
+  ]
+ },
+ "Mac/MacTimelineDebug.swift": {
+  "file_length": [
+   [
+    "",
+    493
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "let url = URL(string: \"https://example.com/card-\\(index)\")!",
+    0
+   ]
+  ],
+  "function_body_length": [
+   [
+    "static func step(_ name: String, _ argument: String, window: NSWindow?) async {",
+    112
+   ]
+  ],
+  "type_body_length": [
+   [
+    "@MainActor enum MacTimelineDebug {",
+    487
+   ]
+  ]
+ },
+ "Mac/MacTimelineLayout.swift": {
+  "function_body_length": [
+   [
+    "func layout(_ input: MacRowInput, tableWidth: CGFloat, previous: MacRowLayout? = nil) -> MacRowLayout {",
+    62
+   ]
+  ]
+ },
+ "NotificationServiceMac/MacExtensionProbe.swift": {
+  "function_body_length": [
+   [
+    "static func record(_ request: UNNotificationRequest, arm: Arm) async -> Mode {",
+    61
+   ]
+  ]
+ },
+ "Packages/MessageStore/Sources/MessageStore/MessageStore.swift": {
+  "closure_body_length": [
+   [
+    "try connection.transaction {",
+    338
+   ]
+  ],
+  "cyclomatic_complexity": [
+   [
+    "private static func migrate(_ connection: Connection) throws {",
+    32
+   ],
+   [
+    "public func commitEncryptedIncoming(accountID: String, sender: String, digest: String,",
+    17
+   ]
+  ],
+  "file_length": [
+   [
+    "",
+    2515
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "[.text(accountID), .text(row[0].string)]).first.map(decodeRow)!",
+    0
+   ],
+   [
+    "let bytes = sqlite3_column_text(statement, column)!",
+    0
+   ],
+   [
+    "let held = try connection.query(\"SELECT COUNT(*) FROM pending_encrypted_inbox WHERE account_id=? AND sender=?\", [.text(accountID), .text(sender)]).first![0].integer",
+    0
+   ],
+   [
+    "let total = try connection.query(\"SELECT COUNT(*) FROM pending_encrypted_inbox WHERE account_id=?\", [.text(accountID)]).first![0].integer",
+    0
+   ],
+   [
+    "return .blob(Data(bytes: sqlite3_column_blob(statement, column)!, count: Int(sqlite3_column_bytes(statement, column))))",
+    0
+   ]
+  ],
+  "function_body_length": [
+   [
+    "private static func migrate(_ connection: Connection) throws {",
+    341
+   ]
+  ],
+  "function_parameter_count": [
+   [
+    "private func insertUpdate(accountID: String, id: String, kind: StoredUpdate.Kind, chatID: String, createdAt: Date,",
+    9
+   ],
+   [
+    "public func commitEncryptedIncoming(accountID: String, sender: String, digest: String,",
+    6
+   ],
+   [
+    "public func sealQueuedOutgoing(accountID: String, messageID: String, profile: String,",
+    6
+   ]
+  ],
+  "type_body_length": [
+   [
+    "public actor MessageStore {",
+    2230
+   ]
+  ]
+ },
+ "Packages/MessageStore/Tests/MessageStoreTests/AttachmentTests.swift": {
+  "force_unwrapping": [
+   [
+    "#expect(try await store!.attachmentsAwaitingUpload(accountID: \"a\").count == 1)",
+    0
+   ],
+   [
+    "#expect(try await store!.attachmentsAwaitingUpload(accountID: \"a\").map(\\.id) == [\"photo\"])",
+    0
+   ],
+   [
+    "#expect(try await store!.claimNextOutgoing(accountID: \"a\") == nil)",
+    0
+   ],
+   [
+    "#expect(try await store!.claimNextOutgoing(accountID: \"a\")?.message.id == \"elsewhere\")",
+    0
+   ],
+   [
+    "#expect(try await store!.enqueueOutgoing(StoredMessage(id: \"elsewhere\", accountID: \"a\", chatID: \"other\", senderID: \"a\", body: \"hi\", isOutgoing: true)))",
+    0
+   ],
+   [
+    "#expect(try await store!.enqueueOutgoing(media(\"caption\", body: \"hello\", attachment: nil)))",
+    0
+   ],
+   [
+    "#expect(try await store!.enqueueOutgoing(media(\"photo\")))",
+    0
+   ],
+   [
+    "#expect(try await store!.queuedOutgoing(accountID: \"a\").map(\\.id) == [\"elsewhere\"])",
+    0
+   ],
+   [
+    "await #expect(throws: MessageStoreError.self) { try await store!.enqueueOutgoing(media(\"inbound-state\", attachment: photo(state: nil))) }",
+    0
+   ],
+   [
+    "await #expect(throws: MessageStoreError.self) { try await store!.enqueueOutgoing(media(\"no-body-no-file\", attachment: nil)) }",
+    0
+   ],
+   [
+    "try await store!.acquireTransportOwnership()",
+    0
+   ],
+   [
+    "try await store!.markAttachmentUploaded(accountID: \"a\", messageID: \"photo\")",
+    0
+   ],
+   [
+    "try await store!.setAttachmentUploadTask(accountID: \"a\", messageID: \"photo\", taskID: 7, url: \"https://u/x\")",
+    0
+   ],
+   [
+    "try await store!.upsertChat(accountID: \"a\", chatID: \"other\", title: \"Other\")",
+    0
+   ],
+   [
+    "try await store!.upsertChat(accountID: \"a\", chatID: \"peer\", title: \"Peer\")",
+    0
+   ]
+  ]
+ },
+ "Packages/MessageStore/Tests/MessageStoreTests/ChatListQueryTests.swift": {
+  "closure_body_length": [
+   [
+    "try await withChatListStore { store in",
+    53
+   ]
+  ],
+  "function_body_length": [
+   [
+    "private func seedAccountA(_ store: MessageStore) async throws -> [String: ChatSeed] {",
+    113
+   ]
+  ]
+ },
+ "Packages/MessageStore/Tests/MessageStoreTests/ChatMuteTests.swift": {
+  "force_unwrapping": [
+   [
+    "let revision = try await store.encryptionStateRevision(accountID: account)!",
+    0
+   ]
+  ]
+ },
+ "Packages/MessageStore/Tests/MessageStoreTests/PendingLimitTests.swift": {
+  "force_unwrapping": [
+   [
+    "let row = try await store.message(accountID: account, messageID: overflow(sender, digest).placeholder!.id)",
+    0
+   ]
+  ]
+ },
+ "Packages/MessageStore/Tests/MessageStoreTests/ReactionNotificationTests.swift": {
+  "force_unwrapping": [
+   [
+    "let revision = try await store.encryptionStateRevision(accountID: account)!",
+    0
+   ]
+  ]
+ },
+ "Packages/MessageStore/Tests/MessageStoreTests/ReadStateTests.swift": {
+  "force_unwrapping": [
+   [
+    "let revision = try await store.encryptionStateRevision(accountID: account)!",
+    0
+   ]
+  ]
+ },
+ "Packages/MessageStore/Tests/MessageStoreTests/ReplyTests.swift": {
+  "force_unwrapping": [
+   [
+    "#expect(try await !store!.enqueueOutgoing(replyMessage(quote)))",
+    0
+   ],
+   [
+    "let first = try #require(await store!.claimNextOutgoing(accountID: \"a\"))",
+    0
+   ],
+   [
+    "try await store!.acquireTransportOwnership()",
+    0
+   ],
+   [
+    "try await store!.enqueueOutgoing(replyMessage(quote))",
+    0
+   ],
+   [
+    "try await store!.upsertChat(accountID: \"a\", chatID: \"peer\", title: \"Peer\")",
+    0
+   ]
+  ]
+ },
+ "Packages/MessageStore/Tests/MessageStoreTests/SnapshotTests.swift": {
+  "async_without_await": [
+   [
+    "private func previousBuildStore(at url: URL, schema: Int = 21, walMessages: Int) async throws -> OpaquePointer? {",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Sources/MessagingCore/ArchiveSynchronizer.swift": {
+  "cyclomatic_complexity": [
+   [
+    "func backfill(account: String, archive: String?, pageBudget: Int, operations: ArchiveSyncOperations) async throws -> BackfillOutcome {",
+    18
+   ],
+   [
+    "func process(account: String, archived: XMPPArchiveMessage, encryption: OMEMOService, transport: XMPPClient) async throws {",
+    15
+   ],
+   [
+    "private func synchronizePages(account: String, room: String?, operations: ArchiveSyncOperations) async throws -> Bool {",
+    16
+   ]
+  ],
+  "function_body_length": [
+   [
+    "private func synchronizePages(account: String, room: String?, operations: ArchiveSyncOperations) async throws -> Bool {",
+    61
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Sources/MessagingCore/BackgroundSynchronizer.swift": {
+  "function_body_length": [
+   [
+    "public func synchronize(databaseURL: URL, wrappingKey: Data, account: BackgroundAccount,",
+    68
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Sources/MessagingCore/InboundProcessor.swift": {
+  "cyclomatic_complexity": [
+   [
+    "public func process(_ event: XMPPEvent) async throws -> Outcome {",
+    16
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Sources/MessagingCore/NotificationDelivery.swift": {
+  "force_unwrapping": [
+   [
+    "private var order: Int { [.queued, .leaseWait, .syncing, .presenting, .committed, .finished].firstIndex(of: self)! }",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Sources/MessagingCore/NotificationPlanner.swift": {
+  "function_body_length": [
+   [
+    "public static func plan(_ batch: MessageNotification, accountID: String? = nil, badge: Int? = nil, playsSound: Bool = true) -> NotificationPlan {",
+    62
+   ]
+  ],
+  "function_parameter_count": [
+   [
+    "private static func communication(accountID: String, thread: String, chatName: String, chatAvatarHash: String?, isGroup: Bool,",
+    8
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Sources/MessagingCore/NotificationPosting.swift": {
+  "async_without_await": [
+   [
+    "public func removeDelivered(identifiers: [String]) async {",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Sources/MessagingCore/OutgoingEnqueue.swift": {
+  "function_parameter_count": [
+   [
+    "public static func file(_ prepared: PreparedAttachment, id: String = UUID().uuidString, account: String, chatID: String,",
+    7
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Tests/MessagingCoreTests/ArchiveCursorLabTests.swift": {
+  "force_unwrapping": [
+   [
+    "#expect(recoveredDirect.cursor != lost && recoveredDirect.stamp.map { $0 >= direct.stamp! } == true)",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Tests/MessagingCoreTests/ArchiveSynchronizerTests.swift": {
+  "file_length": [
+   [
+    "",
+    542
+   ]
+  ],
+  "type_body_length": [
+   [
+    "struct ArchiveSynchronizerTests {",
+    514
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "func refresh(_ room: String) throws { events.append(\"refresh:\" + room) }",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Tests/MessagingCoreTests/BackgroundSynchronizerTests.swift": {
+  "async_without_await": [
+   [
+    "func deliveredNotifications() async -> [DeliveredNotification] { [] }",
+    0
+   ],
+   [
+    "func removeDelivered(identifiers: [String]) async {}",
+    0
+   ]
+  ],
+  "no_empty_block": [
+   [
+    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
+    0
+   ],
+   [
+    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
+    0
+   ],
+   [
+    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
+    0
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "case .stalls: try await Task.sleep(for: .seconds(60))",
+    0
+   ],
+   [
+    "consume: { try await Task.sleep(for: .seconds(60)) },",
+    0
+   ],
+   [
+    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
+    0
+   ],
+   [
+    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
+    0
+   ],
+   [
+    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .milliseconds(50))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .seconds(20))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .seconds(20))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .seconds(20))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .seconds(20))   // a slow pull, cut short by the ended connection",
+    0
+   ],
+   [
+    "while await run.posting.added.count < 2 { try await Task.sleep(for: .milliseconds(20)) }",
+    0
+   ],
+   [
+    "while await run.posting.added.isEmpty { try await Task.sleep(for: .milliseconds(10)) }",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Tests/MessagingCoreTests/CommunicationNotificationTests.swift": {
+  "unneeded_throws_rethrows": [
+   [
+    "@Test func groupIntentNamesTheRoomAndEveryKnownRecipientIncludingTheAccount() throws {",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Tests/MessagingCoreTests/LivenessHandshakeTests.swift": {
+  "no_wall_clock_in_tests": [
+   [
+    "try? await Task.sleep(for: delay)",
+    0
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "func ask(_ request: LivenessRequest) throws {",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Tests/MessagingCoreTests/NotificationDeliveryTests.swift": {
+  "async_without_await": [
+   [
+    "func deliveredNotifications() async -> [DeliveredNotification] { delivered }",
+    0
+   ],
+   [
+    "func removeDelivered(identifiers: [String]) async {",
+    0
+   ]
+  ],
+  "file_length": [
+   [
+    "",
+    508
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "do { try await Task.sleep(for: .seconds(30)) } catch { await cancelled.release() }",
+    0
+   ],
+   [
+    "for _ in 0..<200 { if await condition() { return }; try await Task.sleep(for: .milliseconds(5)) }",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .milliseconds(100))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .milliseconds(20))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .milliseconds(20))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .milliseconds(20))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .milliseconds(20))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .milliseconds(50))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .milliseconds(50))",
+    0
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "@Test func expiryBeforeCommitFallsBackAndCancelsAnAbandonedRun() async throws {",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Tests/MessagingCoreTests/NotificationPlannerTests.swift": {
+  "unneeded_throws_rethrows": [
+   [
+    "@Test func chatsBeyondTheCapGetOneSummaryThatNeverTakesTheSound() throws {",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Tests/MessagingCoreTests/NullTransport.swift": {
+  "unneeded_throws_rethrows": [
+   [
+    "func fetchOMEMODevices(for jid: String, profile: XMPPOMEMOProfile) async throws -> [UInt32] {",
+    0
+   ],
+   [
+    "func publishOMEMOBundle(_ bundle: XMPPOMEMOBundle) async throws { await published.setBundle(bundle) }",
+    0
+   ],
+   [
+    "func publishOMEMODevices(_ devices: [UInt32], profile: XMPPOMEMOProfile) async throws { await published.setDevices(devices, profile) }",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Tests/MessagingCoreTests/ReadSyncLabTests.swift": {
+  "function_body_length": [
+   [
+    "@Test func anotherClientsDisplayedStateMovesOurPointerAndOursRoundTrips() async throws {",
+    61
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "try await Task.sleep(for: .milliseconds(200))",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Tests/MessagingCoreTests/ShareSessionLabTests.swift": {
+  "force_unwrapping": [
+   [
+    "url = URL(string: \"http://127.0.0.1:\\(port)/upload\")!",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Tests/MessagingCoreTests/ShareSessionTests.swift": {
+  "no_wall_clock_in_tests": [
+   [
+    "let release = Task { try await Task.sleep(for: .milliseconds(300)); try await owner.releaseTransportOwnership() }",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Tests/MessagingCoreTests/StalledRoomLabTests.swift": {
+  "no_print": [
+   [
+    "print(\"stalled-room burst: banner=\\(banner - start) appWaited=\\(waited) posted=\\(await posting.added.count)\")",
+    0
+   ],
+   [
+    "print(\"stalled-room run: elapsed=\\(elapsed) firstPost=\\(progress.report.firstPostMilliseconds.map(String.init) ?? \"none\")ms posted=\\(progress.report.posted)\")",
+    0
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "catch MessageStoreError.transportOwnedElsewhere { try await Task.sleep(for: .milliseconds(250)) }",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .milliseconds(100))",
+    0
+   ],
+   [
+    "try await Task.sleep(for: .seconds(1))",
+    0
+   ],
+   [
+    "try await Task.sleep(until: banner + .seconds(2))",
+    0
+   ],
+   [
+    "while await posting.added.isEmpty { try await Task.sleep(for: .milliseconds(20)) }",
+    0
+   ]
+  ]
+ },
+ "Packages/MessagingCore/Tests/MessagingCoreTests/TransferArchiveTests.swift": {
+  "force_unwrapping": [
+   [
+    "#expect(kept == [\"keychain/account\": expected[\"keychain/account\"]!])",
+    0
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "@Test func codesCarry120RandomBitsAndForgiveHowTheyAreTyped() throws {",
+    0
+   ]
+  ]
+ },
+ "Packages/OMEMO/Sources/OMEMO/EncryptedContent.swift": {
+  "cyclomatic_complexity": [
+   [
+    "static func decode(_ data: Data, sender: String, recipient: String, modern: Bool, sendingTime: Date? = nil, requireGroupAffixes: Bool = false) throws -> EncryptedContent {",
+    16
+   ]
+  ],
+  "function_parameter_count": [
+   [
+    "static func encodeReaction(targetWireID: String, reactions: [String], sender: String,",
+    6
+   ]
+  ]
+ },
+ "Packages/OMEMO/Sources/OMEMO/GroupEncryption.swift": {
+  "cyclomatic_complexity": [
+   [
+    "func receiveGroupLocked(account: String, message: XMPPEncryptedGroupMessage, transport: any OMEMOGroupTransport,",
+    35
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "let plaintext = try PayloadCrypto.open(SealedPayload(payload: message.envelope.payload!, keyMaterial: material, iv: nil), profile: .modern)",
+    0
+   ]
+  ],
+  "function_body_length": [
+   [
+    "func receiveGroupLocked(account: String, message: XMPPEncryptedGroupMessage, transport: any OMEMOGroupTransport,",
+    157
+   ]
+  ]
+ },
+ "Packages/OMEMO/Sources/OMEMO/OMEMOService.swift": {
+  "cyclomatic_complexity": [
+   [
+    "private func prepareUpdatesLocked(account: String, transport: any OMEMOTransport) async throws -> EncryptionPreparation {",
+    14
+   ],
+   [
+    "private func receiveLocked(account: String, message: XMPPEncryptedMessage, sentAt: Date?, transport: any OMEMOTransport) async throws -> Bool {",
+    50
+   ],
+   [
+    "public func retryPendingIncoming(account: String, transport: any OMEMOTransport,",
+    13
+   ]
+  ],
+  "file_length": [
+   [
+    "",
+    1243
+   ]
+  ],
+  "function_body_length": [
+   [
+    "private func prepareUpdatesLocked(account: String, transport: any OMEMOTransport) async throws -> EncryptionPreparation {",
+    76
+   ],
+   [
+    "private func receiveLocked(account: String, message: XMPPEncryptedMessage, sentAt: Date?, transport: any OMEMOTransport) async throws -> Bool {",
+    186
+   ]
+  ],
+  "function_parameter_count": [
+   [
+    "func mergeAdvertised(_ ids: [UInt32], owner: String, profile: XMPPOMEMOProfile, skipping: Set<UInt32>,",
+    6
+   ]
+  ],
+  "type_body_length": [
+   [
+    "public actor OMEMOService {",
+    1198
+   ]
+  ]
+ },
+ "Packages/OMEMO/Sources/OMEMOLab/main.swift": {
+  "cyclomatic_complexity": [
+   [
+    "static func run() async throws {",
+    30
+   ]
+  ],
+  "function_body_length": [
+   [
+    "static func run() async throws {",
+    127
+   ]
+  ],
+  "no_print": [
+   [
+    "else if let error = error as? Failure { print(\"OMEMO_INTEGRATION_FAILED \\(error)\") }",
+    0
+   ],
+   [
+    "else { print(\"OMEMO_INTEGRATION_FAILED \\(String(describing: type(of: error)))\") }",
+    0
+   ],
+   [
+    "if let error = error as? OMEMOError { print(\"OMEMO_INTEGRATION_FAILED \\(error)\") }",
+    0
+   ],
+   [
+    "print(\"ENCRYPTED_ECHO_VERIFIED \\(profile.rawValue)\")",
+    0
+   ],
+   [
+    "print(\"ENCRYPTED_OUTBOX_PREPARED\")",
+    0
+   ],
+   [
+    "print(\"ENCRYPTED_SENT\")",
+    0
+   ],
+   [
+    "print(\"PERSISTED_CIPHERTEXT_VERIFIED\")",
+    0
+   ],
+   [
+    "print(\"PERSISTED_IDENTITY_VERIFIED\")",
+    0
+   ]
+  ]
+ },
+ "Packages/OMEMO/Tests/OMEMOTests/AttachmentServiceTests.swift": {
+  "force_unwrapping": [
+   [
+    "expectedCipherHash: Data(hex: received.cipherHash!), expectedPlainHash: Data(hex: received.hash)), plain)",
+    0
+   ]
+  ],
+  "no_empty_block": [
+   [
+    "do { _ = try await f.b.receive(account: f.bob, message: incoming, transport: f.bTransport) } catch {}",
+    0
+   ]
+  ]
+ },
+ "Packages/OMEMO/Tests/OMEMOTests/AttachmentTests.swift": {
+  "force_unwrapping": [
+   [
+    "XCTAssertEqual(try AttachmentTransfer.open(ciphertext, key: sharing.key!, iv: sharing.iv!, expectedCipherHash: sharing.cipherHash, expectedPlainHash: sharing.hash), plain)",
+    0
+   ],
+   [
+    "XCTAssertEqual(try AttachmentTransfer.open(ciphertext, key: sharing.key!, iv: sharing.iv!, expectedCipherHash: sharing.cipherHash, expectedPlainHash: sharing.hash), plain)",
+    0
+   ],
+   [
+    "XCTAssertThrowsError(try AttachmentTransfer.open(ciphertext, key: sharing.key!, iv: sharing.iv!, expectedCipherHash: Data(repeating: 0, count: 32), expectedPlainHash: nil)) {",
+    0
+   ],
+   [
+    "XCTAssertThrowsError(try AttachmentTransfer.open(ciphertext, key: sharing.key!, iv: sharing.iv!, expectedCipherHash: Data(repeating: 0, count: 32), expectedPlainHash: nil)) {",
+    0
+   ],
+   [
+    "XCTAssertThrowsError(try AttachmentTransfer.open(ciphertext, key: sharing.key!, iv: sharing.iv!, expectedCipherHash: nil, expectedPlainHash: Data.sha256(Data(\"other\".utf8)))) {",
+    0
+   ],
+   [
+    "XCTAssertThrowsError(try AttachmentTransfer.open(ciphertext, key: sharing.key!, iv: sharing.iv!, expectedCipherHash: nil, expectedPlainHash: Data.sha256(Data(\"other\".utf8)))) {",
+    0
+   ],
+   [
+    "XCTAssertThrowsError(try AttachmentTransfer.open(tampered, key: sharing.key!, iv: sharing.iv!, expectedCipherHash: nil, expectedPlainHash: nil)) {",
+    0
+   ],
+   [
+    "XCTAssertThrowsError(try AttachmentTransfer.open(tampered, key: sharing.key!, iv: sharing.iv!, expectedCipherHash: nil, expectedPlainHash: nil)) {",
+    0
+   ]
+  ]
+ },
+ "Packages/OMEMO/Tests/OMEMOTests/GroupServiceTests.swift": {
+  "file_length": [
+   [
+    "",
+    540
+   ]
+  ],
+  "no_empty_block": [
+   [
+    "catch {}",
+    0
+   ],
+   [
+    "catch {}",
+    0
+   ],
+   [
+    "do { _ = try await f.a.outgoingGroupEnvelope(account: f.alice, messageID: message.id, room: roomID, transport: transport); XCTFail() } catch {}",
+    0
+   ],
+   [
+    "do { _ = try await f.b.receiveGroup(account: f.bob, message: message, transport: unreadable); XCTFail(\"Room was unreadable\") } catch {}",
+    0
+   ]
+  ],
+  "type_body_length": [
+   [
+    "@MainActor final class GroupServiceTests: XCTestCase {",
+    475
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "func expectHeld(_ id: String, _ reason: String) async throws {",
+    0
+   ]
+  ],
+  "xctfail_message": [
+   [
+    "do { _ = try await f.a.outgoingGroupEnvelope(account: f.alice, messageID: message.id, room: roomID, transport: transport); XCTFail() } catch {}",
+    0
+   ],
+   [
+    "do { try await f.a.prepareGroupMessage(account: f.alice, messageID: message.id, room: roomID, transport: transport); XCTFail() }",
+    0
+   ],
+   [
+    "do { try await f.a.prepareGroupMessage(account: f.alice, messageID: message.id, room: roomID, transport: transport); XCTFail() }",
+    0
+   ]
+  ]
+ },
+ "Packages/OMEMO/Tests/OMEMOTests/OwnBundleLabTests.swift": {
+  "async_without_await": [
+   [
+    "func fetchOMEMOBundle(for jid: String, deviceID: UInt32, profile: XMPPOMEMOProfile) async throws -> XMPPOMEMOBundle { throw OMEMOError.unavailable }",
+    0
+   ],
+   [
+    "func fetchOMEMODevices(for jid: String, profile: XMPPOMEMOProfile) async throws -> [UInt32] { throw OMEMOError.unavailable }",
+    0
+   ],
+   [
+    "func publishOMEMOBundle(_ bundle: XMPPOMEMOBundle) async throws { throw OMEMOError.unavailable }",
+    0
+   ],
+   [
+    "func publishOMEMODevices(_ devices: [UInt32], profile: XMPPOMEMOProfile) async throws { throw OMEMOError.unavailable }",
+    0
+   ]
+  ]
+ },
+ "Packages/OMEMO/Tests/OMEMOTests/OwnDeviceServiceTests.swift": {
+  "force_unwrapping": [
+   [
+    "XCTAssertEqual(Set(held.blockedChats.values), [OMEMOError.trustRequired.errorDescription!])",
+    0
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "for _ in 0..<300 where !(await probe.finished) { try await Task.sleep(for: .milliseconds(10)) }",
+    0
+   ]
+  ]
+ },
+ "Packages/OMEMO/Tests/OMEMOTests/ServiceTests.swift": {
+  "async_without_await": [
+   [
+    "func fetchOMEMOBundle(for jid: String, deviceID: UInt32, profile: XMPPOMEMOProfile) async throws -> XMPPOMEMOBundle { throw OMEMOError.unavailable }",
+    0
+   ],
+   [
+    "func fetchOMEMODevices(for jid: String, profile: XMPPOMEMOProfile) async throws -> [UInt32] { throw OMEMOError.unavailable }",
+    0
+   ],
+   [
+    "func publishOMEMOBundle(_ bundle: XMPPOMEMOBundle) async throws { throw OMEMOError.unavailable }",
+    0
+   ],
+   [
+    "func publishOMEMODevices(_ devices: [UInt32], profile: XMPPOMEMOProfile) async throws { throw OMEMOError.unavailable }",
+    0
+   ]
+  ],
+  "file_length": [
+   [
+    "",
+    1496
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "await log.note(retained == nil ? \"not retained\" : \"retained \\(retained!.reason.rawValue)\")",
+    0
+   ]
+  ],
+  "no_empty_block": [
+   [
+    "do { _ = try await f.a.outgoingUpdateEnvelope(account: f.alice, updateID: id); XCTFail(\"plain wire is not an envelope\") } catch {}",
+    0
+   ],
+   [
+    "do { _ = try await f.a.refreshDevices(account: f.alice, peer: carol, transport: OfflineTransport()); XCTFail(\"Offline refresh completed\") } catch {}",
+    0
+   ],
+   [
+    "do { _ = try await f.a.refreshDevices(account: f.alice, peer: f.bob, transport: f.aTransport); XCTFail(\"Accepted invalid signature\") } catch {}",
+    0
+   ],
+   [
+    "do { _ = try await f.b.receive(account: f.bob, message: f.message(envelope, fallbackBody: true), transport: f.bTransport, sentAt: stamp); XCTFail(\"Trust missing\") } catch {}",
+    0
+   ],
+   [
+    "do { _ = try await f.b.receive(account: f.bob, message: f.message(invalid), transport: f.bTransport); XCTFail(\"Expected trust gate\") } catch {}",
+    0
+   ],
+   [
+    "do { _ = try await f.b.receive(account: f.bob, message: f.message(quiet, id: \"quiet\"), transport: f.bTransport, sentAt: stamp); XCTFail(\"Trust missing\") } catch {}",
+    0
+   ],
+   [
+    "do { _ = try await f.b.receive(account: f.bob, message: f.message(unknown, id: \"second\"), transport: OfflineTransport()); XCTFail(\"Device unknown\") } catch {}",
+    0
+   ],
+   [
+    "do { _ = try await f.b.receive(account: f.bob, message: f.message(valid), transport: f.bTransport); XCTFail(\"Expected trust gate\") } catch {}",
+    0
+   ],
+   [
+    "do { try await f.a.initialize(account: f.alice, transport: OfflineTransport()); XCTFail(\"Initialized offline\") } catch {}",
+    0
+   ],
+   [
+    "do { try await f.a.prepareQueuedMessages(account: f.alice, transport: f.aTransport); XCTFail(\"Sealed send may not ignore changed recipient\") } catch {}",
+    0
+   ],
+   [
+    "do { try await f.b.retryPendingIncoming(account: f.bob, transport: OfflineTransport(), reasons: [.trustPending]) } catch {}",
+    0
+   ],
+   [
+    "do { try await f.b.retryPendingIncoming(account: f.bob, transport: f.bTransport) } catch {}",
+    0
+   ]
+  ],
+  "type_body_length": [
+   [
+    "final class ServiceTests: XCTestCase {",
+    1268
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "func fetchOMEMODevices(for jid: String, profile: XMPPOMEMOProfile) async throws -> [UInt32] { await server.devices(jid, profile) }",
+    0
+   ],
+   [
+    "func publishOMEMOBundle(_ bundle: XMPPOMEMOBundle) async throws { await server.publish(account, bundle) }",
+    0
+   ],
+   [
+    "func publishOMEMODevices(_ devices: [UInt32], profile: XMPPOMEMOProfile) async throws { await server.publish(account, devices, profile) }",
+    0
+   ]
+  ]
+ },
+ "Packages/OMEMOCrypto/Tests/OMEMOCryptoTests/OMEMOCryptoTests.swift": {
+  "force_unwrapping": [
+   [
+    "#expect(try Data(legacy.bundle().preKeys[1]!.dropFirst()) != modern.bundle().preKeys[1]!)",
+    0
+   ],
+   [
+    "#expect(try Data(legacy.bundle().preKeys[1]!.dropFirst()) != modern.bundle().preKeys[1]!)",
+    0
+   ]
+  ]
+ },
+ "Packages/OMEMOCrypto/Tests/OMEMOCryptoTests/SnapshotBenchmarks.swift": {
+  "no_print": [
+   [
+    "print(\"SnapshotBenchmarks sessions=\\(sessions) snapshot_bytes=\\(snapshot.count)\")",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Sources/HausLab/main.swift": {
+  "cyclomatic_complexity": [
+   [
+    "private static func verifyRecovery(client: XMPPClient, persistence: LabRecoveryPersistence, env: [String: String]) async throws {",
+    13
+   ],
+   [
+    "static func run() async throws {",
+    16
+   ]
+  ],
+  "file_length": [
+   [
+    "",
+    405
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "let domain = env[\"HAUS_LAB_DOMAIN\"]!, user = env[\"HAUS_LAB_USERNAME\"]!",
+    0
+   ],
+   [
+    "let domain = env[\"HAUS_LAB_DOMAIN\"]!, user = env[\"HAUS_LAB_USERNAME\"]!",
+    0
+   ],
+   [
+    "let domain = env[\"HAUS_LAB_DOMAIN\"]!, user = env[\"HAUS_LAB_USERNAME\"]!, password = env[\"HAUS_LAB_PASSWORD\"]!",
+    0
+   ],
+   [
+    "let domain = env[\"HAUS_LAB_DOMAIN\"]!, user = env[\"HAUS_LAB_USERNAME\"]!, password = env[\"HAUS_LAB_PASSWORD\"]!",
+    0
+   ],
+   [
+    "let domain = env[\"HAUS_LAB_DOMAIN\"]!, user = env[\"HAUS_LAB_USERNAME\"]!, password = env[\"HAUS_LAB_PASSWORD\"]!",
+    0
+   ],
+   [
+    "try await client.connect(host: env[\"HAUS_LAB_HOST\"] ?? domain, domain: domain, username: user, password: env[\"HAUS_LAB_PASSWORD\"]!)",
+    0
+   ]
+  ],
+  "function_body_length": [
+   [
+    "private static func verifyStreamCounters(client: XMPPClient, persistence: LabRecoveryPersistence, env: [String: String]) async throws {",
+    67
+   ],
+   [
+    "static func run() async throws {",
+    83
+   ]
+  ],
+  "no_print": [
+   [
+    "case .avatarMetadata(let owner, let metadata): print(\"AVATAR \\(owner) \\(metadata?.id ?? \"removed\")\")",
+    0
+   ],
+   [
+    "case .avatarMetadata(let owner, let metadata): print(\"AVATAR \\(owner) \\(metadata?.id ?? \"removed\")\")",
+    0
+   ],
+   [
+    "do { try await run() } catch { print(\"FAILED: TLS or XMPP session could not be established (\\(error))\"); exit(1) }",
+    0
+   ],
+   [
+    "print(\"BLOCKING_ADVERTISED reporting=\\(features.contains(\"urn:xmpp:reporting:1\"))\")",
+    0
+   ],
+   [
+    "print(\"BLOCK_WITH_REPORT_VERIFIED\")",
+    0
+   ],
+   [
+    "print(\"Connected over \\(session.endpoint.security) to port \\(session.endpoint.port); SCRAM: \\(session.authenticatedWithSCRAM)\")",
+    0
+   ],
+   [
+    "print(\"DISCONNECTED \\(reason ?? \"requested\")\")",
+    0
+   ],
+   [
+    "print(\"MAM_PAGED_CATCHUP_VERIFIED\")",
+    0
+   ],
+   [
+    "print(\"OMEMO_CARBONS_BOTH_DIRECTIONS_VERIFIED\")",
+    0
+   ],
+   [
+    "print(\"OMEMO_WIRE_\\(profile.rawValue.uppercased())_VERIFIED\")",
+    0
+   ],
+   [
+    "print(\"ONLINE\")",
+    0
+   ],
+   [
+    "print(\"PRODUCTION_ACCEPTED\")",
+    0
+   ],
+   [
+    "print(\"PUSH_ENABLED_AT_ACCOUNT_SERVER\")",
+    0
+   ],
+   [
+    "print(\"PUSH_NODE_REGISTERED\")",
+    0
+   ],
+   [
+    "print(\"PUSH_REGISTRATION_AND_CSI_VERIFIED\")",
+    0
+   ],
+   [
+    "print(\"RECEIVED \\(message.id) bytes=\\(message.body.utf8.count)\")",
+    0
+   ],
+   [
+    "print(\"REPLY_BODY_VERIFIED\")",
+    0
+   ],
+   [
+    "print(\"REPLY_SOURCE_VERIFIED\")",
+    0
+   ],
+   [
+    "print(\"Required environment: HAUS_LAB_DOMAIN, HAUS_LAB_USERNAME, HAUS_LAB_PASSWORD; optional HAUS_LAB_HOST, HAUS_LAB_PORT, HAUS_LAB_SECURITY (starttls), HAUS_LAB_CA_DER, HAUS_LAB_TO, HAUS_LAB_BODY. Lab plaintext only.\")",
+    0
+   ],
+   [
+    "print(\"SENT \\(id)\")",
+    0
+   ],
+   [
+    "print(\"SM_ADVERTISED_H_DURABLE_VERIFIED\")",
+    0
+   ],
+   [
+    "print(\"SM_DISCONNECT_FLUSH_VERIFIED\")",
+    0
+   ],
+   [
+    "print(\"SM_DURABLE_ACK_AND_RESUME_VERIFIED\")",
+    0
+   ],
+   [
+    "print(\"SM_IQ_JOURNAL_BYTES_ABSENT\")",
+    0
+   ],
+   [
+    "print(\"SM_RESUME_DROPS_UNSENT_IQ_SLOTS_VERIFIED\")",
+    0
+   ],
+   [
+    "print(\"UNBLOCK_VERIFIED\")",
+    0
+   ],
+   [
+    "} catch XMPPIQError.stanza(condition: \"not-acceptable\") { print(\"PRODUCTION_REFUSED\") }",
+    0
+   ]
+  ],
+  "type_body_length": [
+   [
+    "@main struct Lab {",
+    376
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Sources/XMPPProtocol/Archive.swift": {
+  "cyclomatic_complexity": [
+   [
+    "mutating func receive(_ node: XMLNode) throws {",
+    17
+   ]
+  ],
+  "function_body_length": [
+   [
+    "mutating func receive(_ node: XMLNode) throws {",
+    64
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Sources/XMPPProtocol/Carbons.swift": {
+  "force_unwrapping": [
+   [
+    "message.attributes[\"type\"] == nil || [\"chat\", \"normal\"].contains(message.attributes[\"type\"]!),",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Sources/XMPPProtocol/GroupChat.swift": {
+  "unhandled_throwing_task": [
+   [
+    "refresh = GroupRoomRefresh(id: id, task: Task { try await self.validateGroupRoom(room, account: account, key: key, refresh: id) }, waiters: 1)",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Sources/XMPPProtocol/LinkDetection.swift": {
+  "force_try": [
+   [
+    "private static let detector = try! NSDataDetector(",
+    0
+   ],
+   [
+    "private static let geoPattern = try! NSRegularExpression(",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Sources/XMPPProtocol/MessageContent.swift": {
+  "cyclomatic_complexity": [
+   [
+    "public func xml() throws -> String {",
+    16
+   ],
+   [
+    "public static func decode(_ node: XMLNode, strict: Bool) throws -> MessageContent {",
+    29
+   ]
+  ],
+  "function_body_length": [
+   [
+    "public static func decode(_ node: XMLNode, strict: Bool) throws -> MessageContent {",
+    88
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Sources/XMPPProtocol/OMEMOWire.swift": {
+  "force_unwrapping": [
+   [
+    "\"<keys jid='\\(xmlEscaped(jid))'>\" + groups[jid]!.sorted { $0.deviceID < $1.deviceID }.map(keyXML).joined() + \"</keys>\"",
+    0
+   ],
+   [
+    "let groups = Dictionary(grouping: envelope.keys, by: { $0.recipientJID! })",
+    0
+   ],
+   [
+    "node.attributes[\"type\"] == nil || [\"chat\", \"normal\"].contains(node.attributes[\"type\"]!),",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Sources/XMPPProtocol/PushNotifications.swift": {
+  "force_unwrapping": [
+   [
+    "\"<field var='\\(xmlEscaped(key))'><value>\\(xmlEscaped(configuration.publishOptions[key]!))</value></field>\"",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Sources/XMPPProtocol/StreamManagement.swift": {
+  "async_without_await": [
+   [
+    "func permitsResumption(_ snapshot: XMPPStreamManagementSnapshot) async throws -> Bool { true }",
+    0
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "func permitsResumption(_ snapshot: XMPPStreamManagementSnapshot) async throws -> Bool { true }",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Sources/XMPPProtocol/XMLStream.swift": {
+  "cyclomatic_complexity": [
+   [
+    "mutating func feed(_ data: Data) throws -> [XMLStreamFrame] {",
+    27
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "guard token == \"</\\(streamQName!)>\" else { throw XMLStreamError.unexpectedStream }",
+    0
+   ],
+   [
+    "let root = try NodeParser.parse(streamOpening! + xml + \"</\\(streamQName!)>\")",
+    0
+   ],
+   [
+    "let root = try NodeParser.parse(streamOpening! + xml + \"</\\(streamQName!)>\")",
+    0
+   ]
+  ],
+  "function_body_length": [
+   [
+    "mutating func feed(_ data: Data) throws -> [XMLStreamFrame] {",
+    63
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Sources/XMPPProtocol/XMPPClient.swift": {
+  "cyclomatic_complexity": [
+   [
+    "private func emitMessage(_ node: XMLNode, provenance: XMPPMessageProvenance, serverStamp: Date? = nil) throws {",
+    17
+   ],
+   [
+    "private func handle(_ node: XMLNode, token: UUID) async throws {",
+    46
+   ],
+   [
+    "public func connect(route: XMPPRoute, domain: String, username: String, password: String,",
+    16
+   ]
+  ],
+  "file_length": [
+   [
+    "",
+    1289
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "let attributes = node.attributes.keys.sorted().map { \"\\($0)=\\(node.attributes[$0]!.prefix(24))\" }.joined(separator: \" \")",
+    0
+   ]
+  ],
+  "function_body_length": [
+   [
+    "private func handle(_ node: XMLNode, token: UUID) async throws {",
+    176
+   ],
+   [
+    "public func connect(route: XMPPRoute, domain: String, username: String, password: String,",
+    61
+   ]
+  ],
+  "type_body_length": [
+   [
+    "public actor XMPPClient {",
+    1172
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Tests/XMPPProtocolTests/AuthenticationTests.swift": {
+  "force_cast": [
+   [
+    ".mapError { $0 as! XMPPClientError }",
+    0
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "@Test func choosesTheStrongestMechanismAndRefusesADowngrade() throws {",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Tests/XMPPProtocolTests/BindIdentityTests.swift": {
+  "force_cast": [
+   [
+    "identity = value as! SecIdentity",
+    0
+   ]
+  ],
+  "force_unwrapping": [
+   [
+    "sec_protocol_options_set_local_identity(tls.securityProtocolOptions, sec_identity_create(identity)!)",
+    0
+   ]
+  ],
+  "no_empty_block": [
+   [
+    "let drain = Task { for await _ in client.events {} }",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Tests/XMPPProtocolTests/ConnectionTests.swift": {
+  "force_unwrapping": [
+   [
+    "if case .ready = state { continuation.resume(returning: listener.port!.rawValue) }",
+    0
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "try await Task.sleep(for: .milliseconds(300))",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Tests/XMPPProtocolTests/JIDLabTests.swift": {
+  "no_empty_block": [
+   [
+    "catch {}",
+    0
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "try await Task.sleep(for: .milliseconds(200))",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Tests/XMPPProtocolTests/LinkDetectionTests.swift": {
+  "unneeded_throws_rethrows": [
+   [
+    "@Test func rangesCoverTheWrittenCharacters() throws {",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Tests/XMPPProtocolTests/LinkMetadataTests.swift": {
+  "force_unwrapping": [
+   [
+    "#expect(order.allSatisfy { $0 != nil } && order.map { $0! } == order.map { $0! }.sorted(), \"\\(xml)\")",
+    0
+   ],
+   [
+    "#expect(order.allSatisfy { $0 != nil } && order.map { $0! } == order.map { $0! }.sorted(), \"\\(xml)\")",
+    0
+   ]
+  ],
+  "unneeded_throws_rethrows": [
+   [
+    "@Test func encoderKeepsToTheSendBounds() throws {",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Tests/XMPPProtocolTests/LoopbackServer.swift": {
+  "force_cast": [
+   [
+    "let identity = value as! SecIdentity",
+    0
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "try await Task.sleep(for: .milliseconds(5))",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Tests/XMPPProtocolTests/MessageDeliveryTests.swift": {
+  "redundant_nil_coalescing": [
+   [
+    "let future = try #require(stamps[\"future\"] ?? nil)",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Tests/XMPPProtocolTests/PushNotificationTests.swift": {
+  "force_unwrapping": [
+   [
+    "let fields = Dictionary(uniqueKeysWithValues: form.children.map { ($0.attributes[\"var\"]!, $0.child(\"value\", namespace: \"jabber:x:data\")!.text) })",
+    0
+   ],
+   [
+    "let fields = Dictionary(uniqueKeysWithValues: form.children.map { ($0.attributes[\"var\"]!, $0.child(\"value\", namespace: \"jabber:x:data\")!.text) })",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Tests/XMPPProtocolTests/RecoveryTests.swift": {
+  "no_wall_clock_in_tests": [
+   [
+    "try await Task.sleep(for: .milliseconds(20))",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Tests/XMPPProtocolTests/ResumeLabTests.swift": {
+  "no_wall_clock_in_tests": [
+   [
+    "try await Task.sleep(for: .seconds(4))",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Tests/XMPPProtocolTests/SessionLifecycleTests.swift": {
+  "no_empty_block": [
+   [
+    "let consumer = Task { for await _ in client.events {} }",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Tests/XMPPProtocolTests/SyncPathBenchmarks.swift": {
+  "unneeded_throws_rethrows": [
+   [
+    "func testParsesWhole50ResultPage() throws {",
+    0
+   ]
+  ]
+ }
+}

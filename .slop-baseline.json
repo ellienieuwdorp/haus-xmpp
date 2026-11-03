@@ -1,0 +1,677 @@
+{
+  "App/AboutView.swift" : {
+    "unsafe.discarded-try" : [
+      "bundle.url(forResource: name, withExtension: nil).flatMap { try? String(contentsOf: $0, encoding: .utf8) }"
+    ],
+    "unsafe.nonisolated-unsafe" : [
+      "private nonisolated(unsafe) static let listItem = /(\\(?([a-z]|[0-9]{1,2})[.)]|[*•-]) .*/"
+    ]
+  },
+  "App/AccountIdentityMigration.swift" : {
+    "unsafe.discarded-try" : [
+      "if ((try? files.contentsOfDirectory(atPath: source.path)) ?? [\"?\"]).isEmpty { try? files.removeItem(at: source) }",
+      "try? files.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)",
+      "try? files.moveItem(at: source, to: target)",
+      "} else { try? files.moveItem(at: item, to: destination) }"
+    ]
+  },
+  "App/AccountTransfer.swift" : {
+    "unsafe.discarded-try" : [
+      "catch { try? files.moveItem(at: aside, to: messaging); throw error }",
+      "for owner in journal?.pushAccounts ?? [] { try? secrets.delete(keychain.pushService, owner) }",
+      "func marker() -> Moved? { try? readMarker() }",
+      "if let data = item.data { try? secrets.set(item.service, item.account, data) } else { try? secrets.delete(item.service, item.account) }",
+      "if let data = item.data { try? secrets.set(item.service, item.account, data) } else { try? secrets.delete(item.service, item.account) }",
+      "try? Data(\"disabled\\n\".utf8).write(to: locations.install.accessGate, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])",
+      "try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)",
+      "try? PreUpgradeSnapshot.removeIfPresent(locations.exportStaging)",
+      "try? PreUpgradeSnapshot.removeIfPresent(locations.exportStaging)",
+      "try? PreUpgradeSnapshot.removeIfPresent(locations.exportStaging)",
+      "try? PreUpgradeSnapshot.removeIfPresent(locations.exportStaging)",
+      "try? PreUpgradeSnapshot.removeIfPresent(locations.importJournal)",
+      "try? PreUpgradeSnapshot.removeIfPresent(locations.importPrevious)",
+      "try? PreUpgradeSnapshot.removeIfPresent(locations.importPrevious)",
+      "try? PreUpgradeSnapshot.removeIfPresent(locations.incoming)",
+      "try? PreUpgradeSnapshot.removeIfPresent(locations.incoming)",
+      "try? PreUpgradeSnapshot.removeIfPresent(locations.incoming)",
+      "try? PreUpgradeSnapshot.removeIfPresent(messaging)",
+      "try? files.moveItem(at: aside, to: messaging)",
+      "try? recordRestored(staged.manifest.transferID, at: now)",
+      "try? rollBackExport()",
+      "try? rollBackExport()",
+      "try? secrets.delete(keychain.accountService, keychain.accountKey)",
+      "try? secrets.delete(locations.codeService, id)",
+      "try? secrets.delete(locations.encryptionService, locations.storageID)",
+      "} catch { try? PreUpgradeSnapshot.removeIfPresent(locations.exportStaging); throw error }"
+    ],
+    "unsafe.unchecked-sendable" : [
+      "private final class Throttle: @unchecked Sendable {"
+    ]
+  },
+  "App/AppModel.swift" : {
+    "unsafe.discarded-try" : [
+      "Task { try? await client.sendSubscription(.subscribe, to: chatID) }",
+      "Task { try? await store.dismissReactionNotifications(accountID: account, chatID: chatID) }",
+      "Task { try? await store.dismissReactionNotifications(accountID: account, chatID: chatID) }",
+      "_ = try? await ReadSync(store: store).push(account: session.account, client: client)",
+      "_ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])",
+      "_ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])",
+      "_ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])",
+      "_ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])",
+      "_ = try? await client.updatePushRegistration(revoke, configuration: old, environment: PushService.environment ?? .sandbox)",
+      "_ = try? await processor.process(event)",
+      "catch MessageStoreError.transportOwnedElsewhere { busy = true; try? await Task.sleep(for: .milliseconds(250)) }",
+      "catch MessageStoreError.transportOwnedElsewhere { try? await Task.sleep(for: .milliseconds(250)) }",
+      "catch MessageStoreError.transportOwnedElsewhere { try? await Task.sleep(for: .milliseconds(250)) }",
+      "if alsoSubscribe { try? await client.sendSubscription(.subscribe, to: event.from) }",
+      "if attempt < 3 { try? await Task.sleep(for: .milliseconds(100)) }",
+      "if let store { try? await DeliveredNotificationCleaner.removeRead(accountID: message.accountID, store: store) }",
+      "let watchdog = Task { try? await Task.sleep(for: timeout); presentation.cancel() }",
+      "ownTypingSend = Task { await previous?.value; try? await client.sendChatState(state, to: chatID, groupchat: group) }",
+      "retryPending: { try? await encryption.retryPendingIncoming(account: account, transport: client) })",
+      "try? FileManager.default.removeItem(at: AttachmentFiles.root(directory: storageRoot, account: account))",
+      "try? FileManager.default.removeItem(at: AvatarStore.directory(root: storageRoot, account: account))",
+      "try? FileManager.default.removeItem(at: AvatarStore.url(root: storageRoot, account: account, hash: fetched.hash))",
+      "try? FileManager.default.removeItem(at: files.stagingURL(messageID: message.id))",
+      "try? NotificationAccessGate.disable(at: NotificationAccessGate.location())",
+      "try? await DeliveredNotificationCleaner.removeRead(accountID: account, store: store)",
+      "try? await StreamPersistence(store: store, accountID: account, encryption: encryption).load()?.streamID",
+      "try? await Task.sleep(for: .milliseconds(10))",
+      "try? await Task.sleep(for: .milliseconds(200))",
+      "try? await Task.sleep(for: .milliseconds(200))",
+      "try? await Task.sleep(for: .seconds(2))",
+      "try? await Task.sleep(for: UploadFailureBudget.backOff)",
+      "try? await Task.sleep(for: duration)",
+      "try? await Task.sleep(until: budget.deadline, clock: .continuous)",
+      "try? await center.add(request)",
+      "try? await client.sendSubscription(.subscribed, to: event.from)",
+      "try? await client.sendSubscription(.unsubscribed, to: event.from)",
+      "try? await client.setAvailability(presence == .available ? .active : self.awayAvailability,",
+      "try? await client.setAvailability(self.awayAvailability, clientActive: transition.clientActive ?? false)",
+      "try? await client.setClientActive(active)",
+      "try? await encryption.maintainLocalAdvertisement(account: account, profile: profile, transport: client)",
+      "try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.keysPending], sender: owner)",
+      "try? await encryption.retryPendingIncoming(account: account, transport: client, reasons: [.trustPending])",
+      "try? await encryption?.flushBundlePublications(account: account, transport: client)",
+      "try? await store.close()",
+      "try? await store.close()",
+      "try? await store.close()",
+      "try? await store.dismissReactionNotifications(accountID: account, chatID: chatID)",
+      "try? await store.markAttachmentUploaded(accountID: accountID, messageID: message.id)",
+      "try? await store.recordReaction(accountID: account, reaction: AuthenticatedReaction(id: UUID().uuidString, chatID: message.chatID, actorID: account,",
+      "try? await store.recordReceipt(accountID: accountID, event: MessageEvent(id: UUID().uuidString, chatID: message.chatID, actorID: message.chatID,",
+      "try? await store.releaseTransportOwnership()",
+      "try? await store.releaseTransportOwnership()",
+      "try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)",
+      "try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)",
+      "while !completion.finished, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(50)) }"
+    ]
+  },
+  "App/Attachments.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await Task.sleep(for: .seconds(2))"
+    ]
+  },
+  "App/ChatListView.swift" : {
+    "unsafe.discarded-try" : [
+      "Task { try? await Task.sleep(for: pinCommitDelay); await model.markChatRead(chat.id) }",
+      "try? await Task.sleep(for: pinCommitDelay)"
+    ]
+  },
+  "App/ConnectionSetup.swift" : {
+    "unsafe.discarded-try" : [
+      "async let domain: Set<String>? = { try? await server() }()"
+    ]
+  },
+  "App/ContactDirectory.swift" : {
+    "unsafe.discarded-try" : [
+      "_ = try? await CNContactStore().requestAccess(for: .contacts)",
+      "for file in AvatarStore.files(root: root, account: account, hash: hash) { try? FileManager.default.removeItem(at: file) }",
+      "try? CNContactStore().enumerateContacts(with: request) { contact, _ in cards.append(ContactCard(contact)) }"
+    ]
+  },
+  "App/ContactLinkCenter.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await Task.sleep(for: .milliseconds(300))"
+    ]
+  },
+  "App/ContactSystemViews.swift" : {
+    "unsafe.nonisolated-unsafe" : [
+      "nonisolated(unsafe) static var key: UInt8 = 0",
+      "nonisolated(unsafe) static var key: UInt8 = 0"
+    ]
+  },
+  "App/Conversation/LinkScan.swift" : {
+    "unsafe.nonisolated-unsafe" : [
+      "nonisolated(unsafe) private static let previewable: NSCache<NSString, URLs> = {",
+      "nonisolated(unsafe) private static let sizes: NSCache<NSString, PixelSize> = {"
+    ]
+  },
+  "App/ConversationView.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await Task.sleep(for: .seconds(30))"
+    ]
+  },
+  "App/LinkPreviewCenter.swift" : {
+    "unsafe.discarded-try" : [
+      "try? FileManager.default.removeItem(at: folder.appending(path: path))"
+    ]
+  },
+  "App/NotificationActions.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await UNUserNotificationCenter.current().add(request)",
+      "while self.handler == nil, clock.now < waitEnd { try? await Task.sleep(for: .milliseconds(50)) }"
+    ]
+  },
+  "App/NotificationDiagnostics.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await store.releaseTransportOwnership()"
+    ]
+  },
+  "App/NotificationHarness.swift" : {
+    "unsafe.discarded-try" : [
+      "Task { _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) }",
+      "try? await Task.sleep(for: .seconds(2))"
+    ]
+  },
+  "App/PlatformSupport.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await Task.sleep(for: Self.macLimit)",
+      "try? await UNUserNotificationCenter.current().setBadgeCount(count)"
+    ]
+  },
+  "App/PreUpgradeSnapshot.swift" : {
+    "unsafe.discarded-try" : [
+      "catch { tidy(); try? await store.close(); throw error }",
+      "catch { try? Self.removeIfPresent(locations.partial(.thisVersion)); throw error }",
+      "else { try? files.moveItem(at: replaced, to: target) }",
+      "for key in (try? Self.keychainAccounts(service: service)) ?? [] { try? Self.keychainDelete(service: service, account: key) }",
+      "if files.fileExists(atPath: target.path) { try? Self.removeIfPresent(replaced) }",
+      "try? MessageStore.chatsWithEncryptedSends(inFileAt: locations.folder(.thisVersion).appending(path: \"messages.sqlite\"), since: restored.takenAt)",
+      "try? Self.keychainDelete(service: locations.keychain.snapshotService, account: key)",
+      "try? Self.keychainDelete(service: locations.keychain.snapshotService, account: key)",
+      "try? Self.removeIfPresent(locations.folder(.thisVersion))",
+      "try? Self.removeIfPresent(locations.partial(copy))",
+      "try? Self.removeIfPresent(locations.savedReplies)",
+      "try? await store.close()",
+      "} catch { tidy(); try? await store.close(); throw error }",
+      "} catch { try? await store.close(); throw error }"
+    ],
+    "unsafe.unchecked-sendable" : [
+      "struct DefaultsDomain: @unchecked Sendable {"
+    ]
+  },
+  "App/PreviousVersionViews.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await Task.sleep(for: .milliseconds(400))"
+    ]
+  },
+  "App/PushRegistration.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await Task.sleep(for: .seconds(15))"
+    ]
+  },
+  "AppLifecycleTests/NotificationAccountTests.swift" : {
+    "comment.restates-name" : [
+      "// A record without endpoint fields is direct TLS to one fixed endpoint, authenticated with PLAIN."
+    ]
+  },
+  "AppShared/SharedItemIntake.swift" : {
+    "unsafe.discarded-try" : [
+      "continuation.resume(returning: url.flatMap { try? copyToOwnFolder($0) })"
+    ],
+    "unsafe.nonisolated-unsafe" : [
+      "nonisolated(unsafe) let value = value as? T"
+    ]
+  },
+  "Mac/MacAttachmentActions.swift" : {
+    "unsafe.discarded-try" : [
+      "if let created = try? folder.resourceValues(forKeys: [.creationDateKey]).creationDate, created < cutoff { try? manager.removeItem(at: folder) }",
+      "try? await Task.sleep(for: .seconds(exportLifetime + 1))"
+    ]
+  },
+  "Mac/MacAttachmentTray.swift" : {
+    "unsafe.discarded-try" : [
+      "let matches = photo.flatMap { try? Data(contentsOf: $0) } == (try? Data(contentsOf: destination))",
+      "try? Data(\"existing\".utf8).write(to: destination)",
+      "try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)",
+      "try? FileManager.default.removeItem(at: folder)"
+    ]
+  },
+  "Mac/MacConversationView.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await Task.sleep(for: .seconds(30))"
+    ]
+  },
+  "Mac/MacDebugHooks.swift" : {
+    "unsafe.discarded-try" : [
+      "case \"wait\": try? await Task.sleep(for: .seconds(Double(argument) ?? 1))",
+      "if let directory = value(after: flag), !directory.hasPrefix(\"/\") { try? FileManager.default.removeItem(atPath: directory) }",
+      "try? FileHandle.standardInput.readToEnd()?.write(to: file)",
+      "try? await Task.sleep(for: .milliseconds(300))",
+      "try? await Task.sleep(for: .milliseconds(5))",
+      "try? await Task.sleep(for: .milliseconds(5))",
+      "try? await Task.sleep(for: .milliseconds(60))",
+      "try? await Task.sleep(for: .seconds(0.5))",
+      "try? await Task.sleep(for: .seconds(1))",
+      "try? await Task.sleep(for: .seconds(1))",
+      "try? await Task.sleep(for: .seconds(1))",
+      "try? await Task.sleep(for: .seconds(1))",
+      "try? await Task.sleep(for: .seconds(max(0, chosen + 0.05 - uptime())))",
+      "try? await Task.sleep(for: .seconds(max(0, released + 0.01 - uptime())))",
+      "try? await Task.sleep(for: .seconds(max(0, time - uptime())))",
+      "try? await Task.sleep(for: .seconds(seconds))",
+      "try? await Task.sleep(for: .seconds(seconds))",
+      "try? await Task.sleep(until: started + .milliseconds(100), clock: clock)",
+      "while !condition(), clock.now < end { try? await Task.sleep(for: .milliseconds(100)) }"
+    ]
+  },
+  "Mac/MacDeviceReviewDebug.swift" : {
+    "unsafe.discarded-try" : [
+      "for _ in 0..<100 where model.groupChats[room]?.devicesLoaded != true { try? await Task.sleep(for: .milliseconds(100)) }",
+      "for _ in 0..<100 where model.messagesLoadedFor != chat { try? await Task.sleep(for: .milliseconds(100)) }"
+    ]
+  },
+  "Mac/MacKeyboardDebug.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await Task.sleep(for: .milliseconds(500))"
+    ]
+  },
+  "Mac/MacLifecycle.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await Task.sleep(for: limit)"
+    ],
+    "unsafe.unchecked-sendable" : [
+      "private final class Once: @unchecked Sendable {"
+    ]
+  },
+  "Mac/MacLifecycleDebug.swift" : {
+    "unsafe.discarded-try" : [
+      "case \"wait\": try? await Task.sleep(for: .seconds(Double(argument) ?? 1))"
+    ]
+  },
+  "Mac/MacPerfProbe.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await Task.sleep(for: .milliseconds(2))",
+      "try? await Task.sleep(for: .milliseconds(20))",
+      "try? await Task.sleep(for: .milliseconds(8))"
+    ],
+    "unsafe.nonisolated-unsafe" : [
+      "nonisolated(unsafe) let marked = layer",
+      "nonisolated(unsafe) let marked = layer"
+    ]
+  },
+  "Mac/MacPushProbe.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await Task.sleep(for: .milliseconds(250))",
+      "try? await Task.sleep(for: .milliseconds(250))",
+      "try? await Task.sleep(for: .seconds(1))"
+    ]
+  },
+  "Mac/MacShareDebug.swift" : {
+    "unsafe.discarded-try" : [
+      "if let data = samplePhoto() { try? data.write(to: photo) }",
+      "private static func settle() async { try? await Task.sleep(for: .seconds(1.5)) }",
+      "while !app.canSendAttachments, ContinuousClock.now < discovered { try? await Task.sleep(for: .milliseconds(200)) }",
+      "while !condition(), ContinuousClock.now < end { try? await Task.sleep(for: .milliseconds(100)) }"
+    ]
+  },
+  "Mac/MacTimeline.swift" : {
+    "unsafe.discarded-try" : [
+      "defer { [red, blue].forEach { try? FileManager.default.removeItem(at: $0) } }",
+      "try? await Task.sleep(for: .milliseconds(600))"
+    ],
+    "unsafe.nonisolated-unsafe" : [
+      "nonisolated(unsafe) let body = MacTimelineMetrics.shared.body",
+      "nonisolated(unsafe) let body = MacTimelineMetrics.shared.body",
+      "nonisolated(unsafe) let window = notification.object as AnyObject?"
+    ]
+  },
+  "Mac/MacTimelineCells.swift" : {
+    "unsafe.nonisolated-unsafe" : [
+      "nonisolated(unsafe) var actions: [NSAccessibilityCustomAction]?"
+    ]
+  },
+  "Mac/MacTimelineController.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await Task.sleep(for: .milliseconds(10))",
+      "try? await Task.sleep(for: .milliseconds(100))",
+      "try? await Task.sleep(for: .milliseconds(100))"
+    ]
+  },
+  "Mac/MacTimelineDebug.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await Task.sleep(for: .milliseconds(100))",
+      "try? await Task.sleep(for: .milliseconds(100))",
+      "try? await Task.sleep(for: .milliseconds(100))",
+      "try? await Task.sleep(for: .milliseconds(100))",
+      "try? await Task.sleep(for: .milliseconds(16))",
+      "try? await Task.sleep(for: .milliseconds(16))",
+      "try? await Task.sleep(for: .milliseconds(300))",
+      "try? await Task.sleep(for: .milliseconds(400))",
+      "try? await Task.sleep(for: .milliseconds(400))",
+      "try? await Task.sleep(for: .milliseconds(400))",
+      "try? await Task.sleep(for: .milliseconds(50))",
+      "try? await Task.sleep(for: .milliseconds(50))",
+      "try? await Task.sleep(for: .milliseconds(500))",
+      "try? await Task.sleep(for: .milliseconds(500))",
+      "try? await Task.sleep(for: .milliseconds(500))",
+      "try? await Task.sleep(for: .milliseconds(8))",
+      "try? await Task.sleep(for: .milliseconds(8))",
+      "try? await Task.sleep(for: .milliseconds(8))"
+    ]
+  },
+  "NotificationService/NotificationService.swift" : {
+    "unsafe.unchecked-sendable" : [
+      "private final class RemoteDelivery: @unchecked Sendable {"
+    ]
+  },
+  "NotificationServiceMac/MacExtensionProbe.swift" : {
+    "unsafe.discarded-try" : [
+      "_ = try? handle.seekToEnd(); try? handle.write(contentsOf: line + Data(\"\\n\".utf8)); try? handle.close()",
+      "_ = try? handle.seekToEnd(); try? handle.write(contentsOf: line + Data(\"\\n\".utf8)); try? handle.close()",
+      "_ = try? handle.seekToEnd(); try? handle.write(contentsOf: line + Data(\"\\n\".utf8)); try? handle.close()",
+      "for file in [try resultsFile, try armFile] { try? FileManager.default.removeItem(at: file) }",
+      "try? (line + Data(\"\\n\".utf8)).write(to: file)",
+      "try? FileManager.default.removeItem(at: file)",
+      "try? await Task.sleep(for: .milliseconds(50))"
+    ]
+  },
+  "Packages/MessageStore/Sources/MessageStore/AddressMigration.swift" : {
+    "comment.density" : [
+      "18"
+    ],
+    "unsafe.discarded-try" : [
+      "try? connection.execute(\"RELEASE address_migration\")",
+      "try? connection.execute(\"ROLLBACK TO address_migration\")"
+    ]
+  },
+  "Packages/MessageStore/Sources/MessageStore/LinkPreviews.swift" : {
+    "comment.restates-name" : [
+      "/// `og:image:alt`."
+    ]
+  },
+  "Packages/MessageStore/Sources/MessageStore/MessageStore.swift" : {
+    "comment.restates-name" : [
+      "/// Requests per chat and per run."
+    ],
+    "unsafe.discarded-try" : [
+      "catch { try? execute(\"ROLLBACK\"); throw error }",
+      "deinit { try? close() }",
+      "for suffix in [\"\", \"-wal\", \"-shm\", \"-journal\"] { try? FileManager.default.removeItem(atPath: destination.path + suffix) }",
+      "if case .failure = marked, connection.inTransaction { try? connection.close() }",
+      "} catch { try? connection.execute(\"ROLLBACK\"); throw error }"
+    ]
+  },
+  "Packages/MessageStore/Sources/MessageStore/Models.swift" : {
+    "unsafe.discarded-try" : [
+      "private static func correction(_ data: Data) -> Correction? { try? JSONDecoder().decode(Correction.self, from: data) }"
+    ]
+  },
+  "Packages/MessageStore/Tests/MessageStoreTests/ChatListQueryTests.swift" : {
+    "comment.density" : [
+      "35"
+    ]
+  },
+  "Packages/MessageStore/Tests/MessageStoreTests/ContactLinkTests.swift" : {
+    "comment.density" : [
+      "25"
+    ]
+  },
+  "Packages/MessageStore/Tests/MessageStoreTests/MessageStoreTestSupport.swift" : {
+    "comment.density" : [
+      "7"
+    ]
+  },
+  "Packages/MessageStore/Tests/MessageStoreTests/MigrationTests.swift" : {
+    "comment.density" : [
+      "25"
+    ]
+  },
+  "Packages/MessageStore/Tests/MessageStoreTests/PendingLimitTests.swift" : {
+    "comment.density" : [
+      "16"
+    ]
+  },
+  "Packages/MessageStore/Tests/MessageStoreTests/ReadStateTests.swift" : {
+    "comment.density" : [
+      "39"
+    ]
+  },
+  "Packages/MessageStore/Tests/MessageStoreTests/SnapshotTests.swift" : {
+    "comment.density" : [
+      "17"
+    ]
+  },
+  "Packages/MessagingCore/Sources/MessagingCore/ArchiveSynchronizer.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await client.requestAcknowledgement()"
+    ]
+  },
+  "Packages/MessagingCore/Sources/MessagingCore/BackgroundSynchronizer.swift" : {
+    "unsafe.discarded-try" : [
+      "group.addTask { try? await Task.sleep(for: limit); return nil }",
+      "try? await Task.sleep(for: .milliseconds(50))"
+    ]
+  },
+  "Packages/MessagingCore/Sources/MessagingCore/NotificationDelivery.swift" : {
+    "unsafe.discarded-try" : [
+      "_ = try? await withTimeout(timeout) { await withdraw(conversation) }",
+      "timer: Task { try? await Task.sleep(for: limit); race.finish(.failure(NotificationRunError.postTimedOut)) })"
+    ],
+    "unsafe.unchecked-sendable" : [
+      "private final class Run: @unchecked Sendable {"
+    ]
+  },
+  "Packages/MessagingCore/Sources/MessagingCore/NotificationOutcomeLog.swift" : {
+    "unsafe.discarded-try" : [
+      "try? url.setResourceValues(values)"
+    ]
+  },
+  "Packages/MessagingCore/Sources/MessagingCore/NotificationPosting.swift" : {
+    "unsafe.unchecked-sendable" : [
+      "final class DonationBudget: @unchecked Sendable {"
+    ]
+  },
+  "Packages/MessagingCore/Sources/MessagingCore/OutboxDrain.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await client.requestAcknowledgement()",
+      "try? await client.requestAcknowledgement()"
+    ]
+  },
+  "Packages/MessagingCore/Sources/MessagingCore/OutgoingEnqueue.swift" : {
+    "unsafe.discarded-try" : [
+      "try? FileManager.default.createDirectory(at: root.appending(path: sub), withIntermediateDirectories: true,"
+    ]
+  },
+  "Packages/MessagingCore/Sources/MessagingCore/ShareSession.swift" : {
+    "unsafe.discarded-try" : [
+      "_ = try? await processor.process(event)",
+      "try? FileManager.default.removeItem(at: staged)",
+      "try? await Task.sleep(for: .milliseconds(200))",
+      "try? await Task.sleep(until: deadline, clock: .continuous)",
+      "try? await client.requestAcknowledgement()"
+    ]
+  },
+  "Packages/MessagingCore/Sources/MessagingCore/TransferArchive.swift" : {
+    "unsafe.discarded-try" : [
+      "func close() { try? handle.close() }",
+      "func close() { try? handle.close() }",
+      "guard Int(version) <= TransferArchive.formatVersion else { try? handle.close(); throw TransferArchiveError.newerFormat(Int(version)) }",
+      "guard zip(check, expected).reduce(UInt8(0), { $0 | ($1.0 ^ $1.1) }) == 0 else { try? handle.close(); throw TransferArchiveError.wrongCode }",
+      "try? files.removeItem(at: url)",
+      "try? handle.close()",
+      "try? handle.close()"
+    ]
+  },
+  "Packages/MessagingCore/Tests/MessagingCoreTests/ArchiveCursorLabTests.swift" : {
+    "comment.density" : [
+      "15"
+    ],
+    "comment.too-long" : [
+      "// The forward walk against the local lab Prosody when the server no longer holds a checkpoint's cursor, through the"
+    ]
+  },
+  "Packages/MessagingCore/Tests/MessagingCoreTests/BackgroundSessionLabTests.swift" : {
+    "comment.density" : [
+      "15"
+    ],
+    "comment.too-long" : [
+      "// The extension's fresh-bind path against the local lab Prosody. Runs only when configured:"
+    ]
+  },
+  "Packages/MessagingCore/Tests/MessagingCoreTests/BackgroundSynchronizerTests.swift" : {
+    "comment.too-long" : [
+      "// A room that never answers, a connection lost during the room walk, or a room page that cannot be"
+    ]
+  },
+  "Packages/MessagingCore/Tests/MessagingCoreTests/NullTransport.swift" : {
+    "comment.density" : [
+      "4"
+    ]
+  },
+  "Packages/MessagingCore/Tests/MessagingCoreTests/ReadSyncLabTests.swift" : {
+    "comment.too-long" : [
+      "// This client and an independent slixmpp client of the same account (an external script that sends markers and"
+    ]
+  },
+  "Packages/MessagingCore/Tests/MessagingCoreTests/ShareSessionLabTests.swift" : {
+    "comment.too-long" : [
+      "// A share's send against the local lab Prosody, with a PUT whose server accepts the connection and never answers."
+    ]
+  },
+  "Packages/MessagingCore/Tests/MessagingCoreTests/StalledRoomLabTests.swift" : {
+    "comment.density" : [
+      "17"
+    ],
+    "comment.too-long" : [
+      "// The extension's entry point against a real server with rooms whose MUC component never answers: catch-up must not"
+    ]
+  },
+  "Packages/OMEMO/Sources/OMEMO/EncryptedContent.swift" : {
+    "comment.density" : [
+      "20"
+    ]
+  },
+  "Packages/OMEMO/Sources/OMEMO/GroupEncryption.swift" : {
+    "unsafe.discarded-try" : [
+      "if key.keyExchange { try? await flushBundlePublicationsLocked(account: account, transport: transport) }"
+    ]
+  },
+  "Packages/OMEMO/Sources/OMEMO/OMEMOService.swift" : {
+    "unsafe.discarded-try" : [
+      "_ = try? await queueReceiptLocked(account: account, chatID: peer, messageID: stored.id, kind: .receipt)",
+      "_ = try? await store.reconcileArchivedUpdate(accountID: account, updateID: reaction.id, expectedWire: wire)",
+      "_ = try? await store.reconcileArchivedUpdate(accountID: account, updateID: receipt.id, expectedWire: wire)",
+      "_ = try? await store.reconcileArchivedUpdate(accountID: account, updateID: retraction.id, expectedWire: wire)"
+    ]
+  },
+  "Packages/OMEMO/Sources/OMEMO/OwnDevices.swift" : {
+    "comment.density" : [
+      "7"
+    ]
+  },
+  "Packages/OMEMO/Tests/OMEMOTests/OwnBundleLabTests.swift" : {
+    "comment.density" : [
+      "7"
+    ]
+  },
+  "Packages/OMEMO/Tests/OMEMOTests/ReadStateServiceTests.swift" : {
+    "comment.density" : [
+      "13"
+    ]
+  },
+  "Packages/OMEMO/Tests/OMEMOTests/ServiceTests.swift" : {
+    "comment.restates-name" : [
+      "// Stored profiles that disagree on the identity fail closed before any network use and are never repaired."
+    ]
+  },
+  "Packages/OMEMOCrypto/Sources/OMEMOCrypto/AttachmentCrypto.swift" : {
+    "comment.restates-name" : [
+      "/// Seals in memory, bounded by `maximumBytes`."
+    ]
+  },
+  "Packages/XMPPProtocol/Sources/HausLab/main.swift" : {
+    "unsafe.discarded-try" : [
+      "_ = try? await lost.value",
+      "case .streamManagementBarrier(let token): if await !inbox.hold(token) { try? await client.acknowledgeInbound(token) }",
+      "if let saveDelay { try? await Task.sleep(for: saveDelay) }"
+    ]
+  },
+  "Packages/XMPPProtocol/Sources/XMPPProtocol/Archive.swift" : {
+    "unsafe.nonisolated-unsafe" : [
+      "nonisolated(unsafe) private static let wholeTimestamp: ISO8601DateFormatter = {"
+    ]
+  },
+  "Packages/XMPPProtocol/Sources/XMPPProtocol/DisplayedSync.swift" : {
+    "comment.density" : [
+      "8"
+    ]
+  },
+  "Packages/XMPPProtocol/Sources/XMPPProtocol/MessageContent.swift" : {
+    "comment.restates-name" : [
+      "/// `node` is a `<message>` or an SCE `<content>`."
+    ]
+  },
+  "Packages/XMPPProtocol/Sources/XMPPProtocol/StreamManagement.swift" : {
+    "unsafe.discarded-try" : [
+      "try? await commit(next)"
+    ]
+  },
+  "Packages/XMPPProtocol/Sources/XMPPProtocol/XMPPClient.swift" : {
+    "unsafe.discarded-try" : [
+      "_ = try? await requestIQ(type: \"get\", to: nil, payload: \"<ping xmlns='urn:xmpp:ping'/>\", timeout: Self.farewellRoundTripLimit)",
+      "else { Task { [weak self] in _ = try? await self?.requestIQ(type: \"get\", to: nil, payload: \"<ping xmlns='urn:xmpp:ping'/>\") } }",
+      "else { Task { [weak self] in _ = try? await self?.requestIQ(type: \"get\", to: nil, payload: \"<ping xmlns='urn:xmpp:ping'/>\") } }",
+      "try? await Task.sleep(until: held.until, clock: .continuous)",
+      "try? await withFarewellDeadline {",
+      "try? await withFarewellDeadline { try await self.writeAcknowledgement(detaching: true) }"
+    ]
+  },
+  "Packages/XMPPProtocol/Tests/XMPPProtocolTests/DisplayedSyncTests.swift" : {
+    "comment.density" : [
+      "12"
+    ]
+  },
+  "Packages/XMPPProtocol/Tests/XMPPProtocolTests/EntityCapabilitiesTests.swift" : {
+    "comment.density" : [
+      "4"
+    ]
+  },
+  "Packages/XMPPProtocol/Tests/XMPPProtocolTests/LinkDetectionTests.swift" : {
+    "comment.density" : [
+      "10"
+    ]
+  },
+  "Packages/XMPPProtocol/Tests/XMPPProtocolTests/ResumeLabTests.swift" : {
+    "comment.density" : [
+      "26"
+    ],
+    "comment.too-long" : [
+      "// XEP-0198 resumption against the local lab Prosody. Runs only when configured:"
+    ]
+  },
+  "Packages/XMPPProtocol/Tests/XMPPProtocolTests/SyncPathBenchmarks.swift" : {
+    "comment.density" : [
+      "11"
+    ],
+    "comment.too-long" : [
+      "// Microbenchmarks for the per-page parse path of archive catch-up. They only"
+    ]
+  },
+  "Shared/SharedStorage.swift" : {
+    "unsafe.discarded-try" : [
+      "try? FileManager.default.removeItem(at: probe)",
+      "} catch { try? await old.close(); throw error }"
+    ]
+  },
+  "ShareExtension/ShareModel.swift" : {
+    "unsafe.discarded-try" : [
+      "group.addTask { try? await Task.sleep(for: limit) }",
+      "if let file = item.file { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }",
+      "let watchdog = Task { try? await Task.sleep(for: .seconds(3)); run.cancel() }",
+      "try? await Task.sleep(for: .milliseconds(300))",
+      "try? await store?.close()"
+    ]
+  }
+}
