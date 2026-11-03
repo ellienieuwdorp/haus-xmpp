@@ -36,8 +36,8 @@ public enum PayloadCrypto {
       guard [16, 32].contains(sealed.keyMaterial.count), let iv = sealed.iv, iv.count == 12 else {
         throw OMEMOCryptoError.invalidInput
       }
-      // Older deployed legacy senders append the GCM tag to payload and transport
-      // only the 16-byte key. Never retry an authentication failure in another format.
+      // Some deployed legacy senders append the GCM tag to the payload and transport only the 16-byte key.
+      // Never retry an authentication failure in another format.
       let appendedTag = sealed.keyMaterial.count == 16
       guard !appendedTag || sealed.payload.count >= 16 else { throw OMEMOCryptoError.invalidInput }
       let ciphertext = appendedTag ? Data(sealed.payload.dropLast(16)) : sealed.payload

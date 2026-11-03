@@ -14,7 +14,7 @@ public struct EncryptedAttachment: Equatable, Sendable {
   }
 }
 public enum AttachmentCrypto {
-  /// Bounded in-memory foundation. Large-file streaming belongs in the future media pipeline.
+  /// Seals in memory, bounded by `maximumBytes`.
   public static func seal(_ plaintext: Data, maximumBytes: Int = 32 * 1024 * 1024) throws
     -> EncryptedAttachment
   {
