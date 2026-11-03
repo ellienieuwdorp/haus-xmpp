@@ -59,8 +59,9 @@ def runners(paths):
         for number, line in enumerate(git("show", f":{path}").splitlines(), 1):
             match = RUNS_ON.match(line)
             if match and not HOSTED.match(match.group(1).strip("'\"")):
-                problems.append(f"{path}:{number}: runs-on {match.group(1) or '(a list or group)'} is not a"
-                                " GitHub-hosted runner label; use one such as ubuntu-latest or xcode-27")
+                problems.append(f"{path}:{number}: runs-on {match.group(1) or '(a list or group)'} is not a standard"
+                                " GitHub-hosted image (self-hosted and paid larger runners are refused); use one such"
+                                " as ubuntu-latest or xcode-27")
     return problems
 
 
