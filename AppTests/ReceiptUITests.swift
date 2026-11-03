@@ -1,5 +1,6 @@
 import XCTest
 
+// The echo peer answers `<request/>` with a receipt and `<markable/>` with a read marker.
 final class ReceiptUITests: XCTestCase {
     @MainActor func testSentMessageClimbsFromAcceptedToDeliveredToReadInsideAFixedFooter() throws {
         continueAfterFailure = false
@@ -27,7 +28,6 @@ final class ReceiptUITests: XCTestCase {
         wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Read"), object: outgoing)], timeout: 25)
         XCTAssertEqual(outgoing.frame.width, acceptedWidth, accuracy: 1)
         capture(app, "Read receipt inside the bubble")
-        // The states survive a relaunch because they are projected, not remembered.
         let echoed = app.textViews.containing(NSPredicate(format: "value == %@", marker)).matching(NSPredicate(format: "NOT (label BEGINSWITH %@)", "You:")).firstMatch
         XCTAssertTrue(echoed.waitForExistence(timeout: 25))
         app.terminate(); app.launch()

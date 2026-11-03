@@ -55,6 +55,7 @@ private final class RemoteDelivery: @unchecked Sendable {
             defer { handler = nil }
             return handler
         }) else { return }
+        // A suppressed delivery carries only the badge; a handed-off one leaves it to the app, a fallback as it is.
         let badge: NSNumber?
         switch outcome {
         case let .settled(report): badge = report.badge.map { NSNumber(value: $0) }
@@ -72,8 +73,7 @@ private final class RemoteDelivery: @unchecked Sendable {
         callback(content)
     }
 
-    // Generic, with no message content. Keeps the request's identifier (the gateway's collapse ID), so repeated
-    // fallbacks replace each other.
+    // Generic, no message content; the request's identifier (the gateway's collapse ID) lets repeats replace each other.
     static func fallback(for request: UNNotificationRequest, badge: NSNumber?) -> UNNotificationContent {
         let content = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
         content.title = ""

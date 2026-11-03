@@ -306,7 +306,8 @@ final class LinkPreviewFetcher: Sendable {
     }
 }
 
-// The session's serial delegate queue runs the callbacks one at a time; the outcome is under the lock.
+// `continuation`, `outcome`, `task` and `timer` are under the lock; the other vars belong to the session's serial
+// delegate queue, which runs the callbacks one at a time.
 private final class BoundedLoad: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let fetcher: LinkPreviewFetcher
     private let imageOnly: Bool

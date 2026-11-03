@@ -160,7 +160,7 @@ struct ConversationView: View {
         let text = state.draftForSend()
         let account = model.accountID
         let reply = replyingTo
-        // What the card shows now goes with the text; a fetch still running is not waited for.
+        // What the card shows at send goes with the text; a fetch still running is not waited for.
         let linkPreview = editing == nil ? state.linkPreview.frozen(for: text, suppressed: !state.tray.isEmpty) : nil
         // Cleared on the tap, not once the send settles: anything typed meanwhile would otherwise leave the sent
         // text behind. A failure puts the text back if the field is still empty.
@@ -498,7 +498,8 @@ struct ConversationView: View {
                     .font(.system(size: 18, weight: .semibold)).foregroundStyle(.orange)
                     .frame(width: 36, height: 36).background(.orange.opacity(0.15), in: Circle())
                 VStack(alignment: .leading, spacing: 1) {
-                    // Only reading waits: the messages came from a device in the OMEMO version this chat does not send with.
+                    // With no send waiting, only reading waits: the messages came from a device in the OMEMO version
+                    // this chat does not send with.
                     Text(ChatDeviceReview.headline(sendingWaits: model.encryptionNeedsReview, isGroup: isGroup,
                                                    ownDevicesOnly: model.encryptionReviewIsOwnDevice, title: title))
                         .font(.subheadline.weight(.semibold))

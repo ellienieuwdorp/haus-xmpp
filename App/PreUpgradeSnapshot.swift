@@ -131,6 +131,7 @@ struct PreUpgradeSnapshot: Sendable {
         case ready(MessageStore)
         // Nothing may open or change the restored data until the user chooses.
         case restored(RestoredState)
+        // Another process holds the transport lease; nothing was changed.
         case busy
         // An upgrade is due but the launch is into the background.
         case deferred
@@ -360,8 +361,8 @@ struct PreUpgradeSnapshot: Sendable {
     }
 
     // A restore leaves the file in WAL mode without sidecars and records its digest, so an older build that opens it
-    // leaves -wal/-shm or changes the file; older builds restored in rollback-journal mode, so the header is checked
-    // too. When it cannot tell it answers true, keeping what the previous build may have written.
+    // leaves -wal/-shm (the system SQLite keeps them after closing) or changes the file; older builds restored in
+    // rollback-journal mode, so the header is checked too. When unsure it answers true, keeping what they wrote.
     func previousVersionRan(_ restored: Restored) -> Bool {
         let files = FileManager.default, path = locations.database.path
         if ["-wal", "-shm", "-journal"].contains(where: { files.fileExists(atPath: path + $0) }) { return true }
@@ -565,8 +566,8 @@ struct PreUpgradeSnapshot: Sendable {
     }
 
     // Finishes or discards what a crash left: a moved-aside copy without replacement is put back, partial copies are
-    // removed, and this version's copy goes when no restore or return is under way. Unreadable copies stay for Delete
-    // backup; Keychain copies go only when they belong to no complete copy and no copy is unreadable.
+    // removed, and this version's copy goes when no restore or return is under way or in place. Unreadable copies stay
+    // for Delete backup; Keychain copies go only when they belong to no complete copy and no copy is unreadable.
     func tidy() {
         let files = FileManager.default
         for copy in Copy.allCases {
@@ -642,7 +643,8 @@ struct PreUpgradeSnapshot: Sendable {
     var savedReplies: [SavedReply] { (try? Self.decode([SavedReply].self, at: locations.savedReplies)) ?? [] }
 
     // A reply whose ID the store already holds was queued by a launch killed before the removal and is not queued
-    // again. Every account's reply but `account`'s is rejected.
+    // again. Every account's reply but `account`'s is rejected. Each reply goes through `enqueue`, so the outbox's trust
+    // and encryption rules apply unchanged.
     func queueSavedReplies(account: String, store: MessageStore, now: Date,
                            enqueue: @Sendable (StoredMessage) async throws -> Void) async -> SavedReplyResult {
         var result = SavedReplyResult()

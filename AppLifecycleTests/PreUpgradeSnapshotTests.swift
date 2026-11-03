@@ -561,7 +561,7 @@ import XMPPProtocol
         XCTAssertEqual(try PreUpgradeSnapshot.keychainData(service: locations.keychain.accountService, account: "primary"), newAccountRecord)
         XCTAssertEqual(try PreUpgradeSnapshot.keychainAccounts(service: locations.keychain.pushService), [account])
         XCTAssertFalse(FileManager.default.fileExists(atPath: locations.accessGate.path))
-        // The previous build's data is the backup now; this version's copy and its Keychain copies are gone.
+        // The previous build's data is the backup; this version's copy and its Keychain copies are gone.
         let backup = try XCTUnwrap(reinstalled.snapshots.manifest)
         XCTAssertEqual(sqliteRows(locations.snapshot.appending(path: "messages.sqlite"), "SELECT count(*) FROM messages WHERE id='old-build-again'"), ["1"])
         XCTAssertEqual(reinstalled.snapshots.status(.thisVersion), .absent)

@@ -1,8 +1,7 @@
 import XCTest
 @testable import HausXMPP
 
-// The scrolling decisions on their own; `TimelinePositionTests` and `TimelineOffsetTests` check that the iPhone's
-// controller carries them out.
+// The decisions alone; `TimelinePositionTests` and `TimelineOffsetTests` check the iPhone's controller applies them.
 final class TimelineScrollPolicyTests: XCTestCase {
     private typealias Update = TimelineScrollPolicy.Update
 
@@ -44,8 +43,7 @@ final class TimelineScrollPolicyTests: XCTestCase {
         }
     }
 
-    // The bubble leaving clamps the offset during the apply; a message arriving meanwhile slides from wherever the
-    // apply left it.
+    // The bubble leaving clamps the offset during the apply; a message arriving meanwhile slides from where it is left.
     func testTheTypingBubbleLeavingSlidesFromThePreviousOffset() {
         XCTAssertTrue(update(from: "b", to: ["a", "b"], nearBottom: true, typingChanged: true, typingLeft: true).slidesFromPreviousOffset)
         XCTAssertFalse(update(from: "b", to: ["a", "b", "c"], nearBottom: true, typingChanged: true, typingLeft: true).slidesFromPreviousOffset)
@@ -179,9 +177,11 @@ final class DesktopTimelineScrollPolicyTests: XCTestCase {
         func landing(_ delta: CGFloat, rowCount: Int = 200) -> Policy.Landing? {
             Policy.landing(laidOut, by: delta, frameHeight: 600, rowCount: rowCount, lead: 12, tail: 12) { $0 == 79 ? 120 : 50 }
         }
+        // Row 24 is 2,970 pt above the top edge (row 79 is 70 pt taller), so 3,000 pt bring it to 30.
         XCTAssertEqual(landing(3000), .row(index: 24, top: 30))
         XCTAssertEqual(landing(4175), .row(index: 0, top: 5))
         XCTAssertEqual(landing(10_000), .start)
+        // Row 142 is 3,000 pt below the top edge.
         XCTAssertEqual(landing(-3000), .row(index: 142, top: 0))
         XCTAssertEqual(landing(-3000, rowCount: 150), .end)
         XCTAssertEqual(landing(-3000, rowCount: 140), .end)
@@ -196,6 +196,7 @@ final class DesktopTimelineScrollPolicyTests: XCTestCase {
         func landing(_ delta: CGFloat) -> Policy.Landing? {
             Policy.landing(laidOut, by: delta, frameHeight: 600, rowCount: 200, lead: 12, tail: 12) { $0 == 79 || $0 == 120 ? 3000 : 50 }
         }
+        // Row 79's top is 3,600 pt above the top edge and row 120's 1,400 pt below it.
         XCTAssertEqual(landing(3000), .row(index: 79, top: -600))
         XCTAssertEqual(landing(-3000), .row(index: 120, top: -1600))
         let tall = [Placed(id: "a", index: 0, top: 0, bottom: 50, dayHeader: nil), Placed(id: "b", index: 1, top: 50, bottom: 3050, dayHeader: nil)]

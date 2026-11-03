@@ -96,6 +96,8 @@ struct NotificationActionBudget: Sendable, Equatable {
     init(start: ContinuousClock.Instant, backgroundTimeRemaining: TimeInterval) {
         self.start = start
         var network = Self.cap
+        // In the foreground UIKit reports `greatestFiniteMagnitude`, which is finite; the 3600 s bound leaves only
+        // the cap.
         if backgroundTimeRemaining.isFinite, backgroundTimeRemaining < 3_600 {
             network = max(.zero, min(network, .seconds(max(0, backgroundTimeRemaining)) - Self.teardown))
         }
@@ -231,10 +233,9 @@ struct BackgroundTaskID: Equatable {
     func perform(_ request: NotificationActionRequest, waitingForHandler limit: Duration = .seconds(5)) async -> NotificationActionOutcome {
         let task = ActionBackgroundTask(time: time)
         task.begin { [weak self] in
-            // Termination releases the kernel lease; a suspended owner keeps it, and every extension run would wait
-            // and fall back until the app ran again. So while the action holds the lease the task is left to expire and
-            // the system ends the process, as for the app's own quiesce. Otherwise the connection is closed and the
-            // task ends here.
+            // Termination releases the kernel lease but a suspended owner keeps it, stalling every extension run. So
+            // while the action holds the lease the task is left to expire and the system ends the process; otherwise
+            // the connection closes and the task ends here.
             if self?.abort?() == true { return }
             task.end()
         }

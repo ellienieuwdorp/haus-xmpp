@@ -103,7 +103,7 @@ import OMEMO
         catch { XCTAssertEqual(error as? OMEMOError, .concurrentChange) }
         try await store.releaseTransportOwnership()
 
-        // Storage opens normally now, and the first connection publishes the new device and drops the old one.
+        // Storage opens normally, and the first connection publishes the new device and drops the old one.
         let reopened = try ready(try await KeyRecovery.open(store: store, storageID: id, account: account))
         try await store.acquireTransportOwnership()
         try await reopened.initialize(account: account, transport: transport)

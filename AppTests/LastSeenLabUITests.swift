@@ -1,6 +1,7 @@
 import XCTest
 
-// Needs `lastactivity` on the lab Prosody; with `XMPP_PEER_EXITS_AFTER` the peer signs off mid-test.
+// Needs `lastactivity` on the lab Prosody and a peer that approves subscriptions itself. `XMPP_PEER_EXITS_AFTER`
+// repeats the peer's `--timeout`.
 final class LastSeenLabUITests: XCTestCase {
     @MainActor func testHeaderShowsOnlineThenLastSeenWhenThePeerLeaves() throws {
         continueAfterFailure = false

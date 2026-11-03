@@ -5,14 +5,9 @@ import Security
 import UserNotifications
 import MessagingCore
 
-// Debug-only check, run in the Mac notification extension for a real remote notification, that the signed app and
-// extension share their storage. The app arms it (`-haus-arm-extension-probe suppress|pass|liveness`) with a random
-// nonce saved as a data-protection Keychain item and in `Debug/extension-probe.json` in the App Group container. The
-// next remote request takes the arm file once and appends what it can reach to `Debug/extension-probe-results.jsonl`.
-// `suppress` then delivers empty content so the filtering entitlement can be seen to hide it; `pass` continues to the
-// normal run; `liveness` also rings the app (`AppLiveness`, answered under `-haus-liveness-answer`) and records whether
-// the nonce came back in time, then continues like `pass`. Records hold paths, statuses and counts, never an address,
-// password, key or token.
+// Debug-only check that the signed Mac app and extension share storage: the app arms it with a nonce in the Keychain
+// and the App Group (`-haus-arm-extension-probe`); the next remote request takes the arm once and records what it
+// reaches. Records hold paths, statuses and counts, never an address, password, key or token.
 enum MacExtensionProbe {
     enum Mode: String, Codable { case suppress, pass, liveness }
 

@@ -682,7 +682,7 @@ final class AppModel {
                 self.error = "Connected, but the password could not be saved. You will be asked for it on the next launch."
             }
             // `.online` was emitted before `connect` returned, so this runs alongside the setup task; not awaited, so
-            // the sign-in sheet closes now.
+            // the sign-in sheet closes at once.
             startPushSetup(client: connection, session: connected, token: token, interactive: manual)
             #if os(macOS)
             // The Mac's own banners need permission whether or not it registers for push; a push setup that asks too
@@ -809,7 +809,8 @@ final class AppModel {
         }
         sessionAccount = nil
         pushStatus = .off
-        // Wait for a setup in flight so its register or enable cannot land after this revocation and disable.
+        // Wait for a setup in flight so its register or enable cannot land after this revocation and disable. Sign-out
+        // cannot happen while the permission prompt is on screen.
         pushTask?.cancel()
         await pushTask?.value
         var turnedOff: PushRegistrationState?
@@ -959,6 +960,7 @@ final class AppModel {
         previousVersionBackupUnreadable = snapshots.status(.previousVersion) == .unreadable || (previousVersionBackup == nil && keptCopyUnreadable)
     }
 
+    // Another process holds the lease: retry shortly, never take it by force.
     private func retryOpeningStorage() {
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(2))
@@ -1069,7 +1071,7 @@ final class AppModel {
         } catch where !FileManager.default.fileExists(atPath: snapshots.locations.journal.path) {
             // Nothing changed: the backup did not verify, or the store could not be handed over.
             Self.syncLog.error("restore refused before any change: \(String(describing: error), privacy: .public)")
-            // Whatever the lease is now: a background transition during the restore left it alone, and the restore
+            // Whatever the lease is at this point: a background transition during the restore left it alone, and the restore
             // gives it up here if the app is no longer in front.
             hasTransportOwnership = await store.holdsTransportOwnership
             if hasTransportOwnership, !transportWanted { await releaseLeaseInBackground(store) }
@@ -1078,7 +1080,7 @@ final class AppModel {
             self.error = "The backup could not be restored: " + PreUpgradeSnapshot.describe(error)
             reconcile()
         } catch {
-            // Part way: the journal finishes it, now or on the next launch.
+            // Part way: the journal finishes it, here or on the next launch.
             Self.syncLog.error("restore interrupted: \(String(describing: error), privacy: .public)")
             try? await store.close()
             closeStorageAfterRestore()
@@ -1354,7 +1356,7 @@ final class AppModel {
         return leased
     }
 
-    // From now on away presence reports this as the last time the user was here.
+    // From here on away presence reports this as the last time the user was here.
     private func recordLastInteraction(at moment: Date) {
         // Nothing the previous build left is rewritten or added to before its snapshot exists.
         guard store != nil else { return }
@@ -1430,7 +1432,7 @@ final class AppModel {
         }
     }
 
-    // An extension run that held the lease may have posted for the chat already on screen; every such run is over now.
+    // An extension run that held the lease may have posted for the chat already on screen; every such run is over.
     private func dismissOpenChatNotifications(store: MessageStore, account: String) async {
         guard let chatID = openChatID, Self.attention.clearsNotifications(of: chatID, lifecycle, openChatID: openChatID),
               !isDemo, accountID == account, hasTransportOwnership else { return }
@@ -1463,7 +1465,7 @@ final class AppModel {
         if pushStatus != .on { pushStatus = .settingUp }
         let token = generation
         guard let client, let session = sessionAccount, isConnected else {
-            // The next connection finishes the setup; asked now, permission needs no prompt then.
+            // The next connection finishes the setup; asked here, permission needs no prompt then.
             #if os(macOS)
             await requestNotificationPermission()
             #else
@@ -1527,7 +1529,7 @@ final class AppModel {
         }
     }
 
-    // Taking the subscription out of the saved account makes the extension's guard decline from now on.
+    // Taking the subscription out of the saved account makes the extension's guard decline from then on.
     @discardableResult private func stagePushTurnOff(account: String) throws -> Bool {
         let enabled = sessionAccount?.accountID == account ? sessionAccount?.push : nil
         guard let state = try PushRegistrationState.turningOff(accountID: account, saved: try PushRegistrationState.load(accountID: account),
@@ -1672,8 +1674,8 @@ final class AppModel {
         }
     }
 
-    // Each step is stored separately and cleared only when confirmed, so a failure of either leaves it for the next
-    // connection, whether or not push is wanted.
+    // Each step is stored separately and cleared only when confirmed or when `PushCleanup` says nothing is left, so a
+    // failure of either leaves it for the next connection, whether or not push is wanted.
     private func settlePushCleanup(client: XMPPClient, account: String, token: UUID) async throws {
         guard let state = try PushRegistrationState.load(accountID: account) else { return }
         var failure: (any Error)?
@@ -1805,7 +1807,7 @@ final class AppModel {
         shareSuggestionsEnabled = ShareSuggestionSetting.isEnabled(accountID: account, defaults: sessionDefaults)
         resetTyping()
         lastSeenTracker = LastSeenTracker()
-        // The previous account's preview fetches stop now, not at the next display.
+        // The previous account's preview fetches stop at once, not at the next display.
         linkPreviewUploadHosts = []; linkPreviewHostsAccount = nil
         useLinkPreviewAccount()
         preferences.set(account, forKey: "lastAccount")
@@ -2076,7 +2078,7 @@ final class AppModel {
             do {
                 let outcome = try await inbound.process(event)
                 guard generation == token else { return }
-                // An XEP-0490 item older than our pointer leaves our newer state pending: answer it now.
+                // An XEP-0490 item older than our pointer leaves our newer state pending: answer it.
                 if case .displayedSync = event { publishReadState() }
                 switch outcome {
                 case .stored:
@@ -2417,7 +2419,7 @@ final class AppModel {
                 Self.syncLog.notice("catch-up finished +\(elapsed, privacy: .public) ms pages=\(pages, privacy: .public) messages=\(messages, privacy: .public) entries_per_s=\(rate, privacy: .public) \(self.syncTimings.summary([.reload, .notify]), privacy: .public)")
                 archiveWalkFinished = true
                 requestOpportunisticBackfill()
-                // XEP-0490 after the walk, so the ids other devices published name messages we now hold.
+                // XEP-0490 after the walk, so the ids other devices published name messages we hold.
                 syncReadState(account: account, client: client, token: token)
             }
         case .degraded(let step, let detail):
@@ -2460,7 +2462,7 @@ final class AppModel {
     }
 
     private func rejoinKnownGroups(account: String, client: XMPPClient, encryption: OMEMOService, token: UUID) async throws {
-        // However the pass ends, a room that bounced meanwhile is rejoined now unless the pass just sent it a join.
+        // However the pass ends, a room that bounced meanwhile is rejoined here unless the pass just sent it a join.
         var joined = Set<String>()
         defer { if setupIsCurrent(token) { groupRejoinsFinished = token; rejoinRoomsThatBouncedDuringSetup(token: token, joinedByPass: joined) } }
         let rooms = try await encryption.knownGroupRooms(account: account)
@@ -2882,7 +2884,7 @@ final class AppModel {
             self.drainPasses += 1
             // A different account/session may have become ready while this attempt settled.
             if self.outboxRequested || self.generation != token { self.startOutbox() }
-            // Catch-up often finishes while the first drain is still running; the deferred history fetch runs now.
+            // Catch-up often finishes while the first drain is still running; the deferred history fetch runs here.
             if self.generation == token { self.requestOpportunisticBackfill() }
         }
     }
@@ -2938,7 +2940,7 @@ final class AppModel {
         let onScreen = Self.attention.clearsNotifications(of: chatID, lifecycle, openChatID: openChatID)
         if !isDemo, onScreen { let account = accountID; Task { await DeliveredNotificationCleaner.removeThread(accountID: account, chatID: chatID) } }
         // Reactions have no read state, so an opened chat clears their alerts. Only under the transport lease: without
-        // it an extension run may be posting them now, and lease acquisition repeats this
+        // it an extension run may be posting them, and lease acquisition repeats this
         // (`dismissOpenChatNotifications`).
         if onScreen, transportWanted, hasTransportOwnership, !quiescing, let store {
             let account = accountID
@@ -2947,7 +2949,7 @@ final class AppModel {
         // Keep the same chat's devices across pop-back and reconnect; another chat starts pending until its store read.
         if encryptionOverviewChatID != chatID { encryptionOverviewChatID = chatID; encryptionOverview = nil }
         encryptionDetailsChatID = chatID
-        // First paint without a cached page loads the whole window now, so the refresh below publishes the same rows.
+        // First paint without a cached page loads the whole window at once, so the refresh below publishes the same rows.
         let account = accountID
         if messagesLoadedFor != chatID, let store, let page = try? await loadTimeline(store: store, account: account, chat: chatID, isGroup: isGroup(chatID), limit: timelineWindow),
            accountID == account, openChatID == chatID, messagesLoadedFor != chatID { publishTimeline(page, chat: chatID) }
@@ -3181,6 +3183,7 @@ final class AppModel {
     }
 
     private func ownDeviceChanged(_ encryption: OMEMOService, account: String, token: UUID) async {
+        // Any chat may have been held for this device: clear every mark; the next outbox pass re-marks those still held.
         encryptionAttention.trustDecidedForAccount()
         if let chat = encryptionOverviewChatID { await loadEncryptionDetails(for: chat, refreshFromServer: false) }
         for room in groupChats.keys where room != encryptionOverviewChatID {
@@ -3519,7 +3522,7 @@ final class AppModel {
             let sharedLastSeen = accountPreferences.lastSeen
             accountPreferences = updated; notificationPreviewsEnabled = updated.notificationPreviews
             guard updated.lastSeen != sharedLastSeen, generation == token, let client else { return }
-            // Off revokes every subscription to our presence now, or on the next connection's roster load when offline.
+            // Off revokes every subscription to our presence at once, or on the next connection's roster load when offline.
             await client.setSharesLastActivity(updated.lastSeen)
             if !updated.lastSeen, session.isReady, lastSeenTracker.rosterLoaded {
                 await revokePresenceSharing(lastSeenTracker.sharingWith, token: token)
@@ -3547,6 +3550,7 @@ final class AppModel {
         startOutbox()
     }
 
+    // The peer gets no read marker: nothing was shown.
     func markChatRead(_ chatID: String) async {
         guard let store else { return }
         let account = accountID
@@ -3573,7 +3577,7 @@ final class AppModel {
         }
     }
 
-    // After catch-up, so other devices' XEP-0490 items name messages we now hold.
+    // After catch-up, so other devices' XEP-0490 items name messages we hold.
     private func syncReadState(account: String, client: XMPPClient, token: UUID) {
         guard !isDemo, let store, let encryption else { return }
         activeEncryptionOperations += 1
@@ -3979,7 +3983,8 @@ final class AppModel {
         Task { await PlatformApplication.setBadgeCount(count, dockTileOnly: dockTileOnly) }
     }
 
-    // A test session's counts must not reach the app's real badge; otherwise the extension sets the same badge too.
+    // The Mac labels its Dock tile until notifications are asked, and in a test session, whose counts must not reach the
+    // app's real badge; otherwise the extension sets the same badge too.
     private var badgeUsesDockTile: Bool {
         #if os(macOS)
         testSessionID != nil || notificationAuthorization == .notDetermined
@@ -4313,7 +4318,7 @@ extension AppModel: NotificationActionEnvironment {
         await refresh()
     }
 
-    // The server pushed nothing for what the action's online connection received, so those alert now under the lease,
+    // The server pushed nothing for what the action's online connection received, so those alert here under the lease,
     // exactly as the extension would (including the claim that stops a later run repeating them).
     private func presentActionArrivals(store: MessageStore, session: NotificationActionSession) async {
         guard authorizedNotificationAccount() == session.account else { return }
@@ -4344,8 +4349,8 @@ extension AppModel: NotificationActionEnvironment {
     private static let silent = LivenessConditions(wantsConnection: false, quiescing: true, ownsLease: false, servesExtensionAccount: false,
                                                    presentsCatchUp: false)
 
-    // The answer promises this process keeps the lease and presents: never while a sleep or sign-out quiesces, and only
-    // for the account the extension serves.
+    // The answer promises this process keeps the lease and presents: never while a sleep or sign-out quiesces, only for
+    // the account the extension serves, and only where a later catch-up still gets its banner.
     private var livenessConditions: LivenessConditions {
         LivenessConditions(wantsConnection: wantsConnection && testSessionID == nil, quiescing: quiescing,
                            ownsLease: hasTransportOwnership,
@@ -4356,7 +4361,7 @@ extension AppModel: NotificationActionEnvironment {
     }
 
     // The server pushed because an acknowledgement was overdue, so the socket may be dead without an error: probe it (a
-    // dead stream ends and the reconciler resumes it, replaying what the server queued), or connect now.
+    // dead stream ends and the reconciler resumes it, replaying what the server queued), or connect at once.
     private func keepLivenessPromise() {
         Self.syncLog.notice("liveness answered, connected=\(self.isConnected, privacy: .public)")
         guard isConnected, let client else {
@@ -4448,7 +4453,7 @@ extension AppModel: NotificationActionEnvironment {
                 self.appBadge = nil
                 self.setAppBadge(badge)
             }
-            // Banners allowed or taken away in System Settings while connected: push follows now.
+            // Banners allowed or taken away in System Settings while connected: push follows at once.
             let alertsAllowed = PushStatus.gate(for: status, alertStyle: alertStyle, interactive: false) == nil
             if changed, status != .notDetermined, self.pushWanted, PushService.isOffered,
                alertsAllowed ? self.pushStatus == .notAllowed : [.on, .settingUp].contains(self.pushStatus),

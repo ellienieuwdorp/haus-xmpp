@@ -270,9 +270,9 @@ private struct TerminationPermission: NSViewRepresentable {
     private var activity: (any NSObjectProtocol)?
     #endif
 
-    // The name is logged: it names the work, never an account or chat. On iOS expiry ends the task only if no transport
-    // lock is held here; otherwise iOS ends the process (0x2182bad2), freeing the lock, because a suspended holder is
-    // killed (0xdead10cc) and blocks every extension run until then.
+    // The name is logged, so it names the work, never an account or chat. On iOS expiry ends the task only while no
+    // transport lock is held; otherwise iOS ends the process (0x2182bad2), freeing the lock. A suspended holder is killed
+    // too (0xdead10cc), and unlocking under live work would let two processes own the transport.
     init(_ name: String) {
         #if os(iOS)
         task = .invalid

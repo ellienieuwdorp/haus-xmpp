@@ -163,7 +163,7 @@ import AppKit
 
     private func unavailable(_ message: String) { phase = .unavailable(message) }
 
-    // Refreshes the account's record so a connection uses the password saved now; a refusal writes nothing.
+    // Refreshes the account's record so a connection uses the password just saved; a refusal writes nothing.
     private func authorize() -> Bool {
         guard let root else { return false }
         switch ShareAuthorization.check(groupRoot: root.deletingLastPathComponent(), accountID: accountID) {

@@ -59,7 +59,7 @@ final class SessionStateTests: XCTestCase {
         XCTAssertTrue(AppModel.isAuthenticationFailure(XMPPClientError.authenticationFailed))
         XCTAssertTrue(AppModel.isAuthenticationFailure(XMPPClientError.authenticationUnavailable))
         XCTAssertTrue(AppModel.isAuthenticationFailure(XMPPClientError.authenticationDowngrade))
-        // A server that cannot check the password right now is retried with backoff, not a password prompt.
+        // A server that cannot check the password at the moment is retried with backoff, not a password prompt.
         XCTAssertFalse(AppModel.isAuthenticationFailure(XMPPClientError.authenticationRetryable))
         XCTAssertFalse(AppModel.isAuthenticationFailure(XMPPClientError.encryptionUnavailable))
         XCTAssertFalse(AppModel.isAuthenticationFailure(XMPPClientError.timedOut))

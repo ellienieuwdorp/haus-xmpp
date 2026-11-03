@@ -31,7 +31,7 @@ enum PushService {
     }
 
     // On the Mac push is safe only once the extension decrypts under the transport lease and the liveness handshake
-    // keeps a live app's alert to itself; until verified, only a Debug run with `-haus-mac-push` registers.
+    // keeps a live app's alert to itself; only a Debug run with `-haus-mac-push` registers.
     static var isOffered: Bool {
         #if os(iOS)
         true

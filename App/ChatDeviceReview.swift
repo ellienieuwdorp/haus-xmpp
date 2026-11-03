@@ -15,7 +15,8 @@ enum ChatDeviceReview {
         return device.trust == .undecided
     }
 
-    // Nil while it waits, and for a record that went inactive undecided (its key was replaced).
+    // Nil while it waits, and for a record that went inactive undecided (its key was replaced). `decided` is keyed by
+    // fingerprint-scoped ID and answers for a device no longer listed.
     static func outcome(of device: EncryptionDevice, in devices: [EncryptionDevice], decided: [String: DeviceTrust] = [:],
                         account: String, isGroup: Bool) -> DeviceTrust? {
         guard let current = devices.first(where: { $0.id == device.id }) else { return decided[device.id] }

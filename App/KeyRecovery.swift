@@ -3,7 +3,8 @@ import MessageStore
 import OMEMO
 import XMPPProtocol
 
-// Starting over keeps messages, gives a new identity under a new device ID and retires the old IDs.
+// Starting over keeps messages, gives a new identity under a new device ID and retires the old IDs. Nothing changes
+// until the user confirms.
 struct KeyRecoveryPlan: Equatable {
     let keyMissing: Bool
     let states: [UnreadableEncryptionState]

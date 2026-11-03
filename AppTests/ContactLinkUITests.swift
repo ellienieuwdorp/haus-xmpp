@@ -29,7 +29,7 @@ final class ContactLinkUITests: XCTestCase {
         capture(app, "Contact menu, not linked")
         link.tap()
 
-        // The system asks now, and only now.
+        // The system asks here, and only here.
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let decline = springboard.buttons["Don’t Allow"]
         XCTAssertTrue(decline.waitForExistence(timeout: 5), "Linking asks for Contacts")

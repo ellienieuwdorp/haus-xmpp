@@ -164,7 +164,7 @@ final class ContactLinkCenter {
                 var link = read
                 link.isReachable = card != nil
                 if let card {
-                    // What the contact says now, also that it has no name: only a contact that cannot be read keeps its cache.
+                    // What the contact says, also that it has no name: only a contact that cannot be read keeps its cache.
                     link.displayName = card.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : card.name
                     link.imageHash = savePhoto(card.thumbnail, account: account)
                 }

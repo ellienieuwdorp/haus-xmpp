@@ -3,7 +3,7 @@ import MessageStore
 import XMPPProtocol
 @testable import HausXMPP
 
-// Files alone carry a reply only as a bare XEP-0461 reference in a modern OMEMO envelope, to a message the peer holds.
+// Files alone carry a reply only as a bare XEP-0461 reference in a modern envelope, to our own sent direct message.
 final class FileReplyGateTests: XCTestCase {
     private let account = "me@example.test"
     private let chat = "alex@example.test"

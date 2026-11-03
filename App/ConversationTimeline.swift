@@ -209,7 +209,7 @@ final class ConversationTimelineController: UIViewController, UICollectionViewDe
                                                                    willDismiss: { [weak self] chosen in self?.actionsWillDismiss(chosen: chosen) ?? false },
                                                                    onDismiss: { [weak self] _ in self?.actionsDismissed() }) else { return false }
                                actionsVisible = true
-                               // The bubble was measured with the keyboard up and the overlay now covers the timeline.
+                               // The bubble was measured with the keyboard up and the overlay covers the timeline.
                                putKeyboardAwayForActions()
                                return true
                            }, openAttachment: { [weak self] url in self?.preview(url, title: row.message.attachment?.name, isImage: row.message.attachment?.isImage == true) },

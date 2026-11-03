@@ -3,6 +3,7 @@ import MessageStore
 
 // Markers for a restore under way or finished, or a return to kept data: every background process stays off the store.
 // Each build names its folder after its schema (`PreUpgrade-24/`), so an older build never takes a newer one's markers.
+// The app writes them; the notification extension only checks for them.
 enum PreUpgradeHold {
     static let generation = MessageStore.currentSchemaVersion
     static let firstNumberedGeneration = 24

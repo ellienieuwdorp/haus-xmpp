@@ -30,7 +30,7 @@ enum ShareRules {
         if isBlocked { return "Blocked" }
         if case .unavailable(let reason) = chat.encryption { return reason }
         guard hasFiles else { return nil }
-        // The composer refuses files in groups for now; text and links go to groups.
+        // The composer refuses files in groups.
         if chat.isGroup { return "Files can't be sent to groups yet" }
         switch filesAccepted {
         case false?: return "Your server doesn't accept files"

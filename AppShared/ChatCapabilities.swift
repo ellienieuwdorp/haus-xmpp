@@ -16,8 +16,7 @@ struct DeviceTrustFacts: Equatable {
     }
 
     init(_ overview: EncryptionOverview, peer: String) {
-        // Only the sending profile's devices decide the pill; a device held for reading in the other profile never
-        // makes the chat read as encrypted to a peer it cannot send to.
+        // Only the sending profile's devices decide the pill, never one held for reading in the other profile.
         self.init(peerTrust: overview.devices.filter { $0.jid == peer && $0.active && $0.profile == overview.profile }.map(\.trust), needsReview: overview.needsTrust,
                   peerKnown: overview.isPeerKnown)
     }
@@ -49,6 +48,7 @@ struct ChatCapabilities: Equatable {
         case pending
         case encrypted(verified: Bool)
         case needsReview
+        // A device published only in the other OMEMO version is a Devices-screen notice, never a reason to hold the chat.
         case unavailable(String)
     }
 
@@ -82,6 +82,7 @@ struct ChatCapabilities: Equatable {
     }
 }
 
+// Only a queued send waiting for a fingerprint decision marks a chat for review; other problems are footer text.
 // Nothing here changes stored trust, so a transient problem never moves the pill.
 struct EncryptionAttention: Equatable {
     private(set) var diagnostics = ""

@@ -3,9 +3,9 @@ import MessageStore
 import MessagingCore
 import os
 
-// Moves an install's accounts to another install as one encrypted file. A move, never a copy: two installs sharing
-// an OMEMO device identity break contacts' sessions, so export ends "moved" (store in `held/`, marker keeps app and
-// extension off) until the user deletes this copy or takes it back. Push registrations arrive turned off.
+// Moves an install's accounts to another install as one encrypted file, never a copy: two installs sharing an OMEMO
+// identity break contacts' sessions. Export ends "moved" (store in `held/`, marker keeps app and extension off) until
+// this copy is deleted or taken back, safe only if the file was never restored anywhere. Push arrives turned off.
 struct AccountTransfer: Sendable {
     struct Locations: Sendable {
         let install: PreUpgradeSnapshot.Locations
@@ -168,6 +168,7 @@ struct AccountTransfer: Sendable {
 
     // Caller has joined all transport, sender and crypto work and holds `store`'s lease. Before the marker a failure
     // leaves the store untouched; after it the store is closed under the lease and moved, and a failure puts it back.
+    // Either way a caller whose call threw opens storage again.
     func export(store: MessageStore, accountID: String, code: TransferCode, now: Date,
                 progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> Moved {
         let files = FileManager.default
@@ -422,6 +423,7 @@ struct AccountTransfer: Sendable {
 
     // All or nothing. The caller holds `store`'s lease with nothing running; the store closes under it before any file
     // moves. Until the journal is removed every step is undone on failure, here or by `recover` after a crash.
+    // Whatever the outcome, the caller opens storage again.
     func commit(_ staged: Staged, store: MessageStore, now: Date) async throws {
         let files = FileManager.default
         guard await store.holdsTransportOwnership else { throw MessageStoreError.transportOwnershipRequired }
