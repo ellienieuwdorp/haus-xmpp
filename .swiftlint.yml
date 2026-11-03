@@ -101,10 +101,12 @@ custom_rules:
     match_kinds: [identifier]
     message: "Use os.Logger with a category and privacy annotations; print output is invisible in release diagnostics"
     severity: error
+  # Sleeps and run-loop waits, asyncAfter, real clocks, and elapsed or deadline checks on Date(). A clock.sleep call on
+  # an injected clock and a Clock's own sleep(until:) declaration pass.
   no_wall_clock_in_tests:
     name: "No wall-clock waits in tests"
     included: '.*Tests/.*\.swift$'
-    regex: '\b(Task\.sleep|Thread\.sleep|usleep|sleep)\s*\('
-    match_kinds: [identifier]
-    message: "Tests must not wait on the clock; await the event, inject a clock, or use confirmation() / fulfillment(of:)"
+    regex: '(?<![\w.])(?<!func )(Task\.sleep|Thread\.sleep|usleep|sleep)\s*\(|\basyncAfter\s*\(|\.run\(until:|\b(ContinuousClock|SuspendingClock)\s*(\(\)|\.now)|\bDate\(\)\s*(<|>|\.timeIntervalSince\()|\btimeIntervalSinceNow\b|\bclock\.now\s*-\s*start\b'
+    match_kinds: [identifier, typeidentifier]
+    message: "Tests must not wait on or measure real time: inject a clock and drive it with TestClock (MessagingCore tests), or await the event under a deadline (fulfillment(of:timeout:), confirmation())"
     severity: error

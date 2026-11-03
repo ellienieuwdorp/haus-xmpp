@@ -62,7 +62,7 @@ final class LinkPreviewFetchTests: XCTestCase {
               in spring.">
             <meta property='og:image' content="/img/bridge.png"><meta property="og:image:alt" content="The bridge at dusk">
             <meta property="og:image" content="https://cdn.example/second.png">
-            """, after: 4 * 1024 * 1024), pause: 5_000))
+            """, after: 4 * 1024 * 1024), pause: 0, holdAfter: 64 * 1024))
         PreviewStubServer.serve("https://news.example/img/bridge.png", .image(Self.png(width: 2_400, height: 1_260)))
 
         let result = await fetch("https://news.example/story")
@@ -469,10 +469,11 @@ private final class TableResolver: HostResolving, @unchecked Sendable {
 }
 
 // Bodies go out in 64 KiB chunks with pauses, so a transfer cut short visibly stops early and concurrent transfers
-// overlap.
+// overlap. With `holdAfter` a page stops after that many bytes until the client cancels (or 10 s pass), so what a
+// client that stops reading received never depends on how fast it cancelled.
 private final class PreviewStubServer: URLProtocol, @unchecked Sendable {
     enum Route {
-        case page(Data, charset: String = "utf-8", pause: useconds_t = 1_000)
+        case page(Data, charset: String = "utf-8", pause: useconds_t = 1_000, holdAfter: Int? = nil)
         case image(Data, announcesLength: Bool = true)
         case redirect(String)
         case stall
@@ -486,6 +487,7 @@ private final class PreviewStubServer: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var active = 0, peak = 0
     private let stopped = NSLock()
     nonisolated(unsafe) private var isStopped = false
+    private let stopSignal = DispatchSemaphore(value: 0)
 
     static func serve(_ url: String, _ route: Route) { lock.withLock { routes[url] = route } }
     static func delivered(_ host: String) -> Int { lock.withLock { sent[host, default: 0] } }
@@ -513,12 +515,10 @@ private final class PreviewStubServer: URLProtocol, @unchecked Sendable {
             let response = HTTPURLResponse(url: url, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: ["Location": location])!
             client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: URL(string: location)!), redirectResponse: response)
             client?.urlProtocolDidFinishLoading(self)
-        case .stall:
-            break
-        case .fail(let code):
-            client?.urlProtocol(self, didFailWithError: URLError(code))
-        case .page(let body, let charset, let pause):
-            send(body, headers: ["Content-Type": "text/html; charset=\(charset)", "Content-Length": String(body.count)], host: host, pause: pause)
+        case .stall: break
+        case .fail(let code): client?.urlProtocol(self, didFailWithError: URLError(code))
+        case .page(let body, let charset, let pause, let holdAfter):
+            send(body, headers: ["Content-Type": "text/html; charset=\(charset)", "Content-Length": String(body.count)], host: host, pause: pause, holdAfter: holdAfter)
         case .image(let body, let announces):
             var headers = ["Content-Type": "image/png"]
             if announces { headers["Content-Length"] = String(body.count) }
@@ -526,7 +526,7 @@ private final class PreviewStubServer: URLProtocol, @unchecked Sendable {
         }
     }
 
-    private func send(_ body: Data, headers: [String: String], host: String, pause: useconds_t) {
+    private func send(_ body: Data, headers: [String: String], host: String, pause: useconds_t, holdAfter: Int? = nil) {
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         Self.lock.withLock { Self.active += 1; Self.peak = max(Self.peak, Self.active) }
@@ -540,11 +540,12 @@ private final class PreviewStubServer: URLProtocol, @unchecked Sendable {
                 offset += chunk.count
                 Self.lock.withLock { Self.sent[host, default: 0] += chunk.count }
                 client?.urlProtocol(self, didLoad: chunk)
+                if let holdAfter, offset >= holdAfter, offset - chunk.count < holdAfter { _ = stopSignal.wait(timeout: .now() + 10) }
             } while offset < body.count
             guard !stopped.withLock({ isStopped }) else { return }
             client?.urlProtocolDidFinishLoading(self)
         }
     }
 
-    override func stopLoading() { stopped.withLock { isStopped = true } }
+    override func stopLoading() { stopped.withLock { isStopped = true }; stopSignal.signal() }
 }

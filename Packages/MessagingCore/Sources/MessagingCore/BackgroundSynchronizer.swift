@@ -110,7 +110,7 @@ public struct BackgroundSynchronizer: Sendable {
                             guard (try? await Task.sleep(for: .milliseconds(50))) != nil else { return [] }
                         }
                         return await BackgroundSession.joinRooms(account: account.accountID, client: client, encryption: encryption,
-                                                                 store: store, within: readSyncTimeout(until: deadline))
+                                                                 store: store, within: readSyncTimeout(until: deadline, now: .now))
                     }
                     async let joined = fresh ? rejoin() : []
                     _ = await (pushEnabled, joined)
@@ -128,7 +128,7 @@ public struct BackgroundSynchronizer: Sendable {
                     try await consumeBackgroundEvents(client.events, processor: InboundProcessor(encryption: encryption, client: client, account: account.accountID))
                 },
                 stop: { await client.disconnectAndWait() }
-            ).run(store: store, timeBudget: timeBudget - waited, deadline: deadline, progress: progress, presentation: presentation)
+            ).run(store: store, deadline: deadline, clock: ContinuousClock(), progress: progress, presentation: presentation)
         } catch {
             // runBackgroundWork has joined crypto, archive and reader work. close releases ownership only if this
             // instance acquired it.
@@ -151,12 +151,13 @@ struct BackgroundCatchUp: Sendable {
     let stop: @Sendable () async -> Void
     var roomsAfterPost: Duration = .seconds(5)
 
-    func run(store: MessageStore, timeBudget: Duration, deadline: ContinuousClock.Instant, progress: NotificationRunProgress?,
-             presentation: BackgroundSynchronizer.Presentation?) async throws {
+    // The budget's timer ends at `deadline`.
+    func run<C: Clock<Duration>>(store: MessageStore, deadline: C.Instant, clock: C, progress: NotificationRunProgress?,
+                                 presentation: BackgroundSynchronizer.Presentation?) async throws {
         let caughtUp = CatchUpMark(), ownArchiveWalked = CatchUpMark(), ledger = CatchUpLedger()
         // A slow or lost server leaves the run a success.
         @Sendable func pullReadState() async throws {
-            if let timeout = readSyncTimeout(until: deadline) { try await pull(timeout) }
+            if let timeout = readSyncTimeout(until: deadline, now: clock.now) { try await pull(timeout) }
             await ledger.notePull()
         }
         @Sendable func walkArchives() async throws {
@@ -177,7 +178,7 @@ struct BackgroundCatchUp: Sendable {
                 if (progress?.report.posted ?? 0) > 0 { await ledger.notePostedEarly() }
             })
         }
-        try await runBackgroundWork(timeBudget: timeBudget, caughtUp: caughtUp, operation: {
+        try await runBackgroundWork(timeBudget: clock.now.duration(to: deadline), clock: clock, caughtUp: caughtUp, operation: {
             try await connect()
             try Task.checkCancellation()
             async let duties: Void = sessionDuties(ownArchiveWalked)
@@ -185,8 +186,8 @@ struct BackgroundCatchUp: Sendable {
                 try await withThrowingTaskGroup(of: Void.self) { group in
                     group.addTask { try await walkArchives() }
                     group.addTask {
-                        while await !ledger.postedEarly { try await Task.sleep(for: .milliseconds(50)) }
-                        try await Task.sleep(for: roomsAfterPost)
+                        try await ledger.untilPostedEarly()
+                        try await clock.sleep(for: roomsAfterPost)
                         throw BackgroundSynchronizationError.deadlineExceeded
                     }
                     try await group.next()
@@ -207,7 +208,7 @@ struct BackgroundCatchUp: Sendable {
         try Task.checkCancellation()
         // From here a new push starts the next run.
         progress?.enter(.presenting)
-        let stage = await ledger.finalStage(pastDeadline: ContinuousClock.now >= deadline)
+        let stage = await ledger.finalStage(pastDeadline: clock.now >= deadline)
         var final: (@Sendable (MessageStore) async throws -> Void)?
         if let presentation { final = { try await presentation($0, stage) } }
         try await finishBackgroundPresentation(store: store, presentation: final)
@@ -218,7 +219,24 @@ actor CatchUpLedger {
     private(set) var postedEarly = false
     private var roomsWalked = false, pulled = false, roomMessages = false
     private var roomError: (any Error)?
-    func notePostedEarly() { postedEarly = true }
+    private var earlyPostWaiters: [UUID: CheckedContinuation<Void, any Error>] = [:]
+    func notePostedEarly() {
+        postedEarly = true
+        earlyPostWaiters.values.forEach { $0.resume() }
+        earlyPostWaiters = [:]
+    }
+    // Throws CancellationError when cancelled first.
+    func untilPostedEarly() async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (waiter: CheckedContinuation<Void, any Error>) in
+                if postedEarly { waiter.resume() }
+                else if Task.isCancelled { waiter.resume(throwing: CancellationError()) }
+                else { earlyPostWaiters[id] = waiter }
+            }
+        } onCancel: { Task { await self.stopWaiting(id) } }
+    }
+    private func stopWaiting(_ id: UUID) { earlyPostWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
     func noteRoomsWalked() { roomsWalked = true }
     func noteRoomWalkFailed(_ error: any Error) { roomError = error }
     func notePull() { pulled = true }
@@ -309,8 +327,8 @@ actor CatchUpMark {
 }
 
 // Ends 1 s before the deadline so the pull can never turn a finished catch-up into `deadlineExceeded`.
-func readSyncTimeout(until deadline: ContinuousClock.Instant, now: ContinuousClock.Instant = .now) -> Duration? {
-    let left = deadline - now - .seconds(1)
+func readSyncTimeout<I: InstantProtocol<Duration>>(until deadline: I, now: I) -> Duration? {
+    let left = now.duration(to: deadline) - .seconds(1)
     guard left >= .milliseconds(500) else { return nil }
     return min(.seconds(5), left)
 }
@@ -324,32 +342,35 @@ func consumeUntilDisconnect(after mark: CatchUpMark, _ consume: () async throws 
 }
 
 // Polls the non-blocking kernel lease; returns the time spent waiting. With `liveness`, the first busy answer asks a
-// running app once; an accepted answer throws `handedOff`. The lease is still tried first on every round.
-func acquireTransportOwnership(_ store: MessageStore, waitingUpTo limit: Duration, interval: Duration = .milliseconds(250),
-                               liveness: (any LivenessChannel)? = nil, answerPoll: Duration = .milliseconds(50)) async throws -> Duration {
-    let clock = ContinuousClock(), start = clock.now
-    var question: (request: LivenessRequest, listensUntil: ContinuousClock.Instant)?, asked = false
+// running app once; an accepted answer throws `handedOff`. The lease is still tried first on every round. `now` is the
+// wall clock both processes stamp the handshake with.
+func acquireTransportOwnership<C: Clock<Duration>>(_ store: MessageStore, waitingUpTo limit: Duration, interval: Duration = .milliseconds(250),
+                                                   liveness: (any LivenessChannel)? = nil, answerPoll: Duration = .milliseconds(50),
+                                                   clock: C = ContinuousClock(), now: @Sendable () -> Date = Date.init) async throws -> Duration {
+    let start = clock.now
+    var question: (request: LivenessRequest, listensUntil: C.Instant)?, asked = false
     while true {
         do {
             try await store.acquireTransportOwnership()
-            return clock.now - start
+            return start.duration(to: clock.now)
         } catch MessageStoreError.transportOwnedElsewhere {
-            guard clock.now - start + interval <= limit else { throw MessageStoreError.transportOwnedElsewhere }
+            guard start.duration(to: clock.now) + interval <= limit else { throw MessageStoreError.transportOwnedElsewhere }
             if let liveness, !asked {
                 asked = true
                 // Also on the monotonic clock, so a wall clock set back cannot stretch the window.
-                let request = LivenessRequest(), listensUntil = clock.now + .seconds(LivenessHandshake.answerWindow)
+                let request = LivenessRequest(sentAt: now()), listensUntil = clock.now.advanced(by: .seconds(LivenessHandshake.answerWindow))
                 if (try? liveness.ask(request)) != nil { question = (request, listensUntil) }
             }
-            let wake = clock.now + interval
+            let wake = clock.now.advanced(by: interval)
             if let liveness, let question {
-                while clock.now < wake, clock.now <= question.listensUntil, LivenessHandshake.isListening(to: question.request) {
-                    if LivenessHandshake.accepts(liveness.latestAnswer(), to: question.request) { throw BackgroundSynchronizationError.handedOff }
-                    try await Task.sleep(for: answerPoll)
+                while clock.now < wake, clock.now <= question.listensUntil, LivenessHandshake.isListening(to: question.request, now: now()) {
+                    if LivenessHandshake.accepts(liveness.latestAnswer(), to: question.request, now: now()) {
+                        throw BackgroundSynchronizationError.handedOff
+                    }
+                    try await clock.sleep(for: answerPoll)
                 }
             }
-            let left = wake - clock.now
-            if left > .zero { try await Task.sleep(for: left) }
+            if clock.now < wake { try await clock.sleep(until: wake, tolerance: nil) }
         }
     }
 }
@@ -382,7 +403,7 @@ func consumeBackgroundEvents(_ events: AsyncStream<XMPPEvent>, processor: Inboun
 
 // Structured children cannot outlive lease ownership, even when the deadline wins the race. Once `caughtUp` is
 // reached the deadline ends the work without failing it.
-func runBackgroundWork(timeBudget: Duration, caughtUp: CatchUpMark? = nil,
+func runBackgroundWork(timeBudget: Duration, clock: some Clock<Duration> = ContinuousClock(), caughtUp: CatchUpMark? = nil,
                        operation: @escaping @Sendable () async throws -> Void,
                        consume: @escaping @Sendable () async throws -> Void,
                        stop: @escaping @Sendable () async -> Void) async throws {
@@ -390,7 +411,7 @@ func runBackgroundWork(timeBudget: Duration, caughtUp: CatchUpMark? = nil,
         group.addTask { try await operation() }
         group.addTask { try await consume() }
         group.addTask {
-            try await Task.sleep(for: timeBudget)
+            try await clock.sleep(for: timeBudget)
             if let caughtUp, await caughtUp.reached { return }
             throw BackgroundSynchronizationError.deadlineExceeded
         }

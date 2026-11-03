@@ -52,8 +52,7 @@ final class ComposerLinkPreview {
         }
         let debounce = debounce
         pending = Task { [weak self] in
-            try? await Task.sleep(for: debounce)
-            guard !Task.isCancelled, let self else { return }
+            guard (try? await Task.sleep(for: debounce)) != nil, let self else { return }
             self.pending = nil
             self.settled(draft, source: source)
         }
@@ -90,6 +89,11 @@ final class ComposerLinkPreview {
                                  imageData: content.thumbnail, imageType: content.thumbnail == nil ? nil : "image/jpeg",
                                  imageAlt: content.thumbnail == nil ? nil : content.imageAlt, source: .own)
     }
+
+    // The decision on the latest draft, and then the fetch it started: events a caller can await instead of guessing
+    // how long either takes.
+    func untilDecided() async { await pending?.value }
+    func untilFetched() async { await work?.value }
 
     private func clear() {
         work?.cancel()

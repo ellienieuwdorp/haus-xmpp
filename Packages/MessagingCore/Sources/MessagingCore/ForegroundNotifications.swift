@@ -72,7 +72,7 @@ extension NotificationPresenter {
         for request in plan.requests {
             // The message is in the app already, so a failed banner does not keep its candidate.
             if (try? await add(request, store: store, accountID: accountID, { request in
-                try await withTimeout(addTimeout) { try await posting.add(request) }
+                try await withTimeout(addTimeout, clock: clock) { try await posting.add(request) }
             })) != nil { posted += 1 }
         }
         try await store.removeNotificationCandidates(accountID: accountID, keys: plan.claimed)

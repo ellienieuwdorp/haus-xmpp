@@ -58,21 +58,31 @@ private final class DonationProbe: @unchecked Sendable {
     func record(_ interaction: INInteraction) { lock.withLock { seen.append(interaction) } }
 }
 
+// Hands the non-Sendable notification content out of the task that made it; nothing else touches it meanwhile.
+private struct Unchecked<Value>: @unchecked Sendable { let value: Value; init(_ value: Value) { self.value = value } }
+
 @Test func aSlowOrFailedDonationStillAppliesTheCommunicationUpdate() async throws {
     let communication = NotificationCommunication(sender: .init(handle: "bob@x", displayName: "Bob", avatarHash: nil), conversationIdentifier: "thread-9",
                                                   account: me, groupName: "Trail crew", body: "Hi")
     let intent = CommunicationNotification.intent(communication) { _ in nil }
     let plain = UNMutableNotificationContent(); plain.title = "Trail crew"
     let communicated = UNMutableNotificationContent(); communicated.title = "communicated"
-    let probe = DonationProbe()
-    let clock = ContinuousClock(), start = clock.now
-    let slow = await CommunicationNotification.content(plain, intent: intent, donate: { interaction in
-        probe.record(interaction)
-        await ignoringCancellation(for: .seconds(10))
-    }, donationTimeout: .milliseconds(50), update: { _, _ in communicated })
+    let probe = DonationProbe(), clock = TestClock()
+    let inputs = Unchecked((plain, intent, communicated))
+    let updating = Task {
+        let (plain, intent, communicated) = inputs.value
+        return Unchecked(await CommunicationNotification.content(plain, intent: intent, donate: { interaction in
+            probe.record(interaction)
+            await ignoringCancellation(for: .seconds(10), on: clock)
+        }, donationTimeout: .milliseconds(50), clock: clock, update: { _, _ in communicated }))
+    }
+    // The donation's limit and the donation.
+    try await clock.sleepers(2)
+    clock.advance(by: .milliseconds(50))
+    let slow = try await bounded { await updating.value }.value
     #expect(slow === communicated, "the update does not wait for, or depend on, the donation")
-    // Far below the donation's 10 s, yet loose enough for a busy machine that stalls the whole run for seconds.
-    #expect(clock.now - start < .seconds(5))
+    // Returned at the limit, while the donation, which ignores cancellation, still sleeps.
+    #expect(clock.sleeperCount == 1)
     // The donation is an incoming interaction grouped by conversation, so it can be deleted with it.
     let donated = try #require(probe.interactions.first)
     #expect(donated.direction == .incoming && donated.groupIdentifier == "thread-9")

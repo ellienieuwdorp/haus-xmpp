@@ -226,9 +226,12 @@ public struct NotificationPresenter: Sendable {
     public var addTimeout: Duration
     public var cleanupTimeout: Duration
     public var withdrawDonations: @Sendable (_ conversation: String) async -> Void = { await CommunicationHistory.deleteConversations([$0]) }
+    /// Times the add and cleanup limits.
+    public var clock: any Clock<Duration>
 
-    public init(posting: any NotificationPosting, addTimeout: Duration = .seconds(4), cleanupTimeout: Duration = .seconds(3)) {
-        self.posting = posting; self.addTimeout = addTimeout; self.cleanupTimeout = cleanupTimeout
+    public init(posting: any NotificationPosting, addTimeout: Duration = .seconds(4), cleanupTimeout: Duration = .seconds(3),
+                clock: any Clock<Duration> = ContinuousClock()) {
+        self.posting = posting; self.addTimeout = addTimeout; self.cleanupTimeout = cleanupTimeout; self.clock = clock
     }
 
     // Re-reads contact links so a plan made before an unlink or relink never donates the old contact; a link that
@@ -245,10 +248,11 @@ public struct NotificationPresenter: Sendable {
 
     private func withdrawDonationsIfRelinked(_ request: PlannedNotification, store: MessageStore, accountID: String) async {
         guard let communication = request.communication else { return }
-        let withdraw = withdrawDonations, timeout = cleanupTimeout
+        let withdraw = withdrawDonations, timeout = cleanupTimeout, clock = clock
         await CommunicationHistory.withdrawIfRelinked([communication.sender] + communication.otherRecipients,
                                                       conversation: communication.conversationIdentifier, accountID: accountID, store: store) { conversation in
-            _ = try? await withTimeout(timeout) { await withdraw(conversation) }
+            // Only the limit throws, and a withdrawal past it still finishes on its own.
+            _ = try? await withTimeout(timeout, clock: clock) { await withdraw(conversation) }
         }
     }
 
@@ -273,7 +277,7 @@ public struct NotificationPresenter: Sendable {
             if request.playsSound { progress.noteAddingSound() }
             do {
                 try await add(request, store: store, accountID: accountID) { request in
-                    try await withTimeout(addTimeout + posting.preparationAllowance(for: request)) { try await posting.add(request) }
+                    try await withTimeout(addTimeout + posting.preparationAllowance(for: request), clock: clock) { try await posting.add(request) }
                 }
             } catch {
                 // A cancelled or timed-out add keeps running in the system and may still play the sound.
@@ -289,7 +293,7 @@ public struct NotificationPresenter: Sendable {
         guard stage.isFinal else { return }
         progress.enter(.committed)
         // Cleanup is best effort and never changes the outcome.
-        let removed = try? await withTimeout(cleanupTimeout) {
+        let removed = try? await withTimeout(cleanupTimeout, clock: clock) {
             try await removeStaleDelivered(store: store, accountID: accountID, summaryPosted: plan.summarizesDeferredChats)
         }
         if let removed { progress.update { $0.removedFallbacks = removed.fallbacks; $0.removedStale = removed.messages } }
@@ -350,13 +354,17 @@ public enum ReactionNotificationCleanup {
 // Returns at the limit even when the operation ignores cancellation, as the `UNUserNotificationCenter` bridges do: it
 // races in an unstructured task left to finish on its own. A late system add may still show; a later run reposts the
 // same identifier, which replaces it.
-func withTimeout<T: Sendable>(_ limit: Duration, _ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+func withTimeout<T: Sendable>(_ limit: Duration, clock: any Clock<Duration> = ContinuousClock(),
+                               _ operation: @escaping @Sendable () async throws -> T) async throws -> T {
     let race = TimeoutRace<T>()
     return try await withTaskCancellationHandler {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, any Error>) in
             race.start(continuation,
                        work: Task { do { race.finish(.success(try await operation())) } catch { race.finish(.failure(error)) } },
-                       timer: Task { try? await Task.sleep(for: limit); race.finish(.failure(NotificationRunError.postTimedOut)) })
+                       timer: Task {
+                           guard (try? await clock.sleep(for: limit)) != nil else { return }
+                           race.finish(.failure(NotificationRunError.postTimedOut))
+                       })
         }
     } onCancel: { race.finish(.failure(CancellationError())) }
 }

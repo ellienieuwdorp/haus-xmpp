@@ -309,7 +309,7 @@ import AppKit
         var states = await session.states(ids)
         while states.values.contains(where: { $0 != .sent && $0 != .failed }), ContinuousClock.now < end, !closing {
             show(states, of: queued)
-            try? await Task.sleep(for: .milliseconds(300))
+            guard (try? await Task.sleep(for: .milliseconds(300))) != nil else { break }
             states = await session.states(ids)
         }
         return states

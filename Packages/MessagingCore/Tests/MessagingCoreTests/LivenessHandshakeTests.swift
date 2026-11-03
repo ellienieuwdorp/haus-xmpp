@@ -3,36 +3,48 @@ import MessageStore
 import Testing
 @testable import MessagingCore
 
-// A running app on the far side of the handshake: it answers each request after `delay` with what `answer` decides,
-// as the app's responder writes it to the App Group.
+// A running app on the far side of the handshake: it answers each request `delay` after it was asked, with what
+// `decide` makes of it at that moment, as the app's responder writes it to the App Group.
 private final class FakeApp: LivenessChannel, @unchecked Sendable {
+    // `lock` guards `requests`.
     private let lock = NSLock()
-    private var requests: [LivenessRequest] = []
-    private var answer: LivenessAnswer?
+    private var requests: [(request: LivenessRequest, asked: TestClock.Instant)] = []
+    private let clock: TestClock
     private let delay: Duration
-    private let decide: @Sendable (LivenessRequest) -> LivenessAnswer?
+    private let decide: @Sendable (LivenessRequest, _ answeredAt: Date) -> LivenessAnswer?
 
-    init(after delay: Duration = .milliseconds(100), decide: @escaping @Sendable (LivenessRequest) -> LivenessAnswer?) {
-        self.delay = delay; self.decide = decide
+    init(clock: TestClock, after delay: Duration = .milliseconds(100),
+         decide: @escaping @Sendable (LivenessRequest, _ answeredAt: Date) -> LivenessAnswer?) {
+        self.clock = clock; self.delay = delay; self.decide = decide
     }
 
     // An app that can keep the promise, or not, answering through the real decision.
-    convenience init(after delay: Duration = .milliseconds(100), conditions: LivenessConditions) {
-        self.init(after: delay) { LivenessHandshake.answer(to: $0, conditions: conditions) }
+    convenience init(clock: TestClock, after delay: Duration = .milliseconds(100), conditions: LivenessConditions) {
+        self.init(clock: clock, after: delay) { LivenessHandshake.answer(to: $0, conditions: conditions, now: $1) }
     }
 
     var asked: Int { lock.withLock { requests.count } }
 
     func ask(_ request: LivenessRequest) throws {
-        lock.withLock { requests.append(request) }
-        Task {
-            try? await Task.sleep(for: delay)
-            let answer = decide(request)
-            lock.withLock { if let answer { self.answer = answer } }
-        }
+        lock.withLock { requests.append((request, clock.now)) }
     }
 
-    func latestAnswer() -> LivenessAnswer? { lock.withLock { answer } }
+    func latestAnswer() -> LivenessAnswer? {
+        let now = clock.now
+        return lock.withLock {
+            requests.reversed().lazy.compactMap { [clock, delay, decide] in
+                let answeredAt = $0.asked.advanced(by: delay)
+                return answeredAt <= now ? decide($0.request, clock.date(at: answeredAt)) : nil
+            }.first
+        }
+    }
+}
+
+// The extension's lease wait on `clock`, run to its end.
+private func waitForLease(_ store: MessageStore, upTo limit: Duration, liveness: FakeApp, clock: TestClock) async throws {
+    _ = try await clock.run {
+        try await acquireTransportOwnership(store, waitingUpTo: limit, liveness: liveness, clock: clock, now: { clock.date })
+    }
 }
 
 private let live = LivenessConditions(wantsConnection: true, quiescing: false, ownsLease: true, servesExtensionAccount: true,
@@ -112,24 +124,23 @@ struct LivenessHandshakeTests {
 
     @Test func anAnswerInTimeHandsThePushToTheApp() async throws {
         try await withBusyLease { store, _ in
-            let app = FakeApp(conditions: live)
-            let clock = ContinuousClock(), start = clock.now
+            let clock = TestClock(), app = FakeApp(clock: clock, conditions: live)
             await #expect(throws: BackgroundSynchronizationError.handedOff) {
-                try await acquireTransportOwnership(store, waitingUpTo: .seconds(6), liveness: app)
+                try await waitForLease(store, upTo: .seconds(6), liveness: app, clock: clock)
             }
-            #expect(clock.now - start < .seconds(1))
+            // The first answer poll after the app's 100 ms reply.
+            #expect(clock.elapsed == .milliseconds(100))
             #expect(app.asked == 1)
         }
     }
 
     @Test func noAnswerKeepsTheWaitAndTheFallback() async throws {
         try await withBusyLease { store, _ in
-            let app = FakeApp { _ in nil }
-            let clock = ContinuousClock(), start = clock.now
+            let clock = TestClock(), app = FakeApp(clock: clock) { _, _ in nil }
             await #expect(throws: MessageStoreError.transportOwnedElsewhere) {
-                try await acquireTransportOwnership(store, waitingUpTo: .seconds(2), liveness: app)
+                try await waitForLease(store, upTo: .seconds(2), liveness: app, clock: clock)
             }
-            #expect(clock.now - start >= .milliseconds(1_750))
+            #expect(clock.elapsed == .seconds(2))
             // Asked once per wait, not on every round.
             #expect(app.asked == 1)
         }
@@ -139,10 +150,12 @@ struct LivenessHandshakeTests {
     // answer a request this old at all; this one does.)
     @Test func aLateAnswerDoesNotHandOff() async throws {
         try await withBusyLease { store, _ in
-            let app = FakeApp(after: .seconds(LivenessHandshake.answerWindow + 0.3)) { LivenessAnswer(nonce: $0.nonce) }
+            let clock = TestClock()
+            let app = FakeApp(clock: clock, after: .seconds(LivenessHandshake.answerWindow + 0.3)) { LivenessAnswer(nonce: $0.nonce, answeredAt: $1) }
             await #expect(throws: MessageStoreError.transportOwnedElsewhere) {
-                try await acquireTransportOwnership(store, waitingUpTo: .seconds(2.5), liveness: app)
+                try await waitForLease(store, upTo: .seconds(2.5), liveness: app, clock: clock)
             }
+            #expect(clock.elapsed == .seconds(2.5))
             #expect(app.latestAnswer() != nil)
         }
     }
@@ -151,9 +164,9 @@ struct LivenessHandshakeTests {
         try await withBusyLease { store, _ in
             var quiescing = live
             quiescing.quiescing = true
-            let app = FakeApp(conditions: quiescing)
+            let clock = TestClock(), app = FakeApp(clock: clock, conditions: quiescing)
             await #expect(throws: MessageStoreError.transportOwnedElsewhere) {
-                try await acquireTransportOwnership(store, waitingUpTo: .seconds(2), liveness: app)
+                try await waitForLease(store, upTo: .seconds(2), liveness: app, clock: clock)
             }
             #expect(app.asked == 1 && app.latestAnswer() == nil)
         }
@@ -162,10 +175,30 @@ struct LivenessHandshakeTests {
     // An answer to another request (a stale file, another wait's nonce) is ignored.
     @Test func anAnswerWithAnotherNonceIsIgnored() async throws {
         try await withBusyLease { store, _ in
-            let app = FakeApp { LivenessAnswer(nonce: $0.nonce + "-other", answeredAt: Date()) }
+            let clock = TestClock()
+            let app = FakeApp(clock: clock) { LivenessAnswer(nonce: $0.nonce + "-other", answeredAt: $1) }
             await #expect(throws: MessageStoreError.transportOwnedElsewhere) {
-                try await acquireTransportOwnership(store, waitingUpTo: .seconds(2), liveness: app)
+                try await waitForLease(store, upTo: .seconds(2), liveness: app, clock: clock)
             }
+            #expect(app.latestAnswer() != nil)
+        }
+    }
+
+    // A wall clock set back during the wait cannot stretch the window: the extension stops listening on the monotonic
+    // clock, so an answer the wall clock still calls in time is ignored.
+    @Test func aWallClockSetBackDoesNotStretchTheWindow() async throws {
+        try await withBusyLease { store, _ in
+            let clock = TestClock()
+            let app = FakeApp(clock: clock, after: .seconds(LivenessHandshake.answerWindow + 0.3)) { request, _ in
+                LivenessAnswer(nonce: request.nonce, answeredAt: request.sentAt)
+            }
+            await #expect(throws: MessageStoreError.transportOwnedElsewhere) {
+                _ = try await clock.run {
+                    try await acquireTransportOwnership(store, waitingUpTo: .seconds(2.5), liveness: app, clock: clock,
+                                                        now: { Date(timeIntervalSince1970: 1_000_000_000) })
+                }
+            }
+            #expect(app.latestAnswer() != nil)
         }
     }
 
@@ -175,9 +208,9 @@ struct LivenessHandshakeTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try MessageStore(url: directory.appending(path: "messages.sqlite"))
-        let app = FakeApp(conditions: live)
-        _ = try await acquireTransportOwnership(store, waitingUpTo: .seconds(6), liveness: app)
-        #expect(app.asked == 0)
+        let clock = TestClock(), app = FakeApp(clock: clock, conditions: live)
+        try await waitForLease(store, upTo: .seconds(6), liveness: app, clock: clock)
+        #expect(app.asked == 0 && clock.elapsed == .zero)
         try await store.close()
     }
 
@@ -190,8 +223,9 @@ struct LivenessHandshakeTests {
         try await withBusyLease { store, app in
             let now = Date().timeIntervalSince1970
             try await receive(app, chat: "bob@example.org", body: "Held while catching up", at: now - 60)
+            let clock = TestClock()
             await #expect(throws: BackgroundSynchronizationError.handedOff) {
-                try await acquireTransportOwnership(store, waitingUpTo: .seconds(6), liveness: FakeApp(conditions: live))
+                try await waitForLease(store, upTo: .seconds(6), liveness: FakeApp(clock: clock, conditions: live), clock: clock)
             }
             #expect(try await app.pendingNotifications(accountID: account).candidates.count == 1)
             try await receive(app, chat: "carol@example.org", body: "Sent before the sleep", at: now - 8 * 3_600)

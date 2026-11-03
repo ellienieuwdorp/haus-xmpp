@@ -693,6 +693,14 @@
    ]
   ]
  },
+ "AppLifecycleTests/AttachmentDispatchTests.swift": {
+  "no_wall_clock_in_tests": [
+   [
+    "let refused = ContinuousClock.now",
+    0
+   ]
+  ]
+ },
  "AppLifecycleTests/AttachmentDownloadTests.swift": {
   "force_unwrapping": [
    [
@@ -727,6 +735,10 @@
    ]
   ],
   "no_wall_clock_in_tests": [
+   [
+    "guard Date() < deadline else { return XCTFail(\"Timed out\") }",
+    0
+   ],
    [
     "try await Task.sleep(for: .milliseconds(20))",
     0
@@ -810,17 +822,15 @@
     0
    ]
   ],
+  "no_wall_clock_in_tests": [
+   [
+    "private func settle() { RunLoop.main.run(until: .now + 0.3) }",
+    0
+   ]
+  ],
   "unneeded_throws_rethrows": [
    [
     "override func tearDown() async throws {",
-    0
-   ]
-  ]
- },
- "AppLifecycleTests/ComposerLinkPreviewTests.swift": {
-  "no_wall_clock_in_tests": [
-   [
-    "private func settle() async throws { try await Task.sleep(for: .milliseconds(150)) }",
     0
    ]
   ]
@@ -844,6 +854,14 @@
   ],
   "no_wall_clock_in_tests": [
    [
+    "let deadline = ContinuousClock.now + .seconds(5)",
+    0
+   ],
+   [
+    "let held = ContinuousClock.now + .milliseconds(50)",
+    0
+   ],
+   [
     "operations.catchUp = { _ in try await Task.sleep(for: .seconds(60)) }",
     0
    ],
@@ -861,6 +879,14 @@
    ],
    [
     "while !mainHeld.value { try await Task.sleep(for: .milliseconds(1)) }",
+    0
+   ],
+   [
+    "while ContinuousClock.now < deadline {",
+    0
+   ],
+   [
+    "while ContinuousClock.now < held {}",
     0
    ]
   ],
@@ -913,6 +939,10 @@
   "no_wall_clock_in_tests": [
    [
     "try await Task.sleep(for: .milliseconds(250))",
+    0
+   ],
+   [
+    "while UIApplication.shared.isProtectedDataAvailable && Date() < deadline {",
     0
    ]
   ]
@@ -1058,6 +1088,22 @@
   ],
   "no_wall_clock_in_tests": [
    [
+    "XCTAssertLessThan(ContinuousClock.now - started, .seconds(3))",
+    0
+   ],
+   [
+    "guard ContinuousClock.now < end else { return XCTFail(\"Timed out\") }",
+    0
+   ],
+   [
+    "let end = ContinuousClock.now + timeout",
+    0
+   ],
+   [
+    "let started = ContinuousClock.now",
+    0
+   ],
+   [
     "try await Task.sleep(for: .milliseconds(10))",
     0
    ],
@@ -1132,6 +1178,18 @@
   ],
   "no_wall_clock_in_tests": [
    [
+    "XCTAssertLessThanOrEqual(deadline, ContinuousClock.now + .seconds(12))",
+    0
+   ],
+   [
+    "let before = ContinuousClock.now",
+    0
+   ],
+   [
+    "let start = ContinuousClock.now",
+    0
+   ],
+   [
     "try await Task.sleep(for: .milliseconds(100))",
     0
    ],
@@ -1197,6 +1255,14 @@
    ]
   ]
  },
+ "AppLifecycleTests/SessionStateTests.swift": {
+  "no_wall_clock_in_tests": [
+   [
+    "let start = ContinuousClock.now",
+    0
+   ]
+  ]
+ },
  "AppLifecycleTests/ShareExtensionTests.swift": {
   "force_unwrapping": [
    [
@@ -1245,6 +1311,24 @@
    ],
    [
     "private var window: UIWindow!",
+    0
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))",
+    0
+   ],
+   [
+    "RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))",
+    0
+   ],
+   [
+    "RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))",
+    0
+   ],
+   [
+    "RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))",
     0
    ]
   ],
@@ -1334,6 +1418,16 @@
     0
    ]
   ],
+  "no_wall_clock_in_tests": [
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.6))",
+    0
+   ],
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.6))",
+    0
+   ]
+  ],
   "unneeded_throws_rethrows": [
    [
     "@MainActor func testAccentAndSchemeChangeRepaintTheOpenSheet() throws {",
@@ -1350,6 +1444,16 @@
    [
     "@MainActor func testSelectMoreGivesThePanelBackUnlessItWasClosed() throws {",
     65
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "private func settle() { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.8)) }",
+    0
+   ],
+   [
+    "private func settle() { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.8)) }",
+    0
    ]
   ],
   "unneeded_throws_rethrows": [
@@ -1397,6 +1501,24 @@
     "@MainActor func testKeyboardKeepsTheHistoryAnchorThenPagesAndSearches() throws {",
     67
    ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))",
+    0
+   ],
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))",
+    0
+   ],
+   [
+    "while !newest.exists, Date() < deadline {",
+    0
+   ],
+   [
+    "while Date() < deadline {",
+    0
+   ]
   ]
  },
  "AppTests/GroupUITests.swift": {
@@ -1407,10 +1529,34 @@
    ]
   ]
  },
+ "AppTests/LabUITestSupport.swift": {
+  "no_wall_clock_in_tests": [
+   [
+    "XCTAssertTrue(connected.waitForExistence(timeout: max(1, deadline.timeIntervalSinceNow)), \"the lab account connects\")",
+    0
+   ],
+   [
+    "while Date() < deadline, !allow.exists, !connected.exists { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2)) }",
+    0
+   ],
+   [
+    "while Date() < deadline, !allow.exists, !connected.exists { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2)) }",
+    0
+   ],
+   [
+    "while Date() < deadline, !allow.exists, !connected.exists { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2)) }",
+    0
+   ]
+  ]
+ },
  "AppTests/LastSeenLabUITests.swift": {
   "no_wall_clock_in_tests": [
    [
     "Thread.sleep(forTimeInterval: 4)",
+    0
+   ],
+   [
+    "let remaining = max(0, exitsAfter - Date().timeIntervalSince(started))",
     0
    ]
   ]
@@ -1425,6 +1571,18 @@
   "unneeded_throws_rethrows": [
    [
     "@MainActor func testComposeEditUnsendStarFilterAndSelectText() throws {",
+    0
+   ]
+  ]
+ },
+ "AppTests/NotificationActionLabUITests.swift": {
+  "no_wall_clock_in_tests": [
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 25))",
+    0
+   ],
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 25))",
     0
    ]
   ]
@@ -1465,6 +1623,76 @@
   "no_print": [
    [
     "if !share.waitForExistence(timeout: 5) { print(host.debugDescription) }",
+    0
+   ]
+  ],
+  "no_wall_clock_in_tests": [
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))",
+    0
+   ],
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))",
+    0
+   ],
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))",
+    0
+   ],
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))",
+    0
+   ],
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))",
+    0
+   ],
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))",
+    0
+   ],
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))",
+    0
+   ],
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))",
+    0
+   ]
+  ]
+ },
+ "AppTests/UITestStorage.swift": {
+  "no_wall_clock_in_tests": [
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.8))",
+    0
+   ],
+   [
+    "RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.8))",
+    0
+   ]
+  ]
+ },
+ "AppTests/UITestSupport.swift": {
+  "no_wall_clock_in_tests": [
+   [
+    "if settle > 0 { RunLoop.current.run(until: Date(timeIntervalSinceNow: settle)) }",
+    0
+   ],
+   [
+    "if settle > 0 { RunLoop.current.run(until: Date(timeIntervalSinceNow: settle)) }",
+    0
+   ],
+   [
+    "while Date() < deadline, !allow.exists, !railPhoto.exists { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1)) }",
+    0
+   ],
+   [
+    "while Date() < deadline, !allow.exists, !railPhoto.exists { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1)) }",
+    0
+   ],
+   [
+    "while Date() < deadline, !allow.exists, !railPhoto.exists { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1)) }",
     0
    ]
   ]
@@ -2075,82 +2303,6 @@
    ]
   ]
  },
- "Packages/MessagingCore/Tests/MessagingCoreTests/BackgroundSynchronizerTests.swift": {
-  "async_without_await": [
-   [
-    "func deliveredNotifications() async -> [DeliveredNotification] { [] }",
-    0
-   ],
-   [
-    "func removeDelivered(identifiers: [String]) async {}",
-    0
-   ]
-  ],
-  "no_empty_block": [
-   [
-    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
-    0
-   ],
-   [
-    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
-    0
-   ],
-   [
-    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
-    0
-   ]
-  ],
-  "no_wall_clock_in_tests": [
-   [
-    "case .stalls: try await Task.sleep(for: .seconds(60))",
-    0
-   ],
-   [
-    "consume: { try await Task.sleep(for: .seconds(60)) },",
-    0
-   ],
-   [
-    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
-    0
-   ],
-   [
-    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
-    0
-   ],
-   [
-    "do { try await Task.sleep(for: .seconds(20)) } catch {}",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(50))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .seconds(20))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .seconds(20))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .seconds(20))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .seconds(20))   // a slow pull, cut short by the ended connection",
-    0
-   ],
-   [
-    "while await run.posting.added.count < 2 { try await Task.sleep(for: .milliseconds(20)) }",
-    0
-   ],
-   [
-    "while await run.posting.added.isEmpty { try await Task.sleep(for: .milliseconds(10)) }",
-    0
-   ]
-  ]
- },
  "Packages/MessagingCore/Tests/MessagingCoreTests/CommunicationNotificationTests.swift": {
   "unneeded_throws_rethrows": [
    [
@@ -2160,12 +2312,6 @@
   ]
  },
  "Packages/MessagingCore/Tests/MessagingCoreTests/LivenessHandshakeTests.swift": {
-  "no_wall_clock_in_tests": [
-   [
-    "try? await Task.sleep(for: delay)",
-    0
-   ]
-  ],
   "unneeded_throws_rethrows": [
    [
     "func ask(_ request: LivenessRequest) throws {",
@@ -2181,56 +2327,6 @@
    ],
    [
     "func removeDelivered(identifiers: [String]) async {",
-    0
-   ]
-  ],
-  "file_length": [
-   [
-    "",
-    508
-   ]
-  ],
-  "no_wall_clock_in_tests": [
-   [
-    "do { try await Task.sleep(for: .seconds(30)) } catch { await cancelled.release() }",
-    0
-   ],
-   [
-    "for _ in 0..<200 { if await condition() { return }; try await Task.sleep(for: .milliseconds(5)) }",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(100))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(20))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(20))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(20))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(20))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(50))",
-    0
-   ],
-   [
-    "try await Task.sleep(for: .milliseconds(50))",
-    0
-   ]
-  ],
-  "unneeded_throws_rethrows": [
-   [
-    "@Test func expiryBeforeCommitFallsBackAndCancelsAnAbandonedRun() async throws {",
     0
    ]
   ]
@@ -2279,12 +2375,18 @@
     "url = URL(string: \"http://127.0.0.1:\\(port)/upload\")!",
     0
    ]
-  ]
- },
- "Packages/MessagingCore/Tests/MessagingCoreTests/ShareSessionTests.swift": {
+  ],
   "no_wall_clock_in_tests": [
    [
-    "let release = Task { try await Task.sleep(for: .milliseconds(300)); try await owner.releaseTransportOwnership() }",
+    "#expect(ContinuousClock.now - start < .seconds(12))",
+    0
+   ],
+   [
+    "let start = ContinuousClock.now",
+    0
+   ],
+   [
+    "let took = ContinuousClock.now - start",
     0
    ]
   ]
@@ -2303,6 +2405,18 @@
   "no_wall_clock_in_tests": [
    [
     "catch MessageStoreError.transportOwnedElsewhere { try await Task.sleep(for: .milliseconds(250)) }",
+    0
+   ],
+   [
+    "let clock = ContinuousClock(), start = clock.now",
+    0
+   ],
+   [
+    "let clock = ContinuousClock(), start = clock.now",
+    0
+   ],
+   [
+    "let elapsed = clock.now - start",
     0
    ],
    [
@@ -3104,6 +3218,10 @@
   ],
   "no_wall_clock_in_tests": [
    [
+    "let clock = ContinuousClock()",
+    0
+   ],
+   [
     "try await Task.sleep(for: .milliseconds(300))",
     0
    ]
@@ -3158,6 +3276,14 @@
   ],
   "no_wall_clock_in_tests": [
    [
+    "guard ContinuousClock.now < deadline else { throw Failure(description: \"nothing received\") }",
+    0
+   ],
+   [
+    "let deadline = ContinuousClock.now + limit",
+    0
+   ],
+   [
     "try await Task.sleep(for: .milliseconds(5))",
     0
    ]
@@ -3211,6 +3337,18 @@
   "unneeded_throws_rethrows": [
    [
     "func testParsesWhole50ResultPage() throws {",
+    0
+   ]
+  ]
+ },
+ "Packages/XMPPProtocol/Tests/XMPPProtocolTests/UploadDiscoveryTests.swift": {
+  "no_wall_clock_in_tests": [
+   [
+    "let elapsed = ContinuousClock.now - started",
+    0
+   ],
+   [
+    "let started = ContinuousClock.now",
     0
    ]
   ]

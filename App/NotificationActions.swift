@@ -245,7 +245,9 @@ struct BackgroundTaskID: Equatable {
             _ = await previous?.value
             guard let self else { return .rejected }
             let clock = ContinuousClock(), waitEnd = min(clock.now + limit, budget.deadline)
-            while self.handler == nil, clock.now < waitEnd { try? await Task.sleep(for: .milliseconds(50)) }
+            while self.handler == nil, clock.now < waitEnd {
+                guard (try? await Task.sleep(for: .milliseconds(50))) != nil else { break }
+            }
             let outcome = await self.handler?(request, budget) ?? .rejected
             // Rejected means nothing was saved: the typed text is gone, so the user hears about it, without naming a
             // chat or an account the app could not attribute.
