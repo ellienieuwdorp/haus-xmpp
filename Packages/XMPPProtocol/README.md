@@ -16,8 +16,9 @@ An XMPP client stack in Swift: transport, stream management, archive recovery an
 ## Guarantees
 
 - Every mechanism runs inside validated TLS (direct TLS or mandatory STARTTLS, TLS 1.2 or later). Certificates are checked against the account domain, never the transport host. `XMPPClient(labCertificateAuthority:)` restricts trust to one DER CA for local test servers; there is no accept-all path.
-- SASL: SCRAM-SHA-256, SCRAM-SHA-1, then PLAIN. PLAIN is refused once an account has authenticated with SCRAM (`requireSCRAM`), and a SCRAM success without a valid server signature fails the login.
+- SASL: SCRAM-SHA-256, SCRAM-SHA-1, then PLAIN. PLAIN is refused when the caller passes `requireSCRAM`, as the app does once an account has authenticated with SCRAM; a SCRAM success without a valid server signature fails the login.
 - The server binds the resource, never the account: a bind for another bare JID ends the session.
+- `sendMessage` sends plaintext for tests and lab tools; it is never a fallback for an encrypted chat.
 - A completed send means the local socket accepted the bytes. A XEP-0198 acknowledgement means server acceptance only, never recipient delivery.
 - Every counted outbound stanza is journaled before its socket write. Resumption replays only the exact saved bytes, and only after `permitsResumption` approves the snapshot; encrypted applications must override it to revalidate recipient trust. A refused resume never retransmits.
 - An inbound message that produced events is followed by `.streamManagementBarrier(token)`. The advertised `h` never exceeds the persisted handled count, which advances only after the consumer acknowledges contiguous tokens.
