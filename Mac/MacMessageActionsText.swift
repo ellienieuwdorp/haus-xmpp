@@ -1,31 +1,22 @@
 import AppKit
 import SwiftUI
 
-/// The bubble's text as a read-only `NSTextView`, so a right-click knows which link it landed on, Select Text can
-/// select it all, and selection, links and the text's own menu behave as everywhere on the Mac. A right-click inside a
-/// selection shows the system's text menu (Copy, Look Up, Services); anywhere else in the text the message's menu. Each
-/// timeline cell reuses one (`MacTimelineMessageCell`), configured from its row's record and never asked for its size.
+// A read-only `NSTextView`, so a right-click knows which link it hit and selection, links and the text menu behave as
+// everywhere on the Mac. A right-click inside a selection shows the text menu, elsewhere the message's menu.
 final class BubbleTextView: NSTextView {
     var messageMenu: ((URL?) -> NSMenu)?
-    /// Takes the keys that belong to the timeline once this text has keyboard focus (`timelineKeys`).
     var timelineKey: ((MacTimelineKey) -> Void)?
-    /// The text took keyboard focus: its message becomes the timeline's focused one.
     var tookFocus: (() -> Void)?
-    /// What a single click that lands on no link and leaves nothing selected does besides placing the caret: a search
-    /// result's jump.
     var plainClick: (() -> Void)?
 
-    /// Whether the text draws all of itself into a plain layer (`makeBackingLayer`); fixed when the view is made. A
-    /// layer drawn whole is backed in full, so a text taller than 4,000 pt in the narrowest bubble keeps AppKit's layer,
-    /// which backs only the part in sight (`MacRowLayout.drawsWhole`).
+    // A layer drawn whole is backed in full, so text taller than 4,000 pt in the narrowest bubble keeps AppKit's layer,
+    // which backs only the part in sight.
     private var drawsWhole = false
 
-    /// The narrowest a bubble's text is laid out: the narrowest bubble (`MacTimelineMetrics.cap`) less its padding.
     nonisolated static let narrowestText: CGFloat = 120 - 2 * 12
 
-    /// Whether the text registers its cursor rects: the I-beam, and the pointing hand over its links. Only the bubble
-    /// under the pointer does (the timeline sets it as the pointer moves): every text in sight registering its rects
-    /// again on each scrolled frame cost the main thread a call to the window server per bubble.
+    // Only the bubble under the pointer registers cursor rects: every text in sight re-registering them on each
+    // scrolled frame cost a window-server call per bubble.
     var showsCursor = false {
         didSet {
             guard showsCursor != oldValue else { return }
@@ -37,11 +28,11 @@ final class BubbleTextView: NSTextView {
         if showsCursor { super.resetCursorRects() }
     }
 
-    /// The text never scrolls the timeline: a text view resized while it holds a caret or a selection scrolls its
-    /// enclosing scroll view to keep it in sight, and in a reused cell that moved the reader's rows.
+    // A text view resized while it holds a caret or a selection scrolls its enclosing scroll view, which in a reused
+    // cell moved the reader's rows.
     override func scrollToVisible(_ rect: NSRect) -> Bool { false }
 
-    /// TextKit 1 for both the live views and the measuring (`MacRowMeasurer`), so the two lay lines out alike.
+    // TextKit 1 for both the live views and `MacRowMeasurer`, so the two lay lines out alike.
     final class TextStack {
         let storage = NSTextStorage()
         let layout = NSLayoutManager()
@@ -78,11 +69,9 @@ final class BubbleTextView: NSTextView {
 
     private var stack: TextStack?
 
-    /// A plain layer that the text draws all of itself into, again only when the text view marks itself as needing
-    /// display. AppKit's own backing layer holds only the part of a view in sight and redisplays whenever the view's
-    /// visible rect changes, which for a view in a scroll view is every scrolled frame: every bubble's text would display
-    /// again on each frame of a scroll. AppKit leaves a layer it did not make to its view (it never marks it as needing
-    /// display), so the view keeps its scale and passes its own invalidations on.
+    // AppKit's backing layer holds only the visible part and redisplays whenever the visible rect changes, which in a
+    // scroll view is every scrolled frame. AppKit never marks a layer it did not make as needing display, so this one
+    // redraws only on the view's own invalidations.
     override func makeBackingLayer() -> CALayer {
         guard drawsWhole else { return super.makeBackingLayer() }
         let layer = CALayer()
@@ -97,7 +86,6 @@ final class BubbleTextView: NSTextView {
         if drawsWhole { redisplayLayer() }
     }
 
-    /// The text view's own invalidation, for a selection change among others.
     override func setNeedsDisplay(_ rect: NSRect, avoidAdditionalLayout flag: Bool) {
         super.setNeedsDisplay(rect, avoidAdditionalLayout: flag)
         if drawsWhole { redisplayLayer() }
@@ -111,8 +99,7 @@ final class BubbleTextView: NSTextView {
         }
     }
 
-    /// All of it, once per display: the bubble's text is short, and the layer's coordinates need not be the view's
-    /// flipped ones. The text view marks itself many times over while its text and attributes are set.
+    // The text view marks itself many times while its text and attributes are set; the short text redraws whole, once.
     private func redisplayLayer() {
         guard let layer, !layer.needsDisplay() else { return }
         layer.setNeedsDisplay()
@@ -128,7 +115,6 @@ final class BubbleTextView: NSTextView {
         matchWindowScale()
     }
 
-    /// The colours are the appearance's: dark text in Light, light in Dark.
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         if drawsWhole { redisplayLayer() }
@@ -141,8 +127,6 @@ final class BubbleTextView: NSTextView {
     }
 
     #if DEBUG
-    /// For the tour's text steps (`MacBubbleTextTour`): the message the text is in, and how often it drew since the last
-    /// report.
     var debugMessageID = ""
     var debugDraws = 0
     var debugDrawsWhole: Bool { drawsWhole }
@@ -152,8 +136,7 @@ final class BubbleTextView: NSTextView {
         super.draw(dirtyRect)
     }
 
-    /// What AppKit does when the window moves to a screen of another scale, from a wrong scale: the layer takes the
-    /// window's again and redraws.
+    // As AppKit does on a move to a screen of another scale: the layer takes the window's scale again and redraws.
     func debugRescale() {
         layer?.contentsScale = (window?.backingScaleFactor ?? 2) == 1 ? 2 : 1
         viewDidChangeBackingProperties()
@@ -164,8 +147,7 @@ final class BubbleTextView: NSTextView {
         clickIsInSelection(event) ? super.menu(for: event) : messageMenu?(link(at: event))
     }
 
-    /// The text view tracks the click until the button comes up, selecting as the pointer drags; only a click that
-    /// selected nothing counts as a plain click. One inside a selection stays the selection's.
+    // The text view tracks the click until mouse-up, so only a click that selected nothing counts as plain.
     override func mouseDown(with event: NSEvent) {
         guard let plainClick, event.clickCount == 1, link(at: event) == nil, !clickIsInSelection(event) else {
             super.mouseDown(with: event)
@@ -175,11 +157,9 @@ final class BubbleTextView: NSTextView {
         if selectedRange().length == 0 { plainClick() }
     }
 
-    /// A click or Select Text gives the text keyboard focus; Tab never stops here, the timeline around it is the stop.
     override var canBecomeKeyView: Bool { false }
 
-    /// Its cell scrolled out of the table with keyboard focus (which takes it out of the window, or hides it): the focus
-    /// stays with the timeline around the text rather than going wherever AppKit would put it next.
+    // A cell scrolled out with keyboard focus: focus stays with the timeline, not wherever AppKit would put it next.
     override func viewDidHide() {
         keepFocusInTimeline()
         super.viewDidHide()
@@ -203,9 +183,8 @@ final class BubbleTextView: NSTextView {
         return true
     }
 
-    /// A click into the text gives it keyboard focus, for selecting with the keys; the timeline's keys still work here:
-    /// the scrolling keys scroll it, Up and Down (without Shift, which extends the selection) move on to the message
-    /// before or after this one, and Esc goes to the composer.
+    // Up and Down without Shift (which extends the selection) move to the neighbouring message; the scrolling keys and
+    // Esc act as in the timeline.
     override func doCommand(by selector: Selector) {
         guard let timelineKey, let key = Self.timelineKeys[selector] else { return super.doCommand(by: selector) }
         timelineKey(key)
@@ -220,7 +199,7 @@ final class BubbleTextView: NSTextView {
         #selector(cancelOperation(_:)): .escape,
     ]
 
-    /// The message's menu without first selecting the word under the pointer, as a text view would.
+    // Skips the text view's selecting of the word under the pointer.
     override func rightMouseDown(with event: NSEvent) {
         guard !clickIsInSelection(event), let menu = messageMenu?(link(at: event)) else {
             super.rightMouseDown(with: event)
@@ -229,7 +208,6 @@ final class BubbleTextView: NSTextView {
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
 
-    /// The character under the pointer, nil between lines or past a line's end.
     private func characterIndex(at event: NSEvent) -> Int? {
         guard let layoutManager, let textContainer else { return nil }
         let point = convert(event.locationInWindow, from: nil)
@@ -253,13 +231,8 @@ final class BubbleTextView: NSTextView {
 }
 
 #if DEBUG
-/// The tour's bubble text steps (`MacDebugHooks`), for checking that a text drawn whole redraws when what it shows
-/// changes: `appearance automatic|light|dark` and `accent <name>` (as Settings sets them, for this run only),
-/// `text-select <message id> <location> <length>` (selects in that message's text without focusing it), `text-rescale`
-/// (each text drawn whole as after a move to a screen of another scale) and `text-layers <name>`, which logs each text in
-/// sight (how it draws, its layer's scale against the window's, whether it waits to display, how often it drew since
-/// the last report, its selection) and renders the layer of each text drawn whole (`CALayer.render(in:)`, over purple
-/// so a blank layer shows) as `<name>-<message id>.png` into the capture directory.
+// Bubble-text tour steps check that a text drawn whole redraws when what it shows changes. `text-layers` renders each
+// such layer over purple, so a blank one shows.
 @MainActor enum MacBubbleTextTour {
     static func step(_ name: String, _ argument: String, window: NSWindow?) {
         let texts = window?.contentView.map(visibleTexts) ?? []
@@ -287,8 +260,7 @@ final class BubbleTextView: NSTextView {
         }
     }
 
-    /// Changes the appearance for this run only: the store saves each change in the app's preferences, which the next
-    /// run (and every other one of this build) would start from.
+    // The store saves each change in the app's preferences, which later runs of this build would start from.
     private static func forThisRun(_ key: String, _ change: () -> Void) {
         let stored = UserDefaults.standard.object(forKey: key)
         change()

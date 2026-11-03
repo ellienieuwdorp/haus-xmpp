@@ -2,19 +2,14 @@ import CoreGraphics
 import ImageIO
 import SwiftUI
 
-/// The link preview card above the text in a Mac bubble: the iPhone's `LinkPreviewCardView` in SwiftUI, drawn from the
-/// same `TimelineLinkPreview`. Large image, small 56 pt thumbnail or text only, as the stored data decides; the large
-/// image's height follows from its stored aspect, so the card is laid out before the image decodes. A click opens the
-/// link through the environment's `openURL`, which the conversation routes; the bubble gives it the message's menu with
-/// the link's items first. The row's accessibility label already speaks for it (`TimelineMessage.accessibilityDescription`).
+// The large image's height follows its stored aspect, so the card is laid out before the image decodes. The row's
+// accessibility label already speaks for it.
 struct MacLinkPreviewCard: View {
     let preview: TimelineLinkPreview
-    /// The reply quote's fill on this bubble.
     let fill: Color
     let textColor: Color
     let metaColor: Color
 
-    /// What the card asks of a bubble that is otherwise narrower: the iPhone's media width plus the Mac's wider column.
     nonisolated static let idealWidth: CGFloat = 300
     static let thumbnailSide: CGFloat = 56
 
@@ -44,7 +39,6 @@ struct MacLinkPreviewCard: View {
                 labels.padding(.horizontal, 10).padding(.top, 7).padding(.bottom, 8)
             }
         case .small:
-            // The thumbnail sits at the trailing edge, as on the iPhone.
             HStack(alignment: .top, spacing: 10) {
                 labels.frame(maxWidth: .infinity, alignment: .leading)
                 picture
@@ -84,8 +78,8 @@ struct MacLinkPreviewCard: View {
     // NSCache is thread-safe; the annotation only tells the compiler so.
     nonisolated(unsafe) private static let decoded = NSCache<NSString, CGImage>()
 
-    /// Bounded as on the iPhone: never inflated beyond what the widest card shows at 2x, and an image whose header
-    /// declares more than `LinkScan.imagePixelBudget` pixels is never decoded.
+    // Never inflated beyond what the widest card shows at 2x; a header declaring more than `LinkScan.imagePixelBudget`
+    // pixels is never decoded.
     private static func decode(_ source: TimelineLinkPreview.Image?) async -> CGImage? {
         guard let source else { return nil }
         let key = switch source {
@@ -106,7 +100,7 @@ struct MacLinkPreviewCard: View {
     }
 }
 
-/// The large image: the card's full width at the image's aspect, its height clamped to 120-220 pt as on the iPhone.
+// Its height clamped to 120-220 pt, as on the iPhone.
 private struct ClampedAspectHeight: Layout {
     let aspect: Double
 

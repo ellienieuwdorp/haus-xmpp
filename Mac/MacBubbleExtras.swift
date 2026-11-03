@@ -1,25 +1,19 @@
 import AppKit
 import SwiftUI
 
-/// The parts of a bubble above its text that SwiftUI draws: the reply's quote, the photo, video or file, and the link
-/// preview card, 4 pt apart, at the bubble's content width. The timeline's cell hosts it (`MacTimelineMessageCell`) at
-/// the frame its row's record gives (`MacRowLayout.extrasFrame`), and the measurer sizes it through the same view
-/// (`MacExtrasSizer`), so the two agree. Text, footer and reactions are drawn by the cell itself.
+// The cell hosts this at its record's `extrasFrame` and the measurer sizes the same view (`MacExtrasSizer`), so the
+// two agree.
 struct MacBubbleExtrasContent: View {
     let message: TimelineMessage
     let accent: AccentTheme
     let openAttachment: () -> Void
-    /// Shows the quoted message, from the reference the quote carries.
     let openQuote: (String) -> Void
-    /// The message's menu for a right-click on these parts; with the card's link for the card.
     let menu: (URL?) -> MacMessageMenuContent
 
     private var textColor: Color { message.isOutgoing ? Color(platform: accent.bubbleText) : .primary }
     private var metaColor: Color { message.isOutgoing ? Color(platform: accent.bubbleText.withAlphaComponent(0.75)) : .secondary }
-    /// The preview card's fill: the iPhone's reply-quote panel fill (`AccentTheme.panelFill`).
     private var panelFill: Color { Color(platform: accent.panelFill(outgoing: message.isOutgoing)) }
 
-    /// The view the measurer lays out: the same parts, with nothing to act on.
     @MainActor static func sizing(_ message: TimelineMessage) -> MacBubbleExtrasContent {
         MacBubbleExtrasContent(message: message, accent: .current, openAttachment: {}, openQuote: { _ in }, menu: { link in
             MacMessageMenuContent(menu: MacMessageMenu(message: message, link: link), perform: { _, _ in }, react: { _ in }, moreReactions: {})
@@ -37,7 +31,6 @@ struct MacBubbleExtrasContent: View {
                     .foregroundStyle(textColor.opacity(0.85))
                     .padding(.leading, 8)
                     .overlay(alignment: .leading) { Capsule().fill(textColor.opacity(0.5)).frame(width: 2) }
-                    // A quoted photo or video keeps its still at the trailing edge, as on the iPhone.
                     if let still = reply.thumbnail {
                         Spacer(minLength: 0)
                         MacQuoteStill(attachment: still, tint: metaColor)
@@ -58,7 +51,6 @@ struct MacBubbleExtrasContent: View {
                             .padding(.horizontal, -MacMediaPreview.edge)
                             .padding(.top, message.reply == nil ? -MacMediaPreview.top : 0)
                     } else {
-                        // The name, then the size once it is here or where its download stands, as on the iPhone.
                         Label {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(attachment.name.isEmpty ? attachment.kindLabel : attachment.name).foregroundStyle(textColor)
@@ -73,7 +65,8 @@ struct MacBubbleExtrasContent: View {
                     }
                 }
                 .buttonStyle(.plain)
-                // Not a stop of its own in the window's keyboard focus: the keyboard opens the file from the message's menu.
+                // Not a stop of its own in the window's keyboard focus: the keyboard opens the file from the message's
+                // menu.
                 .focusable(false)
                 .modifier(MacAttachmentDragSource(attachment: attachment))
                 .help(attachment.localURL == nil ? attachment.downloadDetail : "Open in Quick Look")
@@ -88,8 +81,7 @@ struct MacBubbleExtrasContent: View {
     }
 }
 
-/// `MacBubbleExtrasContent` as a cell hosts it: at the bubble's content width inside its padding, with the links it
-/// opens routed to the conversation. The row's VoiceOver element speaks for all of it.
+// The row's VoiceOver element speaks for all of it.
 struct MacBubbleExtras: View {
     let content: MacBubbleExtrasContent
     let contentWidth: CGFloat
@@ -111,20 +103,17 @@ struct MacBubbleExtras: View {
     }
 }
 
-/// A photo's or video's still in the bubble, sized as the iPhone sizes it: 274 pt wide inside a 280 pt bubble (a 3 pt
-/// frame of bubble colour), its height following the picture between 114 and 334 pt, corners concentric with the
-/// bubble's. Until the file is here the frame keeps that size and says where the download stands.
+// Sized as on the iPhone; until the file is here the frame keeps that size and says where the download stands.
 struct MacMediaPreview: View {
     let attachment: TimelineAttachment
     let tint: Color
     @State private var image: NSImage?
 
     nonisolated static let width: CGFloat = 274
-    /// From the bubble's content edge to its outer edge, less the 3 pt frame.
+    // From the bubble's content edge to its outer edge, less the 3 pt frame.
     nonisolated static let edge: CGFloat = 9
     nonisolated static let top: CGFloat = 5
 
-    /// The still's height: the picture's at the fixed width, between 114 and 334 pt.
     nonisolated static func height(for attachment: TimelineAttachment) -> CGFloat {
         min(334, max(114, (width / attachment.aspectRatio).rounded()))
     }
@@ -170,8 +159,7 @@ struct MacMediaPreview: View {
     }
 }
 
-/// The small still of a quoted photo or video. Its slot is there from the first frame, so the quote never widens when
-/// the file arrives; until then it holds the kind's symbol on a quiet fill.
+// Its slot is there from the first frame, so the quote never widens when the file arrives.
 struct MacQuoteStill: View {
     let attachment: TimelineAttachment
     let tint: Color
@@ -203,7 +191,6 @@ struct MacQuoteStill: View {
     }
 }
 
-/// Someone is typing: a received-style bubble of dots after the newest message.
 struct MacTypingRow: View {
     let typing: TimelineTyping
 
@@ -229,7 +216,6 @@ struct MacTypingRow: View {
     }
 }
 
-/// Above the oldest message while the server's older history is fetched, as on the iPhone.
 struct MacLoadingEarlierRow: View {
     static let label = "Loading earlier messages"
 

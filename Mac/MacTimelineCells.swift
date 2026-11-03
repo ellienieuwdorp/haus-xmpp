@@ -1,33 +1,24 @@
 import AppKit
 import SwiftUI
 
-// The timeline table's reused cells, laid out by hand from each row's cached record (`MacRowLayout`): no Auto Layout,
-// and nothing is asked for its size. Each part is a small layer-backed view that redraws only when told to
-// (`.onSetNeedsDisplay`), so scrolling moves layers and draws nothing; the bubble is a plain layer with continuous
-// 16 pt corners and no mask. The quote, file and preview card, the hover toolbar and the typing and loading rows are
-// SwiftUI in a hosting view each cell keeps and gives a new root on reuse.
+// Cells are laid out by hand from each row's cached record (`MacRowLayout`), with no Auto Layout and nothing asked for
+// its size. Each part is a layer-backed view redrawn only when told (`.onSetNeedsDisplay`), so scrolling draws nothing;
+// the bubble is a plain layer with continuous corners and no mask.
 
-/// What every cell acts through: the conversation's handlers and the timeline's state, shared by all cells of a table.
 @MainActor final class MacTimelineCellContext {
     var accent: AccentTheme = .current
     var isFiltered = false
-    /// The contact's name in a direct chat, which VoiceOver reads as the sender of what they sent.
     var contactName: String?
     var handlers = MacMessageHandlers(perform: { _, _, _ in }, react: { _, _ in })
     var openAttachment: (TimelineMessage) -> Void = { _ in }
     var openLink: (URL) -> Void = { _ in }
     var openQuote: (String) -> Void = { _ in }
-    /// A key a bubble's text passed on, and the message it is in.
     var textKey: (MacTimelineKey, String) -> Void = { _, _ in }
-    /// A bubble's text took keyboard focus.
     var textFocused: (String) -> Void = { _ in }
-    /// A search or starred result was clicked: the whole timeline at that message.
     var showResult: (String) -> Void = { _ in }
-    /// VoiceOver's Show Menu on a message.
     var openMenu: (String) -> Void = { _ in }
 }
 
-/// A row view that draws nothing: no selection, no background, no backing store.
 final class MacTimelineRowView: NSTableRowView {
     static let identifier = NSUserInterfaceItemIdentifier("timeline.row")
 
@@ -38,7 +29,6 @@ final class MacTimelineRowView: NSTableRowView {
     override var isOpaque: Bool { false }
 }
 
-/// The bubble's fill: a layer's background colour and corner radius, and the keyboard focus ring around it.
 final class MacBubbleView: NSView {
     var isOutgoing = false { didSet { if isOutgoing != oldValue { needsDisplay = true } } }
     var accent: AccentTheme = .indigo { didSet { if accent != oldValue { needsDisplay = true } } }
@@ -94,7 +84,7 @@ final class MacBubbleView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// A view that draws itself, once per `needsDisplay`, and again at each new size.
+// Draws once per `needsDisplay`, and again at each new size.
 class MacTimelineDrawnView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -104,10 +94,9 @@ class MacTimelineDrawnView: NSView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// What it draws is placed in its bounds (the footer against the trailing edge, the author's name truncated to
-    /// them), which the redraw policy leaves alone on a resize: the layer kept the old drawing and AppKit drew only
-    /// the strip a wider frame uncovered, so a bubble widening step by step showed a copy of its time and status mark
-    /// at each earlier width.
+    // What it draws is placed in its bounds, which the redraw policy leaves alone on a resize: the layer would keep the
+    // old drawing and AppKit draw only the uncovered strip, leaving a copy of the time and status at each earlier
+    // width.
     override func setFrameSize(_ newSize: NSSize) {
         let changed = newSize != frame.size
         super.setFrameSize(newSize)
@@ -124,7 +113,6 @@ class MacTimelineDrawnView: NSView {
     }
 
     #if DEBUG
-    /// The size it last drew its whole bounds at, and the parts of them it drew since, for the tour's `mismatch`.
     private(set) var debugDrawnSize: CGSize?
     private(set) var debugPartialDraws = 0
 
@@ -139,7 +127,6 @@ class MacTimelineDrawnView: NSView {
     #endif
 }
 
-/// The day header: caption semibold in a quaternary capsule.
 final class MacDayHeaderView: MacTimelineDrawnView {
     var text = "" { didSet { if text != oldValue { needsDisplay = true } } }
 
@@ -151,7 +138,6 @@ final class MacDayHeaderView: MacTimelineDrawnView {
     }
 }
 
-/// A group member's name above their run, in their colour.
 final class MacAuthorView: MacTimelineDrawnView {
     var text = "" { didSet { if text != oldValue { needsDisplay = true } } }
     var color: NSColor = .labelColor { didSet { if color != oldValue { needsDisplay = true } } }
@@ -163,8 +149,7 @@ final class MacAuthorView: MacTimelineDrawnView {
     }
 }
 
-/// The footer, right-aligned and quiet: the star (its slot is always there, so starring never moves anything), the time
-/// and the status mark.
+// The star's slot is always there, so starring never moves anything.
 final class MacFooterView: MacTimelineDrawnView {
     struct Content: Equatable {
         var isOutgoing = false
@@ -205,7 +190,6 @@ final class MacFooterView: MacTimelineDrawnView {
         }
     }
 
-    /// A template image in `color`, drawn into the current flipped context.
     static func drawTinted(_ image: NSImage, in rect: NSRect, color: NSColor) {
         guard let context = NSGraphicsContext.current?.cgContext,
               let cgImage = image.cgImage(forProposedRect: nil, context: NSGraphicsContext.current, hints: nil) else { return }
@@ -220,18 +204,15 @@ final class MacFooterView: MacTimelineDrawnView {
     }
 }
 
-/// The reaction pills, hung off the bubble's outer bottom corner. Where the user can react, a click on a pill adds that
-/// emoji as theirs, or takes theirs back; the pills' tooltips say which, on the row under the pointer only (a tooltip
-/// is a tracking rect, which costs every scrolled frame as a cursor rect does).
+// Tooltips only on the row under the pointer: a tooltip is a tracking rect, which costs every scrolled frame as a
+// cursor rect does.
 final class MacReactionsView: MacTimelineDrawnView {
     var pills: [MacReactionPill] = [] { didSet { if pills != oldValue { needsDisplay = true; updateToolTips() } } }
     var reactions: [TimelineReaction] = [] { didSet { if reactions != oldValue { updateToolTips() } } }
     var showsToolTips = false { didSet { if showsToolTips != oldValue { updateToolTips() } } }
-    /// Nil where the message takes no reactions: the pills only show.
     var react: ((String) -> Void)?
 
-    /// A pill takes the click where the user can react; the gaps between pills, the "+N" and a message that takes no
-    /// reactions let it through to the row. Not the drawn view's, which never takes one.
+    // The gaps, the "+N" and a message that takes no reactions let the click through to the row.
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard react != nil, !isHidden, let superview else { return nil }
         let local = convert(point, from: superview)
@@ -285,7 +266,6 @@ final class MacReactionsView: MacTimelineDrawnView {
     }
 }
 
-/// The tint behind a row: a search or starred result under the pointer, or a message just scrolled to.
 final class MacRowTintView: NSView {
     enum Tint: Equatable { case none, hover, highlight }
 
@@ -335,7 +315,6 @@ final class MacRowTintView: NSView {
     }
 }
 
-/// One message row: its parts placed at the record's frames, mirrored for a sent message.
 final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
     static let identifier = NSUserInterfaceItemIdentifier("timeline.message")
     static let longIdentifier = NSUserInterfaceItemIdentifier("timeline.message.long")
@@ -354,7 +333,6 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
     private(set) var message: TimelineMessage?
     private var linkColor: NSColor?
     private var emojiPopover: NSPopover?
-    /// The arrow a reply swipe uncovers beside the bubble, made for the first swipe on this cell.
     private var replyIndicator: NSImageView?
     let element = MacTimelineMessageElement()
     private let headerElement = MacTimelineHeaderElement()
@@ -365,15 +343,13 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         get { bubble.showsFocusRing }
         set { bubble.showsFocusRing = newValue }
     }
-    /// How far a reply swipe has moved the bubble right (`MacReplySwipe`): the bubble and what is part of it (its text,
-    /// footer, quote, file, card and pills) travel; the tint, day header and author stay.
+    // The bubble and its parts travel; the tint, day header and author stay.
     var swipeOffset: CGFloat = 0 {
         didSet {
             guard swipeOffset != oldValue else { return }
             needsLayout = true
         }
     }
-    /// A reply swipe is under way on this cell: no hover toolbar.
     private(set) var isSwiping = false
 
     init(drawsWhole: Bool, context: MacTimelineCellContext) {
@@ -399,9 +375,7 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {}
 
-    // MARK: Content
-
-    /// Sets the parts' content from `layout`; the text view is given new text only when the row's content changed.
+    // The text view is given new text only when the row's content changed.
     func configure(_ layout: MacRowLayout, message: TimelineMessage) {
         let input = layout.input
         let sameContent = layoutRecord.map { $0.key.id == input.id && $0.key.revision == input.revision } ?? false
@@ -485,9 +459,6 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         _ = frame
     }
 
-    // MARK: Layout
-
-    /// Mirrors a leading-side frame to the trailing side for a sent message.
     private func place(_ rect: CGRect) -> CGRect {
         guard layoutRecord?.input.isOutgoing == true else { return rect }
         return CGRect(x: bounds.width - rect.maxX, y: rect.minY, width: rect.width, height: rect.height)
@@ -516,27 +487,21 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         placeToolbar()
     }
 
-    // MARK: Reply swipe
-
     private func travelled(_ rect: CGRect) -> CGRect { rect.offsetBy(dx: swipeOffset, dy: 0) }
 
-    /// The parts that travel with the bubble, for stopping their settling.
     private var travellers: [NSView] { [bubble, textView, footer, reactions] + [extras, replyIndicator].compactMap { $0 } }
 
-    /// The message offers Reply, as its toolbar decides; a placeholder never does.
     var takesReplySwipe: Bool {
         guard let message, !message.showsPlaceholder else { return false }
         return MessageActionMenu.items(for: message).contains { $0.kind == .reply }
     }
 
-    /// Where a reply swipe may start on this row: anywhere below its day header, full width, as on the iPhone, on a
-    /// message that offers Reply. `point` is in the cell's coordinates.
+    // Anywhere below the day header, full width, as on the iPhone.
     func ownsReplySwipe(at point: NSPoint) -> Bool {
         guard takesReplySwipe, bounds.contains(point) else { return false }
         return header.isHidden || point.y >= header.frame.maxY
     }
 
-    /// A swipe starts: the toolbar goes, and a bubble still settling from the last one stops where it is.
     func beginSwipe() {
         isSwiping = true
         for view in travellers { view.layer?.removeAllAnimations() }
@@ -557,9 +522,8 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         updateToolbarVisibility()
     }
 
-    /// The bubble springs back (at once with Reduce Motion, or when the cell is reused or its swipe given up) and the
-    /// toolbar may come back. At once also stops the bubble settling from an earlier swipe, whose offset is already 0:
-    /// a cell reused for another message must not show the last one's movement.
+    // Ending at once also stops a bubble settling from an earlier swipe: a cell reused for another message must not
+    // show the last one's movement.
     func endSwipe(animated: Bool) {
         let wasSwiping = isSwiping
         isSwiping = false
@@ -580,11 +544,9 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         if wasSwiping { updateToolbarVisibility() }
     }
 
-    /// The bubble may still be springing back from a swipe, as its layer's animations tell (a finished one may linger
-    /// there, which is harmless to remove); a bubble never swiped has none, so a reuse costs one look.
+    // A bubble never swiped has no animations, so a reuse costs one look; a finished one lingering is harmless.
     private var isSettling: Bool { bubble.layer?.animationKeys()?.isEmpty == false }
 
-    /// In the room the bubble leaves at its leading side, centred in it, whole from the threshold on.
     private func placeReplyIndicator(bubble: CGRect) {
         guard let replyIndicator else { return }
         let side: CGFloat = 20
@@ -592,10 +554,7 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         replyIndicator.alphaValue = min(1, swipeOffset / MacReplySwipe.threshold)
     }
 
-    // MARK: Hover toolbar
-
-    /// Built the first time the pointer is over this row: a glass capsule and a menu on every row would cost layout
-    /// in every step of a resize.
+    // Built on first hover: a glass capsule and a menu on every row would cost layout in every step of a resize.
     private func hoverChanged() {
         textView.showsCursor = hovering
         reactions.showsToolTips = hovering
@@ -647,9 +606,8 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         }
     }
 
-    /// Beside the bubble in the gutter, on its outer side, centred on it; where the gutter is too narrow for the buttons
-    /// this message has, over the bubble's top outer corner instead, so it never runs past the window's edge. Either way
-    /// inside the row: the row clips what pokes above it, and a click there would reach the row above.
+    // Where the gutter is too narrow, it sits over the bubble's top outer corner so it never passes the window's edge;
+    // always inside the row, which clips what pokes above it and would pass the click to the row above.
     private func placeToolbar() {
         guard let toolbar, let layout = layoutRecord else { return }
         let size = toolbar.intrinsicContentSize
@@ -665,22 +623,18 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         toolbar.frame = CGRect(origin: CGPoint(x: round(origin.x), y: round(origin.y)), size: size)
     }
 
-    // MARK: Actions
-
     private func menuContent(_ link: URL?) -> MacMessageMenuContent? {
         guard let message else { return nil }
         return MacMessageMenuContent(menu: MacMessageMenu(message: message, link: link), perform: { [weak self] kind, link in self?.perform(kind, link: link) },
                                      react: { [weak self] in self?.react($0) }, moreReactions: { [weak self] in self?.pickEmoji() })
     }
 
-    /// The message's menu, with the link's items when it was opened on one.
     func textMenu(_ link: URL?) -> NSMenu {
         guard let message else { return NSMenu() }
         return MacMessageNSMenu.make(MacMessageMenu(message: message, link: link), perform: { [weak self] kind, link in self?.perform(kind, link: link) },
                                      react: { [weak self] in self?.react($0) }, moreReactions: { [weak self] in self?.pickEmoji() })
     }
 
-    /// The menu as the keyboard opens it: the bubble's, then what a click on the bubble does.
     func keyboardMenu() -> NSMenu {
         let menu = textMenu(nil)
         guard let message else { return menu }
@@ -689,13 +643,11 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         return menu
     }
 
-    /// Scrolls to the message the reply quotes, as a click on the quote does.
     var showQuote: (() -> Void)? {
         guard let message, !message.showsPlaceholder, let reference = message.reply?.messageID else { return nil }
         return { [context] in context.openQuote(reference) }
     }
 
-    /// Select Text stays in the row, where the text view is; everything else goes to the conversation.
     func perform(_ kind: MessageAction.Kind, link: URL?) {
         guard let message else { return }
         if kind == .selectText {
@@ -711,7 +663,6 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         context.handlers.react(emoji, message)
     }
 
-    /// Any emoji as a reaction, in a popover on the bubble.
     func pickEmoji() {
         guard let message, emojiPopover == nil else { return }
         let popover = NSPopover()
@@ -734,9 +685,7 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         emojiPopover = nil
     }
 
-    // MARK: Menus and clicks
-
-    /// The message's menu for a right-click on the bubble, never on the empty gutter beside it.
+    // Never on the empty gutter beside the bubble.
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
         return bubbleFrame.contains(point) ? textMenu(nil) : nil
@@ -748,19 +697,14 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         return true
     }
 
-    /// A search or starred result says what a click does, under the pointer.
     private func updateToolTip() {
         let tip = context.isFiltered && hovering ? "Show in Conversation" : nil
         if toolTip != tip { toolTip = tip }
     }
 
-    // MARK: Tint
-
     private func updateTint() {
         tint.tint = highlighted ? .highlight : context.isFiltered && hovering ? .hover : .none
     }
-
-    // MARK: Accessibility
 
     private func updateAccessibility(_ layout: MacRowLayout, message: TimelineMessage) {
         let sender = message.senderName(contactName: context.contactName)
@@ -778,9 +722,7 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         return layoutRecord?.header == nil ? [element] : [headerElement, element]
     }
 
-    /// The actions VoiceOver offers on the message, in the order the bubble's menu lists them: a search or starred
-    /// result's Show in Conversation first, then the menu's items, the file's (open it, then the Mac's copy, save and
-    /// share), one per link, the quoted message, and one per quick reaction, as on the iPhone.
+    // In the bubble menu's order, as on the iPhone.
     func accessibilityActions() -> [NSAccessibilityCustomAction] {
         guard let message else { return [] }
         var actions: [NSAccessibilityCustomAction] = []
@@ -809,7 +751,6 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
 
     var headerFrame: CGRect { header.frame }
 
-    /// The message's element covers the author line, the bubble and its pills.
     var messageFrame: CGRect {
         guard let layout = layoutRecord else { return bounds }
         var frame = place(layout.bubbleFrame)
@@ -819,7 +760,6 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
     }
 
     #if DEBUG
-    /// The tour's row steps: Select Text, and the emoji picker.
     func debugRequest(_ verb: String) {
         switch verb {
         case "select-text": perform(.selectText, link: nil)
@@ -828,23 +768,19 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         }
     }
 
-    /// The centre of the first reaction pill with an emoji, in the window's coordinates, and the view the pills are.
     var debugReactionPill: (point: NSPoint, view: NSView, emoji: String)? {
         guard let layout = layoutRecord, let frame = layout.reactionsFrame, let pill = layout.pills.first, let emoji = pill.emoji else { return nil }
         let placed = place(frame)
         return (convert(NSPoint(x: placed.minX + pill.width / 2, y: placed.midY), to: nil), reactions, emoji)
     }
 
-    /// The hosting view of the quote, file and card, as the cell placed it.
     var debugExtras: NSView? { extras?.isHidden == false ? extras : nil }
 
-    /// The footer's size, unless it last drew whole at that size.
     var debugStaleFooter: String? {
         guard footer.debugDrawnSize != footer.bounds.size else { return nil }
         return "\(Int(footer.bounds.width)) drawn at \(footer.debugDrawnSize.map { "\(Int($0.width))" } ?? "none") + \(footer.debugPartialDraws) parts"
     }
 
-    /// Where the bubble is against where it rests, the reply arrow and the toolbar.
     var debugSwipeState: String {
         layoutSubtreeIfNeeded()
         let rests = bubbleFrame.minX, now = bubble.layer?.presentation()?.frame.minX ?? bubble.frame.minX
@@ -863,8 +799,6 @@ extension MacTimelineMessageCell: NSPopoverDelegate {
     }
 }
 
-/// A message as VoiceOver reads it: one element with the author, the text, the file, the quote, the time, the status
-/// and the reactions, and the bubble's actions.
 final class MacTimelineMessageElement: NSAccessibilityElement, NSAccessibilityElementProtocol {
     weak var cell: MacTimelineMessageCell?
     var message: TimelineMessage?
@@ -898,7 +832,6 @@ final class MacTimelineMessageElement: NSAccessibilityElement, NSAccessibilityEl
     }
 }
 
-/// The day header above a message, which VoiceOver reads as a heading.
 final class MacTimelineHeaderElement: NSAccessibilityElement {
     weak var cell: MacTimelineMessageCell?
 
@@ -914,7 +847,6 @@ final class MacTimelineHeaderElement: NSAccessibilityElement {
     }
 }
 
-/// A row SwiftUI draws whole: the typing bubble, or the loading row above the oldest message.
 final class MacTimelineHostedCell: NSView {
     static let identifier = NSUserInterfaceItemIdentifier("timeline.hosted")
 
