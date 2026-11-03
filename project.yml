@@ -338,7 +338,7 @@ targets:
     platform: iOS
     sources:
       - AppLifecycleTests
-      # The 045ca73 build's schema-21 store, the f563365 build's schema-23 store and main's schema-24 (4df394a) and
+      # The 21ba6b0 build's schema-21 store, the 6664869 build's schema-23 store and the schema-24 (58b543a) and
       # schema-25 (7159f37) stores, shared with the MessageStore package tests.
       - path: Packages/MessageStore/Tests/MessageStoreTests/Fixtures/schema-21.sql
         buildPhase: resources
