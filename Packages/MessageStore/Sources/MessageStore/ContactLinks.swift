@@ -6,7 +6,6 @@ import Foundation
 /// never touches Contacts itself.
 public struct ContactLink: Sendable, Equatable, CustomStringConvertible {
     public enum Source: String, Sendable, Equatable {
-        /// The user picked the contact.
         case picker
         /// The user confirmed a suggested contact whose Jabber address equals the chat's.
         case imAddress = "im_address"

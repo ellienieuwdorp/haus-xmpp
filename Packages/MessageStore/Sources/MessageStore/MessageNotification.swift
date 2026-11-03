@@ -13,7 +13,6 @@ public enum NotificationCandidateKey: Hashable, Sendable {
 
 /// Someone this account talks to, as a notification may name them. Local, authenticated state only.
 public struct NotificationParticipant: Sendable, Equatable, CustomStringConvertible {
-    /// The bare JID.
     public let id: String
     /// Their linked contact's name, else the stored title of their direct chat, when there is one.
     public let title: String?

@@ -62,6 +62,8 @@ public actor MessageStore {
         try connection.transaction {
             let version = try connection.query("PRAGMA user_version").first?[0].integer ?? 0
             guard version <= currentSchemaVersion else { throw MessageStoreError.unsupportedSchema(version) }
+            // Every step checks its table or column (or uses IF NOT EXISTS) first: stores from parallel branches reach
+            // these versions in any order, and a rolled-back address rewrite can leave the version at 22.
             try connection.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
                     account_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL,
@@ -828,9 +830,9 @@ public actor MessageStore {
 
     // 4 chat + 11 attachment + 4 summary + 7 link preview columns precede `l.*` (`Self.columns` order).
     private static let chatListPrefix = 26
-    // `?1` is the account. Every step is an index seek per chat, so cost follows chats, not messages, and the plan holds
-    // without the ANALYZE statistics the store never gathers. `last` must not alias `messages` (the outbox subquery in
-    // `Self.columns` names it); message columns come last so added columns never shift the prefix.
+    // `?1` is the account. Each step is an index seek per chat; a ROW_NUMBER() window over the account's messages
+    // nested-loops once per chat without statistics (59 s at 100 chats × 1,000). `last` must not alias `messages`
+    // (`Self.columns` names it); message columns come last so added columns never shift the prefix.
     private static let chatListSQL = """
         WITH last AS (
             SELECT \(columns) FROM messages WHERE account_id=?1
