@@ -614,6 +614,7 @@ struct AccountTransfer: Sendable {
     }
 }
 
+// `last` changes only under `lock`; `sink` wraps the caller's `@Sendable` progress callback.
 private final class Throttle: @unchecked Sendable {
     private let sink: (Int64) -> Void
     private var last: Int64 = -1

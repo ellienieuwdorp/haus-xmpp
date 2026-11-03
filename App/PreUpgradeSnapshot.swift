@@ -23,6 +23,7 @@ struct PreUpgradeSnapshot: Sendable {
         case thisVersion = "post-upgrade"
     }
 
+    // UserDefaults is thread-safe, and `name` is an immutable String.
     struct DefaultsDomain: @unchecked Sendable {
         let defaults: UserDefaults
         let name: String

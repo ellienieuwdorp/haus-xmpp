@@ -134,6 +134,7 @@ public final class NotificationRunProgress: @unchecked Sendable {
 public final class NotificationRunCoordinator: @unchecked Sendable {
     public typealias Operation = @Sendable (NotificationRunProgress) async -> NotificationRunOutcome
 
+    // `task` and `waiters` are read and written only under the coordinator's `lock`.
     private final class Run: @unchecked Sendable {
         let progress = NotificationRunProgress()
         var task: Task<NotificationRunOutcome, Never>?

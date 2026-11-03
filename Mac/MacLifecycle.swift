@@ -188,6 +188,7 @@ import MessagingCore
         }
     }
 
+    // `claimed` is read and set only under `lock`.
     private final class Once: @unchecked Sendable {
         private let lock = NSLock()
         private var claimed = false
