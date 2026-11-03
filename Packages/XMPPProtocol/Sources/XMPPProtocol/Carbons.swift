@@ -4,8 +4,8 @@ public enum XMPPMessageProvenance: String, Sendable, Codable {
     case direct, receivedCarbon, sentCarbon
 }
 
-/// XEP-0280 forwarding is accepted only inside a carbon from our own bare JID.
-/// Arbitrary XEP-0297 forwarded payloads and nested wrappers are never unwrapped.
+// XEP-0280 forwarding is accepted only inside a carbon from our own bare JID; other XEP-0297 payloads and nested
+// wrappers are never unwrapped.
 enum Carbons {
     static let namespace = "urn:xmpp:carbons:2"
     static let forwarding = "urn:xmpp:forward:0"

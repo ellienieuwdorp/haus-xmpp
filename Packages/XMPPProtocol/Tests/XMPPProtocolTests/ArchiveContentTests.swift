@@ -2,10 +2,9 @@ import Foundation
 import Testing
 @testable import XMPPProtocol
 
-// Four malformed inner shapes in archive results: each used to throw out of the page parser and wedge
-// catch-up. Outer provenance still throws; inner content becomes a rejected entry.
-// Inner messages carry xmlns='jabber:client' as servers send them: inside <forwarded/> an unqualified
-// <message/> would inherit urn:xmpp:forward:0 and be an unknown child, not archived content.
+// Four malformed inner shapes in archive results: outer provenance still throws, inner content becomes a rejected
+// entry. Inner messages carry xmlns='jabber:client' as servers send them: inside <forwarded/> an unqualified
+// <message/> would inherit urn:xmpp:forward:0.
 
 private let account = "alice@localhost"
 private func probeQuery(limit: Int = 10) -> ArchiveQuery {
@@ -38,8 +37,8 @@ private let plain = "<message xmlns='jabber:client' from='bob@localhost/x' to='a
     #expect(try query.finish(fin).lastID == "4")
 }
 
-/// Prosody keeps a stanza returned to one of our resources in the own archive (mod_mam `should_store`, "bounce"). It
-/// echoes our ciphertext; before, that echo failed the envelope parser and became an unreadable message from the peer.
+// Prosody keeps a stanza returned to one of our resources in the own archive (mod_mam `should_store`, "bounce"). It
+// echoes our ciphertext and must not become an unreadable message from the peer.
 @Test func archivedBounceIsABounceAndNeverContent() throws {
     var query = probeQuery()
     let bounce = "<message xmlns='jabber:client' from='bob@localhost' to='alice@localhost/ios' type='error' id='sent-1'>"

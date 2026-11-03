@@ -2,21 +2,18 @@ import CommonCrypto
 import CryptoKit
 import Foundation
 
-/// One SASL exchange over RFC 6120 §6 (SASL1). Mechanisms, strongest first: SCRAM-SHA-256, SCRAM-SHA-1
-/// (RFC 5802, RFC 7677), then PLAIN. Every mechanism runs only inside a verified TLS stream; PLAIN is refused
-/// once the account has authenticated with SCRAM. Channel binding (-PLUS) is not implemented, so SCRAM sends
-/// the GS2 flag `n` ("client does not support binding"), which a server offering -PLUS accepts.
+// RFC 6120 §6 (SASL1), strongest first: SCRAM-SHA-256, SCRAM-SHA-1 (RFC 5802, RFC 7677), PLAIN, only inside verified
+// TLS; PLAIN is refused once the account used SCRAM. No channel binding, so SCRAM sends GS2 flag `n`, which a server
+// offering -PLUS accepts.
 struct SASLNegotiation {
     static let namespace = "urn:ietf:params:xml:ns:xmpp-sasl"
     enum Mechanism: String { case scramSHA256 = "SCRAM-SHA-256", scramSHA1 = "SCRAM-SHA-1", plain = "PLAIN" }
 
     let mechanism: Mechanism
     private var scram: SCRAM?
-    /// The first message, sent with `<auth/>`: PLAIN's credentials or SCRAM's client-first.
+    // PLAIN's credentials or SCRAM's client-first.
     let initialResponse: Data
 
-    /// Throws `authenticationDowngrade` when SCRAM is required but not offered, `authenticationUnavailable` when
-    /// nothing usable is offered.
     init(offered: Set<String>, username: String, password: String, requireSCRAM: Bool, nonce: String = SCRAM.makeNonce()) throws {
         let prepared = SASLprep.prepare(password)
         let variant = [SCRAM.Variant.sha256, .sha1].first { offered.contains($0.mechanism.rawValue) }
@@ -35,22 +32,21 @@ struct SASLNegotiation {
 
     var usesSCRAM: Bool { scram != nil }
 
-    /// Answers a `<challenge/>`: SCRAM's server-first, or a server-final sent as a challenge (answered empty).
+    // A server-final sent as a challenge is answered empty.
     mutating func respond(to challenge: Data) throws -> Data {
         guard var scram else { throw XMPPClientError.unexpectedProtocol }
         defer { self.scram = scram }
         return try scram.respond(to: challenge)
     }
 
-    /// `<success/>` counts only once the server has proven it knows the password: a SCRAM success without a valid
-    /// server signature is a failed login, whether the signature is missing or wrong.
+    // A SCRAM success without a valid server signature is a failed login.
     mutating func complete(_ additionalData: Data) throws {
         guard var scram else { return }
         defer { self.scram = scram }
         try scram.complete(additionalData)
     }
 
-    /// RFC 6120 §6.5. Only conditions a new password could fix stop the account; transient ones are retried.
+    // RFC 6120 §6.5: only conditions a new password could fix stop the account; transient ones are retried.
     static func error(forFailure node: XMLNode) -> XMPPClientError {
         let condition = node.children.first { $0.namespace == namespace && $0.name != "text" }?.name
         switch condition {
@@ -62,7 +58,7 @@ struct SASLNegotiation {
         }
     }
 
-    /// SASL payloads are base64; `=` is an empty response (RFC 6120 §6.4.2).
+    // `=` is an empty response (RFC 6120 §6.4.2).
     static func decode(_ text: String) throws -> Data {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty || trimmed == "=" { return Data() }
@@ -73,14 +69,14 @@ struct SASLNegotiation {
     static func encode(_ data: Data) -> String { data.isEmpty ? "=" : data.base64EncodedString() }
 }
 
-/// RFC 5802 client. Hashing, HMAC and the constant-time signature check come from CryptoKit; PBKDF2 from CommonCrypto.
+// RFC 5802. Hashing, HMAC and constant-time comparison from CryptoKit; PBKDF2 from CommonCrypto.
 struct SCRAM {
     enum Variant {
         case sha256, sha1
         var mechanism: SASLNegotiation.Mechanism { self == .sha256 ? .scramSHA256 : .scramSHA1 }
     }
-    /// RFC 5802 §5.1 and RFC 7677 ask servers for at least 4096; the ceiling keeps a hostile count from stalling the
-    /// notification extension's budget (Prosody's default is 10,000).
+    // RFC 5802 §5.1 and RFC 7677 ask for at least 4096; the ceiling keeps a hostile count from stalling the
+    // notification extension (Prosody's default is 10,000).
     static let iterations = 4096...1_000_000
     private enum State { case awaitingServerFirst, awaitingServerFinal(authMessage: Data, serverKey: SymmetricKey), verified }
 
@@ -98,7 +94,7 @@ struct SCRAM {
         clientFirst = "n,," + clientFirstBare
     }
 
-    /// 24 random bytes; base64 contains no `,`, so it is a valid SCRAM nonce.
+    // Base64 contains no `,`, so this is a valid SCRAM nonce.
     static func makeNonce() -> String {
         var generator = SystemRandomNumberGenerator()
         return Data((0..<24).map { _ in UInt8.random(in: .min ... .max, using: &generator) }).base64EncodedString()
@@ -129,8 +125,8 @@ struct SCRAM {
     }
 
     private mutating func clientFinal(serverFirst data: Data) throws -> Data {
-        // r= first (a leading m= is reserved and must fail), then s= and i=; later extensions are ignored. A violation
-        // is the server's fault, not a missing mechanism or a wrong password: nothing is sent and the login fails.
+        // r= first (a leading m= must fail), then s= and i=; extensions are ignored. A violation is the server's fault:
+        // nothing is sent and the login fails.
         guard let serverFirst = String(data: data, encoding: .utf8) else { throw XMPPClientError.unexpectedProtocol }
         let attributes = serverFirst.split(separator: ",", omittingEmptySubsequences: false)
         guard attributes.count >= 3, attributes[0].hasPrefix("r="), attributes[1].hasPrefix("s="), attributes[2].hasPrefix("i=") else {
@@ -176,17 +172,15 @@ struct SCRAM {
     private func digest(_ data: Data) -> Data {
         variant == .sha256 ? Data(SHA256.hash(data: data)) : Data(Insecure.SHA1.hash(data: data))
     }
-    /// CryptoKit compares in constant time.
     private func verify(_ signature: Data, authMessage: Data, key: SymmetricKey) -> Bool {
         variant == .sha256 ? HMAC<SHA256>.isValidAuthenticationCode(signature, authenticating: authMessage, using: key)
                            : HMAC<Insecure.SHA1>.isValidAuthenticationCode(signature, authenticating: authMessage, using: key)
     }
 }
 
-/// RFC 4013 SASLprep of a password, as far as Foundation can do it faithfully: the B.1 and C.1.2 mappings, NFKC and
-/// the C.1.2–C.9 prohibitions. Limits: there is no bidirectional-text table, so any right-to-left script returns nil,
-/// and NFKC uses the system's Unicode version rather than 3.2. nil means "cannot prepare": the caller uses PLAIN, which
-/// the server prepares, unless the account requires SCRAM. Printable ASCII is returned unchanged.
+// RFC 4013 SASLprep as far as Foundation allows: B.1 and C.1.2 mappings, NFKC, C.1.2–C.9 prohibitions. Without a
+// bidi table any right-to-left script gives nil, and NFKC uses the system's Unicode, not 3.2. nil means the caller
+// uses PLAIN (the server prepares it) unless SCRAM is required.
 enum SASLprep {
     static func prepare(_ password: String) -> String? {
         if password.unicodeScalars.allSatisfy({ (0x20...0x7E).contains($0.value) }) { return password }

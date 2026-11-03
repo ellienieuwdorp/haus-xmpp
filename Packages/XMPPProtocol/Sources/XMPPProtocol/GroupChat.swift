@@ -17,8 +17,8 @@ extension XMPPGroupError: LocalizedError {
     }
 }
 
-/// A complete member/admin/owner union obtained from the authenticated room service.
-/// Occupant presence alone is never a membership list: offline members remain recipients.
+/// A complete member/admin/owner union from the authenticated room service. Occupant presence alone is never a
+/// membership list: offline members remain recipients.
 public struct XMPPGroupRoomSnapshot: Sendable, Equatable, Codable {
     public let room: String
     public let members: [String]
@@ -38,8 +38,8 @@ public struct XMPPGroupRoomSnapshot: Sendable, Equatable, Codable {
 
 }
 
-/// Construct only after validating the room's occupant→real-JID mapping. The displayed
-/// nickname is never the cryptographic sender identity.
+/// Construct only after validating the room's occupant→real-JID mapping. The nickname is never the cryptographic
+/// sender identity.
 public enum XMPPGroupProvenance: String, Sendable, Codable { case liveOccupant, ownArchive, roomArchive }
 
 public struct XMPPEncryptedGroupMessage: Sendable, Equatable, Codable {
@@ -50,10 +50,9 @@ public struct XMPPEncryptedGroupMessage: Sendable, Equatable, Codable {
     public let envelope: XMPPOMEMOEnvelope
     public let provenance: XMPPGroupProvenance
     public let roomStanzaID: String?
-    /// Unencrypted outer `<body/>` fallback: a content hint only (see `XMPPEncryptedMessage.hasFallbackBody`).
+    /// Unencrypted outer `<body/>` fallback: a content hint only.
     public let hasFallbackBody: Bool
-    /// A live stanza our own server held for this session (see `XMPPEncryptedMessage.serverStamp`). Not encoded:
-    /// a retained envelope keeps its time beside it.
+    /// A live stanza our server held for this session (see `XMPPEncryptedMessage.serverStamp`). Not encoded.
     public var serverStamp: Date? = nil
     public init(id: String, room: String, occupant: String, sender: String, envelope: XMPPOMEMOEnvelope, provenance: XMPPGroupProvenance = .liveOccupant, roomStanzaID: String? = nil,
                 hasFallbackBody: Bool = false) throws {
@@ -71,7 +70,7 @@ public struct XMPPEncryptedGroupMessage: Sendable, Equatable, Codable {
                       envelope: values.decode(XMPPOMEMOEnvelope.self, forKey: .envelope),
                       provenance: values.decodeIfPresent(XMPPGroupProvenance.self, forKey: .provenance) ?? .liveOccupant,
                       roomStanzaID: values.decodeIfPresent(String.self, forKey: .roomStanzaID),
-                      // Retained envelopes written before this field existed still decode.
+                      // Older retained envelopes lack this field.
                       hasFallbackBody: values.decodeIfPresent(Bool.self, forKey: .hasFallbackBody) ?? false)
     }
 
@@ -82,23 +81,21 @@ struct GroupRoomState {
     var occupants: [String: String] = [:]
     var revision: UInt64 = 0
     var joined = false
-    /// The room answered our last join with an error presence (not a member, banned, nickname taken, room gone).
+    // Error presence to our last join (not a member, banned, nickname taken, room gone).
     var joinRefused = false
     var nickname: String?
-    /// The `revision` at which `members` was last validated by this connection.
     var validatedRevision: UInt64? = nil
 
-    /// How much reading a membership refresh needs. Occupant presence and nickname changes bump `revision`,
-    /// so an unchanged revision means no presence this connection can observe has changed since validation.
+    // Occupant presence and nickname changes bump `revision`, so an unchanged revision means no observable presence
+    // changed since validation.
     private var refreshDecision: GroupRoomRefreshDecision {
         guard !members.isEmpty, let validatedRevision else { return .readTwice }
         return validatedRevision == revision ? .cached : .readOnceExpecting(members)
     }
 
-    /// An unchanged revision does not mean unchanged membership: granting or revoking membership for a user
-    /// who is not in the room sends no presence (XEP-0045 §9.3, §9.4). Only the archive paging path may reuse
-    /// the validation; sends and key distribution read at least once so an added member gets the key and a
-    /// removed one stops getting it.
+    // Granting or revoking membership for a user not in the room sends no presence (XEP-0045 §9.3, §9.4). Only archive
+    // paging may reuse the validation; sends and key distribution read at least once so an added member gets the key
+    // and a removed one stops getting it.
     func refreshDecision(reusingValidation: Bool) -> GroupRoomRefreshDecision {
         let decision = refreshDecision
         guard !reusingValidation, decision == .cached else { return decision }
@@ -120,29 +117,27 @@ struct GroupRoomState {
 }
 
 enum GroupRoomRefreshDecision: Equatable {
-    /// No presence changed since the last validation: return the stored snapshot, zero IQs.
+    // Return the stored snapshot, zero IQs.
     case cached
-    /// Presence changed: one read; accept it without a second read when it equals the last validated list.
+    // One read; accept it without a second when it equals the last validated list.
     case readOnceExpecting([String])
-    /// Never validated on this connection: two agreeing reads.
+    // Never validated on this connection: two agreeing reads.
     case readTwice
 }
 
-/// One in-flight membership validation, shared by every caller that asks for the room meanwhile.
-/// It is cancelled only when every waiter was cancelled, or by `finish` with the connection.
+// Shared by every caller asking for the room meanwhile; cancelled only when every waiter was, or by `finish`.
 struct GroupRoomRefresh: Sendable {
     let id: UUID
     let task: Task<XMPPGroupRoomSnapshot, Error>
     var waiters: Int
 }
 
-/// In-flight refreshes are kept apart by whether they may answer from the cache: a caller that must read
-/// never joins one that may not read.
+// A caller that must read never joins a refresh that may answer from the cache.
 struct GroupRoomRefreshKey: Hashable, Sendable {
     let room: String
     let reusesValidation: Bool
 
-    /// The in-flight refreshes a caller may join, most thorough first.
+    // Most thorough first.
     static func joinable(room: String, reusingValidation: Bool) -> [GroupRoomRefreshKey] {
         let reading = GroupRoomRefreshKey(room: room, reusesValidation: false)
         return reusingValidation ? [reading, GroupRoomRefreshKey(room: room, reusesValidation: true)] : [reading]
@@ -191,8 +186,8 @@ enum GroupChatWire {
                                              sender: sender, envelope: OMEMOWire.parseEnvelope(encrypted), roomStanzaID: stanzaID(node, room: room),
                                              hasFallbackBody: !node.children("body", namespace: "jabber:client").isEmpty)
     }
-    /// Only called inside an authenticated MAM query. Historical nicknames cannot use
-    /// today's occupant map: the service must include the archived author's real JID.
+    // Only inside an authenticated MAM query. Historical nicknames cannot use today's occupant map: the service must
+    // include the archived author's real JID.
     static func archivedMessage(_ node: XMLNode, account: String, archiveRoom: String?, knownRooms: Set<String>, archiveID: String? = nil) throws -> XMPPEncryptedGroupMessage {
         guard node.attributes["type"] == "groupchat", let from = node.attributes["from"],
               let fromBare = OMEMOWire.bareJID(from), node.children.filter({ $0.name == "encrypted" }).count == 1,
@@ -225,8 +220,7 @@ enum GroupChatWire {
         if let archiveID {
             guard OMEMOWire.validStanzaID(archiveID), value.map({ $0 == archiveID }) ?? true else { throw XMPPGroupError.invalidMessage }
         }
-        // XEP-0444 requires the room-assigned stanza-id element; a MAM cursor alone
-        // does not turn a message without that extension into a reaction target.
+        // XEP-0444 requires the room-assigned stanza-id; a MAM cursor alone does not make a message a reaction target.
         return value
     }
     static func applyPresence(_ node: XMLNode, room: String, account: String, state: inout GroupRoomState) {
@@ -236,8 +230,8 @@ enum GroupChatWire {
         let ownOccupant = occupant == room + "/" + (state.nickname ?? "")
         let xs = node.children.filter { $0.name == "x" && $0.namespace == user }
         let items = xs.first?.children.filter { $0.name == "item" && $0.namespace == user } ?? []
-        // Nonanonymous rooms can expose one item per session of the same occupant.
-        // All entries must still describe exactly one real identity and affiliation.
+        // Nonanonymous rooms can expose one item per session of the same occupant; all must name one real identity and
+        // affiliation.
         guard node.attributes["type"] == nil, xs.count == 1, !items.isEmpty, items.count <= 100,
               let jid = items[0].attributes["jid"].flatMap(OMEMOWire.bareJID),
               let affiliation = items[0].attributes["affiliation"], ["member", "admin", "owner"].contains(affiliation),
@@ -246,8 +240,7 @@ enum GroupChatWire {
             if ownOccupant { state.joined = false; state.joinRefused = node.attributes["type"] == "error" }
             return
         }
-        // Keep authenticated presence for a newly added member; a complete membership
-        // refresh is still required before this mapping can authorize message routing.
+        // A complete membership refresh is still required before this mapping can authorize message routing.
         state.occupants[occupant] = jid
         if ownOccupant {
             state.joined = jid == account && xs[0].children.contains {
@@ -262,7 +255,7 @@ enum GroupChatWire {
 }
 
 extension XMPPClient {
-    /// The room refused our last join (an error presence to it); a later join clears this.
+    /// The room refused our last join; a later join clears this.
     public func groupRoomRefusedJoin(_ room: String) -> Bool { groupRooms[room]?.joinRefused == true }
     public func groupRoomSnapshot(_ room: String) throws -> XMPPGroupRoomSnapshot? {
         guard let state = groupRooms[room], !state.members.isEmpty else { return nil }
@@ -274,18 +267,17 @@ extension XMPPClient {
               current.revision == snapshot.revision, current.members == snapshot.members else { throw XMPPGroupError.membershipChanged }
     }
 
-    /// The server offers no transactional membership revision. The first validation on a connection
-    /// requires two matching full reads with no intervening presence change. Every later refresh reads at
-    /// least once and accepts one read that equals the last validated list: a change and its reversal between
-    /// reads is invisible to two reads as well. Used by sends, joins and OMEMO's group key distribution.
-    /// Callers must still revalidate before send (`validateGroupWrite` compares the revision at write time).
+    /// The server offers no transactional membership revision. The first validation on a connection needs two matching
+    /// full reads with no presence change between; later refreshes accept one read equal to the last validated list (a
+    /// change and its reversal between reads is invisible to two reads as well). Callers still revalidate before a send
+    /// (`validateGroupWrite` compares the revision at write time).
     public func refreshGroupRoom(_ room: String) async throws -> XMPPGroupRoomSnapshot {
         try await refreshGroupRoom(room, reusingValidation: false)
     }
 
-    /// `reusingValidation: true` also returns this connection's last validated list without any read while no
-    /// occupant presence or nickname change arrived. Only for archive paging after the walk validated the room:
-    /// affiliation changes for absent users send no presence, so this may be stale for the rest of the walk.
+    /// `reusingValidation: true` returns the last validated list without a read while no occupant presence or nickname
+    /// change arrived. Only for archive paging after the walk validated the room: affiliation changes for absent users
+    /// send no presence, so this may be stale for the rest of the walk.
     public func refreshGroupRoom(_ room: String, reusingValidation: Bool) async throws -> XMPPGroupRoomSnapshot {
         let account = try groupAccount()
         guard OMEMOWire.bareJID(room) == room else { throw XMPPGroupError.unsupportedRoom }

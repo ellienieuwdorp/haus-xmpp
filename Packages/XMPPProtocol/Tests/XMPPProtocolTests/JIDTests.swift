@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import XMPPProtocol
 
-/// RFC 7622 normal forms, with the spellings Prosody 13 (`util.jid.prep`) produced for the same inputs where they agree.
+// RFC 7622 normal forms, with the spellings Prosody 13 (`util.jid.prep`) produced for the same inputs where they agree.
 @Test func addressesNormaliseToOneSpelling() {
     let cases: [(String, String)] = [
         ("Ellie@LocalHost", "ellie@localhost"),

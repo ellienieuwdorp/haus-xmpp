@@ -1,6 +1,6 @@
 import Foundation
 
-/// These profiles have different key derivation and payload formats. Never relabel ciphertext.
+/// Profiles differ in key derivation and payload format. Never relabel ciphertext.
 public enum XMPPOMEMOProfile: String, Sendable, Codable, CaseIterable {
     case legacy, modern
 
@@ -31,7 +31,7 @@ public struct XMPPOMEMOBundle: Sendable, Equatable, Codable {
 }
 
 public struct XMPPOMEMOKey: Sendable, Equatable, Codable {
-    /// Modern OMEMO scopes recipient device IDs to a bare JID. Legacy headers do not carry this field.
+    /// Modern OMEMO scopes recipient device IDs to a bare JID; legacy headers lack this field.
     public let recipientJID: String?
     public let deviceID: UInt32
     public let keyExchange: Bool
@@ -47,7 +47,7 @@ public struct XMPPOMEMOEnvelope: Sendable, Equatable, Codable {
     public let senderDeviceID: UInt32
     public let keys: [XMPPOMEMOKey]
     public let iv: Data?
-    /// Nil is a session-management/key-transport message, not an empty plaintext message.
+    /// nil is a session-management or key-transport message, not an empty plaintext.
     public let payload: Data?
 
     public init(profile: XMPPOMEMOProfile, senderDeviceID: UInt32, keys: [XMPPOMEMOKey], iv: Data? = nil, payload: Data?) {
@@ -62,19 +62,19 @@ public struct XMPPEncryptedMessage: Sendable, Equatable {
     public let originID: String?
     public let envelope: XMPPOMEMOEnvelope
     public let provenance: XMPPMessageProvenance
-    /// Unencrypted outer `<request/>` / `<markable/>`: the sender wants a receipt or read marker back.
+    /// Unencrypted outer `<request/>` / `<markable/>`.
     public var requestsReceipt = false
     public var markable = false
-    /// Unencrypted outer `<body/>` (the XEP-0384 fallback text): a content hint only, never shown and never authenticated.
-    /// It tells an exclusion that the envelope would have been a message bubble rather than a reaction or receipt.
+    /// The unencrypted XEP-0384 fallback `<body/>`: a hint, never shown or authenticated, that the envelope is a
+    /// message rather than a reaction or receipt.
     public var hasFallbackBody = false
     /// Untrusted XEP-0308 reference outside the ciphertext, the only place legacy OMEMO can carry it.
     public var replaces: String? = nil
-    /// XEP-0359 id the account's own archive assigned (`by` = the account's bare JID): the MAM result id, or a live
-    /// `<stanza-id/>` from our server. Direct chats' XEP-0490 state refers to messages by it. Nil when unknown.
+    /// XEP-0359 id the account's own archive assigned (the MAM result id or our server's live `<stanza-id/>`); XEP-0490
+    /// refers to direct messages by it.
     public var archiveStanzaID: String? = nil
-    /// When our own server stored a live stanza for this session (offline storage, a hibernated stream's queue): its
-    /// `<delay/>`, clamped to now. Nil for a stanza delivered as it was sent, and for every delay a peer added.
+    /// Our own server's `<delay/>` on a live stanza it held for this session, clamped to now. nil when delivered as
+    /// sent, and for every delay a peer added.
     public var serverStamp: Date? = nil
 
     public init(id: String, from: String, to: String?, originID: String?, envelope: XMPPOMEMOEnvelope, provenance: XMPPMessageProvenance = .direct,
@@ -90,7 +90,7 @@ public enum XMPPIQError: Error, Sendable, Equatable {
     case requestLimit
 }
 
-/// Pure bounded OMEMO XML codecs. Signature verification and trust are the crypto package's responsibility.
+// Bounded OMEMO XML codecs. Signature verification and trust belong to the crypto package.
 enum OMEMOWire {
     static let pubsub = "http://jabber.org/protocol/pubsub"
     static let eventNamespace = pubsub + "#event"
@@ -103,7 +103,7 @@ enum OMEMOWire {
               let result = UInt32(text), validID(result) else { throw XMPPIQError.malformedResponse }
         return result
     }
-    /// The normal-form bare JID of a user or room address (`JID`); `bareJID(x) == x` means x is already one.
+    // Normal form; `bareJID(x) == x` means x already is one.
     static func bareJID(_ jid: String) -> String? { JID.normalizedBare(jid) }
     static func singleton(_ parent: XMLNode, _ name: String, _ namespace: String) throws -> XMLNode {
         let matches = parent.children.filter { $0.name == name && $0.namespace == namespace }
@@ -276,9 +276,9 @@ enum OMEMOWire {
     }
     static func messageXML(to: String, envelope: XMPPOMEMOEnvelope, id: String, requestReceipt: Bool = false, markable: Bool = false, replaces: String? = nil) throws -> String {
         guard bareJID(to) != nil, validStanzaID(id), replaces.map(validStanzaID) ?? true else { throw XMPPClientError.invalidConfiguration }
-        // No body or reply metadata is emitted outside the encrypted payload. Receipt requests carry no
-        // content, so they ride outside where every deployed client (Conversations, slixmpp) reads them;
-        // a legacy correction reference rides outside because legacy OMEMO has no envelope to hold it.
+        // No body or reply metadata goes outside the encrypted payload. Receipt requests carry no content and ride
+        // outside, where deployed clients read them; a legacy correction reference rides outside because legacy OMEMO
+        // cannot hold it.
         let hints = (requestReceipt ? "<request xmlns='urn:xmpp:receipts'/>" : "") + (markable ? "<markable xmlns='urn:xmpp:chat-markers:0'/>" : "")
         let replace = replaces.map { "<replace xmlns='urn:xmpp:message-correct:0' id='\(xmlEscaped($0))'/>" } ?? ""
         let result = "<message to='\(xmlEscaped(to))' type='chat' id='\(xmlEscaped(id))'>\(try envelopeXML(envelope))\(replace)<origin-id xmlns='urn:xmpp:sid:0' id='\(xmlEscaped(id))'/><store xmlns='urn:xmpp:hints'/><encryption xmlns='urn:xmpp:eme:0' namespace='\(envelope.profile.namespace)' name='OMEMO'/>\(hints)</message>"

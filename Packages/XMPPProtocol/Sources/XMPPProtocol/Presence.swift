@@ -1,9 +1,8 @@
 import Foundation
 
-/// A contact resource's availability (RFC 6121 §4) with its XEP-0319 idle time. `<show/>`, `<status/>` and
-/// priority are ignored. The sender is server-stamped; presence from our own other resources is kept.
+/// A contact resource's availability (RFC 6121 §4) with its XEP-0319 idle time; `<show/>`, `<status/>` and priority
+/// are ignored. Presence from our own other resources is kept.
 public struct XMPPContactPresence: Sendable, Equatable {
-    /// The contact's bare address.
     public let contact: String
     public let resource: String?
     public let available: Bool
@@ -19,7 +18,7 @@ public enum XMPPSubscriptionRequest: String, Sendable, Equatable, CaseIterable {
     case subscribe, subscribed, unsubscribe, unsubscribed
 }
 
-/// A subscription presence from a contact's bare address.
+/// From a contact's bare address.
 public struct XMPPSubscriptionEvent: Sendable, Equatable {
     public let from: String
     public let kind: XMPPSubscriptionRequest
@@ -43,8 +42,7 @@ enum PresenceWire {
     static let idleNamespace = "urn:xmpp:idle:1"
     static let maximumRosterItems = 10_000
 
-    /// A non-room presence from a contact, addressed to us: a subscription change or an availability.
-    /// Errors, probes and unknown types are dropped. Rooms keep their own path.
+    // A non-room presence addressed to us. Errors, probes and unknown types are dropped.
     static func event(_ node: XMLNode, accountBareJID: String, accountFullJID: String, rooms: Set<String>) -> XMPPEvent? {
         guard node.name == "presence", node.namespace == "jabber:client",
               let from = node.attributes["from"], let bare = OMEMOWire.bareJID(from), !rooms.contains(bare) else { return nil }
@@ -69,7 +67,7 @@ enum PresenceWire {
         return "<presence to='\(xmlEscaped(bare))' type='\(kind.rawValue)'/>"
     }
 
-    /// Items that are not bare user addresses or carry an unknown subscription are skipped, not fatal.
+    // Items that are not bare user addresses or carry an unknown subscription are skipped, not fatal.
     static func rosterItems(_ query: XMLNode) throws -> [XMPPRosterItem] {
         guard query.name == "query", query.namespace == rosterNamespace else { throw XMPPIQError.malformedResponse }
         let items = query.children.filter { $0.name == "item" && $0.namespace == rosterNamespace }
@@ -81,7 +79,7 @@ enum PresenceWire {
         }
     }
 
-    /// RFC 6121 §2.1.3 result. A server may omit the query when the roster is empty.
+    // RFC 6121 §2.1.3: a server may omit the query when the roster is empty.
     static func rosterResult(_ response: XMLNode) throws -> [XMPPRosterItem] {
         let queries = response.children.filter { $0.name == "query" && $0.namespace == rosterNamespace }
         if queries.isEmpty, response.children.isEmpty { return [] }
@@ -89,8 +87,7 @@ enum PresenceWire {
         return try rosterItems(queries[0])
     }
 
-    /// RFC 6121 §2.1.6: a push is legitimate only without `from` or from our own bare address,
-    /// and carries exactly one item. Anything else is not a push.
+    // RFC 6121 §2.1.6: a push is legitimate only without `from` or from our own bare address, with exactly one item.
     static func rosterPush(_ node: XMLNode, accountBareJID: String) -> XMPPRosterItem? {
         guard node.name == "iq", node.namespace == "jabber:client", node.attributes["type"] == "set",
               node.attributes["from"] == nil || node.attributes["from"] == accountBareJID,
@@ -99,7 +96,6 @@ enum PresenceWire {
         return items[0]
     }
 
-    /// XEP-0012 seconds from an answer; a missing or non-numeric count is malformed.
     static func lastActivitySeconds(_ response: XMLNode) throws -> Int {
         let query = try OMEMOWire.singleton(response, "query", lastActivityNamespace)
         guard let text = query.attributes["seconds"], !text.isEmpty, text.utf8.count <= 12,
@@ -107,8 +103,7 @@ enum PresenceWire {
         return seconds
     }
 
-    /// The inline answer to an inbound IQ get/set that is not a roster push: disco#info, ping,
-    /// XEP-0012 to our full address while sharing is on, otherwise `service-unavailable`.
+    // disco#info, ping, XEP-0012 to our full address while sharing is on; otherwise `service-unavailable`.
     static func inlineResponse(_ node: XMLNode, accountFullJID: String, sharesLastActivity: Bool) -> String? {
         guard node.name == "iq", node.namespace == "jabber:client",
               ["get", "set"].contains(node.attributes["type"] ?? ""), let id = node.attributes["id"] else { return nil }

@@ -1,8 +1,8 @@
 import Foundation
 
-/// XEP-0191 Blocking Command 1.3 (2015-03-12), namespace `urn:xmpp:blocking`, with XEP-0377 Blocking Command Reports
-/// 0.4.1 (2026-02-25), namespace `urn:xmpp:reporting:1`. The account's server keeps the list and enforces it for every
-/// session of the account; a client only reads it, asks for changes and follows the server's pushes.
+// XEP-0191 Blocking Command 1.3 (`urn:xmpp:blocking`) with XEP-0377 Blocking Command Reports 0.4.1
+// (`urn:xmpp:reporting:1`). The account's server keeps and enforces the list for every session; a client only reads
+// it, asks for changes and follows the server's pushes.
 
 /// XEP-0377 §3 reasons.
 public enum XMPPReportReason: String, Sendable, Equatable, CaseIterable {
@@ -12,25 +12,23 @@ public enum XMPPReportReason: String, Sendable, Equatable, CaseIterable {
     case abuse = "urn:xmpp:reporting:abuse"
 }
 
-/// A XEP-0359 `<stanza-id/>` as an archive assigned it: `by` is that archive (for a direct chat the account's own bare
-/// JID), `id` its identifier.
+/// A XEP-0359 `<stanza-id/>`: `by` is the archive that assigned it (the account's bare JID for a direct chat).
 public struct XMPPStanzaReference: Sendable, Equatable, Hashable {
     public let id: String
     public let by: String
     public init(id: String, by: String) { self.id = id; self.by = by }
 }
 
-/// A XEP-0377 report riding on a block. The server blocks exactly as it would without it (XEP-0377 §6); what it does
-/// with the report is its own business, and a server that does not know the namespace ignores it.
+/// A XEP-0377 report riding on a block. The server blocks exactly as it would without it (XEP-0377 §6); a server
+/// that does not know the namespace ignores it.
 public struct XMPPBlockReport: Sendable, Equatable {
     public let reason: XMPPReportReason
-    /// Copies of the reported messages' stanza IDs. XEP-0377 §6 allows them only when the server has an archive
-    /// (XEP-0313), where they point.
+    /// XEP-0377 §6 allows these only when the server has a XEP-0313 archive, where they point.
     public let messages: [XMPPStanzaReference]
     public init(reason: XMPPReportReason, messages: [XMPPStanzaReference] = []) { self.reason = reason; self.messages = messages }
 }
 
-/// One change to the account's block list, in stream order.
+/// In stream order.
 public enum XMPPBlocklistChange: Sendable, Equatable {
     /// The whole list, from a fetch (XEP-0191 §3.2).
     case replaceAll(Set<String>)
@@ -51,9 +49,8 @@ public struct XMPPBlocklist: Sendable, Equatable, Codable {
 
     public var isEmpty: Bool { addresses.isEmpty }
 
-    /// Whether the server drops stanzas from `address`: an entry for the full address, its bare address, its domain
-    /// with the same resource, or its domain alone. A full-JID entry blocks only that resource, so a bare address
-    /// (a chat) is blocked only by its bare or domain entry.
+    /// Matches an entry for the full address, its bare address, its domain with the same resource, or its domain alone.
+    /// A full-JID entry blocks only that resource, so a bare address is blocked only by its bare or domain entry.
     public func blocks(_ address: String) -> Bool {
         guard let jid = JID(address) else { return false }
         if addresses.contains(jid.full) || addresses.contains(jid.bare) || addresses.contains(jid.domainpart) { return true }
@@ -82,11 +79,10 @@ enum BlockingWire {
     static let reportingNamespace = "urn:xmpp:reporting:1"
     static let stanzaIDNamespace = "urn:xmpp:sid:0"
     static let maximumItems = 10_000
-    /// More stanza IDs than this in one report says nothing the first ones do not.
+    // More IDs in one report add nothing.
     static let maximumReportedMessages = 20
 
-    /// `<item jid='…'/>` children of a list, block or unblock element. An item whose address is not a JID is skipped in
-    /// a fetched list (the rest still applies) but makes a push malformed: a push is all or nothing.
+    // A non-JID item is skipped in a fetched list but makes a push malformed: a push is all or nothing.
     static func items(_ element: XMLNode, strict: Bool) throws -> Set<String> {
         let items = element.children.filter { $0.name == "item" && $0.namespace == namespace }
         guard items.count <= maximumItems else { throw XMPPIQError.malformedResponse }
@@ -101,12 +97,12 @@ enum BlockingWire {
         return addresses
     }
 
-    /// §3.2 result: exactly one `<blocklist/>`, possibly empty.
+    // §3.2 result: exactly one `<blocklist/>`, possibly empty.
     static func blocklistResult(_ response: XMLNode) throws -> Set<String> {
         try items(OMEMOWire.singleton(response, "blocklist", namespace), strict: false)
     }
 
-    /// §3.3 request, with an optional XEP-0377 report on the single item.
+    // §3.3 request, with an optional XEP-0377 report on the single item.
     static func blockXML(_ address: String, report: XMPPBlockReport?) throws -> String {
         guard let jid = JID.normalized(address), MessageContent.validXMLText(jid) else { throw XMPPClientError.invalidConfiguration }
         guard let report else { return "<block xmlns='\(namespace)'><item jid='\(xmlEscaped(jid))'/></block>" }
@@ -122,7 +118,7 @@ enum BlockingWire {
         return "<block xmlns='\(namespace)'><item jid='\(xmlEscaped(jid))'>\(element)</item></block>"
     }
 
-    /// §3.4 request. An empty list would unblock everything (§3.5), which no caller means by accident.
+    // §3.4 request. An empty list would unblock everything (§3.5).
     static func unblockXML(_ addresses: [String]) throws -> String {
         let normal = addresses.compactMap(JID.normalized)
         guard !normal.isEmpty, normal.count == addresses.count, normal.allSatisfy(MessageContent.validXMLText) else {
@@ -131,8 +127,8 @@ enum BlockingWire {
         return "<unblock xmlns='\(namespace)'>" + normal.map { "<item jid='\(xmlEscaped($0))'/>" }.joined() + "</unblock>"
     }
 
-    /// A §3.3/§3.4/§3.5 push. Like a roster push (RFC 6121 §2.1.6), it is legitimate only without `from` or from our own
-    /// bare address, and carries one `<block/>` with at least one item or one `<unblock/>`. Anything else is not a push.
+    // A §3.3/§3.4/§3.5 push is legitimate only without `from` or from our own bare address (as RFC 6121 §2.1.6 roster
+    // pushes), carrying one `<block/>` with items or one `<unblock/>`.
     static func push(_ node: XMLNode, accountBareJID: String) -> XMPPBlocklistChange? {
         guard node.name == "iq", node.namespace == "jabber:client", node.attributes["type"] == "set",
               node.attributes["from"] == nil || node.attributes["from"] == accountBareJID,

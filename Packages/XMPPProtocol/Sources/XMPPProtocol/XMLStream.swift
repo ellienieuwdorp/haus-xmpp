@@ -6,9 +6,8 @@ public struct XMLNode: Sendable, Equatable {
     public let attributes: [String: String]
     public var text = ""
     public var children: [XMLNode] = []
-    /// The namespace each prefix of a prefixed attribute in `attributes` was bound to where the parser met this element.
-    /// `xml` (fixed by the XML namespaces spec) and `xmlns` declarations are not recorded, so it is empty for every
-    /// element without a prefixed attribute of its own. Read attributes by namespace with `attribute(_:namespace:)`.
+    /// The namespace bound to each prefix of a prefixed attribute where the parser met this element; `xml` and `xmlns`
+    /// are not recorded. Read attributes with `attribute(_:namespace:)`.
     public let attributePrefixes: [String: String]
 
     public init(name: String, namespace: String, attributes: [String: String], text: String = "", children: [XMLNode] = [],
@@ -17,8 +16,8 @@ public struct XMLNode: Sendable, Equatable {
         self.attributePrefixes = attributePrefixes
     }
 
-    /// The attribute with local name `localName` in `namespace`, whatever prefix the sender bound to it. An unprefixed
-    /// attribute is in no namespace, so it never matches; two attributes with the same expanded name give nil.
+    /// Matches whatever prefix the sender bound. An unprefixed attribute is in no namespace, so it never matches; two
+    /// attributes with the same expanded name give nil.
     public func attribute(_ localName: String, namespace: String) -> String? {
         if namespace == Self.xmlNamespace { return attributes["xml:" + localName] }
         let matches = attributes.filter { key, _ in
@@ -36,11 +35,11 @@ public struct XMLNode: Sendable, Equatable {
     public func children(_ name: String, namespace: String) -> [XMLNode] {
         children.filter { $0.name == name && $0.namespace == namespace }
     }
-    /// Nesting depth of the deepest descendant; a leaf is 1.
+    /// A leaf is 1.
     public var depth: Int { 1 + (children.map(\.depth).max() ?? 0) }
 
-    /// One complete element outside any stream: a decrypted SCE payload. No declarations,
-    /// comments, CDATA, entities or external resources, and the element limit is shallow.
+    /// One complete element outside any stream, such as a decrypted SCE payload. No declarations, comments, CDATA,
+    /// entities or external resources.
     public static func parse(standalone data: Data, maxDepth: Int = MessageContent.maximumDepth) throws -> XMLNode {
         guard let text = String(data: data, encoding: .utf8), !text.contains("<!"), !text.contains("<?") else { throw XMLStreamError.forbiddenDeclaration }
         return try NodeParser.parse(text, maxDepth: maxDepth, singleRoot: true)
@@ -57,8 +56,8 @@ enum XMLStreamFrame: Sendable, Equatable {
     case closed
 }
 
-/// Frames an unclosed XMPP XML stream without interpreting incomplete UTF-8.
-/// Each complete stanza is then validated by Apple's XML parser in stream namespace context.
+// Frames an unclosed stream without interpreting incomplete UTF-8; Apple's XML parser validates each complete stanza
+// in stream namespace context.
 struct XMLStreamFramer {
     let maximumBytes: Int
     private var pending: [UInt8] = []
@@ -70,7 +69,7 @@ struct XMLStreamFramer {
 
     init(maximumBytes: Int = 1_048_576) { self.maximumBytes = maximumBytes }
 
-    /// Bytes fed but not yet framed, apart from whitespace between elements.
+    // Ignores whitespace between elements.
     var hasBufferedInput: Bool { !stanza.isEmpty || !pending.allSatisfy(Self.whitespace) }
 
     mutating func feed(_ data: Data) throws -> [XMLStreamFrame] {

@@ -11,8 +11,8 @@ import Testing
 
 private func parsed(_ xml: String) throws -> XMPPProtocol.XMLNode { try XMLNode.parse(standalone: Data(xml.utf8)) }
 
-/// A peer hashes the disco#info reply it receives and must reach the `ver` our presence announced,
-/// or it re-queries and never trusts our `+notify` interests.
+// A peer hashes the disco#info reply it receives and must reach the `ver` our presence announced,
+// or it re-queries and never trusts our `+notify` interests.
 @Test func presenceCapsHashTheDiscoReplyAPeerReceives() throws {
     let caps = try parsed(EntityCapabilities.presenceElement)
     #expect(caps.name == "c" && caps.namespace == "http://jabber.org/protocol/caps" && caps.attributes["hash"] == "sha-1")

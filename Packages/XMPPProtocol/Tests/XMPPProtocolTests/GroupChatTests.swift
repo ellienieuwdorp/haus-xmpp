@@ -143,7 +143,7 @@ private func groupEnvelope() -> XMPPOMEMOEnvelope {
     let archivedWithBody = try GroupChatWire.archivedMessage(groupNode(ownWithBody), account: groupAlice, archiveRoom: nil, knownRooms: [])
     #expect(archived.provenance == .ownArchive && !archived.hasFallbackBody)
     #expect(archivedWithBody.hasFallbackBody)
-    // Retained envelopes encoded before the field existed still decode, as "no hint".
+    // Retained envelopes without the field decode as "no hint".
     var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(archivedWithBody)) as? [String: Any])
     #expect(json["hasFallbackBody"] as? Bool == true)
     json.removeValue(forKey: "hasFallbackBody")

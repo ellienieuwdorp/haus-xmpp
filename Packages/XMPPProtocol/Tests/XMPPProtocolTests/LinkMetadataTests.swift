@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import XMPPProtocol
 
-/// Card text is plain text: a sender or a page cannot reorder the host line with bidi controls, hide characters, or
-/// break the card's line limits with newlines.
+// Card text is plain text: a sender or a page cannot reorder the host line with bidi controls, hide characters, or
+// break the card's line limits with newlines.
 @Test func cardTextDropsControlsAndBidiAndCollapsesWhitespace() {
     let cases: [(String, String?)] = [
         ("  Council\n\napproves\tthe\u{2028}bridge  ", "Council approves the bridge"),
@@ -24,7 +24,7 @@ private let rdf = LinkMetadata.rdfNamespace, og = LinkMetadata.openGraphNamespac
 private let link = "https://example.org/news/42?ref=a&b=c"
 private let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3])
 
-/// Decodes `<content/>` children the way the SCE layer does: strictly, as authenticated content.
+// Decodes `<content/>` children the way the SCE layer does: strictly, as authenticated content.
 private func content(_ children: String, body: String = "Read this \(xmlEscaped(link))", strict: Bool = true,
                      languages: [String] = ["en-US"]) throws -> MessageContent {
     let node = try XMLNode.parse(standalone: Data("<content xmlns='urn:xmpp:sce:1'><body xmlns='jabber:client'>\(body)</body>\(children)</content>".utf8))
@@ -36,8 +36,8 @@ private func description(about: String = xmlEscaped(link), _ children: String = 
     "<Description xmlns='\(rdf)' xmlns:rdf='\(rdf)' rdf:about='\(about)'>\(children)</Description>"
 }
 
-/// What we send is what a receiver reads back, inside the reply form, in a fixed order: body, reply and its fallback,
-/// at most one Description, origin ID.
+// What we send is what a receiver reads back, inside the reply form, in a fixed order: body, reply and its fallback,
+// at most one Description, origin ID.
 @Test func sentMetadataRoundTripsInsideContentAfterTheReply() throws {
     let sent = MessageContent(body: "Look \(link) now", reply: .init(id: "w1", to: "bob@example.org", quote: "> bob\n> https://quoted.example/x\n\n"),
                               originID: "o1", linkMetadata: [LinkMetadata(about: link, title: " Council\napproves ", description: "Spring.",
@@ -51,7 +51,7 @@ private func description(about: String = xmlEscaped(link), _ children: String = 
                                                    image: .data(type: "image/jpeg", bytes: png), imageAlt: "Dusk")])
 }
 
-/// The deployed form, the XEP's prefixed example and any other RDF prefix are one and the same Description.
+// The deployed form, the XEP's prefixed example and any other RDF prefix are one and the same Description.
 @Test func everyPrefixFormDecodesAlike() throws {
     let image = "data:image/png;base64,\(png.base64EncodedString())"
     let forms = [
@@ -64,7 +64,7 @@ private func description(about: String = xmlEscaped(link), _ children: String = 
     }
 }
 
-/// Receive rules: a broken Description drops every Description of the message, never the text.
+// Receive rules: a broken Description drops every Description of the message, never the text.
 @Test func brokenMetadataDropsAllOfItAndKeepsTheMessage() throws {
     let good = description()
     let other = "https://other.example/a"
@@ -91,8 +91,8 @@ private func description(about: String = xmlEscaped(link), _ children: String = 
     #expect(try content(good, body: "&gt; \(xmlEscaped(link))\nmine").linkMetadata.isEmpty)
 }
 
-/// What is merely unsupported is ignored without dropping its neighbours: remote, `cid:` and other-type images, other
-/// properties, and Descriptions with nothing to show.
+// What is merely unsupported is ignored without dropping its neighbours: remote, `cid:` and other-type images, other
+// properties, and Descriptions with nothing to show.
 @Test func unsupportedPartsAreIgnored() throws {
     let second = "https://second.example/b"
     let decoded = try content(description(about: second, "<title xmlns='\(og)'>Two</title><image xmlns='\(og)'>https://cdn.example/x.jpg</image><url xmlns='\(og)'>https://evil.example/</url>")
@@ -102,7 +102,7 @@ private func description(about: String = xmlEscaped(link), _ children: String = 
     #expect(decoded.linkMetadata == [LinkMetadata(about: second, title: "Two")])
 }
 
-/// Several languages for one link: the reader's language, else the first given.
+// Several languages for one link: the reader's language, else the first given.
 @Test func prefersTheReadersLanguage() throws {
     let both = description("<title xmlns='\(og)'>Brug</title>").replacingOccurrences(of: "rdf:about", with: "xml:lang='nl' rdf:about")
         + description("<title xmlns='\(og)'>Bridge</title>").replacingOccurrences(of: "rdf:about", with: "xml:lang='en' rdf:about")
@@ -111,7 +111,7 @@ private func description(about: String = xmlEscaped(link), _ children: String = 
     #expect(try content(both, languages: ["de"]).linkMetadata.map(\.title) == ["Brug"])
 }
 
-/// Only text messages carry metadata, and the encoder writes only what a receiver would keep.
+// Only text messages carry metadata, and the encoder writes only what a receiver would keep.
 @Test func encoderWritesOnlyValidMetadataOnTextMessages() throws {
     let preview = LinkMetadata(about: link, title: "Bridge")
     for message in [MessageContent(body: "No link here", linkMetadata: [preview]),
@@ -126,9 +126,9 @@ private func description(about: String = xmlEscaped(link), _ children: String = 
     #expect(try MessageContent(body: "Read \(link)", linkMetadata: [preview]).xml().contains("rdf:about='\(xmlEscaped(link))'"))
 }
 
-/// We send within our own bounds, which are tighter than what we accept: a 24 KiB thumbnail, a title of 200 characters
-/// and 512 bytes, a description of 300 characters and 1,024 bytes, an alt of 200 characters. One field over its bound
-/// sends no metadata; every field at its bound sends.
+// We send within our own bounds, which are tighter than what we accept: a 24 KiB thumbnail, a title of 200 characters
+// and 512 bytes, a description of 300 characters and 1,024 bytes, an alt of 200 characters. One field over its bound
+// sends no metadata; every field at its bound sends.
 @Test func encoderKeepsToTheSendBounds() throws {
     let jpeg = { (count: Int) in MessageContent.LinkMetadata.Image.data(type: "image/jpeg", bytes: Data(repeating: 0xFF, count: count)) }
     let wide = String(repeating: "日", count: 171) // 171 characters, 513 bytes

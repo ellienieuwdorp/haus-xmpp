@@ -90,8 +90,8 @@ private func item(_ chat: String, id: String, by: String) -> String {
     #expect(EntityCapabilities.discoInfoQuery(node: nil).contains("<feature var='urn:xmpp:mds:displayed:0+notify'/>"))
 }
 
-/// The node is private (whitelist): a response that fails to decode is logged by shape only, never with the contact
-/// and room JIDs or stanza-ids its attributes carry.
+// The node is private (whitelist): a response that fails to decode is logged by shape only, never with the contact
+// and room JIDs or stanza-ids its attributes carry.
 @Test func malformedDisplayedSyncIsLoggedWithoutAttributes() throws {
     let items = item("romeo@montegue.lit", id: "secret-stanza", by: account) + item("orchard@rooms.capulet.lit", id: "room-7", by: "orchard@rooms.capulet.lit")
     let result = try node("<iq type='result' from='\(account)' id='1'><pubsub xmlns='http://jabber.org/protocol/pubsub'><items node='urn:xmpp:bookmarks:1'>\(items)</items></pubsub></iq>")

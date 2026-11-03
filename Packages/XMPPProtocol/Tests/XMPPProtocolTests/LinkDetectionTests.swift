@@ -6,7 +6,7 @@ private func found(_ text: String) -> [(DetectedLink.Kind, String, String)] {
     LinkDetection.links(in: text).map { ($0.kind, $0.text, $0.url.absoluteString) }
 }
 
-/// Every kind the bubble draws, with what each opens: a bare domain opens as https, a written number as `tel:`.
+// Every kind the bubble draws, with what each opens: a bare domain opens as https, a written number as `tel:`.
 @Test func detectsEveryLinkKindWithTheURLItOpens() {
     let text = "Read HTTPS://Example.org/A and www.example.net/b. Or http://plain.example, xmpp:room@muc.example?join, "
         + "bob@example.com, mailto:eve@example.com?subject=hi, tel:+3161234, +31 6 12345678 and geo:52.3731,4.8922;u=30."
@@ -28,7 +28,7 @@ private func found(_ text: String) -> [(DetectedLink.Kind, String, String)] {
     }
 }
 
-/// Ranges count UTF-16 units, so a link after an emoji still underlines its own characters.
+// Ranges count UTF-16 units, so a link after an emoji still underlines its own characters.
 @Test func rangesCoverTheWrittenCharacters() throws {
     let text = "👩🏽‍💻 see example.org/x 🎉 and geo:1,2"
     for link in LinkDetection.links(in: text) {
@@ -37,8 +37,8 @@ private func found(_ text: String) -> [(DetectedLink.Kind, String, String)] {
     #expect(LinkDetection.links(in: text).map(\.kind) == [.web, .geo])
 }
 
-/// Doc 06: key-bearing attachment links go only to the attachment decoder, never to open, copy or fetch. Other
-/// schemes, credentials and out-of-range coordinates are not links either.
+// Key-bearing attachment links go only to the attachment decoder, never to open, copy or fetch. Other schemes,
+// credentials and out-of-range coordinates are not links either.
 @Test func neverTreatsKeysCredentialsOrOtherSchemesAsLinks() {
     let key = String(repeating: "ab", count: 44), longKey = String(repeating: "cd", count: 48)
     for text in ["aesgcm://up.example/f.jpg#\(key)",
@@ -54,8 +54,8 @@ private func found(_ text: String) -> [(DetectedLink.Kind, String, String)] {
     #expect(found("https://example.org/doc#section-2").map(\.0) == [.web])
 }
 
-/// One classifier for which links may carry a preview, used by the composer, the encoder and the receive validator
-/// alike.
+// One classifier for which links may carry a preview, used by the composer, the encoder and the receive validator
+// alike.
 @Test func previewableURLsApplyEveryExclusion() {
     let file = "https://upload.example.org/slot/photo.jpg"
     let aesgcmFile = "aesgcm://upload.example.org/slot/legacy.jpg#" + String(repeating: "0", count: 88)
@@ -73,7 +73,7 @@ private func found(_ text: String) -> [(DetectedLink.Kind, String, String)] {
     #expect(LinkDetection.previewableURLs(in: text).count == 5)
 }
 
-/// The fetcher's scheme and port rule, and the key two fetches of one page share.
+// The fetcher's scheme and port rule, and the key two fetches of one page share.
 @Test func onlyDefaultPortHTTPSIsFetchedAndCacheKeysIgnoreCaseOfHostAndFragments() throws {
     let fetchable = ["https://example.org/a", "https://example.org:443/a"]
     let refused = ["http://example.org/a", "https://example.org:8443/a", "xmpp:me@example.org", "https://user@example.org/"]

@@ -108,7 +108,7 @@ private let account = "me@example.test"
     #expect(decoded == XMPPBlocklist(["b@example.test"]))
 }
 
-/// The fetch, block and push paths through `XMPPClient`'s own socket and parser against `LoopbackServer`.
+// The fetch, block and push paths through `XMPPClient`'s own socket and parser against `LoopbackServer`.
 @Suite(.serialized)
 struct BlockingSessionTests {
     private static let bindNamespace = "urn:ietf:params:xml:ns:xmpp-bind"

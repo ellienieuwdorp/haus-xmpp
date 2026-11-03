@@ -1,7 +1,7 @@
 import Foundation
 
-/// Why an archive entry with valid outer provenance carries no content this client accepts. Recorded durably
-/// (before the cursor) instead of failing the page, so one odd message cannot wedge catch-up.
+/// Why an archive entry with valid outer provenance carries no acceptable content. Recorded durably before the
+/// cursor instead of failing the page, so one odd message cannot wedge catch-up.
 public enum XMPPArchiveRejection: String, Sendable, Equatable {
     case unverifiableEncryptedGroup
     /// Inner from/to is not user@domain, or neither side is the account (server notice, component, forged actors).
@@ -9,8 +9,7 @@ public enum XMPPArchiveRejection: String, Sendable, Equatable {
     /// Content the client does not implement: EME without an OMEMO envelope, an unknown `urn:xmpp:omemo:*` namespace,
     /// more than one `<encrypted/>`, or a nested MAM/carbon/forwarded wrapper.
     case unsupportedDirectContent
-    /// One OMEMO envelope in a known namespace that `OMEMOWire.parseMessage` refused (bad base64, oversize key or
-    /// payload, wrong legacy IV length, invalid stanza id, duplicate/invalid header ids).
+    /// One OMEMO envelope in a known namespace that `OMEMOWire.parseMessage` refused.
     case malformedEncryptedContent
 }
 
@@ -25,22 +24,21 @@ public struct XMPPArchiveMessage: Sendable, Equatable {
     public var encryptedGroupMessage: XMPPEncryptedGroupMessage? = nil
     public var rejectedContent: XMPPArchiveRejection? = nil
     public var rejectionArchive: String? = nil
-    /// Bare JID of the conversation a rejected direct entry belongs to; nil for `foreignSender` and group rejections.
+    /// nil for `foreignSender` and group rejections.
     public var rejectedPeer: String? = nil
-    /// True when the rejected entry was sent by the account (own archive, `from` is the account).
+    /// The account sent the rejected entry.
     public var rejectedOutgoing: Bool = false
-    /// A stanza a server returned to us, which Prosody keeps in the own archive ("so you know if your own messages
-    /// were not delivered"). Never content: only its id, sender and condition are read.
+    /// A bounced stanza, which Prosody keeps in the own archive. Only its id, sender and condition are read.
     public var messageError: XMPPMessageError? = nil
 }
 
 /// Which side of a cursor an archive page is taken from (XEP-0059 §2.2, §2.5; XEP-0313 §4.1).
 public enum XMPPArchiveBound: Sendable, Equatable {
-    /// Forward from a cursor; nil = from the beginning of the archive.
+    /// nil starts at the beginning of the archive.
     case after(String?)
-    /// Backward from a cursor; nil = the newest page (RSM `<before/>`).
+    /// nil is the newest page (RSM `<before/>`).
     case before(String?)
-    /// Forward from the first entry archived at or after this time (XEP-0313 §4.1.1 `start` field), without a cursor.
+    /// XEP-0313 §4.1.1 `start` field, without a cursor.
     case since(Date)
 
     var cursor: String? {
@@ -51,14 +49,14 @@ public enum XMPPArchiveBound: Sendable, Equatable {
     }
 }
 
-/// Results are in chronological order in either direction: `messages.first` is the oldest entry.
+/// Chronological in either direction: `messages.first` is the oldest entry.
 public struct XMPPArchivePage: Sendable, Equatable {
     public let messages: [XMPPArchiveMessage]
     /// Forward: nothing newer than this page. Backward: nothing older than this page.
     public let complete: Bool
-    /// RSM `<first>`: the oldest returned ID. nil only when the page is empty.
+    /// RSM `<first>`, the oldest returned ID; nil only when the page is empty.
     public let firstID: String?
-    /// RSM `<last>`: the newest returned ID. nil only when the page is empty.
+    /// RSM `<last>`, the newest returned ID; nil only when the page is empty.
     public let lastID: String?
     public let handledTokens: [XMPPInboundToken]
 }
@@ -79,8 +77,7 @@ struct ArchiveQuery {
     static let namespace = "urn:xmpp:mam:2"
     static let resultSetNamespace = "http://jabber.org/protocol/rsm"
 
-    /// The MAM query with an RSM set of `limit` items on the requested side of the cursor. An empty `<before/>`
-    /// asks for the last (newest) page (XEP-0059 §2.5, XEP-0313 §4.1). `.since` filters by time instead of a cursor.
+    // An empty `<before/>` asks for the newest page (XEP-0059 §2.5, XEP-0313 §4.1).
     static func payload(queryID: String, limit: Int, bound: XMPPArchiveBound) -> String {
         var cursorXML = "", filterXML = ""
         switch bound {
@@ -121,8 +118,7 @@ struct ArchiveQuery {
                 let group = try GroupChatWire.archivedMessage(inner, account: accountBareJID, archiveRoom: room, knownRooms: knownRooms, archiveID: id)
                 messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil, encryptedGroupMessage: group))
             } catch {
-                // The outer archive provenance is valid. Record a deliberate rejection of
-                // unsupported/unverifiable inner content instead of blocking unrelated DMs.
+                // Valid outer provenance: record the rejection instead of blocking unrelated DMs.
                 messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil, rejectedContent: .unverifiableEncryptedGroup, rejectionArchive: archiveOwner))
             }
             identifiers.insert(id); return
@@ -133,12 +129,11 @@ struct ArchiveQuery {
             messages.append(.init(archiveID: id, timestamp: timestamp, message: nil, encryptedMessage: nil))
             identifiers.insert(id); return
         }
-        // Everything above is the own archive's outer provenance and still throws. From here on the inner message is
-        // content: whatever this client cannot accept becomes a rejected entry, recorded before the cursor advances.
+        // Above: outer provenance, which throws. Below: inner content, which becomes a rejected entry recorded before
+        // the cursor advances.
         if inner.attributes["to"] == nil {
-            // Prosody stores incoming/self messages without their redundant local recipient; ejabberd includes it.
-            // This normalization is permitted only after the own-archive wrapper is authenticated. Both shapes are
-            // covered by `archiveNormalizesOnlyTrustedMissingRecipientAndAcceptsRedactedPositions` and `ArchiveContentTests`.
+            // Prosody stores incoming/self messages without their local recipient; ejabberd includes it. Normalized
+            // only after the own-archive wrapper is authenticated.
             var attributes = inner.attributes; attributes["to"] = accountBareJID
             inner = XMLNode(name: inner.name, namespace: inner.namespace, attributes: attributes, text: inner.text, children: inner.children, attributePrefixes: inner.attributePrefixes)
         }
@@ -159,7 +154,7 @@ struct ArchiveQuery {
             identifiers.insert(id); return
         }
         guard !Self.nestsWrapper(inner) else { return reject(.unsupportedDirectContent, peer: peer, outgoing: outgoing) }
-        // Reuse already authenticated own-account forwarding provenance; archive ID and time are separate.
+        // Reuses authenticated own-account forwarding provenance; archive ID and time are separate.
         let provenance: XMPPMessageProvenance = outgoing ? .sentCarbon : .receivedCarbon
         var encrypted: XMPPEncryptedMessage?
         if OMEMOWire.hasEncryptedContent(inner) {
@@ -192,22 +187,21 @@ struct ArchiveQuery {
             return nodes.first?.text
         }
         let first = try bound("first"), last = try bound("last")
-        // Results arrive oldest first whichever direction was asked, so the RSM bounds must name exactly the
-        // returned ends. A non-empty page names both (so it needs a `<set/>`); an empty one names neither.
+        // Results arrive oldest first in either direction, so the RSM bounds must name exactly the returned ends; an
+        // empty page names neither.
         guard first == messages.first?.archiveID, last == messages.last?.archiveID else { throw XMPPIQError.malformedResponse }
-        // An empty page offers no cursor to continue from, so it ends the walk whatever it claims. ejabberd sends
-        // `complete='false'` (Monal 060db00d8, 0bacd2e2d) or no `<set/>` on some empty pages; asking again would loop.
+        // An empty page offers no cursor, so it ends the walk. ejabberd sends `complete='false'` or no `<set/>` on some
+        // empty pages (Monal 060db00d8, 0bacd2e2d); asking again would loop.
         return .init(messages: messages, complete: complete || messages.isEmpty, firstID: first, lastID: last, handledTokens: handledTokens)
     }
 
-    /// A MAM result, carbon or `<forwarded/>` inside archived content: never unwrapped a second time.
+    // Never unwrapped a second time.
     static func nestsWrapper(_ inner: XMLNode) -> Bool {
         containsWrapper(inner) || Carbons.containsWrapper(inner) || inner.child("forwarded", namespace: Carbons.forwarding) != nil
     }
 
-    // Configured once and then only read: `ISO8601DateFormatter`, like `DateFormatter` since iOS 7, is thread-safe for
-    // parsing and formatting, so one shared pair replaces two allocations per archived message. `nonisolated(unsafe)` is needed only
-    // because the class is not `Sendable` under Swift 6; nothing mutates these after initialization.
+    // `ISO8601DateFormatter` is thread-safe for parsing and formatting, and nothing mutates these after initialization;
+    // `nonisolated(unsafe)` only because the class is not `Sendable`.
     nonisolated(unsafe) private static let fractionalTimestamp: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

@@ -1,18 +1,16 @@
 import Foundation
 
-/// A `<message type='error'>`: a server returned one of our stanzas (RFC 6120 §8.3). Only the id, the address and the
-/// defined condition are read. The payload may echo our own ciphertext and is never parsed; the `<text/>` is written
-/// by whoever bounced it and is never shown.
+/// A bounced `<message type='error'>` (RFC 6120 §8.3). Only the id, address and defined condition are read: the
+/// payload may echo our ciphertext and is never parsed, and the bouncer's `<text/>` is never shown.
 public struct XMPPMessageError: Sendable, Equatable {
-    /// The id of the stanza that was returned: ours, when we sent it.
     public let id: String
-    /// Who returned it, in normal form: the address we sent to (its server bouncing it), or one of its resources.
+    /// Normal form: the address we sent to (its server bouncing it), or one of its resources.
     public let from: String
     /// An RFC 6120 §8.3.3 defined condition; `undefined-condition` for anything else.
     public let condition: String
-    /// `auth`, `cancel`, `continue`, `modify` or `wait`; nil when missing or unknown.
+    /// nil when missing or unknown.
     public let type: String?
-    /// XEP-0191: our own block list refused it (`<blocked xmlns='urn:xmpp:blocking:errors'/>`).
+    /// XEP-0191: our own block list refused it.
     public let blockedByUs: Bool
 
     public init(id: String, from: String, condition: String, type: String? = nil, blockedByUs: Bool = false) {
@@ -29,7 +27,7 @@ public struct XMPPMessageError: Sendable, Equatable {
     static let stanzasNamespace = "urn:ietf:params:xml:ns:xmpp-stanzas"
     static let blockingErrorsNamespace = "urn:xmpp:blocking:errors"
 
-    /// Nil unless the stanza is an error message with a valid id and sender and exactly one `<error/>`.
+    // nil unless an error message with a valid id and sender and exactly one `<error/>`.
     static func parse(_ node: XMLNode) -> XMPPMessageError? {
         guard node.name == "message", node.namespace == "jabber:client", node.attributes["type"] == "error",
               let id = node.attributes["id"], OMEMOWire.validStanzaID(id),
@@ -43,29 +41,26 @@ public struct XMPPMessageError: Sendable, Equatable {
                                 type: type, blockedByUs: error.child("blocked", namespace: blockingErrorsNamespace) != nil)
     }
 
-    /// The address whose server returned the stanza: `from` when it is a bare JID (a server bouncing for the address we
-    /// sent to, or a room). Nil for an error one of a peer's resources wrote, which says nothing about the peer's other
-    /// resources, and for a bare domain. Nil for `recipient-unavailable` too: RFC 6120 makes it temporary, and Prosody's
-    /// mod_smacks sends it from the peer's bare JID for each stanza one of the peer's sessions lost unacknowledged,
-    /// while the peer's other sessions may have received the same message.
+    /// `from` when it is a bare JID (a server bouncing for the address, or a room). nil for a bare domain, for an error
+    /// one of a peer's resources wrote (it says nothing about the others), and for `recipient-unavailable`: RFC 6120
+    /// makes it temporary, and Prosody's mod_smacks sends it from the bare JID for each stanza one session lost while
+    /// the peer's other sessions may have received it.
     public var bouncedAddress: String? {
         guard condition != "recipient-unavailable", let jid = JID(from), jid.resourcepart == nil, jid.localpart != nil else { return nil }
         return jid.bare
     }
 
-    /// What the store records: the condition, or `blocked` when our own block list refused it.
+    /// The condition, or `blocked` when our own block list refused it.
     public var rejection: String { blockedByUs ? "blocked" : condition }
 
-    /// XEP-0045 §7.2.1 and XEP-0410: a room that answers a message with `not-acceptable` (or `not-allowed`) no longer
-    /// counts us as an occupant.
+    /// XEP-0045 §7.2.1 and XEP-0410: a room that answers with `not-acceptable` or `not-allowed` no longer counts us as
+    /// an occupant.
     public var meansNotInRoom: Bool { condition == "not-acceptable" || condition == "not-allowed" }
 }
 
-/// The XEP-0203 stamp our own server put on a stanza it held for this session: offline storage (`from` = our domain)
-/// or a hibernated stream's queue (Prosody's mod_smacks stamps every queued stanza, `from` = our bare JID). Exactly
-/// one such delay counts, clamped to now; a delay anyone else added is the sender's claim and is ignored. A peer can
-/// still write one naming our server, so `ServerStampWindow` decides when a stamp can be real, and the stamp only
-/// places the message in time: it never authenticates anything.
+// XEP-0203 delay from our own server on a stanza it held (offline storage, or mod_smacks' hibernation queue). Exactly
+// one counts, clamped to now; others are the sender's claim. A peer can forge one, so `ServerStampWindow` gates it
+// and it only places the message in time, never authenticates.
 enum ServerStamp {
     static let namespace = "urn:xmpp:delay"
 
@@ -80,13 +75,9 @@ enum ServerStamp {
     }
 }
 
-/// When a stamp of ours can be real. Our server stamps only what it held while this session was away, and it sends all
-/// of that at once: the hibernation queue right after `<resumed/>`, offline storage right after initial presence. So a
-/// stamp counts only during that catch-up, which ends at the first message with no delay at all (live traffic), the
-/// first answer to one of our own requests (sent after going online, so the server answers it after the catch-up), or
-/// `catchUpLimit` after going online, whichever comes first. A delay naming our server on a later message was written
-/// by its sender. Within the catch-up a stamp is also no older than `floor`: the previous stream's last contact, less
-/// `floorMargin` for clock skew and for stanzas received but not yet acknowledged. Nothing older is still queued.
+// Our server stamps only what it held while we were away and sends it all at once after `<resumed/>` or initial
+// presence. A stamp counts until the first undelayed message, the first answer to our own request or `catchUpLimit`,
+// and is no older than `floor`: the previous stream's last contact less `floorMargin` (skew, unacknowledged stanzas).
 struct ServerStampWindow {
     static let catchUpLimit: TimeInterval = 60
     static let floorMargin: TimeInterval = 300
@@ -98,19 +89,17 @@ struct ServerStampWindow {
         self.floor = floor; closesAt = openedAt.addingTimeInterval(Self.catchUpLimit)
     }
 
-    /// The earliest stamp a stream resuming `snapshot` (or binding afresh after it) can carry: its last contact, which
-    /// `expiresAt` holds plus the server's timeout, less the margin. Nil when unknown: the first session on this device.
+    // `expiresAt` minus the server's timeout, less the margin; nil on the first session on this device.
     static func floor(after snapshot: XMPPStreamManagementSnapshot?) -> Date? {
         guard let expiresAt = snapshot?.expiresAt, let timeout = snapshot?.resumeTimeoutSeconds else { return nil }
         return expiresAt.addingTimeInterval(-TimeInterval(timeout) - floorMargin)
     }
 
-    /// Whether `stanza` (as it reached us: a carbon's wrapper, not what it forwards) ends the catch-up.
+    // `stanza` as it reached us: a carbon's wrapper, not what it forwards.
     func ends(with stanza: XMLNode, now: Date = Date()) -> Bool {
         now >= closesAt || stanza.child("delay", namespace: ServerStamp.namespace) == nil
     }
 
-    /// Our server's stamp on `stanza` when it can be real; nil otherwise.
     func stamp(of stanza: XMLNode, accountBareJID: String, now: Date = Date()) -> Date? {
         guard !ends(with: stanza, now: now), let stamp = ServerStamp.of(stanza, accountBareJID: accountBareJID, now: now),
               floor.map({ stamp >= $0 }) ?? true else { return nil }

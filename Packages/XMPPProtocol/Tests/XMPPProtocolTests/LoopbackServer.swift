@@ -3,14 +3,14 @@ import Network
 @preconcurrency import Security
 @testable import XMPPProtocol
 
-/// A one-connection XMPP server on loopback TLS that a test drives stanza by stanza, so `XMPPClient`'s own
-/// socket, parser and state machine run unchanged. The certificate is made per test process by the system's
-/// `openssl` for `localhost` and lives only in memory; clients trust it as their lab authority.
+// A one-connection XMPP server on loopback TLS that a test drives stanza by stanza, so `XMPPClient`'s own
+// socket, parser and state machine run unchanged. The certificate is made per test process by the system's
+// `openssl` for `localhost` and lives only in memory; clients trust it as their lab authority.
 actor LoopbackServer {
     struct Failure: Error, CustomStringConvertible { let description: String }
 
     static let domain = "localhost"
-    /// Made once per test process; SecIdentity is immutable.
+    // Made once per test process; SecIdentity is immutable.
     private nonisolated(unsafe) static let credentials = Result { try makeIdentity() }
 
     nonisolated let port: UInt16
@@ -22,7 +22,7 @@ actor LoopbackServer {
     private var frames: [XMLStreamFrame] = []
     private var restartPending = false
     private var ended = false
-    /// Every byte the client wrote, in order, for tests that pin the exact wire text.
+    // Every byte the client wrote, in order, for tests that pin the exact wire text.
     private var received = Data()
 
     static func start() async throws -> LoopbackServer {
@@ -54,7 +54,7 @@ actor LoopbackServer {
         self.listener = listener; self.port = port; self.certificate = certificate
     }
 
-    /// A client configured for this server's certificate.
+    // A client configured for this server's certificate.
     nonisolated func client() -> XMPPClient { XMPPClient(labCertificateAuthority: certificate) }
 
     nonisolated func connect(_ client: XMPPClient) async throws {
@@ -93,10 +93,10 @@ actor LoopbackServer {
         if ended { self.ended = true }
     }
 
-    /// How many bytes the client has written so far; pass it to `written(since:)`.
+    // How many bytes the client has written so far; pass it to `written(since:)`.
     func mark() -> Int { received.count }
 
-    /// The client's bytes since `mark`, as text.
+    // The client's bytes since `mark`, as text.
     func written(since mark: Int) -> String { String(decoding: received.suffix(from: mark), as: UTF8.self) }
 
     func send(_ xml: String) async throws {
@@ -108,7 +108,7 @@ actor LoopbackServer {
         }
     }
 
-    /// The next frame from the client; throws when none arrives in time or the connection ended first.
+    // The next frame from the client; throws when none arrives in time or the connection ended first.
     private func nextFrame(within limit: Duration) async throws -> XMLStreamFrame {
         let deadline = ContinuousClock.now + limit
         while frames.isEmpty {
@@ -124,7 +124,7 @@ actor LoopbackServer {
         return node
     }
 
-    /// Everything the client writes until it closes the connection, answering its pings on the way.
+    // Everything the client writes until it closes the connection, answering its pings on the way.
     func remainder(within limit: Duration = .seconds(5)) async throws -> [XMPPProtocol.XMLNode] {
         var nodes: [XMPPProtocol.XMLNode] = []
         while true {
@@ -138,7 +138,7 @@ actor LoopbackServer {
         }
     }
 
-    /// Stream opening, SASL PLAIN and the restarted stream, ending with the post-authentication features.
+    // Stream opening, SASL PLAIN and the restarted stream, ending with the post-authentication features.
     func authenticate(features: String = "<sm xmlns='urn:xmpp:sm:3'/><csi xmlns='urn:xmpp:csi:0'/>") async throws {
         guard try await nextFrame(within: .seconds(5)) == .opened else { throw Failure(description: "expected the stream") }
         try await send(Self.header + "<stream:features><mechanisms xmlns='urn:ietf:params:xml:ns:xmpp-sasl'><mechanism>PLAIN</mechanism></mechanisms></stream:features>")

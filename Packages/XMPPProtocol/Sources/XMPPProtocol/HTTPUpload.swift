@@ -1,15 +1,13 @@
 import Foundation
 
-/// XEP-0363: the server's upload component and one slot for one file.
+/// XEP-0363: the server's upload component.
 public struct XMPPUploadService: Sendable, Equatable {
     public static let namespace = "urn:xmpp:http:upload:0"
     public let jid: String
-    /// Advertised `max-file-size`, when the component publishes one.
     public let maximumFileSize: Int?
     public init(jid: String, maximumFileSize: Int?) { self.jid = jid; self.maximumFileSize = maximumFileSize }
 
-    /// Reads the component's disco#info: the feature plus the optional data form. A MUC service that also offers
-    /// uploads keeps them for its rooms, so it is not the account's service.
+    // A MUC service that also offers uploads keeps them for its rooms, so it is not the account's service.
     static func decode(jid: String, info query: XMLNode) -> XMPPUploadService? {
         let features = Set(query.children.filter { $0.name == "feature" && $0.namespace == query.namespace }.compactMap { $0.attributes["var"] })
         guard features.contains(namespace), !features.contains("http://jabber.org/protocol/muc") else { return nil }
@@ -26,7 +24,7 @@ public struct XMPPUploadService: Sendable, Equatable {
 
 public struct XMPPUploadSlot: Sendable, Equatable {
     public let put: URL
-    /// Only the headers XEP-0363 permits are kept; anything else from the server is dropped.
+    /// Only the headers XEP-0363 permits; anything else from the server is dropped.
     public let headers: [String: String]
     public let get: URL
 
@@ -50,7 +48,7 @@ public struct XMPPUploadSlot: Sendable, Equatable {
 }
 
 extension XMPPClient {
-    /// Entities the server lists under disco#items (components such as the upload service).
+    /// Entities the server lists under disco#items.
     public func discoveryItems(for jid: String? = nil, timeout: Duration = XMPPClient.iqTimeout) async throws -> [String] {
         let response = try await requestIQ(type: "get", to: jid, payload: "<query xmlns='http://jabber.org/protocol/disco#items'/>", timeout: timeout)
         let query = try OMEMOWire.singleton(response, "query", "http://jabber.org/protocol/disco#items")
@@ -59,17 +57,12 @@ extension XMPPClient {
         return items.compactMap { $0.attributes["jid"] }.filter { MessageContent.validAddress($0) && !$0.contains("/") }
     }
 
-    /// Probes in flight at once; well under the client's limit on outstanding IQs.
+    // Well under the client's limit on outstanding IQs.
     static let uploadProbeWidth = 8
 
-    /// The server's XEP-0363 service, or nil when the server offers none. The domain itself and every entity it lists
-    /// under disco#items are probed concurrently, each within `timeout`; components hang off the server domain (an
-    /// unaddressed items query returns the account's own items), and each probe is addressed to the exact entity so the
-    /// reply scope stays strict. Of several services the one with the largest `max-file-size` wins (one that states no
-    /// limit counts as largest), then the domain, then list order.
-    ///
-    /// A stanza error means "not this entity". Any other failure (a silent component, a timeout, a malformed answer)
-    /// leaves the question open: when nothing was found, that error is thrown, so the caller keeps what it knew.
+    /// Probes the domain and every disco#items entity concurrently, each addressed exactly and within `timeout`. The
+    /// largest `max-file-size` wins (none stated counts as largest), then the domain, then list order. A stanza error
+    /// means "not this entity"; when nothing was found, any other failure is thrown so the caller keeps what it knew.
     public func uploadService(timeout: Duration = .seconds(5)) async throws -> XMPPUploadService? {
         guard !domain.isEmpty else { throw XMPPClientError.notConnected }
         let server = domain

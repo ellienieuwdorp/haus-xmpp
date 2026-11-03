@@ -2,8 +2,8 @@ import Foundation
 import Network
 import Security
 
-/// Transport parameters for either security mode. Both use the same TLS verification: the account domain as SNI and
-/// service identity, TLS 1.2 or later, system trust (or only the explicit lab CA).
+// Both modes verify TLS the same way: the account domain as SNI and service identity, TLS 1.2 or later, system trust
+// (or only the explicit lab CA).
 enum XMPPTransport {
     static func parameters(for security: XMPPTransportSecurity, domain: String, labCertificateAuthority: Data?, queue: DispatchQueue) -> NWParameters {
         let tls = tlsOptions(domain: domain, labCertificateAuthority: labCertificateAuthority, queue: queue)
@@ -43,19 +43,12 @@ enum XMPPTransport {
         return tls
     }
 
-    /// How the framer reports a server that does not offer, or refuses, STARTTLS.
     static let startTLSRefused = NWError.posix(.EPROTONOSUPPORT)
 }
 
-/// RFC 6120 §5 as a Network.framework framer, in the pattern `nw_framer_prepend_application_protocol` documents:
-/// the framer runs the plaintext negotiation itself while the connection is still preparing, then adds TLS above
-/// itself and marks ready. The connection reports `.ready` only after the TLS handshake, so the client sees
-/// exactly what direct TLS gives it and never reads or writes a plaintext byte.
-///
-/// Fail closed: features without `<starttls/>`, `<failure/>`, a stream error or any other element fails the
-/// connection. Nothing except the stream header and `<starttls/>` is sent before TLS. Bytes that follow `<proceed/>`
-/// in the same read are an injection attempt and fail the connection; later ones reach TLS as garbage and fail the
-/// handshake. Each framer instance (Happy Eyeballs may race several) keeps its own state.
+// RFC 6120 §5 as a framer (`nw_framer_prepend_application_protocol`): it negotiates in plaintext while the connection
+// prepares, then adds TLS above itself, so `.ready` follows the handshake and the client never sees a plaintext byte.
+// Fails closed on anything but `<proceed/>`; bytes after it in the same read are an injection attempt.
 final class StartTLSFramer: NWProtocolFramerImplementation {
     static let label = "XMPP STARTTLS"
     static let definition = NWProtocolFramer.Definition(implementation: StartTLSFramer.self)
@@ -63,7 +56,7 @@ final class StartTLSFramer: NWProtocolFramerImplementation {
     private static let tlsNamespace = "urn:ietf:params:xml:ns:xmpp-tls"
     private var parser = XMLStreamFramer(maximumBytes: 65_536)
     private var awaitingProceed = false
-    /// Set once TLS is prepended or the connection failed; no further plaintext is read.
+    // Set once TLS is prepended or the connection failed; no further plaintext is read.
     private var finished = false
 
     required init(framer: NWProtocolFramer.Instance) {}

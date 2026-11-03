@@ -1,17 +1,15 @@
 import Foundation
 
-/// The one grammar for message payload elements, shared by plain stanzas and decrypted SCE
-/// `<content>`. Wrappers differ (a `<message>` stanza, an SCE envelope); the elements do not.
-/// `strict` decoding is for authenticated content, where any ambiguity is tampering and
-/// rejects the whole payload. Lenient decoding is for untrusted outer stanzas, where an
-/// ambiguous extension is dropped and the rest of the stanza is still delivered.
+/// The message payload grammar shared by plain stanzas and decrypted SCE `<content>`. `strict` decoding is for
+/// authenticated content, where any ambiguity is tampering and rejects the payload; lenient decoding is for untrusted
+/// outer stanzas, where an ambiguous extension is dropped and the rest delivered.
 public struct MessageContent: Sendable, Equatable {
     public struct Reply: Sendable, Equatable {
-        /// Wire identity of the quoted message. Nil emits only the visible quote.
+        /// Wire identity of the quoted message; nil emits only the visible quote.
         public let id: String?
         public let to: String
-        /// The exact fallback text prefixed to the body. Callers own its format. Empty sends the reference alone,
-        /// with no fallback: the form a file message takes, whose body must stay exactly its link.
+        /// The exact fallback text prefixed to the body. Empty sends the reference alone, as a file message must, whose
+        /// body stays exactly its link.
         public let quote: String
         public init(id: String?, to: String, quote: String) { self.id = id; self.to = to; self.quote = quote }
     }
@@ -28,7 +26,7 @@ public struct MessageContent: Sendable, Equatable {
         public init(targetID: String, kind: Kind) { self.targetID = targetID; self.kind = kind }
     }
 
-    /// Body text after the reply quote, if any.
+    /// After the reply quote, if any.
     public var body: String
     public var reply: Reply?
     public var reaction: Reaction?
@@ -36,17 +34,16 @@ public struct MessageContent: Sendable, Equatable {
     /// `<request xmlns='urn:xmpp:receipts'/>` and `<markable xmlns='urn:xmpp:chat-markers:0'/>` on a message we send.
     public var requestsReceipt: Bool
     public var markable: Bool
-    /// XEP-0424: wire identity of an own message to unsend. Carries no other content; the
-    /// fallback body is emitted by the encoder and dropped by the decoder.
+    /// XEP-0424: wire identity of an own message to unsend. Carries no other content; the encoder emits the fallback
+    /// body and the decoder drops it.
     public var retraction: String?
     /// XEP-0308: wire identity of the own message this body replaces.
     public var correction: String?
     public var originID: String?
-    /// One shared file. `body` is then its caption, which may be empty.
+    /// `body` is then its caption, which may be empty.
     public var fileSharing: FileSharing?
-    /// XEP-0511 metadata about links in `body`, in body order. Read only from strict (authenticated) content of a text
-    /// message (`LinkMetadata.decode`); written only when valid for `body` (`LinkMetadata.validated`). A file, reaction,
-    /// receipt or retraction never carries it.
+    /// XEP-0511 metadata about links in `body`, in body order. Read only from strict content of a text message; written
+    /// only when valid for `body`. A file, reaction, receipt or retraction never carries it.
     public var linkMetadata: [LinkMetadata]
 
     public static let retractionFallback = "This person attempted to retract a previous message, but it's unsupported by your client."
@@ -59,11 +56,11 @@ public struct MessageContent: Sendable, Equatable {
         self.requestsReceipt = requestsReceipt; self.markable = markable; self.originID = originID; self.fileSharing = fileSharing
     }
 
-    /// The full `<body>` text, quote included.
+    /// The full `<body>`, quote included.
     public var text: String { (reply?.quote ?? "") + body }
 
-    /// Body text a client without XEP-0447 sees: the URL (legacy `aesgcm://` form when
-    /// encrypted) after the caption. The range is declared as a fallback so we can strip it.
+    // What a client without XEP-0447 sees: the URL (legacy `aesgcm://` when encrypted) after the caption, declared as a
+    // fallback so it can be stripped.
     private var fileFallback: String? {
         guard let fileSharing else { return nil }
         let link = fileSharing.aesgcmURL ?? fileSharing.url
@@ -73,7 +70,7 @@ public struct MessageContent: Sendable, Equatable {
     public static let maximumDepth = 16
     public static let maximumReactionCount = 12
 
-    /// What of `linkMetadata` the encoder writes: all of it when valid for this text message, else nothing.
+    /// All of `linkMetadata` when valid for this text message, else nothing.
     public var sendableLinkMetadata: [LinkMetadata] {
         guard fileSharing == nil, reaction == nil, receipt == nil, retraction == nil else { return [] }
         return LinkMetadata.validated(linkMetadata, body: body)
@@ -127,7 +124,7 @@ public struct MessageContent: Sendable, Equatable {
         return xml
     }
 
-    /// `node` is the element whose children carry the payload: a `<message>` or an SCE `<content>`.
+    /// `node` is a `<message>` or an SCE `<content>`.
     public static func decode(_ node: XMLNode, strict: Bool) throws -> MessageContent {
         guard node.depth <= maximumDepth else { throw XMPPClientError.invalidConfiguration }
         func ambiguous() throws { if strict { throw XMPPClientError.invalidConfiguration } }
@@ -148,8 +145,8 @@ public struct MessageContent: Sendable, Equatable {
         var reaction: Reaction?
         if reactionNodes.count > 1 { try ambiguous() }
         else if let container = reactionNodes.first {
-            // XEP-0444 sends the complete set; an empty set withdraws. Duplicate and non-emoji
-            // values are ignored, as the XEP permits, so a foreign client cannot poison a ratchet.
+            // XEP-0444 sends the complete set; an empty set withdraws. Duplicate and non-emoji values are ignored, as
+            // the XEP permits, so a foreign client cannot poison a ratchet.
             if let target = container.attributes["id"], validIdentifier(target), container.children.count <= 48,
                container.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                container.children.allSatisfy({ $0.name == "reaction" && $0.namespace == "urn:xmpp:reactions:0" && $0.children.isEmpty && validXMLText($0.text) }) {
@@ -164,7 +161,7 @@ public struct MessageContent: Sendable, Equatable {
         else if let file = files.first {
             if let decoded = FileSharing.decode(file) {
                 fileSharing = decoded
-                // Strip the URL we (or a like-minded sender) appended for clients without XEP-0447.
+                // Strip the URL appended for clients without XEP-0447.
                 let ranges = node.children("fallback", namespace: "urn:xmpp:fallback:0").filter { $0.attributes["for"] == FileSharing.namespace }
                     .flatMap { $0.children("body", namespace: "urn:xmpp:fallback:0") }
                 let scalars = Array(body.unicodeScalars)
@@ -207,8 +204,8 @@ public struct MessageContent: Sendable, Equatable {
                 }
             }
         }
-        // A retraction is the whole message: its fallback body is never shown, and any other
-        // content next to it is a contradiction (tampering when authenticated, dropped otherwise).
+        // A retraction is the whole message: its fallback body is never shown, and other content beside it is a
+        // contradiction.
         let retracts = node.children("retract", namespace: "urn:xmpp:message-retract:1")
         var retraction: String?
         if retracts.count > 1 { try ambiguous() }
@@ -225,8 +222,8 @@ public struct MessageContent: Sendable, Equatable {
             if reaction != nil || correction != nil || receipt != nil || fileSharing != nil { try ambiguous() }
             body = ""; reply = nil; reaction = nil; correction = nil; receipt = nil
         }
-        // Link metadata is decorative: only authenticated content of a text message carries it, and a broken
-        // Description drops the metadata, never the message (`LinkMetadata.decode`). Outer stanzas never yield it.
+        // Decorative: only authenticated text messages carry it, and a broken description drops the metadata, never the
+        // message.
         let linkMetadata = strict && retraction == nil && reaction == nil && receipt == nil && fileSharing == nil
             ? LinkMetadata.decode(in: node, body: body) : []
         return MessageContent(body: body, reply: reply, reaction: reaction, receipt: receipt, retraction: retraction, correction: correction,
@@ -234,7 +231,7 @@ public struct MessageContent: Sendable, Equatable {
                               linkMetadata: linkMetadata)
     }
 
-    /// Complete set, deduplicated and sorted, so equal intentions produce equal bytes.
+    /// Deduplicated and sorted, so equal intentions produce equal bytes.
     public static func normalizedReactions(_ values: [String]) throws -> [String] {
         guard values.count <= maximumReactionCount, values.allSatisfy(isEmoji) else { throw XMPPClientError.invalidConfiguration }
         return Array(Set(values)).sorted()
@@ -243,13 +240,13 @@ public struct MessageContent: Sendable, Equatable {
     public static func isEmoji(_ value: String) -> Bool {
         guard value.count == 1, value.utf8.count <= 64 else { return false }
         let scalars = value.unicodeScalars
-        // Unicode's emoji property includes bare ASCII digits. Those need a keycap
-        // sequence; text-presentation emoji require VS16 to count as an emoji here.
+        // Unicode's emoji property includes bare ASCII digits, which need a keycap sequence; text-presentation emoji
+        // need VS16.
         return scalars.contains { $0.properties.isEmojiPresentation }
             || (scalars.contains { $0.properties.isEmoji } && scalars.contains { $0.value == 0xfe0f || $0.value == 0x20e3 })
     }
 
-    /// Keep attribute normalization from changing a caller's durable identifier.
+    /// Rejects identifiers that attribute normalization would change.
     public static func validIdentifier(_ value: String) -> Bool {
         !value.isEmpty && value.utf8.count <= 1_024 && !value.contains(where: { $0.isWhitespace }) && validXMLText(value)
     }

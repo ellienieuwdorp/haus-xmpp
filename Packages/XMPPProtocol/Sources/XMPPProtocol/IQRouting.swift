@@ -1,7 +1,7 @@
 import Foundation
 
-/// An IQ ID is only a correlation token. The response must also come from the addressed entity.
-/// Addresses are compared in normal form (`JID`): a server answers for `Bob@Example.org` as `bob@example.org`.
+// An IQ ID is only a correlation token: the response must also come from the addressed entity, compared in normal
+// form.
 struct IQReplyScope: Sendable {
     let recipient: String?
     let accountBareJID: String
@@ -29,8 +29,8 @@ struct IQReplyScope: Sendable {
     static func result(_ node: XMLNode) throws -> XMLNode {
         if node.attributes["type"] == "error" {
             let error = try OMEMOWire.singleton(node, "error", "jabber:client")
-            // RFC 6120 §8.3.2 names exactly one condition, but some servers add a second; the first decides, as in other
-            // clients, so a refusal stays a refusal instead of failing the step that asked.
+            // RFC 6120 §8.3.2 names one condition, but some servers add a second; the first decides, as in other
+            // clients.
             guard let condition = error.children.first(where: { $0.namespace == "urn:ietf:params:xml:ns:xmpp-stanzas" && $0.name != "text" }) else {
                 throw XMPPIQError.malformedResponse
             }
@@ -41,7 +41,7 @@ struct IQReplyScope: Sendable {
 }
 
 extension XMPPClient {
-    /// Pure encoding used to persist the exact ciphertext before any network write.
+    /// Pure, so the exact ciphertext is persisted before any network write.
     public nonisolated static func encryptedMessageXML(to: String, envelope: XMPPOMEMOEnvelope, id: String, requestReceipt: Bool = false, markable: Bool = false, replaces: String? = nil) throws -> String {
         try OMEMOWire.messageXML(to: to, envelope: envelope, id: id, requestReceipt: requestReceipt, markable: markable, replaces: replaces)
     }
@@ -58,8 +58,8 @@ extension XMPPClient {
                                 attributePrefixes: original.attributePrefixes))
     }
 
-    /// Decode saved outgoing ciphertext for fingerprint-scoped replay authorization.
-    /// Only the already authenticated account may fill the absent outgoing sender attribute.
+    /// Decodes saved outgoing ciphertext for fingerprint-scoped replay authorization. Only the authenticated account
+    /// may fill the absent outgoing sender.
     public nonisolated static func decodeOutgoingEncryptedMessageXML(_ xml: String, from account: String) throws -> XMPPEncryptedMessage {
         guard OMEMOWire.bareJID(account) == account else { throw XMPPClientError.invalidConfiguration }
         var parser = XMLStreamFramer()
@@ -75,7 +75,7 @@ extension XMPPClient {
         return try OMEMOWire.parseMessage(node)
     }
 
-    /// The plain XEP-0444 twin, for deciding whether a journaled reaction stanza may be replayed.
+    /// Plain XEP-0444, for deciding whether a journaled reaction stanza may be replayed.
     public nonisolated static func decodeOutgoingReactionXML(_ xml: String, from account: String) -> XMPPReaction? {
         guard OMEMOWire.bareJID(account) == account else { return nil }
         var parser = XMLStreamFramer()

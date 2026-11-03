@@ -39,9 +39,9 @@ private func plan(_ directTLS: SRVLookup, _ startTLS: SRVLookup) -> [XMPPEndpoin
     #expect(SRVLookup([]) == SRVLookup.none)
 }
 
-/// RFC 2782: within a priority, the chance of going first follows weight. Its draw from 0...sum inclusive gives the
-/// first record one extra point, so weights 1 and 9 put the heavy record first 9/11 of the time (1,636 of 2,000,
-/// standard deviation 17); ignoring weights gives 50%. The bounds are five deviations wide.
+// RFC 2782: within a priority, the chance of going first follows weight. Its draw from 0...sum inclusive gives the
+// first record one extra point, so weights 1 and 9 put the heavy record first 9/11 of the time (1,636 of 2,000,
+// standard deviation 17); ignoring weights gives 50%. The bounds are five deviations wide.
 @Test func discoveryHonoursWeights() {
     var heavyFirst = 0
     for _ in 0..<2_000 where plan(.none, .records([srv(0, 1, "light.example.org"), srv(0, 9, "heavy.example.org")])).first?.host == "heavy.example.org" {
@@ -57,8 +57,8 @@ private func plan(_ directTLS: SRVLookup, _ startTLS: SRVLookup) -> [XMPPEndpoin
     #expect(SRVRecord(rdata: Data([0, 0, 0, 0, 0, 0, 9, 65])) == nil)
 }
 
-/// A plaintext server on loopback that answers the client's stream header and `<starttls/>` as scripted, and
-/// records every byte the client sends. Without `features` it never answers. A TLS ClientHello ends the connection.
+// A plaintext server on loopback that answers the client's stream header and `<starttls/>` as scripted, and
+// records every byte the client sends. Without `features` it never answers. A TLS ClientHello ends the connection.
 private final class PlaintextServer: @unchecked Sendable {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "test.plaintext-server")
@@ -119,7 +119,7 @@ private final class PlaintextServer: @unchecked Sendable {
 private let sasl = "<mechanisms xmlns='urn:ietf:params:xml:ns:xmpp-sasl'><mechanism>PLAIN</mechanism></mechanisms>"
 private let starttls = "<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'><required/></starttls>"
 
-/// RFC 6120 §5: without `<proceed/>` the connection fails and nothing but the header and `<starttls/>` was sent.
+// RFC 6120 §5: without `<proceed/>` the connection fails and nothing but the header and `<starttls/>` was sent.
 @Test(arguments: [
     ("<stream:features>\(sasl)</stream:features>", ""), // STARTTLS not offered (stripped)
     ("<stream:features>\(starttls)\(sasl)</stream:features>", "<failure xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>"),
@@ -137,9 +137,8 @@ private func startTLSFailsClosed(_ features: String, _ reply: String) async thro
     #expect(sent.components(separatedBy: "<stream:stream").count == 2)
 }
 
-/// After `<proceed/>` the next bytes on the wire are our TLS ClientHello (content type 22) for the account domain.
-/// Plaintext injected behind `<proceed/>` fails the connection before any handshake, so it can never be read as
-/// post-TLS stream content. Either way nothing but the header and `<starttls/>` travels in plaintext.
+// After `<proceed/>` the next bytes are our TLS ClientHello (content type 22) for the account domain; plaintext
+// injected behind `<proceed/>` fails the connection before any handshake.
 @Test(arguments: [("<proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>", true),
                   ("<proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/><stream:features>\(sasl)</stream:features>", false)])
 private func startTLSHandsOverToTLSOnlyOnACleanProceed(_ reply: String, _ handshakes: Bool) async throws {
@@ -159,7 +158,7 @@ private func startTLSHandsOverToTLSOnlyOnACleanProceed(_ reply: String, _ handsh
     #expect((afterStartTLS.range(of: Data("example.test".utf8)) != nil) == handshakes)
 }
 
-/// XEP-0368: the direct TLS ClientHello asks for ALPN `xmpp-client` and names the account domain.
+// XEP-0368: the direct TLS ClientHello asks for ALPN `xmpp-client` and names the account domain.
 @Test func directTLSOffersTheXMPPClientProtocol() async throws {
     let server = try PlaintextServer(features: nil)
     let port = try await server.start()
@@ -172,14 +171,14 @@ private func startTLSHandsOverToTLSOnlyOnACleanProceed(_ reply: String, _ handsh
     #expect(hello.range(of: Data("xmpp-client".utf8)) != nil && hello.range(of: Data("example.test".utf8)) != nil)
 }
 
-/// SRV records on this machine only (multicast DNS, never on the network): the real resolver path without a public
-/// zone. Each test gets its own `.local` domain; records vanish when the registration ends.
+// SRV records on this machine only (multicast DNS, never on the network): the real resolver path without a public
+// zone. Each test gets its own `.local` domain; records vanish when the registration ends.
 private final class LocalSRVZone: @unchecked Sendable {
     let domain = "haus-test-\(UUID().uuidString.prefix(8).lowercased()).local"
     private var connection: DNSServiceRef?
     private var records: [OpaquePointer?] = []
 
-    /// `target` "." declares the service not offered.
+    // `target` "." declares the service not offered.
     func register(_ service: String, target: String, port: UInt16) throws {
         if connection == nil {
             guard DNSServiceCreateConnection(&connection) == kDNSServiceErr_NoError else { throw POSIXError(.EIO) }
@@ -203,8 +202,8 @@ private final class LocalSRVZone: @unchecked Sendable {
 
 private enum DeadEndpoint { case refused, silent }
 
-/// RFC 6120 §3.2: a remembered endpoint that no longer answers is skipped for what SRV now says, and the error is
-/// the last candidate's. The silent case waits out the per-candidate timeout.
+// RFC 6120 §3.2: a remembered endpoint that does not answer is skipped for what SRV says, and the error is the last
+// candidate's. The silent case waits out the per-candidate timeout.
 @Test(arguments: [DeadEndpoint.refused, .silent])
 private func discoveryMovesPastADeadRememberedEndpoint(_ dead: DeadEndpoint) async throws {
     let current = try PlaintextServer(features: "<stream:features>\(sasl)</stream:features>")
@@ -229,8 +228,8 @@ private func discoveryMovesPastADeadRememberedEndpoint(_ dead: DeadEndpoint) asy
     if dead == .silent { #expect(String(decoding: silent.received, as: UTF8.self).contains("<stream:stream")) }
 }
 
-/// Discovery ends with the caller's cancellation, not with the DNS timeout: the notification extension's budget
-/// covers it. A `.local` name nobody answers makes the query wait for its full timeout otherwise.
+// Discovery ends with the caller's cancellation, not with the DNS timeout: the notification extension's budget
+// covers it. A `.local` name nobody answers makes the query wait for its full timeout otherwise.
 @Test func cancellingDuringDiscoveryReturnsPromptly() async throws {
     let zone = LocalSRVZone()
     let client = XMPPClient()

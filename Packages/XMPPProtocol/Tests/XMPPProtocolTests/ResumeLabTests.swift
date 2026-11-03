@@ -2,11 +2,11 @@ import Foundation
 import Testing
 @testable import XMPPProtocol
 
-/// XEP-0198 resumption against the local lab Prosody. Runs only when configured:
-///   HAUS_LAB_RESUME_ACCOUNT  credential JSON ({"jid", "password"}) of a disposable lab account
-///   HAUS_LAB_CA              the lab CA (PEM)
-///   HAUS_LAB_PROSODY_CONTAINER the lab's Prosody container (default haus-xmpp-lab-prosody-1), for the server's view
-///   HAUS_LAB_DIRECT_TLS_PORT direct TLS port on localhost (default 5223), for a disposable copy of the lab
+// XEP-0198 resumption against the local lab Prosody. Runs only when configured:
+//   HAUS_LAB_RESUME_ACCOUNT  credential JSON ({"jid", "password"}) of a disposable lab account
+//   HAUS_LAB_CA              the lab CA (PEM)
+//   HAUS_LAB_PROSODY_CONTAINER the lab's Prosody container (default haus-xmpp-lab-prosody-1), for the server's view
+//   HAUS_LAB_DIRECT_TLS_PORT direct TLS port on localhost (default 5223), for a disposable copy of the lab
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["HAUS_LAB_RESUME_ACCOUNT"] != nil), .serialized)
 struct ResumeLabTests {
     private struct Credentials: Decodable { let jid: String; let password: String }
@@ -32,7 +32,7 @@ struct ResumeLabTests {
         return try #require(Data(base64Encoded: pem.split(separator: "\n").filter { !$0.hasPrefix("-----") }.joined()))
     }
 
-    /// Connects a new client over `persistence`, as the app, extension and actions each do.
+    // Connects a new client over `persistence`, as the app, extension and actions each do.
     private func connect(_ persistence: Persistence, resource: String, availability: XMPPAvailability = .active) async throws -> XMPPClient {
         let account = try credentials()
         let parts = account.jid.split(separator: "@").map(String.init)
@@ -52,7 +52,8 @@ struct ResumeLabTests {
         await first.disconnectAndWait()
         var saved = try #require(await persistence.value)
         #expect(saved.fullJID.hasSuffix("/" + resource))
-        // As an older build saved it: 300 s from a last acknowledgement 301 s ago. Prosody still holds the session.
+        // 300 s from a last acknowledgement 301 s ago, as a snapshot without a re-stamped window; Prosody still holds
+        // it.
         saved.resumeTimeoutSeconds = 300
         saved.expiresAt = Date().addingTimeInterval(-1)
         await persistence.seed(saved)
@@ -86,14 +87,14 @@ struct ResumeLabTests {
         let replacement = try await connect(Persistence(), resource: resource)
         #expect(await !replacement.sessionResumed)
         await replacement.disconnectAndWait()
-        // The server no longer holds the first session: it was replaced, not left behind as a second resource.
+        // The first session was replaced, not left behind as a second resource.
         await old.seed(hibernating)
         let probe = try await connect(old, resource: resource)
         #expect(await !probe.sessionResumed)
         await probe.disconnectAndWait()
     }
 
-    /// `prosodyctl shell` in the lab container: the server's own view, which no client can query.
+    // `prosodyctl shell` in the lab container: the server's own view, which no client can query.
     private func prosody(_ arguments: String...) throws -> [Substring] {
         let process = Process(), output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -105,15 +106,15 @@ struct ResumeLabTests {
         return String(decoding: data, as: UTF8.self).split(separator: "\n")
     }
 
-    /// The stanzas the server holds unacknowledged for a hibernating session of the account.
+    // The stanzas the server holds unacknowledged for a hibernating session of the account.
     private func queued(resource: String) throws -> Int? {
         let jid = try credentials().jid + "/" + resource
         let row = try prosody("c2s", "show", jid, "jid smacks_queue").first { $0.hasPrefix(jid + " ") }
         return row?.split(separator: "|").last.flatMap { Int($0.trimmingCharacters(in: .whitespaces)) }
     }
 
-    /// Two installations of one account. Presence from one reaches the other's hibernating session, where Prosody queues
-    /// it (and, with push enabled, pushes for it). A resumed session whose availability did not change sends none.
+    // Two installations of one account. Presence from one reaches the other's hibernating session, where Prosody queues
+    // it (and, with push enabled, pushes for it). A resumed session whose availability did not change sends none.
     @Test func resumedAwaySessionSendsNoPresenceToAnotherHibernatingSession() async throws {
         // Sessions left by earlier runs expire after Prosody's hibernation time, and each sends the other resources an
         // unavailable presence: close them, so only this test's presence reaches the queue it counts.
@@ -141,8 +142,8 @@ struct ResumeLabTests {
         #expect(try queued(resource: other) == before + 1)
     }
 
-    /// Typing and then going to the background leaves nothing for a resume to replay: Prosody answers the farewell's
-    /// `<r/>` ahead of its ping, so the chat state and the away presence are acknowledged before the socket closes.
+    // Typing and then going to the background leaves nothing for a resume to replay: Prosody answers the farewell's
+    // `<r/>` ahead of its ping, so the chat state and the away presence are acknowledged before the socket closes.
     @Test func typingThenGoingAwayLeavesNothingToReplay() async throws {
         let resource = XMPPClient.makeResource()
         let persistence = Persistence()
@@ -159,8 +160,8 @@ struct ResumeLabTests {
         await second.disconnectAndWait()
     }
 
-    /// A local count behind the server's (a counting error) meets `<resumed h>` above what we sent: that connect ends
-    /// with the XEP-0198 error and retires the session, and the next one binds fresh instead of failing again.
+    // A local count behind the server's (a counting error) meets `<resumed h>` above what we sent: that connect ends
+    // with the XEP-0198 error and retires the session, and the next one binds fresh instead of failing again.
     @Test func resumedCountAboveWhatWeSentBindsFreshNextTime() async throws {
         let resource = XMPPClient.makeResource()
         let persistence = Persistence()
@@ -177,8 +178,8 @@ struct ResumeLabTests {
         await third.disconnectAndWait()
     }
 
-    /// Prosody's mod_smacks stamps each stanza it queues for a hibernating session with a delay from the account's bare
-    /// JID. A message that waited is dated by that stamp on resume, not by when the resumed stream delivered it.
+    // Prosody's mod_smacks stamps each stanza it queues for a hibernating session with a delay from the account's bare
+    // JID. A message that waited is dated by that stamp on resume, not by when the resumed stream delivered it.
     @Test func aMessageQueuedForAHibernatingSessionKeepsItsQueueTime() async throws {
         let account = try credentials(), resource = XMPPClient.makeResource(), persistence = Persistence()
         let first = try await connect(persistence, resource: resource)
