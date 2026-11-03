@@ -133,6 +133,16 @@ import Testing
         }
     }
 
+    // An extension run may be writing the rows; without the lease nothing is removed.
+    @Test func signOutRefusesWithoutTheLease() async throws {
+        try await Self.withSeededStore { store, url in
+            let before = Self.counts(url, account: Self.alice)
+            try await store.releaseTransportOwnership()
+            await #expect(throws: MessageStoreError.transportOwnershipRequired) { try await store.removeRowsAtSignOut(accountID: Self.alice) }
+            #expect(Self.counts(url, account: Self.alice) == before)
+        }
+    }
+
     // An account with encryption state is refused; without it, every table loses the account's row.
     @Test func erasingAnAccountEmptiesEveryTable() async throws {
         try await Self.withSeededStore { store, url in

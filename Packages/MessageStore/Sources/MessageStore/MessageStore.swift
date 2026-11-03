@@ -3102,7 +3102,9 @@ extension MessageStore {
     }
 
     /// Deletes the account's rows from every table whose sign-out policy (`AccountTable`) is `delete`, in one transaction.
+    /// Needs the transport lease, so no extension run is writing those rows meanwhile.
     public func removeRowsAtSignOut(accountID: String) throws {
+        try requireTransportOwnership()
         guard !accountID.isEmpty else { throw MessageStoreError.invalidValue }
         let tables = AccountTable.allCases.filter { $0.policy.signOut == .delete }
         guard !tables.isEmpty else { return }

@@ -1,4 +1,6 @@
 import Foundation
+import MessageStore
+import os
 
 // Per-account state outside the store (whose tables are `AccountTable`), and what sign-out and a transfer do to it. A
 // pre-upgrade copy takes both preference domains whole, `PreUpgradeSnapshot.folders`, the account record and the push
@@ -67,6 +69,14 @@ enum AccountResource: CaseIterable {
         case .deliveredNotifications, .appBadge, .donations:
             Policy(location: .system, signOut: .delete, transfer: .omit(reason: "the system's, on this device"))
         }
+    }
+
+    // Sign-out's share of the store: without the lease the rows stay rather than race an extension run.
+    static func removeStoreRows(of account: String, store: MessageStore, leased: Bool) async {
+        let log = Logger(subsystem: "haus.xmpp.ios", category: "sync")
+        guard leased else { return log.error("sign-out could not take the lease; the account's rows stay") }
+        do { try await store.removeRowsAtSignOut(accountID: account) }
+        catch { log.error("sign-out left rows of the account: \(String(describing: error), privacy: .public)") }
     }
 
     // Sign-out's share of the preferences, after the account was deselected.

@@ -764,10 +764,6 @@ final class AppModel {
         await forgetAccount()
         // Replies saved before the upgrade for this account are not sent after it signed out.
         if !account.isEmpty { try? snapshots?.removeSavedReplies(of: account) }
-        if !account.isEmpty, let store {
-            do { try await store.removeRowsAtSignOut(accountID: account) }
-            catch { Self.syncLog.error("sign-out left rows of the account: \(String(describing: error), privacy: .public)") }
-        }
         reconnection = ReconnectPolicy()
         selectAccount("")
         AccountResource.forgetPreferencesAtSignOut(of: account, app: preferences, group: sessionDefaults)
@@ -830,7 +826,7 @@ final class AppModel {
             }
         }
         guard generation == token else { return }
-        await quiesceTransport()
+        await quiesceTransport(signingOut: account)
         if let localFailure { self.error = localFailure }
     }
 
@@ -1367,12 +1363,14 @@ final class AppModel {
         BackgroundSession.availability(sharesLastSeen: accountPreferences.lastSeen, leftForeground: SharedSession.leftForeground(defaults: sessionDefaults))
     }
 
-    private func quiesceTransport() async {
+    private func quiesceTransport(signingOut account: String? = nil) async {
         await stopTransportWork()
         // A restore holds the lease until it closes the store, and releases it itself if it is refused.
         guard !restoringData else { return }
         hasTransportOwnership = false
         guard let store else { return }
+        // Once this process's work is joined and under the lease, so no extension run writes those rows meanwhile.
+        if let account, !account.isEmpty { await AccountResource.removeStoreRows(of: account, store: store, leased: await takeLease(store)) }
         await releaseLeaseInBackground(store)
     }
 
