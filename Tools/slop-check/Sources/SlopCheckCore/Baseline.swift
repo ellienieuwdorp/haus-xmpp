@@ -87,7 +87,7 @@ extension Baseline {
 
     private func overAllowance(_ violation: Violation, allowed: Int) -> Violation {
         Violation(file: violation.file, line: violation.line, rule: violation.rule,
-                  message: violation.message + " (the baseline allows \(allowed)%; bring it back to \(allowed)% or lower)",
+                  message: violation.message + " (the baseline allows \(allowed) comment lines here, this has \(violation.measure ?? 0))",
                   fingerprint: violation.fingerprint, measure: violation.measure)
     }
 }

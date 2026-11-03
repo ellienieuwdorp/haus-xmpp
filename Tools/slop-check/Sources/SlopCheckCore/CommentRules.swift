@@ -136,8 +136,9 @@ struct CommentRules {
         let commentLines = Set(ownLine.flatMap { $0.line...$0.endLine }).subtracting(apiDocLines)
         let percent = commentLines.count * 100 / nonBlank
         guard percent > Limits.densityPercent else { return }
+        // The baseline records the comment line count, not the percentage, so deleting code never fails it.
         report.add(1, Rule.density,
                    "comments are \(percent)% of this file's lines (limit \(Limits.densityPercent)%); delete the ones that restate the code",
-                   measure: percent)
+                   measure: commentLines.count)
     }
 }

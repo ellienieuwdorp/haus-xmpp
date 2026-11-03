@@ -53,7 +53,8 @@ struct FileCheckerTests {
         let source = (0..<6).map { "// Reason \($0) for the line below.\nlet x\($0) = \($0)\n" }.joined()
             + (0..<24).map { "let y\($0) = \($0)\n" }.joined()
         let density = FileChecker.check(path: "Sources/Thing.swift", text: source).first { $0.rule == Rule.density }
-        #expect(density?.measure == 16)
+        #expect(density?.message.hasPrefix("comments are 16%") == true)
+        #expect(density?.measure == 6)
     }
 }
 

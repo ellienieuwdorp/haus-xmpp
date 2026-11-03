@@ -1,7 +1,7 @@
 {
   "App/AboutView.swift" : {
     "comment.density" : [
-      "11"
+      "29"
     ],
     "comment.doc-on-non-api" : [
       "/// \"iOS 26.1\": the system and its version, nothing that tells one device from another.",
@@ -37,7 +37,7 @@
   },
   "App/AccountIdentityMigration.swift" : {
     "comment.density" : [
-      "14"
+      "12"
     ],
     "comment.doc-on-non-api" : [
       "/// An account signed in before addresses were normalised may be named as typed (`Ellie@Example.org`) outside the",
@@ -59,7 +59,7 @@
   },
   "App/AccountTransfer.swift" : {
     "comment.density" : [
-      "16"
+      "106"
     ],
     "comment.doc-on-non-api" : [
       "/// A UI test session's own store, preferences and Keychain items (DEBUG builds only set one), beside the",
@@ -157,7 +157,7 @@
       "/// visible message, which on iOS cells do as they appear (critique G3)."
     ],
     "comment.density" : [
-      "16"
+      "778"
     ],
     "comment.doc-on-non-api" : [
       "/// \"Suggest chats in Share Sheet\" (`ShareSuggestionSetting`); with previews off nothing is donated whatever it says.",
@@ -549,7 +549,7 @@
   },
   "App/AppModel+LinkPreviews.swift" : {
     "comment.density" : [
-      "21"
+      "16"
     ],
     "comment.doc-on-non-api" : [
       "/// A message with a link is on screen (iOS cell configure or prefetch, Mac row appear): fetch its preview if the",
@@ -566,7 +566,7 @@
   },
   "App/AttachmentDownloads.swift" : {
     "comment.density" : [
-      "16"
+      "64"
     ],
     "comment.doc-on-non-api" : [
       "/// A bubble whose file is not on disk came on screen: its download goes before those of bubbles not seen.",
@@ -609,7 +609,7 @@
   },
   "App/AttachmentKeyboard.swift" : {
     "comment.density" : [
-      "14"
+      "154"
     ],
     "comment.doc-on-non-api" : [
       "/// \"You've given access to a selection of photos\" plus a Select More button.",
@@ -721,7 +721,7 @@
   },
   "App/Blocking.swift" : {
     "comment.density" : [
-      "18"
+      "12"
     ],
     "comment.doc-on-non-api" : [
       "/// A block or report waiting for its confirmation dialog. `messageID` names the reported message, when a report came",
@@ -760,7 +760,7 @@
   },
   "App/ChatDetailsView.swift" : {
     "comment.density" : [
-      "12"
+      "18"
     ],
     "comment.doc-on-non-api" : [
       "/// A details page's hero: the iPhone's full-width screen, and on the Mac an inspector column a third of that width.",
@@ -776,7 +776,7 @@
   },
   "App/ChatDeviceReview.swift" : {
     "comment.density" : [
-      "32"
+      "16"
     ],
     "comment.doc-on-non-api" : [
       "/// The Don't Trust confirmation for one device: what stops, and for another member's device in a group, that the",
@@ -830,7 +830,7 @@
   },
   "App/ChatRow.swift" : {
     "comment.density" : [
-      "13"
+      "16"
     ],
     "comment.doc-on-non-api" : [
       "/// Incoming messages after the read pointer, in the row's trailing column under the time: a small accent capsule",
@@ -843,7 +843,7 @@
   },
   "App/CoalescedReload.swift" : {
     "comment.density" : [
-      "11"
+      "4"
     ],
     "comment.doc-on-non-api" : [
       "/// One load at a time. Requests made while a load runs are unioned into a single follow-up load,",
@@ -852,7 +852,7 @@
   },
   "App/ConnectionSetup.swift" : {
     "comment.density" : [
-      "25"
+      "66"
     ],
     "comment.doc-on-non-api" : [
       "/// An optional step failed and setup went on without its answer. Logged only.",
@@ -888,7 +888,7 @@
   },
   "App/ContactDirectory.swift" : {
     "comment.density" : [
-      "16"
+      "24"
     ],
     "comment.doc-on-non-api" : [
       "/// A Jabber or XMPP address as a bare JID in normal form; an `xmpp:` prefix is tolerated.",
@@ -917,7 +917,7 @@
   },
   "App/ContactLinkCenter.swift" : {
     "comment.density" : [
-      "14"
+      "34"
     ],
     "comment.doc-on-non-api" : [
       "/// A Contact row action asked for from elsewhere (the Mac's chat menus); the chat's row starts it and clears it.",
@@ -948,7 +948,7 @@
   },
   "App/ContactSystemViews.swift" : {
     "comment.density" : [
-      "13"
+      "8"
     ],
     "comment.doc-on-non-api" : [
       "/// The iPhone's system Contacts screens for linking, presented by UIKit from the frontmost view controller: both refuse",
@@ -967,7 +967,7 @@
   },
   "App/Conversation/AttachmentDownloadState.swift" : {
     "comment.density" : [
-      "36"
+      "11"
     ],
     "comment.doc-on-non-api" : [
       "/// A 1:1 chat we never wrote in: no request to the sender's host unasked.",
@@ -983,7 +983,7 @@
   },
   "App/Conversation/ComposerLinkPreview.swift" : {
     "comment.density" : [
-      "24"
+      "27"
     ],
     "comment.doc-on-non-api" : [
       "/// Fetching; the card shows the host and an activity indicator.",
@@ -1006,7 +1006,7 @@
   },
   "App/Conversation/ComposerPlan.swift" : {
     "comment.density" : [
-      "31"
+      "15"
     ],
     "comment.doc-on-non-api" : [
       "/// Each file as its own message with no body, then the caption last: Conversations shows a file only when the",
@@ -1022,7 +1022,7 @@
   },
   "App/Conversation/ConversationPresenter.swift" : {
     "comment.density" : [
-      "20"
+      "45"
     ],
     "comment.doc-on-non-api" : [
       "/// A dashed ring while the outbox works, one ringed check once the server holds it, two rings once the",
@@ -1063,7 +1063,7 @@
   },
   "App/Conversation/LastMessageTargets.swift" : {
     "comment.density" : [
-      "27"
+      "9"
     ],
     "comment.doc-on-non-api" : [
       "/// The messages the menu bar's message commands act on, as Messages' \"Reply to Last Message\" does: each command takes",
@@ -1076,7 +1076,7 @@
   },
   "App/Conversation/LinkOpening.swift" : {
     "comment.density" : [
-      "19"
+      "17"
     ],
     "comment.doc-on-non-api" : [
       "/// A new mail to `address`; when no mail app takes it, the address is copied instead.",
@@ -1096,7 +1096,7 @@
   },
   "App/Conversation/LinkPreviewModels.swift" : {
     "comment.density" : [
-      "30"
+      "19"
     ],
     "comment.doc-on-non-api" : [
       "/// A 56 pt thumbnail beside the text.",
@@ -1116,7 +1116,7 @@
   },
   "App/Conversation/LinkPreviewPolicy.swift" : {
     "comment.density" : [
-      "42"
+      "15"
     ],
     "comment.doc-on-non-api" : [
       "/// Fetch for `message` only with the setting on, outside the sample conversations, for a contact's message: a",
@@ -1128,7 +1128,7 @@
   },
   "App/Conversation/LinkScan.swift" : {
     "comment.density" : [
-      "18"
+      "17"
     ],
     "comment.doc-on-non-api" : [
       "/// A preview image decoded at most `maxPixelSize` on its longer side, first frame only; nil when unreadable or when",
@@ -1160,7 +1160,7 @@
   },
   "App/Conversation/MessageActionMenu.swift" : {
     "comment.density" : [
-      "13"
+      "18"
     ],
     "comment.doc-on-non-api" : [
       "/// An SF Symbol name.",
@@ -1183,7 +1183,7 @@
   },
   "App/Conversation/TimelineItems.swift" : {
     "comment.density" : [
-      "30"
+      "9"
     ],
     "comment.doc-on-non-api" : [
       "/// Above the oldest message the loading cell; below the newest the typing bubble.",
@@ -1196,7 +1196,7 @@
   },
   "App/Conversation/TimelineMessageFocus.swift" : {
     "comment.density" : [
-      "30"
+      "9"
     ],
     "comment.doc-on-non-api" : [
       "/// Keyboard focus among a desktop timeline's messages: the arrow keys move it from message to message, and the",
@@ -1206,7 +1206,7 @@
   },
   "App/Conversation/TimelineModels.swift" : {
     "comment.density" : [
-      "15"
+      "33"
     ],
     "comment.doc-on-non-api" : [
       "/// A message plus what its neighbours decide: day header, run start (spacing, sender name) and run end (tail corner).",
@@ -1240,7 +1240,7 @@
   },
   "App/Conversation/TimelineScrollPolicy.swift" : {
     "comment.density" : [
-      "38"
+      "115"
     ],
     "comment.doc-on-non-api" : [
       "/// - Parameters:",
@@ -1306,7 +1306,7 @@
   },
   "App/ConversationTimeline.swift" : {
     "comment.density" : [
-      "11"
+      "227"
     ],
     "comment.doc-on-non-api" : [
       "/// 20pt corners; the last bubble of a run gets a 6pt tail on its outer bottom corner.",
@@ -1411,7 +1411,7 @@
   },
   "App/ConversationView.swift" : {
     "comment.density" : [
-      "11"
+      "104"
     ],
     "comment.doc-on-non-api" : [
       "/// A bare view behind a SwiftUI control, handed out so UIKit code can find what SwiftUI built around it.",
@@ -1480,7 +1480,7 @@
   },
   "App/DateChipView.swift" : {
     "comment.density" : [
-      "14"
+      "9"
     ],
     "comment.doc-on-non-api" : [
       "/// 1 at rest; falls to 0 as the next day's header pushes the chip up under the bars.",
@@ -1520,7 +1520,7 @@
   },
   "App/DemoSamples.swift" : {
     "comment.density" : [
-      "15"
+      "16"
     ],
     "comment.doc-on-non-api" : [
       "/// The end of Alex's chat: 09:38 on the latest day that has passed it, so the sample reads as this morning's (or,",
@@ -1535,7 +1535,7 @@
   },
   "App/DevelopmentEndpoint.swift" : {
     "comment.density" : [
-      "18"
+      "7"
     ],
     "comment.doc-on-non-api" : [
       "/// Device tests may reach the same disposable lab through the Mac's private LAN address.",
@@ -1571,7 +1571,7 @@
   },
   "App/HausXMPPApp.swift" : {
     "comment.density" : [
-      "15"
+      "13"
     ],
     "comment.doc-on-non-api" : [
       "/// At the start of `prepare()`: a launch into the background must not connect, and its first activation counts as",
@@ -1584,7 +1584,7 @@
   },
   "App/KeyRecovery.swift" : {
     "comment.density" : [
-      "29"
+      "20"
     ],
     "comment.doc-on-non-api" : [
       "/// Every lost device's ID was recorded, so each leaves its account's device lists on the next connection.",
@@ -1611,7 +1611,7 @@
   },
   "App/LastSeen.swift" : {
     "comment.density" : [
-      "22"
+      "37"
     ],
     "comment.doc-on-non-api" : [
       "/// A XEP-0012 answer. `seconds == 0` means the server has no record (or the contact is online): unknown.",
@@ -1649,7 +1649,7 @@
   },
   "App/LinkPreviewCenter.swift" : {
     "comment.density" : [
-      "15"
+      "29"
     ],
     "comment.doc-on-non-api" : [
       "/// A cache entry as the app shows it; an image whose file is gone (a cleared cache) leaves a text card.",
@@ -1678,7 +1678,7 @@
   },
   "App/LinkPreviewFetcher.swift" : {
     "comment.density" : [
-      "11"
+      "56"
     ],
     "comment.doc-on-non-api" : [
       "/// A direct image's card title: the last path component, percent-decoded.",
@@ -1742,7 +1742,7 @@
   },
   "App/LinkPreviewImaging.swift" : {
     "comment.density" : [
-      "15"
+      "12"
     ],
     "comment.doc-on-non-api" : [
       "/// A preview image as the fetch keeps it on disk: downsampled and re-encoded, so nothing of the original file",
@@ -1757,7 +1757,7 @@
   },
   "App/MessageActionsOverlay.swift" : {
     "comment.density" : [
-      "13"
+      "71"
     ],
     "comment.doc-on-non-api" : [
       "/// 0.1 s when the bubble has to travel, so the pill arrives after it starts moving.",
@@ -1804,7 +1804,7 @@
   },
   "App/NotificationActions.swift" : {
     "comment.density" : [
-      "25"
+      "94"
     ],
     "comment.doc-on-non-api" : [
       "/// A Mac action never expires: its own budget's cap bounds it, and the activity keeps App Nap away meanwhile.",
@@ -1898,7 +1898,7 @@
   },
   "App/NotificationNavigation.swift" : {
     "comment.density" : [
-      "12"
+      "4"
     ],
     "comment.doc-on-non-api" : [
       "/// Created before app-model setup; the latest tap remains buffered during a cold launch.",
@@ -1908,7 +1908,7 @@
   },
   "App/OwnDeviceReview.swift" : {
     "comment.density" : [
-      "13"
+      "39"
     ],
     "comment.doc-on-non-api" : [
       "/// A changed identity is named even when several devices wait, so it never reads as just another new device.",
@@ -1935,7 +1935,7 @@
   },
   "App/PlatformSupport.swift" : {
     "comment.density" : [
-      "19"
+      "63"
     ],
     "comment.doc-on-non-api" : [
       "/// A list row that is a button (an icon tile and a title) stays a row on the Mac, as a tapped row is on the",
@@ -1985,7 +1985,7 @@
   },
   "App/PreUpgradeSnapshot.swift" : {
     "comment.density" : [
-      "19"
+      "152"
     ],
     "comment.doc-on-non-api" : [
       "/// A Keychain copy holds exactly the original bytes, with the original's accessibility, read back to confirm.",
@@ -2103,7 +2103,7 @@
   },
   "App/PushRegistration.swift" : {
     "comment.density" : [
-      "16"
+      "22"
     ],
     "comment.doc-on-non-api" : [
       "/// Becomes the notification center's delegate. Called once at launch by the platform's application delegate.",
@@ -2119,7 +2119,7 @@
   },
   "App/PushService.swift" : {
     "comment.density" : [
-      "30"
+      "42"
     ],
     "comment.doc-on-non-api" : [
       "/// A failed setup, in the words Settings uses.",
@@ -2146,7 +2146,7 @@
   },
   "App/SessionState.swift" : {
     "comment.density" : [
-      "21"
+      "18"
     ],
     "comment.doc-on-non-api" : [
       "/// An attempt starts after its delay.",
@@ -2183,7 +2183,7 @@
   },
   "App/SyncPhaseTimings.swift" : {
     "comment.density" : [
-      "12"
+      "8"
     ],
     "comment.doc-on-non-api" : [
       "/// Empty unless this connection's phases were all seen.",
@@ -2221,7 +2221,7 @@
   },
   "App/Typing.swift" : {
     "comment.density" : [
-      "17"
+      "15"
     ],
     "comment.doc-on-non-api" : [
       "/// \"Maya is typing…\", \"Maya and Sam are typing…\"; the list row of a direct chat says only \"typing…\".",
@@ -2318,7 +2318,7 @@
   },
   "AppLifecycleTests/ChatDeviceReviewTests.swift" : {
     "comment.density" : [
-      "18"
+      "11"
     ],
     "comment.doc-on-non-api" : [
       "/// A chat sending legacy OMEMO lists an OMEMO 2 device only while it holds messages; once decided and released it",
@@ -2377,7 +2377,7 @@
   },
   "AppLifecycleTests/ComposerSendTextTests.swift" : {
     "comment.density" : [
-      "11"
+      "5"
     ],
     "comment.doc-on-non-api" : [
       "/// Send needs text or files; an edit needs text that changes the message. Whitespace alone never sends.",
@@ -2441,7 +2441,7 @@
   },
   "AppLifecycleTests/EmojiCatalogTests.swift" : {
     "comment.density" : [
-      "12"
+      "6"
     ],
     "comment.doc-on-non-api" : [
       "/// What the reaction picker offers: every quick choice, nothing the wire layer would refuse, and a search by name."
@@ -2457,7 +2457,7 @@
   },
   "AppLifecycleTests/FileReplyGateTests.swift" : {
     "comment.density" : [
-      "16"
+      "7"
     ],
     "comment.doc-on-non-api" : [
       "/// Files sent with no caption can carry a reply only as a bare XEP-0461 reference inside a modern OMEMO envelope,"
@@ -2493,7 +2493,7 @@
   },
   "AppLifecycleTests/LinkOpeningTests.swift" : {
     "comment.density" : [
-      "16"
+      "8"
     ],
     "comment.doc-on-non-api" : [
       "/// Copy puts what a person would paste elsewhere: the number or address alone, the link itself otherwise.",
@@ -2539,7 +2539,7 @@
   },
   "AppLifecycleTests/LinkPreviewPolicyTests.swift" : {
     "comment.density" : [
-      "16"
+      "8"
     ],
     "comment.doc-on-non-api" : [
       "/// The setting off, or the sample conversations: never, not even for a contact.",
@@ -2582,7 +2582,7 @@
   },
   "AppLifecycleTests/OwnDeviceReviewTests.swift" : {
     "comment.density" : [
-      "16"
+      "12"
     ],
     "comment.doc-on-non-api" : [
       "/// A changed identity is called out as changed, never as a new device.",
@@ -2598,7 +2598,7 @@
   },
   "AppLifecycleTests/PreUpgradeSnapshotTests.swift" : {
     "comment.density" : [
-      "13"
+      "107"
     ],
     "comment.doc-on-non-api" : [
       "/// A device still running 6664869 has a store, whose store is at schema 23: it is copied whole, including what is still only",
@@ -2645,7 +2645,7 @@
   },
   "AppLifecycleTests/PushSetupTests.swift" : {
     "comment.density" : [
-      "11"
+      "17"
     ],
     "comment.doc-on-non-api" : [
       "/// A reconnect stopped at Off because nobody had answered the prompt; an answer given from Settings finishes that",
@@ -2708,7 +2708,7 @@
   },
   "AppLifecycleTests/TimelinePositionTests.swift" : {
     "comment.density" : [
-      "11"
+      "19"
     ],
     "comment.doc-on-non-api" : [
       "/// Older history is asked for a few screens before the reader reaches the oldest loaded message, and only by their",
@@ -2720,7 +2720,7 @@
   },
   "AppLifecycleTests/TimelineScrollPolicyTests.swift" : {
     "comment.density" : [
-      "22"
+      "53"
     ],
     "comment.doc-on-non-api" : [
       "/// A message taller than the frame can cover it with no row starting on screen: the move lands inside that message,",
@@ -2744,7 +2744,7 @@
   },
   "AppShared/Appearance.swift" : {
     "comment.density" : [
-      "15"
+      "22"
     ],
     "comment.doc-on-non-api" : [
       "/// Glyphs, links, buttons: at least 4.5:1 on both system backgrounds in each appearance.",
@@ -2786,7 +2786,7 @@
   },
   "AppShared/ChatCapabilities.swift" : {
     "comment.density" : [
-      "30"
+      "62"
     ],
     "comment.doc-on-non-api" : [
       "/// A completed outbox pass: only the chats it held for trust stay marked.",
@@ -2855,7 +2855,7 @@
   },
   "AppShared/GroupChatState.swift" : {
     "comment.density" : [
-      "19"
+      "6"
     ],
     "comment.doc-on-non-api" : [
       "/// A transport fact: it gates sending and never the trust pill.",
@@ -2879,7 +2879,7 @@
   },
   "AppShared/ShareAuthorization.swift" : {
     "comment.density" : [
-      "19"
+      "6"
     ],
     "comment.doc-on-non-api" : [
       "/// The signed-in account as saved now. `accountID` is the account the sheet opened for, nil while it opens; another",
@@ -2888,7 +2888,7 @@
   },
   "AppShared/SharedItemIntake.swift" : {
     "comment.density" : [
-      "12"
+      "27"
     ],
     "comment.doc-on-non-api" : [
       "/// A concrete file type: data that is neither a link nor text (a PDF, an archive, a document).",
@@ -2919,7 +2919,7 @@
   },
   "AppShared/ShareRules.swift" : {
     "comment.density" : [
-      "22"
+      "27"
     ],
     "comment.doc-on-non-api" : [
       "/// A stored chat as the picker lists it, named and pictured as the app and its notifications show it: a linked",
@@ -2944,7 +2944,7 @@
   },
   "AppShared/SuggestedConversation.swift" : {
     "comment.density" : [
-      "26"
+      "8"
     ],
     "comment.doc-on-non-api" : [
       "/// Names are bounded as a notification's are.",
@@ -2989,7 +2989,7 @@
   },
   "AppTests/ConversationUITests.swift" : {
     "comment.density" : [
-      "12"
+      "15"
     ],
     "comment.doc-on-non-api" : [
       "/// Every visible history bubble from one accessibility snapshot; querying each element's frame costs a round trip.",
@@ -3000,7 +3000,7 @@
   },
   "AppTests/LabUITestSupport.swift" : {
     "comment.density" : [
-      "16"
+      "20"
     ],
     "comment.doc-on-non-api" : [
       "/// Accepts every device awaiting review on the open encryption page, one fingerprint at a time through the same",
@@ -3016,7 +3016,7 @@
   },
   "AppTests/LastSeenLabUITests.swift" : {
     "comment.density" : [
-      "21"
+      "8"
     ],
     "comment.doc-on-non-api" : [
       "/// Two clients on the lab: opening a chat with the echo peer asks for its presence, slixmpp approves the"
@@ -3029,7 +3029,7 @@
   },
   "AppTests/NotificationActionLabUITests.swift" : {
     "comment.density" : [
-      "11"
+      "18"
     ],
     "comment.doc-on-non-api" : [
       "/// A person long-presses; on the iOS 26.5 simulator a synthesized long press only shrinks the platter, so this",
@@ -3040,7 +3040,7 @@
   },
   "AppTests/PushOnboardingLabUITests.swift" : {
     "comment.density" : [
-      "13"
+      "9"
     ],
     "comment.doc-on-non-api" : [
       "/// Lets an appearance change or a toggle animation finish before a review capture.",
@@ -3063,7 +3063,7 @@
   },
   "AppTests/ReceiptUITests.swift" : {
     "comment.density" : [
-      "14"
+      "6"
     ],
     "comment.doc-on-non-api" : [
       "/// Two clients on the lab: the echo peer answers `<request/>` with a receipt and `<markable/>` with a"
@@ -3076,7 +3076,7 @@
   },
   "AppTests/RevisionUITests.swift" : {
     "comment.density" : [
-      "18"
+      "10"
     ],
     "comment.doc-on-non-api" : [
       "/// Edits and unsends against the lab, in both directions. The same actions on sample data are in MessageActionsUITests.",
@@ -3101,7 +3101,7 @@
   },
   "AppTests/UITestStorage.swift" : {
     "comment.density" : [
-      "18"
+      "9"
     ],
     "comment.doc-on-non-api" : [
       "/// A sent bubble the server holds: the label climbs from accepted to delivered to read as receipts arrive.",
@@ -3114,7 +3114,7 @@
   },
   "AppTests/UITestSupport.swift" : {
     "comment.density" : [
-      "20"
+      "15"
     ],
     "comment.doc-on-non-api" : [
       "/// Keeps a review screenshot of `source` in the result bundle, only when the runner was started with",
@@ -3133,7 +3133,7 @@
   },
   "Mac/MacAppDelegate.swift" : {
     "comment.density" : [
-      "22"
+      "23"
     ],
     "comment.doc-on-non-api" : [
       "/// A Block or Report chosen from a chat's menu (the sidebar's or the menu bar's), waiting for its confirmation.",
@@ -3157,7 +3157,7 @@
   },
   "Mac/MacAttachButton.swift" : {
     "comment.density" : [
-      "15"
+      "11"
     ],
     "comment.doc-on-non-api" : [
       "/// A menu item that runs a closure; the item keeps its target alive.",
@@ -3168,7 +3168,7 @@
   },
   "Mac/MacAttachmentActions.swift" : {
     "comment.density" : [
-      "14"
+      "20"
     ],
     "comment.doc-on-non-api" : [
       "/// A copy of the cached file under its own name, in a folder of its own so two files of one name never collide.",
@@ -3214,7 +3214,7 @@
   },
   "Mac/MacBubbleExtras.swift" : {
     "comment.density" : [
-      "11"
+      "26"
     ],
     "comment.doc-on-non-api" : [
       "/// A photo's or video's still in the bubble, sized as the iPhone sizes it: 274 pt wide inside a 280 pt bubble (a 3 pt",
@@ -3233,7 +3233,7 @@
   },
   "Mac/MacChatActions.swift" : {
     "comment.density" : [
-      "15"
+      "20"
     ],
     "comment.doc-on-non-api" : [
       "/// A direct chat with someone else: it can be linked to a contact.",
@@ -3260,7 +3260,7 @@
   },
   "Mac/MacCommands.swift" : {
     "comment.density" : [
-      "15"
+      "35"
     ],
     "comment.doc-on-non-api" : [
       "/// \"❤️ Heart\": the emoji and its name, as a menu item reads best.",
@@ -3285,7 +3285,7 @@
   },
   "Mac/MacComposer.swift" : {
     "comment.density" : [
-      "13"
+      "61"
     ],
     "comment.doc-on-non-api" : [
       "/// A chat's draft, kept apart from everything the timeline reads, so typing redraws the composer and never the",
@@ -3335,7 +3335,7 @@
   },
   "Mac/MacComposerTextView.swift" : {
     "comment.density" : [
-      "17"
+      "47"
     ],
     "comment.doc-on-non-api" : [
       "/// A PDF with no file behind it: a document scanned on an iPhone.",
@@ -3377,7 +3377,7 @@
   },
   "Mac/MacConversationFind.swift" : {
     "comment.density" : [
-      "13"
+      "21"
     ],
     "comment.doc-on-non-api" : [
       "/// A native search field. Esc closes the find bar (not only clears the field, as a plain search field would) unless",
@@ -3397,7 +3397,7 @@
       "// not idle): what was already on screen counts as seen now (critique G3)."
     ],
     "comment.density" : [
-      "17"
+      "75"
     ],
     "comment.doc-on-non-api" : [
       "/// A click on a photo, video or file: Quick Look once it is here, else its download (a file waiting for a click, or",
@@ -3432,7 +3432,7 @@
   },
   "Mac/MacDebugHooks.swift" : {
     "comment.density" : [
-      "21"
+      "270"
     ],
     "comment.doc-on-non-api" : [
       "/// A message action for the open conversation, or for one row, to perform; `serial` makes a repeat a change.",
@@ -3532,7 +3532,7 @@
   },
   "Mac/MacDeviceReviewDebug.swift" : {
     "comment.density" : [
-      "23"
+      "19"
     ],
     "comment.doc-on-non-api" : [
       "/// The device trust tour steps (`-haus-tour`; see `MacDebugHooks`). Debug builds only."
@@ -3571,7 +3571,7 @@
   },
   "Mac/MacLifecycle.swift" : {
     "comment.density" : [
-      "14"
+      "38"
     ],
     "comment.doc-on-non-api" : [
       "/// Called on the main thread; the closure it receives lets sleep proceed.",
@@ -3610,7 +3610,7 @@
   },
   "Mac/MacLifecycleDebug.swift" : {
     "comment.density" : [
-      "18"
+      "31"
     ],
     "comment.doc-on-non-api" : [
       "/// Debug checks of the Mac lifecycle (`MacLifecycle`, `MacLifecycleDriver`). Debug builds only.",
@@ -3630,7 +3630,7 @@
   },
   "Mac/MacLinkPreviewCard.swift" : {
     "comment.density" : [
-      "11"
+      "13"
     ],
     "comment.doc-on-non-api" : [
       "/// Bounded as on the iPhone: never inflated beyond what the widest card shows at 2x, and an image whose header",
@@ -3642,7 +3642,7 @@
   },
   "Mac/MacMainWindow.swift" : {
     "comment.density" : [
-      "13"
+      "23"
     ],
     "comment.doc-on-non-api" : [
       "/// A SwiftUI root inside the AppKit window: the app's theme and appearance, as the scenes' roots have them.",
@@ -3678,7 +3678,7 @@
   },
   "Mac/MacMessageActionsText.swift" : {
     "comment.density" : [
-      "18"
+      "53"
     ],
     "comment.doc-on-non-api" : [
       "/// A click into the text gives it keyboard focus, for selecting with the keys; the timeline's keys still work here:",
@@ -3713,7 +3713,7 @@
   },
   "Mac/MacNotificationDebug.swift" : {
     "comment.density" : [
-      "21"
+      "32"
     ],
     "comment.doc-on-non-api" : [
       "/// A notice the model adds to the notification centre itself (a notification reply's outcome) rather than through",
@@ -3733,7 +3733,7 @@
   },
   "Mac/MacNotificationSettings.swift" : {
     "comment.density" : [
-      "12"
+      "16"
     ],
     "comment.doc-on-non-api" : [
       "/// \"Open at login\": the app as its own login item (`SMAppService.mainApp`). Off until the user turns it on here;",
@@ -3745,7 +3745,7 @@
   },
   "Mac/MacPerfProbe.swift" : {
     "comment.density" : [
-      "18"
+      "92"
     ],
     "comment.doc-on-non-api" : [
       "/// Core Animation may display a layer off the main thread; those go uncounted.",
@@ -3788,7 +3788,7 @@
   },
   "Mac/MacPushProbe.swift" : {
     "comment.density" : [
-      "14"
+      "44"
     ],
     "comment.doc-on-non-api" : [
       "/// A file URL the system keeps for the notification: whether this sandboxed process can read it, and if it is an",
@@ -3816,7 +3816,7 @@
   },
   "Mac/MacReplySwipe.swift" : {
     "comment.density" : [
-      "18"
+      "45"
     ],
     "comment.doc-on-non-api" : [
       "/// A gesture's first event: held back if it starts over a message that can be replied to, otherwise a scroll.",
@@ -3855,7 +3855,7 @@
   },
   "Mac/MacShareDebug.swift" : {
     "comment.density" : [
-      "13"
+      "9"
     ],
     "comment.doc-on-non-api" : [
       "/// A synthetic gradient, so the capture shows no real picture.",
@@ -3870,7 +3870,7 @@
   },
   "Mac/MacSplitController.swift" : {
     "comment.density" : [
-      "17"
+      "67"
     ],
     "comment.doc-on-non-api" : [
       "/// A pushed page stays in the closed inspector until it has finished closing; then it opens on the chat's details",
@@ -3898,7 +3898,7 @@
   },
   "Mac/MacTimeline.swift" : {
     "comment.density" : [
-      "15"
+      "298"
     ],
     "comment.doc-on-non-api" : [
       "/// A change of the model's content: rows inserted or removed in order, rows changed in place. The new and changed",
@@ -4137,7 +4137,7 @@
   },
   "Mac/MacTimelineController.swift" : {
     "comment.density" : [
-      "21"
+      "108"
     ],
     "comment.doc-on-non-api" : [
       "/// A bubble's text took keyboard focus (a click, Select Text): the keys go on from that message.",
@@ -4223,7 +4223,7 @@
   },
   "Mac/MacTimelineDebug.swift" : {
     "comment.density" : [
-      "13"
+      "74"
     ],
     "comment.doc-on-non-api" : [
       "/// A received message added below the others through the table's update path, as an arrival is; the model never",
@@ -4272,7 +4272,7 @@
   },
   "Mac/MacTimelineKeyboard.swift" : {
     "comment.density" : [
-      "13"
+      "6"
     ],
     "comment.doc-on-non-api" : [
       "/// A key that a bubble's text passes on to the timeline instead of handling it (`BubbleTextView`).",
@@ -4284,7 +4284,7 @@
   },
   "Mac/MacTimelineLayout.swift" : {
     "comment.density" : [
-      "15"
+      "67"
     ],
     "comment.doc-on-non-api" : [
       "/// A guess at their height for a record made before SwiftUI measured them.",
@@ -4344,7 +4344,7 @@
   },
   "Mac/MacUnobtrusive.swift" : {
     "comment.density" : [
-      "21"
+      "24"
     ],
     "comment.doc-on-non-api" : [
       "/// AppKit keeps a titled window's title bar on a screen (`constrainFrameRect(_:to:)`), which pulled a parked",
@@ -4372,7 +4372,7 @@
       "/// Plan D2: generic, no message content, the fallback category, and the identifier the system gave this request"
     ],
     "comment.density" : [
-      "20"
+      "37"
     ],
     "comment.doc-on-non-api" : [
       "/// Calls the system's content handler exactly once per remote request.",
@@ -4388,7 +4388,7 @@
   },
   "NotificationServiceMac/MacExtensionProbe.swift" : {
     "comment.density" : [
-      "13"
+      "21"
     ],
     "comment.doc-on-non-api" : [
       "/// Debug-only check that the signed Mac app and its signed notification extension share their storage, run inside the",
@@ -4418,7 +4418,7 @@
   },
   "Packages/MessageStore/Sources/MessageStore/AddressMigration.swift" : {
     "comment.density" : [
-      "16"
+      "28"
     ],
     "comment.doc-on-non-api" : [
       "/// Outside the rewrite's savepoint, so the readers find the column even when the rewrite is rolled back.",
@@ -4552,7 +4552,7 @@
   },
   "Packages/MessageStore/Tests/MessageStoreTests/ChatListQueryTests.swift" : {
     "comment.density" : [
-      "12"
+      "35"
     ],
     "comment.doc-on-non-api" : [
       "/// A second account reusing chat IDs, message IDs and wire IDs: nothing may leak into account `a`.",
@@ -4568,7 +4568,7 @@
   },
   "Packages/MessageStore/Tests/MessageStoreTests/ContactLinkTests.swift" : {
     "comment.density" : [
-      "11"
+      "25"
     ],
     "comment.doc-on-non-api" : [
       "/// A refresh and the photo switch each write only their own fields, so neither undoes the other whichever read",
@@ -4601,7 +4601,7 @@
   },
   "Packages/MessageStore/Tests/MessageStoreTests/MessageStoreTestSupport.swift" : {
     "comment.density" : [
-      "16"
+      "8"
     ],
     "comment.doc-on-non-api" : [
       "/// A fresh store in a temporary directory, holding the transport lease, with an encryption state for `account` so",
@@ -4612,7 +4612,7 @@
   },
   "Packages/MessageStore/Tests/MessageStoreTests/MigrationTests.swift" : {
     "comment.density" : [
-      "11"
+      "26"
     ],
     "comment.doc-on-non-api" : [
       "/// A rewrite that would leave a row pointing at nothing is rolled back whole. The store still opens, keeps every",
@@ -4631,7 +4631,7 @@
   },
   "Packages/MessageStore/Tests/MessageStoreTests/PendingLimitTests.swift" : {
     "comment.density" : [
-      "14"
+      "17"
     ],
     "comment.doc-on-non-api" : [
       "/// A message in `chat` (created if needed), for the evidence that makes a sender known.",
@@ -4653,7 +4653,7 @@
   },
   "Packages/MessageStore/Tests/MessageStoreTests/ReadStateTests.swift" : {
     "comment.density" : [
-      "16"
+      "39"
     ],
     "comment.doc-on-non-api" : [
       "/// A first sign-in is not news: the newest archive page, and whatever backfill later brings from before it, count as",
@@ -4675,7 +4675,7 @@
   },
   "Packages/MessageStore/Tests/MessageStoreTests/SnapshotTests.swift" : {
     "comment.density" : [
-      "11"
+      "17"
     ],
     "comment.doc-on-non-api" : [
       "/// A previous build's store (a real schema-21, 23, 24 or 25 file, `writePreviousReleaseStore`) with its three",
@@ -4688,7 +4688,7 @@
   },
   "Packages/MessagingCore/Sources/MessagingCore/ArchiveSynchronizer.swift" : {
     "comment.density" : [
-      "16"
+      "76"
     ],
     "comment.doc-on-non-api" : [
       "/// A query that failed without a page leaves nothing outstanding: the client closes the stream itself when a failure",
@@ -4722,7 +4722,7 @@
   },
   "Packages/MessagingCore/Sources/MessagingCore/BackgroundSynchronizer.swift" : {
     "comment.density" : [
-      "15"
+      "67"
     ],
     "comment.doc-on-non-api" : [
       "/// A connection that ends after the own archive committed (while rooms or the best-effort pull run) ends the run",
@@ -4948,7 +4948,7 @@
   },
   "Packages/MessagingCore/Tests/MessagingCoreTests/ArchiveCursorLabTests.swift" : {
     "comment.density" : [
-      "16"
+      "15"
     ],
     "comment.doc-on-non-api" : [
       "/// One direct and one room entry from the peer, each with an envelope keyed only for a device the account does not have.",
@@ -4977,7 +4977,7 @@
   },
   "Packages/MessagingCore/Tests/MessagingCoreTests/BackgroundSessionLabTests.swift" : {
     "comment.density" : [
-      "16"
+      "15"
     ],
     "comment.doc-on-non-api" : [
       "/// The extension's fresh-bind path against the local lab Prosody. Runs only when configured:",
@@ -5047,7 +5047,7 @@
   },
   "Packages/MessagingCore/Tests/MessagingCoreTests/LifecycleTests.swift" : {
     "comment.density" : [
-      "11"
+      "21"
     ],
     "comment.doc-on-non-api" : [
       "/// Each signal's own effect, with the others held still. iOS never separates them; a desktop driver will.",
@@ -5103,7 +5103,7 @@
   },
   "Packages/MessagingCore/Tests/MessagingCoreTests/NullTransport.swift" : {
     "comment.density" : [
-      "11"
+      "4"
     ],
     "comment.doc-on-non-api" : [
       "/// A direct (legacy) and a group (modern) envelope, each with the one key for this device, from a sender device the",
@@ -5121,7 +5121,7 @@
   },
   "Packages/MessagingCore/Tests/MessagingCoreTests/ReadSyncLabTests.swift" : {
     "comment.density" : [
-      "12"
+      "15"
     ],
     "comment.doc-on-non-api" : [
       "/// Runs the second client once and returns its output lines.",
@@ -5141,7 +5141,7 @@
   },
   "Packages/MessagingCore/Tests/MessagingCoreTests/StalledRoomLabTests.swift" : {
     "comment.density" : [
-      "12"
+      "17"
     ],
     "comment.doc-on-non-api" : [
       "/// A direct message keyed only for a device this account does not have: it commits as a placeholder.",
@@ -5179,7 +5179,7 @@
   },
   "Packages/OMEMO/Sources/OMEMO/EncryptedContent.swift" : {
     "comment.density" : [
-      "17"
+      "32"
     ],
     "comment.doc-on-non-api" : [
       "/// A receipt or read marker for a modern peer rides inside the envelope so the read message ID is never on the wire in clear.",
@@ -5246,7 +5246,7 @@
       "/// D4: would this envelope have been a bubble here? Only then does an exclusion deserve a placeholder. Modern (SCE)"
     ],
     "comment.density" : [
-      "12"
+      "189"
     ],
     "comment.doc-on-non-api" : [
       "/// A correction whose queued link preview the seal leaves out (legacy has nowhere private to carry it).",
@@ -5303,7 +5303,7 @@
   },
   "Packages/OMEMO/Sources/OMEMO/OwnDevices.swift" : {
     "comment.density" : [
-      "13"
+      "9"
     ],
     "comment.doc-on-non-api" : [
       "/// One version's own device list as fetched before the merge; a listed ID without a bundle is gone or unreadable.",
@@ -5337,7 +5337,7 @@
   },
   "Packages/OMEMO/Tests/OMEMOTests/ContentCodecParityTests.swift" : {
     "comment.density" : [
-      "11"
+      "7"
     ],
     "comment.doc-on-non-api" : [
       "/// Here the paths differ on purpose: XEP-0511 metadata is read only from authenticated SCE content. The same",
@@ -5368,7 +5368,7 @@
   },
   "Packages/OMEMO/Tests/OMEMOTests/KeyRecoveryServiceTests.swift" : {
     "comment.density" : [
-      "12"
+      "36"
     ],
     "comment.doc-on-non-api" : [
       "/// A readable row without a recorded ID (written before schema 25) gets it on the next open, without a connection.",
@@ -5393,7 +5393,7 @@
   },
   "Packages/OMEMO/Tests/OMEMOTests/OwnBundleLabTests.swift" : {
     "comment.density" : [
-      "15"
+      "10"
     ],
     "comment.doc-on-non-api" : [
       "/// Creates local encryption state and then fails, so nothing reaches the server.",
@@ -5402,7 +5402,7 @@
   },
   "Packages/OMEMO/Tests/OMEMOTests/OwnDeviceLabTests.swift" : {
     "comment.density" : [
-      "12"
+      "11"
     ],
     "comment.doc-on-non-api" : [
       "/// A second installation signs in to an account against the local lab Prosody: the first one finds it through the"
@@ -5491,7 +5491,7 @@
   },
   "Packages/OMEMO/Tests/OMEMOTests/StateNormalizationTests.swift" : {
     "comment.density" : [
-      "11"
+      "10"
     ],
     "comment.doc-on-non-api" : [
       "/// A base build sealed the identity and a file's key under the typed account (`Ellie@LocalHost`: the account is the",
@@ -5507,7 +5507,7 @@
   },
   "Packages/OMEMOCrypto/Tests/OMEMOCryptoTests/SnapshotBenchmarks.swift" : {
     "comment.density" : [
-      "12"
+      "6"
     ],
     "comment.doc-on-non-api" : [
       "/// What `OMEMOService` pays per incoming message before and after the ratchet step: importing the account's engine"
@@ -5532,7 +5532,7 @@
   },
   "Packages/XMPPProtocol/Sources/XMPPProtocol/Archive.swift" : {
     "comment.density" : [
-      "11"
+      "24"
     ],
     "comment.doc-on-non-api" : [
       "/// A MAM result, carbon or `<forwarded/>` inside archived content: never unwrapped a second time.",
@@ -5570,7 +5570,7 @@
   },
   "Packages/XMPPProtocol/Sources/XMPPProtocol/DisplayedSync.swift" : {
     "comment.density" : [
-      "15"
+      "12"
     ],
     "comment.doc-on-non-api" : [
       "/// A PEP notification for the node. XEP-0490 §7: only a notification from the account's own bare JID counts;",
@@ -5682,7 +5682,7 @@
   },
   "Packages/XMPPProtocol/Sources/XMPPProtocol/MessageDelivery.swift" : {
     "comment.density" : [
-      "16"
+      "17"
     ],
     "comment.doc-on-non-api" : [
       "/// Nil unless the stanza is an error message with a valid id and sender and exactly one `<error/>`.",
@@ -5716,7 +5716,7 @@
   },
   "Packages/XMPPProtocol/Sources/XMPPProtocol/SASL.swift" : {
     "comment.density" : [
-      "13"
+      "27"
     ],
     "comment.doc-on-non-api" : [
       "/// 24 random bytes; base64 contains no `,`, so it is a valid SCRAM nonce.",
@@ -5735,7 +5735,7 @@
   },
   "Packages/XMPPProtocol/Sources/XMPPProtocol/StartTLS.swift" : {
     "comment.density" : [
-      "13"
+      "17"
     ],
     "comment.doc-on-non-api" : [
       "/// How the framer reports a server that does not offer, or refuses, STARTTLS.",
@@ -5749,7 +5749,7 @@
   },
   "Packages/XMPPProtocol/Sources/XMPPProtocol/StreamManagement.swift" : {
     "comment.density" : [
-      "13"
+      "52"
     ],
     "comment.doc-on-non-api" : [
       "/// A deliberate disconnect: persists the handled count and the time of this last contact in one commit, even",
@@ -5909,7 +5909,7 @@
   },
   "Packages/XMPPProtocol/Tests/XMPPProtocolTests/DisplayedSyncTests.swift" : {
     "comment.density" : [
-      "13"
+      "12"
     ],
     "comment.doc-on-non-api" : [
       "/// The node is private (whitelist): a response that fails to decode is logged by shape only, never with the contact"
@@ -5917,7 +5917,7 @@
   },
   "Packages/XMPPProtocol/Tests/XMPPProtocolTests/EntityCapabilitiesTests.swift" : {
     "comment.density" : [
-      "11"
+      "4"
     ],
     "comment.doc-on-non-api" : [
       "/// A peer hashes the disco#info reply it receives and must reach the `ver` our presence announced,"
@@ -5936,7 +5936,7 @@
   },
   "Packages/XMPPProtocol/Tests/XMPPProtocolTests/LinkDetectionTests.swift" : {
     "comment.density" : [
-      "12"
+      "10"
     ],
     "comment.doc-on-non-api" : [
       "/// Doc 06: key-bearing attachment links go only to the attachment decoder, never to open, copy or fetch. Other",
@@ -6000,7 +6000,7 @@
   },
   "Packages/XMPPProtocol/Tests/XMPPProtocolTests/ResumeLabTests.swift" : {
     "comment.density" : [
-      "13"
+      "25"
     ],
     "comment.doc-on-non-api" : [
       "/// A local count behind the server's (a counting error) meets `<resumed h>` above what we sent: that connect ends",
@@ -6030,7 +6030,7 @@
   },
   "Packages/XMPPProtocol/Tests/XMPPProtocolTests/SyncPathBenchmarks.swift" : {
     "comment.density" : [
-      "14"
+      "11"
     ],
     "comment.doc-on-non-api" : [
       "/// Deterministic base64 of `count` bytes, so every run parses the same input.",
@@ -6057,7 +6057,7 @@
   },
   "Shared/AppLiveness.swift" : {
     "comment.density" : [
-      "23"
+      "22"
     ],
     "comment.doc-on-non-api" : [
       "/// Larger than this is not ours to parse.",
@@ -6074,7 +6074,7 @@
   },
   "Shared/AvatarStore.swift" : {
     "comment.density" : [
-      "20"
+      "21"
     ],
     "comment.doc-on-non-api" : [
       "/// A ≤256 px thumbnail decoded within the pixel budget; nil for anything ImageIO cannot bound. A `CGImage` so this",
@@ -6100,7 +6100,7 @@
   },
   "Shared/DeliveredNotificationCleaner.swift" : {
     "comment.density" : [
-      "26"
+      "25"
     ],
     "comment.doc-on-non-api" : [
       "/// After a completed catch-up the \"You may have new messages\" fallback and the deferred-chats summary are answered:",
@@ -6116,7 +6116,7 @@
   },
   "Shared/EncryptionKeychain.swift" : {
     "comment.density" : [
-      "14"
+      "5"
     ],
     "comment.doc-on-non-api" : [
       "/// Only absence permits creation, and only while the database has no encrypted identity or after the user chose to",
@@ -6137,7 +6137,7 @@
   },
   "Shared/NotificationAccount.swift" : {
     "comment.density" : [
-      "11"
+      "13"
     ],
     "comment.doc-on-non-api" : [
       "/// A discovering account that has never connected has no endpoint yet (empty host, in memory only).",
@@ -6161,7 +6161,7 @@
   },
   "Shared/PreUpgradeHold.swift" : {
     "comment.density" : [
-      "39"
+      "15"
     ],
     "comment.doc-on-non-api" : [
       "/// Files in the App Group container that hold every background process off the store: a restore of the previous",
@@ -6176,7 +6176,7 @@
   },
   "Shared/PushRegistrationState.swift" : {
     "comment.density" : [
-      "19"
+      "18"
     ],
     "comment.doc-on-non-api" : [
       "/// Durable registration intent contains no account password. A revocation tombstone can",
@@ -6222,7 +6222,7 @@
   },
   "Shared/ThisDevice.swift" : {
     "comment.density" : [
-      "22"
+      "7"
     ],
     "comment.doc-on-non-api" : [
       "/// \"iPhone\", \"iPad\" or \"Mac\".",
@@ -6239,7 +6239,7 @@
   },
   "ShareExtension/ShareModel.swift" : {
     "comment.density" : [
-      "12"
+      "53"
     ],
     "comment.doc-on-non-api" : [
       "/// A file that could not be prepared stays on the review card until the user removes it.",
