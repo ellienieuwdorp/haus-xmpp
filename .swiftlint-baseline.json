@@ -835,14 +835,6 @@
    ]
   ]
  },
- "AppLifecycleTests/ComposerLinkPreviewTests.swift": {
-  "no_wall_clock_in_tests": [
-   [
-    "private func settle() async throws { try await Task.sleep(for: .milliseconds(150)) }",
-    0
-   ]
-  ]
- },
  "AppLifecycleTests/ConnectionSetupTests.swift": {
   "force_unwrapping": [
    [

@@ -18,59 +18,69 @@ final class ComposerLinkPreviewTests: XCTestCase {
                                                summary: "Summary", imageAlt: "Alt", thumbnail: Data([0xFF, 0xD8, 0xFF]))
         }
 
-        func release() { held.forEach { $0.resume() }; held = [] }
+        func release() { holding = false; held.forEach { $0.resume() }; held = [] }
     }
 
     private let source = Source()
-    private let preview = ComposerLinkPreview(debounce: .milliseconds(30))
+    // No debounce: each test waits for the decision itself, so none depends on how long a pause takes.
+    private let preview = ComposerLinkPreview(debounce: .zero)
 
     private func type(_ draft: String, enabled: Bool = true, suppressed: Bool = false) {
         preview.update(draft: draft, enabled: enabled, suppressed: suppressed, source: source)
     }
 
-    private func settle() async throws { try await Task.sleep(for: .milliseconds(150)) }
+    // The decision on the latest draft, and the fetch it started unless the source holds it.
+    private func settle() async {
+        let settled = expectation(description: "the preview settled")
+        Task {
+            await preview.untilDecided()
+            if !source.holding { await preview.untilFetched() }
+            settled.fulfill()
+        }
+        await fulfillment(of: [settled], timeout: 10)
+    }
 
     private var readyURL: URL? { if case .ready(let content) = preview.state { content.url } else { nil } }
 
     // Only the first previewable link counts, and an http link there is never fetched (nor is the https link after it).
-    func testFetchesTheFirstLinkOnceTypingPauses() async throws {
+    func testFetchesTheFirstLinkOnceTypingPauses() async {
         for draft in ["Look https://ex", "Look https://example.org/a", "Look https://example.org/a and https://example.net/b"] { type(draft) }
-        try await settle()
+        await settle()
         XCTAssertEqual(source.asked, [URL(string: "https://example.org/a")!])
         XCTAssertEqual(readyURL, URL(string: "https://example.org/a"))
 
         type("http://plain.example/x then https://example.org/a")
-        try await settle()
+        await settle()
         XCTAssertEqual(preview.state, .none)
         XCTAssertEqual(source.asked.count, 1)
     }
 
     // A new draft may show the removed card again.
-    func testARemovedCardStaysRemovedUntilTheDraftIsEmptied() async throws {
+    func testARemovedCardStaysRemovedUntilTheDraftIsEmptied() async {
         type("https://example.org/a")
-        try await settle()
+        await settle()
         preview.remove()
         XCTAssertEqual(preview.state, .none)
         type("https://example.org/a is good")
-        try await settle()
+        await settle()
         XCTAssertEqual(preview.state, .none)
         XCTAssertEqual(source.asked.count, 1)
 
         type("")
         type("https://example.org/a")
-        try await settle()
+        await settle()
         XCTAssertEqual(readyURL, URL(string: "https://example.org/a"))
     }
 
-    func testNoPreviewWithFilesInAnEditOrWithTheSettingOff() async throws {
+    func testNoPreviewWithFilesInAnEditOrWithTheSettingOff() async {
         type("https://example.org/a", suppressed: true)
         type("https://example.org/a", enabled: false)
-        try await settle()
+        await settle()
         XCTAssertEqual(source.asked, [])
         XCTAssertEqual(preview.state, .none)
 
         type("https://example.org/a")
-        try await settle()
+        await settle()
         type("https://example.org/a", suppressed: true)
         XCTAssertEqual(preview.state, .none, "Adding a file takes the card away")
         XCTAssertNil(preview.frozen(for: "https://example.org/a", suppressed: true))
@@ -80,12 +90,12 @@ final class ComposerLinkPreviewTests: XCTestCase {
     func testSendFreezesOnlyAReadyCardForTheSentLink() async throws {
         source.holding = true
         type("Read https://example.org/a")
-        try await settle()
+        await settle()
         XCTAssertEqual(preview.state, .loading(URL(string: "https://example.org/a")!))
         XCTAssertNil(preview.frozen(for: "Read https://example.org/a", suppressed: false), "Sending now goes without a preview")
 
         source.release()
-        try await settle()
+        await settle()
         let frozen = try XCTUnwrap(preview.frozen(for: "Read https://example.org/a", suppressed: false))
         XCTAssertEqual(frozen, StoredLinkPreview(url: "https://example.org/a", title: "Title of /a", summary: "Summary",
                                                  imageData: Data([0xFF, 0xD8, 0xFF]), imageType: "image/jpeg", imageAlt: "Alt", source: .own))
