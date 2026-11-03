@@ -4,7 +4,7 @@ import SQLite3
 import Testing
 @testable import MessageStore
 
-/// The schema this build writes. A schema bump changes this one literal.
+// The schema this build writes. A schema bump changes this one literal.
 private let currentSchemaVersion: Int32 = 27
 
 struct MigrationTests {
@@ -26,7 +26,7 @@ struct MigrationTests {
         #expect(throws: MessageStoreError.unsupportedSchema(Int(currentSchemaVersion) + 1)) { _ = try MessageStore(url: url) }
     }
 
-    /// v24 adds where a returned send's reason lives; a v23 outbox keeps its rows and states and can record one.
+    // v24 adds where a returned send's reason lives; a v23 outbox keeps its rows and states and can record one.
     @Test func aVersion23OutboxGainsRejectionsAndKeepsItsWork() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "rejection-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -48,8 +48,8 @@ struct MigrationTests {
         try await store.close()
     }
 
-    /// v25 adds the plain-text device ID of each state row and the retired own devices; a v24 row keeps its state and
-    /// has no recorded ID until a build reads it.
+    // v25 adds the plain-text device ID of each state row and the retired own devices; a v24 row keeps its state and
+    // has no recorded ID until a build reads it.
     @Test func aVersion24StateRowGainsADeviceIDColumnAndTheRetiredTable() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "device-id-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -68,8 +68,8 @@ struct MigrationTests {
         try await store.close()
     }
 
-    /// v26 adds link previews: a v25 store (or a branch that stamped 25 again) gains both tables, and its messages can
-    /// then carry a preview and the account a fetch cache.
+    // v26 adds link previews: a v25 store (or a branch that stamped 25 again) gains both tables, and its messages can
+    // then carry a preview and the account a fetch cache.
     @Test func aVersion25StoreGainsTheLinkPreviewTables() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "link-previews-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -94,10 +94,9 @@ struct MigrationTests {
         #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["\(currentSchemaVersion)"]])
     }
 
-    /// A v21 store written by a build that kept typed capitals: the account `Ellie@Example.org`, and chats with
-    /// `Bob@Example.org` (started by hand) and `bob@example.org` (the server's spelling on his replies). Opening it
-    /// normalises every key, merges the two chats without losing a message, keeps the later read pointer and the
-    /// encryption identity, and never overwrites an identity already saved under the normal spelling.
+    // A v21 store with typed capitals: account `Ellie@Example.org`, chats with `Bob@Example.org` and `bob@example.org`.
+    // Opening normalises every key, merges the two chats without losing a message, keeps the later read pointer and the
+    // encryption identity, and never overwrites an identity already saved under the normal spelling.
     @Test func addressesMigrateToNormalFormAndSpellingDuplicatesMerge() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "addresses-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -138,9 +137,9 @@ struct MigrationTests {
         try await store.close()
     }
 
-    /// Both spellings of one account hold the same archived message (signed in once as typed, once lowercase), and
-    /// the file already has a foreign-key violation unrelated to addresses. Neither blocks the rewrite: the normal
-    /// copy is reachable, the typed copy stays intact with its chat, and the store is stamped v23.
+    // Both spellings of one account hold the same archived message (signed in once as typed, once lowercase), and
+    // the file already has a foreign-key violation unrelated to addresses. Neither blocks the rewrite: the normal
+    // copy is reachable, the typed copy stays intact with its chat, and the store is stamped v23.
     @Test func collidingMessagesAndUnrelatedViolationsDoNotBlockTheRewrite() async throws {
         try await withEncryptedStore(account: "ellie@example.org") { old, url in
             let typed = "Ellie@Example.org", account = "ellie@example.org", sentAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -168,8 +167,8 @@ struct MigrationTests {
         }
     }
 
-    /// A rewrite that would leave a row pointing at nothing is rolled back whole. The store still opens, keeps every
-    /// row where it was, and stays below v23 so a later build tries again rather than stranding the typed spelling.
+    // A rewrite that would leave a row pointing at nothing is rolled back whole. The store still opens, keeps every
+    // row where it was, and stays below v23 so a later build tries again rather than stranding the typed spelling.
     @Test func aRewriteThatBreaksAForeignKeyIsRolledBackAndRetried() async throws {
         try await withEncryptedStore(account: "Ellie@Example.org", chats: [("bob@example.org", "Bob")]) { old, url in
             let typed = "Ellie@Example.org"

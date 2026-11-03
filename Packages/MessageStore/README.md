@@ -1,66 +1,34 @@
 # MessageStore
 
-First development persistence layer using Apple's system SQLite, with no downloaded dependencies. A `MessageStore` actor serializes its connection; SQLite transactions enforce insertion and reject conflicting identities. Chats and messages are scoped to an account. Reopening the database preserves messages, local stars and chat pins.
+Account-scoped persistence for messages, chats, encryption state and transport work, on Apple's system SQLite with no downloaded dependencies. The `MessageStore` actor serializes one connection; every multi-row change is one SQLite transaction.
 
-Create a protected directory before initializing `MessageStore(url:)`. Upsert a chat before inserting messages. `StoredMessage.id` is an application-generated stable identifier unique within an account. Never pass an arbitrary peer stanza ID as that identity: transport deduplication still needs validated issuer, conversation and identifier aliases. Duplicate inserts preserve local starring; different immutable content under the same identity throws `conflictingIdentity`.
+The database holds plaintext messages and serialized OMEMO state under OS file protection, not database-level encryption; WAL sidecars hold the same data. The app owns the protected directory, backup exclusion, account and key lifecycle, and notification coordination.
 
-`messages` returns the latest bounded page in chronological order, using timestamp plus ID for pagination. `search` performs literal substring matching with SQLite's ASCII case folding, with account and optional chat filtering. It is an initial query API, not the planned ranked, multilingual full-text search. Pins and stars are local only.
+## Public surface
 
-This database stores plaintext messages and sensitive serialized OMEMO state under OS file protection, not database-level encryption. WAL sidecars contain the same sensitive data. The application owns protected-directory configuration, backup exclusion, account/key lifecycle and notification coordination. Schema version 6 preserves history, organization, encrypted payloads and transport state, and refuses unknown future versions.
+- **Messages and chats**: `upsertChat`, `insertMessage`, `messages` (latest bounded page, chronological, paged by timestamp plus ID), `chats` (the chat list in one statement), `search` (literal substring, SQLite ASCII case folding). `StoredMessage.id` is an application-generated identity unique within an account, never a peer stanza ID. A duplicate insert keeps local stars; different content under the same ID throws `conflictingIdentity`. Pins and stars are local only.
+- **Outbox**: `enqueueOutgoing`, `claimNextOutgoing`, `finishOutgoingSubmission`, `releaseUnsentSubmission`, `recoverInterruptedSubmissions`, `retryOutgoing`, `failQueuedOutgoing`, `rejectOutgoing`; the same lifecycle for non-message stanzas (reactions, receipts, markers, retractions, corrections, key transports) through `enqueueReceipt`, `enqueueMessageUpdate`, `sealQueuedUpdate` and `claimNextUpdate`.
+- **Transport lease**: `acquireTransportOwnership`, `releaseTransportOwnership`, `holdsTransportOwnership`.
+- **Encryption**: `saveEncryptionState`, `sealQueuedOutgoing`, `commitEncryptedIncoming`, `retainEncryptedIncoming`, `recordUnreadableMessage`, `resetEncryption`.
+- **Synchronization**: `saveStreamManagement`, `reconcileArchivedOutgoing`, `saveArchiveCheckpoint`, `saveNewestArchivePage`, `saveArchiveBackfillCursor`.
+- **Read state and notifications**: `markRead`, `applyDisplayedSync`, `unreadCounts`, `pendingNotifications`, `removeNotificationCandidates`.
+- **Lifecycle**: `close`, `closeForMigration`, `writeSnapshot`, `upgradeSchema`, and `SchemaAccess` (`upgrade`, `currentOnly`, `asIs`).
 
-Run `swift test --package-path Packages/MessageStore` from the repository root. Tests include real subprocess contention/SIGKILL ownership recovery, acknowledgement races, archive CAS, and reopening, account isolation, duplicate/conflicting inserts, literal search, pagination ties, transaction rollback, version-1 migration, durable FIFO work, interrupted submissions, explicit retry and stale callback fencing.
+## Invariants
 
-Before deleting or replacing a database, stop/join its work and `try await store.close()` for **every** connection. Actor references held by encryption services can delay deinitialization; unlinking an open SQLite database/WAL/SHM is an API violation. Explicit close is idempotent, releases transport ownership and makes subsequent database access fail with `MessageStoreError.closed`.
+- **Lease before transport work.** Claiming, finishing, retrying and recovering outgoing work require `acquireTransportOwnership()`: a nonblocking kernel `flock` on a database sidecar shared by the app and its extensions. A suspended process keeps the lock; contenders get `transportOwnedElsewhere`; process death releases it, with no timeout. Opening a store never changes another owner's active claim. Stop and join every sender before releasing; release invalidates attempt tokens. Never remove the lock sidecar.
+- **Socket completion is not delivery.** A finished submission, success or error, becomes `unconfirmed`. Only an authenticated stream acknowledgement (`saveStreamManagement`, which also stores the protocol's opaque snapshot) or an exact-ciphertext own-archive match (`reconcileArchivedOutgoing`) marks it `serverAccepted`, which late callbacks, recovery and retries cannot regress. Server acceptance is not peer delivery or reading.
+- **Retries resend exact bytes.** `retryOutgoing` reuses the stable wire ID and the saved ciphertext; the UI warns about possible remote duplicates. Release and completion calls are fenced by the attempt token, so a stale callback cannot change a later attempt.
+- **Ciphertext, state and outcome commit together.** `sealQueuedOutgoing` stores exact ciphertext with the ratchet advance; `commitEncryptedIncoming` stores the authenticated message, replay outcome, session change and any response together. Encryption state is revision-checked: a conflict means the caller discards its in-memory engine and reloads. Crypto writes need no transport lease.
+- **Archive page before checkpoint.** Advance a MAM checkpoint only after the whole page is durably handled; revision checks reject stale page completions, and replay after a crash is deduplicated by the message and crypto pipeline.
+- **Reactions.** Authenticated (SCE) reactions resolve only through a wire ID that identifies exactly one message in the conversation; an ambiguous ID resolves to nothing. Each actor's newest `(updatedAt, id)` event is their complete set, an empty set withdraws, and a reused event ID cannot replace its first contents. Events for missing targets are kept until the target arrives. Reaction updates have their own outbox and never create message rows.
+- **Schema.** Opening with `.upgrade` migrates in place; `.currentOnly` refuses an older store before writing; an unknown newer schema is always refused.
+- **Close before deleting.** Stop and join all work and `try await store.close()` on every connection before deleting or replacing a database, its WAL or SHM. `close` is idempotent; later calls throw `MessageStoreError.closed`.
 
-## Durable outbox
+## Testing
 
-`enqueueOutgoing` atomically inserts a local outgoing message and queued work. Use its application-generated `message.id` as the wire stanza/origin ID; repeating enqueue is idempotent and never resets an attempt. Existing messages without an outbox record are not automatically replayed during migration or enqueue.
+```sh
+swift test --package-path Packages/MessageStore
+```
 
-`claimNextOutgoing(accountID:)` claims FIFO work and returns a persisted attempt token. After calling the socket sender, invoke `finishOutgoingSubmission` for either success or error: both become **unconfirmed**, since socket completion does not prove remote acceptance and an error can occur after writing. Opening a store never changes an active claim. After acquiring transport ownership and stopping/joining previous senders, explicitly call `recoverInterruptedSubmissions(accountID:)`; interrupted claims then become unconfirmed. Only queued work is selected automatically. Explicit `retryOutgoing` reuses the same stable wire ID; the UI must warn about possible remote duplicates. `failQueuedOutgoing` is restricted to pre-send local rejection.
-
-If disconnected/cancelled before invoking the socket operation, `releaseUnsentSubmission` may safely return the claim to queued. Once the send is invoked, use unconfirmed instead. Release/completion calls are fenced by the attempt token so stale callbacks after recovery/retry cannot change a later attempt. Cancellation before claim leaves work queued; cancellation after claim requires the caller to finish/release according to this rule.
-
-Call `acquireTransportOwnership()` before claiming, finishing, retrying or recovering any transport work. A nonblocking kernel `flock` on a persistent database sidecar coordinates independent app/extension processes. A suspended process retains the lock; contenders receive `transportOwnedElsewhere` and must defer socket ownership. Process death releases it without timeout heuristics. Opening another store for reading or revision-CAS crypto writes does not disturb the active sender. Stop and join every sender/socket before `releaseTransportOwnership()`; releasing invalidates active attempt tokens. Never remove the lock sidecar during database use.
-
-`saveStreamManagement(accountID:expectedRevision:data:acknowledgedMessageIDs:)` persists an opaque protocol-owned snapshot and marks associated local outbox rows `serverAccepted` in one FULL-synchronous SQLite transaction. This indicates authenticated server stream handling, not peer delivery/read. Late socket completions, recovery and retries cannot regress that state. The protocol layer validates server identity, SM counter rollover, acknowledgements and outstanding window before calling this API; arbitrary peer stanza IDs must never reach it. Snapshot size is bounded at 4 MiB and the acknowledgement batch at 2,000 IDs. `streamManagementState` returns the revision for CAS. Exact full stanzas reside in the snapshot; unchanged ciphertext retries remain in `encrypted_outbox`.
-
-`reconcileArchivedOutgoing(accountID:messageID:expectedEncryptedWire:)` requires exact saved ciphertext bytes and a local outgoing row. Its caller must first verify authenticated self-archive/carbon provenance, recipient and full envelope. It can acknowledge queued manual retries as well as uncertain attempts, preventing retransmission after authenticated archive reconciliation; arbitrary peer identifiers alone are insufficient.
-
-`archiveCheckpoint(accountID:archiveID:)` and `saveArchiveCheckpoint(accountID:archiveID:expectedRevision:cursor:)` persist account/archive-scoped MAM cursors. Advance only after the complete page is durably handled. CAS rejects stale concurrent page completions; replay after a crash before cursor persistence is expected and must be deduplicated by the message/crypto pipeline.
-
-`saveEncryptionState(..., control:)` atomically persists ratchet changes and an optional outbound key transport. `sealQueuedOutgoing` atomically stores exact ciphertext plus state. `commitEncryptedIncoming` atomically persists authenticated message/replay outcome plus state and optional response. Revision conflicts require discarding the ephemeral crypto engine and reloading. Crypto transactions do not require socket ownership; network drains do.
-
-## Reply snapshots
-
-`StoredMessage.reply` optionally stores a `MessageReply(messageID:senderID:body:wireID:)`. `messageID` is the local navigation identity; `wireID` defaults to nil and is only supplied when the caller actually knows the original wire identifier. The store does not resolve or trust arbitrary inbound IDs. A missing wire ID supports a local quote snapshot without inventing a protocol reference.
-
-Snapshots persist atomically with the message/outbox and survive retry, reopen, timeline and search queries. Immutable payload comparison includes all reply fields. Schema v3 migrates older messages with no reply and preserves their organization/outbox state. Snapshot bounds are 1,024 UTF-8 bytes for each identity, 3,071 bytes for sender, and 16,384 bytes for quote body; IDs and sender must be nonempty. Invalid snapshots roll back insertion. Malformed stored JSON fails the read rather than silently discarding the reference. These snapshots live in the same plaintext development store and require the same protection as message bodies.
-
-
-## Authenticated reactions
-
-Schema 6 stores authenticated modern OMEMO origin IDs separately from local message IDs and untrusted outer stanza IDs. Existing rows migrate without invented authentication. `reactionTarget` returns a target only when its authenticated wire ID identifies exactly one message within the account and conversation; ambiguous collisions across actors are deliberately unresolvable.
-
-Reaction updates have a dedicated FIFO outbox, exact ciphertext column and attempt tokens. They do not create visible message rows or change the chat's latest-message preview. Enqueue persists an optimistic own-actor complete set; sealing commits ratchet advancement and ciphertext together. Only prepared sealed IDs can be claimed. Recovery makes attempted sends uncertain; explicit retry preserves exact ciphertext. Atomic stream acknowledgements mark server acceptance, and late socket callbacks cannot regress it. Owners must hold the transport lock for claiming, recovery, retry and acknowledgement.
-
-Incoming authenticated reactions commit their event, replay outcome and cryptographic state in one transaction. Each actor's newest `(updatedAt, id)` event supplies the entire set; an empty set withdraws all reactions. An event ID cannot replace its first accepted contents. Events referring to unavailable targets are retained and resolve only when a unique authenticated target arrives. Peer actors must equal the direct chat JID; own-device actors must equal the account. Message/reaction packet identity remains the OMEMO layer's authentication responsibility. String/count bounds are enforced here; emoji/content validation belongs to the authenticated payload codec.
-
-Tests verify atomic sealing failure, persistence-before-claim, exact retry bytes, uncertain recovery, server-ack callback fencing, full-set withdrawal, stale/reused events, sender/account isolation, retained missing targets, ambiguous authenticated IDs and migration without manufactured wire authentication.
-
-## Chat list query
-
-`chats(accountID:)` is one SQL statement. It returns what the earlier per-chat loop returned: `messages(limit: 1)` plus `events(...)` per chat, projected with `applying(_:)`, with the strongest peer receipt on an outgoing last message. `ChatListQueryTests` compares it against that loop, rebuilt from public API, on seeded data that covers ties, sender-only retraction and correction, attachments, ambiguous and authenticated wire IDs, room stanza-id references, outbox state, pins, avatars and a decoy account.
-
-Every step is an index seek per chat. The newest message comes from the `timeline` index (`ORDER BY sent_at DESC, id DESC LIMIT 1`) and is joined by primary key. The reaction target is resolved through a rowid `UNION` of the `message_wire` and `group_reference_target` lookups; the equivalent `OR` scans the chat. Events come from `event_target`. The store never runs `ANALYZE`, so the plan has to be good without statistics. A `ROW_NUMBER()` window over all of the account's messages, the first design, took 59 s for 100 chats of 1,000 messages in that state: the planner nested-loops the materialized window once per chat.
-
-Measured 2026-09-25 on an Apple M1 Pro, macOS 27.0, release build, in-process system SQLite, median of 9 runs through the `MessageStore` actor. Synthetic data: every chat alternates incoming and outgoing messages, each outgoing message has a delivered and a displayed receipt, and each incoming one has a reaction. The benchmark was a throwaway test and is not committed.
-
-| Chats × messages per chat | Per-chat loop | One statement |
-|---|---|---|
-| 100 × 10 | 12.7 ms | 1.2 ms |
-| 100 × 1,000 | 37.3 ms | 1.4 ms |
-| 300 × 300 | 62.6 ms | 4.3 ms |
-| 1,000 × 20 | 149.6 ms | 14.3 ms |
-| 1,000 × 200 | 201.6 ms | 25.1 ms |
-
-Both implementations returned equal `[StoredChat]` values on every shape.
+The suite covers subprocess lock contention and SIGKILL recovery, acknowledgement races, archive and checkpoint revision checks, migrations from real earlier-schema stores, account isolation, duplicate and conflicting inserts, outbox fencing, reaction projection and the chat-list query against a reference built from public API.

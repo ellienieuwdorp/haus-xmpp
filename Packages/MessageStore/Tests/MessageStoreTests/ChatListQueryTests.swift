@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import MessageStore
 
-/// `chats(accountID:)` is one statement. These tests hold it to the per-chat loop it replaced,
-/// rebuilt here from public API: newest message, its events, the sender's projection, the receipt.
+// `chats(accountID:)` is one statement, held here to a reference rebuilt from public API: newest message, its events,
+// the sender's projection, the receipt.
 
 private struct ChatSeed {
     var title: String
@@ -11,8 +11,8 @@ private struct ChatSeed {
     var avatar: String? = nil
 }
 
-/// The removed loop: `messages(limit: 1)` + `events` per chat, sorted pinned first, then newest
-/// last message (none last), then ID.
+// The reference: `messages(limit: 1)` + `events` per chat, sorted pinned first, then newest last message (none last),
+// then ID.
 private func legacyChats(_ store: MessageStore, accountID: String, seeds: [String: ChatSeed]) async throws -> [StoredChat] {
     var result: [StoredChat] = []
     for (chatID, seed) in seeds {
@@ -71,7 +71,7 @@ private func withChatListStore(_ operation: (MessageStore) async throws -> Void)
 private let room = "room@rooms.localhost"
 private let incomingRoom = "other-room@rooms.localhost"
 
-/// Seeds account `a` with one chat per case and returns what the test knows about each chat.
+// Seeds account `a` with one chat per case and returns what the test knows about each chat.
 private func seedAccountA(_ store: MessageStore) async throws -> [String: ChatSeed] {
     var seeds: [String: ChatSeed] = [:]
     func chat(_ id: String, title: String? = nil) async throws {
@@ -238,7 +238,7 @@ private func seedAccountA(_ store: MessageStore) async throws -> [String: ChatSe
     return seeds
 }
 
-/// A second account reusing chat IDs, message IDs and wire IDs: nothing may leak into account `a`.
+// A second account reusing chat IDs, message IDs and wire IDs: nothing may leak into account `a`.
 private func seedDecoyAccountB(_ store: MessageStore) async throws -> [String: ChatSeed] {
     var seeds: [String: ChatSeed] = [:]
     for id in ["plain", "delivered", "empty", "retracted"] {

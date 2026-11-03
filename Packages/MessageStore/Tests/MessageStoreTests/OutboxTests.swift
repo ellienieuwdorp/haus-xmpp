@@ -86,7 +86,7 @@ private func outgoing(_ id: String, account: String = "a", time: Double = 100, b
     #expect(try await store.claimNextOutgoing(accountID: "a")?.message.id == "1")
 }
 
-/// A process suspended holding the transport lock is killed, so a release whose bookkeeping fails must still free it.
+// A process suspended holding the transport lock is killed, so a release whose bookkeeping fails must still free it.
 @Test func failedReleaseStillFreesTheTransportLockForTheNextOwner() async throws {
     let url = try fixture()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

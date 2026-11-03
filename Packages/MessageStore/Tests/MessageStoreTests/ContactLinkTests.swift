@@ -10,7 +10,7 @@ private func link(_ jid: String = "bob@x", account: String = "a", identifier: St
                 usesContactPhoto: usesContactPhoto, isReachable: reachable, linkedAt: Date(timeIntervalSince1970: 1_000))
 }
 
-/// A stored link as it was saved, without the generation the store gave it.
+// A stored link as it was saved, without the generation the store gave it.
 private func unsaved(_ link: ContactLink?) -> ContactLink? {
     link.map { var link = $0; link.generation = 0; return link }
 }
@@ -27,7 +27,7 @@ private func commit(_ store: MessageStore, _ id: String, chat: String, sender: S
 }
 
 struct ContactLinkTests {
-    /// v27 adds the link table: a v26 store (or a branch that stamped 26 again) gains it and keeps its chats.
+    // v27 adds the link table: a v26 store (or a branch that stamped 26 again) gains it and keeps its chats.
     @Test func aVersion26StoreGainsTheContactLinkTable() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "contact-links-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -49,7 +49,7 @@ struct ContactLinkTests {
         #expect(sqliteRows(url: url, sql: "PRAGMA user_version") == [["27"]])
     }
 
-    /// The previous release's real store (schema 25) migrates through 26 to 27 and can hold links.
+    // The previous release's real store (schema 25) migrates through 26 to 27 and can hold links.
     @Test func aPreviousReleaseStoreMigratesToContactLinks() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "contact-links-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -88,8 +88,8 @@ struct ContactLinkTests {
         }
     }
 
-    /// A refresh that read the contact before the user unlinked or relinked must not touch the new link, even one to
-    /// the same contact.
+    // A refresh that read the contact before the user unlinked or relinked must not touch the new link, even one to
+    // the same contact.
     @Test func aRefreshOnlyUpdatesTheLinkItRead() async throws {
         try await withEncryptedStore(account: "a") { store, _ async throws in
             var refreshed = link()
@@ -114,8 +114,8 @@ struct ContactLinkTests {
         }
     }
 
-    /// A refresh and the photo switch each write only their own fields, so neither undoes the other whichever read
-    /// the link first.
+    // A refresh and the photo switch each write only their own fields, so neither undoes the other whichever read
+    // the link first.
     @Test func aRefreshAndThePhotoSwitchNeverUndoEachOther() async throws {
         try await withEncryptedStore(account: "a") { store, _ async throws in
             let saved = try await store.saveContactLink(link(imageHash: photo)).saved
@@ -156,7 +156,7 @@ struct ContactLinkTests {
         }
     }
 
-    /// Links go with the account's other local rows.
+    // Links go with the account's other local rows.
     @Test func erasingTheAccountRemovesItsLinks() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "contact-links-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -170,8 +170,8 @@ struct ContactLinkTests {
         try await store.close()
     }
 
-    /// A transfer's copy loses every account's links, and names the photos only they used; a copy from before
-    /// schema 27 has nothing to remove.
+    // A transfer's copy loses every account's links, and names the photos only they used; a copy from before
+    // schema 27 has nothing to remove.
     @Test func aTransferCopyLosesEveryAccountsLinks() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "contact-links-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -211,7 +211,7 @@ struct ContactLinkTests {
         #expect(link(reachable: false).usableContactIdentifier == nil && link().usableContactIdentifier == "contact-1")
     }
 
-    /// Notifications read the link from the store: the contact's name and photo, and the contact only while reachable.
+    // Notifications read the link from the store: the contact's name and photo, and the contact only while reachable.
     @Test func notificationCandidatesCarryTheLinkedContact() async throws {
         try await withEncryptedStore(account: "a", chats: [("bob@x", "bob@x"), ("room@rooms", "Book club")]) { store, _ in
             try await store.setAvatarHash(accountID: "a", chatID: "bob@x", hash: verified)

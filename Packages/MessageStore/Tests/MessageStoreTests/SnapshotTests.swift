@@ -3,14 +3,14 @@ import CSQLite
 import Testing
 @testable import MessageStore
 
-/// The pre-upgrade snapshot path: an older build's store is opened without migrating, copied under the lease, and only
-/// then migrated. Other processes open `currentOnly` and must leave an older store exactly as it is.
+// The pre-upgrade snapshot path: an older build's store is opened without migrating, copied under the lease, and only
+// then migrated. Other processes open `currentOnly` and must leave an older store exactly as it is.
 struct SnapshotTests {
     private let previousVersion = 21
 
-    /// A previous build's store (a real schema-21, 23, 24 or 25 file, `writePreviousReleaseStore`) with its three
-    /// messages with Bob in the main file and `walMessages` more committed through a connection that stays open, so
-    /// they exist only as WAL frames. Returns that connection; close it with `sqlite3_close`.
+    // A previous build's store (a real schema-21, 23, 24 or 25 file, `writePreviousReleaseStore`) with its three
+    // messages with Bob in the main file and `walMessages` more committed through a connection that stays open, so
+    // they exist only as WAL frames. Returns that connection; close it with `sqlite3_close`.
     private func previousBuildStore(at url: URL, schema: Int = 21, walMessages: Int) async throws -> OpaquePointer? {
         try writePreviousReleaseStore(at: url, schema: schema)
         // As that build wrote the account: schema 21 kept the spelling as typed, 23 to 25 the normal form.
@@ -86,8 +86,8 @@ struct SnapshotTests {
         #expect(throws: MessageStoreError.snapshotMismatch("schema 23 != 21")) { try MessageStore.verifySnapshot(at: copy, matches: summary) }
     }
 
-    /// The notification extension's open: an older store (any previous build's) is refused before anything is
-    /// written to it, and neither that open nor the snapshot path creates a store that is not there.
+    // The notification extension's open: an older store (any previous build's) is refused before anything is
+    // written to it, and neither that open nor the snapshot path creates a store that is not there.
     @Test(arguments: [21, 23, 24, 25]) func currentOnlyRefusesAnOlderStoreWithoutWritingToIt(schema: Int) async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -103,9 +103,9 @@ struct SnapshotTests {
         #expect(!FileManager.default.fileExists(atPath: missing.path))
     }
 
-    /// Every previous build's real store, frames still in its WAL included, migrates to the current schema under the
-    /// lease, under the normal account spelling, with every message and the state that build kept. The only upgrades a
-    /// real store can take start here: no store below schema 21 exists.
+    // Every previous build's real store, frames still in its WAL included, migrates to the current schema under the
+    // lease, under the normal account spelling, with every message and the state that build kept. The only upgrades a
+    // real store can take start here: no store below schema 21 exists.
     @Test(arguments: [21, 23, 24, 25]) func upgradeAfterTheSnapshotNeedsTheLeaseAndReachesTheCurrentSchema(schema: Int) async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -130,7 +130,7 @@ struct SnapshotTests {
         try await MessageStore(url: url, schema: .currentOnly).close()
     }
 
-    /// A process that opened the store before a restore swapped the file never gets the lease over the new file.
+    // A process that opened the store before a restore swapped the file never gets the lease over the new file.
     @Test func aStoreWhoseFileWasReplacedIsRefusedTheLease() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -148,7 +148,7 @@ struct SnapshotTests {
         try await fresh.close()
     }
 
-    /// What restoring older data would roll back: chats where an encrypted message was sent since the snapshot.
+    // What restoring older data would roll back: chats where an encrypted message was sent since the snapshot.
     @Test func chatsWithEncryptedSendsSinceADate() async throws {
         try await withEncryptedStore(account: "ellie@example.org", chats: [("a@example.org", "Alice"), ("b@example.org", "Bob"),
                                                                            ("c@example.org", "Carol"), ("d@example.org", "Dan")]) { store, _ in

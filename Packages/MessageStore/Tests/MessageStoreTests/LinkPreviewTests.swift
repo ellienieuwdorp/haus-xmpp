@@ -10,8 +10,8 @@ private func previewed(_ id: String, body: String = "Read \(link)", _ preview: S
                   wireID: "w-\(id)", linkPreview: preview)
 }
 
-/// A preview is part of its message: it loads with it, a repeated insert of the same message is not a conflict, and a
-/// row out of the wire's bounds is refused together with its message.
+// A preview is part of its message: it loads with it, a repeated insert of the same message is not a conflict, and a
+// row out of the wire's bounds is refused together with its message.
 @Test func previewTravelsWithItsMessageWithinTheWireBounds() async throws {
     try await withEncryptedStore(account: account, chats: [(peer, "Bob")]) { store, _ in
         let preview = StoredLinkPreview(url: link, title: "Council approves", summary: "Spring.", imageData: Data(repeating: 1, count: 65_536),
@@ -36,8 +36,8 @@ private func previewed(_ id: String, body: String = "Read \(link)", _ preview: S
     }
 }
 
-/// A correction carries the full new metadata and replaces the preview, one without removes it, and a retraction
-/// deletes the stored row.
+// A correction carries the full new metadata and replaces the preview, one without removes it, and a retraction
+// deletes the stored row.
 @Test func correctionsReplaceThePreviewAndRetractionsDeleteIt() async throws {
     try await withEncryptedStore(account: account, chats: [(peer, "Bob")]) { store, url in
         try await store.insertMessage(previewed("m", StoredLinkPreview(url: link, title: "Old", source: .sender)))
@@ -61,8 +61,8 @@ private func previewed(_ id: String, body: String = "Read \(link)", _ preview: S
     }
 }
 
-/// Our own fetches: one entry per account and link, replaced in place; the image paths of entries the store drops are
-/// handed back so the caller can delete the files, and a path outside `link-previews/` is refused.
+// Our own fetches: one entry per account and link, replaced in place; the image paths of entries the store drops are
+// handed back so the caller can delete the files, and a path outside `link-previews/` is refused.
 @Test func fetchCacheKeepsOneEntryPerLinkAndHandsBackDroppedImages() async throws {
     try await withEncryptedStore(account: account) { store, _ in
         func entry(_ url: String, at seconds: TimeInterval, path: String? = nil, account: String = account) -> LinkPreviewCacheEntry {

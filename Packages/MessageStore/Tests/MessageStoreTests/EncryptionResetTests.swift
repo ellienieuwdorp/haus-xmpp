@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MessageStore
 
-/// `resetEncryption`: what starting encryption over after a lost wrapping key discards, keeps and creates.
+// `resetEncryption`: what starting encryption over after a lost wrapping key discards, keeps and creates.
 struct EncryptionResetTests {
     private let account = "alice@localhost"
     private let peer = "bob@localhost"
@@ -56,8 +56,8 @@ struct EncryptionResetTests {
         }
     }
 
-    /// The failed file's key material is still sealed with the lost key: queued again it could never be sealed and
-    /// would sit in the outbox for good, so retry refuses it. A file failed for any other reason can still be retried.
+    // The failed file's key material is still sealed with the lost key: queued again it could never be sealed and
+    // would sit in the outbox for good, so retry refuses it. A file failed for any other reason can still be retried.
     @Test func aFileFailedByTheResetCannotBeQueuedAgain() async throws {
         try await withEncryptedStore(account: account, chats: [(peer, "Bob")]) { store, url in
             #expect(try await store.enqueueOutgoing(photo("photo")))

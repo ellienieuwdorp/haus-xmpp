@@ -84,14 +84,14 @@ private func media(_ id: String, body: String = "", attachment: StoredAttachment
     #expect(media("t", body: "Just text", attachment: nil).quoteText == "Just text")
 }
 
-/// Replies stored before the snapshot kept the quoted media type still load, and quote text alone.
+// Replies stored before the snapshot kept the quoted media type still load, and quote text alone.
 @Test func replyStoredWithoutAMediaTypeStillDecodes() throws {
     let older = try JSONDecoder().decode(MessageReply.self, from: Data(#"{"messageID":"m","senderID":"a","body":"Ten it is","wireID":"m"}"#.utf8))
     #expect(older == MessageReply(messageID: "m", senderID: "a", body: "Ten it is", wireID: "m"))
 }
 
-/// Link previews never fetch from a host that serves the account's files: the GET host of a slot we took, and the
-/// host of a file we received. Another account's files do not count.
+// Link previews never fetch from a host that serves the account's files: the GET host of a slot we took, and the
+// host of a file we received. Another account's files do not count.
 @Test func attachmentHostsAreThoseOfTheAccountsSlotsAndReceivedFiles() async throws {
     let url = try fixture()
     defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

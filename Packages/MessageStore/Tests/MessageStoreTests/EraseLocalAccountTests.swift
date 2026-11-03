@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import MessageStore
 
-/// Erasing a local-only account leaves no row of it in any table and every row of other accounts, and an account
-/// with encryption state is refused with nothing removed.
+// Erasing a local-only account leaves no row of it in any table and every row of other accounts, and an account
+// with encryption state is refused with nothing removed.
 @Test func erasingALocalAccountRemovesOnlyItsRowsAndRefusesAnAccountWithKeys() async throws {
     try await withEncryptedStore(account: "me@example.org", chats: [("bob@example.org", "Bob")]) { store, url in
         let sample = "preview.local"
