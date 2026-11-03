@@ -4,7 +4,7 @@ import MessageStore
 import XMPPProtocol
 @testable import OMEMO
 
-// XCTest's assertion autoclosures cannot await; these evaluate first, like ServiceTests' helpers.
+// XCTest's assertion autoclosures cannot await; these evaluate first.
 private func expectEqual<T: Equatable>(_ a: T, _ b: T, file: StaticString = #filePath, line: UInt = #line) { XCTAssertEqual(a, b, file: file, line: line) }
 private func expectTrue(_ a: Bool, file: StaticString = #filePath, line: UInt = #line) { XCTAssertTrue(a, file: file, line: line) }
 private func expectFalse(_ a: Bool, file: StaticString = #filePath, line: UInt = #line) { XCTAssertFalse(a, file: file, line: line) }
@@ -12,11 +12,11 @@ private func expectNil<T>(_ a: T?, file: StaticString = #filePath, line: UInt = 
 private func expectNotNil<T>(_ a: T?, file: StaticString = #filePath, line: UInt = #line) { XCTAssertNotNil(a, file: file, line: line) }
 private func unwrap<T>(_ value: T?, file: StaticString = #filePath, line: UInt = #line) throws -> T { try XCTUnwrap(value, file: file, line: line) }
 
-/// Read state across devices of one account: another device's XEP-0333 `displayed` (SCE or plain) moves this device's
-/// read pointer; the same marker still reaches the peer as a receipt; the peer's marker never moves a pointer.
+// Another own device's XEP-0333 `displayed` (SCE or plain) moves this device's read pointer and still reaches the
+// peer as a receipt; the peer's marker never moves a pointer.
 @MainActor
 final class ReadStateServiceTests: XCTestCase {
-    /// Alice has two devices; Bob writes to her and both copies arrive (the second as a received carbon).
+    // Alice has two devices; Bob's message arrives on both (the second as a received carbon).
     private struct TwoDevices {
         let f: ServiceFixture
         let secondStore: MessageStore

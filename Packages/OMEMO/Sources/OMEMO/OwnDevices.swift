@@ -1,23 +1,18 @@
 import Foundation
 import XMPPProtocol
 
-/// The account's other devices, for a review that is not tied to a chat. Trust is stored per device record
-/// (owner, version, device ID, identity key) in the account's state, and every 1:1 chat and group addresses the
-/// account's own active devices of its version, so one decision here applies to every chat.
+// Trust is stored per device record (owner, version, device ID, identity key) and every chat addresses the account's
+// own active devices of its version, so one decision about an own device applies to every chat.
 extension OMEMOService {
-    /// This account's other devices as stored, both OMEMO versions, in stored order. No network; this installation's
-    /// own device is never listed.
+    /// Both OMEMO versions, from storage only; this installation's device is never listed.
     public func ownDevices(account: String) async throws -> [EncryptionDevice] {
         let (_, state) = try await load(account)
         return try ownDevices(state, account: account)
     }
 
-    /// Re-reads the account's device list and bundles in both versions and stores them as a chat refresh does, without
-    /// choosing a version for any chat. A device seen for the first time, or with a new key, is stored `.undecided`:
-    /// nothing is trusted here. Returns `ownDevices`.
-    ///
-    /// The lists and bundles are fetched before taking the gate and merged under it, so decrypts and seals do not wait
-    /// behind these round trips; this runs on every connection. The merge reads the state current at that point.
+    /// Fetches both versions' device lists and bundles and stores them as a chat refresh does, without choosing a
+    /// version for any chat. A new device or a changed key is stored `.undecided`; nothing is trusted here.
+    /// Fetching happens outside the gate so decrypts and seals do not wait behind the round trips.
     public func refreshOwnDevices(account: String, transport: any OMEMOTransport) async throws -> [EncryptionDevice] {
         let (_, snapshot) = try await load(account)
         var fetched: [AdvertisedOwnDevices] = []
@@ -50,8 +45,7 @@ extension OMEMOService {
         return try ownDevices(state, account: account)
     }
 
-    /// This installation and, as in `refreshLocked`, the devices this account gave up (`startOver`) and has not seen
-    /// reclaimed: those are not offered for review while a list still names them.
+    // Own devices given up by `startOver` and not seen reclaimed stay out of review while a list still names them.
     private func skippedOwnDevices(_ state: AccountEncryptionState, account: String,
                                    profile: XMPPOMEMOProfile) async throws -> Set<UInt32> {
         let retired = try await store.retiredOwnDevices(accountID: account, profile: profile.rawValue, statuses: [.pending, .removed])
@@ -65,7 +59,7 @@ extension OMEMOService {
     }
 }
 
-/// One version's own device list as fetched before the merge; a listed ID without a bundle is gone or unreadable.
+// A listed ID without a bundle is gone or unreadable.
 private struct AdvertisedOwnDevices: Sendable {
     let profile: XMPPOMEMOProfile
     let ids: [UInt32]

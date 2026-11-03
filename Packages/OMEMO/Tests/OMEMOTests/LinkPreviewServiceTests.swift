@@ -4,9 +4,8 @@ import XCTest
 import XMPPProtocol
 @testable import OMEMO
 
-/// XEP-0511 metadata frozen into our outgoing row rides inside the modern SCE envelope and is committed with the
-/// authenticated message on the other side (the path the notification extension runs too). Legacy OMEMO has nowhere
-/// private to carry it, so it never goes, and our stored preview goes with it.
+// XEP-0511 metadata rides inside the modern SCE envelope and is committed with the authenticated message. Legacy
+// OMEMO has nowhere private for it, so it never goes and our stored preview is dropped.
 @MainActor
 final class LinkPreviewServiceTests: XCTestCase {
     private let link = "https://example.org/news"
@@ -37,8 +36,6 @@ final class LinkPreviewServiceTests: XCTestCase {
         }
     }
 
-    /// An edit sends the whole new message: the preview goes along while its link stays in the text, and an edit
-    /// without the link removes it on both sides.
     func testEditsKeepThePreviewOnlyWhileItsLinkRemains() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -66,8 +63,7 @@ final class LinkPreviewServiceTests: XCTestCase {
         }
     }
 
-    /// An edit queued with the preview while the chat was modern, sealed after it fell back to legacy, goes without
-    /// it; the same seal takes the preview out of the stored edit, so our bubble shows what the peer got.
+    // Queued while modern, sealed after a legacy fallback: the seal also drops the preview from the stored edit.
     func testAnEditSealedForLegacyLosesItsQueuedPreview() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)

@@ -4,13 +4,9 @@ import MessageStore
 import XMPPProtocol
 @testable import OMEMO
 
-/// A second installation signs in to an account against the local lab Prosody: the first one finds it through the
-/// account-level refresh (real PEP device lists and bundles, both versions), holds sending until it is reviewed, and one
-/// decision releases the send to the contact and the new installation. The new installation lists the first at once.
-/// Message delivery itself is not exercised here: the prepared envelope is handed to the receivers directly.
-/// Runs only when the lab is configured:
-///   HAUS_LAB_OWNDEVICE_APP, HAUS_LAB_OWNDEVICE_PEER  fixture JSONs ({"jid", "password"}) of fresh disposable accounts
-///   HAUS_LAB_CA (PEM)
+// Against a real Prosody: the first installation finds a second through real PEP lists in both versions, holds
+// sending until it is reviewed, and one decision releases it. Set HAUS_LAB_OWNDEVICE_APP, HAUS_LAB_OWNDEVICE_PEER
+// (fixture JSON {"jid", "password"} of fresh disposable accounts) and HAUS_LAB_CA (PEM).
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["HAUS_LAB_OWNDEVICE_APP"] != nil), .serialized)
 struct OwnDeviceLabTests {
     private let env = ProcessInfo.processInfo.environment

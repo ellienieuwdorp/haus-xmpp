@@ -9,24 +9,24 @@ private func expectTrue(_ a: Bool, file: StaticString = #filePath, line: UInt = 
 private func expectFalse(_ a: Bool, file: StaticString = #filePath, line: UInt = #line) { XCTAssertFalse(a, file: file, line: line) }
 private func unwrap<T>(_ value: T?, file: StaticString = #filePath, line: UInt = #line) throws -> T { try XCTUnwrap(value, file: file, line: line) }
 
-/// Plan D8 through the real receive path: only another person's authenticated (SCE) reaction to one of Alice's own
-/// messages queues a reaction alert, committed together with the ratchet.
+// Through the real receive path: only another person's authenticated (SCE) reaction to Alice's own message queues
+// a reaction alert, committed together with the ratchet.
 @MainActor
 final class ReactionNotificationServiceTests: XCTestCase {
     private struct Setup {
         let f: ServiceFixture
         let second: OMEMOService
         let secondStore: MessageStore
-        /// Alice's own message, on her first device, and its copy on her second.
+        // Alice's own message on her first device, and its copy on her second.
         let mine: StoredMessage
         let mineOnSecond: StoredMessage
-        /// Bob's message to Alice, on her first device and on Bob's.
+        // Bob's message to Alice, on her first device and on Bob's.
         let bobs: StoredMessage
         let bobsOnBob: StoredMessage
         let aliceOnBob: StoredMessage
     }
 
-    /// Alice has two trusted devices and one message each way with Bob.
+    // Alice has two trusted devices and one message each way with Bob.
     private func setup() async throws -> Setup {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -56,7 +56,7 @@ final class ReactionNotificationServiceTests: XCTestCase {
                      aliceOnBob: try unwrap(try await f.bStore.messages(accountID: f.bob, chatID: f.alice).first { !$0.isOutgoing }))
     }
 
-    /// Bob reacts; each resulting envelope reaches Alice's first device. Returns what the last receive reported.
+    // Returns what the last receive reported.
     @discardableResult
     private func bobReacts(_ s: Setup, to messageID: String, _ reactions: [String]) async throws -> [XMPPEncryptedMessage] {
         let f = s.f

@@ -4,8 +4,7 @@ import XCTest
 import XMPPProtocol
 @testable import OMEMO
 
-/// The file rides the ordinary message path: sealed once, replayable as its exact envelope,
-/// and decoded on the other side into a stored attachment without touching the network.
+// A file is sealed once, replayable as its exact envelope, and decoded into a stored attachment without network.
 @MainActor
 final class AttachmentServiceTests: XCTestCase {
     func testUploadedFileMessageSealsReplaysAndArrivesAsAttachment() async throws {
@@ -50,8 +49,8 @@ final class AttachmentServiceTests: XCTestCase {
                                                    expectedCipherHash: Data(hex: received.cipherHash!), expectedPlainHash: Data(hex: received.hash)), plain)
     }
 
-    /// A file queued as a reply in a modern chat keeps its reply when sealed for modern; if the chat fell back to
-    /// legacy before the upload finished, the seal leaves the reference out and the stored quote goes with it.
+    // A file reply keeps its reply when sealed for modern; after a legacy fallback the seal drops the reference and
+    // the stored quote.
     func testSealedFileKeepsItsReplyOnlyWhereTheEnvelopeCarriesIt() async throws {
         for profile in [XMPPOMEMOProfile.modern, .legacy] {
             let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }

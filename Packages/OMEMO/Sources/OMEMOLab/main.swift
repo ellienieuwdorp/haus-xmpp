@@ -5,8 +5,7 @@ import MessageStore
 import OMEMO
 import XMPPProtocol
 
-/// Deliberately narrow integration executable for disposable localhost accounts. The explicit
-/// trust flag is a test harness policy, never the app's device-trust policy.
+// Integration harness for disposable localhost accounts. Its automatic trust is harness policy, never the app's.
 @main struct OMEMOLab {
     enum Failure: Error { case arguments, permissions, unexpectedState, plaintextReceived, timeout, mismatch }
     struct Credentials: Decodable { let jid: String; let password: String }
@@ -16,8 +15,8 @@ import XMPPProtocol
         let deviceID: UInt32
         let fingerprint: String
         var canonical: IdentityRecord {
-            // The initial harness stored legacy serialized-key prefix 05. Display fingerprints
-            // now correctly use the raw Curve25519 key; that formatting change is not a new key.
+            // A stored legacy fingerprint may carry the serialized-key prefix 05; without it, it is the same raw
+            // Curve25519 key.
             let normalized = profile == .legacy && fingerprint.count == 66 && fingerprint.hasPrefix("05") ? String(fingerprint.dropFirst(2)) : fingerprint
             return IdentityRecord(account: account, profile: profile, deviceID: deviceID, fingerprint: normalized)
         }
@@ -26,7 +25,7 @@ import XMPPProtocol
     static func main() async {
         do { try await run() }
         catch {
-            // Errors from network or parsers can include peer-controlled text. Keep logs generic.
+            // Network and parser errors can include peer-controlled text, so logs stay generic.
             if let error = error as? OMEMOError { print("OMEMO_INTEGRATION_FAILED \(error)") }
             else if let error = error as? Failure { print("OMEMO_INTEGRATION_FAILED \(error)") }
             else { print("OMEMO_INTEGRATION_FAILED \(String(describing: type(of: error)))") }

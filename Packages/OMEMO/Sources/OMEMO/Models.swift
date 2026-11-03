@@ -42,21 +42,19 @@ public struct EncryptionOverview: Sendable {
     /// The selected version's devices of both owners (the recipients of new messages), followed by any device of the
     /// other version whose retained incoming ciphertext for this chat waits on its trust decision.
     public let devices: [EncryptionDevice]
-    /// Some device of either owner is published only in the other OMEMO version. Informational: those devices are
-    /// simply not recipients in this version; sending goes ahead to the devices that are.
+    /// Some device of either owner is published only in the other OMEMO version. Informational: sending goes ahead
+    /// to the devices of this version.
     public let hasIncompatibleDevices: Bool
-    /// Per owner, how many advertised device IDs exist only in the other version (they will not receive these messages).
+    /// Per owner, advertised device IDs that exist only in the other version and will not receive these messages.
     public var otherVersionOnlyDevices: [String: Int] = [:]
-    /// Advertised device IDs per owner whose bundle could not be fetched; they cannot be reviewed or messaged.
+    /// Per owner, advertised device IDs whose bundle could not be fetched; they cannot be reviewed or messaged.
     public var unavailableDevices: [String: Int] = [:]
-    /// Device IDs each owner advertised in this version, before bundle checks.
     public var advertisedDevices: [String: Int] = [:]
-    /// A device refresh for this peer has completed on this account at some point, so an empty or unusable device
-    /// list is a stored answer rather than "not fetched yet". Derived from stored state; no schema change.
+    /// A device refresh for this peer has completed, so an empty or unusable device list is an answer rather than
+    /// "not fetched yet".
     public var isPeerKnown = false
-    /// Sending waits: a device of the selected version needs a fingerprint decision.
     public var needsTrust: Bool { devices.contains { $0.profile == profile && $0.active && $0.trust == .undecided } }
-    /// Reading waits: messages sent in the other version are held until one of these devices is decided.
+    /// Messages sent in the other version are held until one of these devices is decided.
     public var needsIncomingReview: Bool { devices.contains { $0.profile != profile && $0.active && $0.trust == .undecided } }
 }
 
@@ -113,9 +111,8 @@ struct AccountEncryptionState: Codable {
         normalizeOwners()
     }
 
-    /// Owners and rooms in normal form (`JID`), for state saved before addresses were normalised. The engines' own
-    /// session addresses stay opaque; a device keyed under another spelling gets a fresh session. An entry that
-    /// collides with one already in normal form yields to it, so a merge never raises a trust decision.
+    // Stored state may name owners and rooms unnormalised. Engine session addresses stay opaque (another spelling
+    // gets a fresh session); an entry colliding with a normal-form one yields to it, so no trust decision is raised.
     private mutating func normalizeOwners() {
         func normal(_ jid: String) -> String { JID.normalizedBare(jid) ?? jid }
         guard devices.contains(where: { normal($0.jid) != $0.jid }) || profiles.keys.contains(where: { normal($0) != $0 })
@@ -144,8 +141,8 @@ extension XMPPOMEMOProfile {
     var crypto: CryptoProfile { self == .legacy ? .legacy : .modern }
 }
 
-/// Serializes one logical operation across awaits. SQLite revision checks additionally fence
-/// another coordinator/process; no network operation is performed inside a SQL transaction.
+// Serializes one logical operation across awaits. SQLite revision checks fence other coordinators and processes;
+// no network operation runs inside a SQL transaction.
 actor OperationGate {
     private var held = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -166,11 +163,11 @@ public struct EncryptionPreparation: Sendable {
     public let messageIDs: Set<String>
     public let blockedChats: [String: String]
     let failure: OMEMOError?
-    /// Files queued as a reply that were sealed without it, because their chat fell back to legacy OMEMO first.
-    /// Their stored quote is gone too; the caller tells the user, whose composer no longer holds the reply.
+    /// Files queued as a reply but sealed without it because their chat fell back to legacy OMEMO. The stored
+    /// quote is dropped too; the caller tells the user.
     public var droppedReplies: Set<String> = []
-    /// Messages and corrections sealed without the link preview they were queued with (their chat fell back to legacy
-    /// OMEMO first). The stored preview is gone too, so the sender's bubble shows what the peer got.
+    /// Messages and corrections sealed without their queued link preview after a legacy fallback. The stored
+    /// preview is dropped too, so the sender's bubble shows what the peer got.
     public var droppedLinkPreviews: Set<String> = []
 }
 

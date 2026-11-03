@@ -3,8 +3,8 @@ import XCTest
 import XMPPProtocol
 @testable import OMEMO
 
-/// Plain stanzas and decrypted SCE content share one payload grammar. These pin that the two
-/// public entry points agree, so a XEP added to one path cannot silently diverge on the other.
+// Plain stanzas and decrypted SCE content share one payload grammar; a XEP added to one path must not diverge on
+// the other.
 final class ContentCodecParityTests: XCTestCase {
     private let account = "alice@localhost"
     private let peer = "bob@localhost"
@@ -51,9 +51,8 @@ final class ContentCodecParityTests: XCTestCase {
         XCTAssertNotNil(try EncryptedContent.decode(envelope(reaction), sender: peer, recipient: account, modern: true).reaction)
     }
 
-    /// Here the paths differ on purpose: XEP-0511 metadata is read only from authenticated SCE content. The same
-    /// Description in a plain stanza (or next to `<encrypted/>`, XEP-0420) is ignored, so nobody can attach a card to
-    /// a message they did not sign.
+    // Deliberate difference: XEP-0511 metadata is read only from authenticated SCE content, so nobody can attach a
+    // card to a message they did not sign.
     func testLinkMetadataIsReadOnlyFromAuthenticatedContent() throws {
         let rdf = MessageContent.LinkMetadata.rdfNamespace
         let content = "<body xmlns='jabber:client'>See https://a.example/</body><Description xmlns='\(rdf)' xmlns:rdf='\(rdf)' "

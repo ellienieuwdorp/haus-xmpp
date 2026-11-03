@@ -18,15 +18,14 @@ public struct GroupEncryptionOverview: Sendable {
     public let room: XMPPGroupRoomSnapshot
     public let devices: [EncryptionDevice]
     let account: String
-    /// The same rule as `groupRecipients`: a rejected own device is left out, so it does not hold the group.
+    /// As in group sends, a rejected own device is left out and does not hold the group.
     public var needsTrust: Bool { devices.contains { !$0.trust.permitsEncryption && !$0.isLeftOutOfGroups(account: account) } }
 }
 
 struct RetainedGroupEnvelope: Codable {
     let message: XMPPEncryptedGroupMessage
     let sentAt: Date
-    /// False for a row kept before room messages recorded their `<body/>` hint, which then decodes as absent: a retry
-    /// counts such a message as a bubble, as it does an old direct row.
+    // False when the stored row lacks the `<body/>` hint; a retry then counts the message as a bubble.
     private(set) var recordsBubbleHint = true
 
     init(message: XMPPEncryptedGroupMessage, sentAt: Date) { self.message = message; self.sentAt = sentAt }
@@ -82,8 +81,8 @@ extension OMEMOService {
         return GroupEncryptionOverview(room: confirmed, devices: devices, account: account)
     }
 
-    /// Uses an already durable message intention. Group membership and recipient fingerprints
-    /// are stored with the immutable ciphertext and ratchet advancement in one transaction.
+    /// Seals an already durable message intention. Membership and recipient fingerprints are stored with the
+    /// immutable ciphertext and the ratchet advancement in one transaction.
     public func prepareGroupMessage(account: String, messageID: String, room: String, transport: any OMEMOGroupTransport) async throws {
         try await gate.run {
             let overview = try await self.refreshGroupLocked(account: account, room: room, transport: transport)
@@ -134,10 +133,9 @@ extension OMEMOService {
 
     func groupRecipients(state: AccountEncryptionState, members: [String], account: String) throws -> [EncryptionDevice] {
         guard members.contains(account), Set(members).count == members.count else { throw XMPPGroupError.incompleteMembership }
-        // A device the user rejected on their own account is left out, as every 1:1 chat leaves it out: the other
-        // members' recipient sets are unchanged. Another member's rejected device still blocks the whole group (no
-        // undisclosed partial recipient set), and an undecided device still needs review, own ones included; a changed
-        // own identity is a new undecided record, so it is asked about again.
+        // A rejected own device is left out, as in 1:1 chats. Another member's rejected device blocks the whole group
+        // (no undisclosed partial recipient set); undecided devices, own ones and changed own identities included,
+        // still need review.
         let recipients = state.devices.filter { members.contains($0.jid) && $0.profile == .modern && $0.active
                                                 && !$0.isLeftOutOfGroups(account: account) }
         guard recipients.allSatisfy({ $0.trust.permitsEncryption }) else { throw OMEMOError.trustRequired }
@@ -156,7 +154,6 @@ extension OMEMOService {
                             sentAt: Date?) async throws -> Bool {
         guard message.envelope.profile == .modern, message.envelope.payload != nil,
               message.occupant.hasPrefix(message.room + "/"), bare(message.sender) == message.sender else { throw OMEMOError.invalidContent }
-        // A. Validate and identify without importing a crypto engine.
         let (_, first) = try await load(account)
         let localID = try localDeviceID(first, .modern)
         if message.sender == account, message.envelope.senderDeviceID == localID {
@@ -179,7 +176,6 @@ extension OMEMOService {
             }
             return false
         }
-        // B. This ciphertext's retained row only, then the validated-archive context correction.
         let pending = try await store.pendingEncryptedIncoming(accountID: account, sender: message.sender, digest: digest)
         var retained = try pending.map { try JSONDecoder().decode(RetainedGroupEnvelope.self, from: $0.wire) }
             ?? RetainedGroupEnvelope(message: message, sentAt: sentAt ?? Date())
@@ -190,25 +186,22 @@ extension OMEMOService {
             guard try await store.replacePendingEncryptedIncomingContext(accountID: account, sender: message.sender, digest: digest,
                 expectedWire: pending.wire, wire: JSONEncoder().encode(retained)) else { throw OMEMOError.stateUnavailable }
         }
-        // C. Decide retention before any network await or trust wait. Membership that would need a room read, an
-        // unknown sender device and an unapproved one all retain first; a known room whose stored membership admits
-        // this sender and an approved sender device decrypt without the extra write (see `receiveLocked`).
+        // Retention is decided before any network await or trust wait: stale membership, an unknown or unapproved
+        // sender device all retain first; a known member with an approved device decrypts without the extra write.
         func senderDevice(_ state: AccountEncryptionState) -> EncryptionDevice? {
             state.devices.last { $0.jid == message.sender && $0.deviceID == message.envelope.senderDeviceID && $0.profile == .modern }
         }
         let storedMembers = first.groupRooms[message.room]
         let known = senderDevice(first)
-        // A device the user blocked: final at once, before any room read (see `receiveLocked`).
+        // A rejected device is final at once, before any room read.
         if known?.trust == .rejected {
             return try await recordRejectedGroupDevice(account: account, message: message, digest: digest, sentAt: retained.sentAt)
         }
         let membershipStale = storedMembers == nil || (message.provenance == .liveOccupant && !(storedMembers?.contains(message.sender) ?? false))
         let retentionSkipped = pending == nil && !membershipStale && storedMembers?.contains(account) == true
             && known?.trust.permitsEncryption == true
-        // Plan D5, as for a direct message: a member's message waiting for trust or keys alerts in the room without content,
-        // and only when it would have been a bubble. Retention for a stale membership alone (a trusted sender device) does
-        // not alert: the room read usually lets it decrypt, and offline it is simply retried. If the read shows the message
-        // does wait for trust or keys, `hold` adds the candidate then, on this first observation only.
+        // A would-be bubble waiting for trust or keys alerts without content. Stale membership alone does not alert
+        // (the room read usually lets it decrypt); `hold` adds the alert if the read shows it does wait.
         let alert = message.sender == account || !Self.expectsBubble(message) ? nil
             : PendingNotificationContext(chatID: message.room, sentAt: retained.sentAt)
         let context = retained
@@ -226,7 +219,7 @@ extension OMEMOService {
             let approved = known?.trust.permitsEncryption == true
             guard try await retain(known != nil ? .trustPending : .keysPending, notification: approved ? nil : alert, approved: approved) else { return false }
         }
-        /// False when a limit gave the ciphertext its final outcome instead of keeping it.
+        // False when a limit gave the ciphertext its final outcome instead of keeping it.
         func hold(_ reason: PendingEncryptedReason) async throws -> Bool {
             if retentionSkipped { return try await retain(reason, notification: alert) }
             try await store.classifyPendingEncryptedIncoming(accountID: account, sender: message.sender, digest: digest, reason: reason,
@@ -235,7 +228,6 @@ extension OMEMOService {
         }
         var refreshedMembers: [String]?
         if membershipStale {
-            // Membership knowledge is insufficient: read the room and refresh every member, as before.
             refreshedMembers = try await refreshGroupLocked(account: account, room: message.room, transport: transport).room.members
         }
         if known == nil {
@@ -248,7 +240,6 @@ extension OMEMOService {
                                                     profile: .modern, transport: transport)
             }
         }
-        // D. Decrypt and commit.
         do {
             let (revision, old) = try await load(account)
             var state = old
@@ -284,11 +275,9 @@ extension OMEMOService {
                         targetWireID: update.targetWireID, reactions: update.reactions,
                         updatedAt: min(content.timestamp ?? retained.sentAt, Date()))
                 } else if content.retraction != nil {
-                    // ponytail: group retract/edit is not projected yet; commit the ratchet, show nothing.
                     stored = nil; reaction = nil
                 } else {
                     guard !content.body.isEmpty else { throw OMEMOError.invalidContent }
-                    // ponytail: a room correction is still stored as a new row; it only stops alerting as a new message.
                     isCorrection = content.correction != nil
                     stored = StoredMessage(id: UUID().uuidString, accountID: account, chatID: message.room, senderID: message.sender,
                         body: content.body, sentAt: retained.sentAt, isOutgoing: message.sender == account, reply: content.reply,
@@ -297,7 +286,7 @@ extension OMEMOService {
                     reaction = nil
                 }
             } catch is SendingTimeOutsideWindow {
-                // Context, not ciphertext: stays retained for a validated archive stamp (written below when C skipped it).
+                // Context, not ciphertext: stays retained for a validated archive stamp (written below if retention was skipped).
                 throw OMEMOError.invalidContent
             } catch let error as OMEMOCryptoError where error != .invalidSnapshot {
                 // Permanent for this ciphertext: a placeholder, no group reference, no committed ratchet.
@@ -349,20 +338,17 @@ extension OMEMOService {
         if try await store.hasEncryptedIncoming(accountID: account, sender: message.sender, digest: digest) { return true }
         return try await store.pendingEncryptedIncoming(accountID: account, sender: message.sender, digest: digest) != nil
     }
-    /// The room-scoped identity of an envelope with no single key for this device.
     func unaddressedGroupDigest(_ message: XMPPEncryptedGroupMessage) throws -> String {
         let direct = XMPPEncryptedMessage(id: message.id, from: message.sender, to: message.room, originID: nil, envelope: message.envelope)
         let inner = try unaddressedDigest(direct)
         return SHA256.hash(data: Data((message.room + "\u{0}" + inner).utf8)).map { String(format: "%02x", $0) }.joined()
     }
-    /// Group placeholder: the room is the chat, the validated real JID is the author. Never a reaction target.
     private func groupPlaceholder(for message: XMPPEncryptedGroupMessage, account: String, reason: UnreadableReason, sentAt: Date?,
                                   key: UnreadableMessage.Key) -> UnreadableMessage {
         UnreadableMessage(accountID: account, chatID: message.room, senderID: message.sender, isOutgoing: message.sender == account,
                           sentAt: sentAt ?? Date(), reason: reason, key: key)
     }
-    /// A blocked sender device's room ciphertext: a quiet `rejectedDevice` placeholder when it would have been a bubble,
-    /// else the consumed replay identity. Never decrypted, never alerts, removes a retained copy. Returns false.
+    // Never decrypted, never alerts; removes any retained copy.
     private func recordRejectedGroupDevice(account: String, message: XMPPEncryptedGroupMessage, digest: String, sentAt: Date) async throws -> Bool {
         if Self.expectsBubble(message) {
             try await store.recordUnreadableMessage(groupPlaceholder(for: message, account: account, reason: .rejectedDevice, sentAt: sentAt,
@@ -372,8 +358,7 @@ extension OMEMOService {
         }
         return false
     }
-    /// Records the durable `decryptFailed` placeholder for group ciphertext this device will never read. Works whether
-    /// or not a pending row exists. Never called for storage, cancellation or state errors.
+    // Only for ciphertext this device will never read, never for storage, cancellation or state errors.
     private func recordGroupDecryptFailure(account: String, message: XMPPEncryptedGroupMessage, digest: String, sentAt: Date?) async throws {
         try await store.recordUnreadableMessage(groupPlaceholder(for: message, account: account, reason: .decryptFailed, sentAt: sentAt,
                                                                  key: .ciphertext(sender: message.sender, digest: digest)))

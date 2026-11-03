@@ -10,12 +10,11 @@ private func expectFalse(_ a: Bool, file: StaticString = #filePath, line: UInt =
 private func expectEqual<T: Equatable>(_ a: T, _ b: T, file: StaticString = #filePath, line: UInt = #line) { XCTAssertEqual(a, b, file: file, line: line) }
 private func unwrap<T>(_ value: T?, file: StaticString = #filePath, line: UInt = #line) throws -> T { try XCTUnwrap(value, file: file, line: line) }
 
-/// Unsend (XEP-0424) and edit (XEP-0308) travel the same durable path as reactions: queued with an
-/// optimistic projection, sealed once, replayable only as that exact wire, and projected on the
-/// original bubble by every receiver, including our own other devices.
+// XEP-0424 retraction and XEP-0308 correction travel the reaction path: optimistic projection, sealed once,
+// replayable only as that exact wire, projected on the original bubble by every receiver and own device.
 @MainActor
 final class RevisionTests: XCTestCase {
-    /// A peer's edit replaces the original bubble's text; their unsend blanks it; neither adds a row.
+    // A peer's edit replaces the bubble's text and their unsend blanks it; neither adds a row.
     func testPeerEditAndUnsendProjectOntoTheOriginalBubbleNotASecondOne() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -62,7 +61,7 @@ final class RevisionTests: XCTestCase {
         catch { XCTAssertEqual(error as? OMEMOError, .unsupportedMessageUpdate) }
     }
 
-    /// Legacy OMEMO carries the correction reference outside the ciphertext and retracts in the clear.
+    // Legacy OMEMO carries the correction reference outside the ciphertext and retracts in the clear.
     func testLegacyPeersGetOuterCorrectionReferencesAndPlainRetractions() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.legacy)

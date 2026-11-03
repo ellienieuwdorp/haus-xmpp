@@ -124,7 +124,7 @@ final class EncryptedContentTests: XCTestCase {
         XCTAssertEqual(result.reply?.body, quote)
     }
 
-    /// Duplicate-emoji folding and the two-container case are pinned against the plain path in ContentCodecParityTests.
+    // Duplicate-emoji folding and the two-container case are pinned in ContentCodecParityTests.
     func testReactionParserRejectsMalformedContainersAndEncoderRejectsNonEmoji() throws {
         assertRejected(envelope("<reactions xmlns='urn:xmpp:reactions:0'/>"))
         assertRejected(envelope("<reactions xmlns='urn:xmpp:reactions:0' id=''><reaction>👍</reaction></reactions>"))
@@ -154,8 +154,7 @@ final class EncryptedContentTests: XCTestCase {
         assertRejected(envelope(content, affixes: "<time stamp='2023-11-14T22:13:20Z'/><time stamp='2023-11-14T22:13:20Z'/>"))
     }
 
-    /// The card shows the first described link of the text; a file never carries metadata, and legacy OMEMO encrypts the
-    /// text alone, with nothing about the link anywhere.
+    // A file never carries link metadata, and legacy OMEMO encrypts the text alone.
     func testLinkMetadataIsTheFirstDescribedLinkAndOnlyInModernTextMessages() throws {
         let rdf = MessageContent.LinkMetadata.rdfNamespace, og = MessageContent.LinkMetadata.openGraphNamespace
         func describe(_ url: String, _ title: String) -> String {

@@ -2,8 +2,8 @@ import Foundation
 import CryptoKit
 import XMPPProtocol
 
-/// The app supplies a device-local Keychain key. Tests may supply an ephemeral key.
-/// Account binding prevents moving a valid encrypted state blob into another account's row.
+/// AES-GCM with the account as associated data, so a valid state blob cannot move into another account's row.
+/// The key is device-local (Keychain in the app).
 public struct StateProtection: Sendable {
     private let key: SymmetricKey
     public init(key: Data) throws {
@@ -16,8 +16,8 @@ public struct StateProtection: Sendable {
         }
         return combined
     }
-    /// `sealedAs` is the spelling a blob saved before addresses were normalised was sealed under (the store keeps it).
-    /// It is used only when it names the same account, so a blob still cannot move to another account's row.
+    // `sealedAs` is the unnormalised address spelling an older blob was sealed under; it is honoured only when it
+    // names the same account.
     func open(_ data: Data, account: String, sealedAs spelling: String? = nil) throws -> Data {
         let bound = spelling.flatMap { JID.normalizedBare($0) == JID.normalizedBare(account) ? $0 : nil } ?? account
         do { return try AES.GCM.open(AES.GCM.SealedBox(combined: data), using: key, authenticating: Data(bound.utf8)) }

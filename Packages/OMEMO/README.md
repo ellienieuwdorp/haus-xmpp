@@ -1,54 +1,38 @@
-# OMEMO business logic
+# OMEMO
 
-This package owns encrypted messaging policy and coordinates the steps around it. The restricted modern private-group path is documented in [GROUPS.md](GROUPS.md). It is independent of SwiftUI/UIKit, Keychain APIs, sockets and any hosted service. It depends on three focused packages: `OMEMOCrypto` for vetted cryptography, `XMPPProtocol` for typed wire values and the transport adapter, and `MessageStore` for atomic persistence.
+Encrypted messaging policy: device discovery, fingerprint trust, profile selection, sealing the outbox, authenticating incoming ciphertext, replay suppression and recovery. It has no UI, Keychain, socket or hosted-service code. It builds on `OMEMOCrypto` (vetted cryptography), `XMPPProtocol` (typed wire values and the transport) and `MessageStore` (atomic persistence). Private groups are described in [GROUPS.md](GROUPS.md), reactions in [REACTIONS.md](REACTIONS.md).
 
-`OMEMOService` coordinates device discovery, explicit fingerprint trust, profile selection, encrypted outbox preparation, incoming authentication, replay suppression and key-exchange acknowledgments. `StateProtection` accepts a device-local wrapping key supplied by the app. A mock `OMEMOTransport` runs the same logic in tests; the real adapter uses our own XMPP implementation.
+## Public surface
 
-The separation is intentional: business policy can be tested without a simulator, crypto can be checked against independent implementations, and the database can prove rollback without coupling either layer to a view. The notification extension can eventually reuse this code, but sharing a package does **not** establish extension ownership, entitlements or lifecycle correctness.
+- `OMEMOService`: the actor every operation goes through. Direct chats: `initialize`, `refreshDevices`, `overview`, `setTrust`, `prepareAvailableMessages`, `outgoingEnvelope`, `receive`, `retryPendingIncoming`, `hasDurableIncomingDisposition`, `canReplay`, `reconcileArchivedOutgoing`. Updates: `queueReactions`, `queueRetraction`, `queueCorrection`, `queueReceipt`, `prepareAvailableUpdates`, `flushUpdates`, and the `receivePlaintext…` entry points for legacy peers. Own devices: `ownDevices`, `refreshOwnDevices`, `retireOwnDevice`, `maintainLocalAdvertisement`, `repairSession`. Key loss: `unreadableStates`, `startOver`.
+- `OMEMOTransport` and `OMEMOGroupTransport`: the network the service needs; `XMPPClient` conforms, tests use an in-memory server.
+- `StateProtection`: AES-GCM over the state blob with the account as associated data, keyed by a device-local key the app supplies.
+- `EncryptionDevice`, `DeviceTrust`, `EncryptionOverview`, `OMEMOError` (user-facing descriptions included), `AttachmentTransfer`.
 
-## Durable contract
+## Guarantees
 
-1. Save a message intention as queued before clearing the composer. It is not yet sent.
-2. Refresh each contact's device sets and public bundles. New/changed identities require an explicit decision; a blocked device is deliberately excluded. Other contacts continue independently.
-3. Load an ephemeral engine from the account-bound, encrypted state snapshot. Encrypt for approved peer devices and other approved devices of the sender. Both protocol profiles share one identity pair, with separate prekeys/sessions.
-4. Commit the updated ratchets, exact encrypted envelope, selected fingerprint set and message security state in one SQLite transaction using a revision comparison.
-5. Give the sender a finite set of successfully prepared message IDs. Messages queued during preparation wait for the next pass. Revalidate local trust immediately before handing out ciphertext.
-6. A retry reuses the saved envelope and stable stanza ID. If recipients changed, do not regenerate the original message's ciphertext or silently omit a new device.
-
-Incoming ciphertext is retained before network key discovery or user trust decisions. Replay identity uses the ciphertext for **this** device plus profile, sender device, IV and payload, scoped by account and sender; outer IDs and unrelated recipient-key ordering do not alter that identity. Authentication, ratchet advancement, message insertion, replay outcome and any empty key-exchange response commit together. Failed transactions discard mutated engines. One invalid pending message cannot prevent processing other pending messages.
-
-Swift actors serialize in-process work. SQLite revision checks reject stale commits from another coordinator; they are not a complete main-app/notification-extension ownership solution. The current app remains the sole process owning outbox transport.
+1. A message is saved as a queued intention before encryption; it is not sent yet.
+2. Each operation loads an ephemeral engine from the account-bound state snapshot and commits the advanced ratchets, the exact envelope, the recipient fingerprint set and the message state in one SQLite transaction with a revision check. A failed operation discards the engine; it never advances durable ratchets. No network call runs inside a transaction.
+3. The sender may claim only the returned set of prepared IDs; messages queued meanwhile wait for the next pass. Trust is revalidated before ciphertext is handed out. A retry reuses the saved envelope and stanza ID; if the recipients changed it fails with `recipientSetChanged` rather than regenerating ciphertext or silently omitting a device.
+4. Incoming ciphertext from an unknown or unapproved device is retained before any key fetch or trust wait. Replay identity is the ciphertext addressed to this device plus profile, sender device, IV and payload, scoped by account and sender; outer IDs never change it. Authentication, ratchet advancement, the stored message, the replay outcome and any key-exchange answer commit together. One bad pending message never blocks the others.
+5. A stream or archive acknowledgement is safe only when `hasDurableIncomingDisposition` (or `hasDurableGroupDisposition`) is true. A storage failure leaves nothing durable, so the caller must not acknowledge.
+6. Retained ciphertext is not authenticated content: `pendingConversations` exposes only addresses and counts. A `sentAt` passed to `receive` must come from a validated archive or delivery context; it can correct a retained arrival time, and only for the exact same envelope and conversation.
+7. Swift actors serialize in-process work. Revision checks reject stale commits from another process sharing the database (the notification extension); transport ownership is the `MessageStore` lease.
 
 ## Profiles and trust
 
-- Legacy OMEMO encrypts body text, including quoted fallback text. It does not expose private reply metadata in outer XML.
-- OMEMO 2 encrypts a bounded SCE envelope and verifies present sender/recipient affixes. Body/reply extensions are interpreted within that authenticated context. Group messages are not supported by this direct-message API.
-- An established outgoing profile never changes because an incoming message used another profile. Prepared ciphertext retains its original profile.
-- Devices advertised only in another profile block sending instead of being silently omitted. Numeric IDs alone cannot prove a physical device's identity; exact fingerprint approval remains necessary within each profile.
-- Fingerprints use the interoperable 32-byte Curve25519 representation; trust remains bound to the complete wire identity, account, profile and device ID.
-- “Accepted” means encryption is allowed without independent verification. “Verified” records the user's out-of-band comparison. An A→B→A key change requires review again. Temporarily absent devices retain history.
-- Existing inconsistent prototype identities fail closed. They are never silently replaced to make a test pass.
+- Legacy OMEMO (`eu.siacs.conversations.axolotl`) encrypts the body only. OMEMO 2 (`urn:xmpp:omemo:2`) encrypts a bounded XEP-0420 SCE envelope and checks the sender and recipient affixes it carries.
+- Both profiles share one identity pair per device ID, with separate prekeys and sessions. State whose profiles disagree on the identity fails closed and is never repaired by replacing an identity.
+- A chat's profile is chosen once and never silently downgraded; prepared ciphertext keeps its profile. A device published only in the other profile is never encrypted to: it is left out of the envelope and reported through `EncryptionOverview`.
+- Fingerprints are the 32-byte Curve25519 form; trust is bound to the full identity key, owner, profile and device ID. New or changed keys are `.undecided` until the user decides. Accepted means encryption is allowed; verified records an out-of-band comparison. A key that returns (A→B→A) needs review again.
+- A rejected device is excluded from sends; its incoming ciphertext is never opened and becomes a quiet placeholder.
+- Session repair rebuilds only the selected fingerprint's session and keeps the old one for delayed messages. Retiring an own device rereads the lists, checks the fingerprint in every profile before changing anything, and cannot wipe or stop the remote installation.
+- `startOver` replaces an identity only with explicit confirmation, only for state the current key cannot open, and never reuses a retired device ID.
 
-## Validation
+## Testing
 
 ```sh
 swift test --package-path Packages/OMEMO
 ```
 
-Interoperability with independent implementations (the upstream Python oldmemo/twomemo ratchet and payload code, and live peers on a local server) was checked with a harness that is not part of this repository. `omemo-lab` is a separate test executable, excluded from the iOS app product. It requires explicit fixture-trust authorization and generated localhost accounts; its automatic test trust policy is never used by the application.
-
-This is development-quality direct messaging, not a claim of full production OMEMO support across groups, archives, devices and notifications.
-
-## Recovery and private reactions
-
-The service now exposes explicit fingerprint-scoped session repair, other-own-device retirement, own PEP advertisement repair, and durable pending bundle publication. Approved inbound sender keys can decrypt without PEP availability; an absent device's still-approved key can authenticate delayed traffic. A previously replaced fingerprint's discarded ratchet is not automatically reconstructed, and a rejected key is never approved by a repair operation.
-
-Session repair creates a fresh upstream session while retaining its old session state, then atomically saves a header-only control with the ratchet. It preserves local identity and queued/prepared messages. Retirement rereads current device lists, validates the selected physical fingerprint in each advertised profile, removes only that device and confirms the update. It cannot erase keys from a remote installation or prevent that installation from re-registering.
-
-Bundle discovery verifies signed prekeys before recording the public identity. The crypto adapter also exposes signature verification for future signed device labels. Labels are currently omitted and ignored, so an unauthenticated label never appears as trusted device metadata.
-
-Modern private reactions now have a dedicated durable outbox and projection, with authenticated inner message references and no plaintext fallback. See [reaction protocol evidence and limits](REACTIONS.md). The package exposes exact-envelope SM replay policy and authenticated own-archive reconciliation for messages and reactions; transport wrappers must establish archive provenance before calling the reconciliation API.
-
-Retained first-contact ciphertext is discoverable through `pendingConversations`, which returns only validated conversation addresses and counts. It never exposes unverified message content. A timestamp supplied to `receive` must come from a validated archive/delivery context. When that context corrects an earlier live arrival time, the service compares the exact envelope and conversation (including equivalent direct-to-archive provenance and restoration of an omitted local recipient) and atomically replaces the pending context before decryption or another trust decision. The correction survives a restart and cannot resurrect consumed ciphertext.
-
-Tests use awaited XCTest teardown and explicitly close every SQLite connection before removing fixture files. Unlinking an active SQLite database or shared-memory file violates SQLite's lifetime contract; removing a directory in a synchronous `defer` while service actors still retain stores is prohibited.
+Tests await teardown and close every SQLite connection before deleting fixture files; never remove a database directory in a synchronous `defer` while a service still holds its store. The `*LabTests` suites skip unless their `HAUS_LAB_*` variables are set. `omemo-lab` refuses anything but generated localhost fixture accounts and an explicit trust flag. Their automatic trust is harness policy, never the app's.

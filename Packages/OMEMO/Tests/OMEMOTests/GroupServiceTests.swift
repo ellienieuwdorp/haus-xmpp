@@ -17,11 +17,8 @@ private actor RoomFixture {
 private struct GroupTransport: OMEMOGroupTransport {
     let base: TestTransport
     let room: RoomFixture
-    /// When set, every room read and key lookup is recorded.
     var log: TransportLog? = nil
-    /// When set, room reads fail (recorded first), as for a room that cannot be read right now.
     var roomUnavailable = false
-    /// When set, key lookups fail (recorded first), as when offline.
     var keysUnavailable = false
     func refreshGroupRoom(_ requested: String) async throws -> XMPPGroupRoomSnapshot {
         await log?.record(.refreshRoom(requested))
@@ -114,8 +111,8 @@ private struct GroupTransport: OMEMOGroupTransport {
         XCTAssertEqual(pending[roomID], 1)
         let devices = try await c.refreshGroupDevices(account: carol, room: roomID, transport: ct).devices
         for device in devices where device.jid == f.alice && device.active { try await c.setTrust(account: carol, deviceID: device.id, trust: .accepted) }
-        // The author left before this member fetched room history; authenticated archive
-        // identity and previously approved key still allow historical decryption.
+        // The author left before this member fetched history; the authenticated archive identity and approved key
+        // still decrypt it.
         await room.setMembers([f.bob, carol])
         _ = try await c.refreshGroupDevices(account: carol, room: roomID, transport: ct)
         try await c.retryPendingIncoming(account: carol, transport: ct)
@@ -248,8 +245,8 @@ private struct GroupTransport: OMEMOGroupTransport {
         XCTAssertEqual(before, after)
     }
 
-    /// The user's Don't Trust on another device of their own account leaves it out of group sends, as 1:1 chats leave it
-    /// out. An undecided own device (a changed identity included) and another member's rejected device still hold the group.
+    // A rejected own device is left out of group sends, as in 1:1 chats. An undecided own device (a changed identity
+    // included) and another member's rejected device still hold the group.
     func testRejectedOwnDeviceIsLeftOutWhileOtherHoldsRemain() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -298,8 +295,8 @@ private struct GroupTransport: OMEMOGroupTransport {
         try await expectHeld(try await queue(), "a changed own identity needs review")
     }
 
-    /// In a room, as in a direct chat: a blocked member device's message is a quiet placeholder in the room on arrival, and
-    /// its room message kept for review before the block drains to the same outcome on the next retry.
+    // A rejected member device's room message is a quiet placeholder on arrival, and one retained before the
+    // rejection drains to the same outcome on the next retry.
     func testBlockedMemberDeviceLeavesQuietRoomPlaceholdersAndNothingPending() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -335,8 +332,8 @@ private struct GroupTransport: OMEMOGroupTransport {
         XCTAssertTrue(alerts.isEmpty)
     }
 
-    /// An approved member's room message kept only while the room is read waits for that read, not for a review: however
-    /// many rows strangers already hold, only the account ceiling bounds it, so it still decrypts in a room Bob only reads.
+    // An approved member's message retained only for the room read is bounded by the account ceiling alone, however
+    // many rows strangers hold.
     func testApprovedMemberStillDecryptsOnceStrangersFillTheirShare() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -359,8 +356,7 @@ private struct GroupTransport: OMEMOGroupTransport {
         XCTAssertEqual(rows.map(\.unreadableReason), [nil])
     }
 
-    /// A room row kept before room messages recorded their `<body/>` hint drains like a direct one once its member device
-    /// is blocked: a quiet placeholder, not a message that silently vanishes.
+    // A retained room row without the `<body/>` hint becomes a placeholder once its device is rejected, never vanishes.
     func testBlockedMemberRowKeptBeforeTheBodyHintStillLeavesAPlaceholder() async throws {
         let f = try ServiceFixture(); addTeardownBlock { try await f.cleanup() }
         try await f.initialize(.modern)
@@ -378,7 +374,7 @@ private struct GroupTransport: OMEMOGroupTransport {
         try await f.b.setTrust(account: f.bob, deviceID: author.id, trust: .undecided)
         do { _ = try await f.b.receiveGroup(account: f.bob, message: message, transport: bt); XCTFail("Trust undecided") }
         catch { XCTAssertEqual(error as? OMEMOError, .trustRequired) }
-        // Rewrite the kept row as an older build wrote it: no hint in the retained stanza.
+        // Rewrite the retained row without the hint.
         let retained = try await f.bStore.pendingEncryptedIncoming(accountID: f.bob, sender: f.alice)
         let kept = try XCTUnwrap(retained.first)
         var json = try XCTUnwrap(try JSONSerialization.jsonObject(with: kept.wire) as? [String: Any])
@@ -396,7 +392,7 @@ private struct GroupTransport: OMEMOGroupTransport {
         XCTAssertEqual(rows.map(\.unreadableReason), [.rejectedDevice])
     }
 
-    /// Carol's second installation joins a room Bob already knows and sends before Bob has seen that device.
+    // Carol's second installation sends in a room Bob already knows, before Bob has seen that device.
     private func carolSecondDeviceMessage(_ f: ServiceFixture, room: RoomFixture, roomID: String, carol: String,
                                           provenance: XMPPGroupProvenance = .liveOccupant) async throws -> (XMPPEncryptedGroupMessage, String) {
         let secondStore = try f.openStore("carol-second.sqlite")
@@ -566,7 +562,7 @@ private struct GroupTransport: OMEMOGroupTransport {
 }
 
 extension GroupServiceTests {
-    /// Rooms are modern only: the preview rides with the room message and is stored for its authenticated sender.
+    // Rooms are modern only, so the preview always rides with the room message.
     func testGroupMessageCarriesItsPreview() async throws {
         let preview = StoredLinkPreview(url: "https://example.org/news", title: "Council approves", imageData: Data([0xFF, 0xD8]),
                                         imageType: "image/jpeg", source: .own)
