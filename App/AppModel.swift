@@ -137,10 +137,10 @@ final class AppModel {
     // With `quiescing`, this guards all transport, crypto and setup work, so a background transition blocks new work at
     // once.
     private var transportWanted: Bool { lifecycle.transportWanted }
-    @ObservationIgnored private var quiescing = false
+    @ObservationIgnored var quiescing = false
     @ObservationIgnored private var appBadge: Int?
     @ObservationIgnored private var activeEncryptionOperations = 0
-    @ObservationIgnored private var acquiringOwnership = false
+    @ObservationIgnored var acquiringOwnership = false
     @ObservationIgnored private var hasTransportOwnership = false
     @ObservationIgnored private var livenessResponder: AppLiveness.Responder?
     @ObservationIgnored private var outboxRingListener: OutboxRing.Listener?
@@ -277,7 +277,7 @@ final class AppModel {
     var attachmentLimit: Int { min(AttachmentTransfer.maximumBytes, uploadService?.maximumFileSize ?? AttachmentTransfer.maximumBytes) }
     // Never gated on the socket: a file is sealed and queued offline and uploads once the session is ready.
     var canSendAttachments: Bool { isDemo || uploadService != nil }
-    @ObservationIgnored private let testSessionID: String? = {
+    @ObservationIgnored let testSessionID: String? = {
         #if DEBUG
         guard let value = ProcessInfo.processInfo.environment["XMPP_UI_TEST_STORE"],
               let id = UUID(uuidString: value) else { return nil }
@@ -286,7 +286,7 @@ final class AppModel {
         return nil
         #endif
     }()
-    @ObservationIgnored private lazy var preferences: UserDefaults = {
+    @ObservationIgnored lazy var preferences: UserDefaults = {
         guard let testSessionID else { return .standard }
         return UserDefaults(suiteName: "haus.xmpp.uitest." + testSessionID) ?? .standard
     }()
@@ -782,6 +782,7 @@ final class AppModel {
         generation = UUID() // Invalidate pending permission/registration before removing credentials.
         let token = generation
         let account = accountID
+        SignOutCleanup(defaults: preferences).owe(account)
         let enabled = testSessionID == nil ? sessionAccount?.push : nil
         let connection = client
         var localFailure: String?
@@ -826,7 +827,7 @@ final class AppModel {
             }
         }
         guard generation == token else { return }
-        await quiesceTransport(signingOut: account)
+        await quiesceTransport(signingOut: true)
         if let localFailure { self.error = localFailure }
     }
 
@@ -1342,12 +1343,12 @@ final class AppModel {
     }
 
     // Kept or taken, never by force: false when another process holds it for ten seconds.
-    private func takeLease(_ store: MessageStore) async -> Bool {
+    func takeLease(_ store: MessageStore) async -> Bool {
         var leased = await store.holdsTransportOwnership
         for _ in 0..<40 where !leased {
             do { try await store.acquireTransportOwnership(); leased = true }
             catch MessageStoreError.transportOwnedElsewhere { guard (try? await Task.sleep(for: .milliseconds(250))) != nil else { break } }
-            catch { break }
+            catch { Self.lifecycleLog.error("lease not taken: \(String(describing: error), privacy: .public)"); break }
         }
         return leased
     }
@@ -1363,14 +1364,14 @@ final class AppModel {
         BackgroundSession.availability(sharesLastSeen: accountPreferences.lastSeen, leftForeground: SharedSession.leftForeground(defaults: sessionDefaults))
     }
 
-    private func quiesceTransport(signingOut account: String? = nil) async {
+    private func quiesceTransport(signingOut: Bool = false) async {
         await stopTransportWork()
         // A restore holds the lease until it closes the store, and releases it itself if it is refused.
         guard !restoringData else { return }
         hasTransportOwnership = false
         guard let store else { return }
         // Once this process's work is joined and under the lease, so no extension run writes those rows meanwhile.
-        if let account, !account.isEmpty { await AccountResource.removeStoreRows(of: account, store: store, leased: await takeLease(store)) }
+        if signingOut { await settleSignOut(store) }
         await releaseLeaseInBackground(store)
     }
 
@@ -1447,6 +1448,7 @@ final class AppModel {
                 try await store.acquireTransportOwnership()
                 guard transportWanted, !quiescing, generation == token else { throw CancellationError() }
                 hasTransportOwnership = true
+                await SignOutCleanup(defaults: preferences).settle(store: store)
                 return
             }
             catch MessageStoreError.transportOwnedElsewhere {
