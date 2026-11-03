@@ -2,18 +2,11 @@ import AppKit
 import CoreText
 import SwiftUI
 
-// The timeline's row geometry, worked out once per row and held as immutable records (`MacRowLayout`). A record is
-// keyed by the row's id, its revision (bumped whenever the row changes) and the width its bubble's content is laid out
-// at; a timeline width that gives the same content width (any timeline at or above about 699 pt, where the bubble cap
-// is 560) reuses the record, so the row's height never changes there. Records are made on a serial `.utility` queue and,
-// for the rows in sight, on the main thread; the table only ever looks a height up.
-//
-// The geometry follows the bubble's design to whole points: the day header's capsule, the author line, the bubble (the
-// quote, file and preview card, then the text, then the footer, 4 pt apart inside 12 pt sides, 8 pt above and 6 pt
-// below) and the reaction pills hung 3 pt into the bubble's bottom padding. Frames are for a bubble on the leading
-// side; the cell mirrors them for a sent message, so a record holds at every timeline width with the same key.
+// Row geometry is held as immutable records keyed by row id, revision and content width, so timeline widths giving the
+// same content width (from about 699 pt, the 560 pt cap) reuse them. Records are made on a serial queue and, for rows
+// in sight, on the main thread; the cell mirrors them for sent messages.
 
-/// Fonts and fixed sizes, read once on the main thread. Fonts are immutable, so the measuring queue may read them.
+// Fonts are immutable, so the measuring queue may read them.
 struct MacTimelineMetrics: @unchecked Sendable {
     let body: NSFont
     let caption: NSFont
@@ -46,24 +39,19 @@ struct MacTimelineMetrics: @unchecked Sendable {
     static let bubblePaddingH: CGFloat = 12
     static let bubbleTop: CGFloat = 8
     static let bubbleBottom: CGFloat = 6
-    /// Between the bubble's parts: the quote, file and card, the text, the footer.
     static let partSpacing: CGFloat = 4
     static let stackSpacing: CGFloat = 2
     static let cornerRadius: CGFloat = 16
     static let statusSlot = CGSize(width: MessageStatusArt.slotWidth, height: MessageStatusArt.designHeight)
-    /// A photo or video fixes the bubble's content width, as on the iPhone: a caption wraps under it.
     static let mediaContentWidth = MacMediaPreview.width - 2 * MacMediaPreview.edge
 
-    /// The bubble's cap for a content width (the timeline less 16 pt each side), to whole points:
-    /// `min(560, 0.84 × width, width − 32)`, and never under 120.
     static func cap(contentWidth width: CGFloat) -> CGFloat { floor(max(120, min(560, width * 0.84, width - 32))) }
 }
 
-/// What a row is laid out from: a snapshot the measuring queue may read.
+// An immutable snapshot the measuring queue may read.
 struct MacRowInput: @unchecked Sendable {
     let id: String
     let revision: Int
-    /// The bubble's text (`MacBubbleTextBuilder`), empty for a file without a caption. Immutable.
     let text: NSAttributedString
     let header: String?
     let author: String?
@@ -72,23 +60,19 @@ struct MacRowInput: @unchecked Sendable {
     let hasStatus: Bool
     let reactions: [(emoji: String, count: String?)]
     let startsRun: Bool
-    /// The quote, file and preview card above the text, which SwiftUI draws (`MacBubbleExtras`); nil without any.
     let extras: Extras?
     let message: TimelineMessage
 
     struct Extras: Sendable {
-        /// What their size follows from, which their measured sizes are kept with (`MacExtrasSizes`).
         let content: MacExtrasSizes.Content
-        /// The content width a photo or video fixes.
         let fixedWidth: CGFloat?
-        /// A guess at their height for a record made before SwiftUI measured them.
         let estimate: CGFloat
     }
 
     var hasText: Bool { text.length > 0 }
 }
 
-/// A row's laid-out geometry, in its cell's flipped coordinates, for a bubble on the leading side.
+// In the cell's flipped coordinates, for a bubble on the leading side.
 struct MacRowLayout: @unchecked Sendable {
     struct Key: Hashable {
         let id: String
@@ -99,31 +83,22 @@ struct MacRowLayout: @unchecked Sendable {
     let key: Key
     let input: MacRowInput
     let height: CGFloat
-    /// The day header's capsule: its width and its top; it is centred in the row.
     let header: (width: CGFloat, y: CGFloat, height: CGFloat)?
     let authorFrame: CGRect?
     let bubbleFrame: CGRect
-    /// The hosting view of the quote, file and card: the bubble's width, from its top edge to theirs plus their height,
-    /// so a photo can reach into the bubble's padding.
+    // Spans from the bubble's top edge, so a photo can reach into the bubble's padding.
     let extrasFrame: CGRect?
     let textFrame: CGRect?
     let footerFrame: CGRect
-    /// The pills' frame, 10 pt in from the row's edge on the bubble's side.
     let reactionsFrame: CGRect?
-    /// The pills shown: all, or the first ones and a "+N".
     let pills: [MacReactionPill]
-    /// The text draws whole into a plain layer (`BubbleTextView.drawsWhole`).
     let drawsWhole: Bool
-    /// Made away from the main thread before SwiftUI had measured the extras: their height is a guess, and the row is
-    /// measured again when it shows.
+    // Made off the main thread before SwiftUI measured the extras: their height is a guess, measured again when shown.
     let provisional: Bool
-    /// Shown in place of a newer record whose height the table cannot take yet (`standIn(height:)`).
     var isStandIn = false
 }
 
 extension MacRowLayout {
-    /// This record with its extras `delta` taller than it guessed: the text, the footer and the pills below them moved
-    /// down by as much, laid out as they were.
     func settled(_ input: MacRowInput, extrasHeight delta: CGFloat) -> MacRowLayout {
         func moved(_ rect: CGRect?) -> CGRect? { rect?.offsetBy(dx: 0, dy: delta) }
         var bubble = bubbleFrame
@@ -135,8 +110,7 @@ extension MacRowLayout {
                             reactionsFrame: moved(reactionsFrame), pills: pills, drawsWhole: drawsWhole, provisional: false)
     }
 
-    /// This record cut to `height`, the height its row has in the table, for its cell to show until the table takes the
-    /// record's own: everything at its place, what falls below the row's edge cropped, nothing over the next row.
+    // Shown until the table takes the record's own height: what falls below the row's edge is cropped.
     func standIn(height: CGFloat) -> MacRowLayout {
         MacRowLayout(key: key, input: input, height: height, header: header, authorFrame: authorFrame, bubbleFrame: bubbleFrame,
                      extrasFrame: extrasFrame, textFrame: textFrame, footerFrame: footerFrame, reactionsFrame: reactionsFrame, pills: pills,
@@ -144,21 +118,18 @@ extension MacRowLayout {
     }
 }
 
-/// One reaction pill: its emoji (nil for the "+N" that stands for the rest), its count and its width.
 struct MacReactionPill: Equatable, Sendable {
     let emoji: String?
     let count: String?
     let width: CGFloat
 }
 
-/// The extras' sizes SwiftUI measured, readable from the measuring queue. Each message's are kept with the extras they
-/// were measured for and hold only while those stay the same, not for a revision: revisions are a table's own, and the
-/// table of a chat opened again starts them over.
+// Readable from the measuring queue. Held per message only while its extras stay the same, not per revision:
+// revisions are a table's own and start over when a chat opens again.
 final class MacExtrasSizes: @unchecked Sendable {
     static let shared = MacExtrasSizes()
 
-    /// What the extras' size follows from: the quote, the file and the card, without the card's image, whose stored
-    /// aspect sizes it.
+    // Without the card's image, whose stored aspect sizes it.
     struct Content: Equatable, Sendable {
         let reply: TimelineReply?
         let attachment: TimelineAttachment?
@@ -205,7 +176,7 @@ final class MacExtrasSizes: @unchecked Sendable {
     }
 }
 
-/// Measures the extras through SwiftUI, on the main thread: one hosting controller, its root swapped for each.
+// One hosting controller, its root swapped for each.
 @MainActor final class MacExtrasSizer {
     private let host = NSHostingController(rootView: AnyView(EmptyView()))
 
@@ -231,8 +202,7 @@ final class MacExtrasSizes: @unchecked Sendable {
     }
 }
 
-/// Each row's natural (unwrapped) text width and its footer's, per revision: what decides its content width. One per
-/// table, as its revisions are, shared by its two measurers, so the main thread finds what the queue measured.
+// One per table, as its revisions are, shared by its two measurers so the main thread finds what the queue measured.
 final class MacNaturalWidths: @unchecked Sendable {
     private let lock = NSLock()
     private var widths: [String: (revision: Int, text: CGFloat, footer: CGFloat)] = [:]
@@ -246,15 +216,12 @@ final class MacNaturalWidths: @unchecked Sendable {
     }
 }
 
-/// Lays rows out. One measurer per thread: the main thread's measures the rows in sight, with SwiftUI for the extras;
-/// the queue's everything else, from what SwiftUI measured before. TextKit 1's objects may be used off the main thread
-/// when no view is attached and one thread uses them at a time, which the serial queue guarantees; Core Text is
-/// thread-safe. The text stack is configured as the bubble's text view's (`BubbleTextView.TextStack`), so the two lay
-/// lines out alike to the point; Core Text differs from it by up to a hundred points on long texts.
+// One measurer per thread. TextKit 1 may be used off the main thread with no view attached and one thread at a time,
+// which the serial queue guarantees; it is configured as `BubbleTextView.TextStack`, so lines match to the point (Core
+// Text differs by up to a hundred points on long texts).
 final class MacRowMeasurer: @unchecked Sendable {
     let metrics: MacTimelineMetrics
     let queue = DispatchQueue(label: "haus.timeline.measure", qos: .utility)
-    /// The main thread's: measures the extras that have no size yet.
     private let sizer: MacExtrasSizer?
     private let natural: MacNaturalWidths
     private let storage = NSTextStorage()
@@ -270,7 +237,6 @@ final class MacRowMeasurer: @unchecked Sendable {
         storage.addLayoutManager(layoutManager)
     }
 
-    /// The text's size laid out `width` wide (unbounded when nil), as the bubble's text view lays it out.
     func measureText(_ text: NSAttributedString, width: CGFloat?) -> CGSize {
         let available = width ?? .greatestFiniteMagnitude
         storage.setAttributedString(text)
@@ -280,8 +246,7 @@ final class MacRowMeasurer: @unchecked Sendable {
         return CGSize(width: min(available, ceil(used.width)), height: ceil(used.height))
     }
 
-    /// The content width a row gets in a timeline of content width `available`: the widest of its text, its footer
-    /// and its extras, capped; a photo fixes it. `known` is false while the extras' width is a guess.
+    // `known` is false while the extras' width is a guess.
     func contentWidth(for input: MacRowInput, available: CGFloat) -> (width: CGFloat, known: Bool) {
         if let fixed = input.extras?.fixedWidth { return (fixed, true) }
         let (text, footer) = naturalWidths(input)
@@ -314,14 +279,12 @@ final class MacRowMeasurer: @unchecked Sendable {
         return (text, footer)
     }
 
-    /// A single line's width, through Core Text.
     func lineWidth(_ string: String, _ font: NSFont) -> CGFloat {
         let line = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: [.font: font]))
         return ceil(CTLineGetTypographicBounds(line, nil, nil, nil))
     }
 
-    /// The footer's natural width: the star's slot (there on every message, so starring never widens the bubble), the
-    /// time and the status slot, 4 pt apart.
+    // The star's slot is there on every message, so starring never widens the bubble.
     private func footerWidth(_ input: MacRowInput) -> CGFloat {
         var width = 4 + metrics.starSize.width
         if let footer = input.footer { width += 4 + lineWidth(footer, metrics.caption2) }
@@ -329,15 +292,12 @@ final class MacRowMeasurer: @unchecked Sendable {
         return width
     }
 
-    /// The key a record for `input` has in a timeline `tableWidth` wide.
     func key(_ input: MacRowInput, tableWidth: CGFloat) -> MacRowLayout.Key {
         let available = max(1, tableWidth - 2 * MacTimelineMetrics.sidePadding)
         return MacRowLayout.Key(id: input.id, revision: input.revision, contentWidth: contentWidth(for: input, available: available).width)
     }
 
-    /// Lays one row out for a timeline `tableWidth` wide; reuses `previous` when its key still holds (unless it is a
-    /// stand-in, cut to another height), and on the main thread puts the extras' measured height in place of the guess
-    /// a queue's record made.
+    // On the main thread the extras' measured height replaces a queue record's guess.
     func layout(_ input: MacRowInput, tableWidth: CGFloat, previous: MacRowLayout? = nil) -> MacRowLayout {
         typealias M = MacTimelineMetrics
         let available = max(1, tableWidth - 2 * M.sidePadding)
@@ -406,7 +366,6 @@ final class MacRowMeasurer: @unchecked Sendable {
                             drawsWhole: drawsWhole, provisional: provisional)
     }
 
-    /// The longest line of pills that fits: every pill, else one fewer and a "+N", and so on, as on the iPhone.
     private func fitPills(_ reactions: [(emoji: String, count: String?)], available: CGFloat) -> [MacReactionPill] {
         func pill(_ emoji: String?, _ count: String?) -> MacReactionPill {
             var width: CGFloat = 12
@@ -424,9 +383,8 @@ final class MacRowMeasurer: @unchecked Sendable {
     }
 }
 
-/// A row's input: the bubble's text with its font, colour and link runs, and what the layout reads. Safe off the main
-/// thread: rows past the first screenful are built on the measuring queue (link detection and date formatting are most
-/// of a reload).
+// Safe off the main thread: rows past the first screenful are built on the measuring queue (link detection and date
+// formatting are most of a reload).
 enum MacBubbleTextBuilder {
     static func attributed(_ message: TimelineMessage, accent: AccentTheme, body: NSFont) -> NSAttributedString {
         guard !message.displayedText.isEmpty else { return NSAttributedString() }
@@ -454,7 +412,6 @@ enum MacBubbleTextBuilder {
                            extras: extras(message), message: message)
     }
 
-    /// What `MacBubbleExtras` shows, and a guess at its height until SwiftUI measures it.
     static func extras(_ message: TimelineMessage) -> MacRowInput.Extras? {
         guard !message.showsPlaceholder, message.reply != nil || message.attachment != nil || message.linkPreview != nil else { return nil }
         var estimate: CGFloat = 0

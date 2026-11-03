@@ -3,43 +3,33 @@ import AppKit
 import ObjectiveC
 import SwiftUI
 
-/// `-haus-unobtrusive`: keeps a check run out of the way of whoever is using this Mac. The app gets no Dock icon or
-/// menu bar, never stays active, and every window it opens is transparent, click-through, ordered behind everything
-/// and moved far off-screen before it is first shown. The capture hooks still render those windows (`cacheDisplay`
-/// draws the views, not the screen). Pass it on every scripted run. Debug builds only.
-///
-/// Anything the checks need from real focus (key window, activation, lock, idle) is simulated through the debug hooks
-/// instead, since a window here is never key and always reports as occluded.
+// `-haus-unobtrusive` (Debug): no Dock icon or menu bar, never active, windows transparent, click-through and parked
+// off-screen before first shown; captures still render (`cacheDisplay`). No window is key, so focus is simulated.
 @MainActor enum MacUnobtrusive {
     static let isOn = ProcessInfo.processInfo.arguments.contains("-haus-unobtrusive")
     private static var observers: [any NSObjectProtocol] = []
-    /// Far outside any arrangement of displays.
     private static let parking = NSPoint(x: -30_000, y: -30_000)
 
-    /// From the app delegate's creation, as early as the app can run code: an accessory app gets no Dock icon, not
-    /// even for the moment before it finishes launching.
+    // Called from the app delegate's init, so the accessory app gets no Dock icon even before launch finishes.
     static func setPolicy() {
         guard isOn else { return }
         NSApplication.shared.setActivationPolicy(.accessory)
     }
 
-    /// From `applicationWillFinishLaunching`, before any window exists.
     static func install() {
         guard isOn else { return }
         NSApp.setActivationPolicy(.accessory)
         allowWindowsOffScreen()
         refuseKeyWindows()
         let center = NotificationCenter.default
-        // Nothing here asks to be activated, but SwiftUI's window opening can activate the app: hand the focus back
-        // at once.
+        // SwiftUI's window opening can activate the app: hand the focus back at once.
         observers.append(center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated {
                 MacDebugHooks.log("unobtrusive: became active; deactivating")
                 NSApp.deactivate()
             }
         })
-        // Any window that slipped past the anchor (an alert, a window SwiftUI shows before its content) is hidden on
-        // the next pass of the event loop.
+        // Windows that slipped past the anchor (an alert, one SwiftUI shows before its content) hide on the next pass.
         for name in [NSApplication.didUpdateNotification, NSWindow.didBecomeKeyNotification, NSWindow.didBecomeMainNotification,
                      NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { _ in
@@ -66,7 +56,6 @@ import SwiftUI
         }
     }
 
-    /// Sheets and child windows move with their parent, so only top-level windows are parked themselves.
     private static func isTopLevel(_ window: NSWindow) -> Bool { window.sheetParent == nil && window.parent == nil }
 
     static func hide(_ window: NSWindow) {
@@ -77,9 +66,8 @@ import SwiftUI
         if isTopLevel(window), window.frame.origin != parking { window.setFrameOrigin(parking) }
     }
 
-    /// AppKit keeps a titled window's title bar on a screen (`constrainFrameRect(_:to:)`), which pulled a parked
-    /// window back to the edge of the display. In this mode no window of the app should be constrained, so the
-    /// constraint returns the frame it was given.
+    // AppKit's `constrainFrameRect(_:to:)` keeps a titled window's title bar on a screen, which would pull a parked
+    // window back; here it returns the frame unchanged.
     private static func allowWindowsOffScreen() {
         let selector = #selector(NSWindow.constrainFrameRect(_:to:))
         guard let method = class_getInstanceMethod(NSWindow.self, selector) else { return }
@@ -87,9 +75,7 @@ import SwiftUI
         method_setImplementation(method, imp_implementationWithBlock(unconstrained))
     }
 
-    /// AppKit makes a sheet's parent the key window again when the sheet ends, and making a window key activates its
-    /// app, which this mode never wants: a window here is shown without becoming key, and a request to make one key
-    /// is dropped. The observer above still hands back any activation that comes another way.
+    // Ending a sheet makes its parent key, and making a window key activates the app, so key requests are dropped.
     private static func refuseKeyWindows() {
         let makeKey: @convention(block) (NSWindow) -> Void = { _ in }
         let makeKeyAndOrderFront: @convention(block) (NSWindow, Any?) -> Void = { window, sender in window.orderFront(sender) }
@@ -101,7 +87,6 @@ import SwiftUI
         }
     }
 
-    /// Hides its window the moment the content joins it, before the window is first ordered on screen.
     struct Anchor: NSViewRepresentable {
         final class View: NSView {
             override func viewDidMoveToWindow() {

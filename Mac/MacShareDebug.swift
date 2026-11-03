@@ -4,12 +4,9 @@ import MessagingCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// `-haus-share-sheet <link>`: the Share extension's screen and model, hosted in a window of the signed app, for checks of
-/// the Mac share flow without a signed extension or a click. The share carries the link and a generated photo
-/// (`-haus-share-link-only`: the link alone).
-/// `-haus-share-to <chat>` opens it on that chat's review card, as a share-sheet suggestion does on the iPhone;
-/// `-haus-share-send` then sends, which queues through the composer's enqueue, rings this app and waits for its outbox
-/// pass, exactly as from the extension. Each stage is captured into `-haus-capture`'s directory. Debug builds only.
+// Hosts the Share extension's screen and model in a window of the signed app, to check the Mac share flow without a
+// signed extension or a click; `-haus-share-send` queues, rings this app and waits for its outbox pass as the extension
+// does.
 @MainActor enum MacShareDebug {
     static func run(_ link: String, model app: AppModel) async {
         guard let url = URL(string: link) else { MacDebugHooks.log("share sheet: not a link"); return }
@@ -58,7 +55,7 @@ import UniformTypeIdentifiers
         while !condition(), ContinuousClock.now < end { try? await Task.sleep(for: .milliseconds(100)) }
     }
 
-    /// A synthetic gradient, so the capture shows no real picture.
+    // A synthetic gradient, so the capture shows no real picture.
     private static func samplePhoto() -> Data? {
         guard let context = CGContext(data: nil, width: 800, height: 600, bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }

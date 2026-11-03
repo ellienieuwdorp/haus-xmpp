@@ -1,29 +1,23 @@
 import SwiftUI
 
-/// One chat's actions: the iPhone's trailing swipe actions (Read, Pin, Mute) and its details' Contact, Block, Report and
-/// Unblock.
-/// The sidebar's right-click menu offers them for any chat and the Chat menu for the selected one, both through
-/// `MacChatActionsMenu`, so the two list the same things in the same order.
+// The sidebar's right-click menu and the Chat menu both list these through `MacChatActionsMenu`, so the two match.
 struct MacChatActions {
     enum Action: Hashable {
         case markRead, togglePin, mute(MuteDuration), unmute, block, unblock, report
-        /// The details' Contact row: shows the details and starts there, where the flow and its confirmations live.
+        // Shows the details and starts there, where the flow and its confirmations live.
         case contact(ContactRowRequest.Kind)
-        /// Selects the chat and shows its details.
         case showDetails
     }
 
     let chat: ChatSummary
     let isGroup: Bool
     let isBlocked: Bool
-    /// A direct chat with someone else: it can be linked to a contact.
     let canLink: Bool
     let isLinked: Bool
-    /// The server blocks; without it Block, Report and Unblock are disabled.
     let canBlock: Bool
     let perform: (Action) -> Void
 
-    /// Block and Report ask first: they set the window's `blockRequest`, which the main window confirms.
+    // Block and Report ask first: they set `blockRequest`, which the main window confirms.
     @MainActor init(chat: ChatSummary, model: AppModel, window: MacWindowState) {
         self.chat = chat
         isGroup = model.isGroup(chat.id)
@@ -52,9 +46,8 @@ struct MacChatActions {
     }
 }
 
-/// `MacChatActions` as menu items. The right-click menu leaves out what does not apply to its chat, as menus over an
-/// item do; the menu bar keeps every item in its place and disables what does not apply, and with no chat selected
-/// (`actions` nil) disables them all. Shortcuts belong to the menu bar only.
+// The right-click menu leaves out what does not apply, as menus over an item do; the menu bar keeps every item in
+// place, disabled. Shortcuts belong to the menu bar only.
 struct MacChatActionsMenu: View {
     enum Placement { case contextMenu, menuBar }
 
@@ -84,12 +77,10 @@ struct MacChatActionsMenu: View {
             }
             .disabled(actions == nil)
         }
-        // A group or the account itself has no contact; the menu bar keeps the items, disabled.
         if menuBar || actions?.canLink == true {
             Divider()
             contactItems
         }
-        // A group has no one to block; the menu bar keeps the items, disabled.
         if menuBar || actions?.isGroup == false {
             Divider()
             blockItems
@@ -100,7 +91,6 @@ struct MacChatActionsMenu: View {
         }
     }
 
-    /// The details' Contact actions, as its row's menu offers them.
     @ViewBuilder private var contactItems: some View {
         let available = actions?.canLink ?? false
         if actions?.isLinked == true {
@@ -114,7 +104,6 @@ struct MacChatActionsMenu: View {
         }
     }
 
-    /// The details' Block, Report and Unblock; disabled without a server that blocks.
     @ViewBuilder private var blockItems: some View {
         let available = actions.map { $0.canBlock && !$0.isGroup } ?? false
         if actions?.isBlocked == true {
@@ -124,7 +113,7 @@ struct MacChatActionsMenu: View {
             Button("Block…", systemImage: "hand.raised") { actions?.perform(.block) }
                 .disabled(!available)
         }
-        // A blocked chat's report was made (or is moot) when it was blocked; the menu bar keeps the item, disabled.
+        // A blocked chat's report was made (or is moot) when it was blocked.
         if menuBar || actions?.isBlocked == false {
             Button("Report…", systemImage: "exclamationmark.bubble") { actions?.perform(.report) }
                 .disabled(!available || actions?.isBlocked == true)
@@ -133,8 +122,7 @@ struct MacChatActionsMenu: View {
 }
 
 extension View {
-    /// A keyboard shortcut in the menu bar; a right-click menu shows none, as the shortcut acts on the selected chat and
-    /// not on the one clicked.
+    // The shortcut acts on the selected chat, not the one right-clicked, so context menus show none.
     @ViewBuilder func menuShortcut(_ key: KeyEquivalent, modifiers: EventModifiers = .command, if applies: Bool = true) -> some View {
         if applies { keyboardShortcut(key, modifiers: modifiers) } else { self }
     }

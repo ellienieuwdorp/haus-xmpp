@@ -3,25 +3,11 @@ import AppKit
 import OMEMO
 import SwiftUI
 
-/// The device trust tour steps (`-haus-tour`; see `MacDebugHooks`). Debug builds only.
-///
-/// - `chat <address>`: opens a chat with that address (a lab contact), creating it as New Chat would.
-/// - `join <room>`: joins that group (a lab room the account is a member of) and opens it.
-/// - `devices`: logs the open chat's devices with their trust, and what the review banner and the account review see.
-/// - `messages [<count>]`: logs the open chat's newest messages (default 4): direction, encryption, state, and the text
-///   of a lab account's (synthetic) messages.
-/// - The rest press a button as VoiceOver would (`MacKeyboardDebug.pressElement`), so they run the button's own action:
-///   `device <id>` a device row in the inspector, `review` the banner's Review…,
-///   `trust|verify|dont-trust|compare|remove <id>` that device's button in the newest open sheet (the review sheet, the
-///   account's review or a fingerprint sheet; `<id>.legacy` or `<id>.modern` picks one version where the review sheet
-///   lists a device in both, else the first), `confirm <button>` a confirmation dialog's button, `close-sheet` the
-///   newest sheet's Done or Close.
-/// - `own-review`: opens the account's device review, as the sidebar card's Review does (the sidebar's rows are not in
-///   the accessibility tree of a window that was never on screen, so the button cannot be pressed).
+// `-haus-tour` steps (see `MacDebugHooks`). Button steps press the element as VoiceOver would, running its own action.
+// `own-review` opens the review directly: the sidebar's rows are not in the accessibility tree of a never-shown window.
 @MainActor enum MacDeviceReviewTour {
     static func step(_ name: String, _ argument: String, model: AppModel, window: MacWindowState, mainWindow: NSWindow?) async {
-        // Identifiers of a device's buttons (the device ID follows), and the fingerprint sheet's titles: that sheet is
-        // for one device, and the iPhone's lab tests find its buttons by title.
+        // The fingerprint sheet is for one device, and the iPhone's lab tests find its buttons by title.
         let buttons: [String: (identifiers: [String], titles: [String])] = [
             "device": (["encryptionDevice.", "waitingDevice.", "groupDevice."], []),
             "trust": (["deviceReview.trust.", "ownDevice.trust."], ["Accept without verifying"]),

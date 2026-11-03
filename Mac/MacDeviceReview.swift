@@ -1,9 +1,7 @@
 import OMEMO
 import SwiftUI
 
-/// The open chat's review prompt: the iPhone's review card as a banner over the conversation. It names who added a
-/// device (the contact, the account or a group's member), says what waits, and opens the review sheet, where each
-/// waiting device is trusted or not by its fingerprint. Later hides it until what waits changes.
+// Later hides it until what waits changes.
 struct MacDeviceReviewBanner: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -12,14 +10,14 @@ struct MacDeviceReviewBanner: View {
     @State private var reviewing = false
 
     private var isGroup: Bool { model.isGroup(chatID) }
-    /// Sending waits: an undecided device in the version this chat sends with, or a send held for a decision.
+    // An undecided device in the version this chat sends with, or a send held for a decision.
     private var sendingWaits: Bool { model.chatCapabilities(chatID).encryption == .needsReview }
-    /// Only reading waits: messages from a device in the other version are held until it is decided.
+    // Messages from a device in the other version are held until it is decided.
     private var readingWaits: Bool { !isGroup && model.encryptionOverview(for: chatID)?.needsIncomingReview == true }
     private var waiting: [EncryptionDevice] { MacDeviceReviewSheet.waiting(model: model, chatID: chatID) }
     private var shows: Bool { !model.isDemo && (sendingWaits || readingWaits) && !dismissed }
 
-    /// The iPhone card's "New device on your account": every device sending waits for is the account's.
+    // Every device sending waits for is the account's.
     private var ownDevicesOnly: Bool {
         guard let profile = model.encryptionOverview(for: chatID)?.profile else { return false }
         let sending = waiting.filter { $0.profile == profile }
@@ -41,8 +39,7 @@ struct MacDeviceReviewBanner: View {
     }
 
     private var card: some View {
-        // The buttons sit beside the text while it keeps a readable column, and under it in a narrow conversation (the
-        // inspector open beside it).
+        // Beside the text while it keeps a readable column, under it in a narrow conversation.
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .center, spacing: 12) {
                 icon
@@ -61,8 +58,7 @@ struct MacDeviceReviewBanner: View {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
-        // The timeline scrolls under the banner: the tint sits on the timeline's own background, so no message shows
-        // through it.
+        // On the timeline's own background, so no message scrolling under the banner shows through the tint.
         .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .padding(.horizontal, 16).padding(.top, 8)
@@ -98,17 +94,16 @@ struct MacDeviceReviewBanner: View {
     }
 }
 
-/// The devices that keep one chat waiting, each with its fingerprint, Trust and Don't Trust, and the fingerprint
-/// comparison that can verify it. A decision covers that one device's key in that version and applies to every chat
-/// it is in; nothing is decided for several devices at once.
+// A decision covers one device's key in one version and applies to every chat it is in; nothing is decided for
+// several devices at once.
 struct MacDeviceReviewSheet: View {
     @Bindable var model: AppModel
     let chatID: String
     let title: String
     @Environment(\.dismiss) private var dismiss
-    /// Every device listed since the sheet opened, so a decided one stays with its outcome until the sheet closes.
+    // So a decided device stays with its outcome until the sheet closes.
     @State private var shown: [EncryptionDevice] = []
-    /// Decisions saved from this sheet by fingerprint-scoped ID, for devices the chat stops listing once decided.
+    // By fingerprint-scoped ID, for devices the chat stops listing once decided.
     @State private var decided: [String: DeviceTrust] = [:]
     @State private var rejecting: EncryptionDevice?
     @State private var comparing: EncryptionDevice?
@@ -116,8 +111,6 @@ struct MacDeviceReviewSheet: View {
     private var isGroup: Bool { model.isGroup(chatID) }
     private var stored: [EncryptionDevice] { Self.stored(model: model, chatID: chatID) }
 
-    /// The chat's stored devices: a group's members' (the account's own among them), else the contact's and the
-    /// account's in both versions.
     static func stored(model: AppModel, chatID: String) -> [EncryptionDevice] {
         model.groupChats[chatID]?.devices ?? model.encryptionOverview(for: chatID)?.devices ?? []
     }
@@ -188,7 +181,6 @@ struct MacDeviceReviewSheet: View {
         .frame(maxWidth: .infinity).padding(.vertical, 4)
     }
 
-    /// Who to compare each fingerprint with: the contact or the members reading theirs out, or the account's other device.
     private var guidance: String {
         let own = shown.contains { $0.jid == model.accountID }, others = shown.contains { $0.jid != model.accountID }
         let subject = shown.count == 1 ? "the fingerprint" : "each fingerprint"
@@ -198,8 +190,7 @@ struct MacDeviceReviewSheet: View {
         return "Compare \(subject) with the one \(title) reads out from their device. Trust only devices you recognize."
     }
 
-    /// The stored record of a listed device, whose trust may have changed since the list was made; for one the chat no
-    /// longer lists, the listed record with the decision saved here.
+    // Trust may have changed since the list was made; a device no longer listed gets the decision saved here.
     private func current(_ device: EncryptionDevice) -> EncryptionDevice {
         if let record = stored.first(where: { $0.id == device.id }) { return record }
         var listed = device
@@ -207,7 +198,6 @@ struct MacDeviceReviewSheet: View {
         return listed
     }
 
-    /// Who to compare with in the fingerprint sheet; nil for one of the account's own devices.
     private func name(of device: EncryptionDevice) -> String? {
         device.jid == model.accountID ? nil : isGroup ? String(device.jid.prefix { $0 != "@" }) : title
     }
@@ -216,8 +206,8 @@ struct MacDeviceReviewSheet: View {
         device.jid == model.accountID ? "Your account" : isGroup ? device.jid : "\(title)’s device"
     }
 
-    /// A device ID can be listed once per version (its OMEMO 2 record holding messages while the chat sends legacy), so
-    /// each button names the version too.
+    // A device ID can be listed once per version (its OMEMO 2 record holding messages while the chat sends legacy), so
+    // the spoken label and the key name the version too.
     private func spoken(_ device: EncryptionDevice) -> String { "\(String(device.deviceID)), \(device.profile.label)" }
     private func key(_ device: EncryptionDevice) -> String { "\(device.deviceID).\(device.profile.rawValue)" }
 

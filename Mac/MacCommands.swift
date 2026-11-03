@@ -1,20 +1,15 @@
 import AppKit
 import SwiftUI
 
-/// Menu commands of the main window. Settings (⌘,) comes with the Settings scene. The Chat and Message menus act on the
-/// main window while it is the key window: its chats from the model, the open chat's find and message commands from
-/// what the conversation registers (`MacMenuTargets`), or publishes as a focused scene value. They are disabled while
-/// another window is in front, the main window is closed, or a transfer, upgrade or key recovery replaces its chats;
-/// New Chat and Find Chat are disabled then too.
+// The Chat and Message menus act on the main window only while it is key and shows its chats (not during a transfer,
+// upgrade or key recovery); the open chat's commands come from `MacMenuTargets` or a focused scene value.
 @MainActor struct MacCommands: Commands {
     let model: AppModel
     let window: MacWindowState
-    /// The open chat's search and starred filter; nil while no chat is shown.
     @FocusedValue(\.conversationFind) private var focusedConversation: MacConversationFindCommands?
     @FocusedValue(\.macMessageCommands) private var focusedMessageCommands: MacMessageCommands?
 
-    /// The main window is in front, showing its chats. An unobtrusive run's window is never key, so there it always
-    /// counts.
+    // An unobtrusive run's window is never key, so there it always counts.
     private var actsOnMainWindow: Bool {
         guard !model.showsBlockingScreen else { return false }
         #if DEBUG
@@ -65,9 +60,8 @@ import SwiftUI
                                                      set: { conversation?.setStarredOnly($0) }))
                 .disabled(conversation == nil)
         }
-        // File > Import from iPhone or iPad: Continuity Camera into the open chat's composer, as the attach menu offers.
         ImportFromDevicesCommands()
-        // The main window by name, as Messages and Mail list theirs: it opens the window again after it was closed.
+        // Listed by name, as Messages and Mail list theirs, so it reopens the window after it was closed.
         CommandGroup(before: .windowList) {
             Button("Haus XMPP") { showMainWindow() }
                 .keyboardShortcut("0")
@@ -81,18 +75,14 @@ import SwiftUI
         }
     }
 
-    /// The commands work with the main window closed too: they bring it back first.
     private func showMainWindow() {
         window.showMainWindow()
     }
 }
 
-/// The main window's chats, for the Chat menu: the selected chat's actions, and moving between chats.
 struct MacChatCommands {
-    /// The selected chat's actions; nil with no chat selected.
     let selected: MacChatActions?
     let detailsShown: Bool
-    /// The sidebar's chats in its order (`ChatListOrder`).
     let chats: [(id: String, title: String)]
     let selection: String?
     let select: (String) -> Void
@@ -111,14 +101,10 @@ struct MacChatCommands {
     func neighbour(forward: Bool) -> String? { ChatListOrder.neighbour(of: selection, in: chats.map(\.id), forward: forward) }
 }
 
-/// The open conversation's message commands, for the Message menu: on the message with the timeline's keyboard focus,
-/// else on the last messages. They act as the bubble's menu does on that message: reply and edit through the composer,
-/// star and reactions through the conversation.
 struct MacMessageCommands {
     let targets: LastMessageTargets
-    /// The targets are the focused message, not the last ones; the items say so.
     let isFocused: Bool
-    /// A blocked chat has no composer and sends nothing, so it neither replies, edits nor reacts.
+    // A blocked chat has no composer and sends nothing, so it neither replies, edits nor reacts.
     let isBlocked: Bool
     let handlers: MacMessageHandlers
 
@@ -132,9 +118,8 @@ extension FocusedValues {
     @Entry var macMessageCommands: MacMessageCommands?
 }
 
-/// The open chat's menu targets, registered by its views while they are shown. The main window's content is hosted in
-/// AppKit views, where a focused scene value need not reach the menu bar's commands, so the commands read these too.
-/// SwiftUI may build a view twice and take the copies down in any order; the newest one left counts.
+// The main window's content is hosted in AppKit views, where a focused scene value need not reach the menu bar, so the
+// commands read these too. SwiftUI may build a view twice and drop the copies in any order; the newest left counts.
 @Observable @MainActor final class MacMenuTargets {
     static let shared = MacMenuTargets()
 
@@ -142,9 +127,7 @@ extension FocusedValues {
     var messageCommands: [(token: UUID, make: () -> MacMessageCommands)] = []
 }
 
-/// The Chat menu: the selected chat's actions (`MacChatActionsMenu`, as in the sidebar's right-click menu), its details,
-/// then moving between chats: ⌃⇥ and ⌃⇧⇥ step to the next and previous chat as they step through tabs elsewhere on the
-/// Mac, and ⌘1 to ⌘9 go to the sidebar's first nine. Details is ⌥⌘I, as ⌘I is italic wherever text is edited.
+// ⌃⇥ and ⌃⇧⇥ step through chats as they step through tabs elsewhere on the Mac; Details is ⌥⌘I, as ⌘I is italic.
 struct MacChatMenu: View {
     let commands: MacChatCommands?
 
@@ -171,10 +154,7 @@ struct MacChatMenu: View {
     }
 }
 
-/// The Message menu: the composer's and the bubble's actions on the message with the timeline's keyboard focus, else
-/// on the conversation's last message (`LastMessageTargets`), each disabled when no loaded message offers it; the items
-/// name the last message only when that is what they act on. ⌘R replies, as Mail's Reply does; ⇧⌘E edits, as plain ⌘E
-/// is Use Selection for Find (Up-arrow in an empty composer edits too).
+// ⌘R replies, as in Mail; ⇧⌘E edits, as ⌘E is Use Selection for Find.
 struct MacMessageMenuCommands: View {
     let commands: MacMessageCommands?
 
@@ -211,15 +191,12 @@ struct MacMessageMenuCommands: View {
         commands.handlers.perform(kind, message, nil)
     }
 
-    /// "❤️ Heart": the emoji and its name, as a menu item reads best.
     static func reactionLabel(_ emoji: String) -> String {
         let name = TimelineReaction.name(for: emoji)
         return "\(emoji)  \(name.prefix(1).uppercased() + name.dropFirst())"
     }
 }
 
-/// The standard About panel (name, icon, version and the Info.plist copyright) with the licence notice and the
-/// source, privacy and support links as its credits. The licence texts are in Settings > About.
 enum MacAboutPanel {
     @MainActor static func show() {
         NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])

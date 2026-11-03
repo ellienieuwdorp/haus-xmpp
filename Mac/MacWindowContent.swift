@@ -1,9 +1,6 @@
 import SwiftUI
 
-/// The main window's sheets, alerts and routes, from a zero-sized view of their own in the window
-/// (`MacShellController`), so following them never reruns a pane. The error alert shows over the split view or the
-/// screen that replaces it; the chats' own (`MacChatsPresenter`) only with the split view, as they open, choose and
-/// change chats.
+// A zero-sized view of its own, so following sheets, alerts and routes never reruns a pane.
 struct MacWindowPresenter: View {
     @Bindable var model: AppModel
     let window: MacWindowState
@@ -24,8 +21,8 @@ struct MacWindowPresenter: View {
     }
 }
 
-/// The split view's sheets, confirmations and routes. Gone while the transfer, upgrade or key-recovery screen replaces
-/// it: a sheet open then closes, and a notification's route waits until the chats are back.
+// Gone while a transfer, upgrade or key-recovery screen replaces the split view: a sheet open then closes, and a
+// notification's route waits until the chats are back.
 private struct MacChatsPresenter: View {
     @Bindable var model: AppModel
     @Bindable var window: MacWindowState
@@ -33,7 +30,8 @@ private struct MacChatsPresenter: View {
     var body: some View {
         Color.clear
             .accessibilityHidden(true)
-            // A Block or Report from the sidebar's menu or the Chat menu; here, so it shows with the sidebar collapsed too.
+            // A Block or Report from the sidebar's menu or the Chat menu; here, so it shows with the sidebar collapsed
+            // too.
             .blockConfirmation(model: model, request: $window.blockRequest)
             .onChange(of: model.accountID) { _, _ in
                 window.selection = nil
@@ -100,7 +98,6 @@ private struct MacChatsPresenter: View {
     }
 }
 
-/// The split view's content: the open chat, or what to do with none open.
 struct MacDetailPane: View {
     let model: AppModel
     let window: MacWindowState
@@ -133,8 +130,7 @@ struct MacDetailPane: View {
     }
 }
 
-/// The inspector's pane: the open chat's details, from when the column first shows them until another chat is chosen
-/// (`MacInspectorController`). Kept in the closed column, they open again with nothing to build.
+// Kept in the closed column, so the details open again with nothing to build.
 struct MacInspectorPane: View {
     let model: AppModel
     @Bindable var window: MacWindowState
@@ -148,7 +144,6 @@ struct MacInspectorPane: View {
     }
 }
 
-/// Chat details in the inspector, with the pages it links to (devices and encryption, group details) pushed inside it.
 struct MacChatInspector: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -170,9 +165,8 @@ struct MacChatInspector: View {
     }
 }
 
-/// A page pushed inside the inspector: its title and a Back button at the top of the inspector. The system's Back
-/// button would sit in the window toolbar's leading area, beside the conversation's title, where it reads as the
-/// conversation's own.
+// Its own Back button: the system's sits in the toolbar's leading area beside the conversation's title, where it reads
+// as the conversation's own.
 struct MacInspectorPage: ViewModifier {
     let title: String
     @Environment(\.dismiss) private var dismiss

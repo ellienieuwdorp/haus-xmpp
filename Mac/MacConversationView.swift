@@ -3,46 +3,28 @@ import MessageStore
 import QuickLook
 import SwiftUI
 
-/// The open chat. The timeline (`MacTimeline`) opens at the newest message in its first frame, follows the bottom while
-/// the reader is there, keeps the reader's rows through older pages and resizes, and pages in older history near the
-/// top; the composer (`MacComposer`) sits below it, and the timeline runs under it and under the bars above. A bubble's right-click menu, its hover toolbar and its VoiceOver actions
-/// perform the shared menu's actions (`MacMessageHandlers`), with the iPhone's retry and unsend dialogs. Links in
-/// bubbles open through `LinkOpening`, and preview cards show as on the iPhone. Photos and videos show as framed stills
-/// and files as a line; a click opens one in Quick Look, or asks for its download when it is not on this Mac yet.
-/// Search and the starred filter list a slice of the chat under bars at the top (`MacConversationFindBars`); search
-/// hides the composer, as on the iPhone, and a reply or an edit in it waits there until search closes.
+// Search hides the composer, as on the iPhone; a reply or an edit started meanwhile waits there until search closes.
 struct MacConversationView: View {
     @Bindable var model: AppModel
     let chatID: String
-    /// The timeline's rows and scroll position; made when the view first appears.
     @State private var timeline: MacTimelineController?
-    /// A message's Report, waiting for its confirmation.
     @State private var blockRequest: BlockRequest?
     @State private var retryMessageID: String?
     @State private var unsendMessageID: String?
-    /// A phone link was clicked: Call, Send Message or Copy.
     @State private var phoneLink: PhoneLink?
-    /// A link could not be opened, so it was copied; the alert says why.
     @State private var copiedReason: String?
-    /// An `xmpp:…?join` link to a group this account is not in: the join flow, with its address filled in.
     @State private var joiningGroup: String?
-    /// The file shown in Quick Look.
     @State private var quickLook: URL?
-    /// The composer's reply or edit, set by message actions.
     @State private var composerIntent = MacComposerIntent()
-    /// Files are being dragged over the chat and it would take them.
     @State private var dropTargeted = false
-    /// Bumped by Find; the find bar's field takes focus on each change.
     @State private var findRequests = 0
-    /// The bubbles' `openURL`, one for the view's life: a new action on each update of this view would change every
-    /// row's environment and run all their bodies again. What it performs is set while the view is shown: it holds this
-    /// view, whose state holds it.
+    // One action for the view's life: a new one on each update would change every row's environment and rerun their
+    // bodies. It holds this view, whose state holds it.
     @State private var linkAction = MacLinkAction()
 
     private var title: String { model.chatName(for: chatID) }
     private var presenter: ConversationPresenter { ConversationPresenter(source: model, chatID: chatID, title: title) }
     private var isGroup: Bool { model.isGroup(chatID) }
-    /// Where Encryption details goes: the inspector's page for this chat's devices, or a group's details.
     private var encryptionRoute: ChatRoute { isGroup ? .groupDetails(chatID) : .encryption(chatID) }
 
     private var debugDropHighlight: Bool {
@@ -53,8 +35,7 @@ struct MacConversationView: View {
         #endif
     }
 
-    /// The failed message the retry dialog is for was a file failed when encryption was set up again: its key is gone,
-    /// so the store refuses a retry and the dialog only explains.
+    // A file that failed when encryption was set up again has lost its key, so the store refuses a retry.
     private var retryIsImpossible: Bool {
         retryMessageID.flatMap { id in model.messages.first { $0.id == id }?.rejection } == MessageStore.encryptionResetRejection
     }
@@ -62,8 +43,7 @@ struct MacConversationView: View {
     var body: some View {
         let presenter = presenter
         Group {
-            // Built only once this chat's first page is loaded, so the scroll view's initial offset is the tail of
-            // real content, not of an empty stack.
+            // Built once the first page has loaded, so the scroll view's initial offset is the tail of real content.
             if let timeline, timeline.isLoaded {
                 self.timeline(timeline, presenter: presenter)
             } else {
@@ -78,13 +58,10 @@ struct MacConversationView: View {
                 ConversationPresenter(source: model, chatID: chatID,
                                       title: model.chatName(for: chatID))
             }
-            // Esc in the timeline, or in a bubble's text: closes the find bar, as Esc in its field does, or else the
-            // starred filter; with neither open, keyboard focus goes to the composer.
             timeline.onEscape = { [weak timeline, composerIntent] in
                 guard let timeline else { return }
                 if timeline.isFiltered { timeline.closeFilter() } else { composerIntent.focusComposer() }
             }
-            // Tab goes on to the composer, or where the window's key view loop goes while search or a block hides it.
             timeline.onTab = { [weak timeline, composerIntent] in
                 guard let timeline else { return }
                 if timeline.searching || model.isBlocked(chatID) {
@@ -118,16 +95,13 @@ struct MacConversationView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            // Sending, or reading, waits on a device nobody decided on (the iPhone shows a card in the chat); the
-            // banner's review sheet decides each waiting device by its fingerprint.
+            // The banner's review sheet decides each device that sending or reading waits on, by its fingerprint.
             VStack(spacing: 0) {
                 MacDeviceReviewBanner(model: model, chatID: chatID, title: title)
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { timeline?.table.setBars(banner: $0) }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            // A blocked chat says so and offers Unblock in place of the composer. The timeline runs under it, and keeps
-            // the newest message above it as it grows and shrinks.
             VStack(spacing: 0) {
                 if model.isBlocked(chatID) {
                     BlockedChatBar(model: model, chatID: chatID, name: title)
@@ -138,8 +112,7 @@ struct MacConversationView: View {
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { timeline?.table.setBars(bottom: $0) }
         }
-        // Files dropped anywhere in the chat but on the find bars join the composer's tray; a drop during search closes
-        // it, as a reply does.
+        // A drop during search closes it, as a reply does.
         .onDrop(of: MacAttachmentDrop.types, delegate: MacAttachmentDrop(model: model, chatID: chatID, intent: composerIntent, targeted: $dropTargeted))
         .overlay { if dropTargeted || debugDropHighlight { MacAttachmentDropHighlight() } }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -149,8 +122,8 @@ struct MacConversationView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { timeline?.table.setBars(find: $0) }
         }
         .onChange(of: model.conversationIntent, initial: true) { _, intent in
-            // The details' Search and Starred tiles leave what they want opened here, as on the iPhone. Applied in a turn
-            // of its own: the timeline scrolls as the filter changes, which it may not do inside a view update.
+            // Applied in a turn of its own: the timeline scrolls as the filter changes, which it may not do inside a
+            // view update.
             switch intent {
             case .search(let id) where id == chatID:
                 model.conversationIntent = nil
@@ -202,7 +175,6 @@ struct MacConversationView: View {
         .background { MacConversationSubtitle(model: model, chatID: chatID) }
         .quickLookPreview($quickLook)
         #if DEBUG
-        // A tour step performing a message action as its menu item would (`MacDebugHooks`).
         .onChange(of: MacDebugHooks.tour.messageRequest) { _, request in
             guard let request, let message = presenter.timelineMessages.first(where: { $0.id == request.messageID }) else { return }
             // No Copy: a run must leave the Mac's pasteboard alone.
@@ -215,8 +187,8 @@ struct MacConversationView: View {
         }
         .onChange(of: MacDebugHooks.tour.hoveredMessage) { _, _ in timeline?.table.debugHoverChanged() }
         #endif
-        // Closed by the window when the selection moves on or the window closes: SwiftUI may build the content pane more
-        // than once for one selection, and a late disappearance would close the chat the new view just opened.
+        // Closed by the window when the selection moves on or the window closes: SwiftUI may build the content pane
+        // more than once for one selection, and a late disappearance would close the chat the new view just opened.
         .task(id: [chatID, model.accountID]) { await model.openChat(chatID) }
         .environment(\.openURL, linkAction.action)
         .confirmationDialog(phoneLink?.number ?? "", isPresented: Binding(get: { phoneLink != nil }, set: { if !$0 { phoneLink = nil } }),
@@ -241,8 +213,6 @@ struct MacConversationView: View {
         }
     }
 
-    /// Performs a link from a bubble or a card. Where it goes is `LinkOpening`'s decision, shared with the iPhone; web
-    /// pages always open in the default browser.
     private func open(_ url: URL) {
         switch LinkOpening.destination(for: url, inAppBrowser: false) {
         case .web(let page, _), .map(let page):
@@ -262,7 +232,6 @@ struct MacConversationView: View {
         }
     }
 
-    /// What a bubble's menu, toolbar and VoiceOver actions do here; the iPhone's `ConversationView` does the same.
     private var messageHandlers: MacMessageHandlers {
         MacMessageHandlers(perform: { kind, message, link in perform(kind, on: message, link: link) },
                            react: { emoji, message in Task { await model.toggleReaction(emoji, messageID: message.id) } })
@@ -282,7 +251,6 @@ struct MacConversationView: View {
         case .unsend: unsendMessageID = message.id
         case .encryptionDetails: model.requestRoute(encryptionRoute)
         case .report: blockRequest = BlockRequest(kind: .report, chatID: chatID, name: title, messageID: message.id)
-        // The menu's first link item: Call for a phone number, what a click does otherwise.
         case .openLink:
             guard let link else { return }
             if case .phone(_, let call, _) = LinkOpening.destination(for: link, inAppBrowser: false) { NSWorkspace.shared.open(call) } else { open(link) }
@@ -295,14 +263,11 @@ struct MacConversationView: View {
         }
     }
 
-    /// A click on a photo, video or file: Quick Look once it is here, else its download (a file waiting for a click, or
-    /// a failed one).
     private func openAttachment(of message: TimelineMessage) {
         guard let attachment = message.attachment, !message.showsPlaceholder else { return }
         if let url = attachment.localURL { quickLook = url } else if attachment.download.canRequest { model.downloadAttachment(message.id) }
     }
 
-    /// Opens search, or moves keyboard focus back into its field when it is open.
     private func find() {
         timeline?.setSearching(true)
         findRequests += 1
@@ -321,8 +286,8 @@ struct MacConversationView: View {
     private func timeline(_ timeline: MacTimelineController, presenter: ConversationPresenter) -> some View {
         MacTimeline(controller: timeline, contactName: isGroup ? nil : title, handlers: messageHandlers,
                     openAttachment: { openAttachment(of: $0) }, openLink: { linkAction.perform($0) })
-        // The user started reading this chat (the app active, its window key and visible, the screen unlocked, the user
-        // not idle): what was already on screen counts as seen now (critique G3).
+        // Reading started (app active, window key and visible, screen unlocked, user not idle): what was already on
+        // screen counts as seen now.
         .onChange(of: model.readingStarts) { _, _ in
             let shownIDs = timeline.table.visibleMessageIDs
             guard let shown = timeline.rows.last(where: { shownIDs.contains($0.message.id) && presenter.marksDisplayed($0.message.id) }) else { return }
@@ -330,17 +295,15 @@ struct MacConversationView: View {
         }
     }
 
-    /// The newest received message marks the chat read when it shows. The model marks it only while the user reads
-    /// this chat (`LifecycleSignals.readsOpenChat`, from `MacLifecycle`), so a row appearing in a window behind other
-    /// apps marks nothing; the start of reading marks it then.
+    // The model marks only while the user reads this chat (`LifecycleSignals.readsOpenChat`), so a row appearing in a
+    // window behind other apps marks nothing until reading starts.
     private func markIfReading(_ id: String) {
         guard presenter.marksDisplayed(id) else { return }
         Task { await model.markDisplayed(id) }
     }
 }
 
-/// What an empty timeline says (`ConversationPresenter.emptyNotice`) under the open filters; a filter that has found
-/// nothing yet waits for the earlier messages it is loading.
+// A filter that has found nothing yet waits for the earlier messages it is loading.
 private struct MacEmptyNotice: View {
     let timeline: MacTimelineController
     let presenter: ConversationPresenter
@@ -356,14 +319,12 @@ private struct MacEmptyNotice: View {
     }
 }
 
-/// The header's line under the chat's name, by the iPhone's rules: who is typing, else the contact's last seen
-/// (`LastSeen.headerLabel`: a 1:1 chat with known activity, never a blocked one), else nothing. The trust state stays
-/// in the details and the review banner, as on the iPhone, so the line never flickers between the two. Its own view:
-/// typing and presence change often and must not rerun the conversation's body.
+// The trust state stays in the details and the review banner, so the line never flickers between the two. Its own
+// view: typing and presence change often and must not rerun the conversation's body.
 private struct MacConversationSubtitle: View {
     let model: AppModel
     let chatID: String
-    /// Ticks while a relative "Last seen" shows, so "just now" and "today" roll over on their own.
+    // Ticks so a relative "Last seen" rolls over on its own.
     @State private var clock = Date.now
 
     private var subtitle: String {
@@ -387,9 +348,7 @@ private struct MacConversationSubtitle: View {
     }
 }
 
-/// Publishes the Message menu's commands for the open chat, from the rows the timeline already built: the message with
-/// the timeline's keyboard focus, else the last messages. Under search or the starred filter those rows are a slice,
-/// so the last messages come from the whole chat: "last message" stays the chat's.
+// Under search or the starred filter the rows are a slice, so "last message" comes from the whole chat.
 private struct MacMessageCommandsSource: View {
     let model: AppModel
     let chatID: String
@@ -401,8 +360,7 @@ private struct MacMessageCommandsSource: View {
     private var commands: MacMessageCommands {
         // `items` is the observed list the rows go into, so a change of rows reruns whatever reads this.
         _ = timeline.items
-        // The message with the timeline's keyboard focus, while the timeline has it. The reader may have scrolled it
-        // away since, so a command brings it back into view, ringed, before acting on it.
+        // The reader may have scrolled the focused message away, so a command brings it back into view before acting.
         if timeline.hasKeyboardFocus, let id = timeline.focusedID, let focused = timeline.rows.first(where: { $0.message.id == id })?.message {
             let handlers = handlers, timeline = timeline
             let revealing = MacMessageHandlers(perform: { kind, message, link in
@@ -427,8 +385,7 @@ private struct MacMessageCommandsSource: View {
     }
 }
 
-/// Publishes what Find in Conversation and View > Starred Messages act on, once the timeline exists: made with it, so
-/// the menu bar sees the starred filter change.
+// Made with the timeline, so the menu bar sees the starred filter change.
 private struct MacFindCommandsSource: View {
     let timeline: MacTimelineController
     let find: () -> Void
@@ -448,14 +405,12 @@ private struct MacFindCommandsSource: View {
     }
 }
 
-/// A clicked phone link's choices.
 private struct PhoneLink {
     let number: String
     let call: URL
     let message: URL
 }
 
-/// An `openURL` action that keeps its identity while what it does is set again.
 @MainActor private final class MacLinkAction {
     var perform: (URL) -> Void = { _ in }
 

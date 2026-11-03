@@ -4,20 +4,15 @@ import SwiftUI
 import UniformTypeIdentifiers
 import MessagingCore
 
-/// A file in the composer's tray: being reduced to what will be uploaded, then ready to send.
 struct MacTrayItem: Identifiable {
     let id = UUID()
-    /// The file's name, or the kind of a picture with no file behind it; shown while it is prepared.
     let label: String
-    /// Nil while it is being prepared.
     var prepared: PreparedAttachment?
     var preview: NSImage?
 }
 
-/// How picked, pasted and dropped files reach the tray, as the iPhone's `addToTray` does it: picking never sends,
-/// each file is reduced (`AttachmentPreparer`) in the order it came, and one that is too large or unreadable shows why
-/// and is left out while the rest still land. Each file holds its place in the tray from the start, so a slow video
-/// cannot let a later photo jump ahead of it.
+// Each file holds its place in the tray from the start and is reduced in the order it came, so a slow video cannot
+// let a later photo jump ahead; one too large or unreadable shows why and the rest still land.
 @MainActor enum MacAttachmentIntake {
     struct Job {
         let label: String
@@ -50,7 +45,6 @@ struct MacTrayItem: Identifiable {
         }
     }
 
-    /// Up to `ComposerPlan.trayLimit` files in the tray; beyond that the user is told and the rest are left out.
     static func add(_ jobs: [Job], to state: MacComposerState, model: AppModel) {
         guard !jobs.isEmpty else { return }
         let room = ComposerPlan.trayLimit - state.tray.count
@@ -81,9 +75,8 @@ struct MacTrayItem: Identifiable {
         }
     }
 
-    /// A drop onto the conversation, one job per dragged item: a file, else an image or PDF with no file behind it (a
-    /// photo dragged from a web page or from Photos). Each holds its place in the tray as soon as it is dropped, so Send
-    /// waits for it, and its bytes are read only in its turn, so a large drop beyond the tray's room is never loaded.
+    // Each job holds its tray place as soon as it is dropped, so Send waits for it, and its bytes are read only in its
+    // turn, so a drop beyond the tray's room is never loaded.
     static func jobs(for providers: [NSItemProvider], limit: Int) -> [Job] {
         providers.compactMap { provider in
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
@@ -109,8 +102,8 @@ struct MacTrayItem: Identifiable {
         }
     }
 
-    /// The item as a file of our own: the provider's file is gone once its handler returns. A file rather than data,
-    /// so the provider never has to hold the whole item in memory to hand it over.
+    // The provider's file is gone once its handler returns; a file rather than data, so the provider never has to hold
+    // the whole item in memory.
     private static func fileCopy(from provider: NSItemProvider, type: UTType) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             _ = provider.loadFileRepresentation(for: type) { url, _, error in
@@ -129,8 +122,7 @@ struct MacTrayItem: Identifiable {
     }
 }
 
-/// Files and images dropped anywhere on the open chat join its composer's tray, as a drop on the field does. Refused
-/// where the composer would refuse them: a group, a server without uploads, an edit in progress.
+// Refused where the composer would refuse them: a group, a server without uploads, an edit in progress.
 struct MacAttachmentDrop: DropDelegate {
     static let types: [UTType] = [.fileURL, .image, .pdf]
     let model: AppModel
@@ -158,12 +150,9 @@ struct MacAttachmentDrop: DropDelegate {
     }
 }
 
-/// The files waiting for Send, above the field inside the composer's glass: a sideways strip of 64 pt tiles, photos
-/// and videos as stills, other files as a card with their name and size, each with its own remove button. A file
-/// still being prepared shows a spinner in its place.
 struct MacAttachmentTray: View {
     let items: [MacTrayItem]
-    /// While Send works through the tray, removing an item could no longer stop it going out.
+    // While Send works through the tray, removing an item could no longer stop it going out.
     let frozen: Bool
     var focus: FocusState<MacComposerControl?>.Binding
     let onRemove: (UUID) -> Void
@@ -246,7 +235,6 @@ struct MacAttachmentTray: View {
     }
 }
 
-/// Over the chat while files dragged over it would join the tray.
 struct MacAttachmentDropHighlight: View {
     @Environment(\.appearance) private var appearance
 
@@ -268,11 +256,8 @@ struct MacAttachmentDropHighlight: View {
 }
 
 #if DEBUG
-/// `-haus-tour`'s attachment steps (`MacDebugHooks`), through the composer's own paths: `attach` hands files to its
-/// seam as a drop on the field would, `drop` hands item providers to the tray as a drop on the chat would, `paste` and
-/// `import` go through the text view's pasteboard reading (from a private pasteboard, never the user's),
-/// `remove-attachment` uses the tray's remove, `copy-image` copies a bubble's photo to a private pasteboard and logs what
-/// landed there, and `save-over` runs Save As…'s copy over an existing file and logs what is left of it.
+// Attachment tour steps go through the composer's own paths; `paste`, `import` and `copy-image` use a private
+// pasteboard, never the user's.
 @MainActor enum MacAttachmentTour {
     private static let pasteboard = NSPasteboard(name: NSPasteboard.Name("haus.tour.attachments"))
 
@@ -306,8 +291,7 @@ struct MacAttachmentDropHighlight: View {
             }
             MacDebugHooks.log("tour \(step) \(argument): read \(textView.readSelection(from: pasteboard)), draft \(textView.string.count) characters")
         case "drop":
-            // `photo`, `slow-photo` (whose source takes two seconds to hand it over), `file` or `scan`, as item providers
-            // dropped on the chat.
+            // `slow-photo`'s source takes two seconds to hand it over.
             let provider: NSItemProvider? = switch argument {
             case "photo", "slow-photo": DemoArt.lakePhotoJPEG().map { data in
                 let provider = NSItemProvider()
@@ -352,7 +336,6 @@ struct MacAttachmentDropHighlight: View {
         MacDebugHooks.log("tray: \(state.tray.count) items, \(state.tray.filter { $0.prepared != nil }.count) ready, sending \(state.sending)")
     }
 
-    /// A one-page PDF itinerary in the app's temporary directory, standing in for a file picked in Finder.
     private static func sampleFile() -> URL? {
         guard let data = samplePDF() else { return nil }
         let url = FileManager.default.temporaryDirectory.appending(path: "Itinerary.pdf")

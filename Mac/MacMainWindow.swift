@@ -2,20 +2,16 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// The one main window, made by the app delegate: an AppKit window whose content is a split view controller
-/// (`MacSplitController`) with a SwiftUI pane in each item, under an AppKit toolbar (`MacToolbar`). Closing it releases
-/// the window and everything in it; the model, the connection and the window's state (`MacWindowState`) stay with the
-/// delegate, and the next `show` builds it again around them.
+// Closing releases the window and everything in it; the model, the connection and `MacWindowState` stay with the
+// delegate, and the next `show` builds it again around them.
 @MainActor final class MacMainWindowController: NSWindowController, NSWindowDelegate {
-    /// Where the window's frame and the split view's dividers are saved. A check run parks its window far off-screen
-    /// and moves the dividers about, so it keeps both under names of its own.
+    // A check run parks its window far off-screen and moves the dividers, so it saves both under names of its own.
     static let autosaveName: String = {
         #if DEBUG
         if MacUnobtrusive.isOn { return "Main Window (check runs)" }
         #endif
         return "Main Window"
     }()
-    /// The content's size until the window has a saved frame.
     static let defaultContentSize = NSSize(width: 1080, height: 720)
     private let model: AppModel
     private let state: MacWindowState
@@ -32,7 +28,8 @@ import SwiftUI
         window.title = "Haus XMPP"
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
-        // Tab goes from the sidebar's search field to the chats, the timeline and the composer, as the panes are placed.
+        // Tab goes from the sidebar's search field to the chats, the timeline and the composer, as the panes are
+        // placed.
         window.autorecalculatesKeyViewLoop = true
         window.collectionBehavior.insert(.fullScreenPrimary)
         super.init(window: window)
@@ -62,7 +59,6 @@ import SwiftUI
     func windowDidBecomeKey(_ notification: Notification) { state.isKey = true }
     func windowDidResignKey(_ notification: Notification) { state.isKey = false }
 
-    /// Nothing is on screen to read any more: the open chat closes, and the delegate lets the window go.
     func windowWillClose(_ notification: Notification) {
         state.isKey = false
         if let chatID = state.selection { model.closeChat(chatID) }
@@ -70,9 +66,8 @@ import SwiftUI
     }
 }
 
-/// The window's content: the split view, or in its place the transfer, upgrade or key-recovery screen until that is
-/// settled, as the iPhone's root does. A zero-sized SwiftUI view beside them presents the window's sheets and alerts
-/// and follows its routes (`MacWindowPresenter`), so neither pane that resizes with the window carries them.
+// A zero-sized SwiftUI view presents the window's sheets and alerts (`MacWindowPresenter`), so neither resizing pane
+// carries them.
 @MainActor final class MacShellController: NSViewController {
     private let model: AppModel
     private let state: MacWindowState
@@ -109,8 +104,7 @@ import SwiftUI
 
     private func showContent(blocked: Bool) {
         if blocked, blocking == nil {
-            // The open chat closes with the split view, as it does with the window; it opens again when the split view
-            // is back.
+            // The open chat closes with the split view, as with the window, and opens again when it is back.
             if let chatID = state.selection { model.closeChat(chatID) }
             let host = NSHostingController(rootView: MacPane { MacBlockingView(model: self.model) })
             host.sizingOptions = []
@@ -137,12 +131,10 @@ import SwiftUI
 }
 
 extension AppModel {
-    /// The transfer, upgrade or key-recovery screen replaces the chats until it is settled: nothing chooses, opens or
-    /// changes a chat meanwhile.
+    // Nothing chooses, opens or changes a chat while it shows.
     var showsBlockingScreen: Bool { transferState != .none || upgradeState != .none || keyRecovery != nil }
 }
 
-/// The upgrade, transfer and key-recovery screens, which replace everything until they are settled.
 private struct MacBlockingView: View {
     let model: AppModel
 
@@ -160,7 +152,6 @@ private struct MacBlockingView: View {
     }
 }
 
-/// A SwiftUI root inside the AppKit window: the app's theme and appearance, as the scenes' roots have them.
 struct MacPane<Content: View>: View {
     @ViewBuilder let content: Content
 
@@ -171,8 +162,7 @@ struct MacPane<Content: View>: View {
     }
 }
 
-/// Runs AppKit updates from observable state: `apply` now, then again after each change to what it read, for as long as
-/// `owner` lives.
+// `apply` runs now and again after each change to what it read, for as long as `owner` lives.
 @MainActor enum MacObservation {
     static func track<Owner: AnyObject & Sendable>(_ owner: Owner, _ apply: @escaping @MainActor (Owner) -> Void) {
         withObservationTracking {

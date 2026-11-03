@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// The Settings window (⌘,): the iPhone's settings screen as the General pane, and Appearance and About as panes of
-/// their own.
 struct MacSettingsView: View {
     enum Pane: String { case general, appearance, about }
 
@@ -49,8 +47,7 @@ struct MacSettingsView: View {
     }
 }
 
-/// A list row's `Label` on the Mac: its icon (the shared screens' coloured tiles) and title 12 points apart, as the
-/// iPhone's rows space them. The Mac's own list label set the tiles flush against their titles.
+// 12 points between icon and title, as the iPhone's rows space them; the Mac's list label sets the tiles flush.
 struct ListRowLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 12) {

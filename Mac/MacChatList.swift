@@ -1,17 +1,13 @@
 import SwiftUI
 
-/// The sidebar: the account's chats with selection, filtered by the search field above them (`MacSidebarSearch`), the
-/// own-device review card above them, and per-chat actions in a right-click menu. The iPhone's trailing swipe actions
-/// (Read, Pin, Mute) are menu items here; a Mac list has no swipe actions.
 struct MacChatList: View {
     @Bindable var model: AppModel
     @Bindable var window: MacWindowState
-    /// Own devices the card was put off for with Later; a device not in here brings the card back.
+    // A device not in here brings the card back.
     @State private var ownDevicesLater: Set<String> = []
 
     private var searchTerm: String { window.chatSearch.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    /// The iPhone list's order.
     private var sortedChats: [ChatSummary] { ChatListOrder.sorted(model.chats) }
 
     private var visibleChats: [ChatSummary] {
@@ -23,7 +19,6 @@ struct MacChatList: View {
         searchTerm.isEmpty && model.ownDeviceReview.contains { !ownDevicesLater.contains($0.id) }
     }
 
-    /// A quiet line under sample chats (and, in DEBUG, lab chats).
     private var listCaption: String? {
         if model.isDemo { return "Sample conversations · stored on this Mac" }
         #if DEBUG
@@ -76,8 +71,6 @@ struct MacChatList: View {
     }
 }
 
-/// New Chat (⌘N): an address field that filters the existing chats and, given a new address, starts a chat; and the
-/// group join form. The iPhone's sheet, laid out for a Mac sheet.
 struct MacNewChatSheet: View {
     @Bindable var model: AppModel
     let open: (String) -> Void
@@ -93,7 +86,6 @@ struct MacNewChatSheet: View {
         return chats.filter { $0.title.localizedCaseInsensitiveContains(recipientTerm) || $0.id.localizedCaseInsensitiveContains(recipientTerm) }
     }
 
-    /// A typed address that is not already a chat can start one; createChat validates it.
     private var offersNewAddress: Bool {
         recipientTerm.contains("@") && !model.chats.contains { $0.id.caseInsensitiveCompare(recipientTerm) == .orderedSame }
     }

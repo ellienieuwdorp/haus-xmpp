@@ -2,9 +2,7 @@ import ServiceManagement
 import SwiftUI
 import UserNotifications
 
-/// The Mac's notification permission, in a build that registers no push (`PushService.isOffered`): what macOS allows
-/// now, a button to ask while it was never asked, and System Settings for everything else, including turning quiet
-/// delivery into banners.
+// For a build that registers no push (`PushService.isOffered`); System Settings handles everything past the first ask.
 struct MacNotificationPermissionRow: View {
     @Bindable var model: AppModel
     @Environment(\.openURL) private var openURL
@@ -41,10 +39,8 @@ struct MacNotificationPermissionRow: View {
     }
 }
 
-/// The iPhone's push switch and its statuses, with the permission row folded in. On the Mac the permission matters
-/// apart from push: the banners the app posts itself while it runs need it too, so it is shown and asked for whatever
-/// the switch says. Quiet delivery, which macOS grants without asking or the alert style None gives, shows no banners,
-/// so the row says so; once asked, System Settings is one button away.
+// On the Mac the permission matters apart from push: the banners the running app posts need it too, so it is shown
+// and asked for whatever the switch says.
 struct MacPushNotificationRows: View {
     @Bindable var model: AppModel
     @Environment(\.openURL) private var openURL
@@ -83,8 +79,6 @@ struct MacPushNotificationRows: View {
         }
     }
 
-    /// What the permission adds to the push status; nothing once banners are allowed, or where the status already
-    /// names it.
     private var permission: String? {
         if model.notificationsArriveQuietly { return "Delivered quietly, without banners" }
         return switch model.notificationAuthorization {
@@ -96,15 +90,13 @@ struct MacPushNotificationRows: View {
 }
 
 extension AppModel {
-    /// Notifications reach Notification Center but show no banner: the quiet delivery macOS grants without asking, or
-    /// a permission whose alert style was set to None in System Settings.
+    // Quiet delivery, which macOS grants without asking, or the alert style None: Notification Center but no banner.
     var notificationsArriveQuietly: Bool {
         notificationAuthorization == .provisional || notificationAuthorization == .authorized && notificationAlertStyle == .none
     }
 }
 
-/// "Open at login": the app as its own login item (`SMAppService.mainApp`). Off until the user turns it on here;
-/// the app never registers itself.
+// Off until the user turns it on here; the app never registers itself.
 struct MacLoginItemSection: View {
     @State private var status = SMAppService.mainApp.status
     @State private var failed = false

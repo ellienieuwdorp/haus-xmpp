@@ -1,16 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// The composer's attach button: a clear glass circle at the field's leading edge, the size of the field at one line,
-/// whose menu offers Photos…, Choose File… and, with an iPhone or iPad nearby, Continuity Camera's items (Take Photo,
-/// Scan Documents, Add Sketch). An AppKit menu, because only one can carry the system's import-from-device item.
+// An AppKit menu, because only one can carry the system's import-from-device item.
 struct MacAttachButton: View {
     let enabled: Bool
     var focus: FocusState<MacComposerControl?>.Binding
     let photos: () -> Void
     let files: () -> Void
-    /// Makes the composer's text view first responder: Continuity Camera offers its items to, and later hands what it
-    /// took to, the first responder that accepts images (`MacComposerTextView.validRequestor`).
+    // Continuity Camera offers its items to, and hands what it took to, the first responder that accepts images.
     let prepareImport: () -> Void
     @State private var anchor = MacMenuAnchor.Box()
 
@@ -46,7 +43,6 @@ struct MacAttachButton: View {
     }
 }
 
-/// A plain view behind a SwiftUI control, so an AppKit menu can open from where the control is.
 struct MacMenuAnchor: NSViewRepresentable {
     final class Box {
         weak var view: NSView?
@@ -63,7 +59,6 @@ struct MacMenuAnchor: NSViewRepresentable {
     func updateNSView(_ view: NSView, context: Context) { box.view = view }
 }
 
-/// A menu item that runs a closure; the item keeps its target alive.
 final class MacMenuAction: NSObject {
     private let body: () -> Void
 

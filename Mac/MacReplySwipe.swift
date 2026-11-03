@@ -1,12 +1,11 @@
 import AppKit
 
-/// The first points of a two-finger gesture over a message decide, once and for the gesture's whole life, whether it is
-/// a reply swipe or a scroll: a swipe when the fingers moved right and mostly sideways, as the iPhone's reply pan begins,
-/// a scroll otherwise. Distances are in the fingers' direction, whatever the scroll-direction setting.
+// A two-finger gesture's first points decide once whether it is a reply swipe (moved right and mostly sideways, as the
+// iPhone's reply pan begins) or a scroll. Distances follow the fingers, whatever the scroll-direction setting.
 struct MacReplySwipeLock {
     enum Decision: Equatable { case undecided, swipe, scroll }
 
-    /// How far the fingers move before the gesture is told apart; a trackpad's first events are a point or two.
+    // A trackpad's first events are a point or two.
     static let slop: CGFloat = 5
 
     private(set) var x: CGFloat = 0
@@ -20,43 +19,25 @@ struct MacReplySwipeLock {
     }
 }
 
-/// Swipe right with two fingers on a message to reply, as in Messages on the Mac and as the iPhone's rightward pan does.
-///
-/// The timeline's scroll events pass through `handle` before the scroll view sees them (the table's local event
-/// monitor; the table keeps no `scrollWheel` override, which responsive scrolling needs). A gesture that starts over a
-/// message that can be replied to is held back for its first few points (`MacReplySwipeLock`): a scroll gets them back,
-/// in order, and the rest of its events and momentum pass untouched; a swipe keeps every event of the gesture and its
-/// momentum, so the timeline does not move. A mouse's notched wheel and gestures with no phases never swipe.
-///
-/// The bubble follows the fingers right, up to `cap`; from `threshold` the reply arrow is whole, a haptic marks the
-/// crossing, and lifting the fingers there replies through the cell's own Reply, as its toolbar and menu do. The swipe
-/// belongs to the message it started on: if its row is given another message or leaves the table, or the app or the
-/// view goes away, it ends without replying.
+// Scroll events reach `handle` through the table's local event monitor before the scroll view (no `scrollWheel`
+// override, which responsive scrolling needs). A gesture over a repliable message is held back until decided: a scroll
+// gets its events back in order; a swipe keeps the gesture and its momentum. Phaseless wheel events never swipe.
 @MainActor final class MacReplySwipe {
-    /// The finger distance at which a release replies, as on the iPhone.
     static let threshold: CGFloat = 56
-    /// The farthest the bubble travels.
     static let cap: CGFloat = 80
 
-    /// How far the bubble has travelled after the fingers moved `distance` right.
     static func offset(for distance: CGFloat) -> CGFloat { min(cap, max(0, distance)) }
 
-    /// The message cell under a point in the table's coordinates, if a swipe there replies to it.
     var cellAt: (NSPoint) -> MacTimelineMessageCell? = { _ in nil }
-    /// Whether a gesture beginning now may be a swipe: not while the timeline is still moving from a scroll or its
-    /// momentum, nor with a mouse button down.
+    // Not while the timeline still moves from a scroll or its momentum, nor with a mouse button down.
     var mayStart: () -> Bool = { false }
-    /// A swipe ended, replying or not: the pointer's row may show its toolbar again.
     var ended: () -> Void = {}
 
     private enum State {
         case idle
-        /// Not a swipe: the gesture and its momentum go to the scroll view.
         case scrolling
-        /// Over a message that can be replied to, the first events held back until they say which it is.
         case deciding(Pending)
         case swiping(Swipe)
-        /// A swipe has ended, or was given up: the rest of its gesture and its momentum are kept from the scroll view.
         case finished
     }
 
@@ -71,17 +52,16 @@ struct MacReplySwipeLock {
         let cell: MacTimelineMessageCell
         let id: String
         var distance: CGFloat
-        /// Past the threshold since the last crossing: the haptic plays again only after falling back under it.
+        // The haptic plays again only after falling back under the threshold.
         var armed: Bool
     }
 
     private var state = State.idle
     private var lastPhase: NSEvent.Phase = []
-    /// Held events going back to the scroll view, which may come through the monitor again: they pass.
+    // Held events handed back may come through the monitor again: they pass.
     private var releasing = false
 
     #if DEBUG
-    /// What the last gesture did, for the tour's swipe steps.
     struct DebugRecord {
         var claimed = false
         var maxOffset: CGFloat = 0
@@ -89,18 +69,15 @@ struct MacReplySwipeLock {
         var haptics = 0
         var consumed = 0
         var passed = 0
-        /// Ended by a cancelled gesture, or given up (`cancel`).
         var cancelled = false
     }
 
     private(set) var debugRecord = DebugRecord()
-    /// Held events the tour's swipe was handed back.
     var debugReleased = 0
     var debugIsSwiping: Bool { if case .swiping = state { true } else { false } }
     #endif
 
-    /// One scroll event at `point` in the table's coordinates. True when the swipe keeps it; `pass` hands held events
-    /// on to the scroll view, in order, when they turn out to be a scroll's.
+    // True when the swipe keeps the event; `pass` hands held events back to the scroll view in order.
     func handle(_ event: NSEvent, at point: NSPoint, pass: (NSEvent) -> Void) -> Bool {
         guard !releasing else { return false }
         let consumed = route(event, at: point, pass: pass)
@@ -122,8 +99,8 @@ struct MacReplySwipeLock {
             state = .idle
             return false
         }
-        // Fingers on the trackpad: a new gesture, unless it is the one whose `mayBegin` came just before. A swipe whose
-        // end never came ends here.
+        // A new gesture, unless it is the one whose `mayBegin` came just before; a swipe whose end never came ends
+        // here.
         if phase == .mayBegin || phase == .began && lastPhase != .mayBegin {
             cancel()
             state = start(event, at: point)
@@ -185,7 +162,6 @@ struct MacReplySwipeLock {
         }
     }
 
-    /// A gesture's first event: held back if it starts over a message that can be replied to, otherwise a scroll.
     private func start(_ event: NSEvent, at point: NSPoint) -> State {
         #if DEBUG
         debugRecord = DebugRecord()
@@ -194,7 +170,6 @@ struct MacReplySwipeLock {
         return .deciding(Pending(cell: cell, id: id))
     }
 
-    /// The events held back go to the scroll view as they came; the gesture is a scroll from here on.
     private func release(_ pending: Pending, pass: (NSEvent) -> Void) {
         state = .scrolling
         releasing = true
@@ -229,8 +204,7 @@ struct MacReplySwipeLock {
         ended()
     }
 
-    /// Ends a swipe or a gesture still being told apart without replying, its bubble back in place at once; the rest of
-    /// its gesture is kept from the scroll view, which never saw its start.
+    // The bubble snaps back; the rest of the gesture is kept from the scroll view, which never saw its start.
     func cancel() {
         switch state {
         case .swiping(let swipe):
@@ -248,13 +222,12 @@ struct MacReplySwipeLock {
         }
     }
 
-    /// The cell still shows the message the gesture started on, in the table.
+    // A swipe belongs to its message: a reused row, or one leaving the table, ends it without replying.
     private func isCurrent(_ cell: MacTimelineMessageCell, _ id: String) -> Bool {
         cell.window != nil && cell.message?.id == id
     }
 
-    /// The horizontal distance the fingers moved, positive to the right. Natural scrolling reports deltas that follow
-    /// the fingers; with it off they are the other way round.
+    // Natural scrolling reports deltas that follow the fingers; with it off they are the other way round.
     static func fingerX(_ event: NSEvent) -> CGFloat {
         event.isDirectionInvertedFromDevice ? event.scrollingDeltaX : -event.scrollingDeltaX
     }

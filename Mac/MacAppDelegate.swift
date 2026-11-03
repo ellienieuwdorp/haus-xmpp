@@ -2,39 +2,28 @@ import AppKit
 import MessagingCore
 import SwiftUI
 
-/// What the main window shows, shared with the menu commands. One instance, for the one main window.
 @Observable @MainActor final class MacWindowState {
-    /// The open chat in the sidebar.
     var selection: String?
     var showingNewChat = false
     var showingAccount = false
     var inspectorShown = false
-    /// The pages pushed in the inspector over the chat's details (devices and encryption, group details).
     var inspectorPath: [ChatRoute] = []
     var reviewingOwnDevices = false
-    /// Restore from a transfer, from the signed-out sidebar.
     var showingRestore = false
-    /// A Block or Report chosen from a chat's menu (the sidebar's or the menu bar's), waiting for its confirmation.
     var blockRequest: BlockRequest?
-    /// What the sidebar's search field filters the chats by.
     var chatSearch = ""
-    /// Bumped by Find Chat (⌥⌘F); the sidebar focuses its search field when it changes.
     var searchRequests = 0
-    /// The main window is the key window: the Chat and Message menus act on it only then.
     var isKey = false
-    /// Opens the main window, or brings it back from the Dock; set by the app delegate, which owns the window.
     @ObservationIgnored var showMainWindow: () -> Void = {}
 }
 
-/// The process's side of the Mac app: it owns the model, so the connection outlives the window, and its lifecycle
-/// owner (`MacLifecycle`), so application, window, power and idle events reach the model once per process.
+// Owns the model and the lifecycle driver, so the connection outlives the window.
 @MainActor final class MacAppDelegate: NSObject, NSApplicationDelegate {
     static let mainWindowID = "main"
 
     let model = AppModel()
     let window = MacWindowState()
     private(set) lazy var lifecycle = MacLifecycle(model: model)
-    /// The main window while it is open; closing it lets it go.
     private var mainWindow: MacMainWindowController?
 
     #if DEBUG
@@ -44,12 +33,12 @@ import SwiftUI
     }
     #endif
 
-    /// The notification centre's delegate is set before launching finishes, so a launch by a click on a notification,
-    /// or on its Reply or Mark as Read, delivers that response to it.
     func applicationWillFinishLaunching(_ notification: Notification) {
         #if DEBUG
         MacDebugHooks.prepareLaunch()
         #endif
+        // Before launching finishes, so a launch by a click on a notification (or its Reply or Mark as Read) delivers
+        // it here.
         PushRegistration.shared.installNotificationDelegate()
         // The share extension draws its send button in the accent chosen here.
         AppearanceStore.shared.mirror = SharedSession.groupDefaults
@@ -70,7 +59,6 @@ import SwiftUI
         #endif
     }
 
-    /// APNs tokens, asked for by `PushRegistration.request`.
     func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         PushRegistration.shared.received(deviceToken)
         #if DEBUG
@@ -85,26 +73,23 @@ import SwiftUI
         #endif
     }
 
-    /// The app stays running, and connected, with no window open.
+    // Closing the last window must not quit, disconnect or release the lease.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-    /// Quit, log out and shut down: the transport quiesces first (a final `<a/>`), bounded, then the app goes.
+    // Quit, log out and shut down quiesce the transport first (a final `<a/>`), bounded.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { lifecycle.shouldTerminate() }
 
-    /// Opens the main window, made again if it was closed, or brings it out of the Dock if it was minimised. A
-    /// notification click comes here too (the window then selects the chat); the system activates the app for the
-    /// click itself.
+    // A notification click lands here too; the system activates the app for the click itself.
     private func showMainWindow() {
         if mainWindow == nil {
             mainWindow = MacMainWindowController(model: model, state: window) { [weak self] in
-                // After the close has finished with the window.
+                // Released only once AppKit has finished closing the window.
                 DispatchQueue.main.async { self?.mainWindow = nil }
             }
         }
         mainWindow?.show()
     }
 
-    /// The Dock icon (or opening the app again) with no window on screen brings the main window back.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         guard !hasVisibleWindows else { return true }
         showMainWindow()

@@ -8,35 +8,9 @@ import MessagingCore
 import UniformTypeIdentifiers
 import UserNotifications
 
-/// Debug-only launch arguments for checking Mac push and the notification extension with real remote notifications.
-/// Nothing here ships.
-///
-/// - `-haus-mac-push`: this run registers for push as the iPhone does (`PushService.isOffered`), and Settings shows the
-///   push switch. Without it a Debug run is the Release Mac app: no push, and a subscription left by an earlier run is
-///   turned off on the next connection.
-/// - `-haus-push-switch on|off`: once the app is prepared (and after `-haus-lab-sign-in`), turns push on or off as the
-///   Settings switch does, and logs the status it ends at. `off` first waits up to 20 s for a setup in flight.
-/// - `-haus-notification-permission not-determined|provisional|banners|quiet|denied`: Settings shows that permission
-///   (`quiet` is granted with the alert style None), for captures; nothing asks macOS.
-/// - `-haus-push-status <seconds>`: logs the push status and the notification authorization each time either changes,
-///   for that long.
-/// - APNs token callbacks are logged with the token's length and the first 8 hex digits of its SHA-256, never the token,
-///   so a stale token shows up against another tool's hash of what it registered.
-/// - `-haus-notification-settings`: the app's notification authorization and alert settings.
-/// - `-haus-request-provisional`: asks for provisional authorization, which the system grants without a prompt and which
-///   delivers quietly to Notification Center.
-/// - `-haus-arm-extension-probe suppress|pass|liveness`: arms `MacExtensionProbe` for the next remote request.
-/// - `-haus-liveness-answer`: answers every fresh liveness ring for as long as the run lasts, as a live app that can keep
-///   the promise would, whatever this run's session; with an armed `liveness` probe it shows the ring and the answer
-///   crossing between the sandboxed extension and the sandboxed app. Each answer is logged.
-/// - `-haus-liveness-self-test`: with `-haus-liveness-answer`, rings once as the extension would and reports whether the
-///   answer to its nonce came back in the window: the ring through notifyd and the files in the App Group, inside the
-///   sandbox, without needing a remote notification.
-/// - `-haus-extension-probe-results`: the extension's probe records; `-haus-extension-probe-clear` removes them.
-/// - `-haus-delivered-notifications`: what Notification Center holds for the app (category, which fields are set,
-///   attachments); `-haus-clear-delivered` removes it all afterwards.
-/// - `-haus-group-avatar-probe`: posts a synthetic group communication notification with a room avatar and reports
-///   whether the intent, the updated content and the delivered notification carry an image.
+// Debug-only push and notification-extension checks with real remote notifications. Without `-haus-mac-push` a Debug
+// run is the Release Mac app: no push, and a subscription left by an earlier run is turned off on the next connection.
+// APNs tokens are logged as their length and the first 8 hex digits of their SHA-256, never the token.
 @MainActor enum MacPushProbe {
     private static let flags = ["-haus-notification-settings", "-haus-request-provisional", "-haus-arm-extension-probe",
                                 "-haus-extension-probe-results", "-haus-extension-probe-clear", "-haus-delivered-notifications",
@@ -94,7 +68,8 @@ import UserNotifications
         }
     }
 
-    /// The extension's side of one ring, from this process: the answer has to come back through the ring's observer.
+    // Rings as the extension would, through notifyd and the App Group files inside the sandbox; the answer has to come
+    // back through the ring's observer.
     private static func livenessSelfTest() async {
         do {
             let channel = AppLiveness.ExtensionChannel(files: AppLiveness.Files(groupRoot: try SharedStorage.groupContainer()))
@@ -112,7 +87,6 @@ import UserNotifications
         } catch { log("liveness self-test: FAILED \(error)") }
     }
 
-    /// What Notification Center holds for the app, oldest first.
     static func logDelivered() async {
         let delivered = await UNUserNotificationCenter.current().deliveredNotifications().sorted { $0.date < $1.date }
         log("delivered: \(delivered.count)")
@@ -128,10 +102,6 @@ import UserNotifications
         log("push registration FAILED \(error.domain) \(error.code) \(error.localizedDescription)")
     }
 
-    // MARK: Push switch
-
-    /// `-haus-notification-permission`, `-haus-push-switch` and `-haus-push-status`, once the model is prepared and any
-    /// lab sign-in has connected.
     static func afterSignIn(_ model: AppModel) async {
         switch MacDebugHooks.value(after: "-haus-notification-permission") {
         case "not-determined": model.debugShowNotificationPermission(.notDetermined, alertStyle: .none)
@@ -173,9 +143,7 @@ import UserNotifications
         }
     }
 
-    // MARK: Group avatar
-
-    /// A synthetic group (no real names, nothing donated) through the same intent and update the poster uses.
+    // A synthetic group (no real names, nothing donated), through the same intent and update the poster uses.
     nonisolated private static func groupAvatarProbe(donates: Bool) async {
         let center = UNUserNotificationCenter.current()
         func log(_ text: String) { FileHandle.standardOutput.write(Data("HAUS \(text)\n".utf8)) }
@@ -228,15 +196,13 @@ import UserNotifications
         return CGImageDestinationFinalize(destination) ? data as Data : nil
     }
 
-    // MARK: Descriptions
-
     nonisolated private static func describe(_ notification: UNNotification) -> String {
         "\(notification.request.identifier.prefix(12)) at \(notification.date.formatted(date: .omitted, time: .standard)): "
             + describe(notification.request.content)
     }
 
-    /// Which fields are set. Bodies other than the fixed generic texts are given as a length; the communication
-    /// context is not public API, so it is read by key only where the object answers to it.
+    // Bodies other than the fixed generic texts are a length; the communication context is not public API, so it is
+    // read by key only where the object answers to it.
     nonisolated private static func describe(_ content: UNNotificationContent) -> String {
         let fixed = [NotificationPlanner.fallbackBody, "New message", "Group avatar probe"]
         var parts = ["category \(content.categoryIdentifier.isEmpty ? "none" : content.categoryIdentifier)",
@@ -256,8 +222,7 @@ import UserNotifications
         return parts.joined(separator: ", ")
     }
 
-    /// A file URL the system keeps for the notification: whether this sandboxed process can read it, and if it is an
-    /// image, its size and centre colour (the probe's room avatar is blue, the sender's orange).
+    // The probe's room avatar is blue and the sender's orange, so the centre colour says which one the system kept.
     nonisolated private static func imageFile(_ url: URL) -> String {
         // Probe content only (synthetic names and colours), so the URL itself may be shown.
         guard url.isFileURL else { return "URL \(url.absoluteString.prefix(160))" }
@@ -275,7 +240,7 @@ import UserNotifications
         return "\(location) \(image.width)x\(image.height), centre rgb \(pixel[0]),\(pixel[1]),\(pixel[2]) = \(colour)"
     }
 
-    /// The object's declared Objective-C properties with a summary of each value (a type, count or flag, never text).
+    // A type, count or flag per value, never text.
     nonisolated private static func properties(of object: NSObject) -> String {
         var names: [String] = []
         var cls: AnyClass? = type(of: object)
