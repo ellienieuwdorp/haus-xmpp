@@ -60,9 +60,6 @@
       "_ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])",
       "_ = try? await client.updatePushRegistration(revoke, configuration: old, environment: PushService.environment ?? .sandbox)",
       "_ = try? await processor.process(event)",
-      "catch MessageStoreError.transportOwnedElsewhere { busy = true; try? await Task.sleep(for: .milliseconds(250)) }",
-      "catch MessageStoreError.transportOwnedElsewhere { try? await Task.sleep(for: .milliseconds(250)) }",
-      "catch MessageStoreError.transportOwnedElsewhere { try? await Task.sleep(for: .milliseconds(250)) }",
       "if alsoSubscribe { try? await client.sendSubscription(.subscribe, to: event.from) }",
       "if attempt < 3 { try? await Task.sleep(for: .milliseconds(100)) }",
       "if let store { try? await DeliveredNotificationCleaner.removeRead(accountID: message.accountID, store: store) }",
@@ -77,12 +74,9 @@
       "try? await DeliveredNotificationCleaner.removeRead(accountID: account, store: store)",
       "try? await StreamPersistence(store: store, accountID: account, encryption: encryption).load()?.streamID",
       "try? await Task.sleep(for: .milliseconds(10))",
-      "try? await Task.sleep(for: .milliseconds(200))",
-      "try? await Task.sleep(for: .milliseconds(200))",
       "try? await Task.sleep(for: .seconds(2))",
       "try? await Task.sleep(for: UploadFailureBudget.backOff)",
       "try? await Task.sleep(for: duration)",
-      "try? await Task.sleep(until: budget.deadline, clock: .continuous)",
       "try? await center.add(request)",
       "try? await client.sendSubscription(.subscribed, to: event.from)",
       "try? await client.sendSubscription(.unsubscribed, to: event.from)",
@@ -103,8 +97,7 @@
       "try? await store.releaseTransportOwnership()",
       "try? await store.releaseTransportOwnership()",
       "try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)",
-      "try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)",
-      "while !completion.finished, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(50)) }"
+      "try? await store.setAttachmentUploadTask(accountID: accountID, messageID: message.id, taskID: nil, url: nil)"
     ]
   },
   "App/Attachments.swift" : {
@@ -128,11 +121,6 @@
       "_ = try? await CNContactStore().requestAccess(for: .contacts)",
       "for file in AvatarStore.files(root: root, account: account, hash: hash) { try? FileManager.default.removeItem(at: file) }",
       "try? CNContactStore().enumerateContacts(with: request) { contact, _ in cards.append(ContactCard(contact)) }"
-    ]
-  },
-  "App/ContactLinkCenter.swift" : {
-    "unsafe.discarded-try" : [
-      "try? await Task.sleep(for: .milliseconds(300))"
     ]
   },
   "App/ContactSystemViews.swift" : {
@@ -159,8 +147,7 @@
   },
   "App/NotificationActions.swift" : {
     "unsafe.discarded-try" : [
-      "try? await UNUserNotificationCenter.current().add(request)",
-      "while self.handler == nil, clock.now < waitEnd { try? await Task.sleep(for: .milliseconds(50)) }"
+      "try? await UNUserNotificationCenter.current().add(request)"
     ]
   },
   "App/NotificationDiagnostics.swift" : {
@@ -373,8 +360,7 @@
       "_ = try? handle.seekToEnd(); try? handle.write(contentsOf: line + Data(\"\\n\".utf8)); try? handle.close()",
       "for file in [try resultsFile, try armFile] { try? FileManager.default.removeItem(at: file) }",
       "try? (line + Data(\"\\n\".utf8)).write(to: file)",
-      "try? FileManager.default.removeItem(at: file)",
-      "try? await Task.sleep(for: .milliseconds(50))"
+      "try? FileManager.default.removeItem(at: file)"
     ]
   },
   "Packages/MessageStore/Sources/MessageStore/AddressMigration.swift" : {
@@ -666,7 +652,6 @@
       "group.addTask { try? await Task.sleep(for: limit) }",
       "if let file = item.file { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }",
       "let watchdog = Task { try? await Task.sleep(for: .seconds(3)); run.cancel() }",
-      "try? await Task.sleep(for: .milliseconds(300))",
       "try? await store?.close()"
     ]
   }

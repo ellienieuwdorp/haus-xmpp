@@ -1052,7 +1052,7 @@ final class AppModel {
         var leased = await store.holdsTransportOwnership
         for _ in 0..<40 where !leased {
             do { try await store.acquireTransportOwnership(); leased = true }
-            catch MessageStoreError.transportOwnedElsewhere { try? await Task.sleep(for: .milliseconds(250)) }
+            catch MessageStoreError.transportOwnedElsewhere { guard (try? await Task.sleep(for: .milliseconds(250))) != nil else { break } }
             catch { break }
         }
         guard leased else {
@@ -1120,7 +1120,7 @@ final class AppModel {
         var busy = false
         for _ in 0..<40 where !leased {
             do { try await store.acquireTransportOwnership(); leased = true }
-            catch MessageStoreError.transportOwnedElsewhere { busy = true; try? await Task.sleep(for: .milliseconds(250)) }
+            catch MessageStoreError.transportOwnedElsewhere { busy = true; guard (try? await Task.sleep(for: .milliseconds(250))) != nil else { break } }
             catch {
                 Self.syncLog.error("setting up encryption again could not take the lease: \(String(describing: error), privacy: .public)")
                 busy = false
@@ -1350,7 +1350,7 @@ final class AppModel {
         var leased = await store.holdsTransportOwnership
         for _ in 0..<40 where !leased {
             do { try await store.acquireTransportOwnership(); leased = true }
-            catch MessageStoreError.transportOwnedElsewhere { try? await Task.sleep(for: .milliseconds(250)) }
+            catch MessageStoreError.transportOwnedElsewhere { guard (try? await Task.sleep(for: .milliseconds(250))) != nil else { break } }
             catch { break }
         }
         return leased
@@ -4002,7 +4002,7 @@ final class AppModel {
     let budget: NotificationActionBudget
     var client: XMPPClient?
     var consumer: Task<Void, Never>?
-    var watchdog: Task<Void, Never>?
+    var watchdog: Task<Void, any Error>?
     var releaseLifecycle: AsyncStream<Void>.Continuation?
     // `acquiringLease` covers the call in flight, whose lock may already be held before the main actor hears of it.
     var holdsLease = false
@@ -4099,7 +4099,7 @@ extension AppModel: NotificationActionEnvironment {
         actionSession = session
         // Measured from the delegate callback: a slow start or a queued action ahead of this one used part of it.
         session.watchdog = Task { [weak session] in
-            try? await Task.sleep(until: budget.deadline, clock: .continuous)
+            try await Task.sleep(until: budget.deadline, clock: .continuous)
             session?.abort()
         }
         // A quiesce in flight finishes first, and a return to the foreground waits for this. The wait for it and for
@@ -4194,7 +4194,7 @@ extension AppModel: NotificationActionEnvironment {
         // Awaiting a task's value ignores cancellation, so the race is polled rather than put in a task group.
         let completion = ActionWaitCompletion()
         Task { @MainActor in await task.value; completion.finished = true }
-        while !completion.finished, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        while !completion.finished, ContinuousClock.now < deadline { guard (try? await Task.sleep(for: .milliseconds(50))) != nil else { break } }
         return completion.finished
     }
 
@@ -4241,7 +4241,7 @@ extension AppModel: NotificationActionEnvironment {
             while clock.now < deadline {
                 if let state = try? await store.message(accountID: account, messageID: messageID)?.transportState, state != .queued { break }
                 if drainPasses > before, drainTask == nil, !outboxRequested { break }
-                try? await Task.sleep(for: .milliseconds(200))
+                guard (try? await Task.sleep(for: .milliseconds(200))) != nil else { break }
             }
         } else {
             await flushBackgroundAction(session)
@@ -4260,7 +4260,8 @@ extension AppModel: NotificationActionEnvironment {
             case .submitting?, .unconfirmed?: if clock.now >= deadline { return .sent }
             default: return .held
             }
-            try? await Task.sleep(for: .milliseconds(200))
+            // Cancelled while written but unacknowledged, which counts as sent.
+            guard (try? await Task.sleep(for: .milliseconds(200))) != nil else { return .sent }
         }
     }
 

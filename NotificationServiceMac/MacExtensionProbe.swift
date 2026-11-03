@@ -137,7 +137,7 @@ enum MacExtensionProbe {
             if LivenessHandshake.accepts(channel.latestAnswer(), to: request) {
                 return "answered in \(Int((clock.now - start) / .milliseconds(1))) ms, nonce matches"
             }
-            try? await Task.sleep(for: .milliseconds(50))
+            guard (try? await Task.sleep(for: .milliseconds(50))) != nil else { break }
         }
         return channel.latestAnswer() == nil ? "no answer" : "no answer to this nonce in time"
     }

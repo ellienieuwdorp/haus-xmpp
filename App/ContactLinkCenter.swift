@@ -140,7 +140,8 @@ final class ContactLinkCenter {
     func refreshSoon() {
         guard refreshing == nil, store != nil, !account.isEmpty else { return }
         refreshing = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(300))
+            // Cancelled by `reset`, which already cleared `refreshing`.
+            guard (try? await Task.sleep(for: .milliseconds(300))) != nil else { return }
             await self?.refresh()
             self?.refreshing = nil
         }
