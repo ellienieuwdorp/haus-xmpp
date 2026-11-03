@@ -1,7 +1,5 @@
 import XCTest
 
-/// Several photos sent in one go against the lab. Each file needs its own slot and PUT before its message can go,
-/// and the caption after them waits until every one of them has uploaded.
 final class AttachmentSendLabUITests: XCTestCase {
     @MainActor func testFourPhotosAndACaptionAllReachTheServer() throws {
         continueAfterFailure = false
@@ -17,9 +15,8 @@ final class AttachmentSendLabUITests: XCTestCase {
         let caption = "After four photos \(UUID().uuidString.prefix(6))"
         input.typeText(caption)
         app.buttons["sendMessage"].tap()
-        // A file still uploading holds everything queued after it in its chat, so the caption goes last: once the
-        // server holds it, every photo before it has uploaded and gone. A file that used up its tries raises an alert.
-        // Our own bubble: the echo peer sends the same text back, and its bubble can come first in the query.
+        // A file still uploading holds everything queued after it, so once the server holds the caption every photo has
+        // gone. Our own bubble: the echo's can come first in the query.
         let sent = app.textViews.matching(NSPredicate(format: "value == %@ AND label BEGINSWITH %@", caption, "You:")).firstMatch
         XCTAssertTrue(sent.waitForExistence(timeout: 15))
         let held = XCTNSPredicateExpectation(predicate: serverHeldLabel, object: sent)

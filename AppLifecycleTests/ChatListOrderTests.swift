@@ -1,8 +1,7 @@
 import XCTest
 @testable import HausXMPP
 
-/// The chat list's order, which the iPhone list, the Mac sidebar and the Mac's Go to Chat (⌘1 to ⌘9) share, and moving
-/// to the next or previous chat from the keyboard.
+// The iPhone list, the Mac sidebar and the Mac's Go to Chat (⌘1 to ⌘9) share this order.
 final class ChatListOrderTests: XCTestCase {
     private func chat(_ id: String, pinned: Bool = false, at minutes: Double?) -> ChatSummary {
         ChatSummary(id: id, title: id, preview: "", isPinned: pinned, lastMessageAt: minutes.map { Date(timeIntervalSince1970: $0 * 60) })

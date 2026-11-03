@@ -5,8 +5,7 @@ import Foundation
 import ImageIO
 import XMPPProtocol
 
-/// The app's Contacts access, as linking needs it. iOS 18 adds limited access: only contacts the user shared with the
-/// app (or the app created) can be read. The Mac has full access or none.
+// iOS 18 limited access reads only contacts the user shared with the app or it created. The Mac has full or none.
 enum ContactAccess: Equatable, Sendable {
     case notDetermined, limited, full, denied
 
@@ -21,25 +20,21 @@ enum ContactAccess: Equatable, Sendable {
         }
     }
 
-    /// Linked contacts can be read, so the system may be told about them (`ContactLink.isReachable`).
     var readsContacts: Bool { self == .full || self == .limited }
 }
 
-/// What a link reads from one contact, and nothing else: no emails, phone numbers or notes.
+// Reads no emails, phone numbers or notes.
 struct ContactCard: Identifiable, Equatable, Sendable {
-    /// `CNContact.identifier`.
     let id: String
     let name: String
-    /// The contact's thumbnail as Contacts holds it; pre-scaled before it is stored (`ContactPhoto`).
     let thumbnail: Data?
-    /// Its Jabber (or XMPP) instant-message addresses, as bare JIDs in normal form.
     let jabberAddresses: [String]
 
     init(id: String, name: String, thumbnail: Data?, jabberAddresses: [String]) {
         self.id = id; self.name = name; self.thumbnail = thumbnail; self.jabberAddresses = jabberAddresses
     }
 
-    /// Reads only the keys the contact was fetched with; a picker's contact may lack some.
+    // A picker's contact may lack some keys; reads only those it was fetched with.
     init(_ contact: CNContact) {
         id = contact.identifier
         name = ContactDirectory.name(of: contact)
@@ -49,12 +44,10 @@ struct ContactCard: Identifiable, Equatable, Sendable {
     }
 }
 
-/// Synchronous reads of the device's contact store; callers run them off the main actor. Nothing read here leaves the
-/// device or reaches a log.
+// Synchronous; callers run them off the main actor. Nothing read here leaves the device or reaches a log.
 struct ContactDirectory: Sendable {
     static var access: ContactAccess { ContactAccess(CNContactStore.authorizationStatus(for: .contacts)) }
 
-    /// The system prompt, when access was never asked for. iOS offers limited or full access in it.
     static func requestAccess() async -> ContactAccess {
         guard access == .notDetermined else { return access }
         _ = try? await CNContactStore().requestAccess(for: .contacts)
@@ -66,19 +59,16 @@ struct ContactDirectory: Sendable {
         CNContactOrganizationNameKey as NSString, CNContactNicknameKey as NSString,
         CNContactInstantMessageAddressesKey as NSString, CNContactThumbnailImageDataKey as NSString
     ] }
-    /// The picker list needs no photos; leaving them out keeps a large address book light.
     private static var listKeys: [any CNKeyDescriptor] { [
         CNContactFormatter.descriptorForRequiredKeys(for: .fullName), CNContactIdentifierKey as NSString,
         CNContactOrganizationNameKey as NSString, CNContactNicknameKey as NSString, CNContactInstantMessageAddressesKey as NSString
     ] }
 
-    /// The contact, or nil when it is gone or this app cannot read it (no access, or outside the limited set).
     func card(identifier: String) -> ContactCard? {
         guard Self.access.readsContacts else { return nil }
         return (try? CNContactStore().unifiedContact(withIdentifier: identifier, keysToFetch: Self.keys)).map(ContactCard.init)
     }
 
-    /// Every contact the app can read, in the user's sort order, without photos.
     func cards() -> [ContactCard] {
         guard Self.access.readsContacts else { return [] }
         let request = CNContactFetchRequest(keysToFetch: Self.listKeys)
@@ -88,8 +78,7 @@ struct ContactDirectory: Sendable {
         return cards
     }
 
-    /// The one readable contact whose Jabber address is `jid`; nil when none or several claim it, so an old or shared
-    /// address never picks a contact for the user.
+    // Nil when several contacts claim the address, so an old or shared address never picks one for the user.
     func suggestion(for jid: String) -> ContactCard? {
         let matches = cards().filter { $0.jabberAddresses.contains(jid) }
         guard matches.count == 1, let match = matches.first else { return nil }
@@ -103,7 +92,6 @@ struct ContactDirectory: Sendable {
         return ""
     }
 
-    /// A Jabber or XMPP address as a bare JID in normal form; an `xmpp:` prefix is tolerated.
     static func jabberAddress(_ address: CNInstantMessageAddress) -> String? {
         let service = address.service.lowercased()
         guard service == CNInstantMessageServiceJabber.lowercased() || service == "xmpp" else { return nil }
@@ -113,10 +101,8 @@ struct ContactDirectory: Sendable {
     }
 }
 
-/// A contact's photo as Haus keeps it: a ≤256 px PNG beside the verified avatars, named by its SHA-1, with the
-/// pre-scaled copy the notification extension reads (`AvatarStore`). Written by the app only.
+// Stored beside the verified avatars with the pre-scaled copy the notification extension reads. App only.
 enum ContactPhoto {
-    /// Saves the pre-scaled photo; returns its hash, or nil for an image ImageIO cannot bound.
     static func save(_ thumbnail: Data, root: URL, account: String) -> String? {
         guard let source = CGImageSourceCreateWithData(thumbnail as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
@@ -142,15 +128,13 @@ enum ContactPhoto {
     }
 }
 
-/// The contact "Add to Contacts" proposes: the chat's name, its Jabber address and an `xmpp:` link, and the peer's
-/// verified avatar. The user sees and edits it in the system editor (iPhone) or a confirmation (Mac) before anything is
-/// written.
+// The user sees and edits it (system editor on iPhone, a confirmation on Mac) before anything is written.
 enum ContactDraft {
     static let urlLabel = "XMPP"
 
     static func contact(name: String, jid: String, photo: Data?) -> CNMutableContact {
         let contact = CNMutableContact()
-        // One field, as typed by whoever named the chat: a name is never split or guessed from an address.
+        // A name is never split or guessed from an address.
         contact.givenName = name
         contact.instantMessageAddresses = [CNLabeledValue(label: CNLabelOther,
                                                           value: CNInstantMessageAddress(username: jid, service: CNInstantMessageServiceJabber))]

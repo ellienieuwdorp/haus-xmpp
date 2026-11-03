@@ -2,8 +2,6 @@ import UIKit
 import XCTest
 @testable import HausXMPP
 
-/// Where the reader stays across timeline updates: the loading-earlier cell above the oldest message appears and leaves
-/// without moving them, and only their own send pulls them back from history.
 @MainActor
 final class TimelinePositionTests: XCTestCase {
     private var window: UIWindow!
@@ -31,7 +29,6 @@ final class TimelinePositionTests: XCTestCase {
                                     isOutgoing: $0.isMultiple(of: 3), isStarred: false) }
     }
 
-    /// The first visible message and its distance from the top edge.
     private func readerPosition() throws -> (id: String, distance: CGFloat) {
         let path = try XCTUnwrap(collectionView.indexPathsForVisibleItems.sorted().first { dataSource?.itemIdentifier(for: $0) != TimelineItems.loadingEarlierID })
         let id = try XCTUnwrap(dataSource?.itemIdentifier(for: path))
@@ -43,7 +40,6 @@ final class TimelinePositionTests: XCTestCase {
         return try XCTUnwrap(collectionView.layoutAttributesForItem(at: path)).frame.minY - collectionView.contentOffset.y
     }
 
-    /// Stands in for the list while the reader's finger moves it, or while it coasts after a fling.
     private final class ReaderScroll: UIScrollView {
         var fingerDown = false
         var coasting = false
@@ -51,9 +47,8 @@ final class TimelinePositionTests: XCTestCase {
         override var isDecelerating: Bool { coasting }
     }
 
-    /// Older history is asked for a few screens before the reader reaches the oldest loaded message, and only by their
-    /// own scroll: opening at the newest message, or any other programmatic move, never pages. The threshold itself is
-    /// `TimelineScrollPolicyTests`'; this checks the controller asks with the scrolling view's own position and state.
+    // Opening at the newest message, or any other programmatic move, never pages. The threshold is
+    // `TimelineScrollPolicyTests`'; this checks the controller asks with the scrolling view's own position and state.
     func testOnlyTheReadersScrollNearTheTopAsksForOlderMessages() throws {
         var asked = 0
         controller.onReachTop = { asked += 1 }
@@ -104,8 +99,8 @@ final class TimelinePositionTests: XCTestCase {
         XCTAssertTrue(collectionView.indexPathsForVisibleItems.contains(sent), "sending returns to the newest message")
     }
 
-    /// Our own fetch starts when its bubble is displayed and lands after it is on screen: the card grows that bubble,
-    /// but the message the reader is looking at stays put, and a chat resting on its newest message stays there.
+    // Our fetch lands after the bubble is on screen; the card grows it, but the reader's message stays put and a chat
+    // resting on its newest message stays there.
     func testALateLinkCardKeepsTheReaderWhereTheyWere() throws {
         var shown = messages(1...100)
         controller.update(messages: shown, onToggleStar: { _ in })

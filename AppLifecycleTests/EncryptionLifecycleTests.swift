@@ -6,7 +6,7 @@ import XMPPProtocol
 import OMEMO
 @testable import HausXMPP
 
-/// Synthetic accounts/keys only. No network, real-account state or private lock API.
+// Synthetic accounts and keys only: no network, real-account state or private lock API.
 @MainActor final class EncryptionLifecycleTests: XCTestCase {
     func testKeychainUsesDeviceLocalAfterFirstUnlockProtection() throws {
         let id = "lifecycle-" + UUID().uuidString
@@ -24,9 +24,8 @@ import OMEMO
         XCTAssertFalse(attributes[kSecAttrSynchronizable as String] as? Bool ?? false)
     }
 
-    /// Wrapping keys saved before every query named the data protection keychain must still be found, never replaced.
-    /// The flag is a no-op on iOS, so this guards the service, account and synchronizable value the shared query uses;
-    /// whether the app and extension share items on macOS needs a Mac test target.
+    // A wrapping key saved without the data protection keychain flag must still be found, never replaced. The flag is a
+    // no-op on iOS, so this guards the service, account and synchronizable value the shared query uses.
     func testWrappingKeySavedWithoutDataProtectionFlagIsStillFound() throws {
         let id = "lifecycle-" + UUID().uuidString
         defer { deleteKey(id) }
@@ -91,8 +90,8 @@ import OMEMO
         XCTAssertTrue(before == after, "Missing wrapping key must never replace stored device identity")
     }
 
-    /// Run twice in separate test-host launches with the same explicit UUID: phase seed, then verify.
-    /// Uses actual Keychain retrieval and existing encrypted snapshot, never in-memory test carryover.
+    // Run twice in separate test-host launches with the same UUID (seed, then verify), reading the real Keychain item
+    // and encrypted snapshot rather than anything carried over in memory.
     func testIdentityAcrossSeparateProcessLaunches() async throws {
         let env = ProcessInfo.processInfo.environment
         guard let value = env["XMPP_LIFECYCLE_RUN_ID"], UUID(uuidString: value) != nil,
@@ -135,8 +134,8 @@ import OMEMO
                                         baseline: prepared.baseline)
     }
 
-    /// Opt-in, attended physical-device test. Requires passcode and immediate lock policy.
-    /// Protected-data false PLUS a newly unreadable complete-protection sentinel proves lock.
+    // Opt-in, attended, physical device with a passcode and immediate lock. Protected data unavailable plus a newly
+    // unreadable complete-protection sentinel proves the lock.
     func testLockedDeviceCanReadAfterFirstUnlockEncryptionState() async throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("A simulator cannot establish physical Data Protection behavior")

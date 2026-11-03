@@ -9,7 +9,7 @@ final class LastSeenTests: XCTestCase {
         return calendar
     }()
 
-    /// Friday 25 September 2026, 14:00 in Amsterdam.
+    // Friday 25 September 2026, 14:00 in Amsterdam.
     private var now: Date { date(2026, 9, 25, 14, 0) }
 
     private func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int, _ second: Int = 0) -> Date {
@@ -31,7 +31,7 @@ final class LastSeenTests: XCTestCase {
         XCTAssertEqual(label(.lastSeen(date(2025, 12, 30, 10, 31))), "Last seen 30 Dec 2025")
     }
 
-    /// Only a 1:1 chat with known activity gets a header line; a blocked contact's last answer would go stale there.
+    // A blocked contact's last answer would go stale in the header.
     func testHeaderLabelOnlyForUnblockedDirectChats() {
         func header(_ state: LastSeen?, isGroup: Bool = false, isBlocked: Bool = false) -> String? {
             LastSeen.headerLabel(state, isGroup: isGroup, isBlocked: isBlocked, now: now, calendar: calendar)
@@ -43,7 +43,7 @@ final class LastSeenTests: XCTestCase {
         XCTAssertNil(header(.online, isBlocked: true))
     }
 
-    /// Days are counted in the calendar's time zone: 23:30 UTC on the 24th is already the 25th in Amsterdam.
+    // 23:30 UTC on the 24th is already the 25th in Amsterdam.
     func testDaysFollowTheCalendarTimeZone() {
         var components = DateComponents(year: 2026, month: 9, day: 24, hour: 23, minute: 30)
         components.timeZone = TimeZone(identifier: "UTC")!

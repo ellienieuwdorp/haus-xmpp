@@ -28,12 +28,11 @@ struct SignInView: View {
         #endif
     }
 
-    /// The address's domain. A bare username has one only in DEBUG, the lab's; Release takes full addresses only.
+    // A bare username has a domain only in DEBUG (the lab's); Release takes full addresses only.
     private var domain: String? {
         let parts = address.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "@", maxSplits: 1)
         return parts.count == 2 ? String(parts[1]).lowercased() : AppModel.bareUsernameDomain
     }
-    /// A bare username, or an address on a lab domain, keeps the disposable-account safeguard (DEBUG only).
     private var isLab: Bool {
         #if DEBUG
         domain.map(AppModel.labDomains.contains) ?? false
@@ -46,7 +45,6 @@ struct SignInView: View {
         let text = port.trimmingCharacters(in: .whitespaces)
         return text.isEmpty ? security.defaultPort : UInt16(text).flatMap { $0 > 0 ? $0 : nil }
     }
-    /// A server entered by hand is the only endpoint tried; nil lets the app find the domain's server.
     private var manualServer: XMPPEndpoint? {
         guard !serverHost.isEmpty, let serverPort else { return nil }
         return XMPPEndpoint(host: serverHost, port: serverPort, security: security)
@@ -158,7 +156,7 @@ struct SignInView: View {
             .toolbarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .sheet(isPresented: $showingRestore) { RestoreTransferView(model: model).themedRoot() }
-            // A restore signs this install in as the transferred account: nothing is left to sign in to here.
+            // A restore signs this install in as the transferred account.
             .onChange(of: model.transferRestored) { _, restored in if restored { dismiss() } }
         }
         #endif
@@ -174,13 +172,10 @@ struct SignInView: View {
     }
 
     #if os(macOS)
-    /// The connection's state under the form, unless it is the plain Offline every sheet starts with.
     private var sessionNote: String? {
         model.session == .offline(reason: nil) ? nil : model.session.label
     }
 
-    /// A Mac sheet: a grouped form whose fields carry their labels, Return moving from the address to the password and
-    /// connecting from there, and Cancel and Connect (the default button) at the bottom edge.
     private var macForm: some View {
         NavigationStack {
             Form {
@@ -256,7 +251,7 @@ struct SignInView: View {
                 }
             }
             .sheet(isPresented: $showingRestore) { RestoreTransferView(model: model).themedRoot() }
-            // A restore signs this install in as the transferred account: nothing is left to sign in to here.
+            // A restore signs this install in as the transferred account.
             .onChange(of: model.transferRestored) { _, restored in if restored { dismiss() } }
         }
         .allowsQuitWhileOpen()

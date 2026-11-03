@@ -2,8 +2,7 @@ import MessagingCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The share screen: a chat picker, then a review card with the files and the message text, then each chat's result.
-/// A share-sheet suggestion skips the picker. The same views serve the iPhone sheet and the Mac popover.
+// The same views serve the iPhone sheet and the Mac popover.
 struct ShareRootView: View {
     @Bindable var model: ShareModel
     let close: () -> Void
@@ -48,8 +47,7 @@ struct ShareRootView: View {
     }
 }
 
-/// Pinned and recent chats with a search field; up to five can be chosen. A chat that cannot take this share is shown
-/// greyed with the reason, never hidden.
+// A chat that cannot take this share is shown greyed with the reason, never hidden.
 struct SharePickerView: View {
     @Bindable var model: ShareModel
     let next: () -> Void
@@ -72,7 +70,6 @@ struct SharePickerView: View {
         .disabled(model.phase != .ready)
     }
 
-    /// The chosen chats and the arrow to the review card, as WhatsApp's forward sheet does it.
     private var selectionBar: some View {
         HStack(spacing: 12) {
             Text(ShareCopy.names(model.selectedChats))
@@ -100,7 +97,7 @@ struct ShareChatRow: View {
     @ScaledMetric(relativeTo: .body) private var scaledAvatar: CGFloat = 40
     @Environment(\.appearance) private var appearance
     @Environment(\.dynamicTypeSize) private var typeSize
-    /// The avatar grows with the text only so far: at accessibility sizes the name needs the width.
+    // At accessibility sizes the name needs the width, so the avatar stops growing.
     private var avatarSize: CGFloat { min(scaledAvatar, 52) }
 
     private var selected: Bool { model.selection.contains(chat.id) }
@@ -142,7 +139,6 @@ struct ShareChatRow: View {
     }
 }
 
-/// The files, the message text and what happens to it, then each chat's result.
 struct ShareReviewView: View {
     @Bindable var model: ShareModel
     let close: () -> Void
@@ -302,8 +298,7 @@ struct ShareFileTile: View {
     }
 }
 
-/// What happens to this share's encryption, in words, from the chats' stored states. The app sends nothing
-/// unencrypted, so a chat that cannot be encrypted never takes the share at all.
+// The app sends nothing unencrypted, so a chat that cannot be encrypted never takes the share at all.
 struct ShareEncryptionCard: View {
     let chats: [ShareRules.Chat]
 

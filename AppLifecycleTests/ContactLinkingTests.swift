@@ -6,9 +6,7 @@ import UIKit
 import XCTest
 @testable import HausXMPP
 
-/// The pieces of contact linking that run without Contacts access: the contact "Add to Contacts" proposes (the Mac
-/// saves the same draft), how a contact's Jabber address is read, the pre-scaled photo the extension reads, and how
-/// `ContactLinkCenter` orders its changes, with synthetic cards in place of Contacts.
+// Contact linking without Contacts access: synthetic cards stand in for Contacts.
 @MainActor final class ContactLinkingTests: XCTestCase {
     func testTheDraftCarriesTheJabberAddressTheXMPPLinkAndTheAvatarOnly() throws {
         let photo = Data([0x89, 0x50, 0x4E, 0x47])
@@ -70,8 +68,7 @@ import XCTest
 
     private let me = "me@example.org", robin = "robin@example.org"
 
-    /// Synthetic Contacts: full access, cards by identifier, and an optional gate that holds the next read until the
-    /// test lets it go, so a change can be made while a refresh is reading.
+    // The optional gate holds the next read until the test lets it go, so a change can be made while a refresh reads.
     private final class SyntheticContacts: @unchecked Sendable {
         private let lock = NSLock()
         private var cards: [String: ContactCard] = [:]
@@ -90,7 +87,7 @@ import XCTest
             return self[identifier]
         }
         var reader: ContactLinkCenter.Reader { ContactLinkCenter.Reader(access: { .full }, card: { self.read($0) }) }
-        /// Blocks a detached task (never the main actor) until the held read has started.
+        // Blocks a detached task, never the main actor.
         static func wait(for semaphore: DispatchSemaphore) { semaphore.wait() }
     }
 
@@ -101,7 +98,6 @@ import XCTest
         }
     }
 
-    /// A center on a fresh store, loaded for the account, its first refresh done.
     private func center(_ contacts: SyntheticContacts) async throws -> (ContactLinkCenter, MessageStore, URL) {
         let root = FileManager.default.temporaryDirectory.appending(path: "contact-center-\(UUID())", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -117,7 +113,6 @@ import XCTest
         (try? FileManager.default.contentsOfDirectory(atPath: AvatarStore.directory(root: root, account: me).path)) ?? []
     }
 
-    /// Asked for in this order, a relink and then an unlink leave the chat unlinked, in the store and on screen.
     func testAnUnlinkAskedForAfterARelinkWinsInTheStoreAndOnScreen() async throws {
         let contacts = SyntheticContacts()
         contacts["A"] = ContactCard(id: "A", name: "Robin Okafor", thumbnail: nil, jabberAddresses: [])
@@ -137,8 +132,6 @@ import XCTest
         XCTAssertEqual(photoFiles(root), [], "B's photo went with the unlink")
     }
 
-    /// The photo switch turned on while a refresh reads the contact survives the refresh's write, and the refresh's
-    /// name still lands.
     func testThePhotoSwitchSurvivesARefreshThatReadTheLinkBefore() async throws {
         let contacts = SyntheticContacts()
         contacts["A"] = ContactCard(id: "A", name: "Robin Okafor", thumbnail: photo(.systemOrange), jabberAddresses: [])
@@ -158,8 +151,7 @@ import XCTest
         XCTAssertEqual(center.links[robin], stored)
     }
 
-    /// A refresh that read the contact before the user unlinked writes nothing and leaves no photo file behind; nor
-    /// does a link the store refuses.
+    // Neither does a link the store refuses.
     func testARefusedRefreshOrLinkLeavesNoPhotoBehind() async throws {
         let contacts = SyntheticContacts()
         contacts["A"] = ContactCard(id: "A", name: "Robin Okafor", thumbnail: photo(.systemOrange), jabberAddresses: [])
@@ -186,8 +178,7 @@ import XCTest
         XCTAssertEqual(photoFiles(root), [])
     }
 
-    /// A readable contact's name is taken as it is now, also when it has none; only one that cannot be read keeps the
-    /// cached name.
+    // Only a contact that cannot be read keeps the cached name.
     func testARefreshClearsANameTheContactNoLongerHas() async throws {
         let contacts = SyntheticContacts()
         contacts["A"] = ContactCard(id: "A", name: "Robin Okafor", thumbnail: nil, jabberAddresses: [])

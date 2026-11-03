@@ -6,10 +6,9 @@ import OMEMO
 import XMPPProtocol
 @testable import HausXMPP
 
-/// A transfer between two installs, through `AccountTransfer` with isolated locations for each: a temporary App Group
-/// root, throwaway preference domains and Keychain services of its own. Never the app's real data. The source holds a
-/// real OMEMO identity with a trusted peer device, so "the same identity arrives" is checked by the OMEMO service
-/// reading the target's store with the target's own Keychain item.
+// Each install gets its own temporary App Group root, preference domains and Keychain services. The source holds a
+// real OMEMO identity with a trusted peer, so the OMEMO service reading the target's store with the target's own
+// Keychain item proves the same identity arrived.
 @MainActor final class AccountTransferTests: XCTestCase {
     private let account = "ellie@localhost"
     private let peer = "bob@localhost"
@@ -49,7 +48,6 @@ import XMPPProtocol
             return store
         }
 
-        /// The service as the app makes it: the store with this install's own wrapping key.
         func encryption(_ store: MessageStore) throws -> OMEMOService {
             let key = try XCTUnwrap(try PreUpgradeSnapshot.keychainData(service: locations.encryptionService, account: locations.storageID))
             return OMEMOService(store: store, protection: try StateProtection(key: key))
@@ -85,10 +83,8 @@ import XMPPProtocol
         let photo: Data
     }
 
-    /// A signed-in install as the app leaves it: an identity, a peer device the user accepted, a chat with messages
-    /// and a received photo, the account record and a settled push registration in the Keychain, and preferences
-    /// that travel (the selected account, the accent) beside ones that belong to the install (the resource, a
-    /// keyboard measurement).
+    // Preferences that travel (the selected account, the accent) sit beside ones that belong to the install (the
+    // resource, a keyboard measurement).
     private func signedIn(_ install: Install) async throws -> Signed {
         let server = LifecyclePublicationServer()
         let store = try install.openStore()
@@ -140,10 +136,8 @@ import XMPPProtocol
         return try await install.transfer.export(store: store, accountID: account, code: code, now: now)
     }
 
-    /// The move the owner makes: export leaves the source moved, with its store out of reach; the target, a fresh
-    /// install with its own locations, ends up with the same messages, files, identity and trust, its own Keychain
-    /// items and preferences, push to be set up again, and the install's own preferences left behind; deleting the
-    /// source's copy afterwards leaves nothing of the account there.
+    // The target gets the same messages, files, identity and trust under its own Keychain items, push to set up again
+    // and no install-local preferences; deleting the source's copy leaves nothing of the account there.
     func testAMoveCarriesTheIdentityTrustAndMessagesToAFreshInstall() async throws {
         let source = try makeInstall(), target = try makeInstall()
         let signed = try await signedIn(source)
@@ -196,7 +190,7 @@ import XMPPProtocol
         XCTAssertNil(target.groupDefaults.string(forKey: "xmppResource.\(account)"), "this install binds its own resource")
         XCTAssertEqual(target.groupDefaults.stringArray(forKey: "blocklist.\(account)"), ["spam@example.org"])
 
-        // One-time: the same file is refused here from now on.
+        // One-time: the same file is refused here afterwards.
         XCTAssertThrowsError(try target.transfer.stage(archive: archive, code: code)) {
             XCTAssertEqual($0 as? AccountTransfer.Failure, .alreadyRestored)
         }
@@ -212,9 +206,8 @@ import XMPPProtocol
         XCTAssertEqual(source.appDefaults.double(forKey: "attachmentKeyboard.height.portrait"), 301)
     }
 
-    /// Contact links are this device's alone. The archive carries no link, in any account, and no photo only a link
-    /// named; a photo that is also a chat's verified avatar travels as that avatar. An archive that does hold links
-    /// (from a build that packed them) loses them, with their photos, before its restore commits.
+    // Contact links are this device's alone; a photo only a link named stays too, while a chat's verified avatar
+    // travels. An archive that does hold links loses them, with their photos, before its restore commits.
     func testContactLinksNeverTravelAndAnArchiveWithLinksLosesThemBeforeTheCommit() async throws {
         let source = try makeInstall(), target = try makeInstall()
         let signed = try await signedIn(source)
@@ -263,7 +256,7 @@ import XMPPProtocol
             try await packed.close()
         }
 
-        // The same archive as a build that packed links would have written it, for two accounts.
+        // The same archive as a build that packed links writes it, for two accounts.
         let packed = try MessageStore(url: database)
         for link in [link(account, peer, photo: shared), link(account, "carol@localhost", photo: only), link(other, peer, photo: otherOnly)] {
             try await packed.saveContactLink(link)
@@ -302,7 +295,6 @@ import XMPPProtocol
         XCTAssertEqual(bodies, signed.messages.map(\.body))
     }
 
-    /// An install that has an identity of its own never takes a restore: nothing in it changes.
     func testARestoreIsRefusedWhenTheTargetHasAnIdentity() async throws {
         let source = try makeInstall(), target = try makeInstall()
         let signed = try await signedIn(source)
@@ -333,8 +325,7 @@ import XMPPProtocol
         XCTAssertNil(try PreUpgradeSnapshot.keychainData(service: target.keychain.accountService, account: "primary"))
     }
 
-    /// A restore that fails after the store was swapped in puts everything back: the target's own data, Keychain and
-    /// preferences, with no journal left. The same file then restores.
+    // Target data, Keychain and preferences come back with no journal left, and the same file then restores.
     func testARestoreThatFailsPartWayPutsTheTargetBack() async throws {
         let source = try makeInstall(), target = try makeInstall()
         let signed = try await signedIn(source)
@@ -381,9 +372,8 @@ import XMPPProtocol
         XCTAssertEqual(device, signed.overview.localDeviceID)
     }
 
-    /// The source's way back. An export a crash interrupted (marker still exporting) is undone at the next launch;
-    /// "Use Here Again" after a finished one puts the store back as it was. Either way the archive is gone and the
-    /// identity is the same.
+    // An export interrupted by a crash (marker still exporting) is undone at the next launch; "Use Here Again" after a
+    // finished one puts the store back. Either way the archive is gone and the identity is the same.
     func testTheSourceGetsItsDataBackAfterAnInterruptedExportOrUseHereAgain() async throws {
         let source = try makeInstall()
         let signed = try await signedIn(source)
@@ -410,8 +400,8 @@ import XMPPProtocol
         XCTAssertEqual(resumedDevice, signed.overview.localDeviceID)
     }
 
-    /// A marker that is there but does not read (before the first unlock, or damaged) keeps storage closed: counting
-    /// it as absent would let a launch create a new store, and a new identity, while the real one is held.
+    // Counting an unreadable marker (before first unlock, or damaged) as absent would let a launch create a new store,
+    // and a new identity, while the real one is held.
     func testAnUnreadableMarkerKeepsStorageClosed() async throws {
         let source = try makeInstall()
         let signed = try await signedIn(source)
@@ -422,10 +412,8 @@ import XMPPProtocol
         XCTAssertFalse(FileManager.default.fileExists(atPath: source.locations.install.database.path))
     }
 
-    /// The owner's update in place, from a build that predates transfers: `Messaging/`, the Keychain records and the
-    /// preferences are there, but no `Transfer/` folder and no transfer Keychain item. The launch's transfer step
-    /// changes and creates nothing, and the saved account counts as this install's, whether that build remembered the
-    /// selected account or not.
+    // An in-place update from a build without transfers: no `Transfer/` folder and no transfer Keychain item. The
+    // transfer step creates nothing, and the saved account counts as this install's whether or not it was selected.
     func testAnUpdateFromABuildBeforeTransfersKeepsItsDataAndAccount() async throws {
         let install = try makeInstall()
         let signed = try await signedIn(install)
@@ -449,8 +437,8 @@ import XMPPProtocol
         XCTAssertTrue(owned, "no selection remembered: the store holds the account's identity")
     }
 
-    /// A reinstall: the Keychain kept the deleted install's account record, but this install never selected it and
-    /// its store holds no identity for it, so the app starts signed out.
+    // The Keychain kept a deleted install's account record, but this install never selected it and its store holds no
+    // identity for it, so the app starts signed out.
     func testARecordADeletedInstallLeftBehindIsNotThisInstalls() async throws {
         let install = try makeInstall()
         let store = try install.openStore()

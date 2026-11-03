@@ -1,15 +1,13 @@
 import SwiftUI
 
-/// Replaces the app while the previous version's data is being backed up, could not be backed up, is being restored,
-/// has been restored, or while this version's kept data goes back, and when a newer version's data is on the device.
-/// Nothing behind it connects or changes storage.
+// Nothing behind it connects or changes storage.
 struct UpgradeBlockingView: View {
     @Bindable var model: AppModel
     @Environment(\.appearance) private var appearance
     @State private var confirmingWithoutBackup = false
     @State private var choosing = false
     @State private var working = false
-    /// A quick upgrade finishes before this shows, so launches do not flash a progress screen.
+    // A quick upgrade finishes before this shows, so launches do not flash a progress screen.
     @State private var showsProgress = false
 
     var body: some View {
@@ -60,8 +58,8 @@ struct UpgradeBlockingView: View {
         }
     }
 
-    /// An older build installed over a newer one (TestFlight allows it): it cannot read the data, and offers nothing that
-    /// would change it.
+    // An older build installed over a newer one (TestFlight allows it) cannot read the data, so it offers
+    // nothing that changes it.
     private var newerData: some View {
         blocking(symbol: "arrow.up.circle.fill", tint: Color(appearance.accent.tint), title: "Update Haus XMPP",
                  body: "This version of Haus XMPP is older than your data. Install the latest version from TestFlight or the App Store.\n\nYour messages and keys are kept as they are.") {
@@ -70,7 +68,6 @@ struct UpgradeBlockingView: View {
         .accessibilityIdentifier("newerDataScreen")
     }
 
-    /// The previous version has not opened the restored data yet.
     private func restoredView(_ state: PreUpgradeSnapshot.RestoredState) -> some View {
         let taken = state.restored.takenAt.formatted(date: .abbreviated, time: .shortened)
         let kept = state.thisVersion != nil ? " This version kept its own data, so you can still return to it."
@@ -113,9 +110,6 @@ struct UpgradeBlockingView: View {
     }
 }
 
-/// Which data to continue with after a restore: this version's kept copy (the default: its messages stay readable
-/// and nothing on the iPhone is dropped) or the restored data, upgraded afresh. Shown in a sheet from the restored
-/// screen, and as the screen itself on the first launch after the previous version used the data.
 struct UpgradeChoiceView: View {
     @Bindable var model: AppModel
     let state: PreUpgradeSnapshot.RestoredState
@@ -224,14 +218,13 @@ struct UpgradeChoiceView: View {
     }
 }
 
-/// Settings: the snapshot of the previous version's data, what restoring it does, and the two actions.
 struct PreviousVersionBackupView: View {
     @Bindable var model: AppModel
     let backup: PreUpgradeSnapshot.Manifest
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingRestore = false
     @State private var confirmingDelete = false
-    /// Chats where this version sent encrypted messages since the backup; a restore rolls their sessions back.
+    // A restore rolls these chats' sessions back.
     @State private var rolledBack: [String] = []
 
     private var taken: String { backup.takenAt.formatted(date: .abbreviated, time: .shortened) }
@@ -279,7 +272,7 @@ struct PreviousVersionBackupView: View {
                         .listRowButton()
                         .accessibilityIdentifier("restorePreviousVersion")
                     Button("Delete backup", role: .destructive) { confirmingDelete = true }
-                        // The role's red, which a Mac row's button style does not apply by itself.
+                        // A Mac row's button style does not apply the role's red by itself.
                         .foregroundStyle(.red)
                         .listRowButton()
                         .accessibilityIdentifier("deletePreviousVersionBackup")

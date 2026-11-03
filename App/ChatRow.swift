@@ -3,17 +3,12 @@ import SwiftUI
 import UIKit
 #endif
 
-/// One chat in the chat list: avatar, name, time, preview with the last message's status, typing, unread count and pin.
-/// The iPhone's list and the Mac's sidebar both draw it.
 struct ChatRow: View {
     let chat: ChatSummary
     let isGroup: Bool
     var avatar: PlatformImage? = nil
-    /// Who is typing in this chat; the preview gives way to it while it lasts.
     var typing: [String]? = nil
-    /// The iPhone's 52 pt; the Mac sidebar's rows are smaller.
     var avatarSize: CGFloat = 52
-    /// The account blocked this chat's address: the preview says so and no unread count shows.
     var isBlocked = false
 
     private static let dayMonth: DateFormatter = { let f = DateFormatter(); f.dateFormat = "dd/MM"; return f }()
@@ -29,7 +24,7 @@ struct ChatRow: View {
         return Self.dayMonth.string(from: date)
     }
 
-    /// Same marks as the bubble footer, drawn static and neutral: read is the filled rings, not a colour.
+    // Read is the filled rings, not a colour.
     private var stateGlyph: Text? {
         guard chat.lastMessageIsOutgoing else { return nil }
         let status: TimelineMessage.Status
@@ -95,8 +90,7 @@ struct ChatRow: View {
                             }
                         }
                         .animation(.easeInOut(duration: 0.2), value: typing)
-                    // One trailing slot under the time: the unread count, else the pin, so both stay right-aligned
-                    // down the list. An unread pinned row still sits in the pinned group at the top.
+                    // One trailing slot under the time (unread count, else pin) keeps both right-aligned down the list.
                     if chat.unreadCount > 0, !isBlocked {
                         UnreadPill(count: chat.unreadCount)
                     } else if chat.isPinned {
@@ -109,9 +103,8 @@ struct ChatRow: View {
     }
 }
 
-/// Incoming messages after the read pointer, in the row's trailing column under the time: a small accent capsule
-/// that sits on the preview's first line, so it never changes the row's height. It takes the sent-bubble pair, measured
-/// at 4.5:1 for text in both appearances (the tint with white text was 3.5:1 in dark mode).
+// Sits on the preview's first line, so it never changes the row's height. The sent-bubble pair measures 4.5:1 for text
+// in both appearances.
 struct UnreadPill: View {
     let count: Int
     @ScaledMetric(relativeTo: .footnote) private var height: CGFloat = 18

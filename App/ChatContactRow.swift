@@ -5,16 +5,13 @@ import SwiftUI
 import ContactsUI
 #endif
 
-/// What a chat's Contact row is asked to start from elsewhere: the Mac's chat menus.
 struct ContactRowRequest: Equatable {
     enum Kind { case link, add, unlink }
     let chatID: String
     let kind: Kind
 }
 
-/// A direct chat's Contact row in its details (the iPhone's screen, the Mac's inspector): link the chat to a contact on
-/// this device, add it to Contacts, or unlink it. Contacts access is asked for only here, when the user starts linking
-/// or adding. What each choice means is said in its confirmation, not in a footer.
+// Contacts access is asked for only here, when the user starts linking or adding.
 struct ChatContactRow: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -24,14 +21,10 @@ struct ChatContactRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private enum Prompt: Equatable {
-        /// The one contact whose Jabber address is this chat's.
         case suggestion(ContactCard)
-        /// No Contacts access: link by name only, or allow access.
         case withoutAccess
         case unlink
-        /// The Mac with access: what "Add to Contacts" will write.
         case add
-        /// The Mac without access: open a contact card in Contacts instead.
         case openCard
     }
 
@@ -115,8 +108,6 @@ struct ChatContactRow: View {
         return status == .missing ? "\(name), contact not found" : name
     }
 
-    // MARK: Flows
-
     private func startLinking() async {
         if center.access == .notDetermined { _ = await center.requestAccess() }
         guard center.access.readsContacts else { prompt = .withoutAccess; return }
@@ -134,8 +125,6 @@ struct ChatContactRow: View {
         prompt = center.access == .full ? .add : .openCard
         #endif
     }
-
-    // MARK: Confirmations
 
     private var promptTitle: String {
         switch prompt {
@@ -215,9 +204,7 @@ struct ChatContactRow: View {
     }
 }
 
-/// The contacts this app can read, to link a chat to one. With limited access (iOS) it also offers the system's search
-/// of contacts not yet shared with Haus (`ContactAccessButton`) and a way to share more; a contact shared from either
-/// is linked straight away, as that is the one the user tapped.
+// A contact shared through the limited-access system search is linked straight away: it is the one the user tapped.
 struct ContactLinkPicker: View {
     let center: ContactLinkCenter
     let chatName: String
@@ -298,7 +285,7 @@ struct ContactLinkPicker: View {
         dismiss()
     }
 
-    /// Contacts the user just shared with Haus: one is linked; several only refresh the list to pick from.
+    // One shared contact is linked; several only refresh the list to pick from.
     private func choose(sharedIdentifiers identifiers: [String]) async {
         cards = await center.readableCards()
         guard identifiers.count == 1, let card = cards?.first(where: { $0.id == identifiers[0] }) else { return }

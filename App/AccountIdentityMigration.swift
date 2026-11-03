@@ -2,22 +2,17 @@ import Foundation
 import XMPPProtocol
 import MessagingCore
 
-/// An account signed in before addresses were normalised may be named as typed (`Ellie@Example.org`) outside the
-/// message store too: preference keys, the attachment and avatar folders. Each is moved once to the normal spelling
-/// the rest of the app now uses (the store migrates itself, the saved credentials and push registrations are read in
-/// normal form). Moves never overwrite: what the normal spelling already has wins, the rest is carried over.
+// Moves an account's preference keys and folders from its as-typed spelling (`Ellie@Example.org`) to normal form
+// once. Moves never overwrite: what the normal spelling already has wins, the rest is carried over.
 enum AccountIdentityMigration {
-    /// Preference keys that end in an account address.
     static let accountKeyPrefixes = ["pushOff.", "avatar.", "uploadService."]
 
     private static func normal(_ address: String) -> String { JID.normalizedBare(address) ?? address }
 
-    /// Old spellings whose folders still have to move. Saved before the preferences that name them are rewritten, so
-    /// a launch that ends before storage opens still moves them on the next one.
+    // Saved before the preferences that name them are rewritten, so a launch that ends before storage opens still
+    // moves them on the next one.
     static let pendingFolderMovesKey = "identityFolderMoves"
 
-    /// Renames account-keyed preferences and `lastAccount`; returns the old spellings it found. Their folders are
-    /// queued for `moveFiles`.
     @discardableResult
     static func migratePreferences(_ defaults: UserDefaults) -> Set<String> {
         var spellings = Set<String>()
@@ -46,7 +41,7 @@ enum AccountIdentityMigration {
                 move(key, to: prefix + normal(account))
             }
         }
-        // `groupNickname.<account>.<room>`: both addresses contain dots, so only a known account spelling splits it.
+        // Both addresses contain dots, so only a known account spelling splits `groupNickname.<account>.<room>`.
         let accounts = spellings.union(spellings.map(normal)).union(defaults.string(forKey: "lastAccount").map { [$0] } ?? [])
         for key in keys where key.hasPrefix("groupNickname.") {
             for account in accounts where key.hasPrefix("groupNickname.\(account).") {
@@ -57,7 +52,6 @@ enum AccountIdentityMigration {
         return spellings
     }
 
-    /// Moves the attachment cache and staging folders and the avatar folder of each queued old spelling.
     static func moveFiles(directory: URL, defaults: UserDefaults) {
         for account in defaults.stringArray(forKey: pendingFolderMovesKey) ?? [] where normal(account) != account {
             merge(AttachmentFiles.root(directory: directory, account: account), into: AttachmentFiles.root(directory: directory, account: normal(account)))
@@ -66,7 +60,6 @@ enum AccountIdentityMigration {
         defaults.removeObject(forKey: pendingFolderMovesKey)
     }
 
-    /// Moves `source` to `target`, or, when `target` exists, each item it lacks (recursing into shared folders).
     private static func merge(_ source: URL, into target: URL) {
         let files = FileManager.default
         guard files.fileExists(atPath: source.path) else { return }

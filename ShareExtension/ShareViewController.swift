@@ -7,9 +7,8 @@ import AppKit
 #endif
 
 #if os(iOS)
-/// The extension's principal class (no storyboard): the SwiftUI share screen in a hosting controller. Leaving the
-/// host (the user switched away or locked the phone) ends the share's connection and gives the transport lease back
-/// before the sheet closes; what was queued stays queued.
+// Leaving the host (an app switch, a lock) ends the share's connection and gives the transport lease back before the
+// sheet closes; what was queued stays queued.
 final class ShareViewController: UIViewController {
     private let model = ShareModel()
     private let appearance = AppearanceStore(defaults: SharedSession.groupDefaults ?? .standard)
@@ -40,7 +39,6 @@ final class ShareViewController: UIViewController {
 
     override func accessibilityPerformEscape() -> Bool { finish(); return true }
 
-    /// Done, Cancel, Close and Escape: the sheet closes once nothing of the share runs any more.
     private func finish() {
         guard !closing else { return }
         closing = true
@@ -51,8 +49,7 @@ final class ShareViewController: UIViewController {
     }
 }
 #else
-/// The Mac extension's principal class: the same SwiftUI share screen in the share popover. The Mac cannot preselect a
-/// suggested chat (`NSExtensionContext.intent` is iOS only), so the picker always shows.
+// `NSExtensionContext.intent` is iOS only, so the Mac cannot preselect a suggested chat and the picker always shows.
 final class ShareViewController: NSViewController {
     private let model = ShareModel()
     private let appearance = AppearanceStore(defaults: SharedSession.groupDefaults ?? .standard)

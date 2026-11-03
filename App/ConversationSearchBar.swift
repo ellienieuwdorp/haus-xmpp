@@ -1,7 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// Keep familiar iOS search behavior, clear control, keyboard and cancellation together.
 struct ConversationSearchBar: UIViewRepresentable {
     @Binding var query: String
     var onCancel: () -> Void
@@ -29,9 +28,8 @@ struct ConversationSearchBar: UIViewRepresentable {
         }
     }
 
-    /// Height follows UISearchBar's fitting height, which grows with Dynamic Type, so the field and Close button stay
-    /// inside the glass group at accessibility sizes. That height carries 10 pt above and below the field; the glass
-    /// group pads itself, so trim it to 4 pt each side (52 pt at the default size, as before).
+    // UISearchBar's fitting height grows with Dynamic Type and carries 10 pt above and below the field; the glass
+    // group pads itself, so trim that to 4 pt each side.
     func sizeThatFits(_ proposal: ProposedViewSize, uiView bar: UISearchBar, context: Context) -> CGSize? {
         guard let width = proposal.width, width.isFinite else { return nil }
         let fitted = bar.systemLayoutSizeFitting(CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),

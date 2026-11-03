@@ -27,8 +27,7 @@ struct HausXMPPApp: App {
                 .themedRoot()
                 .environment(\.appearance, appearance)
                 .task { await model.prepare() }
-                // Observed on the content, as before: the app has one scene (UIApplicationSupportsMultipleScenes is
-                // off), so this runs once per process.
+                // The app has one scene (UIApplicationSupportsMultipleScenes is off), so this runs once per process.
                 .onChange(of: scenePhase) { previous, phase in
                     lifecycle.phaseChanged(from: .init(previous), to: .init(phase))
                 }
@@ -36,16 +35,13 @@ struct HausXMPPApp: App {
     }
 }
 
-/// The iOS lifecycle owner: it holds `SceneLifecycleDriver` and hands the model its updates, the way `MacLifecycle`
-/// does for the Mac. The scene phase drives all four signals together, and a launch into the background (a
-/// notification action) starts away until its first activation.
+// A launch into the background (a notification action) starts away until its first activation.
 @MainActor final class SceneLifecycle {
     private var driver = SceneLifecycleDriver()
     private unowned let model: AppModel
     private var backgroundLaunchObserver: (any NSObjectProtocol)?
-    /// Begun as the scene leaves `.active`, while the app is still in front: iOS grants background time asynchronously,
-    /// so it is asked for before the app can be suspended. Ends at `.active` again, or at `.background` once the model's
-    /// transition has begun its own.
+    // Begun as the scene leaves `.active`: iOS grants background time asynchronously, so it is asked for before
+    // suspension. Ends at `.active` again, or at `.background` once the model's transition holds its own.
     private var departure: BackgroundActivity?
 
     init(model: AppModel) {
@@ -59,8 +55,7 @@ struct HausXMPPApp: App {
         if phase != .inactive { departure?.end(); departure = nil }
     }
 
-    /// At the start of `prepare()`: a launch into the background must not connect, and its first activation counts as
-    /// a return to the foreground even if the scene phase was never seen to change.
+    // A launch into the background must not connect, and its first activation counts as a foreground return.
     private func launched() -> [LifecycleUpdate] {
         let inBackground = PlatformApplication.isInBackground
         let updates = driver.updates(for: .launched(inBackground: inBackground))
@@ -83,7 +78,6 @@ private extension SceneLifecycleDriver.Phase {
         switch phase {
         case .active: self = .active
         case .background: self = .background
-        // `.inactive`, and any future phase: neither turns the signals on nor off.
         default: self = .inactive
         }
     }

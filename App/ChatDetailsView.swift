@@ -2,13 +2,12 @@ import SwiftUI
 import OMEMO
 
 extension AppModel {
-    /// A stored title, unless it is just the address; then the local part reads as the name (`ContactName`).
     nonisolated static func displayName(for chatID: String, title: String?) -> String {
         ContactName.display(for: chatID, title: title)
     }
 
-    /// Stored device trust decides, whatever the socket is doing: a chat with usable trusted devices is encrypted
-    /// while offline too, because queued messages are sealed for them. A failed refresh never changes it.
+    // Stored device trust decides, not the socket: queued messages are sealed for trusted devices while offline too. A
+    // failed refresh never changes it.
     func trustSummary(for chatID: String) -> ConversationTrust {
         // The samples read as a verified chat would; the chat list says they are samples.
         if isDemo { return ConversationTrust(level: .verified, subtitle: "Encrypted · Verified") }
@@ -16,12 +15,10 @@ extension AppModel {
     }
 }
 
-/// What Chat Details asks the conversation to open once it has popped back.
 enum ConversationIntent: Equatable {
     case search(chatID: String), starred(chatID: String)
 }
 
-/// A details page's hero: the iPhone's full-width screen, and on the Mac an inspector column a third of that width.
 enum DetailsHeroMetrics {
     #if os(iOS)
     static let avatar: CGFloat = 96, top: CGFloat = 35, bottom: CGFloat = 36
@@ -43,8 +40,8 @@ struct ChatDetailsView: View {
 
     var body: some View {
         GroupedList {
-            // Hero and tiles are the section's header, outside its rounded background: as the last row they
-            // lost their outer bottom corners to the section's larger corner mask.
+            // In the header, outside the section's rounded background: as its last row the section's corner mask would
+            // clip their bottom corners.
             Section {
                 NavigationLink(value: isGroup ? ChatRoute.groupDetails(chatID) : .encryption(chatID)) {
                     HStack {
@@ -110,7 +107,6 @@ struct ChatDetailsView: View {
         .padding(.vertical, 10)
     }
 
-    /// Pop back to the conversation and let it open the requested mode.
     private func leave(with intent: ConversationIntent) {
         model.conversationIntent = intent
         dismiss()
@@ -124,7 +120,7 @@ struct ChatDetailsView: View {
 
     private func tile(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            // A fixed glyph box and tile height: the two symbols differ in height, which made the tiles 60 and 60.67.
+            // The two symbols differ in height, so the glyph box and tile height are fixed.
             VStack(spacing: 4) {
                 Image(systemName: systemImage).font(.title3.weight(.medium)).frame(height: tileGlyphHeight)
                 Text(title).font(.footnote.weight(.semibold))
@@ -140,12 +136,10 @@ struct ChatDetailsView: View {
 }
 
 extension AppModel {
-    /// The one derived value per chat that views read for trust, sending and attaching.
     func chatCapabilities(_ chatID: String) -> ChatCapabilities {
         let group = groupChats[chatID]
-        // Review means a stored device is undecided or a send is held for a fingerprint decision. Retained ciphertext
-        // is not a review by itself: a carbon from another own client or a message from a removed device stays
-        // retained with nothing to approve, and blaming a new device for it was wrong (2026-09-25).
+        // Retained ciphertext alone is not a review: a carbon from another own client or a removed device's message
+        // stays retained with nothing to approve.
         return ChatCapabilities.derive(isDemo: isDemo, isGroup: group != nil, knowledge: encryptionKnowledge(for: chatID),
                                        reviewPending: encryptionAttention.heldForTrust.contains(chatID),
                                        groupJoined: group?.joined == true,

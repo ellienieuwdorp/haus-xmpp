@@ -6,34 +6,24 @@ import UserNotifications
 import MessageStore
 import MessagingCore
 
-/// Reply and Mark as Read on a message notification.
 enum NotificationActionIdentifier {
     static let reply = "reply"
     static let markRead = "mark-read"
 }
 
-/// Copy the notification actions post and show.
 enum NotificationActionCopy {
     static let replyFailed = "Couldn't send your reply. Open the chat to review."
-    /// A reply the app could not attribute to the current account (signed out, switched, keychain locked before the
-    /// first unlock, message gone): no chat, no account, nothing to route to.
     static let replyRejected = "Couldn't send your reply."
-    /// A reply typed while this version waited to upgrade the previous version's data: kept, and queued once the app
-    /// finished updating in front. Shown under the rejected notice's identifier, which it replaces.
+    // Shown under the rejected notice's identifier, which it replaces.
     static let replySavedForUpgrade = "Open Haus XMPP to finish updating; your reply was saved."
-    /// A saved reply found more than a day after it was typed: dropped instead of sent late.
     static let savedReplyExpired = "A reply you typed before the update was not sent because it is more than a day old."
-    /// One content-free notice for every rejected reply; posting again replaces it.
     static let replyRejectedIdentifier = "e-rejected"
 }
 
 enum NotificationCategories {
-    /// `message` names one authenticated incoming message and offers Reply and Mark as Read. Neither asks for
-    /// authentication, as in Messages: iOS's own "Allow access when locked" settings decide whether they appear on the
-    /// lock screen. Sending needs only after-first-unlock data (keychain and store), so it works on a locked phone that
-    /// was unlocked once since boot. Before that the account cannot be read: the reply is rejected and only the
-    /// content-free "Couldn't send your reply." notice is posted (`NotificationActionCenter`). `notice` (review,
-    /// placeholder, summary, failed reply), `reaction` and `fallback` have no actions.
+    // Neither action asks for authentication; iOS's "Allow access when locked" decides lock-screen visibility. Sending
+    // needs only after-first-unlock data, so before the first unlock the reply is rejected with the content-free
+    // notice.
     static var all: Set<UNNotificationCategory> {
         let reply = UNTextInputNotificationAction(identifier: NotificationActionIdentifier.reply, title: "Reply", options: [],
                                                   icon: UNNotificationActionIcon(systemImageName: "arrowshape.turn.up.left"),
@@ -52,15 +42,12 @@ enum NotificationCategories {
     }
 }
 
-/// One action on one notification, parsed before leaving the delegate callback. Holds the opaque destination and,
-/// for a reply, the typed text; never an address.
+// Holds the opaque destination and, for a reply, the typed text; never an address.
 struct NotificationActionRequest: Sendable, Equatable, CustomStringConvertible {
     enum Kind: Sendable, Equatable { case markRead, reply(String) }
     let destination: NotificationDestination
     let kind: Kind
 
-    /// Nil unless the request is in the `message` category, names one message, and (for Reply) carries text the
-    /// composer would accept.
     init?(userInfo: [AnyHashable: Any], categoryIdentifier: String, actionIdentifier: String, text: String?) {
         guard categoryIdentifier == NotificationIdentity.messageCategory,
               let payload = userInfo[NotificationDestination.userInfoKey] as? [String: String],
@@ -79,99 +66,68 @@ struct NotificationActionRequest: Sendable, Equatable, CustomStringConvertible {
     var description: String { "NotificationActionRequest(<redacted>)" }
 }
 
-/// What happened to one action. Only the outcome is logged; never text or addresses.
+// Only the outcome is logged; never text or addresses.
 enum NotificationActionOutcome: String, Sendable, Equatable {
-    /// Not the current authorized account, signed out, or no such incoming encrypted message: nothing was done.
     case rejected
-    /// No storage, or the read could not be saved; nothing was sent.
     case unavailable
     case markedRead
-    /// Written to the server on an encrypted session (acknowledged or still unconfirmed); never plaintext.
+    // Written on an encrypted session (acknowledged or still unconfirmed); never plaintext.
     case replySent
-    /// Saved and queued, not sent: the chat needs a trust decision or keys, or no session was ready. Stays queued
-    /// exactly as the composer leaves it; the user was told.
     case replyHeld
-    /// Could not be saved at all; the user was told.
     case replyFailed
-    /// Kept for after the upgrade the app has not run yet (launched into the background); nothing was sent.
     case replySavedForUpgrade
 }
 
-/// Where a reply stands once the session tried to deliver it.
 enum ReplyDelivery: Sendable, Equatable { case sent, held }
 
-/// The time one action may use, measured from the moment the delegate handed it over: before the model finished
-/// starting, before an action queued ahead of it and before `prepare()`. The network work ends at `deadline`; the
-/// teardown (disconnect, consumer join, presenting what arrived, releasing the lease) has `teardown` after it, so the
-/// lease is back well before the system's background time runs out.
+// Measured from the delegate handover, before model start-up and queued actions. Network work ends at `deadline`; the
+// teardown (disconnect, consumer join, presentation, lease release) gets `teardown` after it, so the lease is back
+// before the system's background time runs out.
 struct NotificationActionBudget: Sendable, Equatable {
-    /// The network part never runs longer than the extension's own budget.
     static let cap: Duration = .seconds(20)
-    /// Kept free after `deadline` for the teardown.
     static let teardown: Duration = .seconds(9)
-    /// How long the action waits for the lifecycle slot and the store's lease together, as the extension waits for the app.
     static let leaseWait: Duration = .seconds(6)
-    /// How long presenting what arrived on the action's connection may take.
     static let presentation: Duration = .seconds(4)
 
     let start: ContinuousClock.Instant
-    /// Everything that needs the network stops here: the watchdog closes the connection at this instant.
+    // The watchdog closes the connection at this instant.
     let deadline: ContinuousClock.Instant
 
-    /// `backgroundTimeRemaining` is UIKit's value right after the action's background task began. In front of the app
-    /// it is effectively unlimited (`greatestFiniteMagnitude`) and only the cap applies.
     init(start: ContinuousClock.Instant, backgroundTimeRemaining: TimeInterval) {
         self.start = start
         var network = Self.cap
+        // In the foreground UIKit reports `greatestFiniteMagnitude`, which is finite; the 3600 s bound leaves only
+        // the cap.
         if backgroundTimeRemaining.isFinite, backgroundTimeRemaining < 3_600 {
             network = max(.zero, min(network, .seconds(max(0, backgroundTimeRemaining)) - Self.teardown))
         }
         deadline = start + network
     }
 
-    /// When the waits before connecting give up: `leaseWait` after `now`, never past the deadline.
     func leaseDeadline(from now: ContinuousClock.Instant) -> ContinuousClock.Instant { min(now + Self.leaseWait, deadline) }
-    /// How long a step that must end by the deadline may still take (zero once it passed).
     func remaining(at now: ContinuousClock.Instant, atMost limit: Duration) -> Duration { max(.zero, min(limit, deadline - now)) }
-    /// Presentation after the connection closed: at most `presentation`, ending 2 s before the reserved teardown does.
     func presentationTimeout(at now: ContinuousClock.Instant) -> Duration {
         max(.zero, min(Self.presentation, deadline + Self.teardown - .seconds(2) - now))
     }
 }
 
-/// The steps an action needs, so the decision logic is testable with fakes. The app implements it on `AppModel`.
 @MainActor protocol NotificationActionEnvironment: AnyObject {
-    /// The account the protected saved credentials, the session and the selected account all agree on; nil when
-    /// signed out, switching, or in a test session.
     func authorizedNotificationAccount() -> String?
-    /// Tap routing's resolution: an existing incoming encrypted message of `account`.
     func resolveNotificationMessage(_ destination: NotificationDestination, account: String) async -> StoredMessage?
-    /// Takes the transport for this action: the live foreground session, or the lease plus a background connection.
-    /// Without either (the lease stayed busy, no network, the budget was spent) the action still reads and queues
-    /// locally. False only when there is no storage; nothing has changed then. Nothing network-bound outlasts
-    /// `budget.deadline`.
+    // Without the live session or the lease the action still reads and queues locally. False only when there is no
+    // storage. Nothing network-bound outlasts `budget.deadline`.
     func beginNotificationAction(account: String, chatID: String, budget: NotificationActionBudget) async -> Bool
-    /// Moves the read pointer through `message`, publishes XEP-0490 and queues the XEP-0333 marker when the
-    /// read-receipts switch allows (the store enforces it).
     func markNotificationMessageRead(_ message: StoredMessage) async throws
-    /// Removes delivered notifications that are now read, and this message's own.
     func clearReadNotifications(for message: StoredMessage) async
-    /// Queues the reply through the composer's outbox; returns its message ID. Throws when it could not be saved.
     func enqueueNotificationReply(_ text: String, to message: StoredMessage) async throws -> String
-    /// Seals and sends what the outbox holds while the session lasts, and reports where the reply stands.
     func deliverNotificationReply(_ messageID: String, account: String) async -> ReplyDelivery
-    /// Delivers the queued marker and read state when there is no reply.
     func flushNotificationAction(account: String) async
-    /// Posts the one "Couldn't send your reply" notice of the chat, or removes a stale one after a sent reply.
     func reportNotificationReply(failed: Bool, for message: StoredMessage) async
-    /// Leaves the transport as it found it: disconnected, what arrived on the action's connection presented as the
-    /// extension would, and the lease released if the app is still in the background.
     func endNotificationAction() async
 }
 
-/// The decision logic of Reply and Mark as Read. The account is checked before anything is touched, and again
-/// before the reply is saved; a reply that is not sent is never retried as plaintext and always reported (a rejected
-/// one by `NotificationActionCenter`, which knows no chat to name).
+// The account is checked before anything is touched and again before the reply is saved. A reply that is not sent is
+// never retried as plaintext and is always reported.
 enum NotificationActionHandler {
     @MainActor static func perform(_ request: NotificationActionRequest, budget: NotificationActionBudget,
                                    in environment: some NotificationActionEnvironment) async -> NotificationActionOutcome {
@@ -209,8 +165,7 @@ enum NotificationActionHandler {
         return delivery == .sent ? .replySent : .replyHeld
     }
 
-    /// The outbox row a notification reply becomes: a plain answer in the chat of `message`, queued unencrypted for
-    /// the drain to seal (not an XEP-0461 reply).
+    // Queued unencrypted for the drain to seal; a plain answer, not an XEP-0461 reply.
     static func replyMessage(_ text: String, id: String, to message: StoredMessage) -> StoredMessage {
         StoredMessage(id: id, accountID: message.accountID, chatID: message.chatID, senderID: message.accountID, body: text,
                       isOutgoing: true, encryptionProfile: "pending")
@@ -220,21 +175,16 @@ enum NotificationActionHandler {
 #if os(iOS)
 typealias BackgroundTaskID = UIBackgroundTaskIdentifier
 #else
-/// The Mac has no background tasks; an action there runs in a process that keeps running, under a `ProcessInfo`
-/// activity so App Nap does not slow it.
 struct BackgroundTaskID: Equatable {
     let rawValue: Int
     static let invalid = BackgroundTaskID(rawValue: 0)
 }
 #endif
 
-/// The system's background time, behind a seam so the center's task handling is testable.
 @MainActor protocol NotificationActionBackgroundTime: AnyObject {
-    /// Begins a background task. The system calls `expiration` on the main thread when the time runs out; a task
-    /// still not ended when it returns gets the process terminated.
+    // A task still not ended when `expiration` returns gets the process terminated.
     func begin(expiration: @escaping @MainActor () -> Void) -> BackgroundTaskID
     func end(_ task: BackgroundTaskID)
-    /// `UIApplication.backgroundTimeRemaining`: effectively unlimited in front of the app.
     var remaining: TimeInterval { get }
 }
 
@@ -247,7 +197,6 @@ struct BackgroundTaskID: Equatable {
     var remaining: TimeInterval { UIApplication.shared.backgroundTimeRemaining }
 }
 #else
-/// A Mac action never expires: its own budget's cap bounds it, and the activity keeps App Nap away meanwhile.
 @MainActor final class ProcessActivityBackgroundTime: NotificationActionBackgroundTime {
     private var activities: [Int: BackgroundActivity] = [:]
     private var next = 1
@@ -263,9 +212,6 @@ struct BackgroundTaskID: Equatable {
 }
 #endif
 
-/// Lets the delegate reach the model, which may still be starting after a background launch. The latest model to
-/// register handles actions, one at a time. Each request runs inside its own background task, begun the moment the
-/// delegate hands it over; the action's budget is measured from there.
 @MainActor final class NotificationActionCenter {
     #if os(iOS)
     static let shared = NotificationActionCenter(time: UIKitBackgroundTime(), reportRejectedReply: postRejectedReply)
@@ -273,8 +219,6 @@ struct BackgroundTaskID: Equatable {
     static let shared = NotificationActionCenter(time: ProcessActivityBackgroundTime(), reportRejectedReply: postRejectedReply)
     #endif
     var handler: (@MainActor (NotificationActionRequest, NotificationActionBudget) async -> NotificationActionOutcome)?
-    /// The system is ending the background time: closes the running action's connection and answers whether the action
-    /// still holds, or is acquiring, the store's transport lease.
     var abort: (@MainActor () -> Bool)?
     private let time: any NotificationActionBackgroundTime
     private let reportRejectedReply: @MainActor () async -> Void
@@ -289,10 +233,9 @@ struct BackgroundTaskID: Equatable {
     func perform(_ request: NotificationActionRequest, waitingForHandler limit: Duration = .seconds(5)) async -> NotificationActionOutcome {
         let task = ActionBackgroundTask(time: time)
         task.begin { [weak self] in
-            // Termination releases the kernel lease; a suspended owner keeps it, and every extension run would wait
-            // and fall back until the app ran again. So while the action holds the lease the task is left to expire and
-            // the system ends the process, as for the app's own quiesce. Otherwise the connection is closed and the
-            // task ends here.
+            // Termination releases the kernel lease but a suspended owner keeps it, stalling every extension run. So
+            // while the action holds the lease the task is left to expire and the system ends the process; otherwise
+            // the connection closes and the task ends here.
             if self?.abort?() == true { return }
             task.end()
         }
@@ -315,13 +258,10 @@ struct BackgroundTaskID: Equatable {
         return outcome
     }
 
-    /// The content-free notice of a rejected reply: no title, no chat, no destination; one at a time.
     static func postRejectedReply() async { await postReplyNotice(NotificationActionCopy.replyRejected) }
 
-    /// The same notice, for a reply kept until the upgrade.
     static func postSavedReply() async { await postReplyNotice(NotificationActionCopy.replySavedForUpgrade) }
 
-    /// The same notice, for saved replies dropped as too old.
     static func postExpiredSavedReply() async { await postReplyNotice(NotificationActionCopy.savedReplyExpired) }
 
     private static func postReplyNotice(_ body: String) async {
@@ -337,7 +277,6 @@ struct BackgroundTaskID: Equatable {
     }
 }
 
-/// Ends one background task exactly once, from the expiration handler or when the action returned.
 @MainActor private final class ActionBackgroundTask {
     private let time: any NotificationActionBackgroundTime
     private var id = BackgroundTaskID.invalid
@@ -350,9 +289,8 @@ struct BackgroundTaskID: Equatable {
     }
 }
 
-/// Which foreground notifications show. Only local requests the app or the extension posted for
-/// this account's messages, and never for the chat that is open; a remote request (the gateway's placeholder or the
-/// extension's fallback) and anything unknown stays hidden, as before.
+// Only local requests for this account's messages show, never for the open chat; remote requests (gateway placeholder,
+// extension fallback) stay hidden.
 enum ForegroundPresentation {
     struct Request: Sendable, Equatable {
         var identifier = ""
@@ -360,11 +298,9 @@ enum ForegroundPresentation {
         var categoryIdentifier: String
         var threadIdentifier: String
         var playsSound: Bool
-        /// The account scope the request names (destination, cleanup reference or failed-reply destination).
         var accountScope: String?
     }
 
-    /// `openChatID` is the conversation on screen; nil on the chat list.
     static func options(for request: Request, accountID: String, openChatID: String?) -> UNNotificationPresentationOptions {
         // The rejected-reply notice names no account; it answers something the user just did, so it shows.
         if !request.isRemote, request.identifier == NotificationActionCopy.replyRejectedIdentifier,
@@ -388,7 +324,6 @@ enum ForegroundPresentation {
     }
 }
 
-/// What the foreground presentation rule reads: the selected account and the open conversation. Kept by `AppModel`.
 @MainActor final class ForegroundNotificationState {
     static let shared = ForegroundNotificationState()
     var accountID = ""

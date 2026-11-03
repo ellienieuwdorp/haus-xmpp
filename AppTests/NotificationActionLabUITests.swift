@@ -1,9 +1,7 @@
 import XCTest
 
-/// Notification actions on the local lab: a trusted peer's message banners while another
-/// chat is open, and Reply from Notification Center, with the app in the background, sends an encrypted answer the peer
-/// decrypts and echoes. Uses the app's primary storage, because notification actions are off in isolated UI-test stores,
-/// so it runs only when explicitly selected on a disposable simulator with disposable lab accounts.
+// Uses the app's primary storage, because notification actions are off in isolated UI-test stores: run it only on a
+// disposable simulator with disposable lab accounts.
 final class NotificationActionLabUITests: XCTestCase {
     @MainActor func testForegroundBannerAndBackgroundReply() throws {
         continueAfterFailure = false
@@ -28,12 +26,9 @@ final class NotificationActionLabUITests: XCTestCase {
         backgroundReply(app, springboard: springboard, peer: peer, marker: marker)
     }
 
-    /// While a background action's connection is online the server pushes nothing for what it delivers there, so the
-    /// action presents those messages itself before it releases the lease, as the extension would. The host drives the
-    /// setup, because the peer's echo timing cannot keep one message unread and land another on the suspended app from
-    /// here: with the app signed in on the lab, a one-shot peer message banners in front of the chat list
-    /// (`XMPP_ACTION_TARGET`), Home, then a second one-shot message (`XMPP_ACTION_EXPECT`) reaches the hibernated
-    /// session. This step then uses Mark as Read on the first; the second must appear in Notification Center.
+    // A background action's connection gets no push for what it delivers, so the action presents those messages
+    // before releasing the lease. The host sends `XMPP_ACTION_TARGET` with the chat list in front and
+    // `XMPP_ACTION_EXPECT` after Home; Mark as Read on the first must leave the second in Notification Center.
     @MainActor func testMarkAsReadPresentsWhatArrivedOnTheActionsConnection() throws {
         continueAfterFailure = false
         let env = ProcessInfo.processInfo.environment
@@ -77,8 +72,7 @@ final class NotificationActionLabUITests: XCTestCase {
         "notification-other@" + (peer.split(separator: "@").last.map(String.init) ?? "localhost")
     }
 
-    /// Creates the other chat, then a trusted round trip with the peer: only a message from an accepted device gets
-    /// Reply and Mark as Read. Ends in the peer's chat.
+    // Only a message from an accepted device gets Reply and Mark as Read. Ends in the peer's chat.
     @MainActor private func trustPeer(_ app: XCUIApplication, peer: String, other: String) {
         startChat(app, with: other)
         app.navigationBars.buttons["BackButton"].tap()
@@ -133,8 +127,8 @@ final class NotificationActionLabUITests: XCTestCase {
         capture(app, "Reply and its echo")
     }
 
-    /// A person long-presses; on the iOS 26.5 simulator a synthesized long press only shrinks the platter, so this
-    /// uses the other system path to the same actions: a short left swipe, then View.
+    // On the iOS 26.5 simulator a synthesized long press only shrinks the platter, so this takes the other system path
+    // to the same actions: a short left swipe, then View.
     @MainActor private func revealActions(_ notification: XCUIElement, springboard: XCUIApplication) -> Bool {
         notification.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
             .press(forDuration: 0.05, thenDragTo: notification.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.5)))

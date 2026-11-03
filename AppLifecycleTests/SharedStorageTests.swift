@@ -6,8 +6,7 @@ import XMPPProtocol
 @testable import HausXMPP
 
 @MainActor final class SharedStorageTests: XCTestCase {
-    /// The App Group follows the build's identity, and the entitlement grants the same group the Info.plist names: the
-    /// Debug test host is the development app, whose data stays apart from the released app's.
+    // The Debug test host is the development app, whose data stays apart from the released app's.
     func testTheAppGroupFollowsTheBundleIdentity() throws {
         let bundle = try XCTUnwrap(Bundle.main.bundleIdentifier)
         XCTAssertEqual(SharedStorage.group, "group." + bundle)
@@ -15,8 +14,8 @@ import XMPPProtocol
         XCTAssertNoThrow(try SharedStorage.groupContainer())
     }
 
-    /// One resource per installation and account, shared by the app, its actions and the extension, so a fresh bind
-    /// replaces the previous session instead of adding one.
+    // Shared by the app, its actions and the extension, so a fresh bind replaces the previous session instead of adding
+    // one.
     func testTheSessionResourceIsCreatedOncePerAccountAndKept() throws {
         let suite = "haus.xmpp.lifecycle." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -105,8 +104,8 @@ import XMPPProtocol
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.destination.path))
     }
 
-    /// macOS returns a container path even without the App Group, so the probe, not nil, decides whether storage and
-    /// the logout tombstone may live there.
+    // macOS returns a container path even without the App Group, so the probe, not nil, decides whether storage and the
+    // logout tombstone may live there.
     func testGroupContainerMustBeAWritableDirectory() throws {
         let fixture = try MigrationFixture()
         addTeardownBlock { try await fixture.remove() }

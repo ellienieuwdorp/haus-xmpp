@@ -3,8 +3,8 @@ import XMPPProtocol
 import MessagingCore
 @testable import HausXMPP
 
-/// An installation signed in as `Ellie@Example.org` before addresses were normalised: everything outside the message
-/// store that names the account moves to `ellie@example.org`, and nothing the normal spelling already has is lost.
+// An installation keyed by the typed `Ellie@Example.org`: everything outside the message store moves to
+// `ellie@example.org`, and nothing the normal spelling already has is lost.
 @MainActor final class AccountIdentityMigrationTests: XCTestCase {
     private let typed = "Ellie@Example.org", account = "ellie@example.org"
 

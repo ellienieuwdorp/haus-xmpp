@@ -2,18 +2,12 @@ import Foundation
 import MessageStore
 import XMPPProtocol
 
-// MARK: Link previews
-
-// What the conversation and the composer ask of the model for link previews: fetches through `linkPreviewCenter` under
-// `LinkPreviewPolicy`, and the composer's preview with the image reduced to what we send.
 extension AppModel: ComposerLinkPreviewSource {
-    /// Our own fetch results for the signed-in account, keyed by `LinkDetection.cacheKey`.
     var linkPreviews: [String: FetchedLinkPreview] {
         linkPreviewCenter.account == accountID ? linkPreviewCenter.results : [:]
     }
 
-    /// Reads the hosts of the account's stored files (`linkPreviewUploadHosts`) once per account, before its timelines
-    /// are published; a failed read is tried again on the next load.
+    // Read before the account's timelines are published; a failed read is tried again on the next load.
     func loadLinkPreviewHosts(store: MessageStore, account: String) async {
         guard !account.isEmpty, linkPreviewHostsAccount != account else { return }
         linkPreviewHostsAccount = account
@@ -23,7 +17,6 @@ extension AppModel: ComposerLinkPreviewSource {
         noteLinkPreviewHosts(stored)
     }
 
-    /// Adds hosts that serve the account's files: a slot just taken, or files in a timeline being published.
     func noteLinkPreviewHosts(_ hosts: Set<String>) {
         guard !hosts.isSubset(of: linkPreviewUploadHosts) else { return }
         linkPreviewUploadHosts.formUnion(hosts)
@@ -33,12 +26,11 @@ extension AppModel: ComposerLinkPreviewSource {
         noteLinkPreviewHosts(Set(messages.compactMap { $0.attachment?.url.flatMap { URL(string: $0) }?.host()?.lowercased() }))
     }
 
-    /// A message with a link is on screen (iOS cell configure or prefetch, Mac row appear): fetch its preview if the
-    /// setting, the sender and the cache allow. Never called at insert time, so archive catch-up causes no burst.
+    // Never called at insert time, so archive catch-up causes no fetch burst.
     func linkPreviewDisplayed(_ messageID: String) {
         guard let message = messages.first(where: { $0.id == messageID }),
               let url = message.linkPreviewCandidate(uploadHosts: linkPreviewUploadHosts), LinkDetection.isFetchable(url),
-              // A preview that came with the message (the sender's, or the one we sent) shows instead.
+              // A preview that came with the message shows instead.
               message.linkPreview?.url != url.absoluteString, mayFetchLinkPreview(for: message) else { return }
         useLinkPreviewAccount()
         linkPreviewCenter.request(url)
@@ -49,9 +41,8 @@ extension AppModel: ComposerLinkPreviewSource {
                                    roster: linkPreviewRosterEntry)
     }
 
-    /// Whether a message sent now to `chatID` can carry a link preview: only a modern OMEMO seal has somewhere private
-    /// for it (groups always seal modern; a direct chat once its version is known). Elsewhere the composer shows no
-    /// card, so it never suggests a preview that would not be sent, and fetches nothing.
+    // Only a modern OMEMO seal has somewhere private for a preview (groups always; a direct chat once its version is
+    // known). Elsewhere the composer shows no card and fetches nothing.
     func linkPreviewsTravel(to chatID: String) -> Bool {
         isGroup(chatID) || encryptionOverview(for: chatID)?.profile == .modern
     }
@@ -68,8 +59,7 @@ extension AppModel: ComposerLinkPreviewSource {
                                            imageAlt: fetched.imageAlt, thumbnail: thumbnail)
     }
 
-    /// The own preview `send` may store with `body`: ours, for the first previewable link of the body, within the
-    /// bounds we send. Anything else is dropped rather than sent.
+    // Anything but our own preview of the body's first previewable link, within the send bounds, is dropped.
     static func acceptedOwnLinkPreview(_ preview: StoredLinkPreview?, body: String, uploadHosts: Set<String>) -> StoredLinkPreview? {
         guard let preview, preview.source == .own,
               LinkDetection.previewableURLs(in: body, uploadHosts: uploadHosts).first?.absoluteString == preview.url,
@@ -79,8 +69,6 @@ extension AppModel: ComposerLinkPreviewSource {
         return preview
     }
 
-    /// Points the fetch center at the signed-in account (none in the sample conversations) and the store's fetch
-    /// cache; a change stops the previous account's fetches.
     func useLinkPreviewAccount() {
         linkPreviewCenter.use(account: isDemo ? "" : accountID, folder: linkPreviewFolder, cache: linkPreviewCache)
     }

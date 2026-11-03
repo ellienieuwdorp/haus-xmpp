@@ -6,7 +6,7 @@
 
 The scheme `HausXMPP` has two test plans in `TestPlans/`:
 
-- **`UISmoke`**: the panel swap, long-chat and reply-swipe tests, about two minutes. These check the software keyboard and gesture arbitration, which break most easily.
+- **`UISmoke`**: the panel swap, long-chat and reply-swipe tests. These check the software keyboard and gesture arbitration, which break most easily.
 - **`UIFull`** (the scheme's default): every UI test. Each routine test launches the app once; the lab and device tests skip in a fraction of a second unless their environment is exported.
 
 Run `UISmoke`, plus `-only-testing` for the suites of the screens you touched. Run `UIFull` before opening a pull request that changes UI.
@@ -35,21 +35,19 @@ xcodebuild test -project HausXMPP.xcodeproj -scheme HausXMPP -testPlan UISmoke \
 xcodebuild test ... -only-testing:HausXMPPUITests/MessageActionsUITests -only-testing:HausXMPPUITests/ChatListSwipeUITests
 ```
 
-`-collect-test-diagnostics never` stops a failure from running `simctl diagnose` for up to ten minutes. Delete result bundles once you have read them.
+`-collect-test-diagnostics never` stops a failure from running `simctl diagnose`, which takes minutes. Delete result bundles once you have read them.
 
-Rebuild with the scheme you are about to test. If `HausXMPPLifecycle` shares a derived data folder with a later `HausXMPP` build, running it without rebuilding fails about a dozen unrelated tests that compare errors.
+Rebuild with the scheme you are about to test. If `HausXMPPLifecycle` shares a derived data folder with a later `HausXMPP` build, running it without rebuilding fails unrelated tests that compare errors.
 
 The attachment suites need an iOS 26.5 simulator with the stock photos.
 
 ### A keyboard that never shows
 
-A simulator that has seen a hardware keyboard minimises the software keyboard: it exists, but its frame sits below the screen, and the composer stays at rest. Every keyboard test then fails. `showKeyboard(tapping:)` (in `UITestSupport.swift`) fails at once in that case and says so. The cause seen so far is `AutomaticMinimizationEnabled` in `com.apple.keyboard.preferences`, which a cloned simulator can have on. Turn it off:
+A simulator that has seen a hardware keyboard minimises the software keyboard: it exists, but its frame sits below the screen, and the composer stays at rest. Every keyboard test then fails. `showKeyboard(tapping:)` (in `UITestSupport.swift`) fails at once in that case and says so. The usual cause is `AutomaticMinimizationEnabled` in `com.apple.keyboard.preferences`, which a cloned simulator can have on. Turn it off:
 
 ```bash
 xcrun simctl spawn <udid> defaults write com.apple.keyboard.preferences AutomaticMinimizationEnabled -bool NO
 ```
-
-A typical symptom is a height assertion such as `467.0 is not equal to 826.0`.
 
 ### Screenshots
 
@@ -57,11 +55,11 @@ Review screenshots (`capture(_:_:)`, kept in the result bundle) are taken only w
 
 ### Parallel clones
 
-`-parallel-testing-enabled YES -parallel-testing-worker-count 3` gives each worker a fresh clone of the simulator and splits the suite by class. Each clone boots every simulator daemon, so use it only while no other simulators are booted; with several others running, clones have stalled.
+`-parallel-testing-enabled YES -parallel-testing-worker-count 3` gives each worker a fresh clone of the simulator and splits the suite by class. Each clone boots every simulator daemon, so use it only while no other simulators are booted, or clones can stall.
 
 ## What belongs where
 
-A UI test costs a launch (about 4 s) and one to four seconds per gesture. Write one only for what XCUITest alone can check: the software keyboard, gesture arbitration with the system back swipe, context menus, the out-of-process photo picker, permission prompts, rotation, and SwiftUI screens a hosted test cannot reach. Add new checks as named steps to the test that already opens that screen rather than as a new launch.
+A UI test costs a launch and seconds per gesture. Write one only for what XCUITest alone can check: the software keyboard, gesture arbitration with the system back swipe, context menus, the out-of-process photo picker, permission prompts, rotation, and SwiftUI screens a hosted test cannot reach. Add new checks as named steps to the test that already opens that screen rather than as a new launch.
 
 Everything else goes in `HausXMPPLifecycleTests` (`AppLifecycleTests/`) or a package:
 
@@ -95,7 +93,7 @@ Export the variables with a `TEST_RUNNER_` prefix so that Xcode passes them to t
 | `HAUS_LAB_HOST` | Optional: the server's private LAN address, for runs on a device |
 | `XMPP_SHARE_LAB`, `XMPP_SECOND_PEER` | `ShareExtensionLabUITests`: `1`, and a second echo peer's bare JID |
 
-`AttachmentSendLabUITests` only catches a dropped upload request over a slow link: on loopback the upload slot round trips are too short to show the bug. Put a proxy that adds about 100 ms each way in front of the server and set `HAUS_LAB_PORT`. `AttachmentDispatchTests.testFilesQueuedDuringAPassGetTheNextPass` in the lifecycle suite catches the same bug without a server.
+`AttachmentSendLabUITests` catches a dropped upload request only over a slow link: on loopback the upload slot round trips are too short to show it. Put a proxy that adds about 100 ms each way in front of the server and set `HAUS_LAB_PORT`. `AttachmentDispatchTests.testFilesQueuedDuringAPassGetTheNextPass` in the lifecycle suite catches the same bug without a server.
 
 Two more suites need setups that are not described here and skip otherwise:
 
@@ -108,7 +106,7 @@ Run lab suites on a simulator you don't otherwise use. `NotificationActionLabUIT
 
 ## Where the time goes
 
-Every gesture waits for the app to go idle. A tap costs one to two seconds. A fling costs three to four, because XCTest waits for the list to stop coasting. To see a run's per-step timeline:
+Every gesture waits for the app to go idle, and a fling also waits for the list to stop coasting. To see a run's per-step timeline:
 
 ```bash
 xcrun xcresulttool get test-results activities --path <bundle>.xcresult --test-id 'ConversationUITests/testKeyboardKeepsTheHistoryAnchorThenPagesAndSearches()'

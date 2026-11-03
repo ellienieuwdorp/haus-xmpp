@@ -1,11 +1,10 @@
 import XCTest
 @testable import HausXMPP
 
-/// The desktop timeline's arrow keys: which message they focus, and how far the timeline scrolls to show it.
 final class TimelineMessageFocusTests: XCTestCase {
     private let ids = ["a", "b", "c", "d", "e"]
 
-    /// Rows laid out in a 300 pt frame: `a` above it, `b` cut by its top edge, `c` and `d` whole, `e` cut by its bottom.
+    // A 300 pt frame: `a` above it, `b` cut by its top edge, `c` and `d` whole, `e` cut by its bottom.
     private var placed: [TimelineScrollPolicy.PlacedRow] {
         [("a", -200, -100), ("b", -40, 60), ("c", 60, 160), ("d", 160, 260), ("e", 260, 360)].enumerated().map { index, row in
             TimelineScrollPolicy.PlacedRow(id: row.0, index: index, top: row.1, bottom: row.2, dayHeader: nil)

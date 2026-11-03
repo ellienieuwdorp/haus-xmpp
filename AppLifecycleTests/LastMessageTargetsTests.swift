@@ -2,7 +2,7 @@ import MessageStore
 import XCTest
 @testable import HausXMPP
 
-/// What the Mac's Message menu acts on: per command, the newest loaded message whose own menu offers that action.
+// Per command, the newest loaded message whose own menu offers that action.
 final class LastMessageTargetsTests: XCTestCase {
     private let sentAt = Date(timeIntervalSince1970: 1_789_380_000)
 
@@ -23,7 +23,7 @@ final class LastMessageTargetsTests: XCTestCase {
         XCTAssertEqual(targets.star?.id, "s2", "the newest message of either side")
     }
 
-    /// Placeholders are notices: an unreadable message offers only its encryption details, an unsent one only its star.
+    // An unreadable message offers only its encryption details, an unsent one only its star.
     func testPlaceholdersAreSkippedForWhatTheyDoNotOffer() {
         let targets = LastMessageTargets(messages: [received("readable"), received("unsent", retracted: true), received("unreadable", unreadable: .decryptFailed)])
         XCTAssertEqual(targets.reply?.id, "readable")
@@ -32,8 +32,7 @@ final class LastMessageTargetsTests: XCTestCase {
         XCTAssertNil(targets.edit)
     }
 
-    /// A focused message is the only target: an own message can be replied to, and a command it does not offer stays
-    /// off instead of acting on another message.
+    // A command the focused message does not offer stays off instead of acting on another message.
     func testAFocusedMessageIsTheOnlyTarget() {
         let own = LastMessageTargets(focused: sent("s1", canEdit: true))
         XCTAssertEqual(own.reply?.id, "s1")

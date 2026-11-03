@@ -4,7 +4,7 @@ import ImageIO
 import UIKit
 @testable import HausXMPP
 
-/// The communication-notification avatar: the app pre-scales a verified avatar once; the extension only reads bytes.
+// The app pre-scales a verified avatar once; the extension only reads bytes.
 @MainActor final class AvatarNotificationImageTests: XCTestCase {
     private func root() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appending(path: "avatar-notification-\(UUID())", directoryHint: .isDirectory)

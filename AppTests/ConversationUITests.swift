@@ -11,10 +11,6 @@ final class ConversationUITests: XCTestCase {
         return field.exists ? field : app.textViews["messageComposer"]
     }
 
-    /// The 250-message History chat in one launch. It opens on its newest message without flashing the empty notice.
-    /// Reading history, the keyboard opening (twice, the second time after an interactive dismissal) and a growing draft
-    /// leave the messages above the composer where they were. Scrolling up loads an older page, and search reaches
-    /// past the loaded pages.
     @MainActor func testKeyboardKeepsTheHistoryAnchorThenPagesAndSearches() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -48,7 +44,6 @@ final class ConversationUITests: XCTestCase {
             var moved = input
             // Twice: the second opening follows an interactive dismissal, which leaves the list wherever the finger put it.
             for round in 1...2 {
-                // Measure once the drag and any cell self-sizing have settled.
                 let anchor = try XCTUnwrap(settled { () -> Anchor? in
                     let top = input.frame.minY
                     return bubbleFrames(in: timeline).filter { $0.frame.maxY < top - 11 }.max { $0.frame.maxY < $1.frame.maxY }
@@ -80,7 +75,6 @@ final class ConversationUITests: XCTestCase {
             @MainActor func oldest() -> Int {
                 bubbleFrames(in: timeline).compactMap { Int($0.text.dropFirst("History message ".count).prefix(while: \.isNumber)) }.min() ?? .max
             }
-            // A hard fling coasts about three screens; every fling waits for the list to come to rest.
             var flings = 0
             while oldest() > 150, flings < 8 { timeline.swipeDown(velocity: 4000); flings += 1 }
             XCTAssertLessThanOrEqual(oldest(), 150, "An older page loads as the reader scrolls up")
@@ -97,7 +91,7 @@ final class ConversationUITests: XCTestCase {
         }
     }
 
-    /// Every visible history bubble from one accessibility snapshot; querying each element's frame costs a round trip.
+    // One accessibility snapshot; querying each element's frame costs a round trip.
     @MainActor private func bubbleFrames(in timeline: XCUIElement) -> [(text: String, frame: CGRect)] {
         var found: [(text: String, frame: CGRect)] = []
         func walk(_ node: XCUIElementSnapshot) {
@@ -108,10 +102,9 @@ final class ConversationUITests: XCTestCase {
         return found
     }
 
-    /// The bubble resting just above the composer and its distance from it.
     private struct Anchor: Equatable { let text: String; let gap: CGFloat }
 
-    /// Polls `probe` until two readings half a second apart agree: scrolling, the keyboard and cell self-sizing are done.
+    // Two readings half a second apart agree once scrolling, the keyboard and cell self-sizing are done.
     @MainActor private func settled<T: Equatable>(timeout: TimeInterval = 10, _ probe: () -> T) -> T {
         var last = probe()
         let deadline = Date().addingTimeInterval(timeout)

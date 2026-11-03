@@ -2,15 +2,13 @@ import CoreGraphics
 import Foundation
 import ImageIO
 
-/// Verified avatar bytes as files under the shared Messaging directory, one folder per account,
-/// named by their SHA-1. Nothing here trusts the bytes: decoding goes through ImageIO with a
-/// pixel budget and produces a small thumbnail, never the full image.
+// Nothing here trusts the bytes: ImageIO decodes within a pixel budget into a small thumbnail, never the full image.
 enum AvatarStore {
     static let maximumPixels = 4_096
     static let thumbnailPixels = 256
 
     static func directory(root: URL, account: String) -> URL {
-        // ponytail: the account JID is percent-escaped rather than hashed; readable in Files and unique enough.
+        // Percent-escaped rather than hashed: readable in Files and unique enough.
         let safe = account.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "account"
         return root.appending(path: "avatars/\(safe)", directoryHint: .isDirectory)
     }
@@ -19,8 +17,7 @@ enum AvatarStore {
         directory(root: root, account: account).appending(path: hash)
     }
 
-    /// Every file kept for one stored image: the original and its pre-scaled copies. Whatever removes or leaves out an
-    /// image names all of them.
+    // Whatever removes or leaves out an image names all of these files.
     static func files(root: URL, account: String, hash: String) -> [URL] {
         [url(root: root, account: account, hash: hash), notificationImageURL(root: root, account: account, hash: hash),
          suggestionImageURL(root: root, account: account, hash: hash)]
@@ -33,28 +30,22 @@ enum AvatarStore {
         try data.write(to: folder.appending(path: hash), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
-    /// The pre-scaled PNG a communication notification shows, beside the verified original. The app writes it; the
-    /// notification extension only reads its bytes, so no image is decoded under the extension's memory limit (and no
-    /// `UIScreen`, which the filtering sandbox reportedly zeroes, is involved).
+    // The app writes it; the notification extension only reads its bytes, so nothing decodes under the extension's
+    // memory limit (nor uses `UIScreen`, which the filtering sandbox reportedly zeroes).
     static func notificationImageURL(root: URL, account: String, hash: String) -> URL {
         directory(root: root, account: account).appending(path: hash + ".notification.png")
     }
 
-    /// At most 256 px PNG: 256 × 256 × 4 bytes plus headers stays well under this.
     static let maximumNotificationImageBytes = 300_000
 
-    /// The larger pre-scaled PNG an outgoing donation shows in share-sheet suggestions, which Apple asks to be at least
-    /// 360 px. Read by the app and the share extension only, never by the notification extension.
+    // Apple asks for share-sheet suggestion images of at least 360 px. Never read by the notification extension.
     static func suggestionImageURL(root: URL, account: String, hash: String) -> URL {
         directory(root: root, account: account).appending(path: hash + ".suggestion.png")
     }
 
     static let suggestionPixels = 384
-    /// At most 384 px PNG: 384 × 384 × 4 bytes plus headers stays under this.
     static let maximumSuggestionImageBytes = 700_000
 
-    /// Writes the pre-scaled copies of a stored avatar once each; true when the notification copy exists afterwards.
-    /// Called by the app only.
     @discardableResult
     static func saveNotificationImage(root: URL, account: String, hash: String) -> Bool {
         guard isHash(hash) else { return false }
@@ -76,8 +67,7 @@ enum AvatarStore {
         return (try? (data as Data).write(to: target, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])) != nil
     }
 
-    /// The suggestion copy's bytes, falling back to the notification copy for an avatar stored before it existed (or
-    /// too large to keep at that size). Bounded and never decoded here.
+    // Falls back to the notification copy for an avatar stored before the suggestion copy existed, or too large for it.
     static func suggestionImageData(root: URL, account: String, hash: String) -> Data? {
         guard isHash(hash) else { return nil }
         let url = suggestionImageURL(root: root, account: account, hash: hash)
@@ -86,7 +76,6 @@ enum AvatarStore {
         return notificationImageData(root: root, account: account, hash: hash)
     }
 
-    /// The pre-scaled copy's bytes for the extension, or nil. Bounded and never decoded here.
     static func notificationImageData(root: URL, account: String, hash: String) -> Data? {
         guard isHash(hash) else { return nil }
         let url = notificationImageURL(root: root, account: account, hash: hash)
@@ -95,13 +84,11 @@ enum AvatarStore {
         return try? Data(contentsOf: url)
     }
 
-    /// Stored hashes are lowercase hex SHA-1; anything else never names a file.
     private static func isHash(_ hash: String) -> Bool {
         hash.utf8.count == 40 && hash.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 
-    /// A ≤256 px thumbnail decoded within the pixel budget; nil for anything ImageIO cannot bound. A `CGImage` so this
-    /// file builds without UIKit; callers wrap it in their platform's image type.
+    // A `CGImage` so this file builds without UIKit.
     static func image(root: URL, account: String, hash: String) -> CGImage? {
         image(at: url(root: root, account: account, hash: hash))
     }

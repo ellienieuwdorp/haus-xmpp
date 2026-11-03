@@ -5,9 +5,8 @@ import UIKit
 import AppKit
 #endif
 
-/// The single source of the user's accent and light/dark choice. Every screen, sheet and hosted
-/// controller reads this one object, so a change made in Settings repaints the sheet that made it too.
-/// Persists under the same keys the app always used, so stored preferences survive.
+// Every screen, sheet and hosted controller reads this one object, so a change in Settings repaints the sheet that
+// made it. The storage keys stay stable so stored preferences survive.
 @Observable @MainActor final class AppearanceStore {
     static let shared = AppearanceStore()
 
@@ -20,17 +19,14 @@ import AppKit
             mirror?.set(accent.rawValue, forKey: AccentTheme.storageKey)
         }
     }
-    /// The App Group copy of the accent, which the share extension draws its send button with. Only the app sets it;
-    /// setting it writes the current choice.
+    // The App Group copy of the accent, for the share extension's send button; only the app sets it.
     @ObservationIgnored var mirror: UserDefaults? { didSet { mirror?.set(accent.rawValue, forKey: AccentTheme.storageKey) } }
-    /// One of `modes`; "automatic" follows the system.
     var mode: String { didSet { defaults.set(mode, forKey: Self.modeKey) } }
     #if os(iOS)
     var interfaceStyle: UIUserInterfaceStyle {
         switch mode { case "light": .light; case "dark": .dark; default: .unspecified }
     }
     #else
-    /// The app's appearance on the Mac; nil follows the system.
     var interfaceStyle: NSAppearance? {
         switch mode { case "light": NSAppearance(named: .aqua); case "dark": NSAppearance(named: .darkAqua); default: nil }
     }
@@ -58,20 +54,18 @@ extension EnvironmentValues {
     }
 }
 
-/// User-selectable accent. Light accents use dark text on the sent bubble; every pair below is measured
-/// against WCAG 2 in both appearances: 4.5:1 for glyphs and links on the background and 4.5:1 for text on
-/// the bubble. Message status glyphs carry no accent colour: they take the bubble's metadata colour.
+// Every pair is checked against WCAG 2 in both appearances: 4.5:1 for glyphs and links on the background and for text
+// on the bubble. Status glyphs take the bubble's metadata colour, never the accent.
 enum AccentTheme: String, CaseIterable, Identifiable {
     case indigo, lime, crab, sky, rose, graphite
 
     static let storageKey = "accentTheme"
-    /// The live selection. Reads go through the observable store, so a SwiftUI body that reads this repaints on change.
+    // Reads go through the observable store, so a SwiftUI body that reads this repaints on change.
     @MainActor static var current: AccentTheme { AppearanceStore.shared.accent }
 
     var id: String { rawValue }
     var title: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
 
-    /// Glyphs, links, buttons: at least 4.5:1 on both system backgrounds in each appearance.
     var tint: PlatformColor {
         switch self {
         case .indigo: return .systemIndigo
@@ -82,7 +76,6 @@ enum AccentTheme: String, CaseIterable, Identifiable {
         case .graphite: return .dynamic(light: PlatformColor(red: 0.36, green: 0.36, blue: 0.38, alpha: 1), dark: .systemGray)
         }
     }
-    /// Sent-bubble fill: dark fills carry white text, light fills dark text, both at 4.5:1 in either appearance.
     var bubble: PlatformColor {
         switch self {
         case .indigo: return PlatformColor(red: 0.345, green: 0.337, blue: 0.839, alpha: 1)
@@ -93,7 +86,6 @@ enum AccentTheme: String, CaseIterable, Identifiable {
         case .graphite: return PlatformColor(red: 0.42, green: 0.42, blue: 0.44, alpha: 1)
         }
     }
-    /// Text on the sent bubble.
     var bubbleText: PlatformColor {
         switch self {
         case .lime: return PlatformColor(red: 0.06, green: 0.13, blue: 0, alpha: 1)
@@ -103,17 +95,14 @@ enum AccentTheme: String, CaseIterable, Identifiable {
         }
     }
     var swatch: Color { Color(platform: bubble) }
-    /// The reply-quote panel and the link preview card inside a bubble. On a sent bubble a tint of its text colour; on
-    /// the neutral received bubble a quiet shade in light mode and a quiet lift in dark mode, where a shade would
-    /// vanish into the dark bubble.
+    // On a received bubble: a shade in light mode, a lift in dark mode, where a shade would vanish into the bubble.
     func panelFill(outgoing: Bool) -> PlatformColor {
         outgoing ? bubbleText.withAlphaComponent(bubbleText == .white ? 0.18 : 0.08)
             : .dynamic(light: PlatformColor.black.withAlphaComponent(0.06), dark: PlatformColor.white.withAlphaComponent(0.08))
     }
 }
 
-/// The one avatar circle: a verified image when the contact has one, otherwise their initial in a
-/// hue keyed by address (`key`) so the same chat looks the same in every screen.
+// Initials take a hue keyed by address, so a chat looks the same on every screen.
 struct ChatAvatar: View {
     let key: String
     let name: String
@@ -143,7 +132,6 @@ struct ChatAvatar: View {
     }
 }
 
-/// Stable per-name avatar colour so a contact keeps its hue across launches.
 enum AvatarPalette {
     static let colors: [PlatformColor] = [
         PlatformColor(red: 0.36, green: 0.48, blue: 0.84, alpha: 1), PlatformColor(red: 0.79, green: 0.42, blue: 0.55, alpha: 1),

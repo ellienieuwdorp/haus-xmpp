@@ -1,9 +1,7 @@
 import XCTest
 
-/// Alex's sample chat: the icon-only compose and send controls, editing and unsending an own message through the
-/// long-press overlay, the overlay targeting the bubble only, starring, the starred filter and native text selection.
-/// `-demo-unreadable` adds two placeholders after the sample messages: an own send from another device that did not
-/// encrypt for this one, and an incoming message that could not be read.
+// `-demo-unreadable` adds two placeholders after the sample messages: an own send from another device that did not
+// encrypt for this one, and an incoming message that could not be read.
 final class MessageActionsUITests: XCTestCase {
     @MainActor func testComposeEditUnsendStarFilterAndSelectText() throws {
         continueAfterFailure = false

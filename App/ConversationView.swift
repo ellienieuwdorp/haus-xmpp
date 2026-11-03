@@ -6,63 +6,49 @@ import SwiftUI
 import UniformTypeIdentifiers
 import XMPPProtocol
 
-/// The draft lives outside `ConversationView`'s state so typing only invalidates the composer, never the timeline.
+// The draft lives outside `ConversationView`'s state so typing only invalidates the composer, never the timeline.
 @MainActor @Observable final class ComposerState {
     var draft = ""
-    /// Focus requested by the conversation; the composer lives in its own hosting controller, where a parent `@FocusState` cannot reach.
-    /// The field keeps its focus while the attachment panel stands in for the letters.
+    // The composer lives in its own hosting controller, where a parent `@FocusState` cannot reach.
     var focused = false
-    /// The attachment panel is the field's keyboard in place of the letters. Turning it off brings the letters back in
-    /// place; the panel goes back to false on its own when the field loses its focus.
     var attachmentsOpen = false
-    /// Puts the panel in and out of the field's input view; never observed.
     @ObservationIgnored let attachmentKeyboard = AttachmentKeyboard()
-    /// Picked files waiting for Send. Owned by the open conversation, so leaving the chat drops them.
     var tray: [PendingAttachment] = []
-    /// True from Send until the last file and the caption are queued; the tray is frozen meanwhile.
     var dispatching = false
-    /// The card for the first link in the draft; Send freezes it into the message.
     @ObservationIgnored let linkPreview = ComposerLinkPreview()
-    /// Counts Sends, so a rail pick that was still preparing when Send took the tray stays out of the next message.
+    // A rail pick still preparing when Send took the tray stays out of the next message.
     @ObservationIgnored var sends = 0
-    /// The draft when a finger last landed on Send. A tap outside the field makes UIKit accept a pending
-    /// autocorrection, and it does so after touch-down but before the button's action runs.
+    // A tap outside the field makes UIKit accept a pending autocorrection after touch-down but before the button's
+    // action runs.
     @ObservationIgnored var draftAtSendTouch: (text: String, at: Date)?
-    /// Sits behind the field, so the text view SwiftUI made for it can be found after `.id` rebuilt it.
+    // The text view SwiftUI made for the field can be found again after `.id` rebuilt it.
     @ObservationIgnored weak var fieldAnchor: UIView?
 
-    /// Empties the field and the draft in one step. SwiftUI hands `draft` to the text view only in its next update,
-    /// and a keyboard edit landing before then (an autocorrection the tap accepted, a word still being composed)
-    /// writes the field's whole text back into the draft.
+    // SwiftUI hands `draft` to the text view only in its next update, and a keyboard edit landing before then (an
+    // accepted autocorrection, a word being composed) writes the field's whole text back into the draft.
     func clearDraft() {
-        // Assigning the text also drops the field's marked text and undo history, so neither can bring the sent
-        // text back.
+        // Assigning the text also drops marked text and undo history, so neither can bring the sent text back.
         if let field {
             if field.hasText { field.text = "" }
         } else if !draft.isEmpty {
-            // Only the draft clears, and the field may go on showing the sent text until SwiftUI updates it.
             Self.log.error("composer text view not found; clearing the draft only")
         }
         draft = ""
     }
 
-    /// Puts back the text of a send that failed, unless something was typed since. A failure reported before
-    /// SwiftUI's next update returns `draft` to the value SwiftUI last saw, so SwiftUI finds nothing to hand to the
-    /// field `clearDraft` emptied, and the next keystroke would replace the text.
+    // A failure reported before SwiftUI's next update returns `draft` to the value SwiftUI last saw, so SwiftUI hands
+    // the emptied field nothing and the next keystroke would replace the text.
     func restoreDraft(_ text: String) {
         guard draft.isEmpty else { return }
         if let field, !field.hasText { field.text = text }
         draft = text
     }
 
-    /// Focuses the field with the letters, swapping the attachment panel out if it was up: replying and editing type.
     func showKeyboard() {
         attachmentsOpen = false
         focused = true
     }
 
-    /// Puts the attachment panel away and the field's focus with it, as Send, search and a chat change do; the
-    /// letters stay up when they were the keyboard.
     func closeAttachments() {
         guard attachmentsOpen else { return }
         attachmentKeyboard.close()
@@ -72,7 +58,6 @@ import XMPPProtocol
     var field: UITextView? { fieldAnchor.flatMap(Self.textView(behind:)) }
     private static let log = Logger(subsystem: "haus.xmpp.ios", category: "composer")
 
-    /// The text view covering `anchor`, from the nearest ancestor that holds one.
     static func textView(behind anchor: UIView) -> UITextView? {
         guard let window = anchor.window else { return nil }
         let frame = anchor.convert(anchor.bounds, to: window)
@@ -88,16 +73,14 @@ import XMPPProtocol
         return nil
     }
 
-    /// What Send sends: the draft as typed, when all the tap changed was the word being typed. A suggestion the
-    /// user never picked stays out of the message.
+    // A suggestion the user never picked stays out of the message.
     func draftForSend() -> String {
         defer { draftAtSendTouch = nil }
         guard let touch = draftAtSendTouch, Date.now.timeIntervalSince(touch.at) < 2 else { return draft }
         return Self.uncorrected(typed: touch.text, current: draft) ?? draft
     }
 
-    /// `typed` when `current` only rewrites its last word, as an autocorrection does. Added text (dictation
-    /// finishing) or a change reaching past that word returns nil, so it stands.
+    // Added text (dictation finishing) or a change reaching past the last word returns nil, so it stands.
     static func uncorrected(typed: String, current: String) -> String? {
         let shared = zip(typed, current).prefix { $0 == $1 }.count
         let word = typed.dropFirst(shared)
@@ -106,13 +89,10 @@ import XMPPProtocol
     }
 }
 
-// ponytail: tray items keep the prepared bytes in memory, up to trayLimit × AttachmentTransfer.maximumBytes;
-// stage them to disk if large video picks show memory pressure.
 struct PendingAttachment: Identifiable {
     let id = UUID()
     let prepared: PreparedAttachment
     let preview: UIImage?
-    /// The library photo it came from when picked on the panel's rail, so the rail can show and undo the pick.
     var assetIdentifier: String? = nil
 }
 
@@ -124,47 +104,39 @@ struct ConversationView: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var importingFile = false
     @State private var attaching = false
-    /// Rail picks prepare one after another so the tray keeps tap order.
+    // Rail picks prepare one after another so the tray keeps tap order.
     @State private var assetPicks: Task<Void, Never>?
     @State private var query = ""
     @State private var showingSearch = false
     @State private var starredOnly = false
     @State private var retryMessageID: String?
     @State private var unsendMessageID: String?
-    /// A message's Report, waiting for its confirmation.
     @State private var blockRequest: BlockRequest?
-    /// The group an `xmpp:…?join` link asked to join, while its join sheet is up.
     @State private var joiningGroup: String?
     @State private var replyingTo: ChatMessage?
-    /// The own message whose text is in the composer; sending queues a correction instead of a message.
     @State private var editing: ChatMessage?
     @State private var reviewDismissed = false
-    /// The floating banners' height, handed to the timeline as top safe area so its first message clears them.
     @State private var bannerHeight: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var searchTerm: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var title: String { model.chatName(for: chatID) }
     private var isGroup: Bool { model.isGroup(chatID) }
-    /// Ticks while a relative "Last seen" is shown so "just now" and "today" roll over on their own.
     @State private var lastSeenClock = Date.now
-    /// The header subtitle; nil keeps the header to the name alone.
     private var lastSeenLabel: String? {
         LastSeen.headerLabel(model.openChatLastSeen, isGroup: isGroup, isBlocked: model.isBlocked(chatID), now: lastSeenClock, calendar: .autoupdatingCurrent)
     }
     private var encryptionRoute: ChatRoute { isGroup ? .groupDetails(chatID) : .encryption(chatID) }
 
-    /// The timeline's derived state, rebuilt with each update so it reads the model as this view observes it.
     private var presenter: ConversationPresenter {
         ConversationPresenter(source: model, chatID: chatID, title: title, searchTerm: searchTerm, starredOnly: starredOnly, showingSearch: showingSearch)
     }
     private var messages: [ChatMessage] { presenter.messages }
 
-    /// Built bare, so the composer's reply strip reads only what the author line needs.
+    // Built bare, so the reply strip observes only what the author line needs.
     private func authorName(_ sender: String) -> String { ConversationPresenter(source: model, chatID: chatID, title: title).authorName(sender) }
 
-    /// The failed message the retry dialog is for was a file failed when encryption was set up again: its key is gone,
-    /// so the store refuses a retry and the dialog only explains.
+    // A file failed when encryption was set up again has lost its key, so the store refuses a retry.
     private var retryIsImpossible: Bool {
         retryMessageID.flatMap { id in messages.first { $0.id == id }?.rejection } == MessageStore.encryptionResetRejection
     }
@@ -188,7 +160,7 @@ struct ConversationView: View {
         let text = state.draftForSend()
         let account = model.accountID
         let reply = replyingTo
-        // What the card shows now goes with the text; a fetch still running is not waited for.
+        // What the card shows at send goes with the text; a fetch still running is not waited for.
         let linkPreview = editing == nil ? state.linkPreview.frozen(for: text, suppressed: !state.tray.isEmpty) : nil
         // Cleared on the tap, not once the send settles: anything typed meanwhile would otherwise leave the sent
         // text behind. A failure puts the text back if the field is still empty.
@@ -228,8 +200,6 @@ struct ConversationView: View {
         }
     }
 
-    /// Picking never sends: each file is reduced into the tray, in pick order. One that is too large or unreadable
-    /// shows why and is left out; the rest still land.
     private func addToTray(_ jobs: [() async throws -> PreparedAttachment]) {
         guard !jobs.isEmpty, !attaching else { return }
         let state = composerState
@@ -249,7 +219,6 @@ struct ConversationView: View {
         }
     }
 
-    /// A tap on the panel's rail. Picks queue behind each other, so a quick second tap lands second.
     private func attach(asset: PHAsset) async {
         let state = composerState
         let limit = model.attachmentLimit
@@ -317,7 +286,6 @@ struct ConversationView: View {
                 if model.isGroup(address) { model.requestRoute(.chat(address)); return }
                 Task { if let chat = await model.createChat(address) { model.requestRoute(.chat(chat)) } }
             }, onOpenGroup: { room in
-                // A group this account has not joined opens the join flow with its address filled in.
                 guard model.isGroup(room) else { composerState.focused = false; joiningGroup = room; return true }
                 if room != chatID { model.requestRoute(.chat(room)) }
                 return true
@@ -342,10 +310,9 @@ struct ConversationView: View {
         }
         .background(Color(uiColor: .systemBackground))
         .navigationBarTitleDisplayMode(.inline)
-        // No toolbar background: a material strip cut messages off flat at its bottom edge. The bar stays transparent
-        // and the timeline's soft scroll-edge effect dissolves messages beneath it and the banners, as Signal does on
-        // iOS 26; Reduce Transparency turns that effect into the system's opaque bar. The system's adaptive dark flip
-        // over a wide sent bubble is kept: pinning the bar's scheme left a black title on the dimmed accent.
+        // No toolbar background: a material strip cut messages off flat. The timeline's soft scroll-edge effect dissolves
+        // them beneath the bar instead (Reduce Transparency makes it opaque). The adaptive dark flip over a wide sent
+        // bubble stays: pinning the bar's scheme left a black title on the dimmed accent.
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 NavigationLink(value: ChatRoute.details(chatID)) {
@@ -354,7 +321,6 @@ struct ConversationView: View {
                         ChatAvatar(key: chatID, name: title, image: model.avatar(for: chatID), isGroup: isGroup, size: 36)
                             .task(id: "\(chatID)|\(model.session.isReady)") { await model.loadAvatar(for: chatID) }
                         if let lastSeenLabel {
-                            // Known activity: a smaller name over the subtitle, centred in the same row so the avatar stays put.
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
                                 Text(lastSeenLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -438,7 +404,6 @@ struct ConversationView: View {
             }
         }
         .onChange(of: model.conversationIntent) { _, intent in
-            // Chat Details pops back and leaves what it wants opened here.
             switch intent {
             case .search(let id) where id == chatID: model.conversationIntent = nil; composerState.focused = false; showingSearch = true
             case .starred(let id) where id == chatID: model.conversationIntent = nil; starredOnly = true
@@ -459,7 +424,6 @@ struct ConversationView: View {
             let limit = model.attachmentLimit
             addToTray(items.map { item in { try await AttachmentPreparer.prepare(photo: item, limit: limit) } })
         }
-        // Files picked for one chat never follow the view to another.
         .onChange(of: [chatID, model.accountID]) {
             composerState.closeAttachments()
             composerState.tray = []
@@ -472,7 +436,7 @@ struct ConversationView: View {
         .onDisappear { model.closeChat(chatID) }
     }
 
-    /// Hosted inside the timeline controller, outside this view's environment, so the accent travels with it.
+    // Hosted inside the timeline controller, outside this view's environment, so the accent travels with it.
     private var composer: some View {
         ConversationComposer(model: model, chatID: chatID, state: composerState, replyingTo: $replyingTo, editing: editing, attaching: attaching,
                              authorName: authorName, onSend: send, onCancelEditing: cancelEditing,
@@ -482,14 +446,11 @@ struct ConversationView: View {
     }
 
     private var showsReview: Bool { !model.isDemo && (model.encryptionNeedsReview || model.encryptionIncomingReview) && !reviewDismissed }
-    /// Which banners are up; a change animates them in or out.
     private var bannerState: [Bool] { [showingSearch, starredOnly, showsReview] }
-    /// Banners slide down from under the bar as they fade in; Reduce Motion keeps only the fade.
     private var bannerTransition: AnyTransition {
         reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity)
     }
 
-    /// Search, the starred filter and the trust review float on glass over the timeline, below the navigation bar.
     @ViewBuilder private var banners: some View {
         if showingSearch || starredOnly || showsReview {
             GlassEffectContainer(spacing: 8) {
@@ -537,8 +498,8 @@ struct ConversationView: View {
                     .font(.system(size: 18, weight: .semibold)).foregroundStyle(.orange)
                     .frame(width: 36, height: 36).background(.orange.opacity(0.15), in: Circle())
                 VStack(alignment: .leading, spacing: 1) {
-                    // Without a send waiting, only reading waits: the messages came from a device in the version this
-                    // chat does not send with.
+                    // With no send waiting, only reading waits: the messages came from a device in the OMEMO version
+                    // this chat does not send with.
                     Text(ChatDeviceReview.headline(sendingWaits: model.encryptionNeedsReview, isGroup: isGroup,
                                                    ownDevicesOnly: model.encryptionReviewIsOwnDevice, title: title))
                         .font(.subheadline.weight(.semibold))
@@ -559,7 +520,7 @@ struct ConversationView: View {
     }
 }
 
-/// The only view that reads the draft while rendering. Explicit inputs, so a hosting controller can own it later.
+// The only view that reads the draft while rendering.
 struct ConversationComposer: View {
     let model: AppModel
     let chatID: String
@@ -576,13 +537,12 @@ struct ConversationComposer: View {
     let onPickFile: () -> Void
     let onAttachAsset: (PHAsset) async -> Void
     let onAttachCapture: (CameraCapture) -> Void
-    /// Counts presses of "+", so the haptic answers the finger and not a programmatic close.
+    // Counts presses of "+", so the haptic answers the finger and not a programmatic close.
     @State private var attachPresses = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isGroup: Bool { model.isGroup(chatID) }
 
-    /// The tray is set aside while an edit rewrites text; attaching then is off.
     private var showsTray: Bool { editing == nil && !state.tray.isEmpty }
 
     private var placeholder: String {
@@ -596,14 +556,11 @@ struct ConversationComposer: View {
         return ComposerPlan.hasContent(draft: state.draft, editing: editing, hasFiles: showsTray)
     }
 
-    /// What the link preview card follows: the draft, the setting (never in the sample conversations), whether the
-    /// chat can carry a preview (modern OMEMO), and whether this message may carry one (not with files, not an edit).
     private var linkPreviewInput: ComposerLinkPreviewInput {
         ComposerLinkPreviewInput(draft: state.draft, enabled: LinkSettings.shared.fetchPreviews && !model.isDemo && model.linkPreviewsTravel(to: chatID),
                                  suppressed: showsTray || editing != nil)
     }
 
-    /// Rail picks in tray order: the order the panel numbers them in.
     private var selectedAssetIDs: [String] { state.tray.compactMap(\.assetIdentifier) }
 
     private var panelActions: AttachmentPanelActions {
@@ -616,7 +573,6 @@ struct ConversationComposer: View {
         dismissed: { state.attachmentsOpen = false }, restore: { if !state.attachmentsOpen { state.attachmentsOpen = true } })
     }
 
-    /// A separate 44pt glass circle left of the field. The glyph turns into an ×; its circle never changes size.
     private var attachButton: some View {
         Button {
             attachPresses += 1
@@ -640,7 +596,6 @@ struct ConversationComposer: View {
         .accessibilityIdentifier("attachFile")
     }
 
-    /// The quoted photo or video, for a small still beside the quote (its file once on disk); nil shows the label alone.
     private func replyStill(_ source: ChatMessage) -> (url: URL?, mediaType: String)? {
         guard let attachment = source.attachment, attachment.isImage || attachment.isVideo else { return nil }
         return (model.attachmentFiles[source.id], attachment.mediaType)
@@ -659,7 +614,6 @@ struct ConversationComposer: View {
         let showsAttach = !isGroup && model.canSendAttachments
         return GlassEffectContainer(spacing: 8) {
             VStack(spacing: 8) {
-                // The same strip carries a reply target or, in edit mode, the message being rewritten.
                 if let reply = replyingTo ?? editing {
                     let isEdit = editing != nil
                     HStack(spacing: 10) {
@@ -702,14 +656,12 @@ struct ConversationComposer: View {
                         }
                         .frame(minHeight: 44)
                     }
-                    // A capsule at one line; the same radius keeps five lines and the tray readable.
                     .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 }
             }
         }
-        // Glass that grew past control size (a tray, a long draft) keeps the light or dark look it had when it grew,
-        // and an appearance change does not re-resolve it; only new glass does. The draft lives in `state`, and focus
-        // is handed to the new field below; the attachment panel moves to the new field by itself.
+        // Glass that grew past control size keeps the look it had when it grew and an appearance change does not
+        // re-resolve it, so it is rebuilt; the draft lives in `state` and focus is handed to the new field below.
         .id(colorScheme)
         .padding(.horizontal, 16).padding(.vertical, 8)
         .onChange(of: colorScheme) { if focused, !state.attachmentsOpen { Task { focused = true } } }
@@ -737,12 +689,10 @@ private struct ComposerLinkPreviewInput: Equatable {
     let suppressed: Bool
 }
 
-/// The preview of the link being typed, above the field inside the composer's glass: the host with an activity
-/// indicator while it loads, then the small-thumbnail card. Its remove button keeps the reply strip's 44 pt target.
 struct ComposerLinkPreviewCard: View {
     let state: ComposerLinkPreview.State
     let onRemove: () -> Void
-    /// Decoded once per card image, not on every composer render; its slot is held from the start.
+    // Decoded once per card image, not on every composer render.
     @State private var thumbnail: UIImage?
 
     private var thumbnailData: Data? {
@@ -791,9 +741,7 @@ struct ComposerLinkPreviewCard: View {
     }
 }
 
-/// A small still of the quoted photo or video in the reply strip. The slot is fixed, so the strip does not change
-/// size when the still decodes; until then (while the file downloads, or if it never decodes) the slot shows a quiet
-/// fill with the kind's symbol.
+// A fixed slot, so the reply strip does not change size when the still decodes.
 struct QuoteStill: View {
     let url: URL?
     let mediaType: String
@@ -815,10 +763,9 @@ struct QuoteStill: View {
     }
 }
 
-/// Picked files above the caption field, scrolling sideways, each with its own remove button.
 struct AttachmentTray: View {
     let items: [PendingAttachment]
-    /// While Send works through the tray, removing an item could no longer stop it going out.
+    // While Send works through the tray, removing an item could no longer stop it going out.
     let frozen: Bool
     let onRemove: (UUID) -> Void
 
@@ -884,7 +831,7 @@ struct AttachmentTray: View {
     }
 }
 
-/// A bare view behind a SwiftUI control, handed out so UIKit code can find what SwiftUI built around it.
+// Lets UIKit code find what SwiftUI built around a control.
 struct FieldAnchor: UIViewRepresentable {
     let onPlaced: (UIView) -> Void
 
@@ -898,8 +845,7 @@ struct FieldAnchor: UIViewRepresentable {
     func updateUIView(_ view: UIView, context: Context) { onPlaced(view) }
 }
 
-/// Reports a finger landing on its frame before any control there sees the touch. It watches the window and
-/// never takes part in the touch, so the button on top of it behaves as before.
+// Watches the window and never takes part in the touch, so the button on top of it behaves normally.
 struct TouchDownProbe: UIViewRepresentable {
     let onTouchDown: () -> Void
 
@@ -923,7 +869,7 @@ struct TouchDownProbe: UIViewRepresentable {
         }
     }
 
-    /// Fails on the first touch, so it never delays, cancels or claims one.
+    // Fails on the first touch, so it never delays, cancels or claims one.
     final class TouchWatcher: UIGestureRecognizer {
         private unowned let probe: ProbeView
 

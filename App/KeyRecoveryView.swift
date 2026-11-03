@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Replaces the app while the database holds encryption state this iPhone can no longer open (`AppModel.keyRecovery`).
-/// Nothing behind it connects or changes storage; only the confirmed button starts encryption over.
+// Nothing behind it connects or changes storage; only the confirmed button starts encryption over.
 struct KeyRecoveryView: View {
     @Bindable var model: AppModel
     @Environment(\.appearance) private var appearance
@@ -72,7 +71,6 @@ struct KeyRecoveryView: View {
 
     struct Consequence { let symbol: String; let text: String }
 
-    /// What starting over does, in the order it matters to the user; only lines that apply.
     static func consequences(_ plan: KeyRecoveryPlan) -> [Consequence] {
         var items: [Consequence] = []
         items.append(Consequence(symbol: "plus.circle", text: plan.account.isEmpty

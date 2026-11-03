@@ -2,7 +2,6 @@ import SwiftUI
 import UniformTypeIdentifiers
 import MessagingCore
 
-/// Settings > Transfer to another app or device: what a transfer does, before anything changes.
 struct TransferIntroView: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -54,8 +53,6 @@ struct TransferIntroView: View {
     }
 }
 
-/// Replaces the app while its data is packed for another install and afterwards, until the user deletes this
-/// install's copy or takes the data back. Nothing behind it connects or opens storage.
 struct TransferBlockingView: View {
     @Bindable var model: AppModel
     @Environment(\.appearance) private var appearance
@@ -160,7 +157,6 @@ struct TransferBlockingView: View {
     }
 }
 
-/// The transfer code, large and monospaced in its six groups, selectable, with a copy button.
 struct TransferCodeCard: View {
     let code: TransferCode
     @State private var copied = false
@@ -204,8 +200,7 @@ struct TransferCodeCard: View {
     }
 }
 
-/// "Use on This iPhone Again": allowed only after the user typed the word, because restoring the same file elsewhere
-/// too would put one identity on two installs.
+// Restoring the same file elsewhere too would put one identity on two installs, so the user types the word first.
 private struct UseHereAgainView: View {
     let confirm: () -> Void
     @Environment(\.dismiss) private var dismiss
@@ -244,7 +239,6 @@ private struct UseHereAgainView: View {
     }
 }
 
-/// Restore from a transfer: pick the file, enter its code, restore. Only for an install with no account of its own.
 struct RestoreTransferView: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -371,7 +365,6 @@ struct RestoreTransferView: View {
 }
 
 extension AppModel {
-    /// The moved state's archive, while it is there.
     func transferFile(_ moved: AccountTransfer.Moved) -> URL? {
         guard let url = transferArchiveURL(moved), FileManager.default.fileExists(atPath: url.path) else { return nil }
         return url
@@ -379,8 +372,6 @@ extension AppModel {
 }
 
 extension View {
-    /// A sheet's minimum size on the Mac, where it would otherwise shrink to its content; the iPhone's sheets fill the
-    /// screen's width.
     func macSheetSize(width: CGFloat, height: CGFloat) -> some View {
         #if os(macOS)
         frame(minWidth: width, minHeight: height)
@@ -389,7 +380,6 @@ extension View {
         #endif
     }
 
-    /// `.formStyle(.grouped)` on the Mac, the iPhone's default grouped form elsewhere.
     func groupedFormStyle() -> some View {
         #if os(macOS)
         formStyle(.grouped)

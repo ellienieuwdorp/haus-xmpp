@@ -3,9 +3,8 @@ import Foundation
 import ImageIO
 import XMPPProtocol
 
-/// `LinkDetection` results kept per text. The presenter rebuilds every row on each view update and the cells ask again
-/// on every configure, while `NSDataDetector` costs about 150 µs for a short message (measured on a Mac, 2026-10-14):
-/// a 200-message window would spend 30 ms per update without this.
+// NSDataDetector costs about 150 µs per short message and the presenter rebuilds every row on each update, so
+// results are cached per text.
 enum LinkScan {
     private final class Links: NSObject {
         let value: [DetectedLink]
@@ -40,7 +39,6 @@ enum LinkScan {
         return cache
     }()
 
-    /// `LinkDetection.links(in:)`.
     static func links(in text: String) -> [DetectedLink] {
         guard !text.isEmpty else { return [] }
         let key = text as NSString
@@ -50,7 +48,6 @@ enum LinkScan {
         return found
     }
 
-    /// `LinkDetection.previewableURLs(in:uploadHosts:)`.
     static func previewableURLs(in text: String, uploadHosts: Set<String>) -> [URL] {
         guard !text.isEmpty else { return [] }
         let key = (uploadHosts.sorted().joined(separator: " ") + "\u{0}" + text) as NSString
@@ -60,15 +57,11 @@ enum LinkScan {
         return found
     }
 
-    /// The most pixels a preview image may declare. Decoding inflates the whole canvas before thumbnailing it, and a
-    /// 48 KB 1-bit PNG can declare 20,000 x 20,000 px (400 MB to decode, measured 2026-10-14). Embedded thumbnails are
-    /// at most 64 KiB and ours are fitted within 400 px, fetched images are already downsampled to 1024 px, so 4 MP
-    /// (16 MB as RGBA) leaves room for any honest image.
+    // Decoding inflates the whole canvas, and a 48 KB 1-bit PNG can declare 20,000 x 20,000 px. Embedded thumbnails are
+    // ≤64 KiB and fetched images are downsampled to 1024 px, so 4 MP (16 MB as RGBA) fits any honest image.
     static let imagePixelBudget = 4_000_000
 
-    /// Pixel size of an embedded preview image as it displays (EXIF orientation applied), read from its header without
-    /// decoding it; nil when unreadable or over `imagePixelBudget`, so the card falls back to text. Cached by the
-    /// bytes' digest, since a correction can replace an image under the same message ID.
+    // Keyed by the bytes' digest: a correction can replace an image under the same message ID.
     static func pixelSize(of data: Data) -> (width: Int, height: Int)? {
         let cacheKey = digest(of: data) as NSString
         if let hit = sizes.object(forKey: cacheKey) { return hit.width > 0 ? (hit.width, hit.height) : nil }
@@ -77,8 +70,6 @@ enum LinkScan {
         return size
     }
 
-    /// A preview image decoded at most `maxPixelSize` on its longer side, first frame only; nil when unreadable or when
-    /// its header declares more than `imagePixelBudget` pixels, which is checked before anything is decoded.
     static func thumbnail(of source: CGImageSource, maxPixelSize: Int) -> CGImage? {
         guard boundedSize(of: source) != nil else { return nil }
         return CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -86,7 +77,6 @@ enum LinkScan {
             kCGImageSourceThumbnailMaxPixelSize: maxPixelSize] as CFDictionary)
     }
 
-    /// Hex SHA-256 of `data`: the cache key for an embedded image.
     static func digest(of data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
     private static func boundedSize(of source: CGImageSource) -> (width: Int, height: Int)? {

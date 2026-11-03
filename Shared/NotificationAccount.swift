@@ -2,24 +2,23 @@ import Foundation
 import Security
 import XMPPProtocol
 
-/// Contains secrets; intentionally has no printable description. The extension only reads a
-/// foreground-authenticated account. Push payloads cannot supply credentials or endpoints.
+// Contains secrets, so it has no printable description. The extension reads only a foreground-authenticated account;
+// push payloads cannot supply credentials or endpoints.
 struct NotificationAccount: Codable, Sendable, Equatable {
     let accountID: String
-    /// The endpoint that last worked, tried first by the app and the extension.
     let host: String
     let port: UInt16
     let security: XMPPTransportSecurity
-    /// False for a manually entered server or the lab: that endpoint only. True: SRV discovery when it fails.
+    // False: that endpoint only (a manual server, the lab). True: SRV discovery when it fails.
     let discoversEndpoint: Bool
-    /// Set once the account authenticated with SCRAM; PLAIN is refused from then on (downgrade protection).
+    // Set once SCRAM succeeded; PLAIN is refused from then on (downgrade protection).
     let requiresSCRAM: Bool
     let domain: String
     let username: String
     let password: String
     let push: XMPPPushConfiguration?
 
-    /// Records written before discovery and SCRAM existed were direct TLS to one fixed endpoint, with PLAIN.
+    // The defaults read records written before discovery and SCRAM: direct TLS to one fixed endpoint, with PLAIN.
     init(accountID: String, host: String, port: UInt16, security: XMPPTransportSecurity = .directTLS, discoversEndpoint: Bool = false,
          requiresSCRAM: Bool = false, domain: String, username: String, password: String, push: XMPPPushConfiguration?) {
         self.accountID = accountID; self.host = host; self.port = port; self.security = security
@@ -43,16 +42,13 @@ struct NotificationAccount: Codable, Sendable, Equatable {
     }
 
     var endpoint: XMPPEndpoint { XMPPEndpoint(host: host, port: port, security: security) }
-    /// A discovering account that has never connected has no endpoint yet (empty host, in memory only).
     var route: XMPPRoute { discoversEndpoint ? .discover(preferred: host.isEmpty ? nil : endpoint) : .fixed(endpoint) }
 
-    /// The same credentials with another (or no) push subscription.
     func replacingPush(_ push: XMPPPushConfiguration?) -> Self {
         NotificationAccount(accountID: accountID, host: host, port: port, security: security, discoversEndpoint: discoversEndpoint,
                             requiresSCRAM: requiresSCRAM, domain: domain, username: username, password: password, push: push)
     }
 
-    /// After a successful sign-in: remember the endpoint that worked, and pin SCRAM once it was used.
     func connected(_ session: XMPPConnectedSession) -> Self {
         NotificationAccount(accountID: accountID, host: session.endpoint.host, port: session.endpoint.port, security: session.endpoint.security,
                             discoversEndpoint: discoversEndpoint, requiresSCRAM: requiresSCRAM || session.authenticatedWithSCRAM,
@@ -100,9 +96,8 @@ struct NotificationAccount: Codable, Sendable, Equatable {
         }
     }
 
-    /// A record saved before addresses were normalised may name the account as typed (`Ellie@Example.org`). It is read
-    /// in normal form, the account's spelling everywhere else; the next successful sign-in saves it that way. Rewritten
-    /// in the JSON so every other field is carried over untouched.
+    // A record saved before addresses were normalised may name the account as typed (`Ellie@Example.org`). The JSON is
+    // rewritten so every other field carries over untouched.
     static func normalizingIdentity(_ data: Data) throws -> Data {
         guard var object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let username = object["username"] as? String, let domain = object["domain"] as? String,
@@ -113,7 +108,6 @@ struct NotificationAccount: Codable, Sendable, Equatable {
         return try JSONSerialization.data(withJSONObject: object)
     }
 
-    /// The Keychain item the record lives in.
     static let service = "haus.xmpp.notification-account"
     static let key = "primary"
 

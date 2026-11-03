@@ -1,8 +1,7 @@
 import XCTest
 @testable import HausXMPP
 
-/// Which actions each message offers, in menu order, and what VoiceOver adds after them. The long-press menu, the
-/// VoiceOver custom actions and a Mac context menu all read this list.
+// The long-press menu, the VoiceOver custom actions and the Mac context menu all read this list.
 final class MessageActionMenuTests: XCTestCase {
     private let sentAt = Date(timeIntervalSince1970: 1_789_380_000)
 
@@ -28,8 +27,7 @@ final class MessageActionMenuTests: XCTestCase {
         }
     }
 
-    /// A long press on a link (or the card) puts that link's actions above the message's own, named for what the link
-    /// is; a press elsewhere on the bubble, or on a placeholder, leaves the message's menu as it was.
+    // Named for what the link is; a press elsewhere on the bubble, or on a placeholder, leaves the message's menu as is.
     func testAPressedLinkPutsItsActionsAboveTheMessages() {
         let message = TimelineMessage(id: "m", body: "Links", isOutgoing: false, isStarred: false, sentAt: sentAt)
         let reading = ["Reply", "Copy", "Star message", "Select text"]
@@ -49,7 +47,7 @@ final class MessageActionMenuTests: XCTestCase {
         XCTAssertEqual(MessageActionMenu.items(for: unreadable, link: URL(string: "https://example.org")!).map(\.title), ["Encryption details"])
     }
 
-    /// A file opens once on disk and can be fetched while it waits for a tap or failed; an unsent message's file cannot.
+    // An unsent message's file cannot be opened or fetched.
     func testAFileOffersOpenOrDownloadByWhereItStands() {
         func file(_ download: AttachmentDownloadState, on disk: URL? = nil, retracted: Bool = false) -> TimelineMessage {
             TimelineMessage(id: "f", body: "", isOutgoing: false, isStarred: false,

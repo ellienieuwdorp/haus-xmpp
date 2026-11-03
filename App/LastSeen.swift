@@ -1,20 +1,16 @@
 import Foundation
 import XMPPProtocol
 
-/// What the chat header says about a 1:1 contact's activity. In memory only; nil means unknown and leaves the header
-/// showing just the name.
 enum LastSeen: Equatable {
     case online
     case lastSeen(Date)
 
-    /// The chat header's subtitle, or nil to leave the name alone: only a 1:1 chat with known activity has one. A
-    /// blocked contact's presence no longer reaches us, so an old answer would go stale in the header.
+    // A blocked contact's presence no longer reaches us, so an old answer would go stale.
     static func headerLabel(_ state: LastSeen?, isGroup: Bool, isBlocked: Bool, now: Date, calendar: Calendar) -> String? {
         guard !isGroup, !isBlocked, let state else { return nil }
         return label(state, now: now, calendar: calendar)
     }
 
-    /// The header subtitle, relative to `now` in `calendar` (its locale and time zone format the time and day).
     static func label(_ state: LastSeen, now: Date, calendar: Calendar) -> String {
         guard case .lastSeen(let date) = state else { return "Online" }
         if now.timeIntervalSince(date) < 60 { return "Last seen just now" }
@@ -34,44 +30,33 @@ enum LastSeen: Equatable {
     }
 }
 
-/// One contact's activity as this connection (and earlier ones) saw it. In memory only, never stored.
 struct ContactPresenceState: Equatable {
-    /// Available resources (the empty string for a bare-address presence) with their XEP-0319 idle start.
+    // Resource (empty for a bare-address presence) to its XEP-0319 idle start.
     var available: [String: Date?] = [:]
-    /// When we saw the contact's last available resource go away.
     var lastUnavailableAt: Date?
-    /// now − seconds from a XEP-0012 answer with seconds > 0.
+    // From a XEP-0012 answer with seconds > 0.
     var lastActivityAt: Date?
-    /// When we last sent a XEP-0012 query on this connection.
     var lastQueriedAt: Date?
-    /// `available` as the previous stream left it: restored when the next stream resumes that session (the server
-    /// sends no probe answers then), dropped when a new session starts.
+    // Restored when the next stream resumes this session (no probe answers then), dropped when a new session starts.
     var heldAvailable: [String: Date?] = [:]
 }
 
-/// Presence, roster and the last-seen policy for 1:1 chats, kept pure so AppModel only does the I/O.
-/// The roster and the available sets belong to one connection; what we last saw survives a reconnect.
 struct LastSeenTracker {
-    /// A XEP-0012 query per contact at most this often on one connection.
     static let queryInterval: TimeInterval = 60
 
     private(set) var contacts: [String: ContactPresenceState] = [:]
     private(set) var roster: [String: XMPPRosterItem] = [:]
-    /// The roster was fetched on this connection, so a missing item really means "not in the roster".
+    // A missing roster item means "not in the roster" only once the roster was fetched on this connection.
     private(set) var rosterLoaded = false
-    /// Contacts we sent `subscribe` to on this connection.
     private var asked: Set<String> = []
 
     enum AskStep: Equatable { case nothing, subscribe, queryLastActivity }
     enum SubscribeAnswer: Equatable {
-        /// Approve; `alsoSubscribe` asks back when we neither hold nor await their presence yet.
         case approve(alsoSubscribe: Bool)
         case deny
         case leavePending
     }
 
-    /// The stream ended: the roster is fetched again on the next one. Who is available is held aside until
-    /// `beginConnection` knows whether the next stream resumes this session.
     mutating func resetConnection() {
         roster = [:]; rosterLoaded = false; asked = []
         for key in contacts.keys {
@@ -82,8 +67,7 @@ struct LastSeenTracker {
         }
     }
 
-    /// A stream is online. A new session gets the server's probe answers, so what was held is dropped; a resumed
-    /// session gets none (only changes queued while it was detached), so what was held is still true.
+    // A resumed session gets no probe answers, so held availability is still true; a new session drops it.
     mutating func beginConnection(resumed: Bool) {
         for key in contacts.keys {
             guard var state = contacts[key] else { continue }
@@ -93,10 +77,8 @@ struct LastSeenTracker {
         }
     }
 
-    /// Records a contact's presence; our own other resources and groups (`isContact == false`) are ignored.
-    /// Contacts without a listed chat are kept too: the server's probe answers arrive once, at login, and a chat
-    /// started later with an online contact would otherwise stay unknown until the contact's presence changes.
-    /// Only listed 1:1 chats ever reach the header. Returns whether the presence was recorded.
+    // Contacts without a listed chat are kept: probe answers arrive once at login, and a chat started later would
+    // otherwise stay unknown until the contact's presence changes.
     @discardableResult
     mutating func apply(_ presence: XMPPContactPresence, account: String, isContact: Bool, now: Date) -> Bool {
         guard isContact, presence.contact != account else { return false }
@@ -127,14 +109,10 @@ struct LastSeenTracker {
         return subscription == .to || subscription == .both
     }
 
-    /// Everyone the roster says may currently see our presence.
     var sharingWith: [String] {
         roster.values.filter { $0.subscription == .from || $0.subscription == .both }.map(\.jid).sorted()
     }
 
-    /// What to ask about a 1:1 contact now; records the decision so it is not repeated too soon.
-    /// Subscribe once per connection unless the server already keeps our request pending; query XEP-0012
-    /// only for a contact we may ask who shows no available resource, at most once a minute.
     mutating func askStep(for contact: String, now: Date) -> AskStep {
         guard rosterLoaded else { return .nothing }
         if !holdsSubscription(to: contact) {
@@ -150,14 +128,13 @@ struct LastSeenTracker {
         return .queryLastActivity
     }
 
-    /// A XEP-0012 answer. `seconds == 0` means the server has no record (or the contact is online): unknown.
+    // `seconds == 0` means the server has no record (or the contact is online): unknown.
     mutating func recordLastActivity(seconds: Int, of contact: String, now: Date) {
         guard seconds > 0 else { return }
         contacts[contact, default: ContactPresenceState()].lastActivityAt = now.addingTimeInterval(-TimeInterval(seconds))
     }
 
-    /// How to answer a `subscribe` from `contact`: approve contacts we chat with while sharing, deny everyone
-    /// while not sharing, and leave strangers pending on the server.
+    // Strangers stay pending on the server.
     mutating func answerSubscribe(from contact: String, sharesLastSeen: Bool, isDirectChat: Bool) -> SubscribeAnswer {
         guard sharesLastSeen else { return .deny }
         guard isDirectChat else { return .leavePending }
@@ -168,8 +145,6 @@ struct LastSeenTracker {
 
     func lastSeen(for contact: String) -> LastSeen? { contacts[contact].flatMap(Self.derive) }
 
-    /// Online when any resource is available and not idle; otherwise the newest idle start when all are idle;
-    /// otherwise the newer of the watched departure and the server's last-activity answer; otherwise unknown.
     static func derive(_ state: ContactPresenceState) -> LastSeen? {
         if !state.available.isEmpty {
             let idle = state.available.values.compactMap { $0 }

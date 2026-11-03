@@ -1,8 +1,6 @@
 import XCTest
 
-/// The attachment panel stands in for the software keyboard: same height, the composer riding on top, and the
-/// recent-photos rail and the system picker feeding the tray. Sample chats accept files locally (nothing is uploaded),
-/// so no lab is needed; photos are the simulator's stock ones.
+// Sample chats accept files locally (nothing is uploaded), so no lab is needed; photos are the simulator's stock ones.
 final class AttachmentPanelUITests: XCTestCase {
     @MainActor private func openAlex(_ arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
@@ -20,7 +18,7 @@ final class AttachmentPanelUITests: XCTestCase {
         return field.exists ? field : app.textViews["messageComposer"]
     }
 
-    /// A rail tile; UIKit reports it as a cell even though it carries the button trait.
+    // UIKit reports a rail tile as a cell even though it carries the button trait.
     @MainActor private func photo(_ index: Int, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: "recentPhoto-\(index)").firstMatch
     }
@@ -32,7 +30,7 @@ final class AttachmentPanelUITests: XCTestCase {
         XCTAssertEqual(app.buttons["attachFile"].label, "Close attachments")
     }
 
-    /// The letters, rather than the panel, are the keyboard. The panel has no keys.
+    // The letters, rather than the panel, are the keyboard: the panel has no keys.
     @MainActor private func lettersUp(in app: XCUIApplication) -> Bool { app.keyboards.keys.count > 10 }
 
     @MainActor private func waitForLetters(in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
@@ -89,8 +87,6 @@ final class AttachmentPanelUITests: XCTestCase {
         XCTAssertEqual(composer(in: app).value as? String, "Hi")
     }
 
-    /// From no keyboard at all, "+" brings the panel up with the field focused behind it, and the × leaves the
-    /// letters where the panel was. A drag on the timeline puts either away, and the × turns back into a +.
     @MainActor func testPanelFromRestAndDragDismissal() throws {
         continueAfterFailure = false
         let app = openAlex()
@@ -131,9 +127,8 @@ final class AttachmentPanelUITests: XCTestCase {
         XCTAssertFalse(app.buttons["attachPhotos"].exists)
     }
 
-    /// The message menu puts the panel away like the keyboard. Closing it without an action, or with one that
-    /// presents nothing (a star), brings the panel back and the letters do not come up instead; Reply takes the
-    /// composer, so the letters come up for it.
+    // Closing the menu without an action, or with one that presents nothing (a star), brings the panel back; Reply
+    // takes the composer, so the letters come up for it.
     @MainActor func testMessageMenuGivesThePanelBack() throws {
         continueAfterFailure = false
         let app = openAlex()
@@ -182,8 +177,6 @@ final class AttachmentPanelUITests: XCTestCase {
         XCTAssertEqual(attach.label, "Add attachment")
     }
 
-    /// The composer is rebuilt for a new appearance; the panel stays up through it, on the new field, in the same
-    /// place, and the × still brings the letters back.
     @MainActor func testAppearanceChangeKeepsThePanelUp() throws {
         continueAfterFailure = false
         XCUIDevice.shared.appearance = .light
@@ -225,9 +218,7 @@ final class AttachmentPanelUITests: XCTestCase {
         XCTAssertEqual(attach.frame.minY, keyboardTop, accuracy: 1)
     }
 
-    /// The rail feeds the tray in tap order, the panel closes like a keyboard (drag, rotation, leaving the chat), a
-    /// later chat's panel still shows the photos, and the system picker fills the tray. Sending the tray is owned by
-    /// AttachmentDispatchTests.
+    // Sending the tray is covered by AttachmentDispatchTests.
     @MainActor func testRailPickerAndPanelLifecycle() throws {
         continueAfterFailure = false
         let app = openAlex()
@@ -289,8 +280,8 @@ final class AttachmentPanelUITests: XCTestCase {
             app.buttons["BackButton"].tap()
             XCTAssertTrue(app.staticTexts["Maya"].waitForExistence(timeout: 5))
             XCTAssertFalse(app.buttons["attachPhotos"].exists)
-            // The recent photos are one library for the whole app, so this rail must get the tiles even though the
-            // library already counts as read: the regression is a second chat's panel opening blank.
+            // The recent photos are one library for the whole app, so a second chat's panel must get the tiles even
+            // though the library already counts as read.
             app.staticTexts["Maya"].tap()
             XCTAssertTrue(attach.waitForExistence(timeout: 5))
             settle()
@@ -314,9 +305,8 @@ final class AttachmentPanelUITests: XCTestCase {
         }
     }
 
-    /// With limited photo access the panel offers Select More. Its picker takes the field's focus, and the panel comes
-    /// back when it closes; turning the phone under the picker closes the panel for good. Grants limited access through
-    /// the system prompt and resets it afterwards; the next panel asks again (see `allowPhotoAccessIfAsked`).
+    // Grants limited access through the system prompt and resets it afterwards; the next panel asks again (see
+    // `allowPhotoAccessIfAsked`). Turning the phone under the picker closes the panel for good.
     @MainActor func testSelectMoreGivesThePanelBackUnlessItWasClosed() throws {
         continueAfterFailure = false
         XCUIApplication().resetAuthorizationStatus(for: .photos)

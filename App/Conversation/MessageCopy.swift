@@ -1,6 +1,5 @@
 import MessageStore
 
-/// One place for the words; the bubble, the chat list and VoiceOver read the same ones.
 enum UnreadableCopy {
     static func bubble(_ reason: UnreadableReason, isOutgoing: Bool) -> String {
         switch reason {
@@ -22,8 +21,7 @@ enum UnreadableCopy {
     }
 }
 
-/// Why a server returned a message (`StoredMessage.rejection`), in our words: the error's own text is written by
-/// whoever bounced it and is never shown. The alert, the retry dialog and VoiceOver read the same sentence.
+// The error's own text is written by whoever bounced the message and is never shown.
 enum RejectionCopy {
     static func reason(_ rejection: String, isGroup: Bool) -> String {
         switch rejection {

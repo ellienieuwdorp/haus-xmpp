@@ -3,30 +3,24 @@ import Foundation
 import MessageStore
 import MessagingCore
 
-/// The sample conversations ("Explore sample conversations"): who they are with, what was said and when. They are
-/// stored as received and sent messages would be, with receipts, reactions, a reply, a star, a photo and a carried
-/// link preview, so every part of a bubble shows; nothing is sent or fetched. `AppModel.loadDemo` writes them on a
-/// fresh sample account each time. Avatars and pictures are drawn by `DemoArt`.
+// Stored as received and sent messages would be, so every part of a bubble shows; nothing is sent or fetched.
 enum DemoSamples {
     static let account = "preview.local"
     static let alex = "alex@preview.local"
     static let maya = "maya@preview.local"
     static let notes = "notes@preview.local"
 
-    /// The end of Alex's chat: 09:38 on the latest day that has passed it, so the sample reads as this morning's (or,
-    /// before then, yesterday's) and the list shows a time, "Yesterday" and weekdays. Every other sample is dated from it.
+    // 09:38 on the latest day that has passed it, so the list shows a time, "Yesterday" and weekdays.
     static func morning(now: Date = .now, calendar: Calendar = .current) -> Date {
         let today = calendar.date(bySettingHour: 9, minute: 38, second: 0, of: now) ?? now
         return today.addingTimeInterval(120) <= now ? today : calendar.date(byAdding: .day, value: -1, to: today) ?? today
     }
 
-    /// `days` before `morning`, at `hour`:`minute`.
     static func day(_ days: Int, _ hour: Int, _ minute: Int, from morning: Date, calendar: Calendar = .current) -> Date {
         let day = calendar.date(byAdding: .day, value: days, to: morning) ?? morning
         return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
     }
 
-    /// The sample chats' header lines; a real chat starts unknown until presence says otherwise.
     static func lastSeen(_ chat: String) -> LastSeen? {
         switch chat {
         case alex: .online
@@ -35,19 +29,16 @@ enum DemoSamples {
         }
     }
 
-    /// Writes the chats, their messages, receipts and reactions, the photo into the file cache and the avatars into the
-    /// avatar store. Returns the hash of the account's own avatar, which the model keeps with its preferences.
     static func write(to store: MessageStore, files: AttachmentFiles?, avatarRoot: URL?, morning: Date) async throws -> String? {
         func minutes(_ value: Double) -> Date { morning.addingTimeInterval(value * 60) }
         func message(_ id: String, in chat: String, outgoing: Bool, _ body: String, at date: Date, starred: Bool = false, reply: MessageReply? = nil,
                      attachment: StoredAttachment? = nil, preview: StoredLinkPreview? = nil) -> StoredMessage {
             // A wire ID lets sample messages carry receipts and reactions, and own ones be unsent or edited (projection
-            // only, nothing is sent).
+            // only).
             StoredMessage(id: id, accountID: account, chatID: chat, senderID: outgoing ? account : chat, body: body, sentAt: date, isOutgoing: outgoing,
                           isStarred: starred, reply: reply, wireID: id, attachment: attachment, linkPreview: preview)
         }
 
-        // Alex: a photo, a reply quoting it, a café link with its preview, reactions both ways and a star.
         let photo = DemoArt.lakePhotoJPEG() ?? Data()
         let attachment = StoredAttachment(name: "boathouse.jpg", mediaType: "image/jpeg", size: photo.count, width: 1200, height: 600,
                                           hash: Data.sha256(photo).hexString,
@@ -68,7 +59,6 @@ enum DemoSamples {
             message("sample-alex-3", in: alex, outgoing: true, "That sounds perfect. Around ten?", at: minutes(-6)),
             message("sample-alex-5", in: alex, outgoing: true, "See you there!", at: minutes(0)),
         ]
-        // Maya (muted by the caller) and the notes chat, on earlier days.
         let mayaMessages = [
             message("sample-maya-0", in: maya, outgoing: false, "A little reminder to take the scenic route.", at: day(-1, 19, 12, from: morning)),
             message("sample-maya-1", in: maya, outgoing: true, "Always. See you this weekend!", at: day(-1, 19, 20, from: morning)),
@@ -92,7 +82,6 @@ enum DemoSamples {
                                                                                     kind: receipt, payload: "{}", updatedAt: message.sentAt.addingTimeInterval(30)))
             }
         }
-        // Our heart on the photo and Alex's thumbs up as the answer to the plan.
         try await store.recordReaction(accountID: account, reaction: AuthenticatedReaction(id: "sample-reaction-own", chatID: alex, actorID: account,
                                                                                            targetWireID: "sample-alex-photo", reactions: ["❤️"], updatedAt: minutes(-51)))
         try await store.recordReaction(accountID: account, reaction: AuthenticatedReaction(id: "sample-reaction-alex", chatID: alex, actorID: alex,

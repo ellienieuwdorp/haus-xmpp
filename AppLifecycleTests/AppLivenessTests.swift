@@ -2,7 +2,7 @@ import XCTest
 import MessagingCore
 @testable import HausXMPP
 
-/// The liveness handshake's files and the app's responder, in a temporary directory instead of the App Group.
+// A temporary directory stands in for the App Group.
 @MainActor final class AppLivenessTests: XCTestCase {
     private static let live = LivenessConditions(wantsConnection: true, quiescing: false, ownsLease: true, servesExtensionAccount: true,
                                                  presentsCatchUp: true)
@@ -13,7 +13,6 @@ import MessagingCore
         return AppLiveness.Files(groupRoot: url)
     }
 
-    /// The extension asks, a live app answers with the request's nonce, and the extension's channel reads it back.
     func testALiveAppAnswersWhatTheExtensionAsked() throws {
         let files = files()
         var promises = 0
@@ -31,7 +30,7 @@ import MessagingCore
         XCTAssertEqual(promises, 1)
     }
 
-    /// A quiescing app (going to the background or to sleep) writes nothing and promises nothing.
+    // Going to the background or to sleep.
     func testAQuiescingAppStaysSilent() throws {
         let files = files()
         var promises = 0
@@ -44,7 +43,7 @@ import MessagingCore
         XCTAssertEqual(promises, 0)
     }
 
-    /// A ring with no request, or with one older than the extension still listens for, is not answered.
+    // Older than the extension still listens for.
     func testOnlyAFreshRequestIsAnswered() throws {
         let files = files()
         let responder = AppLiveness.Responder(files: files, conditions: { Self.live }, answered: {})
@@ -54,7 +53,7 @@ import MessagingCore
         XCTAssertNil(files.answer())
     }
 
-    /// A file that is not a request (damaged, or too large to be one) is ignored.
+    // Damaged, or too large to be a request.
     func testAnUnreadableRequestIsIgnored() throws {
         let files = files()
         try FileManager.default.createDirectory(at: files.directory, withIntermediateDirectories: true)

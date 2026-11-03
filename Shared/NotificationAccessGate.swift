@@ -1,7 +1,6 @@
 import Foundation
 
-/// A non-secret logout tombstone, independent of Keychain deletion. It prevents the extension
-/// from reusing saved credentials when deletion fails; an explicit successful sign-in clears it.
+// A non-secret logout tombstone: keeps the extension off saved credentials when Keychain deletion fails.
 enum NotificationAccessGate {
     static func location() throws -> URL {
         let root: URL

@@ -3,13 +3,10 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-/// The pictures of the sample conversations, drawn here with Core Graphics so no image ships and nothing is fetched:
-/// the contacts' avatars (illustrations, not people's photos), the photo in Alex's chat and its café link's thumbnail.
-/// Every drawing works in a y-down canvas of its own pixel size; the same code draws them on the iPhone and the Mac.
+// Drawn with Core Graphics so no image ships and nothing is fetched; each drawing uses a y-down canvas of its
+// own pixel size.
 enum DemoArt {
-    // MARK: Avatars
 
-    /// 512 px avatars, PNG, as a contact would publish one.
     enum Avatar { case alex, maya, sam, notes, own }
 
     static func avatarPNG(_ avatar: Avatar) -> Data? {
@@ -28,17 +25,14 @@ enum DemoArt {
         }
     }
 
-    /// A friendly head-and-shoulders figure: soft background, sweater, closed smiling eyes and a little blush.
     private static func portrait(_ c: CGContext, background: [CGColor], skin: CGColor, hair: CGColor, sweater: CGColor, curls: Bool) {
         linear(c, background, from: CGPoint(x: 0, y: 0), to: CGPoint(x: 512, y: 512))
         radial(c, [rgba(1, 1, 1, 0.28), rgba(1, 1, 1, 0)], center: CGPoint(x: 150, y: 120), radius: 320)
         if !curls {
-            // Long hair falls behind the shoulders.
             c.setFillColor(hair)
             c.addPath(rounded(CGRect(x: 130, y: 120, width: 252, height: 330), radius: 120))
             c.fillPath()
         }
-        // Shoulders.
         c.setFillColor(sweater)
         let shoulders = CGMutablePath()
         shoulders.move(to: CGPoint(x: 56, y: 512))
@@ -46,19 +40,16 @@ enum DemoArt {
         shoulders.addCurve(to: CGPoint(x: 456, y: 512), control1: CGPoint(x: 362, y: 372), control2: CGPoint(x: 452, y: 420))
         shoulders.closeSubpath()
         c.addPath(shoulders); c.fillPath()
-        // Collar shadow and neck.
         c.setFillColor(shade(skin, 0.86))
         c.addPath(rounded(CGRect(x: 216, y: 300, width: 80, height: 100), radius: 30)); c.fillPath()
         c.setFillColor(shade(sweater, 0.82))
         c.fillEllipse(in: CGRect(x: 200, y: 372, width: 112, height: 30))
         c.setFillColor(shade(skin, 0.86))
         c.fillEllipse(in: CGRect(x: 214, y: 360, width: 84, height: 28))
-        // Ears and head.
         c.setFillColor(skin)
         c.fillEllipse(in: CGRect(x: 150, y: 222, width: 40, height: 56))
         c.fillEllipse(in: CGRect(x: 322, y: 222, width: 40, height: 56))
         c.fillEllipse(in: CGRect(x: 168, y: 130, width: 176, height: 206))
-        // Hair on top.
         c.setFillColor(hair)
         if curls {
             for (x, y, r) in [(176.0, 196.0, 30.0), (186, 156, 34), (220, 128, 36), (262, 118, 38), (302, 132, 36), (332, 162, 32), (340, 200, 26),
@@ -74,7 +65,6 @@ enum DemoArt {
             fringe.addCurve(to: CGPoint(x: 164, y: 240), control1: CGPoint(x: 206, y: 196), control2: CGPoint(x: 178, y: 214))
             c.addPath(fringe); c.fillPath()
         }
-        // Blush, closed eyes and a smile.
         c.setFillColor(rgba(0.95, 0.42, 0.42, 0.28))
         c.fillEllipse(in: CGRect(x: 192, y: 262, width: 40, height: 24))
         c.fillEllipse(in: CGRect(x: 280, y: 262, width: 40, height: 24))
@@ -89,7 +79,6 @@ enum DemoArt {
         c.strokePath()
     }
 
-    /// Hills at dusk with a winding path: someone who takes the scenic route.
     private static func valley(_ c: CGContext) {
         linear(c, [rgb(0.99, 0.80, 0.60), rgb(0.98, 0.62, 0.55), rgb(0.62, 0.50, 0.75)], from: CGPoint(x: 0, y: 340), to: CGPoint(x: 0, y: 0))
         radial(c, [rgba(1, 0.95, 0.80, 1), rgba(1, 0.90, 0.70, 0)], center: CGPoint(x: 330, y: 176), radius: 150)
@@ -103,11 +92,9 @@ enum DemoArt {
         c.strokePath()
     }
 
-    /// An orange cat on a cool blue.
     private static func cat(_ c: CGContext) {
         linear(c, [rgb(0.62, 0.82, 0.96), rgb(0.42, 0.62, 0.90)], from: .zero, to: CGPoint(x: 512, y: 512))
         let fur = rgb(0.96, 0.62, 0.30), light = rgb(1, 0.90, 0.78), pink = rgb(0.96, 0.60, 0.62)
-        // Ears.
         for (tip, left, right) in [(CGPoint(x: 150, y: 96), CGPoint(x: 120, y: 250), CGPoint(x: 250, y: 170)),
                                    (CGPoint(x: 362, y: 96), CGPoint(x: 262, y: 170), CGPoint(x: 392, y: 250))] {
             c.setFillColor(fur)
@@ -117,7 +104,6 @@ enum DemoArt {
             func toward(_ p: CGPoint, _ t: CGFloat) -> CGPoint { CGPoint(x: p.x + (inset.x - p.x) * t, y: p.y + (inset.y - p.y) * t) }
             c.move(to: toward(tip, 0.25)); c.addLine(to: toward(right, 0.35)); c.addLine(to: toward(left, 0.35)); c.closePath(); c.fillPath()
         }
-        // Head, muzzle, stripes.
         c.setFillColor(fur); c.fillEllipse(in: CGRect(x: 96, y: 140, width: 320, height: 290))
         c.setFillColor(shade(fur, 0.84))
         for (x, w) in [(236.0, 14.0), (212, 10), (282, 10)] {
@@ -126,12 +112,10 @@ enum DemoArt {
         c.setFillColor(light)
         c.fillEllipse(in: CGRect(x: 176, y: 300, width: 90, height: 84))
         c.fillEllipse(in: CGRect(x: 246, y: 300, width: 90, height: 84))
-        // Eyes with a glint.
         for x in [196.0, 316.0] {
             c.setFillColor(rgb(0.16, 0.20, 0.22)); c.fillEllipse(in: CGRect(x: x - 22, y: 240, width: 44, height: 54))
             c.setFillColor(rgb(1, 1, 1)); c.fillEllipse(in: CGRect(x: x - 8, y: 248, width: 15, height: 15))
         }
-        // Nose, mouth and whiskers.
         c.setFillColor(pink)
         c.move(to: CGPoint(x: 236, y: 304)); c.addLine(to: CGPoint(x: 276, y: 304)); c.addLine(to: CGPoint(x: 256, y: 326)); c.closePath(); c.fillPath()
         c.setStrokeColor(rgb(0.45, 0.28, 0.20)); c.setLineWidth(5); c.setLineCap(.round)
@@ -146,7 +130,6 @@ enum DemoArt {
         c.strokePath()
     }
 
-    /// A tilted note card with a star: the chat with yourself.
     private static func note(_ c: CGContext) {
         linear(c, [rgb(1, 0.88, 0.50), rgb(0.98, 0.70, 0.32)], from: .zero, to: CGPoint(x: 512, y: 512))
         c.saveGState()
@@ -164,9 +147,6 @@ enum DemoArt {
         c.restoreGState()
     }
 
-    // MARK: The photo and the café thumbnail
-
-    /// Alex's photo, 1200 × 600: a lake at sunrise with a boathouse on a jetty.
     static func lakePhotoJPEG() -> Data? {
         jpeg(width: 1200, height: 600, quality: 0.85) { c in
             c.translateBy(x: 0, y: -120) // drawn for an 800 px canvas: the top of the sky and the near water are cropped
@@ -174,22 +154,18 @@ enum DemoArt {
             linear(c, [rgb(0.42, 0.55, 0.80), rgb(0.70, 0.64, 0.84), rgb(0.97, 0.72, 0.62), rgb(1, 0.86, 0.64)],
                    locations: [0, 0.45, 0.82, 1], from: CGPoint(x: 0, y: 0), to: CGPoint(x: 0, y: horizon))
             radial(c, [rgba(1, 0.92, 0.74, 0.9), rgba(1, 0.82, 0.62, 0)], center: CGPoint(x: 760, y: 330), radius: 360)
-            // Soft clouds.
             for (x, y, w, h, a) in [(110.0, 168.0, 340.0, 30.0, 0.26), (250, 204, 220, 20, 0.18), (840, 140, 280, 26, 0.24), (930, 228, 200, 18, 0.26)] {
                 c.setFillColor(rgba(1, 0.94, 0.93, a))
                 c.addPath(rounded(CGRect(x: x, y: y, width: w, height: h), radius: h / 2)); c.fillPath()
                 c.addPath(rounded(CGRect(x: x + w * 0.2, y: y - h * 0.55, width: w * 0.45, height: h), radius: h / 2)); c.fillPath()
             }
             c.setFillColor(rgb(1, 0.97, 0.88)); c.fillEllipse(in: CGRect(x: 714, y: 284, width: 92, height: 92))
-            // Distant ranges, hazier the farther they are.
             let far: [(Double, Double)] = [(0, 380), (140, 330), (260, 372), (420, 316), (560, 384), (680, 360), (860, 398), (1000, 338), (1200, 372)]
             let mid: [(Double, Double)] = [(0, 424), (180, 396), (360, 438), (540, 410), (760, 446), (980, 404), (1200, 430)]
             hills(c, base: horizon, color: rgba(0.66, 0.58, 0.78, 0.9), points: far)
             hills(c, base: horizon, color: rgba(0.47, 0.43, 0.65, 0.95), points: mid)
-            // Water: the sky's colours, deepening towards the shore.
             linear(c, [rgb(0.97, 0.78, 0.66), rgb(0.64, 0.59, 0.79), rgb(0.27, 0.31, 0.52)], from: CGPoint(x: 0, y: horizon), to: CGPoint(x: 0, y: 800),
                    clip: CGRect(x: 0, y: horizon, width: 1200, height: 330))
-            // Pines on the left shore, and their reflection.
             let pines = { (alpha: Double) in
                 c.setFillColor(rgba(0.20, 0.25, 0.38, alpha))
                 c.fill(CGRect(x: 0, y: horizon - 14, width: 470, height: 16))
@@ -208,7 +184,6 @@ enum DemoArt {
             pines(0.28)
             c.restoreGState()
             pines(1)
-            // The sun's glitter path and a few ripples.
             c.setLineCap(.round)
             var y = horizon + 8
             for row in 0..<30 {
@@ -224,7 +199,6 @@ enum DemoArt {
             for (rx, ry, rw) in [(90.0, 560.0, 220.0), (380, 612, 150), (980, 590, 160), (200, 700, 260), (900, 730, 210)] {
                 c.move(to: CGPoint(x: rx, y: ry)); c.addLine(to: CGPoint(x: rx + rw, y: ry)); c.strokePath()
             }
-            // The boathouse, its lit windows and the jetty.
             let wood = rgb(0.24, 0.19, 0.27)
             c.setFillColor(wood)
             c.fill(CGRect(x: 900, y: horizon - 6, width: 300, height: 14))
@@ -237,14 +211,12 @@ enum DemoArt {
             c.setFillColor(rgba(0.24, 0.19, 0.27, 0.25)); c.fill(CGRect(x: 960, y: horizon + 10, width: 150, height: 60))
             c.setFillColor(rgba(1, 0.82, 0.48, 0.30))
             c.fill(CGRect(x: 1000, y: horizon + 36, width: 26, height: 14)); c.fill(CGRect(x: 1046, y: horizon + 36, width: 26, height: 14))
-            // Two birds.
             c.setStrokeColor(rgba(0.25, 0.22, 0.33, 0.8)); c.setLineWidth(3.5)
             for (bx, by, s) in [(520.0, 190.0, 1.0), (566, 214, 0.75)] {
                 c.move(to: CGPoint(x: bx - 16 * s, y: by - 6 * s)); c.addQuadCurve(to: CGPoint(x: bx, y: by), control: CGPoint(x: bx - 8 * s, y: by - 10 * s))
                 c.addQuadCurve(to: CGPoint(x: bx + 16 * s, y: by - 6 * s), control: CGPoint(x: bx + 8 * s, y: by - 10 * s))
                 c.strokePath()
             }
-            // Reeds in the near corner: tapered blades.
             c.setFillColor(rgb(0.15, 0.18, 0.28))
             for index in 0..<11 {
                 let base = 10.0 + Double(index) * 17, lean = Double((index * 7) % 5) * 14 - 28, top = 610 + Double((index * 23) % 90)
@@ -253,12 +225,11 @@ enum DemoArt {
                 c.addQuadCurve(to: CGPoint(x: base + 5, y: 800), control: CGPoint(x: base + 6, y: (800 + top) / 2))
                 c.closePath(); c.fillPath()
             }
-            // A light vignette.
             radial(c, [rgba(0, 0, 0, 0), rgba(0.08, 0.06, 0.16, 0.28)], center: CGPoint(x: 600, y: 400), radius: 820, startRadius: 420)
         }
     }
 
-    /// The café link's thumbnail, 240 × 240 (below a large card's width, so it shows small): a cup of coffee.
+    // Below a large card's width, so it shows small.
     static func cafeThumbnailJPEG() -> Data? {
         jpeg(width: 240, height: 240, quality: 0.85) { c in
             linear(c, [rgb(0.99, 0.91, 0.80), rgb(0.95, 0.78, 0.62)], from: .zero, to: CGPoint(x: 240, y: 240))
@@ -283,12 +254,9 @@ enum DemoArt {
         }
     }
 
-    // MARK: Drawing helpers
-
     private static func rgb(_ r: Double, _ g: Double, _ b: Double) -> CGColor { CGColor(srgbRed: r, green: g, blue: b, alpha: 1) }
     private static func rgba(_ r: Double, _ g: Double, _ b: Double, _ a: Double) -> CGColor { CGColor(srgbRed: r, green: g, blue: b, alpha: a) }
 
-    /// The colour darkened (factor below 1) or lightened (above 1).
     private static func shade(_ color: CGColor, _ factor: Double) -> CGColor {
         let parts = color.converted(to: CGColorSpace(name: CGColorSpace.sRGB)!, intent: .defaultIntent, options: nil)?.components ?? [0, 0, 0, 1]
         return rgba(min(1, parts[0] * factor), min(1, parts[1] * factor), min(1, parts[2] * factor), parts.count > 3 ? parts[3] : 1)
@@ -310,7 +278,6 @@ enum DemoArt {
         return path
     }
 
-    /// A smooth ridge through `points` filled down to `base`.
     private static func hills(_ c: CGContext, base: Double, color: CGColor, points: [(Double, Double)]) {
         guard let first = points.first, let last = points.last else { return }
         c.setFillColor(color)
@@ -338,7 +305,6 @@ enum DemoArt {
         c.drawRadialGradient(gradient, startCenter: center, startRadius: startRadius, endCenter: center, endRadius: radius, options: [.drawsAfterEndLocation])
     }
 
-    /// An sRGB bitmap with a y-down coordinate system, like a view's.
     private static func render(width: Int, height: Int, opaque: Bool, _ body: (CGContext) -> Void) -> CGImage? {
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space,

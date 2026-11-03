@@ -2,7 +2,6 @@ import XCTest
 import XMPPProtocol
 @testable import HausXMPP
 
-/// What the reaction picker offers: every quick choice, nothing the wire layer would refuse, and a search by name.
 final class EmojiCatalogTests: XCTestCase {
     func testEveryEntryIsAReactionTheWireAccepts() {
         let entries = EmojiCatalog.all
@@ -45,7 +44,6 @@ final class EmojiCatalogTests: XCTestCase {
     }
 
     func testSearchMatchesEveryWordOfTheName() {
-        // Unicode's names: "thumbs up sign", "heavy black heart".
         XCTAssertTrue(EmojiCatalog.search("thumbs up").contains { $0.emoji == "👍" })
         XCTAssertTrue(EmojiCatalog.search("black heart").contains { $0.emoji == "❤️" })
         XCTAssertEqual(EmojiCatalog.search("flag japan").map(\.emoji), ["🇯🇵"])

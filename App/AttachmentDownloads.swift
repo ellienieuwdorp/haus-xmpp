@@ -6,43 +6,34 @@ import Observation
 import OMEMO
 import os
 
-/// When a received file is fetched and how many bytes it may have. Every download has a cap set before it starts:
-/// the declared size plus the 16-byte GCM tag, a HEAD Content-Length, or, for a tap on a file of unknown size, the
-/// hard limit. Sizes here are body lengths, which for an encrypted file include the tag.
+// Every download has a cap set before it starts: the declared size plus the 16-byte GCM tag, a HEAD
+// Content-Length, or the hard limit for a tap on a file of unknown size.
 enum AttachmentDownloadPolicy {
-    /// The largest body fetched at all: the largest file we decrypt, plus its tag.
     static let hardLimit = AttachmentTransfer.maximumBytes + 16
-    /// Files up to this size download on sight on an unconstrained network.
     static let automaticLimit = 16 * 1024 * 1024
-    /// Files up to this size also download on sight on cellular and other expensive networks.
     static let expensiveLimit = 5 * 1024 * 1024
 
     struct Fetch: Equatable, Sendable {
         let cap: Int
         let allowsExpensive: Bool
         let allowsConstrained: Bool
-        /// What a body past the cap shows, when it is not past the hard limit too. A cap from a declared or announced
-        /// size was a false promise; a cap of the hard limit was a file too large to fetch.
         var overrun = AttachmentDownloadState.mismatch
     }
 
-    /// A file of unknown size whose server refused the HEAD (a presigned GET URL answers 403, some servers 405): its
-    /// GET is capped at the automatic limit and kept off expensive networks, and a longer body waits for a tap.
+    // For servers that refuse HEAD (presigned GET URLs answer 403, some 405): capped at the automatic limit, kept
+    // off expensive networks, and a longer body waits for a tap.
     static let unmeasured = Fetch(cap: automaticLimit, allowsExpensive: false, allowsConstrained: false, overrun: .tapToDownload(.size))
 
     enum Decision: Equatable, Sendable {
         case fetch(Fetch)
-        /// Size unknown: ask the server with a HEAD, then decide again.
         case probe
         case hold(AttachmentDownloadHold)
         case tooLarge
     }
 
-    /// The body length expected for a file whose metadata declares `size` plaintext bytes; nil when it declares none
-    /// (legacy `aesgcm://` links, or metadata without a size). A plain file's body is 16 bytes shorter: the margin.
+    // Nil for legacy `aesgcm://` links or metadata without a size. A plain file's body is 16 bytes shorter: the margin.
     static func bodyLength(declaredSize size: Int) -> Int? { size > 0 ? size + 16 : nil }
 
-    /// `automatic` is a fetch on sight rather than a tap; `knownSender` is false in a stranger's 1:1 chat.
     static func decide(bodyLength: Int?, automatic: Bool, knownSender: Bool) -> Decision {
         if let bodyLength, bodyLength > hardLimit { return .tooLarge }
         guard automatic else {
@@ -55,8 +46,7 @@ enum AttachmentDownloadPolicy {
     }
 }
 
-/// Which received files download next: at most `limit` at once, those on screen before the rest, newer before older.
-/// Keyed by cache file, so messages sharing one file share one download.
+// Keyed by cache file, so messages sharing one file share one download.
 struct AttachmentDownloadQueue {
     private struct Entry {
         var messageIDs: Set<String>
@@ -69,7 +59,6 @@ struct AttachmentDownloadQueue {
 
     init(limit: Int) { self.limit = limit }
 
-    /// Queues `key` for `messageID`, or adds the message to the download already queued or running for it.
     mutating func add(_ key: String, messageID: String, order: Date, visible: Bool) {
         if running[key] != nil { running[key]?.insert(messageID); return }
         var entry = pending[key] ?? Entry(messageIDs: [], visible: false, order: order)
@@ -81,10 +70,8 @@ struct AttachmentDownloadQueue {
 
     func contains(_ key: String) -> Bool { pending[key] != nil || running[key] != nil }
 
-    /// A queued file came on screen.
     mutating func promote(_ key: String) { pending[key]?.visible = true }
 
-    /// The next key to start, counted as running from now; nil at the limit or when nothing waits.
     mutating func next() -> String? {
         guard running.count < limit,
               let key = pending.max(by: { ($0.value.visible ? 1 : 0, $0.value.order) < ($1.value.visible ? 1 : 0, $1.value.order) })?.key,
@@ -93,28 +80,21 @@ struct AttachmentDownloadQueue {
         return key
     }
 
-    /// Ends a running download; returns the messages that were waiting for it.
     mutating func finish(_ key: String) -> Set<String> { running.removeValue(forKey: key) ?? [] }
 
-    /// The chat closed: nothing more starts. Running downloads finish and land in the cache.
     mutating func dropPending() { pending = [:] }
 }
 
 enum AttachmentDownloadOutcome: Equatable, Sendable {
-    /// The verified plaintext is at the destination.
     case saved
     case state(AttachmentDownloadState)
-    /// Cancelled before it finished; nothing was written.
     case cancelled
 }
 
-/// Fetches a shared file to disk and authenticates it. The body streams to a temporary file, and the transfer is
-/// cancelled as soon as it passes its cap; a plain file is hashed on the way and moved into place. TLS trust is the
-/// system store's (the simulator carries the lab CA); nothing here relaxes it.
+// The body streams to a temporary file and is cancelled once past its cap. TLS trust is the system store's.
 final class AttachmentDownloader: Sendable {
     enum Failure: Error, Equatable {
         case badResponse
-        /// The body passed its cap; `atLeast` is the announced length, or the bytes received when it passed.
         case tooLarge(atLeast: Int)
     }
 
@@ -124,7 +104,6 @@ final class AttachmentDownloader: Sendable {
         session = URLSession(configuration: configuration)
     }
 
-    /// Never throws: every failure becomes the state the bubble shows.
     func download(_ attachment: StoredAttachment, secret: (key: Data, iv: Data)?, automatic: Bool, knownSender: Bool,
                   to destination: URL) async -> AttachmentDownloadOutcome {
         guard let remote = attachment.url, let url = URL(string: remote), url.scheme == "https" else { return .state(.failed) }
@@ -134,7 +113,6 @@ final class AttachmentDownloader: Sendable {
             if decision == .probe {
                 switch try await bodyLength(of: url) {
                 case .announced(let length): decision = AttachmentDownloadPolicy.decide(bodyLength: length, automatic: automatic, knownSender: knownSender)
-                // The server gives no length either: wait for a tap, which downloads under the hard limit.
                 case .unannounced: return .state(.tapToDownload(.size))
                 case .refused: decision = .fetch(AttachmentDownloadPolicy.unmeasured)
                 }
@@ -160,9 +138,8 @@ final class AttachmentDownloader: Sendable {
 
     private enum Measured { case announced(Int), unannounced, refused }
 
-    /// The body length a HEAD announces. A server may refuse HEAD on a link that serves GET: a presigned URL is
-    /// signed for GET only (403), and some servers do not implement it (405, 501). Like an automatic fetch, the probe
-    /// never runs on a constrained network.
+    // Some servers refuse HEAD on a link that serves GET (presigned URLs: 403; 405, 501). Never runs on a
+    // constrained network.
     private func bodyLength(of url: URL) async throws -> Measured {
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
@@ -175,7 +152,6 @@ final class AttachmentDownloader: Sendable {
         return length.map(Measured.announced) ?? .unannounced
     }
 
-    /// Streams the body to `file`; returns the SHA-256 of what was written.
     private func body(of url: URL, _ fetch: AttachmentDownloadPolicy.Fetch, to file: URL) async throws -> Data {
         guard FileManager.default.createFile(atPath: file.path, contents: nil,
                                              attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]) else { throw CocoaError(.fileWriteUnknown) }
@@ -193,7 +169,6 @@ final class AttachmentDownloader: Sendable {
     private static func outcome(for error: any Error) -> AttachmentDownloadOutcome {
         if error is CancellationError { return .cancelled }
         if let error = error as? URLError {
-            // The system refused the request under Low Data Mode or on an expensive network: the user decides.
             if error.networkUnavailableReason != nil { return .state(.tapToDownload(.network)) }
             if error.code == .cancelled { return .cancelled }
         }
@@ -201,8 +176,7 @@ final class AttachmentDownloader: Sendable {
     }
 }
 
-/// One data task's body, written to disk as it arrives. The session's serial delegate queue runs the delegate
-/// callbacks one at a time; only the continuation crosses from the starting task, under the lock.
+// The serial delegate queue runs callbacks one at a time; only the continuation crosses threads, under the lock.
 private final class BoundedBody: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let cap: Int
     private let handle: FileHandle
@@ -265,9 +239,8 @@ private final class BoundedBody: NSObject, URLSessionDataDelegate, @unchecked Se
     }
 }
 
-/// Turns a downloaded body into the cached plaintext, one file at a time. CryptoKit's AES-GCM has no streaming
-/// interface, so opening holds a copy of the ciphertext and the plaintext in memory (up to 32 MiB each); serialising
-/// it keeps that peak to one file however many downloads run. The downloaded ciphertext itself is mapped from disk.
+// Serialised: CryptoKit's AES-GCM has no streaming API, so opening holds ciphertext and plaintext in memory
+// (up to 32 MiB each); one file at a time bounds the peak.
 private actor AttachmentOpener {
     static let shared = AttachmentOpener()
 
@@ -287,37 +260,25 @@ private actor AttachmentOpener {
     }
 }
 
-/// One received file to fetch for the open chat.
 struct AttachmentDownloadJob: Sendable {
     let messageID: String
     let sentAt: Date
     let attachment: StoredAttachment
     let account: String
     let destination: URL
-    /// On sight rather than on a tap.
     let automatic: Bool
     let knownSender: Bool
 }
 
-/// The open chat's received files: which download on sight and in which order, and what each bubble shows until its
-/// file is on disk. A stranger's file, one above the automatic limit and one the network policy refuses wait for a
-/// tap. At most `concurrent` downloads run at once; the newest `lookahead` files start when the chat opens, older
-/// ones once their bubble comes on screen.
 @MainActor @Observable
 final class AttachmentDownloadCenter {
-    /// Received files of the open chat that are not on disk, by message ID.
     private(set) var states: [String: AttachmentDownloadState] = [:]
-    /// A verified file is on disk for these messages of the account: found in the cache or just downloaded.
     @ObservationIgnored var onFile: (_ account: String, _ messageIDs: [String], _ file: URL) -> Void = { _, _, _ in }
-    /// A job's file key and IV; nil for a file shared without encryption. Throws while the account's keys cannot be
-    /// opened, which fails that download.
     @ObservationIgnored var openSecret: (AttachmentDownloadJob) throws -> (key: Data, iv: Data)? = { _ in throw CancellationError() }
     @ObservationIgnored private let downloader: AttachmentDownloader
     @ObservationIgnored private let lookahead: Int
     @ObservationIgnored private var queue: AttachmentDownloadQueue
-    /// What each queued or running download needs, by cache path.
     @ObservationIgnored private var jobs: [String: AttachmentDownloadJob] = [:]
-    /// Older files that may download on sight, waiting until their bubble comes on screen, by message ID.
     @ObservationIgnored private var deferred: [String: AttachmentDownloadJob] = [:]
 
     init(configuration: URLSessionConfiguration, concurrent: Int = 2, lookahead: Int = 10) {
@@ -326,14 +287,11 @@ final class AttachmentDownloadCenter {
         self.lookahead = lookahead
     }
 
-    /// The open chat's loaded messages, after every load. `known` is a group or a chat the user pinned; a 1:1 chat is
-    /// also known once the window holds an own message. Messages `onDisk` already has a file for are skipped.
+    // `known` is a group or a pinned chat; a 1:1 chat is also known once the window holds an own message.
     func load(_ messages: [StoredMessage], known: Bool, files: AttachmentFiles, account: String, onDisk: (String) -> Bool) {
-        // Approving a stranger's device lets their messages show; writing back is what lets their files download on
-        // sight. The roster is no signal here: opening a chat asks for a subscription, and a direct chat's peer gets
-        // one approved on request.
+        // Writing back is what lets a stranger's files download on sight. The roster is no signal: opening a chat
+        // asks for a subscription.
         let knownChat = known || messages.contains { $0.isOutgoing }
-        // Written to since the chat opened: what waited for that is decided again.
         if knownChat, states.values.contains(.tapToDownload(.sender)) {
             states = states.filter { $0.value != .tapToDownload(.sender) }
         }
@@ -361,7 +319,6 @@ final class AttachmentDownloadCenter {
         start()
     }
 
-    /// A bubble whose file is not on disk came on screen: its download goes before those of bubbles not seen.
     func displayed(_ messageID: String, attachment: StoredAttachment?, files: AttachmentFiles) {
         if let job = deferred.removeValue(forKey: messageID) {
             enqueue(job, visible: true)
@@ -371,7 +328,6 @@ final class AttachmentDownloadCenter {
         start()
     }
 
-    /// A tap on a file waiting for one, or on a failed one: fetched on any network, up to the hard limit.
     func request(_ message: StoredMessage, files: AttachmentFiles, account: String) {
         guard states[message.id]?.canRequest == true, let attachment = message.attachment else { return }
         states[message.id] = .loading
@@ -382,7 +338,6 @@ final class AttachmentDownloadCenter {
         start()
     }
 
-    /// The open chat changed: its states go, queued downloads are dropped, running ones finish into the cache.
     func reset() {
         states = [:]
         deferred = [:]
@@ -392,7 +347,6 @@ final class AttachmentDownloadCenter {
 
     private func enqueue(_ job: AttachmentDownloadJob, visible: Bool) {
         let key = job.destination.path
-        // A tap makes a queued automatic download of the same file a requested one; a running one is joined as it is.
         if jobs[key] == nil || !job.automatic { jobs[key] = job }
         queue.add(key, messageID: job.messageID, order: job.sentAt, visible: visible)
     }
@@ -414,7 +368,6 @@ final class AttachmentDownloadCenter {
     }
 
     private func finish(_ key: String, job: AttachmentDownloadJob, outcome: AttachmentDownloadOutcome) {
-        // Only messages of the chat still open have a state; the file stays cached for the others.
         let waiting = queue.finish(key).filter { states[$0] != nil }
         jobs[key] = nil
         if outcome == .state(.failed) || outcome == .state(.mismatch) {

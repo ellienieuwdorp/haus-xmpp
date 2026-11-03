@@ -12,15 +12,12 @@ import UIKit
 import AppKit
 #endif
 
-/// The share screen's state, from the moment the sheet opens until it closes. Everything it writes goes through the
-/// composer's enqueue (`OutgoingEnqueue`) into the shared store, which needs no transport lease: what the user shared is
-/// queued before anything is sent and stays queued whatever happens to this process. On the iPhone it then sends
-/// itself, under the lease, while the sheet is up (`ShareSession`); on the Mac it rings the running app, which owns
-/// the lease and sends. Nothing here migrates the store, accepts trust or sends plaintext.
+// Writes go through `OutgoingEnqueue` into the shared store, which needs no transport lease, so a share is queued
+// before anything sends. The iPhone then sends under the lease while the sheet is up; the Mac rings the running app,
+// which owns the lease. Nothing here migrates the store, accepts trust or sends plaintext.
 @MainActor @Observable final class ShareModel {
     enum Phase: Equatable {
         case loading
-        /// The share cannot go anywhere; the text says why and what to do.
         case unavailable(String)
         case ready
         case sending
@@ -32,17 +29,14 @@ import AppKit
     private(set) var phase = Phase.loading
     private(set) var chats: [ShareRules.Chat] = []
     private(set) var items: [SharedItem] = []
-    /// Files the intake left out (over the limit) or could not read; the review card says so once.
     private(set) var skippedFiles = 0
     private(set) var unreadableItems = 0
     private(set) var prepared: [UUID: Preparation] = [:]
     var selection: [String] = []
     var text = ""
     var search = ""
-    /// Set when a share-sheet suggestion named a known chat: the review card opens first.
     private(set) var suggested: String?
     private(set) var deliveries: [String: Delivery] = [:]
-    /// A line under the results, when something needs saying (queued, or not sent).
     private(set) var outcomeNote: String?
     private(set) var avatars: [String: PlatformImage] = [:]
 
@@ -61,7 +55,6 @@ import AppKit
     private var uploadService: XMPPUploadService?
     private var filesAccepted: Bool?
     private var roomMembers: [String: [String]] = [:]
-    /// The account's contact links by chat address, read once with the chats.
     private var contactLinks: [String: ContactLink] = [:]
     private var preparedFiles: [UUID: PreparedAttachment] = [:]
     private var preparation: Task<Void, Never>?
@@ -75,12 +68,11 @@ import AppKit
     #if DEBUG
     static let queueOnlyKey = "debug.shareQueueOnly"
     #endif
-    /// How long the iPhone waits for the lease after Send, and how long it may then stay connected.
+    // Also bounds how long the iPhone stays connected once it has the lease.
     static let leaseWait: Duration = .seconds(3)
     static let sendBudget: Duration = .seconds(25)
-    /// How long the Mac watches the queued rows for the running app's send.
     static let macWatch: Duration = .seconds(6)
-    /// How long closing waits for the share's donations before the store closes under them (`mayDonate`).
+    // Bounds how long closing waits for donations before the store closes under them (`mayDonate`).
     static let donationWait: Duration = .seconds(2)
 
     var files: [SharedItem] { items.filter(\.isFile) }
@@ -93,7 +85,6 @@ import AppKit
         phase == .ready && !isPreparing
             && ShareRules.canSend(files: readyFiles.count, unsendableFiles: unsendableFiles.count, text: text, recipients: selection.count)
     }
-    /// A file that could not be prepared stays on the review card until the user removes it.
     var hasUnsendableFiles: Bool { !unsendableFiles.isEmpty }
     private var readyFiles: [SharedItem] { files.filter { if case .ready = prepared[$0.id] { true } else { false } } }
     private var unsendableFiles: [SharedItem] { files.filter { if case .failed = prepared[$0.id] { true } else { false } } }
@@ -119,9 +110,7 @@ import AppKit
         selection.removeAll { id in chats.first { $0.id == id }.map { unavailableReason($0) != nil } ?? true }
     }
 
-    // MARK: Loading
-
-    /// Opens what the notification extension opens, the same way: never a migration, never another install's data.
+    // Opens the store as the notification extension does: never a migration, never another install's data.
     func load(providers: [NSItemProvider], suggestedConversation: String?) async {
         SharedItemIntake.discardAll()
         do {
@@ -174,8 +163,7 @@ import AppKit
 
     private func unavailable(_ message: String) { phase = .unavailable(message) }
 
-    /// The account may still share from this sheet (`ShareAuthorization`); its record is refreshed, so a connection uses
-    /// the password saved now. Otherwise the sheet says why and nothing is written.
+    // Refreshes the account's record so a connection uses the password just saved; a refusal writes nothing.
     private func authorize() -> Bool {
         guard let root else { return false }
         switch ShareAuthorization.check(groupRoot: root.deletingLastPathComponent(), accountID: accountID) {
@@ -188,8 +176,6 @@ import AppKit
         }
     }
 
-    /// Each chat's stored state, read once per sheet. The encryption state is cached by revision, so this decodes it
-    /// once, and nothing is fetched from the network.
     private func loadEncryption() async {
         guard let encryption else { return }
         let account = accountID
@@ -213,7 +199,6 @@ import AppKit
         if let suggested, !selection.contains(suggested) { self.suggested = nil }
     }
 
-    /// A small decoded avatar for a row, once.
     func loadAvatar(_ chat: ShareRules.Chat) {
         guard avatars[chat.id] == nil, let hash = chat.avatarHash, let root else { return }
         let account = accountID
@@ -225,8 +210,8 @@ import AppKit
         }
     }
 
-    /// Images and video are re-encoded while the user picks a chat, one at a time, so Send has little left to do and a
-    /// file too large for the server says so on the review card first.
+    // Re-encodes one file at a time while the user picks a chat, so a file too large for the server shows on the
+    // review card before Send.
     private func startPreparation() {
         for item in files { prepared[item.id] = .preparing }
         let files = files, limit = attachmentLimit
@@ -247,10 +232,7 @@ import AppKit
         }
     }
 
-    // MARK: Sending
-
-    /// Queues everything for every chosen chat, then sends it (iPhone) or hands it to the running app (Mac). `finish` is
-    /// called once nothing of this process's is left running and the sheet may close.
+    // `finish` runs once nothing of this process is left running.
     func send() {
         guard canSend, let store, let encryption, let root, authorize() else { return }
         phase = .sending
@@ -288,9 +270,8 @@ import AppKit
         }
     }
 
-    /// The iPhone sends while the sheet is up, under the lease, when it is free; the Mac's running app sends. Either
-    /// way the rows are already durable, so a lease held elsewhere, a lost connection or a dismissed sheet leaves them
-    /// for the app's next connection.
+    // The rows are already durable, so a lease held elsewhere, a lost connection or a dismissed sheet leaves them for
+    // the app's next connection.
     private func deliver(_ queued: [String: [String]], rooms: Set<String>) async -> [String: ShareItemState] {
         let ids = queued.values.flatMap { $0 }
         #if os(iOS)
@@ -341,8 +322,7 @@ import AppKit
         }
     }
 
-    /// `unsaved`: chats for which an item could not be saved. Its data is gone with the sheet, so the result says to
-    /// share it again rather than letting the rest's state stand for it.
+    // An unsaved item's data is gone with the sheet, so its chat's result says to share it again.
     private func settle(_ queued: [String: [String]], of recipients: [ShareRules.Chat], states: [String: ShareItemState], unsaved: Set<String>) {
         let saved = Dictionary(recipients.map { chat in (chat.id, (queued[chat.id] ?? []).map { states[$0] ?? .queued }) },
                                uniquingKeysWith: { first, _ in first })
@@ -350,15 +330,13 @@ import AppKit
         phase = .finished
     }
 
-    /// The sheet is going away (Done, the host left, the activity expired): stop sending, end the connection and give
-    /// the lease back. The rows stay queued for the app.
+    // Ends the connection and gives the lease back; the rows stay queued for the app.
     func cancelSending() {
         closing = true
         preparation?.cancel()
         sessionTask?.cancel()
     }
 
-    /// Waits until nothing of this share runs any more, the lease included. Then the sheet may close.
     func close() async {
         cancelSending()
         await sendTask?.value
@@ -372,8 +350,7 @@ import AppKit
     private func donate(to recipients: [ShareRules.Chat]) {
         guard let root, let store else { return }
         let account = accountID, groupRoot = root.deletingLastPathComponent()
-        // The picker's titles and avatars already put linked contacts first; the links add who they are, and the
-        // donation reads each link again (`OutgoingDonation`).
+        // The donation reads each link again (`OutgoingDonation`).
         let titles = Dictionary(chats.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first }), links = contactLinks
         let conversations = recipients.map { chat in
             SuggestedConversation.outgoing(accountID: account, chatID: chat.id, title: chat.title, avatarHash: chat.avatarHash,
@@ -386,10 +363,9 @@ import AppKit
         }
     }
 
-    /// Whether a donation may stand, read afresh each time `OutgoingDonation.donate` asks: the sheet's account still
-    /// signed in, previews and suggestions on now, the chat not blocked. No lease orders this against the app's
-    /// deletions (the Mac's sheet never takes it), so asking again once the system finished is what keeps a donation
-    /// from outliving one. A store this sheet already closed reads as not allowed, which deletes rather than keeps.
+    // Read afresh on each `OutgoingDonation.donate` call: no lease orders this against the app's deletions (the Mac's
+    // sheet never takes it), so asking again keeps a donation from outliving one. A store this sheet already closed
+    // reads as not allowed, which deletes rather than keeps.
     private nonisolated static func mayDonate(_ conversation: OutgoingConversation, store: MessageStore, groupRoot: URL) async -> Bool {
         let account = conversation.accountID
         guard case .success = ShareAuthorization.check(groupRoot: groupRoot, accountID: account),
@@ -398,7 +374,7 @@ import AppKit
         return conversation.isGroup || !BlockedAddresses.load(accountID: account).blocks(conversation.chatID)
     }
 
-    /// Waits for `task` at most `limit`, without cancelling it.
+    // Does not cancel `task`.
     private static func wait(for task: Task<Void, Never>, upTo limit: Duration) async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await task.value }
@@ -409,8 +385,8 @@ import AppKit
     }
 
     #if os(iOS)
-    /// What the share's connection received alerts as the notification extension would show it: the server pushes
-    /// nothing for a connected session. Bounded, and only for the signed-in account.
+    // The server pushes nothing for a connected session, so what the share's connection receives alerts as the
+    // notification extension would show it, bounded and for the signed-in account only.
     private func presentation() -> (@Sendable (MessageStore) async -> Void)? {
         guard let root, let account else { return nil }
         let accountID = accountID, blocklist = blocklist
@@ -440,7 +416,6 @@ import AppKit
     #endif
 }
 
-/// Read-only states of queued rows, for the Mac, whose app sends them.
 private struct ShareStateReader: Sendable {
     let store: MessageStore
     let accountID: String
@@ -453,8 +428,8 @@ private struct ShareStateReader: Sendable {
 }
 
 #if os(iOS)
-/// Asks the system for time to finish (`ProcessInfo.performExpiringActivity`, which extensions may use). When the time
-/// runs out, `expired` runs so the share can end its connection and release the lease before the process is suspended.
+// `ProcessInfo.performExpiringActivity`: when the time runs out, `expired` lets the share end its connection and
+// release the lease before the process is suspended.
 private final class ExpiringActivity: @unchecked Sendable {
     private let done = DispatchSemaphore(value: 0)
 

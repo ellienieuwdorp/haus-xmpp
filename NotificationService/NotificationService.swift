@@ -2,13 +2,10 @@ import Foundation
 import UserNotifications
 import MessagingCore
 
-/// Thin shell: every remote request joins the process's run (`NotificationRunCoordinator`) and finishes with its outcome.
-/// A settled run posted one local request per new message, and a handed-off one left the push to the running app,
-/// which answered the liveness handshake; either way the remote alert is suppressed with empty content (the filtering
-/// entitlement), or replaced by a quiet stand-in where the extension lacks that entitlement. Anything else shows the
-/// generic fallback; unknown is never suppressed.
+// A settled or handed-off run suppresses the remote alert: empty content with the filtering entitlement, a quiet
+// stand-in without it. Anything else shows the generic fallback; unknown is never suppressed.
 final class NotificationService: UNNotificationServiceExtension, @unchecked Sendable {
-    /// One per process: `didReceive` may arrive concurrently for coalesced pushes, on this or another instance.
+    // `didReceive` may arrive concurrently for coalesced pushes, on this or another instance.
     private static let coordinator = NotificationRunCoordinator { progress in await ExtensionRun.run(progress) }
 
     private let lock = NSLock()
@@ -20,8 +17,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         lock.withLock { deliveries[ticket] = delivery }
         Task {
             #if DEBUG && os(macOS)
-            // The Mac extension's storage probe (NotificationServiceMac/MacExtensionProbe.swift), only when the app armed
-            // it; never in a release build. The delivery is registered first, so an expiry during the probe still answers.
+            // Debug-only Mac storage probe. The delivery is registered first, so an expiry during the probe answers.
             if let arm = MacExtensionProbe.takeArm() {
                 if await MacExtensionProbe.record(delivery.probedRequest, arm: arm) == .suppress { delivery.suppress() }
                 guard !delivery.isFinished else {
@@ -45,7 +41,6 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     }
 }
 
-/// Calls the system's content handler exactly once per remote request.
 private final class RemoteDelivery: @unchecked Sendable {
     private let lock = NSLock()
     private let request: UNNotificationRequest
@@ -60,14 +55,12 @@ private final class RemoteDelivery: @unchecked Sendable {
             defer { handler = nil }
             return handler
         }) else { return }
+        // A suppressed delivery carries only the badge; a handed-off one leaves it to the app, a fallback as it is.
         let badge: NSNumber?
         switch outcome {
-        // The badge is the one field a settled delivery may carry: unread outside muted chats, when the run knew it.
         case let .settled(report): badge = report.badge.map { NSNumber(value: $0) }
-        // The running app presents and sets the badge itself.
         case .handedOff: badge = nil
         case .fallback:
-            // Unknown: leave the icon badge as it is.
             callback(Self.fallback(for: request, badge: nil))
             return
         }
@@ -75,15 +68,12 @@ private final class RemoteDelivery: @unchecked Sendable {
             callback(Self.standIn(for: request, badge: badge))
             return
         }
-        // Every local add already completed, or the app presents: empty content suppresses the remote alert (no title,
-        // body or sound).
         let content = UNMutableNotificationContent()
         content.badge = badge
         callback(content)
     }
 
-    /// Plan D2: generic, no message content, the fallback category, and the identifier the system gave this request
-    /// (the gateway's per-registration collapse ID), so repeated fallbacks replace each other.
+    // Generic, no message content; the request's identifier (the gateway's collapse ID) lets repeats replace each other.
     static func fallback(for request: UNNotificationRequest, badge: NSNumber?) -> UNNotificationContent {
         let content = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
         content.title = ""
@@ -97,9 +87,8 @@ private final class RemoteDelivery: @unchecked Sendable {
         return content
     }
 
-    /// Without the filtering entitlement, empty content does not hide the push: the system shows it as it arrived. So
-    /// a settled run hands back the fallback instead, made quiet: passive and without a sound, as the messages the run
-    /// posted already alerted. Its fallback category lets the next run, or the app's catch-up, remove it.
+    // Without the filtering entitlement empty content does not hide the push, so a settled run hands back the fallback,
+    // passive and silent; its category lets the next run or the app's catch-up remove it.
     static func standIn(for request: UNNotificationRequest, badge: NSNumber?) -> UNNotificationContent {
         let content = (fallback(for: request, badge: badge).mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
         content.sound = nil
@@ -108,20 +97,17 @@ private final class RemoteDelivery: @unchecked Sendable {
     }
 }
 
-/// Whether this extension has the managed entitlement `com.apple.developer.usernotifications.filtering`, which makes
-/// empty content hide a push. Its build says so in the `HausNotificationFiltering` Info.plist key, set from the same
-/// build setting that picks the entitlements file (`HAUS_EXTENSION_FILTERING`); a missing key counts as no.
+// `com.apple.developer.usernotifications.filtering` makes empty content hide a push. The `HausNotificationFiltering`
+// Info.plist key, set from `HAUS_EXTENSION_FILTERING`, says whether this build has it; a missing key counts as no.
 enum NotificationFiltering {
     static let isAvailable = Bundle.main.object(forInfoDictionaryKey: "HausNotificationFiltering") as? String == "YES"
 }
 
 #if DEBUG && os(macOS)
-/// For the Mac extension's storage probe only.
 extension RemoteDelivery {
     var probedRequest: UNNotificationRequest { request }
     var isFinished: Bool { lock.withLock { handler == nil } }
 
-    /// Empty content, so the filtering entitlement hides the remote alert; the quiet stand-in where it is missing.
     func suppress() {
         guard let callback = lock.withLock({ () -> ((UNNotificationContent) -> Void)? in
             defer { handler = nil }
@@ -132,30 +118,25 @@ extension RemoteDelivery {
 }
 #endif
 
-/// One run in this process: load the protected account, catch up under the lease, post, settle, and record counts.
 private enum ExtensionRun {
     static func run(_ progress: NotificationRunProgress) async -> NotificationRunOutcome {
         var directory: URL?
         let outcome: NotificationRunOutcome
         do {
-            // The shared directory first, so that even a run without an account leaves a diagnostic record.
             let root: URL
             do { root = try await SharedStorage.directory(migrate: false) } catch { throw NotificationRunError.protectedDataUnavailable }
             directory = root
             // A restore of the previous version's data is under way or done: that data is the app's alone.
             guard !PreUpgradeHold.isHeld(groupRoot: root.deletingLastPathComponent()) else { throw NotificationRunError.upgradePending }
-            // Moved to another install: the identity is that copy's now. (The app also moves the store out of reach.)
             guard !TransferHold.isMoved(groupRoot: root.deletingLastPathComponent()) else { throw NotificationRunError.noAccount }
             guard let account = try NotificationAccount.load(), account.push != nil else { throw NotificationRunError.noAccount }
             let key: Data
             do { key = try EncryptionKeychain.load(storageID: "primary", allowCreation: false) }
             catch { throw NotificationRunError.protectedDataUnavailable }
             let accountID = account.accountID
-            // "Suggest chats in Share Sheet" off: the communication notifications still show who wrote, but nothing is
-            // donated for the system's suggestions. Read as each one posts, under the lease the app changes it under.
+            // The suggestion setting is read as each notification posts, under the lease the app changes it under.
             let donates: @Sendable () -> Bool = { ShareSuggestionSetting.isEnabled(accountID: accountID) }
             let presenter = NotificationPresenter(posting: UserNotificationPoster(donates: donates, avatarData: { hash in
-                // The app's pre-scaled copy of a verified avatar, read as bytes: nothing is decoded in the extension.
                 AvatarStore.notificationImageData(root: root, account: accountID, hash: hash)
             }))
             try await BackgroundSynchronizer().synchronize(databaseURL: root.appending(path: "messages.sqlite"), wrappingKey: key,
@@ -165,14 +146,11 @@ private enum ExtensionRun {
                                            push: PushRegistrationState.sessionSubscription(
                                                saved: account.push, state: try? PushRegistrationState.load(accountID: accountID)),
                                            leftForeground: SharedSession.leftForeground()),
-                // On the Mac a busy lease asks the running app first: if it answers, it presents and this run hands the
-                // push over.
                 liveness: AppLiveness.isOffered
                     ? AppLiveness.ExtensionChannel(files: AppLiveness.Files(groupRoot: root.deletingLastPathComponent())) : nil,
                 progress: progress, presentation: { store, stage in
-                    // Keep the transport lease through presentation. Preferences cannot change under this lease;
-                    // logout authorization is reread before each presentation (direct messages first, then the rest).
-                    // The block list is the app's copy of what the server last reported; nothing from it alerts.
+                    // The transport lease spans presentation, so preferences cannot change; logout authorization is
+                    // reread before each presentation.
                     try await presenter.present(store: store, accountID: accountID, progress: progress, stage: stage,
                                                 blocklist: BlockedAddresses.load(accountID: accountID), authorize: {
                         guard try NotificationAccount.load() == account else { throw CancellationError() }

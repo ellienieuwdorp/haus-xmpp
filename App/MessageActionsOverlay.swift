@@ -3,42 +3,33 @@ import SwiftUI
 import UIKit
 import XMPPProtocol
 
-/// What the overlay needs from the pressed bubble. Frames are window coordinates and ignore the press squeeze.
+// Frames are window coordinates and ignore the press squeeze.
 struct MessageActionsContext {
     let message: TimelineMessage
     let bubble: UIView
     let bubbleFrame: CGRect
-    /// The bubble's outline in its own bounds: the lifted shadow follows a fixed path instead of an offscreen pass.
+    // A fixed shadow path avoids an offscreen pass.
     let bubbleShape: CGPath
-    /// How far the press squeeze had shrunk the live bubble, about its centre, when the overlay took its place.
     var sourceScale: CGFloat
     let reactions: UIView?
     let reactionsFrame: CGRect
     let actions: [MessageAction]
     let react: (String) -> Void
-    /// Hides the live bubble while its snapshot is on screen, so a moved snapshot never shows a twin.
     let setSourceHidden: (Bool) -> Void
-    /// Where the live bubble is when the menu closes (the keyboard may have moved it); nil once its cell shows another message.
+    // The keyboard may have moved it; nil once its cell shows another message.
     let currentBubbleFrame: () -> CGRect?
 }
 
-/// A live blur, the bubble at its real size, quick reactions above it and the action list below.
-/// Replaces UIContextMenuInteraction, which cannot host a tappable accessory above its preview.
-/// The overlay's view is attached straight to the window rather than presented: a presentation resigns the composer
-/// on the spot, which snaps the keyboard away without animation and moves the whole timeline in one frame, and it
-/// defers the overlay's first render by a runloop turn. The view animates itself so the bubble starts where the
-/// squeezed live one is and ends wherever the live one is by then.
+// Replaces UIContextMenuInteraction, which cannot host a tappable accessory above its preview. Attached to the window,
+// not presented: a presentation resigns the composer at once, snapping the keyboard away without animation, and defers
+// the first render by a runloop turn.
 @MainActor
 enum MessageActionsOverlay {
-    /// Instruments intervals for the press path (os_signpost, category MessageMenu). Nothing on it renders offscreen.
     static let signposter = OSSignposter(subsystem: "haus.xmpp.ios", category: "MessageMenu")
-    /// The open overlay; a window keeps only its view.
     private static var current: UIViewController?
-    /// Built hidden while the press squeeze runs, so the squeeze's end only has to unhide it.
+    // Built hidden while the press squeeze runs, so the squeeze's end only has to unhide it.
     private static var prepared: (messageID: String, controller: UIHostingController<MessageActionsOverlayView>)?
 
-    /// Builds the overlay for a press that may become a menu, hidden and laid out in `window`, so opening it later
-    /// costs no hosting-controller setup or first SwiftUI pass. Does nothing while a menu is open.
     static func prepare(in window: UIWindow, context: MessageActionsContext) {
         guard current == nil else { return }
         let preparing = signposter.beginInterval("prepare")
@@ -51,17 +42,13 @@ enum MessageActionsOverlay {
         prepared = (context.message.id, controller)
     }
 
-    /// Drops a prepared overlay whose press ended without a menu.
     static func discardPrepared() {
         prepared?.controller.view.removeFromSuperview()
         prepared = nil
     }
 
-    /// `willDismiss` runs when the overlay starts to close, with the chosen action's kind, and returns true when the
-    /// timeline is about to put the live bubble back where it was at the press (the keyboard is coming back); the
-    /// snapshot then springs to that frame instead of the one the live bubble has at that moment.
-    /// `onDismiss` runs once the overlay is gone and before the chosen action runs; it receives that action's kind.
-    /// Returns false, having touched nothing, when the presenter has no window or a menu is already open.
+    // `willDismiss` returns true when the returning keyboard is about to put the live bubble back at its press frame;
+    // the snapshot then springs there. `onDismiss` runs once the overlay is gone, before the chosen action.
     @discardableResult
     static func present(from presenter: UIViewController, context: MessageActionsContext,
                         willDismiss: @escaping (MessageAction.Kind?) -> Bool = { _ in false },
@@ -89,10 +76,9 @@ enum MessageActionsOverlay {
         controller.rootView = view
         controller.view.isHidden = false
         current = controller
-        // The view already rendered the source stage while hidden, so the entrance starts in this pass and the first
-        // frame on screen is the spring's first step. Committed now, before the timeline puts the keyboard away: left
-        // to the next pass it would run inside the keyboard's animation block and every snapshot would fly in from its
-        // initial frame. (Not performWithoutAnimation: the blur's own fade starts in this pass.)
+        // Committed in this pass, before the timeline puts the keyboard away: in the next pass it would run inside the
+        // keyboard's animation block and every snapshot would fly in from its initial frame. Not performWithoutAnimation:
+        // the blur's own fade starts in this pass.
         view.enter()
         controller.view.layoutIfNeeded()
         UIAccessibility.post(notification: .screenChanged, argument: controller.view)
@@ -116,8 +102,7 @@ struct MessageActionsOverlayView: View {
     let windowSize: CGSize
     var willDismiss: (MessageAction.Kind?) -> Bool = { _ in false }
     var finish: (MessageAction?) -> Void = { _ in }
-    /// Held by reference, so `present` can start the entrance in the same pass that shows the overlay (a change made
-    /// from onAppear or onChange lands a pass later, and its spring two frames after the overlay appears).
+    // A reference, so `present` starts the entrance in the pass that shows the overlay; onAppear and onChange land later.
     private let motion = OverlayMotion()
     @AppStorage("recentReactions") private var recentReactions = ""
     private var accent: String { AccentTheme.current.rawValue }
@@ -125,17 +110,13 @@ struct MessageActionsOverlayView: View {
 
     private static let gap: CGFloat = 14
     private static let pillHeight: CGFloat = 52
-    /// The entrance spring for the bubble, the menu riding under it and the pill riding over it: Signal's 0.4 s preview
-    /// spring, a touch less damped (0.75, about 3 % overshoot) and leaving with a normalised velocity of one travel per
-    /// second, so the first frame after the squeeze already moves instead of easing out of rest.
+    // Initial velocity 1, so the first frame after the squeeze already moves instead of easing out of rest.
     private static let enter = Animation.interpolatingSpring(Spring(duration: 0.4, bounce: 0.25), initialVelocity: 1)
-    /// The arrival pop on top of the move: 1.03 on a quick lively spring, then down to 1 on a softer one.
     private static let liftScale: CGFloat = 1.03
     private static let liftUp = Animation.spring(duration: 0.18, bounce: 0.35)
     private static let liftDown = Animation.spring(duration: 0.32, bounce: 0.3)
-    /// No overshoot on the way back: the snapshot must land exactly on the live bubble before it reappears.
+    // No overshoot: the snapshot must land exactly on the live bubble before it reappears.
     private static let leave = Animation.interpolatingSpring(Spring(duration: 0.3, bounce: 0), initialVelocity: 1)
-    /// Menu opacity on its own short curve: 0.3 in the first frame, so it is visible while it grows with the bubble.
     private static let menuFade = Animation.easeOut(duration: 0.25)
     private static let menuStartScale: CGFloat = 0.2
     private static let menuStartOpacity: Double = 0.3
@@ -146,7 +127,6 @@ struct MessageActionsOverlayView: View {
     private var closing: Bool { if case .closing = motion.stage { true } else { false } }
 
     private struct Layout {
-        /// The bubble and its reaction pills where the press found them.
         let block: CGRect
         let fitScale: CGFloat
         let groupTop: CGFloat
@@ -185,8 +165,6 @@ struct MessageActionsOverlayView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { dismiss(nil) }
                     .accessibilityAddTraits(.isButton).accessibilityLabel("Dismiss")
-                // Pill and menu ride the bubble's spring from where it was pressed to where it opens; the pill's emoji
-                // slide up into it and the menu grows from the bubble's corner. Opacity alone keeps its own short curve.
                 VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 6) {
                     reactionPill
                     if let reason = message.reactionUnavailableReason {
@@ -228,7 +206,6 @@ struct MessageActionsOverlayView: View {
         }
     }
 
-    /// How far the pill and the menu sit from their open places in this stage: they travel with the bubble.
     private func ride(_ layout: Layout) -> CGFloat {
         switch motion.stage {
         case .source: layout.block.minY - layout.bubbleTop
@@ -237,7 +214,6 @@ struct MessageActionsOverlayView: View {
         }
     }
 
-    /// The menu hangs under the bubble's block: at the press, open, and back over the live bubble.
     private func menuTop(_ layout: Layout) -> CGFloat {
         switch motion.stage {
         case .source: layout.block.maxY + Self.gap
@@ -246,9 +222,6 @@ struct MessageActionsOverlayView: View {
         }
     }
 
-    /// The first frame shows the snapshot exactly over the squeezed live bubble with the menu at a fifth of its size
-    /// under it; from there one spring carries the bubble to its clamped place and the pill and menu with it, while
-    /// the blur fades in and the bubble pops once on arrival. No timers: each part runs its own curve.
     func enter() {
         guard motion.stage == .source, !motion.shown else { return }
         motion.pillIn = true
@@ -262,8 +235,6 @@ struct MessageActionsOverlayView: View {
         }
     }
 
-    /// Springs the snapshot back onto the live bubble, wherever it is now (or where the returning keyboard is about to
-    /// put it), then shows the live bubble and removes the overlay.
     private func dismiss(_ action: MessageAction?) {
         // A prepared overlay that never entered is still hidden: nothing to close.
         guard motion.pillIn, !motion.dismissing else { return }
@@ -288,8 +259,7 @@ struct MessageActionsOverlayView: View {
         withAnimation(Self.leave, completionCriteria: .logicallyComplete) { motion.stage = .closing(moved) } completion: { done() }
     }
 
-    /// The snapshot at the stage's place. The squeeze scales about the bubble's centre (the reaction pills with it);
-    /// a fit scale (bubble taller than the screen) keeps the outer top corner fixed so the group stays against its side.
+    // A fit scale (bubble taller than the screen) keeps the outer top corner fixed so the group stays against its side.
     private func snapshot(_ view: UIView, frame: CGRect, layout: Layout, shadow: CGPath?) -> some View {
         let outerTop: UnitPoint = message.isOutgoing ? .topTrailing : .topLeading
         let centre = UnitPoint(x: (context.bubbleFrame.midX - frame.minX) / max(1, frame.width),
@@ -392,33 +362,25 @@ struct MessageActionsOverlayView: View {
     }
 }
 
-/// The overlay's animated state, in a reference so the presenter can change it inside its own animation transaction.
 @MainActor @Observable
 private final class OverlayMotion {
     enum Stage: Equatable {
-        /// Over the live bubble as the press left it: squeezed, and wherever the keyboard had it.
         case source
-        /// Clamped between the pill and the menu.
         case open
-        /// Back over the live bubble, which has moved by this much since the press; nil fades out in place.
         case closing(CGSize?)
     }
     var stage = Stage.source
-    /// Blur, scrim and pill are in (each animates its own ramp).
     var shown = false
-    /// The bubble's pop on arrival: up a few percent on a quick spring, then back to rest on a softer one.
     var lifted = false
-    /// Set as the close begins, before the keyboard can come back, so the layout stops following it.
+    // Set before the keyboard can come back, so the layout stops following it.
     var dismissing = false
-    /// The quick reactions have slid up; never reset, so they stay put while the pill fades out.
+    // Never reset, so the reactions stay put while the pill fades out.
     var pillIn = false
-    /// 0.1 s when the bubble has to travel, so the pill arrives after it starts moving.
     var pillDelay: Double = 0
     var choosingEmoji = false
     var keyboardHeight: CGFloat = 0
 }
 
-/// Signal's reaction bar entrance: each emoji rises 24 pt into the pill, 10 ms after its neighbour, over 0.2 s ease-in.
 private struct SlideIn: ViewModifier {
     let index: Int
     let delay: Double
@@ -431,10 +393,8 @@ private struct SlideIn: ViewModifier {
     }
 }
 
-/// A live blur: its effect animates (never its alpha, which UIKit forbids for effect views), so the timeline and the
-/// navigation bar stay live and recognisable under it and nothing is rasterised on the press path. The 20 % scrim is a
-/// sibling view whose alpha rides the same curve: a background colour on the effect view's content view is not animated
-/// when the effect changes in the same block, so it appeared at full strength in the overlay's first frame.
+// Animates the effect, never its alpha (UIKit forbids that for effect views). The scrim is a sibling view: a background
+// colour on the effect view's content view is not animated when the effect changes in the same block.
 private struct LiveBlur: UIViewRepresentable {
     let active: Bool
 
@@ -465,8 +425,6 @@ private final class BlurScrimView: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    /// Blur and scrim fade in together over 0.2 s and out over 0.3 s (the length of the return spring), each from
-    /// wherever it is now.
     func setActive(_ active: Bool) {
         guard active != self.active else { return }
         self.active = active
@@ -477,8 +435,8 @@ private final class BlurScrimView: UIView {
     }
 }
 
-/// Hosts a snapshot view; the bubble's lift shadow is a layer shadow on a fixed path, faded with Core Animation, so
-/// the spring moves a cached layer instead of re-rendering a SwiftUI shadow every frame.
+// A layer shadow on a fixed path, faded with Core Animation, so the spring moves a cached layer instead of re-rendering a
+// SwiftUI shadow every frame.
 private struct SnapshotHost: UIViewRepresentable {
     let view: UIView
     let shadowPath: CGPath?
@@ -513,7 +471,6 @@ private struct SnapshotHost: UIViewRepresentable {
     }
 }
 
-/// A hidden field that raises the emoji keyboard when the user has one, else the plain keyboard filtered to emoji.
 private struct EmojiKeyboardField: UIViewRepresentable {
     let onEmoji: (String) -> Void
 

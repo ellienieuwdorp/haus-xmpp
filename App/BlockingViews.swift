@@ -2,7 +2,7 @@ import SwiftUI
 import XMPPProtocol
 
 extension View {
-    /// The block and report confirmation for `request`; nothing reaches the server until a button in it is chosen.
+    // Nothing reaches the server until a button is chosen.
     func blockConfirmation(model: AppModel, request: Binding<BlockRequest?>) -> some View {
         modifier(BlockConfirmation(model: model, request: request))
     }
@@ -44,8 +44,7 @@ private struct BlockConfirmation: ViewModifier {
     }
 }
 
-/// Block, Report and Unblock for a direct chat, at the end of its details (the iPhone's screen and the Mac's inspector).
-/// A server without XEP-0191, or no connection, leaves the actions disabled with the reason in a row below them.
+// Without XEP-0191 or a connection the actions stay disabled with the reason below them.
 struct ChatBlockingSection: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -88,14 +87,13 @@ struct ChatBlockingSection: View {
             Text(title).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
         }
         #if os(macOS)
-        // A list row in the inspector, as on the iPhone, rather than a bordered push button.
         .buttonStyle(.borderless)
         #endif
         .foregroundStyle(role == .destructive ? AnyShapeStyle(.red) : AnyShapeStyle(.tint))
     }
 }
 
-/// In place of the composer while the chat is blocked: sending would be refused by the server anyway.
+// Sending would be refused by the server anyway.
 struct BlockedChatBar: View {
     @Bindable var model: AppModel
     let chatID: String
@@ -120,8 +118,6 @@ struct BlockedChatBar: View {
     }
 }
 
-/// Settings › Blocked: the account's list as the server holds it, with Unblock on each entry. Entries that are no chat
-/// (a whole domain, one resource) show their address.
 struct BlockedContactsView: View {
     @Bindable var model: AppModel
 

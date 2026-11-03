@@ -1,7 +1,6 @@
 import XCTest
 
-/// The chat list's trailing swipe actions: Pin, and Mute with its duration dialog, a quiet row glyph and the details
-/// row that ends it. Mute is local. The demo seeds Maya as muted always; `-demo-typing` leaves Alex typing.
+// Mute is local. The demo seeds Maya as muted always; `-demo-typing` leaves Alex typing.
 final class ChatListSwipeUITests: XCTestCase {
     @MainActor func testSwipePinAndMuteThenUnmuteFromDetails() throws {
         continueAfterFailure = false
@@ -72,7 +71,7 @@ final class ChatListSwipeUITests: XCTestCase {
         }
     }
 
-    /// Waits for `value`; the list applies a pin or mute change a moment after the swipe action or dialog closes.
+    // The list applies a pin or mute change a moment after the swipe action or dialog closes.
     @MainActor private func wait(_ element: XCUIElement, value: String, timeout: TimeInterval = 5) -> Bool {
         let predicate = NSPredicate(format: "value == %@", value)
         return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: timeout) == .completed

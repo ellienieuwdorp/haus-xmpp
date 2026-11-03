@@ -1,14 +1,11 @@
 import XCTest
 
-/// The disposable lab fixture exported to the test runner as `HAUS_LAB_*` and `XMPP_*`: a local XMPP server reached as
-/// `localhost` with direct TLS on port 5223, its CA certificate (`HAUS_LAB_CA_DER`, base64 DER) and throwaway accounts.
-/// See AppTests/README.md.
+// Exported as `HAUS_LAB_*` and `XMPP_*`; see AppTests/README.md.
 struct LabFixture {
     let username: String
     let password: String
     private let environment: [String: String]
 
-    /// Skips the test unless the lab account and every key in `required` are exported.
     init(requiring required: [String] = ["XMPP_OMEMO_PEER"], orSkip reason: String) throws {
         let environment = ProcessInfo.processInfo.environment
         guard let username = environment["HAUS_LAB_USERNAME"], let password = environment["HAUS_LAB_PASSWORD"],
@@ -19,10 +16,8 @@ struct LabFixture {
     }
 
     subscript(key: String) -> String? { environment[key] }
-    /// The echo peer's address; present whenever the default `required` passed.
     var peer: String { environment["XMPP_OMEMO_PEER"] ?? "" }
 
-    /// The app on its own isolated store, signed out, with the lab account filled in for the Settings sign-in button.
     @MainActor func launch(arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-lab-ui-test"] + arguments
@@ -34,15 +29,13 @@ struct LabFixture {
 }
 
 extension XCUIApplication {
-    /// Signs in to the lab from Settings (opening it if needed) and leaves the sheet open once it reads "Connected".
     func connectToLab(timeout: TimeInterval = 30) {
         if !navigationBars["Settings"].exists { buttons["Settings"].tap() }
         buttons["accountSignIn"].tap()
         let consent = switches["labConsent"]
         XCTAssertTrue(consent.waitForExistence(timeout: 5))
         consent.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        // A lab reached through a local proxy on another port (for example one that adds latency, to simulate a slow
-        // link).
+        // A local proxy on another port, for example one that adds latency.
         if let port = ProcessInfo.processInfo.environment["HAUS_LAB_PORT"] {
             buttons["Advanced"].tap()
             let host = textFields["serverHost"]
@@ -54,8 +47,7 @@ extension XCUIApplication {
             textFields["serverPort"].typeText(port)
         }
         buttons["Connect"].tap()
-        // The system asks once per install. Stop at whichever comes first rather than waiting out a prompt that
-        // already came on an earlier run.
+        // The system asks once per install: stop at whichever comes first.
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["Allow"]
         let connected = staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Connected")).firstMatch
         let deadline = Date().addingTimeInterval(timeout)
@@ -64,13 +56,12 @@ extension XCUIApplication {
         XCTAssertTrue(connected.waitForExistence(timeout: max(1, deadline.timeIntervalSinceNow)), "the lab account connects")
     }
 
-    /// The composer; a multiline SwiftUI text field is exposed as a text view on some runtimes.
+    // A multiline SwiftUI text field is exposed as a text view on some runtimes.
     var messageComposer: XCUIElement {
         let field = textFields["messageComposer"]
         return field.exists ? field : textViews["messageComposer"]
     }
 
-    /// Starts a direct chat from the Chats root and returns its composer.
     @discardableResult func startChat(with address: String) -> XCUIElement {
         returnToChats()
         buttons["newConversation"].tap()
@@ -84,7 +75,6 @@ extension XCUIApplication {
         return composer
     }
 
-    /// Switches the open Devices & Encryption page to OMEMO 2, the only profile a modern echo peer speaks.
     func selectModernOMEMO() {
         let version = buttons.matching(NSPredicate(format: "label CONTAINS %@", "OMEMO · compatible")).firstMatch
         for _ in 0..<5 { if version.isHittable { break }; swipeUp() }
@@ -97,8 +87,7 @@ extension XCUIApplication {
         for _ in 0..<5 { if rows.firstMatch.isHittable { break }; swipeDown() }
     }
 
-    /// Accepts every device awaiting review on the open encryption page, one fingerprint at a time through the same
-    /// review a person uses. Accepted is not verified. `onReview` runs with each fingerprint on screen.
+    // One fingerprint at a time through the same review a person uses. Accepted is not verified.
     func acceptPendingDevices(group: Bool = false, onReview: () -> Void = {}) {
         let page = navigationBars[group ? "Group details" : "Devices & Encryption"]
         let rows = encryptionDeviceRows(group: group)

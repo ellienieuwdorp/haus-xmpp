@@ -3,11 +3,10 @@ import UIKit
 import XCTest
 @testable import HausXMPP
 
-/// Send empties the composer's real text view along with the draft. SwiftUI pushes a cleared draft into the field
-/// only in its next update; a keyboard edit landing before then used to write the whole sent text back.
+// SwiftUI pushes a cleared draft into the field only in its next update; a keyboard edit landing before then must not
+// write the sent text back.
 @MainActor
 final class ComposerClearTests: XCTestCase {
-    /// The composer's field as `ConversationComposer` builds it.
     private struct Field: View {
         @Bindable var state: ComposerState
         var body: some View {
@@ -42,7 +41,6 @@ final class ComposerClearTests: XCTestCase {
         field = nil
     }
 
-    /// Lets SwiftUI run its update pass.
     private func settle() { RunLoop.main.run(until: .now + 0.3) }
 
     private func assertEmpty(file: StaticString = #filePath, line: UInt = #line) {
@@ -73,8 +71,7 @@ final class ComposerClearTests: XCTestCase {
         assertEmpty()
     }
 
-    /// An autocorrection or prediction the keyboard works out on the old text and delivers after the clear lands on
-    /// the empty field: at worst its own word comes back, never the sent text.
+    // An autocorrection or prediction worked out on the old text and delivered after the clear.
     func testAnEditAimedAtTheOldTextBringsBackOnlyItsOwnWord() throws {
         field.insertText("see you tomorow")
         settle()
@@ -87,7 +84,7 @@ final class ComposerClearTests: XCTestCase {
         XCTAssertEqual(field.text, state.draft)
     }
 
-    /// Emptying the field from code drops its undo history, so a shake or ⌘Z cannot put the sent text back.
+    // Emptying the field from code drops its undo history, so a shake or ⌘Z cannot put the sent text back.
     func testUndoCannotBringTheSentTextBack() throws {
         field.insertText("see you tomorrow")
         settle()
@@ -110,7 +107,6 @@ final class ComposerClearTests: XCTestCase {
         XCTAssertEqual(field.text, "second")
     }
 
-    /// A failed send puts its text back into the emptied field.
     func testAFailureStillPutsTheTextBack() {
         field.insertText("see you tomorrow")
         settle()
@@ -121,8 +117,8 @@ final class ComposerClearTests: XCTestCase {
         XCTAssertEqual(field.text, "see you tomorrow")
     }
 
-    /// A send refused before SwiftUI's next update: `draft` is back where SwiftUI last saw it, so only the field
-    /// itself can show the text again, and typing on must continue it rather than replace it.
+    // `draft` is back where SwiftUI last saw it, so only the field itself can show the text again, and typing on must
+    // continue it rather than replace it.
     func testAFailureBeforeTheUpdateStillPutsTheTextBack() {
         field.insertText("see you tomorrow")
         settle()
@@ -135,7 +131,6 @@ final class ComposerClearTests: XCTestCase {
         XCTAssertEqual(state.draft, "see you tomorrow!")
     }
 
-    /// Text typed while the send was under way stays; the failed text does not overwrite it.
     func testAFailureLeavesNewTypingAlone() {
         field.insertText("see you tomorrow")
         settle()

@@ -1,12 +1,10 @@
 import XCTest
 
-/// The Share extension on the local lab, from other apps' real share sheets: a link from Safari, photos and a video from
-/// Photos, and a file from Files, to one chat and to several. It uses the app's primary storage, because the extension
-/// opens the App Group store, so it runs only when explicitly selected on a disposable simulator with disposable lab
-/// accounts, two echo peers and the lab CA installed as a trust anchor (`simctl keychain add-root-cert`): the
-/// extension has no test CA of its own. The simulator's library holds the photos and the video to share.
+// Uses the app's primary storage because the extension opens the App Group store: run it only on a disposable
+// simulator with disposable lab accounts, two echo peers and the lab CA installed as a trust anchor (the extension
+// has no test CA of its own).
 final class ShareExtensionLabUITests: XCTestCase {
-    /// The app as the lab runs it, and the two peers' addresses. Skips unless the lab is exported.
+    // Skips unless the lab is exported.
     @MainActor private func lab() throws -> (XCUIApplication, [String]) {
         continueAfterFailure = false
         let env = ProcessInfo.processInfo.environment
@@ -21,8 +19,7 @@ final class ShareExtensionLabUITests: XCTestCase {
         return (app, [peer, second])
     }
 
-    /// Signs in and makes a trusted round trip with both peers, so their chats exist with accepted devices; each send
-    /// also donates the chat for share-sheet suggestions.
+    // Each send also donates the chat for share-sheet suggestions.
     @MainActor func test1PrepareTrustedChats() throws {
         let (app, peers) = try lab()
         app.launch()
@@ -44,7 +41,7 @@ final class ShareExtensionLabUITests: XCTestCase {
         XCTAssertTrue(app.waitForBackground())
     }
 
-    /// A link from Safari to the first peer, sent from the extension while the app is in the background.
+    // Sent from the extension while the app is in the background.
     @MainActor func test2ShareLinkFromSafari() throws {
         let (_, peers) = try lab()
         let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
@@ -67,8 +64,7 @@ final class ShareExtensionLabUITests: XCTestCase {
         sheet.done.tap()
     }
 
-    /// Two photos (a HEIC and a JPEG) and a video from Photos, with a caption, to both peers at once: the files are
-    /// prepared while the chats are picked, then each chat gets three files and the caption as its own message.
+    // The files are prepared while the chats are picked; each chat gets three files and the caption as its own message.
     @MainActor func test3SharePhotosAndVideoToTwoChats() throws {
         let (_, peers) = try lab()
         let photos = XCUIApplication(bundleIdentifier: "com.apple.mobileslideshow")
@@ -103,8 +99,7 @@ final class ShareExtensionLabUITests: XCTestCase {
         sheet.done.tap()
     }
 
-    /// A PDF from the Files app (On My iPhone, where the run put a synthetic one) to the second peer: shared by
-    /// reference, read through a file coordinator and sent as it is.
+    // Shared by reference, read through a file coordinator and sent as it is.
     @MainActor func test4ShareFileFromFiles() throws {
         let (_, peers) = try lab()
         let files = XCUIApplication(bundleIdentifier: "com.apple.DocumentsApp")
@@ -136,8 +131,7 @@ final class ShareExtensionLabUITests: XCTestCase {
         sheet.done.tap()
     }
 
-    /// With the extension only queueing (`-haus-share-queue-only`, as when the lease is busy), a shared link waits in
-    /// the outbox, the sheet says so, and the app sends it when it next comes to the front.
+    // `-haus-share-queue-only` stands in for a busy lease.
     @MainActor func test5QueuedShareSendsWhenTheAppOpens() throws {
         let (app, peers) = try lab()
         app.launchArguments.append("-haus-share-queue-only")
@@ -174,8 +168,7 @@ final class ShareExtensionLabUITests: XCTestCase {
         XCTAssertTrue(app.waitForBackground())
     }
 
-    /// After sends to the first peer (each donated), the share sheet suggests that chat; picking the suggestion opens the
-    /// extension on that chat's review card, with the picker one step back.
+    // Picking the suggestion opens the extension on that chat's review card, with the picker one step back.
     @MainActor func test6SuggestedChatIsPreselected() throws {
         let (_, peers) = try lab()
         let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
@@ -201,9 +194,8 @@ final class ShareExtensionLabUITests: XCTestCase {
         sheet.done.tap()
     }
 
-    /// The picker and the review card as VoiceOver and touch see them, in whatever appearance and text size the
-    /// simulator is set to; nothing is sent. Run it again after `simctl ui <udid> appearance dark` and
-    /// `content_size accessibility-extra-large` for the review screenshots.
+    // Nothing is sent. Rerun after `simctl ui <udid> appearance dark` and `content_size accessibility-extra-large` for
+    // the review screenshots.
     @MainActor func test7PickerAndReviewAccessibility() throws {
         let (_, peers) = try lab()
         let photos = XCUIApplication(bundleIdentifier: "com.apple.mobileslideshow")
@@ -241,7 +233,7 @@ final class ShareExtensionLabUITests: XCTestCase {
         cancel.tap()
     }
 
-    /// The suggestions switch under Privacy: on by default, off deletes the donations (and stays off), on again.
+    // On by default; off deletes the donations.
     @MainActor func test8SuggestionsSwitch() throws {
         let (app, _) = try lab()
         app.launch()
@@ -270,7 +262,7 @@ final class ShareExtensionLabUITests: XCTestCase {
         app.buttons["sendMessage"].tap()
     }
 
-    /// Safari's share button sits in its toolbar, or behind the page menu ("…") in the compact layout.
+    // The share button sits in Safari's toolbar, or behind the page menu ("…") in the compact layout.
     @MainActor private func openShareSheet(in host: XCUIApplication) {
         let share = host.buttons.matching(NSPredicate(format: "label == 'Share' OR identifier == 'ShareButton'")).firstMatch
         if share.waitForExistence(timeout: 3), share.isHittable { share.tap(); return }
@@ -285,7 +277,6 @@ final class ShareExtensionLabUITests: XCTestCase {
         share.tap()
     }
 
-    /// Haus Dev in the share sheet's app row, scrolling the row if it is further along.
     @MainActor private func chooseHaus(in host: XCUIApplication) -> ShareSheet {
         let haus = host.collectionViews.cells.matching(NSPredicate(format: "label == 'Haus Dev'")).firstMatch
         let row = host.collectionViews.firstMatch

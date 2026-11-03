@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// What the About screen, the support mail and the Mac's About panel say about this build. Version, build and
-/// copyright come from the bundle's Info.plist, so they are what was built.
+// Version, build and copyright come from the bundle's Info.plist, so they are what was built.
 enum AppInfo {
     static let name = "Haus XMPP"
     static var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "" }
@@ -13,21 +12,19 @@ enum AppInfo {
     }
     static let warranty = "Haus XMPP comes with ABSOLUTELY NO WARRANTY. This is free software under the GNU GPL version 3 or later; you may redistribute it under its terms."
 
-    /// The repository; the exact source of each released build is tagged there.
     static let sourceCode = URL(string: "https://github.com/ellienieuwdorp/haus-xmpp")!
     static let privacyPolicy = URL(string: "https://xmpp.haus/privacy")!
     static let support = URL(string: "https://xmpp.haus/support")!
     static let supportAddress = "ellie@xmpp.haus"
 
-    /// "iOS 26.1": the system and its version, nothing that tells one device from another.
+    // Names the system and version only, nothing that tells one device from another.
     static var systemVersion: String {
         let version = ProcessInfo.processInfo.operatingSystemVersion
         let patch = version.patchVersion > 0 ? ".\(version.patchVersion)" : ""
         return "\(ThisDevice.systemName) \(version.majorVersion).\(version.minorVersion)\(patch)"
     }
 
-    /// A new mail to support with the app and system versions filled in. Nothing about the account, its server or the
-    /// device goes in: the person adds what they want to share.
+    // Nothing about the account, its server or the device goes in.
     static var supportMail: URL {
         var components = URLComponents()
         components.scheme = "mailto"
@@ -40,8 +37,6 @@ enum AppInfo {
     }
 }
 
-/// Settings > About: the build, the copyright and licence notice, and where the source, privacy policy, support and
-/// licences are.
 struct AboutView: View {
     var body: some View {
         GroupedList {
@@ -77,7 +72,7 @@ struct AboutView: View {
         #endif
     }
 
-    /// The copyright and licence notice every copy shows (GPL section 0, "Appropriate Legal Notices").
+    // Every copy shows it: GPL section 0, "Appropriate Legal Notices".
     private var legalNotice: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(AppInfo.copyright)
@@ -89,7 +84,6 @@ struct AboutView: View {
     }
 }
 
-/// A row that opens a web page, styled like the other settings rows rather than as tinted link text.
 struct ExternalLinkRow: View {
     let title: String
     let url: URL
@@ -111,12 +105,11 @@ struct ExternalLinkRow: View {
     }
 }
 
-/// The app icon as the Home Screen or Dock shows it.
 private struct AppIconView: View {
     @ScaledMetric(relativeTo: .title2) private var size: CGFloat = 88
 
     var body: some View {
-        // Grows with the text, but not past the point where it pushes the links off a phone's screen.
+        // Capped so a large text size does not push the links off a phone's screen.
         let size = min(size, 120)
         if let icon = PlatformApplication.iconImage {
             Image(platformImage: icon)
@@ -131,15 +124,10 @@ private struct AppIconView: View {
     }
 }
 
-// MARK: Licences
-
-/// One component's notices, as bundled: whole files from the repository, or a component's section of
-/// THIRD_PARTY_LICENSES.md. Nothing here repeats licence text; it only says where the text is.
+// Only says where the bundled licence text is; never repeats it.
 struct LicenceEntry: Identifiable, Hashable {
     enum Source: Hashable {
-        /// A bundled file, shown under `title`.
         case file(String, title: String)
-        /// The `## heading` section of THIRD_PARTY_LICENSES.md.
         case thirdPartySection(String)
     }
 
@@ -149,7 +137,6 @@ struct LicenceEntry: Identifiable, Hashable {
 
     static let thirdPartyFile = "THIRD_PARTY_LICENSES.md"
 
-    /// Haus XMPP first, then each component THIRD_PARTY_LICENSES.md lists, in its order.
     static let all: [LicenceEntry] = [
         LicenceEntry(name: "Haus XMPP", sources: [
             .file("LICENSE-ADDITIONAL-PERMISSION", title: "Additional permission for Apple distribution"),
@@ -168,9 +155,8 @@ struct LicenceEntry: Identifiable, Hashable {
 
     struct Document {
         let title: String?
-        /// Nil when the bundle lacks it (a build that left a resource out).
+        // Nil when the bundle lacks the resource.
         let text: String?
-        /// A section of THIRD_PARTY_LICENSES.md, whose code spans are Markdown; the licence files are plain text.
         let isMarkdown: Bool
     }
 
@@ -189,8 +175,6 @@ struct LicenceEntry: Identifiable, Hashable {
         bundle.url(forResource: name, withExtension: nil).flatMap { try? String(contentsOf: $0, encoding: .utf8) }
     }
 
-    /// The `## heading` section of a Markdown file, up to the next `## ` heading or rule, with the four-space indent of
-    /// its quoted licence blocks removed.
     static func section(_ heading: String, of markdown: String) -> String? {
         let lines = markdown.components(separatedBy: .newlines)
         guard let start = lines.firstIndex(of: "## " + heading) else { return nil }
@@ -198,15 +182,12 @@ struct LicenceEntry: Identifiable, Hashable {
         return body.map { $0.hasPrefix("    ") ? String($0.dropFirst(4)) : $0 }.joined(separator: "\n")
     }
 
-    /// The `## ` headings of a Markdown file, for checking that every listed component has an entry.
     static func headings(of markdown: String) -> [String] {
         markdown.components(separatedBy: .newlines).filter { $0.hasPrefix("## ") }.map { String($0.dropFirst(3)) }
     }
 
-    /// Plain text wrapped for a narrow screen: the files break lines at about 72 columns, which would leave ragged
-    /// half-lines on a phone. Lines are joined within paragraphs (separated by blank lines), except that a list item
-    /// ("(a) ", "1. ", "* ") starts a line of its own; runs of spaces collapse, and underline or rule lines of `=` or
-    /// `-` are dropped.
+    // The files wrap at about 72 columns, which leaves ragged half-lines on a phone: lines are joined within
+    // paragraphs, list items start their own line, and `=`/`-` rule lines are dropped.
     static func paragraphs(_ text: String) -> [String] {
         var result: [String] = [], current = ""
         func flush() {
@@ -227,7 +208,6 @@ struct LicenceEntry: Identifiable, Hashable {
     private nonisolated(unsafe) static let listItem = /(\(?([a-z]|[0-9]{1,2})[.)]|[*•-]) .*/
 }
 
-/// Settings > About > Licences.
 struct LicencesView: View {
     var body: some View {
         List(LicenceEntry.all) { entry in
@@ -237,7 +217,6 @@ struct LicencesView: View {
     }
 }
 
-/// One component's full licence text, selectable.
 struct LicenceTextView: View {
     let entry: LicenceEntry
 
@@ -272,7 +251,6 @@ struct LicenceTextView: View {
         #endif
     }
 
-    /// Paragraphs one blank line apart; in Markdown, inline syntax (code spans) is rendered.
     private static func rendered(_ text: String, markdown: Bool) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         var result = AttributedString()

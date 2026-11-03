@@ -5,11 +5,8 @@ import MessagingCore
 import OMEMO
 import UniformTypeIdentifiers
 
-/// Reduces a chosen file to what we are willing to upload: images are re-encoded as JPEG at ≤ 2048 px, video is exported
-/// at 720p, everything else goes as is, each within `limit`. Shared by the apps and their share extensions, so nothing
-/// here holds a whole file on the heap that it can read from disk instead: images are decoded from their file, and an
-/// exported video or a plain file is memory-mapped, which keeps a large file out of an extension's memory budget until
-/// it is sealed. The app's own pickers (photo library, camera) are in `Attachments.swift`.
+// Shared with the share extensions, so nothing here holds a whole file on the heap that it can read from disk: images
+// decode from their file, and exported video or a plain file is memory-mapped, outside the extension's memory budget.
 enum AttachmentPreparer {
     enum Failure: LocalizedError {
         case tooLarge(limit: Int), unreadable
@@ -23,7 +20,6 @@ enum AttachmentPreparer {
     static let maximumPixels = 2048
     static let jpegQuality = 0.85
 
-    /// Images are re-encoded at ≤ 2048 px, video is exported at 720p, everything else goes as is.
     static func prepare(fileURL: URL, name: String, type: UTType?, limit: Int) async throws -> PreparedAttachment {
         let scoped = fileURL.startAccessingSecurityScopedResource()
         defer { if scoped { fileURL.stopAccessingSecurityScopedResource() } }
@@ -50,7 +46,6 @@ enum AttachmentPreparer {
         return try prepareImage(source, name: name, limit: limit)
     }
 
-    /// The first frame of `source` (a Live Photo's still, a HEIC's primary image) as a JPEG of at most `maximumPixels`.
     static func prepareImage(_ source: CGImageSource, name: String, limit: Int) throws -> PreparedAttachment {
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                   kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
@@ -61,8 +56,7 @@ enum AttachmentPreparer {
         return PreparedAttachment(data: jpeg, name: (base.isEmpty ? "photo" : base) + ".jpg", mediaType: "image/jpeg", width: image.width, height: image.height)
     }
 
-    /// ImageIO's encoder on both platforms, as `UIImage.jpegData` uses on iOS; UIKit drawing is avoided because it is
-    /// unreliable inside an extension.
+    // ImageIO on both platforms; UIKit drawing is unreliable inside an extension.
     static func jpegData(_ image: CGImage, quality: Double) -> Data? {
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
@@ -75,7 +69,7 @@ enum AttachmentPreparer {
         try await prepareVideo(AVURLAsset(url: url), name: name, limit: limit)
     }
 
-    /// Slow-motion library videos arrive as compositions rather than files, so the export takes any asset.
+    // Slow-motion library videos arrive as compositions rather than files, so the export takes any asset.
     static func prepareVideo(_ asset: AVAsset, name: String, limit: Int) async throws -> PreparedAttachment {
         guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPreset1280x720) else { throw Failure.unreadable }
         let output = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".mp4")
@@ -92,7 +86,6 @@ enum AttachmentPreparer {
         return PreparedAttachment(data: data, name: (name as NSString).deletingPathExtension + ".mp4", mediaType: "video/mp4", width: width, height: height)
     }
 
-    /// The file's bytes as clean, file-backed pages rather than a heap copy; refused before mapping when over `limit`.
     private static func mapped(_ url: URL, limit: Int) throws -> Data {
         if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > limit { throw Failure.tooLarge(limit: limit) }
         let data = try Data(contentsOf: url, options: .alwaysMapped)

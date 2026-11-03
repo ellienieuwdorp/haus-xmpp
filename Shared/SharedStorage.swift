@@ -2,9 +2,7 @@ import Foundation
 import MessageStore
 
 enum SharedStorage {
-    /// This build's App Group, from the `HausAppGroup` Info.plist key (`HAUS_APP_GROUP` in Config/Base.xcconfig). The
-    /// development app and the released app each have their own, so neither can reach the other's data. A bundle
-    /// without the key is a broken build and stops here: any default could be another app's data.
+    // A bundle without the `HausAppGroup` key is a broken build: any default could be another app's data.
     static let group: String = {
         guard let group = Bundle.main.object(forInfoDictionaryKey: "HausAppGroup") as? String, !group.isEmpty else {
             preconditionFailure("HausAppGroup is missing from the Info.plist")
@@ -13,8 +11,7 @@ enum SharedStorage {
     }()
     enum Failure: Error, Equatable { case unavailable, conflictingStores }
 
-    /// Only the containing app migrates its original store. Move the whole directory while
-    /// holding its OS lease, preserving SQLite sidecars and the identity instead of copying it.
+    // Only the app migrates: it moves the whole directory under its OS lease, SQLite sidecars and identity included.
     static func directory(testSessionID: String? = nil, migrate: Bool) async throws -> URL {
         let manager = FileManager.default
         let support = try manager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
@@ -26,22 +23,17 @@ enum SharedStorage {
         }
         let destination = try groupContainer().appending(path: "Messaging", directoryHint: .isDirectory)
         #if os(macOS)
-        // The legacy location only ever held stores from iOS builds before the App Group move. No Mac build kept a store
-        // there, so there is nothing to bring across.
         return try await resolve(legacy: nil, destination: destination, migrate: migrate)
         #else
         return try await resolve(legacy: legacy, destination: destination, migrate: migrate)
         #endif
     }
 
-    /// The App Group container, once this process can use it. A missing entitlement makes `containerURL` nil on iOS,
-    /// but on macOS it always returns a path, so the directory itself is checked too.
+    // On macOS `containerURL` returns a path even without the entitlement, so the directory itself is checked too.
     static func groupContainer() throws -> URL {
         try usableContainer(FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group))
     }
 
-    /// The container must be a directory that exists or can be created, and on macOS one this process may write to
-    /// (`permitsWriting`).
     static func usableContainer(_ url: URL?) throws -> URL {
         guard let url else { throw Failure.unavailable }
         let manager = FileManager.default
@@ -56,31 +48,25 @@ enum SharedStorage {
 
     private static func permitsWriting(_ url: URL) -> Bool {
         #if os(macOS)
-        // Inside the Mac sandbox, access(2) calls the App Group container read-only although files can be created in
-        // it (measured 2026-10-09 on macOS 27.0.1 with a development-signed build: EPERM from access, success from a
-        // write), and permission bits cannot see a sandbox that denies writes (a build without the App Group
-        // entitlement, where containerURL still returns a path). Only a real write answers both. A Mac has no data
-        // protection classes that could refuse it before first unlock.
+        // In the Mac sandbox access(2) reports the container read-only although writes succeed, and permission bits
+        // cannot see a sandbox that denies writes; only a real write answers both.
         let probe = url.appending(path: ".write-probe-\(UUID().uuidString)")
         guard FileManager.default.createFile(atPath: probe.path, contents: nil) else { return false }
         try? FileManager.default.removeItem(at: probe)
         return true
         #else
-        // On iOS a URL at all means the process has the App Group, and access(2) is no test: on an iPhone it reports the
-        // container read-only although the app writes inside it (measured 2026-10-16 on iOS 27 with a TestFlight build;
-        // the simulator says writable). A probe write could fail before first unlock and would write for nothing.
+        // On iOS a URL means the process has the App Group; access(2) wrongly reports it read-only on devices, and a
+        // probe write could fail before first unlock.
         true
         #endif
     }
 
-    /// Explicit roots keep migration tests isolated from both real app containers. Without a legacy directory there
-    /// is nothing to move.
     static func resolve(legacy: URL?, destination: URL, migrate: Bool) async throws -> URL {
         let manager = FileManager.default
         let oldDatabase = legacy?.appending(path: "messages.sqlite")
         if migrate, let legacy, let oldDatabase, manager.fileExists(atPath: oldDatabase.path) {
             guard !manager.fileExists(atPath: destination.path) else { throw Failure.conflictingStores }
-            // As is: a store an older build left there is moved unchanged; the app snapshots it before migrating.
+            // A store an older build left there is moved unchanged; the app snapshots it before migrating.
             let old = try MessageStore(url: oldDatabase, schema: .asIs)
             do {
                 try await old.acquireTransportOwnership()

@@ -10,7 +10,7 @@ xcodebuild test -project HausXMPP.xcodeproj -scheme HausXMPPLifecycle \
 
 Besides the app logic tests (conversation presentation, timeline, composer, notifications, migrations), the encryption suite checks device-local Keychain accessibility metadata, stable key reload, encrypted OMEMO identity restoration, backup exclusion and fail-closed behaviour after a wrapping key disappears. A device-only test checks the actual Data Protection class on the directory, the SQLite database, its WAL and SHM files and the transport lock file. Simulator runs skip that assertion because the simulator file system does not expose iOS Data Protection attributes.
 
-Rebuild with this scheme before running it. A derived data folder last built by the `HausXMPP` scheme makes about a dozen unrelated tests that compare errors fail.
+Rebuild with this scheme before running it. A derived data folder last built by the `HausXMPP` scheme makes unrelated tests that compare errors fail.
 
 ## Process relaunch
 

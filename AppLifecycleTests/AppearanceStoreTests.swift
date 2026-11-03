@@ -62,7 +62,7 @@ final class AppearanceStoreTests: XCTestCase {
     }
 }
 
-/// `withObservationTracking` calls back synchronously on the mutating thread (main, here).
+// `withObservationTracking` calls back synchronously on the mutating thread (main, here).
 private final class Flag: @unchecked Sendable {
     private(set) var value = false
     func set() { value = true }

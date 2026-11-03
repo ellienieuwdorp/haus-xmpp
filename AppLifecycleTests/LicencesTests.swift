@@ -1,8 +1,8 @@
 import XCTest
 @testable import HausXMPP
 
-/// Settings > About > Licences reads the repository's licence files from the app bundle. Every component that
-/// THIRD_PARTY_LICENSES.md lists needs a row, and every row's text must be in the built app.
+// Every component THIRD_PARTY_LICENSES.md lists needs a row in Settings > About > Licences, and every row's text
+// must be in the built app.
 final class LicencesTests: XCTestCase {
     func testEveryRowsTextIsInTheApp() throws {
         for entry in LicenceEntry.all {
