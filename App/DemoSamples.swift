@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import MessageStore
 import MessagingCore
+import XMPPProtocol
 
 // Stored as received and sent messages would be, so every part of a bubble shows; nothing is sent or fetched.
 enum DemoSamples {

@@ -22,9 +22,9 @@ final class ComposerClearTests: XCTestCase {
 
     override func setUp() async throws {
         state = ComposerState()
-        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
         // A window outside a scene cannot become key, and the field could not take the keyboard.
-        window.windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+        window = UIWindow(windowScene: try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene))
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
         window.rootViewController = UIHostingController(rootView: Field(state: state))
         window.makeKeyAndVisible()
         settle()

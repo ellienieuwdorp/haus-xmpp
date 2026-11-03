@@ -200,8 +200,8 @@ struct MessageActionsOverlayView: View {
         // The bubble is a picture taken at the press; in a new appearance it would stay in the old one.
         .onChange(of: colorScheme) { dismiss(nil) }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
-            guard let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
-                  !motion.dismissing, let screen = (note.object as? UIScreen) ?? UIScreen.main as UIScreen? else { return }
+            guard let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue, !motion.dismissing,
+                  let screen = (note.object as? UIScreen) ?? UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.screen }).first else { return }
             motion.keyboardHeight = max(0, screen.bounds.height - frame.minY)
         }
     }
@@ -485,7 +485,7 @@ private struct EmojiKeyboardField: UIViewRepresentable {
     func updateUIView(_ uiView: EmojiTextField, context: Context) {}
     func makeCoordinator() -> Coordinator { Coordinator(onEmoji: onEmoji) }
 
-    final class Coordinator: NSObject {
+    @MainActor final class Coordinator: NSObject {
         let onEmoji: (String) -> Void
         init(onEmoji: @escaping (String) -> Void) { self.onEmoji = onEmoji }
         @objc func changed(_ field: UITextField) {

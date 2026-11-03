@@ -1,5 +1,6 @@
 import Foundation
 import OMEMO
+import XMPPProtocol
 
 enum ChatDeviceReview {
     static func devices(_ devices: [EncryptionDevice], account: String, isGroup: Bool) -> [EncryptionDevice] {

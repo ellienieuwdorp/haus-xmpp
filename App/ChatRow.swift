@@ -1,3 +1,4 @@
+import MessageStore
 import SwiftUI
 #if os(iOS)
 import UIKit
@@ -56,7 +57,7 @@ struct ChatRow: View {
         if isBlocked { return Text("Blocked") }
         let body = Text(chat.preview.isEmpty ? "Start a conversation" : chat.preview)
         guard let stateGlyph else { return body }
-        return stateGlyph + Text(" ") + body
+        return Text("\(stateGlyph) \(body)")
     }
 
     var body: some View {

@@ -1,11 +1,11 @@
 import XCTest
 
 final class ConversationUITests: XCTestCase {
-    private func bubble(_ index: Int, in app: XCUIApplication) -> XCUIElement {
+    @MainActor private func bubble(_ index: Int, in app: XCUIApplication) -> XCUIElement {
         app.textViews.containing(NSPredicate(format: "value == %@", "History message \(index)")).firstMatch
     }
 
-    private func composer(in app: XCUIApplication) -> XCUIElement {
+    @MainActor private func composer(in app: XCUIApplication) -> XCUIElement {
         // A multiline SwiftUI TextField is exposed as a text view on some runtimes.
         let field = app.textFields["messageComposer"]
         return field.exists ? field : app.textViews["messageComposer"]
@@ -94,7 +94,7 @@ final class ConversationUITests: XCTestCase {
     // One accessibility snapshot; querying each element's frame costs a round trip.
     @MainActor private func bubbleFrames(in timeline: XCUIElement) -> [(text: String, frame: CGRect)] {
         var found: [(text: String, frame: CGRect)] = []
-        func walk(_ node: XCUIElementSnapshot) {
+        func walk(_ node: any XCUIElementSnapshot) {
             if node.elementType == .textView, let text = node.value as? String, text.hasPrefix("History message") { found.append((text, node.frame)) }
             node.children.forEach(walk)
         }

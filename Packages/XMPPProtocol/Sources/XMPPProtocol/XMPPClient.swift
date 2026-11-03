@@ -183,7 +183,7 @@ public actor XMPPClient {
     private var authenticatedWithSCRAM = false
     // One TCP/TLS attempt; a failed candidate is abandoned without ending the connect.
     private var attempt = UUID()
-    private var abandonedError: Error?
+    private var abandonedError: (any Error)?
     // Set at the first stream features inside TLS: from then on a failure ends the connect instead of moving on.
     private var committed = false
     // A candidate must reach TLS stream features within this; the whole login within `loginTimeout`.
@@ -209,7 +209,7 @@ public actor XMPPClient {
     private var emittedEvents: UInt64 = 0
     private struct IQRequest {
         let scope: IQReplyScope
-        let continuation: CheckedContinuation<XMLNode, Error>
+        let continuation: CheckedContinuation<XMLNode, any Error>
         let timeout: Task<Void, Never>
     }
     private var iqRequests: [String: IQRequest] = [:]
@@ -238,7 +238,7 @@ public actor XMPPClient {
     private var smOffered = false
     private var csiOffered = false
     private let writeGate = XMPPAsyncGate()
-    private var handshake: CheckedContinuation<Void, Error>?
+    private var handshake: CheckedContinuation<Void, any Error>?
     private let queue = DispatchQueue(label: "xmpp.transport")
     private enum Phase { case idle, features, authentication, authenticatedFeatures, binding, enablingSM, resumingSM, online }
 
@@ -292,7 +292,7 @@ public actor XMPPClient {
                 case .discover(let preferred): candidates = preferred.map { [$0] } ?? []; discovered = false
                 }
                 var tried = Set<XMPPEndpoint>()
-                var failure: Error?
+                var failure: (any Error)?
                 let giveUp = ContinuousClock.now + Self.connectTimeout
                 while true {
                     let remaining = giveUp - .now
@@ -374,7 +374,7 @@ public actor XMPPClient {
     }
 
     // Without ending the connect or emitting a disconnect.
-    private func abandonAttempt(_ attemptID: UUID, error: Error) {
+    private func abandonAttempt(_ attemptID: UUID, error: any Error) {
         guard attempt == attemptID, !committed else { return }
         attempt = UUID(); abandonedError = error
         deadline?.cancel(); deadline = nil
@@ -1446,7 +1446,7 @@ public actor XMPPClient {
         return true
     }
 
-    private func failIQ(_ id: String, error: Error) {
+    private func failIQ(_ id: String, error: any Error) {
         rosterFetchIDs.remove(id); blocklistFetchIDs.remove(id)
         guard let request = iqRequests.removeValue(forKey: id) else { return }
         request.timeout.cancel()
@@ -1467,7 +1467,7 @@ public actor XMPPClient {
     }
     private func cancel(_ token: UUID) { if generation == token { finish(nil) } }
     private func timeout(_ token: UUID) { if generation == token && phase != .online { finish("Connection timed out", error: XMPPClientError.timedOut) } }
-    private func finish(_ reason: String?, error: Error = XMPPClientError.connectionClosed) {
+    private func finish(_ reason: String?, error: any Error = XMPPClientError.connectionClosed) {
         generation = UUID()
         groupRooms.removeAll(); rosterFetchIDs.removeAll(); rosterRequested = false
         blocklistFetchIDs.removeAll(); blocklistRequested = false
@@ -1554,10 +1554,10 @@ public actor XMPPClient {
         default: error == XMPPTransport.startTLSRefused || error == .posix(.EBADMSG)
         }
     }
-    private static func transportError(_ error: Error) -> Error {
+    private static func transportError(_ error: any Error) -> any Error {
         (error as? NWError) == XMPPTransport.startTLSRefused ? XMPPClientError.encryptionUnavailable : error
     }
-    private static func safeDescription(_ error: Error, otherwise: String = "Connection ended") -> String {
+    private static func safeDescription(_ error: any Error, otherwise: String = "Connection ended") -> String {
         switch error {
         case XMPPClientError.authenticationFailed: "Authentication failed"
         case XMPPClientError.authenticationUnavailable: "Server offers no supported authentication mechanism"
@@ -1573,14 +1573,14 @@ public actor XMPPClient {
     }
 }
 
-private struct CandidateFailure: Error { let error: Error }
+private struct CandidateFailure: Error { let error: any Error }
 
 // NWConnection callbacks are serialized on their queue; the lock also protects cancellation delivery.
 private final class ConnectionStart: @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: CheckedContinuation<Void, Error>?
-    init(_ continuation: CheckedContinuation<Void, Error>) { self.continuation = continuation }
-    func finish(_ error: Error?) {
+    private var continuation: CheckedContinuation<Void, any Error>?
+    init(_ continuation: CheckedContinuation<Void, any Error>) { self.continuation = continuation }
+    func finish(_ error: (any Error)?) {
         lock.lock(); let result = continuation; continuation = nil; lock.unlock()
         if let error { result?.resume(throwing: error) } else { result?.resume() }
     }

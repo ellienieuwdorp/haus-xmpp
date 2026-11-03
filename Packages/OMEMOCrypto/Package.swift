@@ -1,5 +1,12 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
+
+let swiftSettings: [SwiftSetting] = [
+  .treatAllWarnings(as: .error),
+  .enableUpcomingFeature("ExistentialAny"),
+  .enableUpcomingFeature("MemberImportVisibility"),
+  .enableUpcomingFeature("ImmutableWeakCaptures"),
+]
 
 let package = Package(
   name: "OMEMOCrypto", platforms: [.iOS(.v17), .macOS(.v15)],
@@ -81,7 +88,8 @@ let package = Package(
       ]),
     .target(
       name: "COMEMOBridge", dependencies: ["CLibOMEMO"], publicHeadersPath: "include",
+      cSettings: [.treatAllWarnings(as: .error)],
       linkerSettings: [.linkedFramework("Security")]),
-    .target(name: "OMEMOCrypto", dependencies: ["COMEMOBridge"]),
-    .testTarget(name: "OMEMOCryptoTests", dependencies: ["OMEMOCrypto"]),
+    .target(name: "OMEMOCrypto", dependencies: ["COMEMOBridge"], swiftSettings: swiftSettings),
+    .testTarget(name: "OMEMOCryptoTests", dependencies: ["OMEMOCrypto"], swiftSettings: swiftSettings),
   ])

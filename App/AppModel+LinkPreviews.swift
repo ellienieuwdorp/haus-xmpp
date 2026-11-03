@@ -1,5 +1,6 @@
 import Foundation
 import MessageStore
+import OMEMO
 import XMPPProtocol
 
 extension AppModel: ComposerLinkPreviewSource {

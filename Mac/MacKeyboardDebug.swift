@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import MessageStore
 
 // Keys go to the main window in process (`NSWindow.sendEvent`), never through the window server; the accessibility
 // tree is read in process, as an assistive app reads it, with no permission asked.
@@ -39,7 +40,7 @@ import AppKit
         guard !treeBuilt else { return }
         treeBuilt = true
         for attribute in ["AXEnhancedUserInterface", "AXManualAccessibility"] {
-            (NSApp as AnyObject).accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: attribute))
+            _ = NSApp.perform(NSSelectorFromString("accessibilitySetValue:forAttribute:"), with: true, with: attribute)
         }
         try? await Task.sleep(for: .milliseconds(500))
     }
@@ -211,7 +212,7 @@ import AppKit
     // A table's rows answer only the older attribute API, as an assistive app reads them.
     private static func children(_ element: Element) -> [Any] {
         if let children: [Any] = ask(element, "accessibilityChildren") { return children }
-        return element.accessibilityAttributeValue(.children) as? [Any] ?? []
+        return element.legacyAccessibilityValue(.children) as? [Any] ?? []
     }
     private static func actions(_ element: Element) -> [String] { (ask(element, "accessibilityCustomActions") as [NSAccessibilityCustomAction]?)?.map(\.name) ?? [] }
     private static func rotors(_ element: Element) -> [NSAccessibilityCustomRotor] { ask(element, "accessibilityCustomRotors") ?? [] }

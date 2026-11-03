@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import MessageStore
 import OMEMO
 import SwiftUI
 

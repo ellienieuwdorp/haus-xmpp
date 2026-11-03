@@ -279,7 +279,7 @@
   "function_body_length": [
    [
     "func configure(row: TimelineRow, toggleStar: @escaping () -> Void, retry: @escaping () -> Void, reply: @escaping () -> Void, reaction: @escaping (String) -> Void,",
-    118
+    117
    ],
    [
     "func update(messages incoming: [TimelineMessage], typing: TimelineTyping? = nil, loadingEarlier: Bool = false, accent: String = \"\", onToggleStar: @escaping (String) -> Void, onRetryMessage: @escaping (String) -> Void = { _ in }, onReply: @escaping (String) -> Void = { _ in }, onReaction: @escaping (String, String) -> Void = { _, _ in },",
@@ -425,7 +425,7 @@
    ],
    [
     "private final class MessageBubbleCell: UICollectionViewCell, UIGestureRecognizerDelegate {",
-    858
+    857
    ]
   ]
  },
@@ -797,10 +797,6 @@
    ]
   ],
   "unneeded_throws_rethrows": [
-   [
-    "override func setUp() async throws {",
-    0
-   ],
    [
     "override func tearDown() async throws {",
     0
@@ -1334,10 +1330,6 @@
   ],
   "unneeded_throws_rethrows": [
    [
-    "override func setUp() async throws {",
-    0
-   ],
-   [
     "override func tearDown() async throws {",
     0
    ]
@@ -1363,10 +1355,6 @@
   "unneeded_throws_rethrows": [
    [
     "func testOnlyTheReadersScrollNearTheTopAsksForOlderMessages() throws {",
-    0
-   ],
-   [
-    "override func setUp() async throws {",
     0
    ],
    [
@@ -1753,7 +1741,7 @@
   "file_length": [
    [
     "",
-    981
+    980
    ]
   ],
   "force_unwrapping": [
@@ -1783,7 +1771,7 @@
   "type_body_length": [
    [
     "@MainActor enum MacDebugHooks {",
-    926
+    923
    ]
   ]
  },
@@ -1925,13 +1913,13 @@
   "file_length": [
    [
     "",
-    681
+    679
    ]
   ],
   "type_body_length": [
    [
     "final class MacTimelineMessageCell: NSView, NSTextViewDelegate {",
-    404
+    401
    ]
   ]
  },
@@ -1947,7 +1935,7 @@
   "file_length": [
    [
     "",
-    493
+    491
    ]
   ],
   "force_unwrapping": [
@@ -1959,13 +1947,13 @@
   "function_body_length": [
    [
     "static func step(_ name: String, _ argument: String, window: NSWindow?) async {",
-    112
+    109
    ]
   ],
   "type_body_length": [
    [
     "@MainActor enum MacTimelineDebug {",
-    487
+    484
    ]
   ]
  },

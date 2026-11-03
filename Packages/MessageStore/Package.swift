@@ -1,5 +1,12 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
+
+let swiftSettings: [SwiftSetting] = [
+    .treatAllWarnings(as: .error),
+    .enableUpcomingFeature("ExistentialAny"),
+    .enableUpcomingFeature("MemberImportVisibility"),
+    .enableUpcomingFeature("ImmutableWeakCaptures"),
+]
 
 let package = Package(
     name: "MessageStore",
@@ -8,7 +15,7 @@ let package = Package(
     dependencies: [.package(path: "../XMPPProtocol")],
     targets: [
         .systemLibrary(name: "CSQLite"),
-        .target(name: "MessageStore", dependencies: ["CSQLite", "XMPPProtocol"]),
-        .testTarget(name: "MessageStoreTests", dependencies: ["MessageStore"], resources: [.copy("Fixtures")])
+        .target(name: "MessageStore", dependencies: ["CSQLite", "XMPPProtocol"], swiftSettings: swiftSettings),
+        .testTarget(name: "MessageStoreTests", dependencies: ["MessageStore"], resources: [.copy("Fixtures")], swiftSettings: swiftSettings)
     ]
 )

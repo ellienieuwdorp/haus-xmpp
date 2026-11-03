@@ -1,4 +1,5 @@
 import AppKit
+import XMPPProtocol
 
 enum MacTimelineKey: Equatable {
     case scroll(MacTimelineController.KeyScroll)

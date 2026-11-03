@@ -1,3 +1,4 @@
+import MessageStore
 import SwiftUI
 
 struct ChatListView: View {

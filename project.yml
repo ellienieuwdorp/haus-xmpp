@@ -10,6 +10,12 @@ configFiles:
 settings:
   base:
     SWIFT_VERSION: '6.0'
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    GCC_TREAT_WARNINGS_AS_ERRORS: YES
+    SWIFT_UPCOMING_FEATURE_EXISTENTIAL_ANY: YES
+    SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
+    # Xcode has no build setting for this upcoming feature.
+    OTHER_SWIFT_FLAGS: $(inherited) -enable-upcoming-feature ImmutableWeakCaptures
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     CODE_SIGN_STYLE: Automatic
 packages:

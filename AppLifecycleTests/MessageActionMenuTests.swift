@@ -1,3 +1,4 @@
+import MessageStore
 import XCTest
 @testable import HausXMPP
 

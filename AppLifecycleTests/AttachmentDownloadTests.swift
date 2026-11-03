@@ -3,6 +3,7 @@ import MessageStore
 import MessagingCore
 import OMEMO
 import XCTest
+import XMPPProtocol
 @testable import HausXMPP
 
 // The in-process URLProtocol stub plays the system's part for Low Data Mode and expensive networks: it refuses a

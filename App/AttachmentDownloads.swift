@@ -4,6 +4,7 @@ import MessageStore
 import MessagingCore
 import Observation
 import OMEMO
+import XMPPProtocol
 import os
 
 // Every download has a cap set before it starts: the declared size plus the 16-byte GCM tag, a HEAD

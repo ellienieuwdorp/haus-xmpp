@@ -1185,7 +1185,7 @@ final class AppModel {
             return
         }
         do {
-            let moved = try await transfers.export(store: store, accountID: account, code: code, now: Date()) { progress in
+            let moved = try await transfers.export(store: store, accountID: account, code: code, now: Date()) { [weak self] progress in
                 Task { @MainActor [weak self] in self?.showTransferProgress(progress) }
             }
             Self.syncLog.notice("transfer packed; this install is moved")
@@ -1268,7 +1268,7 @@ final class AppModel {
         catch { return AccountTransfer.describe(error) }
         let staged: AccountTransfer.Staged
         do {
-            staged = try await Task.detached {
+            staged = try await Task.detached { [weak self] in
                 try Self.readPicked(file) { url in
                     try transfers.stage(archive: url, code: code) { progress in
                         Task { @MainActor [weak self] in self?.showTransferProgress(progress) }
@@ -1843,7 +1843,7 @@ final class AppModel {
             donateSend(to: chatID)
             return true
         } catch {
-            if accountID == account { self.error = (error as? LocalizedError)?.errorDescription ?? "Could not save the file." }
+            if accountID == account { self.error = (error as? any LocalizedError)?.errorDescription ?? "Could not save the file." }
             return false
         }
     }
@@ -2385,7 +2385,7 @@ final class AppModel {
             session = .ready
             Self.syncLog.notice("ready +\(self.syncElapsed(), privacy: .public) ms")
             // Roster pushes are answered only after a fetch on this stream; the `.rosterItems` event revokes and asks.
-            try? await client.fetchRoster()
+            _ = try? await client.fetchRoster()
             guard setupIsCurrent(token) else { return }
             await flushEncryptionControls(account: account, client: client, logsLiveStore: false)
             await refresh()

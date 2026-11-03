@@ -406,6 +406,7 @@
 		C8298B541D029F2D79E3CDE7 /* KeychainQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA93764A4DF52154E7E4EE99 /* KeychainQuery.swift */; };
 		C8EFCB52E82C322BD11EC02F /* XMPPProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = C2FEBE454A1DEC0613A1D681 /* XMPPProtocol */; };
 		C8F4AF8EA28836DE5E863873 /* LinkPreviewFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACBF37A7C95EEC298914703E /* LinkPreviewFetcher.swift */; };
+		C94AE6262D0ECD0BF8493F5E /* MacLegacyAccessibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08AEC48CCF4D638B6D8508F5 /* MacLegacyAccessibility.swift */; };
 		C9F1C4A7F8151E8DD8CE6EE3 /* LinkPreviewPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = DED03AC2C8C20A692BFCF788 /* LinkPreviewPolicy.swift */; };
 		CA1473BDCD93F12D49215EAD /* ReceiptUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 198B61EF24F8F532830EF75A /* ReceiptUITests.swift */; };
 		CA6A4BE7AC0F7581EE9CDA72 /* MessageStore in Frameworks */ = {isa = PBXBuildFile; productRef = C1FD7887F5B6566A54B370AD /* MessageStore */; };
@@ -610,6 +611,7 @@
 		07698C55DB964708DC796FF2 /* ContactLinkCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactLinkCenter.swift; sourceTree = "<group>"; };
 		08A54D67178B7D4A0E4267AB /* ThisDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThisDevice.swift; sourceTree = "<group>"; };
 		08AB25F55ECA4190D03927E7 /* MessageActionsOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageActionsOverlay.swift; sourceTree = "<group>"; };
+		08AEC48CCF4D638B6D8508F5 /* MacLegacyAccessibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLegacyAccessibility.swift; sourceTree = "<group>"; };
 		08DCEB72DB5C954FB177F948 /* OwnDeviceReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwnDeviceReview.swift; sourceTree = "<group>"; };
 		0947D89080553653EC6040CF /* DeliveredNotificationCleaner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeliveredNotificationCleaner.swift; sourceTree = "<group>"; };
 		09FA0B70EB5B16DFE6426118 /* Appearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Appearance.swift; sourceTree = "<group>"; };
@@ -1006,6 +1008,7 @@
 				A5E408B62A510F3B497AE648 /* MacDeviceReview.swift */,
 				2BFB7DF54D7EE2058412BCD7 /* MacDeviceReviewDebug.swift */,
 				B57B2F4C459976BC8495A7C6 /* MacKeyboardDebug.swift */,
+				08AEC48CCF4D638B6D8508F5 /* MacLegacyAccessibility.swift */,
 				F7D7B0F60E83D75595B85518 /* MacLifecycle.swift */,
 				C330E74F87D4C44D0C45570E /* MacLifecycleDebug.swift */,
 				D6DB6AFCBA2A1A1FCF238CA3 /* MacLinkPreviewCard.swift */,
@@ -2246,6 +2249,7 @@
 				27D9B832DBF91F4A50C4A8D2 /* MacDeviceReviewDebug.swift in Sources */,
 				3A7A62B7523F6748224D8BF5 /* MacExtensionProbe.swift in Sources */,
 				564DD323EEBE9F651ADE3EEE /* MacKeyboardDebug.swift in Sources */,
+				C94AE6262D0ECD0BF8493F5E /* MacLegacyAccessibility.swift in Sources */,
 				0D04946520F10F50787A02A8 /* MacLifecycle.swift in Sources */,
 				267CEC631E56DBC1EBE98E9B /* MacLifecycleDebug.swift in Sources */,
 				354D11AC9DAF73E8B9268104 /* MacLinkPreviewCard.swift in Sources */,
@@ -2668,6 +2672,7 @@
 					"$(inherited)",
 					"DEBUG=1",
 				);
+				GCC_TREAT_WARNINGS_AS_ERRORS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
 				GCC_WARN_UNDECLARED_SELECTOR = YES;
@@ -2678,9 +2683,13 @@
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				OTHER_SWIFT_FLAGS = "$(inherited) -enable-upcoming-feature ImmutableWeakCaptures";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_UPCOMING_FEATURE_EXISTENTIAL_ANY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
@@ -2754,6 +2763,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_TREAT_WARNINGS_AS_ERRORS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
 				GCC_WARN_UNDECLARED_SELECTOR = YES;
@@ -2763,9 +2773,13 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
+				OTHER_SWIFT_FLAGS = "$(inherited) -enable-upcoming-feature ImmutableWeakCaptures";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_UPCOMING_FEATURE_EXISTENTIAL_ANY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
 			};
 			name = Release;

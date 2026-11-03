@@ -128,7 +128,7 @@ enum GroupRoomRefreshDecision: Equatable {
 // Shared by every caller asking for the room meanwhile; cancelled only when every waiter was, or by `finish`.
 struct GroupRoomRefresh: Sendable {
     let id: UUID
-    let task: Task<XMPPGroupRoomSnapshot, Error>
+    let task: Task<XMPPGroupRoomSnapshot, any Error>
     var waiters: Int
 }
 

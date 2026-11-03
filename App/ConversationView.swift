@@ -213,7 +213,7 @@ struct ConversationView: View {
                     let prepared = try await job()
                     state.tray.append(PendingAttachment(prepared: prepared, preview: await AttachmentThumbnails.preview(of: prepared)))
                 } catch {
-                    model.error = (error as? LocalizedError)?.errorDescription ?? "This file could not be attached."
+                    model.error = (error as? any LocalizedError)?.errorDescription ?? "This file could not be attached."
                 }
             }
         }
@@ -238,7 +238,7 @@ struct ConversationView: View {
                 guard state.sends == sends else { return }
                 state.tray.append(PendingAttachment(prepared: prepared, preview: preview, assetIdentifier: asset.localIdentifier))
             } catch {
-                model.error = (error as? LocalizedError)?.errorDescription ?? "This photo could not be attached."
+                model.error = (error as? any LocalizedError)?.errorDescription ?? "This photo could not be attached."
             }
         }
         assetPicks = pick

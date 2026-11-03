@@ -4,6 +4,9 @@ import MessageStore
 import MessagingCore
 import Observation
 import os
+#if os(iOS)
+import UIKit
+#endif
 
 // Keeps stored rows current with Contacts on load, on return to the foreground and when Contacts changes; a link is
 // only ever made or removed by the user.

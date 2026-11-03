@@ -61,7 +61,7 @@ public struct ContactLink: Sendable, Equatable, CustomStringConvertible {
     func validate() throws {
         guard !accountID.isEmpty, !jid.isEmpty, jid != accountID, !contactIdentifier.isEmpty, contactIdentifier.utf8.count <= 512,
               (displayName?.utf8.count ?? 0) <= 1_024, imageHash.map(Self.isHash) ?? true,
-              linkedAt.timeIntervalSince1970.isFinite, checkedAt.map { $0.timeIntervalSince1970.isFinite } ?? true
+              linkedAt.timeIntervalSince1970.isFinite, checkedAt.map({ $0.timeIntervalSince1970.isFinite }) ?? true
         else { throw MessageStoreError.invalidValue }
     }
 

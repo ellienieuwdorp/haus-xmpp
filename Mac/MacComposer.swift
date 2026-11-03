@@ -1,5 +1,6 @@
 import AppKit
 import ImageIO
+import MessageStore
 import PhotosUI
 import SwiftUI
 import XMPPProtocol

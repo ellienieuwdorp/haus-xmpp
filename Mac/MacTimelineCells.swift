@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import XMPPProtocol
 
 // Cells are laid out by hand from each row's cached record (`MacRowLayout`), with no Auto Layout and nothing asked for
 // its size. Each part is a layer-backed view redrawn only when told (`.onSetNeedsDisplay`), so scrolling draws nothing;
@@ -377,10 +378,7 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
     }
 
     private func configureExtras(_ layout: MacRowLayout, message: TimelineMessage) {
-        guard let frame = layout.extrasFrame else {
-            extras?.isHidden = true
-            return
-        }
+        guard let frame = layout.extrasFrame else { extras?.isHidden = true; return }
         let root = MacBubbleExtras(content: MacBubbleExtrasContent(
             message: message, accent: context.accent,
             openAttachment: { [context] in context.openAttachment(message) },

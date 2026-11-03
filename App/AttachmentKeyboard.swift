@@ -72,7 +72,7 @@ enum KeyboardHeightCache {
     // attached meanwhile. Detaching clears this, so a picker closing after the panel was put away restores nothing.
     private var pickingMore: UUID?
     private var restoresAfterMenu = false
-    private var rotation: UITraitChangeRegistration?
+    private var rotation: (any UITraitChangeRegistration)?
     private let camera = CameraDelegate()
 
     var isPresented: Bool {
@@ -265,7 +265,7 @@ enum KeyboardHeightCache {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized: presentCamera()
         case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .video) { granted in
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
                 Task { @MainActor [weak self] in
                     if granted { self?.presentCamera() } else { self?.refuse("Allow camera access in Settings to take a photo.") }
                 }
@@ -712,7 +712,7 @@ private final class RecentPhotosRail: UIView, UICollectionViewDataSource, UIColl
         UIView.animate(withDuration: 0.3) { self.alpha = 1 }
         if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined {
             showAccessPrompt()
-            PHPhotoLibrary.requestAuthorization(for: .readWrite) { _ in
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { [weak self] _ in
                 Task { @MainActor [weak self] in self?.reload() }
             }
         } else {
