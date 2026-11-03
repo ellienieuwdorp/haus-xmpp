@@ -149,61 +149,6 @@ final class MacAuthorView: MacTimelineDrawnView {
     }
 }
 
-// The star's slot is always there, so starring never moves anything.
-final class MacFooterView: MacTimelineDrawnView {
-    struct Content: Equatable {
-        var isOutgoing = false
-        var accent: AccentTheme = .indigo
-        var isStarred = false
-        var text: String?
-        var glyph: MessageStatusGlyph?
-    }
-
-    var content = Content() { didSet { if content != oldValue { needsDisplay = true } } }
-
-    override func draw(_ dirtyRect: NSRect) {
-        #if DEBUG
-        debugNoteDraw(dirtyRect)
-        #endif
-        let metrics = MacTimelineMetrics.shared
-        let color = content.isOutgoing ? content.accent.bubbleText.withAlphaComponent(0.75) : .secondaryLabelColor
-        let slot = MacTimelineMetrics.statusSlot
-        var x = bounds.width
-        if let glyph = content.glyph {
-            x -= slot.width
-            let width = MessageStatusArt.designWidth(glyph)
-            let rect = NSRect(x: x + slot.width - width, y: (bounds.height - slot.height) / 2, width: width, height: slot.height)
-            Self.drawTinted(MessageStatusArt.image(glyph, scale: 1), in: rect, color: color)
-            x -= 4
-        }
-        if let text = content.text {
-            let attributes: [NSAttributedString.Key: Any] = [.font: metrics.caption2, .foregroundColor: color]
-            let width = ceil((text as NSString).size(withAttributes: attributes).width)
-            x -= width
-            (text as NSString).draw(at: NSPoint(x: x, y: (bounds.height - metrics.caption2Line) / 2), withAttributes: attributes)
-            x -= 4
-        }
-        if content.isStarred {
-            x -= metrics.starSize.width
-            let rect = NSRect(x: x, y: (bounds.height - metrics.starSize.height) / 2, width: metrics.starSize.width, height: metrics.starSize.height)
-            Self.drawTinted(metrics.star, in: rect, color: color)
-        }
-    }
-
-    static func drawTinted(_ image: NSImage, in rect: NSRect, color: NSColor) {
-        guard let context = NSGraphicsContext.current?.cgContext,
-              let cgImage = image.cgImage(forProposedRect: nil, context: NSGraphicsContext.current, hints: nil) else { return }
-        context.saveGState()
-        context.translateBy(x: rect.minX, y: rect.maxY)
-        context.scaleBy(x: 1, y: -1)
-        let local = CGRect(origin: .zero, size: rect.size)
-        context.clip(to: local, mask: cgImage)
-        context.setFillColor(color.cgColor)
-        context.fill(local)
-        context.restoreGState()
-    }
-}
-
 // Tooltips only on the row under the pointer: a tooltip is a tracking rect, which costs every scrolled frame as a
 // cursor rect does.
 final class MacReactionsView: MacTimelineDrawnView {
@@ -685,11 +630,10 @@ final class MacTimelineMessageCell: NSView, NSTextViewDelegate {
         emojiPopover = nil
     }
 
+    override func menu(for event: NSEvent) -> NSMenu? { menu(at: convert(event.locationInWindow, from: nil)) }
+
     // Never on the empty gutter beside the bubble.
-    override func menu(for event: NSEvent) -> NSMenu? {
-        let point = convert(event.locationInWindow, from: nil)
-        return bubbleFrame.contains(point) ? textMenu(nil) : nil
-    }
+    func menu(at point: NSPoint) -> NSMenu? { bubbleFrame.contains(point) ? textMenu(nil) : nil }
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         guard let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)) else { return false }

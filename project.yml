@@ -358,6 +358,26 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/HausXMPP.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/HausXMPP
         BUNDLE_LOADER: $(TEST_HOST)
+  # Hosted in the Debug Mac app, which sees XCTest at launch and starts only an empty, prohibited NSApplication
+  # (`MacTestHost`): no model, window, store, Keychain or network. The shared timeline policy tests run here too, on the
+  # Mac build of those models.
+  HausXMPPMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: '26.0'
+    sources:
+      - MacTests
+      - AppLifecycleTests/MessageActionMenuTests.swift
+      - AppLifecycleTests/TimelineMessageFocusTests.swift
+      - AppLifecycleTests/TimelineScrollPolicyTests.swift
+    dependencies:
+      - target: HausXMPPMac
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        ARCHS: arm64
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/$(HAUS_DISPLAY_NAME).app/Contents/MacOS/$(HAUS_DISPLAY_NAME)
+        BUNDLE_LOADER: $(TEST_HOST)
   HausXMPPUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -386,6 +406,9 @@ schemes:
         HausXMPPMac: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets: [HausXMPPMacTests]
   HausXMPPLifecycle:
     build:
       targets:

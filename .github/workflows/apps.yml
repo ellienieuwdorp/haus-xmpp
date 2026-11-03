@@ -1,5 +1,6 @@
-# Compiles the iPhone and Mac apps, unsigned, and runs the app's hosted unit tests (the `HausXMPPLifecycle` scheme) on
-# an iOS simulator. Nothing is signed, archived or uploaded, and the UI tests don't run here.
+# Compiles the iPhone and Mac apps, unsigned, and runs the app's hosted unit tests: the `HausXMPPLifecycle` scheme on an
+# iOS simulator and the `HausXMPPMac` scheme's tests on the runner's macOS. Nothing is signed, archived or uploaded, and
+# the UI tests don't run here.
 #
 # Security properties, for anyone changing this file:
 # - Every job runs on a GitHub-hosted runner, a fresh VM per job; no job may target a self-hosted runner.
@@ -8,7 +9,8 @@
 # - The token can only read the repository (`contents: read`), and checkout doesn't keep it in .git/config.
 # - Actions are pinned to full commit SHAs.
 # - Nothing is signed with a real identity: there's no development team (Config/Local.xcconfig is gitignored and a
-#   checkout has none), the app builds turn code signing off, and the simulator tests use ad hoc signing.
+#   checkout has none), the app builds and the Mac tests turn code signing off, and the simulator tests use ad hoc
+#   signing.
 name: Apps
 
 # Everything the app targets and their tests compile or bundle (the same list for both events). Package tests have
@@ -23,6 +25,7 @@ on:
       - 'NotificationService/**'
       - 'NotificationServiceMac/**'
       - 'AppLifecycleTests/**'
+      - 'MacTests/**'
       - 'Packages/*/Package.swift'
       - 'Packages/*/Sources/**'
       - 'Packages/MessageStore/Tests/MessageStoreTests/Fixtures/**'
@@ -43,6 +46,7 @@ on:
       - 'NotificationService/**'
       - 'NotificationServiceMac/**'
       - 'AppLifecycleTests/**'
+      - 'MacTests/**'
       - 'Packages/*/Package.swift'
       - 'Packages/*/Sources/**'
       - 'Packages/MessageStore/Tests/MessageStoreTests/Fixtures/**'
@@ -140,3 +144,24 @@ jobs:
           xcodebuild test -project HausXMPP.xcodeproj -scheme HausXMPPLifecycle \
             -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath build/DerivedData \
             -parallel-testing-enabled NO -quiet
+
+  mac-tests:
+    name: Mac tests
+    runs-on: xcode-27
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Show the toolchain
+        run: xcodebuild -version
+      # Hosted in the unsigned Debug app, which under XCTest starts no model, window or network (`MacTestHost`).
+      - name: Test
+        run: |
+          xcodebuild test -project HausXMPP.xcodeproj -scheme HausXMPPMac -destination 'platform=macOS' \
+            -derivedDataPath build/DerivedData -quiet \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
